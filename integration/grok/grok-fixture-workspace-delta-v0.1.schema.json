@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-fixture-workspace-delta-v0.1.schema.json",
+  "title": "Grok disposable fixture workspace delta v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "receipt_kind", "delta_id", "created_at", "checkpoint", "workspace", "current_state", "changes", "checks", "valid", "limitations"],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "workspace_id": { "type": "string", "pattern": "^FIXTURE-[0-9a-f]{32}$" },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "bytes", "sha256"],
+      "properties": {
+        "relative_path": { "type": "string", "minLength": 1, "pattern": "^[^\\\\]+(?:/[^\\\\]+)*$" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "receipt_kind": { "const": "grok-fixture-workspace-delta" },
+    "delta_id": { "type": "string", "pattern": "^DELTA-[0-9a-f]{32}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256", "checkpoint_id", "aggregate_sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "checkpoint_id": { "type": "string", "pattern": "^CHECKPOINT-[0-9a-f]{32}$" },
+        "aggregate_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_path", "workspace_id", "disposable_marker"],
+      "properties": {
+        "canonical_path": { "type": "string", "minLength": 1 },
+        "workspace_id": { "$ref": "#/$defs/workspace_id" },
+        "disposable_marker": { "$ref": "#/$defs/file" }
+      }
+    },
+    "current_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_count", "total_bytes", "aggregate_sha256"],
+      "properties": {
+        "file_count": { "type": "integer", "minimum": 1 },
+        "total_bytes": { "type": "integer", "minimum": 1 },
+        "aggregate_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "changes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created", "modified", "deleted", "counts", "aggregate_sha256"],
+      "properties": {
+        "created": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+        "modified": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["relative_path", "before", "after"],
+            "properties": {
+              "relative_path": { "type": "string", "minLength": 1 },
+              "before": { "$ref": "#/$defs/file" },
+              "after": { "$ref": "#/$defs/file" }
+            }
+          }
+        },
+        "deleted": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["created", "modified", "deleted", "unchanged"],
+          "properties": {
+            "created": { "type": "integer", "minimum": 0 },
+            "modified": { "type": "integer", "minimum": 0 },
+            "deleted": { "type": "integer", "minimum": 0 },
+            "unchanged": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "aggregate_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoint_valid", "workspace_identity_matches", "disposable_marker_unchanged", "output_outside_workspace", "scan_complete_within_limits", "regular_files_only", "casefold_paths_unique"],
+      "properties": {
+        "checkpoint_valid": { "type": "boolean" },
+        "workspace_identity_matches": { "type": "boolean" },
+        "disposable_marker_unchanged": { "type": "boolean" },
+        "output_outside_workspace": { "type": "boolean" },
+        "scan_complete_within_limits": { "type": "boolean" },
+        "regular_files_only": { "type": "boolean" },
+        "casefold_paths_unique": { "type": "boolean" }
+      }
+    },
+    "valid": { "type": "boolean" },
+    "limitations": { "type": "array", "minItems": 3, "items": { "type": "string", "minLength": 1 } }
+  }
+}

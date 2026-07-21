@@ -125,6 +125,33 @@ provider capture、supervisor result 与三张 receipt。它只输出白名单 m
 prompt/reasoning/tool content。跨来源 runtime 顺序固定为 `not_established`，bridge sequence 只是确定性追加顺序。
 [`verify_grok_event_bridge.py`](../../scripts/verify_grok_event_bridge.py) 独立重算 source/journal digest、event schema、
 counts、sequence、previous/event hash 与 raw-field omission；post-run result 必须登记该 verifier report。
-当前锁定 build 的 fake headless session 已落盘但未进入 session search index，导致 trace/export 都返回 not found；
-bridge 因此正确标为 `partial`。完整实测、schema 和 digest 见
+当前锁定 build 的 fake headless session 已落盘但未进入派生 session search index；这不影响按目录直接发现。
+修复本项目 Windows PowerShell 子进程环境注入后，trace/export 均为 `available`。bridge 仍为 `partial`，因为
+跨来源 runtime 顺序、sealed encryption 与显式 stdout tool lifecycle 尚未建立。完整实测、schema 和 digest 见
 [`GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`](../../docs/GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md)。
+
+## Disposable fixture workspace checkpoint/delta
+
+[`capture_grok_fixture_workspace.py`](../../scripts/capture_grok_fixture_workspace.py) 是下一阶段的 hash-only
+implementation spike。它只接受含 `.lif-disposable-workspace.json` 且显式 `disposable=true` 的一次性 fixture；
+输出必须位于 workspace 外。checkpoint 与 delta 分别受
+[`grok-fixture-workspace-checkpoint-v0.1.schema.json`](grok-fixture-workspace-checkpoint-v0.1.schema.json) 和
+[`grok-fixture-workspace-delta-v0.1.schema.json`](grok-fixture-workspace-delta-v0.1.schema.json) 约束。
+
+它执行两次连续全量扫描，拒绝 reparse point、大小/数量超限、case-insensitive 路径碰撞、变化中的文件、marker
+变化、checkpoint aggregate 不一致与输出覆盖。receipt 仅包含相对路径、长度和 SHA-256；不复制正文，也不执行
+restore。created/modified/deleted 只表示两次文件系统状态之差，不声称某个 tool 是变化原因。
+
+```powershell
+python ..\..\scripts\capture_grok_fixture_workspace.py checkpoint `
+  --workspace .\disposable-fixture `
+  --output ..\..\.observed-runs\fixture-checkpoint.json
+
+python ..\..\scripts\capture_grok_fixture_workspace.py delta `
+  --workspace .\disposable-fixture `
+  --checkpoint ..\..\.observed-runs\fixture-checkpoint.json `
+  --output ..\..\.observed-runs\fixture-delta.json
+```
+
+该工具尚未接入 Grok launcher，更不允许对真实用户 workspace 自动恢复。设计边界与 Windows fixture 结果见
+[`GROK_FIXTURE_CHECKPOINT_DELTA_SPIKE_2026-07-21.md`](../../docs/GROK_FIXTURE_CHECKPOINT_DELTA_SPIKE_2026-07-21.md)。
