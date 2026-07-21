@@ -1,0 +1,30 @@
+{
+  "schema_version": "0.1.0",
+  "artifact_kind": "global-progress-disposition",
+  "disposition_id": "GPD-FIXTURE-REPLAN-001",
+  "review_id": "GPR-0eb74b6dfc582037",
+  "review_sha256": "1b0d5182375a26f6920f48ec1a5e83c07112c6232d6e23192ff9a96c0949f636",
+  "decision": "replan",
+  "selected_step_id": null,
+  "acceptance_refs": [],
+  "warning_dispositions": [
+    {
+      "warning_id": "GPW-d5a979c2fd709b3c",
+      "status": "accepted"
+    },
+    {
+      "warning_id": "GPW-7c77fb2f3a7e4388",
+      "status": "accepted"
+    },
+    {
+      "warning_id": "GPW-cf5c3fce3820deeb",
+      "status": "accepted"
+    }
+  ],
+  "verification_before_claim": [
+    "map ACC-HANDOFF to a plan step",
+    "refresh STEP-ACP-01 verification"
+  ],
+  "next_review_condition": "after the plan revision is recorded",
+  "rationale_summary": "Replan before advancing another implementation direction because one acceptance is uncovered and prior write verification is stale."
+}

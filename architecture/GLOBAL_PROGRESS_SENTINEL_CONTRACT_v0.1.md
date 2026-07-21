@@ -179,3 +179,9 @@ v0.1 不扩展 `RunEvent.event_type` 枚举，也不把 heuristic warning 冒充
 6. 通过后才评估如何从 Grok ACP plan/session updates 建立稳定 `step_id`/`direction_id` 映射。
 
 本 spike 只证明留痕、提醒和处置链可重放；不证明模型一定会克服 tunnel vision，也不把方向多样性当成正确性。
+
+当前进度：上述 no-model fixture 已完成。六方向输入机械产生 `direction_concentration`、
+`acceptance_uncovered`、`verification_debt` 三类 source-linked WARN；`reasoned_continue` 与 `replan` 两种 disposition
+均通过独立重建，plan revision、journal head、warning coverage 与 review digest 篡改均失败。详见
+[`GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md`](../docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md)。下一步只评估
+Grok ACP `initialize`/plan capability，不立即把 GPS 注入真实模型回合。

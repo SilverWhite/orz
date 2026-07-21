@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/global-progress-review-v0.1.schema.json",
+  "title": "LIF Global Progress Review v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "review_id",
+    "source_input_sha256",
+    "task_id",
+    "task_contract_sha256",
+    "plan_revision",
+    "review_cycle",
+    "journal_span",
+    "objective",
+    "progress",
+    "direction_coverage",
+    "acceptance_coverage",
+    "unresolved",
+    "warnings",
+    "suppressed_warning_dedupe_keys",
+    "next_review_trigger",
+    "generator"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-review" },
+    "review_id": { "type": "string", "pattern": "^GPR-[a-f0-9]{16}$" },
+    "source_input_sha256": { "$ref": "#/$defs/sha256" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "task_contract_sha256": { "$ref": "#/$defs/sha256" },
+    "plan_revision": { "type": "integer", "minimum": 1 },
+    "review_cycle": { "type": "integer", "minimum": 0 },
+    "journal_span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first_sequence", "last_sequence", "head_event_id"],
+      "properties": {
+        "first_sequence": { "type": "integer", "minimum": 0 },
+        "last_sequence": { "type": "integer", "minimum": 0 },
+        "head_event_id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "objective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "state"],
+      "properties": {
+        "text": { "$ref": "#/$defs/nonEmptyString" },
+        "state": { "const": "contract_derived" }
+      }
+    },
+    "progress": { "type": "array", "items": { "$ref": "#/$defs/progressItem" } },
+    "direction_coverage": { "type": "array", "items": { "$ref": "#/$defs/directionCoverage" } },
+    "acceptance_coverage": { "type": "array", "items": { "$ref": "#/$defs/acceptanceCoverage" } },
+    "unresolved": { "type": "array", "items": { "$ref": "#/$defs/unresolved" } },
+    "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } },
+    "suppressed_warning_dedupe_keys": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sha256" },
+      "uniqueItems": true
+    },
+    "next_review_trigger": { "$ref": "#/$defs/nonEmptyString" },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "summary_state"],
+      "properties": {
+        "name": { "const": "build_global_progress_review.py" },
+        "version": { "const": "0.1.0" },
+        "summary_state": { "const": "deterministic_structured_projection" }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stringArray": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+    "progressItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step_id", "direction_id", "state", "acceptance_refs", "source_refs"],
+      "properties": {
+        "step_id": { "$ref": "#/$defs/id" },
+        "direction_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+        "state": { "enum": ["pending", "in_progress", "completed", "deferred", "failed"] },
+        "acceptance_refs": { "$ref": "#/$defs/stringArray" },
+        "source_refs": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "directionCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction_id", "pending", "in_progress", "completed", "deferred", "failed", "source_refs"],
+      "properties": {
+        "direction_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+        "pending": { "type": "integer", "minimum": 0 },
+        "in_progress": { "type": "integer", "minimum": 0 },
+        "completed": { "type": "integer", "minimum": 0 },
+        "deferred": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "source_refs": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "acceptanceCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptance_ref", "state", "step_ids", "source_refs"],
+      "properties": {
+        "acceptance_ref": { "$ref": "#/$defs/id" },
+        "state": { "enum": ["uncovered", "planned", "in_progress", "completed_unverified", "verified", "deferred"] },
+        "step_ids": { "$ref": "#/$defs/stringArray" },
+        "source_refs": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "unresolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["constraint_id", "text", "source_ref"],
+      "properties": {
+        "constraint_id": { "$ref": "#/$defs/id" },
+        "text": { "$ref": "#/$defs/nonEmptyString" },
+        "source_ref": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warning_id", "kind", "severity", "message", "subject_refs", "source_refs", "dedupe_key", "review_required"],
+      "properties": {
+        "warning_id": { "type": "string", "pattern": "^GPW-[a-f0-9]{16}$" },
+        "kind": { "enum": ["direction_concentration", "acceptance_uncovered", "verification_debt"] },
+        "severity": { "const": "warn" },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "subject_refs": { "$ref": "#/$defs/stringArray" },
+        "source_refs": { "$ref": "#/$defs/stringArray" },
+        "dedupe_key": { "$ref": "#/$defs/sha256" },
+        "review_required": { "const": true }
+      }
+    }
+  }
+}

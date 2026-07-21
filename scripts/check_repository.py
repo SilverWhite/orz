@@ -359,6 +359,21 @@ def check_repository() -> dict[str, Any]:
                 f"runtime/examples/{example_name}",
             )
         )
+    progress_fixture_root = ROOT / "runtime/fixtures/global-progress-sentinel-v0.1"
+    progress_fixtures = {
+        "input.json": "global-progress-input-v0.1.schema.json",
+        "reasoned-continue.disposition.json": "global-progress-disposition-v0.1.schema.json",
+        "replan.disposition.json": "global-progress-disposition-v0.1.schema.json",
+    }
+    for fixture_name, schema_name in progress_fixtures.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(progress_fixture_root / fixture_name),
+                ROOT / "runtime" / schema_name,
+                f"runtime/fixtures/global-progress-sentinel-v0.1/{fixture_name}",
+            )
+        )
+    counts["global_progress_fixtures"] = len(progress_fixtures)
     errors.extend(
         _validate_instance(
             _load_json(ROOT / "evaluation/example-evaluation-result-v0.1.json"),

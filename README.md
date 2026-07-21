@@ -53,10 +53,14 @@
 - [`runtime/leak-scan-report-v0.1.schema.json`](runtime/leak-scan-report-v0.1.schema.json)：机械/语义泄漏检查、人工签发与 fail-closed 决策 schema。
 - [`runtime/run-manifest-v0.1.schema.json`](runtime/run-manifest-v0.1.schema.json)：不可变运行前置条件 schema。
 - [`runtime/run-event-v0.1.schema.json`](runtime/run-event-v0.1.schema.json)：append-only、hash-chained JSONL event schema。
+- [`runtime/global-progress-review-v0.1.schema.json`](runtime/global-progress-review-v0.1.schema.json)：由 task contract、计划和 journal 机械派生的全局进度、方向覆盖、验收覆盖与三类 WARN。
+- [`runtime/global-progress-disposition-v0.1.schema.json`](runtime/global-progress-disposition-v0.1.schema.json)：模型对每条全局 WARN 的显式处置，以及 `continue/pivot/defer/stop/replan` 决策边界。
+- [`runtime/fixtures/global-progress-sentinel-v0.1/`](runtime/fixtures/global-progress-sentinel-v0.1/)：六方向 no-model 输入与 `reasoned_continue`/`replan` 两种合法处置 fixture。
 - [`runtime/examples/`](runtime/examples/)：仅用于 schema 自证的零 digest 示例，不代表真实导出或运行。
 - [`prototype/`](prototype/)：一次性 Python conformance fixtures；固定 LIF schema、DeepSeek thinking continuity、redaction 与 Windows 进程边界，不是待扩展的生产 runner。
 - [`scripts/check_repository.py`](scripts/check_repository.py)：CI 使用的仓库级机械完整性检查；验证 schema、corpus、coverage、fixture digest、交叉引用和本地文档链接。
 - [`docs/REPOSITORY_AUDIT_2026-07-21.md`](docs/REPOSITORY_AUDIT_2026-07-21.md)：迁移后审计、初始提交边界和下一阶段 session-validator spike 范围。
+- [`docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md`](docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md)：no-model 全局回看生成、独立重建、合法处置、去重与篡改失败的实测记录。
 
 ## 证据路由
 

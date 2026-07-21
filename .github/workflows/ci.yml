@@ -63,3 +63,6 @@ jobs:
 
       - name: Run Grok integration fixture tests
         run: python -m unittest discover -s integration/grok/tests -v
+
+      - name: Run runtime control-plane fixture tests
+        run: python -m unittest discover -s runtime/tests -v

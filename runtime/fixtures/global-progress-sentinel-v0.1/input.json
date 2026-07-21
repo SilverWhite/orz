@@ -1,0 +1,143 @@
+{
+  "schema_version": "0.1.0",
+  "fixture_kind": "global-progress-sentinel-no-model",
+  "task_id": "TASK-GPS-FIXTURE-001",
+  "task_contract": {
+    "sha256": "1ef6e2f430d1de44c8a1db7207e1ba038746b638c14a0cd565c554108c358ebc",
+    "objective": "Advance the Windows-first LIF CLI without over-pushing one implementation direction.",
+    "acceptance": [
+      { "acceptance_ref": "ACC-ACP", "text": "ACP capability is observed without a model call." },
+      { "acceptance_ref": "ACC-WINDOWS", "text": "Windows process containment remains explicit." },
+      { "acceptance_ref": "ACC-DEEPSEEK", "text": "DeepSeek-specific conformance remains isolated." },
+      { "acceptance_ref": "ACC-RECOVERY", "text": "Recovery is separated from audit receipts." },
+      { "acceptance_ref": "ACC-EVIDENCE", "text": "Evidence and claim gates remain independent." },
+      { "acceptance_ref": "ACC-DOCS", "text": "Architecture and observed state remain synchronized." },
+      { "acceptance_ref": "ACC-HANDOFF", "text": "The next-stage handoff names unresolved directions." }
+    ]
+  },
+  "plan": {
+    "revision": 3,
+    "review_cycle": 4,
+    "steps": [
+      {
+        "step_id": "STEP-ACP-01",
+        "direction_id": "runtime_acp",
+        "state": "completed",
+        "acceptance_refs": ["ACC-ACP"],
+        "defer_reason": null,
+        "last_activity_review_cycle": 4
+      },
+      {
+        "step_id": "STEP-ACP-02",
+        "direction_id": "runtime_acp",
+        "state": "in_progress",
+        "acceptance_refs": ["ACC-ACP"],
+        "defer_reason": null,
+        "last_activity_review_cycle": 4
+      },
+      {
+        "step_id": "STEP-WINDOWS-01",
+        "direction_id": "windows_containment",
+        "state": "pending",
+        "acceptance_refs": ["ACC-WINDOWS"],
+        "defer_reason": null,
+        "last_activity_review_cycle": 2
+      },
+      {
+        "step_id": "STEP-DEEPSEEK-01",
+        "direction_id": "deepseek_conformance",
+        "state": "pending",
+        "acceptance_refs": ["ACC-DEEPSEEK"],
+        "defer_reason": null,
+        "last_activity_review_cycle": 1
+      },
+      {
+        "step_id": "STEP-RECOVERY-01",
+        "direction_id": "recovery",
+        "state": "pending",
+        "acceptance_refs": ["ACC-RECOVERY"],
+        "defer_reason": null,
+        "last_activity_review_cycle": 1
+      },
+      {
+        "step_id": "STEP-EVIDENCE-01",
+        "direction_id": "evidence_gates",
+        "state": "pending",
+        "acceptance_refs": ["ACC-EVIDENCE"],
+        "defer_reason": null,
+        "last_activity_review_cycle": 1
+      },
+      {
+        "step_id": "STEP-DOCS-01",
+        "direction_id": "documentation",
+        "state": "completed",
+        "acceptance_refs": ["ACC-DOCS"],
+        "defer_reason": null,
+        "last_activity_review_cycle": 3
+      }
+    ]
+  },
+  "thresholds": {
+    "direction_concentration_actions": 3
+  },
+  "journal": [
+    {
+      "sequence": 41,
+      "event_id": "EVT-041",
+      "event_type": "action_terminal",
+      "step_id": "STEP-ACP-01",
+      "direction_id": "runtime_acp",
+      "terminal_state": "succeeded",
+      "write_effect": true,
+      "verification_state": null
+    },
+    {
+      "sequence": 42,
+      "event_id": "EVT-042",
+      "event_type": "artifact_registered",
+      "step_id": "STEP-ACP-01",
+      "direction_id": "runtime_acp",
+      "terminal_state": null,
+      "write_effect": false,
+      "verification_state": null
+    },
+    {
+      "sequence": 43,
+      "event_id": "EVT-043",
+      "event_type": "verification_result",
+      "step_id": "STEP-ACP-01",
+      "direction_id": "runtime_acp",
+      "terminal_state": null,
+      "write_effect": false,
+      "verification_state": "stale"
+    },
+    {
+      "sequence": 44,
+      "event_id": "EVT-044",
+      "event_type": "action_terminal",
+      "step_id": "STEP-ACP-01",
+      "direction_id": "runtime_acp",
+      "terminal_state": "succeeded",
+      "write_effect": false,
+      "verification_state": null
+    },
+    {
+      "sequence": 45,
+      "event_id": "EVT-045",
+      "event_type": "action_terminal",
+      "step_id": "STEP-ACP-02",
+      "direction_id": "runtime_acp",
+      "terminal_state": "succeeded",
+      "write_effect": false,
+      "verification_state": null
+    }
+  ],
+  "unresolved_user_constraints": [
+    {
+      "constraint_id": "CONSTRAINT-NO-CLOUD",
+      "text": "Do not restore cloud runtime scope.",
+      "source_ref": "ADR-0002"
+    }
+  ],
+  "previous_warning_dedupe_keys": []
+}

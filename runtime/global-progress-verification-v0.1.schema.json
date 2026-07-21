@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/global-progress-verification-v0.1.schema.json",
+  "title": "LIF Global Progress Sentinel verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "valid",
+    "review_id",
+    "input_sha256",
+    "review_sha256",
+    "disposition_sha256",
+    "warning_count",
+    "checks",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-verification" },
+    "valid": { "type": "boolean" },
+    "review_id": { "type": ["string", "null"], "pattern": "^GPR-[a-f0-9]{16}$" },
+    "input_sha256": { "$ref": "#/$defs/sha256" },
+    "review_sha256": { "$ref": "#/$defs/sha256" },
+    "disposition_sha256": { "$ref": "#/$defs/sha256" },
+    "warning_count": { "type": "integer", "minimum": 0 },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_schema_valid",
+        "review_schema_valid",
+        "review_rebuilt_exactly",
+        "disposition_schema_valid",
+        "review_linkage_valid",
+        "warning_dispositions_complete",
+        "decision_semantics_valid"
+      ],
+      "properties": {
+        "input_schema_valid": { "type": "boolean" },
+        "review_schema_valid": { "type": "boolean" },
+        "review_rebuilt_exactly": { "type": "boolean" },
+        "disposition_schema_valid": { "type": "boolean" },
+        "review_linkage_valid": { "type": "boolean" },
+        "warning_dispositions_complete": { "type": "boolean" },
+        "decision_semantics_valid": { "type": "boolean" }
+      }
+    },
+    "errors": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

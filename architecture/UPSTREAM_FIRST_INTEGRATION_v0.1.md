@@ -79,8 +79,8 @@ git-ignored 的 `.tools/`，计算 SHA-256 后再运行。当前网络未能取�
 workspace trust、local trace/export、event bridge 与 hash-only fixture checkpoint/delta 也已完成首轮机械验证。
 进一步复核上游后，下一步不是增加新的通用 Agent 组件，而是：
 
-1. 先实现 no-model Global Progress Sentinel fixture，从计划/journal 生成全局摘要、WARN 与结构化 disposition；
-2. 对 `grok agent stdio` 做 no-model ACP `initialize`/capability 探针；
+1. no-model Global Progress Sentinel fixture 已完成：从计划/journal 生成全局摘要、WARN 与结构化 disposition；
+2. 下一步对 `grok agent stdio` 做 no-model ACP `initialize`/capability 探针；
 3. 用 fake provider 验证 ACP structured tool/permission/terminal continuity，并与 session files 对账；
 4. 用独立 shadow Git fixture 承担恢复，现有 hash-only checkpoint 继续作为 audit receipt；
 5. 补 ACP persistent process/background child-tree timeout fixture 和 compaction provenance；

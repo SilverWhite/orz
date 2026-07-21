@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/global-progress-disposition-v0.1.schema.json",
+  "title": "LIF Global Progress Review disposition v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "disposition_id",
+    "review_id",
+    "review_sha256",
+    "decision",
+    "selected_step_id",
+    "acceptance_refs",
+    "warning_dispositions",
+    "verification_before_claim",
+    "next_review_condition",
+    "rationale_summary"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-disposition" },
+    "disposition_id": { "type": "string", "pattern": "^GPD-[A-Z0-9._-]+$" },
+    "review_id": { "type": "string", "pattern": "^GPR-[a-f0-9]{16}$" },
+    "review_sha256": { "$ref": "#/$defs/sha256" },
+    "decision": { "enum": ["continue", "pivot", "defer", "stop", "replan"] },
+    "selected_step_id": { "type": ["string", "null"], "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "acceptance_refs": { "$ref": "#/$defs/stringArray" },
+    "warning_dispositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["warning_id", "status"],
+        "properties": {
+          "warning_id": { "type": "string", "pattern": "^GPW-[a-f0-9]{16}$" },
+          "status": { "enum": ["accepted", "mitigated", "reasoned_continue", "needs_user"] }
+        }
+      }
+    },
+    "verification_before_claim": { "$ref": "#/$defs/stringArray" },
+    "next_review_condition": { "$ref": "#/$defs/nonEmptyString" },
+    "rationale_summary": { "type": "string", "minLength": 1, "maxLength": 500 }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" },
+      "uniqueItems": true
+    }
+  }
+}

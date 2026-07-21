@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/global-progress-input-v0.1.schema.json",
+  "title": "LIF Global Progress Sentinel input v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fixture_kind",
+    "task_id",
+    "task_contract",
+    "plan",
+    "thresholds",
+    "journal",
+    "unresolved_user_constraints",
+    "previous_warning_dedupe_keys"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "fixture_kind": { "const": "global-progress-sentinel-no-model" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "task_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "objective", "acceptance"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "objective": { "$ref": "#/$defs/nonEmptyString" },
+        "acceptance": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["acceptance_ref", "text"],
+            "properties": {
+              "acceptance_ref": { "$ref": "#/$defs/id" },
+              "text": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "review_cycle", "steps"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "review_cycle": { "type": "integer", "minimum": 0 },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/step" }
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction_concentration_actions"],
+      "properties": {
+        "direction_concentration_actions": { "type": "integer", "minimum": 2, "maximum": 50 }
+      }
+    },
+    "journal": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/journalEvent" }
+    },
+    "unresolved_user_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["constraint_id", "text", "source_ref"],
+        "properties": {
+          "constraint_id": { "$ref": "#/$defs/id" },
+          "text": { "$ref": "#/$defs/nonEmptyString" },
+          "source_ref": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "previous_warning_dedupe_keys": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sha256" },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "idArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/id" },
+      "uniqueItems": true
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "step_id",
+        "direction_id",
+        "state",
+        "acceptance_refs",
+        "defer_reason",
+        "last_activity_review_cycle"
+      ],
+      "properties": {
+        "step_id": { "$ref": "#/$defs/id" },
+        "direction_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+        "state": { "enum": ["pending", "in_progress", "completed", "deferred", "failed"] },
+        "acceptance_refs": { "$ref": "#/$defs/idArray" },
+        "defer_reason": { "type": ["string", "null"] },
+        "last_activity_review_cycle": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "journalEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "event_id",
+        "event_type",
+        "step_id",
+        "direction_id",
+        "terminal_state",
+        "write_effect",
+        "verification_state"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "event_id": { "$ref": "#/$defs/id" },
+        "event_type": { "enum": ["action_terminal", "artifact_registered", "verification_result", "plan_revised"] },
+        "step_id": { "type": ["string", "null"], "pattern": "^[A-Z][A-Z0-9._-]+$" },
+        "direction_id": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9_]+$" },
+        "terminal_state": { "enum": ["succeeded", "failed", "cancelled", "unknown", null] },
+        "write_effect": { "type": "boolean" },
+        "verification_state": { "enum": ["pass", "warn", "fail", "stale", "unknown", null] }
+      }
+    }
+  }
+}
