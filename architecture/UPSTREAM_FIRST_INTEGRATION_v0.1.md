@@ -80,8 +80,9 @@ workspace trust、local trace/export、event bridge 与 hash-only fixture checkp
 进一步复核上游后，下一步不是增加新的通用 Agent 组件，而是：
 
 1. no-model Global Progress Sentinel fixture 已完成：从计划/journal 生成全局摘要、WARN 与结构化 disposition；
-2. 下一步对 `grok agent stdio` 做 no-model ACP `initialize`/capability 探针；
-3. 用 fake provider 验证 ACP structured tool/permission/terminal continuity，并与 session files 对账；
+2. no-model ACP `initialize`/capability 探针已完成：protocol v1、capability/meta、扩展通知、Job Object、
+   全出站阻断与独立 verifier 均有 Windows 实测；
+3. 下一步用 fake provider 验证 ACP structured tool/permission/terminal continuity，并与 session files 对账；
 4. 用独立 shadow Git fixture 承担恢复，现有 hash-only checkpoint 继续作为 audit receipt；
 5. 补 ACP persistent process/background child-tree timeout fixture 和 compaction provenance；
 6. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。

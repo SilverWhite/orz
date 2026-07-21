@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-acp-initialize-probe-result-v0.1.schema.json",
+  "title": "Grok ACP initialize no-model probe result v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "probe_kind",
+    "probe_id",
+    "valid",
+    "started_at",
+    "completed_at",
+    "binary",
+    "request",
+    "response",
+    "process",
+    "workspace_trust",
+    "network",
+    "environment",
+    "leak_scan",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "probe_kind": { "const": "grok-acp-initialize-no-model" },
+    "probe_id": { "type": "string", "pattern": "^ACPINIT-[a-f0-9]{32}$" },
+    "valid": { "type": "boolean" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256", "locked_sha256", "version", "authenticode_status", "signer_subject"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "locked_sha256": { "$ref": "#/$defs/sha256" },
+        "version": { "const": "0.2.106" },
+        "authenticode_status": { "$ref": "#/$defs/nonEmptyString" },
+        "signer_subject": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "jsonrpc", "id", "method", "protocol_version", "client_capability_paths", "session_or_prompt_requests_sent"],
+      "properties": {
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "method": { "const": "initialize" },
+        "protocol_version": { "const": 1 },
+        "client_capability_paths": { "$ref": "#/$defs/stringArray" },
+        "session_or_prompt_requests_sent": { "const": 0 }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "artifact",
+        "jsonrpc",
+        "id_matches",
+        "has_result",
+        "has_error",
+        "protocol_version",
+        "agent_capability_paths",
+        "extension_meta_paths",
+        "agent_info",
+        "auth_method_count",
+        "allowed_notification_count",
+        "allowed_notification_methods",
+        "unexpected_stdout_line_count"
+      ],
+      "properties": {
+        "state": { "enum": ["observed", "timeout", "eof", "parse_error", "rpc_error"] },
+        "artifact": { "oneOf": [{ "$ref": "#/$defs/artifact" }, { "type": "null" }] },
+        "jsonrpc": { "type": ["string", "null"] },
+        "id_matches": { "type": "boolean" },
+        "has_result": { "type": "boolean" },
+        "has_error": { "type": "boolean" },
+        "protocol_version": { "type": ["integer", "null"] },
+        "agent_capability_paths": { "$ref": "#/$defs/stringArray" },
+        "extension_meta_paths": { "$ref": "#/$defs/stringArray" },
+        "agent_info": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "title", "version"],
+          "properties": {
+            "name": { "type": ["string", "null"] },
+            "title": { "type": ["string", "null"] },
+            "version": { "type": ["string", "null"] }
+          }
+        },
+        "auth_method_count": { "type": ["integer", "null"], "minimum": 0 },
+        "allowed_notification_count": { "type": "integer", "minimum": 0 },
+        "allowed_notification_methods": {
+          "type": "array",
+          "items": { "const": "_x.ai/mcp/servers_updated" },
+          "uniqueItems": true
+        },
+        "unexpected_stdout_line_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exit_code", "timed_out", "duration_ms", "terminal_state", "stdout", "stderr", "containment"],
+      "properties": {
+        "exit_code": { "type": ["integer", "null"] },
+        "timed_out": { "type": "boolean" },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "terminal_state": { "enum": ["exited", "terminated_after_response", "timed_out", "failed_to_start", "unknown"] },
+        "stdout": { "$ref": "#/$defs/artifact" },
+        "stderr": { "$ref": "#/$defs/artifact" },
+        "containment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["job_object_created", "job_object_assigned", "kill_on_close", "job_object_closed", "assignment_race_known"],
+          "properties": {
+            "job_object_created": { "type": "boolean" },
+            "job_object_assigned": { "type": "boolean" },
+            "kill_on_close": { "const": true },
+            "job_object_closed": { "type": "boolean" },
+            "assignment_race_known": { "const": true }
+          }
+        }
+      }
+    },
+    "workspace_trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflight_receipt", "postrun_receipt", "preflight_valid", "postrun_valid", "candidate_count", "aggregate_unchanged"],
+      "properties": {
+        "preflight_receipt": { "$ref": "#/$defs/artifact" },
+        "postrun_receipt": { "$ref": "#/$defs/artifact" },
+        "preflight_valid": { "type": "boolean" },
+        "postrun_valid": { "type": "boolean" },
+        "candidate_count": { "type": "integer", "minimum": 0 },
+        "aggregate_unchanged": { "type": "boolean" }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["all_profiles_enabled", "outbound_block_created", "rule_name", "rule_removed", "remaining_rule_count"],
+      "properties": {
+        "all_profiles_enabled": { "type": "boolean" },
+        "outbound_block_created": { "type": "boolean" },
+        "rule_name": { "$ref": "#/$defs/nonEmptyString" },
+        "rule_removed": { "type": "boolean" },
+        "remaining_rule_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clean", "variable_names", "credential_variable_names", "proxy_fail_closed"],
+      "properties": {
+        "clean": { "type": "boolean" },
+        "variable_names": { "$ref": "#/$defs/stringArray" },
+        "credential_variable_names": { "type": "array", "maxItems": 0 },
+        "proxy_fail_closed": { "type": "boolean" }
+      }
+    },
+    "leak_scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scanned_artifacts", "forbidden_markers", "hit_count", "hits"],
+      "properties": {
+        "scanned_artifacts": { "$ref": "#/$defs/stringArray" },
+        "forbidden_markers": { "$ref": "#/$defs/stringArray" },
+        "hit_count": { "type": "integer", "minimum": 0 },
+        "hits": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binary_locked",
+        "signature_valid",
+        "workspace_restricted_empty_and_stable",
+        "request_initialize_only",
+        "response_id_matches",
+        "protocol_version_agreed",
+        "rpc_result_observed",
+        "no_unexpected_stdout",
+        "clean_environment",
+        "network_blocked_and_cleaned",
+        "job_contained",
+        "leak_scan_clean"
+      ],
+      "properties": {
+        "binary_locked": { "type": "boolean" },
+        "signature_valid": { "type": "boolean" },
+        "workspace_restricted_empty_and_stable": { "type": "boolean" },
+        "request_initialize_only": { "type": "boolean" },
+        "response_id_matches": { "type": "boolean" },
+        "protocol_version_agreed": { "type": "boolean" },
+        "rpc_result_observed": { "type": "boolean" },
+        "no_unexpected_stdout": { "type": "boolean" },
+        "clean_environment": { "type": "boolean" },
+        "network_blocked_and_cleaned": { "type": "boolean" },
+        "job_contained": { "type": "boolean" },
+        "leak_scan_clean": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stringArray": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

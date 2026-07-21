@@ -25,6 +25,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\inspect_grok_i
 
 该脚本只检查 lock、文件长度/hash、PE header、Authenticode 和 `grok --version`，不登录或调用模型。
 
+## ACP initialize no-model probe
+
+[`invoke_grok_acp_initialize_probe.ps1`](../../scripts/invoke_grok_acp_initialize_probe.ps1) 在一次性空 workspace、
+clean environment、kill-on-close Job Object 和针对锁定 `grok.exe` 的临时全出站阻断规则中，只发送一个 ACP
+`initialize`。`clientCapabilities={}`，不创建 session，不发送 prompt，也不读取 credential。脚本需要管理员
+令牌；通过普通 Codex 沙箱授权不等于 Windows UAC 提权。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_acp_initialize_probe.ps1 `
+  -OutputDirectory ..\..\.observed-runs\acp-initialize-local `
+  -TemporaryWorkspaceParent C:\tmp
+```
+
+输出受 [`grok-acp-initialize-probe-result-v0.1.schema.json`](grok-acp-initialize-probe-result-v0.1.schema.json)
+约束，并由 [`verify_grok_acp_initialize_probe.py`](../../scripts/verify_grok_acp_initialize_probe.py) 独立重算
+artifact hash、JSON-RPC 语义、capability/meta 投影和 workspace receipt。锁定 build 在响应后会发送精确的
+`_x.ai/mcp/servers_updated` 空列表通知；任何非空服务器、额外 method/field、stderr 或其他 stdout 行均失败。
+正式 Windows 结果、调试失败链与未证明项见
+[`GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md`](../../docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md)。
+
 ## Observed dry-run
 
 [`new_grok_observed_dry_run.ps1`](../../scripts/new_grok_observed_dry_run.ps1) 生成一个

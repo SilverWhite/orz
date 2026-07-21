@@ -137,9 +137,11 @@ validator verdict 或 claim evidence。
 0. **Global Progress Sentinel（no-model fixture 已完成）**：从 task contract、计划和 journal 重建方向覆盖、
    未决 acceptance 与 verification debt；生成可去重 WARN 和结构化 disposition。详见
    [`GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`](GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md)。
-1. **ACP capability probe（下一步，no-model）**：启动锁定 binary 的 `grok agent stdio`，完成
-   `initialize`，冻结 protocol/capability/x.ai extension 响应、进程 terminal 和泄漏扫描；不创建真实模型 turn。
-2. **ACP fake tool continuity**：在 disposable workspace + fake provider 中核验 structured tool ID、状态转换、
+1. **ACP capability probe（no-model，已完成）**：锁定 binary 的 `grok agent stdio` 已完成
+   `initialize`，冻结 protocol/capability/x.ai extension 响应、进程 terminal、全出站阻断和泄漏扫描；未创建
+   session 或模型 turn。详见
+   [`../docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md`](../docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md)。
+2. **ACP fake tool continuity（下一步）**：在 disposable workspace + fake provider 中核验 structured tool ID、状态转换、
    permission request/response、cancel 和恰好一个 terminal；与 `events.jsonl`/`updates.jsonl` 对账。
 3. **shadow Git recovery fixture**：在现有 hash-only checkpoint 收据中引用 shadow commit/tree；生成显式
    files-only restore plan 和冲突报告，仍不自动 restore 真实 workspace。

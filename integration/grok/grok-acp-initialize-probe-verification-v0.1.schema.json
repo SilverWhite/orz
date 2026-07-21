@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-acp-initialize-probe-verification-v0.1.schema.json",
+  "title": "Grok ACP initialize probe verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verification_kind",
+    "valid",
+    "probe_id",
+    "result_sha256",
+    "checks",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "verification_kind": { "const": "grok-acp-initialize-probe-verification" },
+    "valid": { "type": "boolean" },
+    "probe_id": { "type": ["string", "null"], "pattern": "^ACPINIT-[a-f0-9]{32}$" },
+    "result_sha256": { "$ref": "#/$defs/sha256" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result_schema_valid",
+        "result_valid_flag",
+        "binary_artifact_matches",
+        "request_artifact_matches",
+        "request_initialize_only",
+        "response_artifact_matches",
+        "response_semantics_match",
+        "capability_projection_matches",
+        "control_receipts_match",
+        "safety_checks_all_true"
+      ],
+      "properties": {
+        "result_schema_valid": { "type": "boolean" },
+        "result_valid_flag": { "type": "boolean" },
+        "binary_artifact_matches": { "type": "boolean" },
+        "request_artifact_matches": { "type": "boolean" },
+        "request_initialize_only": { "type": "boolean" },
+        "response_artifact_matches": { "type": "boolean" },
+        "response_semantics_match": { "type": "boolean" },
+        "capability_projection_matches": { "type": "boolean" },
+        "control_receipts_match": { "type": "boolean" },
+        "safety_checks_all_true": { "type": "boolean" }
+      }
+    },
+    "errors": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

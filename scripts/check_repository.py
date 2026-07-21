@@ -305,6 +305,40 @@ def check_repository() -> dict[str, Any]:
     counts["grok_fake_provider_fixtures"] = 1
     counts["grok_tool_continuity_fixtures"] = 1
 
+    acp_probe_source = (
+        ROOT / "scripts/invoke_grok_acp_initialize_probe.ps1"
+    ).read_text(encoding="utf-8")
+    acp_verifier_source = (
+        ROOT / "scripts/verify_grok_acp_initialize_probe.py"
+    ).read_text(encoding="utf-8")
+    for schema_name in (
+        "grok-acp-initialize-probe-result-v0.1.schema.json",
+        "grok-acp-initialize-probe-verification-v0.1.schema.json",
+    ):
+        if not (ROOT / "integration/grok" / schema_name).is_file():
+            errors.append(f"missing ACP initialize probe schema: {schema_name}")
+    for marker in (
+        "New-NetFirewallRule",
+        "EnvironmentVariables.Clear()",
+        "CreateKillOnClose",
+        "clientCapabilities = [ordered]@{}",
+        "session_or_prompt_requests_sent = 0",
+        "_x.ai/mcp/servers_updated",
+    ):
+        if marker not in acp_probe_source:
+            errors.append(f"ACP initialize probe is missing safety marker: {marker}")
+    for marker in (
+        "request is not the exact initialize-only no-model shape",
+        "stdout/stderr transcript or initialize notification classification mismatch",
+        "response capability/meta projection mismatch",
+        "workspace trust receipts do not prove an empty stable restricted workspace",
+    ):
+        if marker not in acp_verifier_source:
+            errors.append(f"ACP initialize verifier is missing replay marker: {marker}")
+    if not (ROOT / "integration/grok/tests/test_acp_initialize_probe.py").is_file():
+        errors.append("missing ACP initialize verifier regression tests")
+    counts["grok_acp_initialize_probe_fixtures"] = 1
+
     bridge_builder_source = (
         ROOT / "scripts/build_grok_event_bridge.py"
     ).read_text(encoding="utf-8")
