@@ -1,0 +1,342 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path, PurePosixPath
+import re
+import sys
+import tomllib
+from typing import Any
+
+from jsonschema import Draft202012Validator, FormatChecker
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def _unique_mapping(
+    loader: UniqueKeyLoader, node: yaml.Node, deep: bool = False
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ValueError(
+                f"duplicate YAML key {key!r} at line {key_node.start_mark.line + 1}"
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping
+)
+
+
+def _load_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _load_yaml(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=UniqueKeyLoader)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_instance(instance: Any, schema_path: Path, label: str) -> list[str]:
+    validator = Draft202012Validator(
+        _load_json(schema_path), format_checker=FormatChecker()
+    )
+    errors: list[str] = []
+    for error in sorted(validator.iter_errors(instance), key=lambda item: list(item.absolute_path)):
+        pointer = "/".join(map(str, error.absolute_path))
+        errors.append(f"{label}#/{pointer}: {error.message}")
+    return errors
+
+
+def _safe_fixture_path(value: str) -> PurePosixPath:
+    path = PurePosixPath(value)
+    if not value or "\\" in value or path.is_absolute() or any(
+        part in {"", ".", ".."} for part in path.parts
+    ):
+        raise ValueError(f"unsafe fixture path: {value!r}")
+    return path
+
+
+def _check_markdown_links() -> list[str]:
+    errors: list[str] = []
+    pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+    for path in sorted(ROOT.rglob("*.md")):
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for match in pattern.finditer(line):
+                target = match.group(1).split("#", 1)[0]
+                if not target or re.match(r"^(?:https?://|mailto:)", target):
+                    continue
+                resolved = (path.parent / target).resolve()
+                if not resolved.exists():
+                    errors.append(
+                        f"{path.relative_to(ROOT)}:{line_number}: broken local link {target}"
+                    )
+    return errors
+
+
+def check_repository() -> dict[str, Any]:
+    errors: list[str] = []
+    counts: dict[str, int] = {}
+
+    schema_paths = sorted(ROOT.rglob("*.schema.json"))
+    counts["schemas"] = len(schema_paths)
+    for schema_path in schema_paths:
+        try:
+            Draft202012Validator.check_schema(_load_json(schema_path))
+        except Exception as exc:
+            errors.append(f"invalid schema {schema_path.relative_to(ROOT)}: {exc}")
+
+    corpus_path = ROOT / "regression/cases-v0.1.yaml"
+    coverage_path = ROOT / "regression/coverage-matrix-v0.1.yaml"
+    reason_path = ROOT / "protocol/reason-codes-v0.1.yaml"
+    gate_path = ROOT / "protocol/gate-matrix-v0.1.yaml"
+    try:
+        corpus = _load_yaml(corpus_path)
+        coverage = _load_yaml(coverage_path)
+        reasons = _load_yaml(reason_path)
+        gates = _load_yaml(gate_path)
+    except Exception as exc:
+        errors.append(f"YAML load failed: {exc}")
+        corpus = coverage = reasons = gates = {}
+
+    if corpus:
+        errors.extend(
+            _validate_instance(
+                corpus,
+                ROOT / "regression/case-corpus-v0.1.schema.json",
+                "regression/cases-v0.1.yaml",
+            )
+        )
+    if coverage:
+        errors.extend(
+            _validate_instance(
+                coverage,
+                ROOT / "regression/coverage-matrix-v0.1.schema.json",
+                "regression/coverage-matrix-v0.1.yaml",
+            )
+        )
+
+    upstream_lock_path = ROOT / "upstream/grok-build.lock.json"
+    upstream_lock = _load_json(upstream_lock_path)
+    errors.extend(
+        _validate_instance(
+            upstream_lock,
+            ROOT / "upstream/grok-build-lock-v0.1.schema.json",
+            "upstream/grok-build.lock.json",
+        )
+    )
+    ownership = upstream_lock.get("ownership", {})
+    ownership_sets = {
+        name: set(values) for name, values in ownership.items() if isinstance(values, list)
+    }
+    ownership_names = sorted(ownership_sets)
+    for left_index, left_name in enumerate(ownership_names):
+        for right_name in ownership_names[left_index + 1 :]:
+            overlap = sorted(ownership_sets[left_name] & ownership_sets[right_name])
+            if overlap:
+                errors.append(
+                    f"upstream ownership overlap {left_name}/{right_name}: {overlap}"
+                )
+    counts["upstream_locks"] = 1
+
+    grok_config_path = ROOT / "integration/grok/deepseek-custom-model.example.toml"
+    with grok_config_path.open("rb") as handle:
+        grok_config = tomllib.load(handle)
+    model_config = grok_config.get("model", {}).get("lif-deepseek-v4-pro", {})
+    expected_model_config = {
+        "model": "deepseek-v4-pro",
+        "base_url": "https://api.deepseek.com",
+        "env_key": "LIF_DEEPSEEK_API_KEY",
+        "api_backend": "chat_completions",
+    }
+    for key, expected in expected_model_config.items():
+        if model_config.get(key) != expected:
+            errors.append(
+                f"DeepSeek Grok config {key} must be {expected!r}, "
+                f"got {model_config.get(key)!r}"
+            )
+    if "api_key" in model_config or "extra_headers" in model_config:
+        errors.append("DeepSeek Grok config must not contain embedded credentials")
+    if grok_config.get("models", {}).get("default"):
+        errors.append("discovery-only DeepSeek Grok config must not set a default model")
+    counts["grok_config_fixtures"] = 1
+
+    grok_plan_example = ROOT / "integration/grok/examples/example-grok-observed-plan.json"
+    errors.extend(
+        _validate_instance(
+            _load_json(grok_plan_example),
+            ROOT / "integration/grok/grok-observed-plan-v0.1.schema.json",
+            "integration/grok/examples/example-grok-observed-plan.json",
+        )
+    )
+    counts["grok_observed_plan_examples"] = 1
+
+    runtime_examples = {
+        "example-deepseek-adapter-profile.json": "deepseek-adapter-profile-v0.1.schema.json",
+        "example-leak-scan-report.json": "leak-scan-report-v0.1.schema.json",
+        "example-run-event.json": "run-event-v0.1.schema.json",
+        "example-run-manifest.json": "run-manifest-v0.1.schema.json",
+        "example-scenario-export-manifest.json": "scenario-export-manifest-v0.1.schema.json",
+    }
+    for example_name, schema_name in runtime_examples.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(ROOT / "runtime/examples" / example_name),
+                ROOT / "runtime" / schema_name,
+                f"runtime/examples/{example_name}",
+            )
+        )
+    errors.extend(
+        _validate_instance(
+            _load_json(ROOT / "evaluation/example-evaluation-result-v0.1.json"),
+            ROOT / "evaluation/evaluation-result-v0.1.schema.json",
+            "evaluation/example-evaluation-result-v0.1.json",
+        )
+    )
+
+    reason_codes = {item["code"] for item in reasons.get("reason_codes", [])}
+    corpus_reason_codes = set(corpus.get("reason_codes", []))
+    unknown_corpus_reasons = sorted(corpus_reason_codes - reason_codes)
+    if unknown_corpus_reasons:
+        errors.append(f"corpus uses unknown reason codes: {unknown_corpus_reasons}")
+    for stage in gates.get("stages", []):
+        unknown = sorted(set(stage.get("gate_codes", [])) - reason_codes)
+        if unknown:
+            errors.append(f"gate stage {stage['stage_id']} uses unknown reason codes: {unknown}")
+
+    cases = corpus.get("cases", [])
+    case_by_id = {case["case_id"]: case for case in cases}
+    counts["cases"] = len(cases)
+    if len(case_by_id) != len(cases):
+        errors.append("case IDs are not unique")
+    for case in cases:
+        case_id = case["case_id"]
+        for decision in case["oracle"]["expected_gate_decisions"]:
+            if decision["gate_id"] not in reason_codes:
+                errors.append(f"{case_id} uses unknown oracle gate {decision['gate_id']}")
+        for other_id in case.get("countercase_ids", []):
+            other = case_by_id.get(other_id)
+            if other is None:
+                errors.append(f"{case_id} references missing countercase {other_id}")
+            elif case_id not in other.get("countercase_ids", []):
+                errors.append(f"countercase link is not reciprocal: {case_id} -> {other_id}")
+
+    coverage_case_ids: set[str] = set()
+    for cluster in coverage.get("clusters", []):
+        unknown_reasons = sorted(set(cluster["primary_reason_codes"]) - reason_codes)
+        if unknown_reasons:
+            errors.append(
+                f"{cluster['cluster_id']} uses unknown reason codes: {unknown_reasons}"
+            )
+        referenced = list(cluster["historical_case_ids"]) + [
+            item["case_id"] for item in cluster["challenge_cases"]
+        ]
+        coverage_case_ids.update(referenced)
+        for case_id in referenced:
+            if case_id not in case_by_id:
+                errors.append(f"{cluster['cluster_id']} references missing case {case_id}")
+    uncovered = sorted(set(case_by_id) - coverage_case_ids)
+    if uncovered:
+        errors.append(f"cases missing from coverage matrix: {uncovered}")
+
+    fixture_schema = ROOT / "regression/fixture-v0.1.schema.json"
+    provenance_schema = ROOT / "regression/historical-excerpt-provenance-v0.1.schema.json"
+    fixture_count = 0
+    for case in cases:
+        references = []
+        if case["scenario"].get("fixture_manifest"):
+            references.append((case["scenario"]["fixture_manifest"], "scenario_only"))
+        if case.get("curation_fixture_manifest"):
+            references.append((case["curation_fixture_manifest"], "reviewer_only"))
+        for relative, expected_visibility in references:
+            fixture_path = ROOT / "regression" / Path(*_safe_fixture_path(relative).parts)
+            if not fixture_path.is_file():
+                errors.append(f"{case['case_id']} fixture is missing: {relative}")
+                continue
+            fixture_count += 1
+            fixture = _load_json(fixture_path)
+            errors.extend(
+                _validate_instance(
+                    fixture,
+                    fixture_schema,
+                    str(fixture_path.relative_to(ROOT)),
+                )
+            )
+            if fixture.get("case_id") != case["case_id"]:
+                errors.append(f"fixture case mismatch at {fixture_path.relative_to(ROOT)}")
+            if fixture.get("visibility") != expected_visibility:
+                errors.append(
+                    f"fixture visibility mismatch at {fixture_path.relative_to(ROOT)}; "
+                    f"expected {expected_visibility}"
+                )
+            for file_record in fixture.get("files", []):
+                file_path = fixture_path.parent / Path(
+                    *_safe_fixture_path(file_record["path"]).parts
+                )
+                if not file_path.is_file():
+                    errors.append(f"fixture file is missing: {file_path.relative_to(ROOT)}")
+                    continue
+                if _sha256(file_path) != file_record["sha256"]:
+                    errors.append(f"fixture digest mismatch: {file_path.relative_to(ROOT)}")
+                if file_path.name == "provenance.json":
+                    errors.extend(
+                        _validate_instance(
+                            _load_json(file_path),
+                            provenance_schema,
+                            str(file_path.relative_to(ROOT)),
+                        )
+                    )
+    counts["fixture_manifests"] = fixture_count
+
+    errors.extend(_check_markdown_links())
+    errors.sort()
+    return {
+        "valid": not errors,
+        "counts": counts,
+        "error_count": len(errors),
+        "errors": errors,
+        "limitations": [
+            "This is a deterministic repository-integrity check, not scientific validation.",
+            "It does not establish oracle-free semantics or evaluation/holdout readiness.",
+        ],
+    }
+
+
+def main() -> int:
+    try:
+        report = check_repository()
+    except Exception as exc:
+        report = {
+            "valid": False,
+            "error_count": 1,
+            "errors": [f"repository checker failed: {type(exc).__name__}: {exc}"],
+        }
+    print(
+        json.dumps(
+            report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+        )
+    )
+    return 0 if report["valid"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

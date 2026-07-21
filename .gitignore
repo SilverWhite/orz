@@ -1,0 +1,7 @@
+_prototype_smoke/
+prototype/.pytest_cache/
+prototype/*.egg-info/
+**/__pycache__/
+**/*.py[cod]
+.tools/
+.observed-runs/
