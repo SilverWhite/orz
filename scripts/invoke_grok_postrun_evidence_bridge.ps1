@@ -230,20 +230,25 @@ function Invoke-ControlledCommand {
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $childEnvironment = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    # Windows PowerShell 5.1 runs on .NET Framework, where Process.Start()
+    # consumes ProcessStartInfo.EnvironmentVariables (a StringDictionary).
+    # Setting the newer private `environment` field is not sufficient: the
+    # child can silently inherit the parent environment instead. Use the
+    # public collection that the active runtime actually serializes.
+    $info.EnvironmentVariables.Clear()
     foreach ($name in $Environment.Keys) {
         if ($null -ne $Environment[$name]) {
-            $childEnvironment[$name] = [string]$Environment[$name]
+            $info.EnvironmentVariables[$name] = [string]$Environment[$name]
         }
     }
-    $environmentField = $info.GetType().GetField(
-        'environment',
-        [System.Reflection.BindingFlags]'Instance,NonPublic'
-    )
-    if ($null -eq $environmentField) {
-        throw 'Could not initialize a clean ProcessStartInfo environment.'
+    if ($info.EnvironmentVariables.Count -ne @($Environment.Keys | Where-Object { $null -ne $Environment[$_] }).Count) {
+        throw 'Could not initialize the complete clean ProcessStartInfo environment.'
     }
-    $environmentField.SetValue($info, $childEnvironment)
+    foreach ($name in $Environment.Keys) {
+        if ($null -ne $Environment[$name] -and $info.EnvironmentVariables[$name] -ne [string]$Environment[$name]) {
+            throw "Clean ProcessStartInfo environment verification failed for: $name"
+        }
+    }
 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $info

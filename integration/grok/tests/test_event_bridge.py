@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 ROOT = Path(__file__).resolve().parents[3]
 BUILDER = ROOT / "scripts" / "build_grok_event_bridge.py"
 VERIFIER = ROOT / "scripts" / "verify_grok_event_bridge.py"
+POSTRUN_ORCHESTRATOR = ROOT / "scripts" / "invoke_grok_postrun_evidence_bridge.ps1"
 EVENT_SCHEMA = ROOT / "integration" / "grok" / "grok-event-bridge-event-v0.1.schema.json"
 MANIFEST_SCHEMA = ROOT / "integration" / "grok" / "grok-event-bridge-manifest-v0.1.schema.json"
 VERIFICATION_SCHEMA = ROOT / "integration" / "grok" / "grok-event-bridge-verification-v0.1.schema.json"
@@ -63,6 +64,12 @@ def _receipt(path: Path, receipt_id: str) -> None:
 
 
 class EventBridgeTests(unittest.TestCase):
+    def test_postrun_uses_public_windows_process_environment(self) -> None:
+        source = POSTRUN_ORCHESTRATOR.read_text(encoding="utf-8")
+        self.assertIn("$info.EnvironmentVariables.Clear()", source)
+        self.assertIn("$info.EnvironmentVariables[$name]", source)
+        self.assertNotIn("GetField(\n        'environment'", source)
+
     def _fixture(self, temporary: str) -> tuple[Path, Path]:
         root = Path(temporary)
         run = root / "run"
