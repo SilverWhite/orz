@@ -213,6 +213,9 @@ def check_repository() -> dict[str, Any]:
         "New-NetFirewallRule",
         "Remove-NetFirewallRule",
         "CleanEnvironment",
+        "LifJobObject",
+        "tool-continuity",
+        "reasoning_marker_preserved",
         "credential_value_absent_from_artifacts",
         "debug_capture_disabled",
     )
@@ -225,6 +228,7 @@ def check_repository() -> dict[str, Any]:
     if "'--debug-file'" in fake_launcher_source or '"--debug-file"' in fake_launcher_source:
         errors.append("fake-provider launcher must not enable Grok debug-file on build 0.2.106")
     counts["grok_fake_provider_fixtures"] = 1
+    counts["grok_tool_continuity_fixtures"] = 1
 
     runtime_examples = {
         "example-deepseek-adapter-profile.json": "deepseek-adapter-profile-v0.1.schema.json",

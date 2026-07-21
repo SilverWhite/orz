@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-tool-continuity-result-v0.2.schema.json",
+  "title": "Grok tool and reasoning continuity conformance result v0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_kind", "run_id", "session_id", "created_at", "binary", "isolation", "process", "provider", "artifacts", "checks", "valid", "limitations", "scenario", "containment", "observations"],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.2.0" },
+    "run_kind": { "const": "grok-tool-continuity-conformance" },
+    "scenario": { "const": "tool-continuity" },
+    "run_id": { "type": "string", "pattern": "^FAKE-[0-9a-f]{32}$" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version_output", "sha256", "verified"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "version_output": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "verified": { "const": true }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_isolated", "workspace_isolated", "temp_isolated", "provider_host", "temporary_firewall_enforced", "firewall_rules_removed", "real_credential_present"],
+      "properties": {
+        "profile_isolated": { "const": true },
+        "workspace_isolated": { "const": true },
+        "temp_isolated": { "const": true },
+        "provider_host": { "const": "127.0.0.1" },
+        "temporary_firewall_enforced": { "const": true },
+        "firewall_rules_removed": { "const": true },
+        "real_credential_present": { "const": false }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "exit_code", "timed_out", "duration_ms"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "exit_code": { "type": "integer" },
+        "timed_out": { "const": false },
+        "duration_ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "provider": { "type": "object" },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/artifact" },
+      "required": ["config", "prompt", "tool_fixture", "stdout", "stderr", "provider_result", "provider_private"]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "required": [
+        "grok_exit_zero",
+        "deepseek_path",
+        "model_match",
+        "stream_requested",
+        "authorization_redacted",
+        "credential_value_absent_from_artifacts",
+        "debug_capture_disabled",
+        "two_loopback_requests",
+        "read_file_schema_observed",
+        "reasoning_marker_preserved",
+        "tool_call_id_preserved",
+        "tool_result_observed",
+        "tool_result_marker_observed",
+        "response_marker_observed",
+        "tool_fixture_unchanged",
+        "job_object_created",
+        "job_object_assigned",
+        "job_object_closed"
+      ]
+    },
+    "containment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_object_created", "job_object_assigned", "kill_on_close", "job_object_closed", "assignment_race_known"],
+      "properties": {
+        "job_object_created": { "const": true },
+        "job_object_assigned": { "const": true },
+        "kill_on_close": { "const": true },
+        "job_object_closed": { "const": true },
+        "assignment_race_known": { "const": true }
+      }
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_event_in_streaming_json", "thought_event_in_streaming_json", "terminal_event_in_streaming_json", "auxiliary_request_count"],
+      "properties": {
+        "tool_event_in_streaming_json": { "type": "boolean" },
+        "thought_event_in_streaming_json": { "type": "boolean" },
+        "terminal_event_in_streaming_json": { "type": "boolean" },
+        "auxiliary_request_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "valid": { "type": "boolean" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

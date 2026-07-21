@@ -68,3 +68,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_fa
 launcher 因此禁用该参数，并扫描全部 run artifact，credential value 命中即 FAIL。当前 fixture 单元测试已
 通过；修复后的管理员 smoke 已通过。完整失败链、最终 run ID 与 artifact digest 见
 [`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](../../docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md)。
+
+两轮只读工具与 reasoning continuity 使用同一 launcher：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_fake_provider_conformance.ps1 `
+  -OutputDirectory ..\..\.observed-runs\tool-continuity-smoke `
+  -Scenario tool-continuity
+```
+
+该模式只允许实际 request schema 中的 `read_file` 读取固定 fixture，并验证第二轮 assistant
+`reasoning_content`、tool call ID 和 tool message。Grok 进程被分配到 kill-on-close Job Object。当前
+`streaming-json` 不包含显式 tool event；完整边界与失败链见
+[`GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md`](../../docs/GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md)。

@@ -11,6 +11,10 @@ from typing import Any
 
 HOST = "127.0.0.1"
 RESPONSE_MARKER = "LIF_FAKE_PROVIDER_OK"
+TOOL_RESPONSE_MARKER = "LIF_FAKE_TOOL_CONTINUITY_OK"
+REASONING_MARKER = "LIF_FAKE_REASONING_CONTINUITY_001"
+TOOL_RESULT_MARKER = "LIF_TOOL_FIXTURE_CONTENT_001"
+TOOL_CALL_ID = "call_lif_read_fixture_001"
 MAX_BODY_BYTES = 1024 * 1024
 
 
@@ -29,9 +33,21 @@ def _atomic_write_json(path: Path, value: Any) -> None:
 
 
 class CaptureState:
-    def __init__(self, output_directory: Path) -> None:
+    def __init__(
+        self, output_directory: Path, scenario: str, tool_fixture_path: Path | None
+    ) -> None:
         self.output_directory = output_directory
+        self.scenario = scenario
+        self.tool_fixture_path = tool_fixture_path
         self.requests: list[dict[str, Any]] = []
+
+    def primary_requests(self) -> list[dict[str, Any]]:
+        return [
+            request
+            for request in self.requests
+            if isinstance(request.get("body"), dict)
+            and request["body"].get("model") == "deepseek-v4-pro"
+        ]
 
     def record(self, handler: BaseHTTPRequestHandler, body: bytes) -> None:
         try:
@@ -73,7 +89,7 @@ class CaptureState:
             handle.write("\n")
 
 
-def _completion_chunks(model: str) -> bytes:
+def _completion_chunks(model: str, marker: str = RESPONSE_MARKER) -> bytes:
     created = int(time.time())
     common = {
         "id": "chatcmpl-lif-fake-0001",
@@ -93,7 +109,7 @@ def _completion_chunks(model: str) -> bytes:
             "choices": [
                 {
                     "index": 0,
-                    "delta": {"content": RESPONSE_MARKER},
+                    "delta": {"content": marker},
                     "finish_reason": None,
                 }
             ],
@@ -111,6 +127,116 @@ def _completion_chunks(model: str) -> bytes:
     lines = [f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n" for chunk in chunks]
     lines.append("data: [DONE]\n\n")
     return "".join(lines).encode("utf-8")
+
+
+def _tool_call_chunks(model: str, tool_fixture_path: Path) -> bytes:
+    created = int(time.time())
+    common = {
+        "id": "chatcmpl-lif-fake-tool-0001",
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+    }
+    arguments = json.dumps(
+        {"target_file": str(tool_fixture_path)}, separators=(",", ":")
+    )
+    chunks = [
+        {
+            **common,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        },
+        {
+            **common,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"reasoning_content": REASONING_MARKER},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            **common,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": TOOL_CALL_ID,
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": arguments,
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            **common,
+            "choices": [
+                {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+            ],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        },
+    ]
+    lines = [f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n" for chunk in chunks]
+    lines.append("data: [DONE]\n\n")
+    return "".join(lines).encode("utf-8")
+
+
+def _final_tool_chunks(model: str) -> bytes:
+    return _completion_chunks(model, TOOL_RESPONSE_MARKER)
+
+
+def _continuity_summary(requests: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(requests) < 2 or not isinstance(requests[1].get("body"), dict):
+        return {
+            "second_request_observed": False,
+            "reasoning_marker_preserved": False,
+            "tool_call_id_preserved": False,
+            "tool_result_observed": False,
+            "tool_result_marker_observed": False,
+        }
+    messages = requests[1]["body"].get("messages", [])
+    assistant_messages = [
+        item for item in messages if isinstance(item, dict) and item.get("role") == "assistant"
+    ]
+    tool_messages = [
+        item for item in messages if isinstance(item, dict) and item.get("role") == "tool"
+    ]
+    reasoning_preserved = any(
+        item.get("reasoning_content") == REASONING_MARKER for item in assistant_messages
+    )
+    tool_call_preserved = False
+    for item in assistant_messages:
+        calls = item.get("tool_calls")
+        if isinstance(calls, list) and any(
+            isinstance(call, dict) and call.get("id") == TOOL_CALL_ID for call in calls
+        ):
+            tool_call_preserved = True
+    result_observed = any(item.get("tool_call_id") == TOOL_CALL_ID for item in tool_messages)
+    result_marker_observed = any(
+        TOOL_RESULT_MARKER in str(item.get("content", "")) for item in tool_messages
+    )
+    return {
+        "second_request_observed": True,
+        "reasoning_marker_preserved": reasoning_preserved,
+        "tool_call_id_preserved": tool_call_preserved,
+        "tool_result_observed": result_observed,
+        "tool_result_marker_observed": result_marker_observed,
+    }
 
 
 def make_handler(state: CaptureState) -> type[BaseHTTPRequestHandler]:
@@ -139,7 +265,16 @@ def make_handler(state: CaptureState) -> type[BaseHTTPRequestHandler]:
                     model = parsed["model"]
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
-            response = _completion_chunks(model)
+            primary_sequence = len(state.primary_requests())
+            if model != "deepseek-v4-pro":
+                response = _completion_chunks(model, "LIF fake session")
+            elif state.scenario == "tool-continuity" and primary_sequence == 1:
+                assert state.tool_fixture_path is not None
+                response = _tool_call_chunks(model, state.tool_fixture_path)
+            elif state.scenario == "tool-continuity":
+                response = _final_tool_chunks(model)
+            else:
+                response = _completion_chunks(model)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
@@ -156,11 +291,21 @@ def make_handler(state: CaptureState) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def run_server(output_directory: Path, timeout_seconds: float) -> dict[str, Any]:
+def run_server(
+    output_directory: Path,
+    timeout_seconds: float,
+    *,
+    scenario: str = "single",
+    tool_fixture_path: Path | None = None,
+) -> dict[str, Any]:
     if output_directory.exists():
         raise ValueError(f"refusing to overwrite provider output: {output_directory}")
     output_directory.mkdir(parents=True)
-    state = CaptureState(output_directory)
+    if scenario == "tool-continuity":
+        if tool_fixture_path is None or not tool_fixture_path.is_file():
+            raise ValueError("tool-continuity requires an existing --tool-fixture-path")
+        tool_fixture_path = tool_fixture_path.resolve()
+    state = CaptureState(output_directory, scenario, tool_fixture_path)
     server = HTTPServer((HOST, 0), make_handler(state))
     server.timeout = 0.25
     port = int(server.server_address[1])
@@ -174,16 +319,24 @@ def run_server(output_directory: Path, timeout_seconds: float) -> dict[str, Any]
     }
     _atomic_write_json(output_directory / "ready.json", ready)
     started = time.monotonic()
-    while not state.requests and time.monotonic() - started < timeout_seconds:
+    expected_requests = 2 if scenario == "tool-continuity" else 1
+    while len(state.primary_requests()) < expected_requests and time.monotonic() - started < timeout_seconds:
         server.handle_request()
     server.server_close()
-    terminal_state = "succeeded" if len(state.requests) == 1 else "timed_out"
+    terminal_state = (
+        "succeeded"
+        if len(state.primary_requests()) == expected_requests
+        else "timed_out"
+    )
     private_path = output_directory / "requests.private.jsonl"
     result = {
         "schema_version": "0.1.0",
+        "scenario": scenario,
         "terminal_state": terminal_state,
         "bind": {"host": HOST, "port": port, "external": False},
         "request_count": len(state.requests),
+        "primary_request_count": len(state.primary_requests()),
+        "auxiliary_request_count": len(state.requests) - len(state.primary_requests()),
         "requests": [
             {
                 key: value
@@ -208,6 +361,33 @@ def run_server(output_directory: Path, timeout_seconds: float) -> dict[str, Any]
                     and isinstance(request["body"].get("messages"), list)
                     else None
                 ),
+                "message_roles": (
+                    [
+                        message.get("role")
+                        for message in request["body"].get("messages", [])
+                        if isinstance(message, dict)
+                    ]
+                    if isinstance(request["body"], dict)
+                    and isinstance(request["body"].get("messages"), list)
+                    else None
+                ),
+                "tool_names": (
+                    [
+                        tool.get("function", {}).get("name")
+                        for tool in request["body"].get("tools", [])
+                        if isinstance(tool, dict)
+                        and isinstance(tool.get("function"), dict)
+                    ]
+                    if isinstance(request["body"], dict)
+                    and isinstance(request["body"].get("tools"), list)
+                    else None
+                ),
+                "request_class": (
+                    "primary"
+                    if isinstance(request["body"], dict)
+                    and request["body"].get("model") == "deepseek-v4-pro"
+                    else "auxiliary"
+                ),
             }
             for request in state.requests
         ],
@@ -222,10 +402,15 @@ def run_server(output_directory: Path, timeout_seconds: float) -> dict[str, Any]
             "classification": "fake-fixture-private",
         },
         "response": {
-            "marker": RESPONSE_MARKER,
+            "marker": TOOL_RESPONSE_MARKER
+            if scenario == "tool-continuity"
+            else RESPONSE_MARKER,
             "streaming_sse": True,
             "real_model_invoked": False,
         },
+        "continuity": _continuity_summary(state.primary_requests())
+        if scenario == "tool-continuity"
+        else None,
         "limitations": [
             "This fake fixture captures request bodies in an ignored local artifact and is not suitable for sensitive prompts.",
             "Successful parsing proves compatibility only with this fixed SSE response, not with the real DeepSeek service.",
@@ -239,10 +424,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Single-request loopback DeepSeek fixture")
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--scenario", choices=("single", "tool-continuity"), default="single"
+    )
+    parser.add_argument("--tool-fixture-path", type=Path)
     args = parser.parse_args()
     if args.timeout_seconds <= 0 or args.timeout_seconds > 300:
         parser.error("--timeout-seconds must be in (0, 300]")
-    result = run_server(args.output_directory.resolve(), args.timeout_seconds)
+    result = run_server(
+        args.output_directory.resolve(),
+        args.timeout_seconds,
+        scenario=args.scenario,
+        tool_fixture_path=args.tool_fixture_path,
+    )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
     return 0 if result["terminal_state"] == "succeeded" else 2
 

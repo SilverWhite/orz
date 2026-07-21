@@ -6,6 +6,9 @@ param(
     [ValidateRange(5, 120)]
     [int]$TimeoutSeconds = 30,
 
+    [ValidateSet('single', 'tool-continuity')]
+    [string]$Scenario = 'single',
+
     [string]$BinaryPath,
 
     [string]$PythonPath
@@ -30,6 +33,100 @@ foreach ($firewallCommand in @('Get-NetFirewallProfile', 'New-NetFirewallRule', 
     if (-not (Get-Command $firewallCommand -ErrorAction SilentlyContinue)) {
         throw "Required Windows Firewall command is unavailable: $firewallCommand"
     }
+}
+
+if (-not ('LifJobObject' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class LifJobObject
+{
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    private const int JobObjectExtendedLimitInformation = 9;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr securityAttributes, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        IntPtr job,
+        int informationClass,
+        ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION information,
+        uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static IntPtr CreateKillOnClose()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        uint size = (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref information, size))
+        {
+            int error = Marshal.GetLastWin32Error();
+            CloseHandle(job);
+            throw new Win32Exception(error);
+        }
+        return job;
+    }
+
+    public static void Assign(IntPtr job, IntPtr process)
+    {
+        if (!AssignProcessToJobObject(job, process))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
+    public static void Close(IntPtr job)
+    {
+        if (job != IntPtr.Zero && !CloseHandle(job))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+}
+'@
 }
 
 function ConvertTo-NativeArgument {
@@ -78,7 +175,8 @@ function Start-RedirectedProcess {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [hashtable]$Environment,
-        [switch]$CleanEnvironment
+        [switch]$CleanEnvironment,
+        [switch]$AssignToJob
     )
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $FilePath
@@ -101,10 +199,33 @@ function Start-RedirectedProcess {
     if (-not $process.Start()) {
         throw "Failed to start process: $FilePath"
     }
+    $jobHandle = [IntPtr]::Zero
+    $jobCreated = $false
+    $jobAssigned = $false
+    if ($AssignToJob) {
+        try {
+            $jobHandle = [LifJobObject]::CreateKillOnClose()
+            $jobCreated = $true
+            [LifJobObject]::Assign($jobHandle, $process.Handle)
+            $jobAssigned = $true
+        } catch {
+            if ($jobHandle -ne [IntPtr]::Zero) {
+                [LifJobObject]::Close($jobHandle)
+            }
+            if (-not $process.HasExited) {
+                $process.Kill()
+                $process.WaitForExit()
+            }
+            throw
+        }
+    }
     return [ordered]@{
         process = $process
         stdout_task = $process.StandardOutput.ReadToEndAsync()
         stderr_task = $process.StandardError.ReadToEndAsync()
+        job_handle = $jobHandle
+        job_created = $jobCreated
+        job_assigned = $jobAssigned
     }
 }
 
@@ -124,7 +245,13 @@ if (-not $PythonPath) {
 }
 $PythonPath = (Resolve-Path -LiteralPath $PythonPath).Path
 $providerScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'fake_deepseek_provider.py')).Path
-$promptSource = (Resolve-Path -LiteralPath (Join-Path $repoRoot 'integration\grok\examples\observed-dry-run-prompt.txt')).Path
+if ($Scenario -eq 'tool-continuity') {
+    $promptSource = (Resolve-Path -LiteralPath (Join-Path $repoRoot 'integration\grok\examples\tool-continuity-prompt.txt')).Path
+    $toolFixtureSource = (Resolve-Path -LiteralPath (Join-Path $repoRoot 'integration\grok\examples\tool-continuity-fixture.txt')).Path
+} else {
+    $promptSource = (Resolve-Path -LiteralPath (Join-Path $repoRoot 'integration\grok\examples\observed-dry-run-prompt.txt')).Path
+    $toolFixtureSource = $null
+}
 
 $runId = 'FAKE-' + [guid]::NewGuid().ToString('N')
 $sessionId = [guid]::NewGuid().ToString()
@@ -134,6 +261,7 @@ $grokConfigDirectory = Join-Path $profileRoot '.grok'
 $workspace = Join-Path $outputRoot 'workspace'
 $tempRoot = Join-Path $outputRoot 'temp'
 $promptPath = Join-Path $workspace 'prompt.txt'
+$toolFixturePath = Join-Path $workspace 'tool-fixture.txt'
 $configPath = Join-Path $grokConfigDirectory 'config.toml'
 $stdoutPath = Join-Path $outputRoot 'grok.stdout.streaming.jsonl'
 $stderrPath = Join-Path $outputRoot 'grok.stderr.log'
@@ -145,17 +273,30 @@ New-Item -ItemType Directory -Path $grokConfigDirectory | Out-Null
 New-Item -ItemType Directory -Path $workspace | Out-Null
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 Copy-Item -LiteralPath $promptSource -Destination $promptPath -ErrorAction Stop
+if ($toolFixtureSource) {
+    Copy-Item -LiteralPath $toolFixtureSource -Destination $toolFixturePath -ErrorAction Stop
+}
 
 $providerHandle = $null
 $grokHandle = $null
 $createdFirewallRules = New-Object System.Collections.Generic.List[string]
 $firewallRulesRemoved = $false
+$jobClosed = $false
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 try {
+    $providerArguments = @(
+        $providerScript,
+        '--output-directory', $providerDirectory,
+        '--timeout-seconds', ([string]($TimeoutSeconds + 15)),
+        '--scenario', $Scenario
+    )
+    if ($Scenario -eq 'tool-continuity') {
+        $providerArguments += @('--tool-fixture-path', $toolFixturePath)
+    }
     $providerHandle = Start-RedirectedProcess `
         -FilePath $PythonPath `
-        -Arguments @($providerScript, '--output-directory', $providerDirectory, '--timeout-seconds', ([string]($TimeoutSeconds + 15))) `
+        -Arguments $providerArguments `
         -WorkingDirectory $outputRoot
 
     $readyPath = Join-Path $providerDirectory 'ready.json'
@@ -247,11 +388,12 @@ context_window = 4096
         'ALL_PROXY' = 'http://127.0.0.1:1'
         'NO_PROXY' = '127.0.0.1,localhost'
     }
+    $maxTurns = if ($Scenario -eq 'tool-continuity') { '2' } else { '1' }
     $grokArguments = @(
         '--cwd', $workspace,
         '--model', 'lif-fake-deepseek',
         '--reasoning-effort', 'high',
-        '--max-turns', '1',
+        '--max-turns', $maxTurns,
         '--output-format', 'streaming-json',
         '--session-id', $sessionId,
         '--no-memory',
@@ -268,12 +410,20 @@ context_window = 4096
         -Arguments $grokArguments `
         -WorkingDirectory $workspace `
         -Environment $cleanEnvironment `
-        -CleanEnvironment
+        -CleanEnvironment `
+        -AssignToJob
 
     $timedOut = -not $grokHandle.process.WaitForExit($TimeoutSeconds * 1000)
     if ($timedOut) {
-        Stop-Process -Id $grokHandle.process.Id -Force -ErrorAction Stop
-        $grokHandle.process.WaitForExit()
+        [LifJobObject]::Close($grokHandle.job_handle)
+        $jobClosed = $true
+        if (-not $grokHandle.process.WaitForExit(5000)) {
+            Stop-Process -Id $grokHandle.process.Id -Force -ErrorAction Stop
+            $grokHandle.process.WaitForExit()
+        }
+    } else {
+        [LifJobObject]::Close($grokHandle.job_handle)
+        $jobClosed = $true
     }
     $grokStdout = $grokHandle.stdout_task.Result
     $grokStderr = $grokHandle.stderr_task.Result
@@ -301,7 +451,20 @@ context_window = 4096
     throw
 } finally {
     if ($grokHandle -and -not $grokHandle.process.HasExited) {
-        Stop-Process -Id $grokHandle.process.Id -Force -ErrorAction SilentlyContinue
+        if (-not $jobClosed -and $grokHandle.job_handle -ne [IntPtr]::Zero) {
+            try {
+                [LifJobObject]::Close($grokHandle.job_handle)
+                $jobClosed = $true
+            } catch {}
+        }
+        if (-not $grokHandle.process.WaitForExit(2000)) {
+            Stop-Process -Id $grokHandle.process.Id -Force -ErrorAction SilentlyContinue
+        }
+    } elseif ($grokHandle -and -not $jobClosed -and $grokHandle.job_handle -ne [IntPtr]::Zero) {
+        try {
+            [LifJobObject]::Close($grokHandle.job_handle)
+            $jobClosed = $true
+        } catch {}
     }
     if ($providerHandle -and -not $providerHandle.process.HasExited) {
         Stop-Process -Id $providerHandle.process.Id -Force -ErrorAction SilentlyContinue
@@ -324,7 +487,9 @@ if (-not $firewallRulesRemoved) {
 
 $providerResultPath = Join-Path $providerDirectory 'provider-result.json'
 $providerResult = Get-Content -LiteralPath $providerResultPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$request = @($providerResult.requests)[0]
+$allRequests = @($providerResult.requests)
+$requests = @($allRequests | Where-Object { $_.request_class -eq 'primary' })
+$request = $requests[0]
 $grokStdout = Get-Content -LiteralPath $stdoutPath -Raw -Encoding UTF8
 $credentialValueHits = @(
     Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
@@ -332,20 +497,38 @@ $credentialValueHits = @(
 )
 $checks = [ordered]@{
     grok_exit_zero = ($grokHandle.process.ExitCode -eq 0)
-    one_loopback_request = ($providerResult.request_count -eq 1 -and $request.client_ip -eq '127.0.0.1')
-    deepseek_path = ($request.path -eq '/chat/completions')
-    model_match = ($request.model -eq 'deepseek-v4-pro')
-    stream_requested = ($request.stream -eq $true)
-    authorization_redacted = ($request.authorization_present -eq $true -and $request.authorization_value_recorded -eq $false)
-    response_marker_observed = $grokStdout.Contains('LIF_FAKE_PROVIDER_OK')
-    no_tool_event_observed = ($grokStdout -notmatch '(?i)"(?:type|event_type)"\s*:\s*"[^"\r\n]*tool')
+    deepseek_path = (@($allRequests | Where-Object { $_.path -ne '/chat/completions' }).Count -eq 0)
+    model_match = (@($requests | Where-Object { $_.model -ne 'deepseek-v4-pro' }).Count -eq 0)
+    stream_requested = (@($allRequests | Where-Object { $_.stream -ne $true }).Count -eq 0)
+    authorization_redacted = (@($allRequests | Where-Object { $_.authorization_present -ne $true -or $_.authorization_value_recorded -ne $false }).Count -eq 0)
     credential_value_absent_from_artifacts = ($credentialValueHits.Count -eq 0)
     debug_capture_disabled = (-not (Test-Path -LiteralPath (Join-Path $outputRoot 'grok.debug.log')))
+}
+if ($Scenario -eq 'tool-continuity') {
+    $checks['two_loopback_requests'] = ($providerResult.primary_request_count -eq 2 -and @($allRequests | Where-Object { $_.client_ip -ne '127.0.0.1' }).Count -eq 0)
+    $checks['read_file_schema_observed'] = (@($requests[0].tool_names) -contains 'read_file')
+    $checks['reasoning_marker_preserved'] = ($providerResult.continuity.reasoning_marker_preserved -eq $true)
+    $checks['tool_call_id_preserved'] = ($providerResult.continuity.tool_call_id_preserved -eq $true)
+    $checks['tool_result_observed'] = ($providerResult.continuity.tool_result_observed -eq $true)
+    $checks['tool_result_marker_observed'] = ($providerResult.continuity.tool_result_marker_observed -eq $true)
+    $checks['response_marker_observed'] = $grokStdout.Contains('LIF_FAKE_TOOL_CONTINUITY_OK')
+    $checks['tool_fixture_unchanged'] = (
+        (Get-FileHash -LiteralPath $toolFixtureSource -Algorithm SHA256).Hash -eq
+        (Get-FileHash -LiteralPath $toolFixturePath -Algorithm SHA256).Hash
+    )
+    $checks['job_object_created'] = ($grokHandle.job_created -eq $true)
+    $checks['job_object_assigned'] = ($grokHandle.job_assigned -eq $true)
+    $checks['job_object_closed'] = $jobClosed
+} else {
+    $checks['one_loopback_request'] = ($providerResult.request_count -eq 1 -and $request.client_ip -eq '127.0.0.1')
+    $checks['response_marker_observed'] = $grokStdout.Contains('LIF_FAKE_PROVIDER_OK')
+    $checks['no_tool_event_observed'] = ($grokStdout -notmatch '(?i)"(?:type|event_type)"\s*:\s*"[^"\r\n]*tool')
 }
 $artifacts = [ordered]@{}
 foreach ($entry in @(
     @{ Name = 'config'; Path = $configPath },
     @{ Name = 'prompt'; Path = $promptPath },
+    @{ Name = 'tool_fixture'; Path = $toolFixturePath },
     @{ Name = 'stdout'; Path = $stdoutPath },
     @{ Name = 'stderr'; Path = $stderrPath },
     @{ Name = 'provider_result'; Path = $providerResultPath },
@@ -356,9 +539,24 @@ foreach ($entry in @(
     }
 }
 $valid = -not ($checks.Values -contains $false)
+$limitations = @(
+    'The temporary firewall rules apply to the verified Grok executable path; descendant executables are not covered by those program rules.',
+    'Grok 0.2.106 debug-file capture is disabled because a rejected probe observed the Authorization value in plaintext debug output.',
+    'The provider private capture is plaintext and restricted to checked-in inert fixtures; sensitive prompts require the future sealed-private layer.',
+    'This validates fixed fake SSE responses and does not establish real DeepSeek compatibility, correctness, or scientific validity.'
+)
+if ($Scenario -eq 'tool-continuity') {
+    $limitations += @(
+        'The process is assigned to the Job Object immediately after start, leaving a small pre-assignment race.',
+        'Tool continuity is proven only for one read_file call against an isolated immutable fixture.',
+        'Grok streaming-json omitted an explicit tool event; execution is observed from the tool message in the second provider request.'
+    )
+} else {
+    $limitations += 'Absence of a tool event is established only from the captured streaming-json output for this fixed response.'
+}
 $result = [ordered]@{
-    schema_version = '0.1.0'
-    run_kind = 'grok-fake-provider-conformance'
+    schema_version = if ($Scenario -eq 'tool-continuity') { '0.2.0' } else { '0.1.0' }
+    run_kind = if ($Scenario -eq 'tool-continuity') { 'grok-tool-continuity-conformance' } else { 'grok-fake-provider-conformance' }
     run_id = $runId
     session_id = $sessionId
     created_at = (Get-Date).ToUniversalTime().ToString('o')
@@ -387,13 +585,23 @@ $result = [ordered]@{
     artifacts = $artifacts
     checks = $checks
     valid = $valid
-    limitations = @(
-        'The temporary firewall rules apply to the verified Grok executable path; descendant executables are not covered by those program rules.',
-        'Absence of a tool event is established only from the captured streaming-json output for this fixed response.',
-        'Grok 0.2.106 debug-file capture is disabled because a rejected probe observed the Authorization value in plaintext debug output.',
-        'The provider private capture is plaintext and restricted to the checked-in inert prompt; sensitive prompts require the future sealed-private layer.',
-        'This validates one fixed SSE response and does not establish real DeepSeek compatibility, correctness, or scientific validity.'
-    )
+    limitations = $limitations
+}
+if ($Scenario -eq 'tool-continuity') {
+    $result['scenario'] = 'tool-continuity'
+    $result['containment'] = [ordered]@{
+        job_object_created = $grokHandle.job_created
+        job_object_assigned = $grokHandle.job_assigned
+        kill_on_close = $true
+        job_object_closed = $jobClosed
+        assignment_race_known = $true
+    }
+    $result['observations'] = [ordered]@{
+        tool_event_in_streaming_json = ($grokStdout -match '(?i)"(?:type|event_type)"\s*:\s*"[^"\r\n]*tool')
+        thought_event_in_streaming_json = ($grokStdout -match '"type"\s*:\s*"thought"')
+        terminal_event_in_streaming_json = ($grokStdout -match '"type"\s*:\s*"end"')
+        auxiliary_request_count = [int]$providerResult.auxiliary_request_count
+    }
 }
 Write-Utf8Atomic -Path $resultPath -Content (($result | ConvertTo-Json -Depth 16) + [Environment]::NewLine)
 $result | ConvertTo-Json -Depth 16

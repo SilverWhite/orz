@@ -95,9 +95,15 @@ bounded queue 和 backpressure：允许降低 telemetry 频率，不允许静默
    clean child environment、no-overwrite 和 schema 已实现。一次 pre-fix run 发现 debug-file 泄漏假 credential
    并据此禁用；修复后的严格 smoke 已通过，详见
    [`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](../docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md)。
-3. Windows Job Object supervisor：取消整个进程树，采集资源和 terminal state。
+3. Windows Job Object supervisor：Grok 已接入 kill-on-close Job Object，并在成功与 timeout development run
+   中记录 create/assign/close；当前仍有 start-to-assignment race，且尚缺显式 child-tree timeout fixture。
 4. local trace/export + workspace delta + hash-chain verifier。
 5. DeepSeek conformance 通过后，才请求一次真实 development call 的单独授权。
+
+两轮 fake tool/reasoning continuity 与 Job Object 结果见
+[`GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md`](../docs/GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md)。Grok
+`streaming-json` 未输出显式 tool event；当前必须用 provider 第二轮 `role=tool` 消息与 artifact digest 补足
+观测，不能声称 stdout 单独构成完整事件日志。
 
 阶段 1–4 均不得要求 API key，也不得产生模型费用。
 

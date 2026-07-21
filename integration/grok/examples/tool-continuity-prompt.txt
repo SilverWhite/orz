@@ -1,0 +1,1 @@
+Use only the provided read_file tool call. Read the isolated fixture, then return the provider's fixed final response. Do not call any other tool.
