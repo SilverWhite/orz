@@ -84,7 +84,8 @@ Windows 后续路径已调整为轻量增量路线：先保持 Python/Win32 spik
 
 model-loop 现已对每轮/每次 retry 传递 attempt context，并由 broker 为三个 fake HTTPS attempt 分别签发 request-digest permit；每份可审计摘要只保留披露类别、计数、限额与 digest。fake-only 终端 UI 现要求逐次输入 digest challenge，allow/deny 写入 append-only hash-chain ledger，并由 result verifier 与三个 attempt 交叉核对。
 
-Grok Windows 预编译程序核验与 zero-model observed dry-run 已完成；下一优先级收缩为无密钥
-fake-provider conformance。不再继续实现平行的 capability discovery、通用 approval-ledger 恢复或通用
-transport 并发层。只有锁定 fake transport、验证实际请求形状/事件流、用户另行授权且凭据安全置入后，才考虑
-一次最小真实 DeepSeek development probe；这不自动扩张为 evaluation、holdout 或通用工具授权。
+Grok Windows 预编译程序核验、zero-model observed dry-run 与单轮无密钥 fake-provider conformance 已
+完成。下一优先级是 fake-only 第二轮 tool transcript 与 Windows Job Object supervisor；不跳到真实 provider。
+只有 reasoning/tool continuity、请求形状、事件流、进程树取消和 sealed-private 边界均通过，用户另行授权且
+凭据安全置入后，才考虑一次最小真实 DeepSeek development probe；这不自动扩张为 evaluation、holdout 或
+通用工具授权。

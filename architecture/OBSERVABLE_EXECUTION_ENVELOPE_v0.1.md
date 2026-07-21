@@ -30,7 +30,8 @@ evidence、precommitment 或正确性证明。API key、credential value 和无�
 ### 必须无损
 
 - Grok `streaming-json` stdout 原始字节流与逐事件解析结果；
-- stderr、debug-file、wrapper 自身决策与所有 terminal state；
+- stderr、wrapper 自身决策与所有 terminal state；上游 debug-file 只有在证明不泄密或启动即进入 sealed
+  private 层后才能启用；
 - tool proposal、权限决定、参数 digest、开始/结束、exit code、stdout/stderr digest；
 - workspace 中创建/修改/删除文件的 before/after digest 与 artifact registration；
 - session ID、模型 requested/resolved、token usage、retry/compaction/timeout/cancel；
@@ -76,8 +77,12 @@ bounded queue 和 backpressure：允许降低 telemetry 频率，不允许静默
 ## 6. Grok 0.2.106 映射
 
 首个 observed fake run 使用 headless `-p`，并至少启用：固定 `--session-id`、
-`--output-format streaming-json`、独立 `--debug-file`、`--max-turns`、`--no-memory`、
+`--output-format streaming-json`、`--max-turns`、`--no-memory`、
 `--no-subagents`、`--disable-web-search`、窄 `--tools`/`--deny` 和显式 `--sandbox`。
+
+锁定的 Grok `0.2.106` 在一次被拒绝的 loopback probe 中把 Authorization value 写进了
+`--debug-file`。因此当前 wrapper 禁用该参数；在上游修复或实现启动即加密/安全截获前，debug log 不能进入
+普通 audit 层。该发现不影响 stdout streaming events、provider 侧脱敏 capture 或 protocol 语义。
 
 禁止 `--always-approve` 与 `bypassPermissions`。全局参数必须位于子命令之前。run 后只执行本地
 `trace --local` 与 `export`，不上传 trace。
@@ -86,7 +91,10 @@ bounded queue 和 backpressure：允许降低 telemetry 频率，不允许静默
 
 1. `new_grok_observed_dry_run.ps1`：只生成 binary/input/Git digest、命令、目录和安全声明；当前已实现为
    `dry-run-no-execution` 计划，明确不是正式 run manifest。
-2. fake provider：捕获 Grok 最终 URL/headers/body，多轮 tool transcript 与 streaming events。
+2. fake provider：捕获 Grok 最终 URL/headers/body 与 streaming events；loopback fixture、临时防火墙、
+   clean child environment、no-overwrite 和 schema 已实现。一次 pre-fix run 发现 debug-file 泄漏假 credential
+   并据此禁用；修复后的严格 smoke 已通过，详见
+   [`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](../docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md)。
 3. Windows Job Object supervisor：取消整个进程树，采集资源和 terminal state。
 4. local trace/export + workspace delta + hash-chain verifier。
 5. DeepSeek conformance 通过后，才请求一次真实 development call 的单独授权。

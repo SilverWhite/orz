@@ -46,3 +46,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\new_grok_obser
 
 输出目录必须事先不存在，防止覆盖旧 provenance。计划中的 `network_policy` 和空 tool allowlist 在此阶段只
 是待验证意图，不能被描述成 Grok 已执行的隔离保证。
+
+## Loopback fake-provider conformance
+
+[`fake_deepseek_provider.py`](../../scripts/fake_deepseek_provider.py) 只绑定 `127.0.0.1`，接受一次
+Chat Completions 请求并返回固定 SSE。它保存完整 request body 到被忽略的 fixture-private artifact，但所有
+header value（尤其 Authorization）只保留 presence/长度/digest，不保存原值。因此它只能使用仓库内惰性
+prompt，不能承载敏感输入。
+
+[`invoke_grok_fake_provider_conformance.ps1`](../../scripts/invoke_grok_fake_provider_conformance.ps1) 要求管理员
+令牌，在启动 Grok 前为已核验 binary 创建临时出站阻断规则：排除 `127.0.0.0/8` 后阻断全部 IPv4，并阻断
+全部 IPv6。它还清空子进程继承环境，只重新加入最小 Windows 环境、隔离的 HOME/profile/temp、假 credential
+和 fail-closed proxy。规则在 `finally` 中按 run UUID 删除；创建规则失败时 Grok 不启动。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_fake_provider_conformance.ps1 `
+  -OutputDirectory ..\..\.observed-runs\fake-provider-smoke
+```
+
+锁定的 Grok `0.2.106` 曾在被拒绝的 pre-fix probe 中把假 Authorization value 写入 `--debug-file`。
+launcher 因此禁用该参数，并扫描全部 run artifact，credential value 命中即 FAIL。当前 fixture 单元测试已
+通过；修复后的管理员 smoke 已通过。完整失败链、最终 run ID 与 artifact digest 见
+[`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](../../docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md)。

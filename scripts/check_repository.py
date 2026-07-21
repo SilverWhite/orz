@@ -13,6 +13,13 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+NON_REPOSITORY_PARTS = {
+    ".git",
+    ".observed-runs",
+    ".pytest_cache",
+    ".tools",
+    "__pycache__",
+}
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -80,6 +87,9 @@ def _check_markdown_links() -> list[str]:
     errors: list[str] = []
     pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
     for path in sorted(ROOT.rglob("*.md")):
+        relative_path = path.relative_to(ROOT)
+        if any(part in NON_REPOSITORY_PARTS for part in relative_path.parts):
+            continue
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             for match in pattern.finditer(line):
                 target = match.group(1).split("#", 1)[0]
@@ -189,6 +199,32 @@ def check_repository() -> dict[str, Any]:
         )
     )
     counts["grok_observed_plan_examples"] = 1
+
+    fake_provider_path = ROOT / "scripts/fake_deepseek_provider.py"
+    fake_launcher_path = ROOT / "scripts/invoke_grok_fake_provider_conformance.ps1"
+    fake_provider_source = fake_provider_path.read_text(encoding="utf-8")
+    fake_launcher_source = fake_launcher_path.read_text(encoding="utf-8")
+    provider_required = (
+        'HOST = "127.0.0.1"',
+        '"authorization_value_recorded": False',
+        '"requests.private.jsonl"',
+    )
+    launcher_required = (
+        "New-NetFirewallRule",
+        "Remove-NetFirewallRule",
+        "CleanEnvironment",
+        "credential_value_absent_from_artifacts",
+        "debug_capture_disabled",
+    )
+    for marker in provider_required:
+        if marker not in fake_provider_source:
+            errors.append(f"fake provider is missing safety marker: {marker}")
+    for marker in launcher_required:
+        if marker not in fake_launcher_source:
+            errors.append(f"fake-provider launcher is missing safety marker: {marker}")
+    if "'--debug-file'" in fake_launcher_source or '"--debug-file"' in fake_launcher_source:
+        errors.append("fake-provider launcher must not enable Grok debug-file on build 0.2.106")
+    counts["grok_fake_provider_fixtures"] = 1
 
     runtime_examples = {
         "example-deepseek-adapter-profile.json": "deepseek-adapter-profile-v0.1.schema.json",
