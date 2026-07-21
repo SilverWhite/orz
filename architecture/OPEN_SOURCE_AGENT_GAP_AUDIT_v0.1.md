@@ -107,7 +107,7 @@ aggregate digest。上游 folder-trust 与 sidecar receipt 两层都不能互相
 ### 5.2 Event completeness 不能由 stdout 假装
 
 两轮 fake run 已证明 provider 后续请求包含 `role=tool`，但 Grok documented streaming event 没有 tool
-begin/end。下一 trace bridge 对每种事件记录：
+begin/end。当前 trace/event bridge 对每种事件记录：
 
 - `event_type`、`sequence`、`timestamp`、`run_id`、`turn_id`/`tool_call_id`；
 - `observed_from`：`grok_stdout`、`grok_trace`、`grok_export`、`hook`、`provider_capture`、
@@ -144,7 +144,7 @@ Grok 已发出 compaction 生命周期 hook，但 summary 是派生模型输出�
 
 ## 6. 修订后的 implementation spike 顺序
 
-### Spike A：trusted observed launch + event completeness（下一步）
+### Spike A：trusted observed launch + event completeness（首轮完成，partial）
 
 1. 新增 workspace discovery/trust manifest 的 schema 与 fixture；默认对未登记 workspace 使用 restricted。
 2. 已用 isolated fake workspace 验证：untrusted instruction/skill/permission config 可见，hook 被跳过；
@@ -153,7 +153,13 @@ Grok 已发出 compaction 生命周期 hook，但 summary 是派生模型输出�
 4. 合并 stdout、trace/export、provider capture、supervisor 和 workspace scan 到 append-only event bridge。
 5. verifier 检查 sequence、payload-before-reference、唯一 terminal、usage/event completeness，不提升 claim。
 
-### Spike B：pre-tool checkpoint + delta + restore receipt
+当前进度：1、2、4、5 已完成 fake-only 实测。`events.jsonl` 直接补足 tool lifecycle，`updates.jsonl` 直接提供
+tool-call ID；34 条 metadata-only bridge event 的 schema 与 hash-chain 通过。第 3 项已实际执行，但锁定 build
+的 fake headless session 未进入 `session_search.sqlite`，trace/export 都返回 not found，因此 completeness 保持
+`partial`，不修改索引制造成功。详见
+[`GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`](../docs/GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md)。
+
+### Spike B：pre-tool checkpoint + delta + restore receipt（下一步）
 
 只对 disposable fixture workspace 实现 shadow snapshot、create/modify/delete delta、外部写冲突和显式 restore。
 通过后再决定使用 bare Git store 还是 content-addressed blob；不得修改用户 Git history。

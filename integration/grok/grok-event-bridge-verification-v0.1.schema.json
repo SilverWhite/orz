@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-event-bridge-verification-v0.1.schema.json",
+  "title": "Grok event bridge replay verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "verification_kind", "checked_at", "bridge_id", "run_id",
+    "session_id", "manifest", "event_journal", "source_artifact_count", "event_count",
+    "checks", "valid", "errors", "limitations"
+  ],
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "verification_kind": { "const": "grok-event-bridge-replay" },
+    "checked_at": { "type": "string", "format": "date-time" },
+    "bridge_id": { "type": "string", "pattern": "^BRIDGE-[0-9a-f]{32}$" },
+    "run_id": { "type": "string", "pattern": "^FAKE-[0-9a-f]{32}$" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "manifest": { "$ref": "#/$defs/artifact" },
+    "event_journal": { "$ref": "#/$defs/artifact" },
+    "source_artifact_count": { "type": "integer", "minimum": 1 },
+    "event_count": { "type": "integer", "minimum": 1 },
+    "checks": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "required": [
+        "manifest_schema_valid", "source_artifacts_match", "event_journal_artifact_matches",
+        "event_schemas_valid", "event_count_and_breakdown_match", "bridge_sequence_contiguous",
+        "event_hash_chain_valid", "raw_content_fields_omitted", "manifest_claims_valid",
+        "completeness_not_promoted"
+      ]
+    },
+    "valid": { "type": "boolean" },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "limitations": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

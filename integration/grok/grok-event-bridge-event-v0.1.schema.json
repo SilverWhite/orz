@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-event-bridge-event-v0.1.schema.json",
+  "title": "Grok event completeness bridge event v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "bridge_id", "run_id", "session_id", "sequence", "event_id",
+    "observed_from", "source_artifact", "source_sequence", "source_event_type",
+    "canonical_event_type", "runtime_timestamp", "turn_id", "tool_call_id",
+    "raw_payload_sha256", "raw_payload_bytes", "raw_payload_scope", "redaction_state",
+    "completeness_state", "details", "previous_event_sha256", "event_sha256"
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "bridge_id": { "type": "string", "pattern": "^BRIDGE-[0-9a-f]{32}$" },
+    "run_id": { "type": "string", "pattern": "^FAKE-[0-9a-f]{32}$" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "event_id": { "type": "string", "pattern": "^BEVT-[0-9]{6}$" },
+    "observed_from": {
+      "enum": [
+        "workspace_scan", "grok_stdout", "grok_session_events", "grok_session_updates",
+        "provider_capture", "grok_trace", "grok_export", "supervisor"
+      ]
+    },
+    "source_artifact": { "type": "string", "minLength": 1 },
+    "source_sequence": { "type": "integer", "minimum": 0 },
+    "source_event_type": { "type": "string", "minLength": 1 },
+    "canonical_event_type": {
+      "enum": [
+        "workspace_trust", "turn_started", "model_request", "model_reasoning_chunk",
+        "model_output_chunk", "tool_proposal", "tool_update", "tool_lifecycle",
+        "tool_started", "tool_completed", "permission_requested", "permission_decision",
+        "terminal", "source_event", "source_status", "run_result"
+      ]
+    },
+    "runtime_timestamp": {
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "null" }
+      ]
+    },
+    "turn_id": { "type": ["string", "null"] },
+    "tool_call_id": { "type": ["string", "null"] },
+    "raw_payload_sha256": { "$ref": "#/$defs/sha256" },
+    "raw_payload_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "raw_payload_scope": { "const": "source_record_or_artifact_bytes" },
+    "redaction_state": { "enum": ["metadata_only", "content_redacted"] },
+    "completeness_state": { "enum": ["direct", "unavailable", "ambiguous"] },
+    "details": { "type": "object" },
+    "previous_event_sha256": {
+      "oneOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "event_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "sequence": { "const": 0 } }, "required": ["sequence"] },
+      "then": { "properties": { "previous_event_sha256": { "type": "null" } } },
+      "else": { "properties": { "previous_event_sha256": { "$ref": "#/$defs/sha256" } } }
+    }
+  ]
+}

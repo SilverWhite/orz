@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-postrun-evidence-result-v0.1.schema.json",
+  "title": "Grok post-run evidence bridge result v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "result_kind", "created_at", "source_run_id", "session_id",
+    "source_result_schema", "workspace_trust", "commands", "bridge", "artifacts",
+    "checks", "valid", "limitations"
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "status_kind", "command_kind", "state", "completed_at",
+        "binary_sha256", "session_id", "arguments", "exit_code", "timed_out",
+        "duration_ms", "artifact_created", "artifact", "stdout", "stderr",
+        "containment", "safety"
+      ],
+      "properties": {
+        "schema_version": { "const": "0.1.0" },
+        "status_kind": { "const": "grok-postrun-command" },
+        "command_kind": { "enum": ["trace", "export"] },
+        "state": { "enum": ["available", "failed", "timed_out"] },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "session_id": { "type": "string", "format": "uuid" },
+        "arguments": { "type": "array", "minItems": 2, "items": { "type": "string" } },
+        "exit_code": { "type": "integer" },
+        "timed_out": { "type": "boolean" },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "artifact_created": { "type": "boolean" },
+        "artifact": {
+          "oneOf": [
+            { "$ref": "#/$defs/artifact" },
+            { "type": "null" }
+          ]
+        },
+        "stdout": { "$ref": "#/$defs/artifact" },
+        "stderr": { "$ref": "#/$defs/artifact" },
+        "containment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["job_object_created", "job_object_assigned", "kill_on_close", "job_object_closed", "assignment_race_known"],
+          "properties": {
+            "job_object_created": { "const": true },
+            "job_object_assigned": { "const": true },
+            "kill_on_close": { "const": true },
+            "job_object_closed": { "const": true },
+            "assignment_race_known": { "const": true }
+          }
+        },
+        "safety": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["clean_environment", "fail_closed_proxy", "all_network_firewall_block", "local_only_flag", "debug_capture_disabled", "credential_present"],
+          "properties": {
+            "clean_environment": { "const": true },
+            "fail_closed_proxy": { "const": true },
+            "all_network_firewall_block": { "const": true },
+            "local_only_flag": { "type": "boolean" },
+            "debug_capture_disabled": { "const": true },
+            "credential_present": { "const": false }
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "result_kind": { "const": "grok-postrun-evidence-bridge" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "source_run_id": { "type": "string", "pattern": "^FAKE-[0-9a-f]{32}$" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "source_result_schema": { "enum": ["0.2.0", "0.3.0"] },
+    "workspace_trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_id", "candidate_count", "aggregate_sha256", "scan_policy_sha256"],
+      "properties": {
+        "receipt_id": { "type": "string", "pattern": "^TRUST-[0-9a-f]{32}$" },
+        "candidate_count": { "const": 0 },
+        "aggregate_sha256": { "$ref": "#/$defs/sha256" },
+        "scan_policy_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace", "export"],
+      "properties": {
+        "trace": { "$ref": "#/$defs/command" },
+        "export": { "$ref": "#/$defs/command" }
+      }
+    },
+    "bridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bridge_id", "completeness", "event_count"],
+      "properties": {
+        "bridge_id": { "type": "string", "pattern": "^BRIDGE-[0-9a-f]{32}$" },
+        "completeness": { "type": "object" },
+        "event_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/artifact" },
+      "required": ["source_result", "postrun_trust_receipt", "trace_status", "export_status", "bridge_manifest", "bridge_events", "bridge_verification"]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "required": [
+        "source_run_valid", "postrun_trust_valid", "workspace_control_aggregate_unchanged",
+        "workspace_scan_policy_unchanged", "all_network_firewall_enforced",
+        "firewall_rules_removed", "trace_local_only_requested", "trace_job_closed",
+        "export_job_closed", "debug_capture_disabled", "no_credential_injected", "bridge_valid",
+        "bridge_verifier_valid"
+      ]
+    },
+    "valid": { "type": "boolean" },
+    "limitations": {
+      "type": "array",
+      "minItems": 5,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

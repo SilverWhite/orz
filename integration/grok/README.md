@@ -112,3 +112,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_fa
 `reasoning_content`、tool call ID 和 tool message。Grok 进程被分配到 kill-on-close Job Object。当前
 `streaming-json` 不包含显式 tool event；完整边界与失败链见
 [`GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md`](../../docs/GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md)。
+
+## Post-run event completeness bridge
+
+[`invoke_grok_postrun_evidence_bridge.ps1`](../../scripts/invoke_grok_postrun_evidence_bridge.ps1) 对一个已经完成、
+trust-gated 且 fake-only 的 run 做第三次 workspace receipt 复核，然后在管理员级 all-network firewall block、
+clean environment 与 Job Object 下有界执行 `trace --local` 和 `export`。命令失败会写 status，不会破坏或重写
+source run。
+
+[`build_grok_event_bridge.py`](../../scripts/build_grok_event_bridge.py) 合并 stdout、session events/updates、脱敏
+provider capture、supervisor result 与三张 receipt。它只输出白名单 metadata 和 raw-record digest；不复制 raw
+prompt/reasoning/tool content。跨来源 runtime 顺序固定为 `not_established`，bridge sequence 只是确定性追加顺序。
+[`verify_grok_event_bridge.py`](../../scripts/verify_grok_event_bridge.py) 独立重算 source/journal digest、event schema、
+counts、sequence、previous/event hash 与 raw-field omission；post-run result 必须登记该 verifier report。
+当前锁定 build 的 fake headless session 已落盘但未进入 session search index，导致 trace/export 都返回 not found；
+bridge 因此正确标为 `partial`。完整实测、schema 和 digest 见
+[`GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`](../../docs/GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md)。

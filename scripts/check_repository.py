@@ -305,6 +305,45 @@ def check_repository() -> dict[str, Any]:
     counts["grok_fake_provider_fixtures"] = 1
     counts["grok_tool_continuity_fixtures"] = 1
 
+    bridge_builder_source = (
+        ROOT / "scripts/build_grok_event_bridge.py"
+    ).read_text(encoding="utf-8")
+    bridge_verifier_source = (
+        ROOT / "scripts/verify_grok_event_bridge.py"
+    ).read_text(encoding="utf-8")
+    postrun_bridge_source = (
+        ROOT / "scripts/invoke_grok_postrun_evidence_bridge.ps1"
+    ).read_text(encoding="utf-8")
+    for marker in (
+        "cross_source_runtime_order",
+        "not_established",
+        "raw_content_omitted_from_bridge",
+        "source_result_artifacts_match",
+        "refusing to overwrite",
+    ):
+        if marker not in bridge_builder_source:
+            errors.append(f"Grok event bridge is missing provenance marker: {marker}")
+    for marker in (
+        "event_hash_chain_valid",
+        "source_artifacts_match",
+        "event_count_and_breakdown_match",
+        "completeness_not_promoted",
+        "refusing to overwrite",
+    ):
+        if marker not in bridge_verifier_source:
+            errors.append(f"Grok event bridge verifier is missing replay marker: {marker}")
+    for marker in (
+        "--local",
+        "all_network_firewall_block",
+        "LifPostrunJobObject",
+        "workspace-trust-receipt.postrun.json",
+        "debug_capture_disabled",
+        "credential_present = $false",
+    ):
+        if marker not in postrun_bridge_source:
+            errors.append(f"Grok post-run bridge is missing safety marker: {marker}")
+    counts["grok_event_bridge_fixtures"] = 1
+
     runtime_examples = {
         "example-deepseek-adapter-profile.json": "deepseek-adapter-profile-v0.1.schema.json",
         "example-leak-scan-report.json": "leak-scan-report-v0.1.schema.json",

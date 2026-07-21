@@ -107,3 +107,12 @@ result 显式升级为 `0.2.0`，tool-continuity 升级为 `0.3.0`，旧 schema 
 防火墙残留为 0。详见
 [`GROK_WORKSPACE_TRUST_AUDIT_2026-07-21.md`](GROK_WORKSPACE_TRUST_AUDIT_2026-07-21.md)。下一小步是 local
 trace/export event-completeness bridge。
+
+local event-completeness 第一轮现已实现并实测：post-run 第三张 trust receipt、管理员 all-network block、
+trace/export Job Object、metadata-only reducer、独立 replay verifier、31 个仓库 schema 和 12 个 Grok
+integration tests 已接通。
+锁定 build 的 fake headless session 文件存在但 search index 为空，trace/export 均返回 not found；bridge 仍从
+直接 session events/updates 观察到 tool lifecycle 与 tool-call ID，形成 34 条可重算 hash-chain event，并以
+`partial` 保存缺失项。详见
+[`GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`](GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md)。下一小步为 disposable fixture
+workspace checkpoint/delta；不迁入旧 index/map/self-check，也不修改 Grok session index 伪造兼容。
