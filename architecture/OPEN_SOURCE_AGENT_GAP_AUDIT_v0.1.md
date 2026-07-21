@@ -153,16 +153,18 @@ Grok 已发出 compaction 生命周期 hook，但 summary 是派生模型输出�
 4. 合并 stdout、trace/export、provider capture、supervisor 和 workspace scan 到 append-only event bridge。
 5. verifier 检查 sequence、payload-before-reference、唯一 terminal、usage/event completeness，不提升 claim。
 
-当前进度：1、2、4、5 已完成 fake-only 实测。`events.jsonl` 直接补足 tool lifecycle，`updates.jsonl` 直接提供
-tool-call ID；34 条 metadata-only bridge event 的 schema 与 hash-chain 通过。第 3 项已实际执行，但锁定 build
-的 fake headless session 未进入 `session_search.sqlite`，trace/export 都返回 not found，因此 completeness 保持
-`partial`，不修改索引制造成功。详见
+当前进度：1–5 已完成 fake-only 首轮实测。`events.jsonl` 直接补足 tool lifecycle，`updates.jsonl` 直接提供
+tool-call ID；34 条 metadata-only bridge event 的 schema 与 hash-chain 通过。纠正后的 Windows v4 post-run 在
+隔离 `GROK_HOME` 与全网络阻断下成功取得 5702-byte local trace 和 297-byte export。整体仍为 `partial`，因为
+cross-source runtime order、sealed encryption 与 stdout tool lifecycle 尚未观测；空 search index 是派生缓存状态，
+不影响 list/export/trace 的直接 session 路径。详见
 [`GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`](../docs/GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md)。
 
-### Spike B：pre-tool checkpoint + delta + restore receipt（下一步）
+### Spike B：pre-tool checkpoint + delta + restore receipt（hash-only audit receipt 已完成）
 
-只对 disposable fixture workspace 实现 shadow snapshot、create/modify/delete delta、外部写冲突和显式 restore。
-通过后再决定使用 bare Git store 还是 content-addressed blob；不得修改用户 Git history。
+disposable fixture workspace 已完成双 pass、hash-only checkpoint 与 create/modify/delete delta，专用 verifier 与
+合并 regression 均通过；它能证明差异但不能恢复。恢复 spike 改用独立 shadow Git fixture，audit receipt 只引用
+commit/tree ID、expected-current digest 和 conflict-only plan；不得修改用户 Git history 或自动覆盖真实文件。
 
 ### Spike C：Windows containment race
 
@@ -181,3 +183,6 @@ Grok 或大幅接管 runtime 时完成，则保留已知 race，不因此启动�
 - 不增加通用多 Agent 编排、双模型 architect/editor 或新的模型 transport。
 - 不 clone 六个参考项目、不复制其实现代码；需要实现时只采用可独立表达的架构不变量。
 - 不把 trace 完整性、checkpoint 可恢复或 leak scan PASS 提升为模型正确、evidence sufficiency 或科学 claim。
+
+更深的职责收缩、ACP-first 路线和 shadow-Git 裁决见
+[`MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)。

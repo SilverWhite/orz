@@ -76,18 +76,20 @@ git-ignored 的 `.tools/`，计算 SHA-256 后再运行。当前网络未能取�
 ## 6. 下一 implementation spike
 
 安装检查、无密钥 fake provider、DeepSeek 两轮 reasoning continuity 与 Windows Job Object 接入已经完成。
-下一步不是增加新的通用 Agent 组件，而是：
+workspace trust、local trace/export、event bridge 与 hash-only fixture checkpoint/delta 也已完成首轮机械验证。
+进一步复核上游后，下一步不是增加新的通用 Agent 组件，而是：
 
-1. 在 Grok 加载项目配置、hook、plugin、MCP 和规则前建立 workspace trust/restricted receipt；
-2. 执行 local trace/export，并把 stdout、provider capture、supervisor 与 workspace delta 合并成有来源的
-   append-only event bridge；
-3. 对 fixture workspace 增加 pre-tool checkpoint、delta 与冲突感知 restore receipt；
-4. 补 child-tree timeout fixture 和 compaction provenance；
+1. 先对 `grok agent stdio` 做 no-model ACP `initialize`/capability 探针；
+2. 用 fake provider 验证 ACP structured tool/permission/terminal continuity，并与 session files 对账；
+3. 用独立 shadow Git fixture 承担恢复，现有 hash-only checkpoint 继续作为 audit receipt；
+4. 补 ACP persistent process/background child-tree timeout fixture 和 compaction provenance；
 5. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。
 
 六个开源 Agent 的固定版本比较、取舍理由与 source ledger 见
 [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。其中 repo map、
 architect/editor 双模型和云端 sandbox 明确延期；不迁入旧研究 `index/map/self-check`。
+职责深拆与 ACP-first 收缩见
+[`MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)。
 
 ## 7. 官方依据
 

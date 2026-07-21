@@ -103,17 +103,20 @@ bounded queue 和 backpressure：允许降低 telemetry 频率，不允许静默
    中记录 create/assign/close；当前仍有 start-to-assignment race，且尚缺显式 child-tree timeout fixture。
 4. workspace trust/restricted launch gate 已接入：双 receipt 早于任何 Grok 进程并在 agent process 前复查；
    fake-provider `0.2.0` 与 tool-continuity `0.3.0` 管理员实测通过。local trace/export + event completeness
-   bridge 已完成首轮 `partial` 实测；下一子步是 fixture-only checkpoint/delta。
-5. fixture-only pre-tool checkpoint + workspace delta + conflict-aware restore receipt。
+   bridge 已完成首轮 `partial` 实测；纠正后的 v4 已成功取得 local trace/export。
+5. fixture-only hash-only checkpoint + workspace delta + 独立 verifier 已完成；它是 audit receipt，不是恢复系统。
 6. child-tree timeout fixture + compaction provenance；summary 必须标为 derived/unverified，不能替代原始
    observation。
 7. DeepSeek conformance 通过后，才请求一次真实 development call 的单独授权。
 
 local event-completeness bridge 现已完成第一轮实测：stdout、session events/updates、provider、supervisor 与
 三张 receipt 被合并为 34 条 metadata-only hash-chain event；session-store 直接补足 tool lifecycle/ID。
-trace/export 对已落盘 fake headless session 返回 not found，因此整体正确标记为 `partial`。详见
-[`GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`](../docs/GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md)。下一实现项为
-disposable fixture workspace checkpoint/delta，而不是篡改 Grok session index。
+纠正 Windows post-run 环境注入后，v4 成功取得 5702-byte local trace 与 297-byte export；整体仍正确标记为
+`partial`，因为跨来源顺序、sealed encryption 与 stdout tool lifecycle 尚未观测。空 search index 只是派生全文
+检索缓存状态，不表示 session 丢失。详见
+[`GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`](../docs/GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md)。hash-only
+checkpoint/delta 结果见
+[`GROK_FIXTURE_CHECKPOINT_DELTA_SPIKE_2026-07-21.md`](../docs/GROK_FIXTURE_CHECKPOINT_DELTA_SPIKE_2026-07-21.md)。
 
 两轮 fake tool/reasoning continuity 与 Job Object 结果见
 [`GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md`](../docs/GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md)。Grok
@@ -126,6 +129,9 @@ disposable fixture workspace checkpoint/delta，而不是篡改 Grok session ind
 [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。Grok 已有 permission、
 hook、sandbox、session 和 compaction lifecycle；本 envelope 只补它们无法提供的 LIF 可验证边界，
 不建立平行 runtime。
+
+进一步核对 Grok ACP、后台任务、shadow-Git recovery 与权限所有权后，生产路线改为 ACP-first；详见
+[`MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)。
 
 云端 runtime 已由 [`ADR-0002`](../adr/ADR-0002-defer-cloud-runtime.md) 延期；本执行 envelope 当前只覆盖
 Windows 本机，不把 relay、云端队列或 D cloud-brain 纳入 implementation spike。
