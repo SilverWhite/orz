@@ -1,0 +1,60 @@
+{
+  "schema_version": "0.1.0",
+  "receipt_kind": "grok-workspace-trust-preflight",
+  "receipt_id": "TRUST-00000000000000000000000000000001",
+  "created_at": "2026-07-21T12:00:00Z",
+  "workspace": {
+    "requested_path": "C:\\example\\repo",
+    "canonical_path": "C:\\example\\repo",
+    "project_root": "C:\\example\\repo",
+    "scope_directories": ["C:\\example\\repo"]
+  },
+  "discovery": {
+    "scan_policy_version": "grok-workspace-control-scan-v0.1",
+    "scan_policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "complete": true,
+    "max_candidate_files": 5000,
+    "max_candidate_bytes": 268435456,
+    "candidate_count": 1,
+    "candidate_bytes": 18,
+    "aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "candidates": [
+      {
+        "relative_path": "AGENTS.md",
+        "path_kind": "file",
+        "surface": "project_instruction",
+        "capability": "instructions",
+        "upstream_folder_trust": "not_documented",
+        "bytes": 18,
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      }
+    ],
+    "limit_reasons": []
+  },
+  "decision": {
+    "mode": "restricted",
+    "actor": "sidecar-default",
+    "explicit_digest_confirmation": false,
+    "launch_permitted": false,
+    "expires_on_control_change": true
+  },
+  "upstream_folder_trust": {
+    "store_modified": false,
+    "documented_required_surfaces": ["project_hooks", "project_mcp", "project_lsp", "project_plugin_code"],
+    "sidecar_receipt_is_not_a_grok_trust_grant": true
+  },
+  "safety": {
+    "model_invoked": false,
+    "network_attempted": false,
+    "tools_executed": false,
+    "project_code_executed": false,
+    "file_contents_recorded": false,
+    "output_overwritten": false
+  },
+  "valid": true,
+  "limitations": [
+    "This is an illustrative receipt and does not authorize a launch.",
+    "The digest values are example values, not observations from C:\\example\\repo.",
+    "A real trusted receipt requires an explicit aggregate digest confirmation."
+  ]
+}

@@ -59,7 +59,7 @@ tool runtime。
 | 文件 | SHA-256 | 观测 |
 |---|---|---|
 | `14-headless-mode.md` | `d5178da68f4bd9c7936de476bc6be07e01ef05cb5e82c8eb82b8bf815d9f7dcb` | documented streaming event 只有 `text`、`thought`、`end`、`error`，另提示存在非穷举 compaction event；usage 明确可能 incomplete |
-| `22-permissions-and-safety.md` | `462e52c075997a92735736fe9130ba10a2600d30d8d15b779863176ef12e6c81` | hook → deny/ask/allow → remembered grant → built-in → mode；项目 allow/config/hook 没有独立 trust prompt |
+| `22-permissions-and-safety.md` | `462e52c075997a92735736fe9130ba10a2600d30d8d15b779863176ef12e6c81` | hook → deny/ask/allow → remembered grant → built-in → mode；项目 permission/config 没有独立 trust prompt |
 | `10-hooks.md` | `135a71daae77d09527bdc866794038d294ba900eb7b80f4bc9fa1c59e4f954f4` | 有 `PreCompact`/`PostCompact` 和 tool lifecycle hook；hook failure 默认 fail open |
 | `04-slash-commands.md` | `60d82b420c8218f292763211417c8eb43f2311da6cf7c7b85e56c0fb0611d2dd` | `/flush` 生成 LLM summary 保存当前知识，不构成逐项无损 provenance |
 
@@ -69,7 +69,7 @@ tool runtime。
 
 | 候选设计 | 裁决 | 本项目落点 | 理由 / 限制 |
 |---|---|---|---|
-| workspace trust bootstrap | **adopt** | launcher 在加载项目 `.grok/config.toml`、`.claude/settings*`、hook、plugin、skill、MCP、project rules 前检查 trust receipt | Grok 文档明确这些配置可无独立提示生效；这是当前最高优先级缺口 |
+| workspace trust bootstrap | **adapt** | launcher 在 Grok discovery 前冻结项目 `.grok/config.toml`、`.claude/settings*`、hook、plugin、skill、MCP 和 project rules 的 digest | Grok 已用 folder-trust 保护 project hook/MCP/LSP/plugin code；sidecar 补未信任时仍可见的 instruction/skill/permission config 与统一审计 receipt |
 | ordered append-only rollout + replay | **adapt** | sidecar `run-event` sequence/hash chain；引用 Grok trace/export 和 content-addressed payload | 不复制 Grok session；记录 completeness 与缺失来源 |
 | typed tool begin/end/permission/patch event | **adapt** | 用 hook/provider capture/workspace delta 组合成观测桥，每条标 `source` 与 `confidence=observed` | Grok stdout 当前不能单独重建 tool loop；不得从最终文本猜事件 |
 | pre-mutation snapshot + restore | **adopt** | 独立 shadow store，tool 前冻结 before digest；restore 必须 no-overwrite、显式授权并产生 receipt | 不自动 commit 用户分支，不把 user dirty work 混入 AI commit |
@@ -89,17 +89,20 @@ tool runtime。
 
 ### 5.1 Workspace trust 在权限系统之前
 
-Grok 的权限系统本身已有清晰顺序，但项目级 allow rule、hook、plugin 和 MCP 在陌生 checkout 中仍可能参与
-启动。sidecar 必须先完成 trust discovery，随后才允许 Grok 读取这些来源。trust receipt 至少固定：
+Grok 的权限系统本身已有清晰顺序，project hook、MCP/LSP 与 plugin code 也已有 unified folder-trust；但
+实际 `grok inspect` 证明 `projectTrusted=false` 时 instruction、skill、`.grok/config.toml` 与
+`.claude/settings.json` 仍进入 discovery。sidecar 因此必须在任何 Grok 进程前先静态冻结所有候选来源。
+trust receipt 至少固定：
 
-- canonical workspace path、Git remote/commit/dirty摘要；
+- canonical workspace path、project root 与 discovery scope；Git remote/commit/dirty 摘要继续由 run manifest 冻结；
 - 将被加载的项目配置、规则、hook manifest、plugin/skill/MCP 定义的路径与 digest；
 - `trusted`、`restricted` 或 `denied`；作出决定的主体与时间；
 - trust 后文件变化时 receipt 失效，不能沿用旧批准。
 
-`restricted` 模式只加载本仓库生成的临时用户级安全配置，禁用项目 hook/plugin/MCP/memory/subagent/web，
-并使用 `dontAsk` + narrow allow + Grok sandbox。是否能够完全阻止 Grok discovery 必须由 fake fixture 实测，
-不能仅凭参数名宣称。
+当前 `restricted` 模式不声称可以用参数禁掉全部 project discovery：只要静态扫描发现任一候选控制文件，
+就生成 receipt 并令 `launch_permitted=false`。只有零候选 workspace 可继续；`trusted` 必须显式确认当前
+aggregate digest。上游 folder-trust 与 sidecar receipt 两层都不能互相替代。实测见
+[`GROK_WORKSPACE_TRUST_AUDIT_2026-07-21.md`](../docs/GROK_WORKSPACE_TRUST_AUDIT_2026-07-21.md)。
 
 ### 5.2 Event completeness 不能由 stdout 假装
 
@@ -144,7 +147,8 @@ Grok 已发出 compaction 生命周期 hook，但 summary 是派生模型输出�
 ### Spike A：trusted observed launch + event completeness（下一步）
 
 1. 新增 workspace discovery/trust manifest 的 schema 与 fixture；默认对未登记 workspace 使用 restricted。
-2. 在 isolated fake profile 中验证哪些项目配置、hook、plugin、MCP 会被 Grok 发现，记录 observed/unknown。
+2. 已用 isolated fake workspace 验证：untrusted instruction/skill/permission config 可见，hook 被跳过；
+   `inspect --trust` 不签发 trust。真实 session trust grant 仍保持 unknown。
 3. 执行本地 `grok trace --local` 与 session `export`，先做 leak scan，再登记 content digest。
 4. 合并 stdout、trace/export、provider capture、supervisor 和 workspace scan 到 append-only event bridge。
 5. verifier 检查 sequence、payload-before-reference、唯一 terminal、usage/event completeness，不提升 claim。

@@ -47,6 +47,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\new_grok_obser
 输出目录必须事先不存在，防止覆盖旧 provenance。计划中的 `network_policy` 和空 tool allowlist 在此阶段只
 是待验证意图，不能被描述成 Grok 已执行的隔离保证。
 
+## Workspace trust preflight
+
+[`new_grok_workspace_trust_receipt.ps1`](../../scripts/new_grok_workspace_trust_receipt.ps1)
+在启动 Grok 之前静态扫描 repo root 到当前工作目录之间的 project instructions、rules、permission
+config、hook、plugin、skill、agent、MCP/LSP 等候选控制面，只记录路径、类别、长度与 SHA-256，不记录
+文件正文，也不执行 Grok、模型、project code 或网络请求。
+
+```powershell
+$output = '.\.observed-runs\trust-preflight.json'
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\new_grok_workspace_trust_receipt.ps1 `
+  -WorkspacePath ..\.. `
+  -OutputPath $output
+```
+
+默认 `restricted`：没有候选控制文件时才允许后续 launcher；存在任何候选时只生成 receipt，
+`launch_permitted=false`。`trusted` 需要再次传入当前 `aggregate_sha256` 和非默认 actor；控制文件发生变化后
+旧 digest 立即失效。receipt 不会写 Grok 的 `trusted_folders.toml`，也不替代 Grok 对 project
+hook/MCP/LSP/plugin code 的 folder-trust。
+
+[`invoke_grok_workspace_discovery_probe.ps1`](../../scripts/invoke_grok_workspace_discovery_probe.ps1)
+会把 checked-in inert control-surface fixture 复制到一次性 Git workspace，先生成 restricted receipt，
+再在隔离 profile 中运行两次本地 `grok inspect --json`。第二次附带隐藏 `--trust` 只用于观察 inspect
+子命令是否签发 trust；在锁定的 `0.2.106` 上它不写 trust store，输出与普通 inspect 相同。该 probe
+不启动模型或 tool session，也不能代替未来真实 session trust 路径的无 provider 验证。
+
 ## Loopback fake-provider conformance
 
 [`fake_deepseek_provider.py`](../../scripts/fake_deepseek_provider.py) 只绑定 `127.0.0.1`，接受一次

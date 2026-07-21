@@ -97,3 +97,10 @@ checkpoint/delta/restore、compaction provenance 和显式 child-tree timeout fi
 边界均通过，用户另行授权且
 凭据安全置入后，才考虑一次最小真实 DeepSeek development probe；这不自动扩张为 evaluation、holdout 或
 通用工具授权。
+
+workspace trust preflight 第一小步现已实现：静态 candidate scan、digest-bound receipt、restricted
+fail-closed、inert `grok inspect` discovery probe 和专用 schema/test 均已落地。观测显示
+`projectTrusted=false` 时 instruction、skill 与两个 permission/config source 仍可见，而 hook 被跳过；
+`inspect --trust` 不签发 trust。详见
+[`GROK_WORKSPACE_TRUST_AUDIT_2026-07-21.md`](GROK_WORKSPACE_TRUST_AUDIT_2026-07-21.md)。下一小步是把
+receipt 作为 fake-provider launcher 的强制前置，并显式升级其 result schema，而不是原地改变旧版本。

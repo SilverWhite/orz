@@ -200,6 +200,56 @@ def check_repository() -> dict[str, Any]:
     )
     counts["grok_observed_plan_examples"] = 1
 
+    trust_example_path = (
+        ROOT / "integration/grok/examples/example-grok-workspace-trust-receipt.json"
+    )
+    errors.extend(
+        _validate_instance(
+            _load_json(trust_example_path),
+            ROOT / "integration/grok/grok-workspace-trust-receipt-v0.1.schema.json",
+            "integration/grok/examples/example-grok-workspace-trust-receipt.json",
+        )
+    )
+    trust_script_source = (
+        ROOT / "scripts/new_grok_workspace_trust_receipt.ps1"
+    ).read_text(encoding="utf-8")
+    for marker in (
+        "ExpectedAggregateSha256",
+        "expires_on_control_change",
+        "launch_permitted",
+        "reparse-policy=record-and-do-not-follow",
+        "refusing to overwrite",
+    ):
+        if marker not in trust_script_source:
+            errors.append(f"workspace trust preflight is missing safety marker: {marker}")
+    counts["grok_workspace_trust_examples"] = 1
+
+    discovery_example_path = (
+        ROOT / "integration/grok/examples/example-grok-workspace-discovery-result.json"
+    )
+    errors.extend(
+        _validate_instance(
+            _load_json(discovery_example_path),
+            ROOT / "integration/grok/grok-workspace-discovery-result-v0.1.schema.json",
+            "integration/grok/examples/example-grok-workspace-discovery-result.json",
+        )
+    )
+    discovery_script_source = (
+        ROOT / "scripts/invoke_grok_workspace_discovery_probe.ps1"
+    ).read_text(encoding="utf-8")
+    for marker in (
+        "inspect_trust_flag_is_non_mutating",
+        "clean_child_environment",
+        "fail_closed_proxy_configured",
+        "debug_capture_disabled",
+        "refusing to overwrite",
+    ):
+        if marker not in discovery_script_source:
+            errors.append(f"workspace discovery probe is missing safety marker: {marker}")
+    if "--debug-file" in discovery_script_source:
+        errors.append("workspace discovery probe must not enable Grok debug-file")
+    counts["grok_workspace_discovery_examples"] = 1
+
     fake_provider_path = ROOT / "scripts/fake_deepseek_provider.py"
     fake_launcher_path = ROOT / "scripts/invoke_grok_fake_provider_conformance.ps1"
     fake_provider_source = fake_provider_path.read_text(encoding="utf-8")

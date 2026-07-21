@@ -1,0 +1,4 @@
+[permission]
+rules = [
+  { action = "deny", tool = "edit" },
+]

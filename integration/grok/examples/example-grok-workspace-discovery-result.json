@@ -1,0 +1,71 @@
+{
+  "schema_version": "0.1.0",
+  "run_kind": "grok-workspace-discovery-probe",
+  "run_id": "DISCOVERY-00000000000000000000000000000001",
+  "created_at": "2026-07-21T12:00:00Z",
+  "binary": {
+    "path": "C:\\example\\grok.exe",
+    "version_output": "grok 0.2.106 (bde89716f6)",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "verified": true
+  },
+  "fixture": {
+    "source_path": "C:\\example\\source-fixture",
+    "path": "C:\\example\\run\\workspace",
+    "static_candidate_count": 5,
+    "static_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "trust_flag_fixture_code_executed": false
+  },
+  "isolation": {
+    "profiles_isolated": true,
+    "temp_isolated": true,
+    "clean_child_environment": true,
+    "fail_closed_proxy_configured": true,
+    "real_credential_present": false,
+    "grok_trust_store_disposable": true
+  },
+  "observations": {
+    "untrusted_project_trusted": false,
+    "trust_flag_project_trusted": false,
+    "instruction_visible_untrusted": true,
+    "instruction_visible_trust_flag": true,
+    "skill_visible_untrusted": true,
+    "skill_visible_trust_flag": true,
+    "hook_visible_untrusted": false,
+    "hook_visible_trust_flag": false,
+    "grok_config_visible_untrusted": true,
+    "grok_config_visible_trust_flag": true,
+    "claude_settings_visible_untrusted": true,
+    "claude_settings_visible_trust_flag": true,
+    "untrusted_instruction_count": 1,
+    "trust_flag_instruction_count": 1,
+    "untrusted_hook_count": 0,
+    "trust_flag_hook_count": 0,
+    "untrusted_skill_count": 1,
+    "trust_flag_skill_count": 1,
+    "untrusted_permission_source_count": 2,
+    "trust_flag_permission_source_count": 2
+  },
+  "checks": {
+    "binary_verified": true,
+    "restricted_preflight_denied_launch": true,
+    "restricted_preflight_complete": true,
+    "untrusted_inspect_exit_zero": true,
+    "trust_flag_inspect_exit_zero": true,
+    "upstream_reports_untrusted_without_grant": true,
+    "inspect_trust_flag_is_non_mutating": true,
+    "no_real_credential_injected": true,
+    "debug_capture_disabled": true
+  },
+  "artifacts": {
+    "restricted_receipt": { "path": "C:\\example\\run\\restricted-receipt.json", "bytes": 1, "sha256": "3333333333333333333333333333333333333333333333333333333333333333" },
+    "inspect_untrusted_stdout": { "path": "C:\\example\\run\\inspect-untrusted.stdout.json", "bytes": 1, "sha256": "4444444444444444444444444444444444444444444444444444444444444444" },
+    "inspect_untrusted_stderr": { "path": "C:\\example\\run\\inspect-untrusted.stderr.log", "bytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    "inspect_trust_flag_stdout": { "path": "C:\\example\\run\\inspect-trust-flag.stdout.json", "bytes": 1, "sha256": "4444444444444444444444444444444444444444444444444444444444444444" },
+    "inspect_trust_flag_stderr": { "path": "C:\\example\\run\\inspect-trust-flag.stderr.log", "bytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }
+  },
+  "valid": true,
+  "limitations": [
+    "This example mirrors the observed field shape but contains illustrative paths and digests."
+  ]
+}

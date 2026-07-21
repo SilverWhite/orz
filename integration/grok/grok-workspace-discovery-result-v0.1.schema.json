@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-workspace-discovery-result-v0.1.schema.json",
+  "title": "Grok workspace discovery probe result v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_kind", "run_id", "created_at", "binary", "fixture", "isolation", "observations", "checks", "artifacts", "valid", "limitations"],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "run_kind": { "const": "grok-workspace-discovery-probe" },
+    "run_id": { "type": "string", "pattern": "^DISCOVERY-[0-9a-f]{32}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version_output", "sha256", "verified"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "version_output": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "verified": { "const": true }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_path", "path", "static_candidate_count", "static_aggregate_sha256", "trust_flag_fixture_code_executed"],
+      "properties": {
+        "source_path": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "static_candidate_count": { "type": "integer", "minimum": 1 },
+        "static_aggregate_sha256": { "$ref": "#/$defs/sha256" },
+        "trust_flag_fixture_code_executed": { "const": false }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profiles_isolated", "temp_isolated", "clean_child_environment", "fail_closed_proxy_configured", "real_credential_present", "grok_trust_store_disposable"],
+      "properties": {
+        "profiles_isolated": { "const": true },
+        "temp_isolated": { "const": true },
+        "clean_child_environment": { "const": true },
+        "fail_closed_proxy_configured": { "const": true },
+        "real_credential_present": { "const": false },
+        "grok_trust_store_disposable": { "const": true }
+      }
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "untrusted_project_trusted", "trust_flag_project_trusted",
+        "instruction_visible_untrusted", "instruction_visible_trust_flag",
+        "skill_visible_untrusted", "skill_visible_trust_flag",
+        "hook_visible_untrusted", "hook_visible_trust_flag",
+        "grok_config_visible_untrusted", "grok_config_visible_trust_flag",
+        "claude_settings_visible_untrusted", "claude_settings_visible_trust_flag",
+        "untrusted_instruction_count", "trust_flag_instruction_count",
+        "untrusted_hook_count", "trust_flag_hook_count",
+        "untrusted_skill_count", "trust_flag_skill_count",
+        "untrusted_permission_source_count", "trust_flag_permission_source_count"
+      ],
+      "properties": {
+        "untrusted_project_trusted": { "type": "boolean" },
+        "trust_flag_project_trusted": { "type": "boolean" },
+        "instruction_visible_untrusted": { "type": "boolean" },
+        "instruction_visible_trust_flag": { "type": "boolean" },
+        "skill_visible_untrusted": { "type": "boolean" },
+        "skill_visible_trust_flag": { "type": "boolean" },
+        "hook_visible_untrusted": { "type": "boolean" },
+        "hook_visible_trust_flag": { "type": "boolean" },
+        "grok_config_visible_untrusted": { "type": "boolean" },
+        "grok_config_visible_trust_flag": { "type": "boolean" },
+        "claude_settings_visible_untrusted": { "type": "boolean" },
+        "claude_settings_visible_trust_flag": { "type": "boolean" },
+        "untrusted_instruction_count": { "type": "integer", "minimum": 0 },
+        "trust_flag_instruction_count": { "type": "integer", "minimum": 0 },
+        "untrusted_hook_count": { "type": "integer", "minimum": 0 },
+        "trust_flag_hook_count": { "type": "integer", "minimum": 0 },
+        "untrusted_skill_count": { "type": "integer", "minimum": 0 },
+        "trust_flag_skill_count": { "type": "integer", "minimum": 0 },
+        "untrusted_permission_source_count": { "type": "integer", "minimum": 0 },
+        "trust_flag_permission_source_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binary_verified", "restricted_preflight_denied_launch", "restricted_preflight_complete",
+        "untrusted_inspect_exit_zero", "trust_flag_inspect_exit_zero",
+        "upstream_reports_untrusted_without_grant", "inspect_trust_flag_is_non_mutating",
+        "no_real_credential_injected", "debug_capture_disabled"
+      ],
+      "properties": {
+        "binary_verified": { "type": "boolean" },
+        "restricted_preflight_denied_launch": { "type": "boolean" },
+        "restricted_preflight_complete": { "type": "boolean" },
+        "untrusted_inspect_exit_zero": { "type": "boolean" },
+        "trust_flag_inspect_exit_zero": { "type": "boolean" },
+        "upstream_reports_untrusted_without_grant": { "type": "boolean" },
+        "inspect_trust_flag_is_non_mutating": { "type": "boolean" },
+        "no_real_credential_injected": { "type": "boolean" },
+        "debug_capture_disabled": { "type": "boolean" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restricted_receipt", "inspect_untrusted_stdout", "inspect_untrusted_stderr", "inspect_trust_flag_stdout", "inspect_trust_flag_stderr"],
+      "properties": {
+        "restricted_receipt": { "$ref": "#/$defs/artifact" },
+        "inspect_untrusted_stdout": { "$ref": "#/$defs/artifact" },
+        "inspect_untrusted_stderr": { "$ref": "#/$defs/artifact" },
+        "inspect_trust_flag_stdout": { "$ref": "#/$defs/artifact" },
+        "inspect_trust_flag_stderr": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "valid": { "type": "boolean" },
+    "limitations": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+  }
+}

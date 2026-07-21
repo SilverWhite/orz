@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd /c exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

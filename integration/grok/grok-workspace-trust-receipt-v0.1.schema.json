@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-workspace-trust-receipt-v0.1.schema.json",
+  "title": "Grok workspace trust preflight receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "receipt_kind", "receipt_id", "created_at", "workspace", "discovery", "decision", "upstream_folder_trust", "safety", "valid", "limitations"],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "path_kind", "surface", "capability", "upstream_folder_trust", "bytes", "sha256"],
+      "properties": {
+        "relative_path": { "type": "string", "minLength": 1, "pattern": "^[^\\\\]+(?:/[^\\\\]+)*$" },
+        "path_kind": { "enum": ["file", "reparse_point"] },
+        "surface": {
+          "enum": [
+            "project_instruction", "grok_rules", "claude_rules", "cursor_rules",
+            "grok_project_config", "claude_project_settings", "grok_lsp", "cursor_hooks", "cursor_mcp",
+            "grok_hooks", "grok_plugins", "grok_skills", "grok_agents", "claude_skills", "cursor_skills"
+          ]
+        },
+        "capability": {
+          "enum": [
+            "instructions", "permissions_and_external_definitions", "permissions_and_code_definitions",
+            "external_process", "external_process_or_connection", "code_execution",
+            "code_execution_or_external_connection", "instructions_or_code", "unknown"
+          ]
+        },
+        "upstream_folder_trust": { "enum": ["required", "partial", "not_documented"] },
+        "bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "path_kind": { "const": "file" } } },
+          "then": { "properties": { "bytes": { "type": "integer" }, "sha256": { "$ref": "#/$defs/sha256" } } }
+        },
+        {
+          "if": { "properties": { "path_kind": { "const": "reparse_point" } } },
+          "then": { "properties": { "bytes": { "type": "null" }, "sha256": { "type": "null" } } }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "receipt_kind": { "const": "grok-workspace-trust-preflight" },
+    "receipt_id": { "type": "string", "pattern": "^TRUST-[0-9a-f]{32}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested_path", "canonical_path", "project_root", "scope_directories"],
+      "properties": {
+        "requested_path": { "type": "string", "minLength": 1 },
+        "canonical_path": { "type": "string", "minLength": 1 },
+        "project_root": { "type": "string", "minLength": 1 },
+        "scope_directories": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scan_policy_version", "scan_policy_sha256", "complete", "max_candidate_files", "max_candidate_bytes", "candidate_count", "candidate_bytes", "aggregate_sha256", "candidates", "limit_reasons"],
+      "properties": {
+        "scan_policy_version": { "const": "grok-workspace-control-scan-v0.1" },
+        "scan_policy_sha256": { "$ref": "#/$defs/sha256" },
+        "complete": { "type": "boolean" },
+        "max_candidate_files": { "type": "integer", "minimum": 1 },
+        "max_candidate_bytes": { "type": "integer", "minimum": 1 },
+        "candidate_count": { "type": "integer", "minimum": 0 },
+        "candidate_bytes": { "type": "integer", "minimum": 0 },
+        "aggregate_sha256": { "$ref": "#/$defs/sha256" },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/candidate" } },
+        "limit_reasons": { "type": "array", "items": { "enum": ["candidate_file_limit_reached", "candidate_byte_limit_reached"] }, "uniqueItems": true }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "actor", "explicit_digest_confirmation", "launch_permitted", "expires_on_control_change"],
+      "properties": {
+        "mode": { "enum": ["restricted", "trusted", "denied"] },
+        "actor": { "type": "string", "minLength": 1 },
+        "explicit_digest_confirmation": { "type": "boolean" },
+        "launch_permitted": { "type": "boolean" },
+        "expires_on_control_change": { "const": true }
+      }
+    },
+    "upstream_folder_trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["store_modified", "documented_required_surfaces", "sidecar_receipt_is_not_a_grok_trust_grant"],
+      "properties": {
+        "store_modified": { "const": false },
+        "documented_required_surfaces": {
+          "type": "array",
+          "const": ["project_hooks", "project_mcp", "project_lsp", "project_plugin_code"]
+        },
+        "sidecar_receipt_is_not_a_grok_trust_grant": { "const": true }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_invoked", "network_attempted", "tools_executed", "project_code_executed", "file_contents_recorded", "output_overwritten"],
+      "properties": {
+        "model_invoked": { "const": false },
+        "network_attempted": { "const": false },
+        "tools_executed": { "const": false },
+        "project_code_executed": { "const": false },
+        "file_contents_recorded": { "const": false },
+        "output_overwritten": { "const": false }
+      }
+    },
+    "valid": { "type": "boolean" },
+    "limitations": { "type": "array", "minItems": 3, "items": { "type": "string", "minLength": 1 } }
+  }
+}
