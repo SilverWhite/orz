@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fep-agent-proto"
+version = "0.1.0"
+description = "Disposable development-only prototype for FEP Agent scenario export and journal replay"
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema>=4.20,<5",
+  "PyYAML>=6,<7",
+  "rfc8785==0.1.4"
+]
+
+[project.scripts]
+fep-agent-proto = "fep_agent_proto.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fep_agent_proto*"]
