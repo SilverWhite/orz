@@ -15,6 +15,7 @@ evidence、precommitment 或正确性证明。API key、credential value 和无�
 
 复用既有 `runtime/run-manifest-v0.1.schema.json`，每个新 run 在启动 Grok 前固定：
 
+- workspace trust/restricted receipt，以及将被发现的项目配置、规则、hook、plugin、skill 与 MCP digest；
 - Grok binary version/build ID/SHA-256/Authenticode verdict；
 - workspace root、Git commit/dirty summary、输入文件与 source ledger digest；
 - Grok config、project rules、system/generated prompt digest；
@@ -36,6 +37,9 @@ evidence、precommitment 或正确性证明。API key、credential value 和无�
 - workspace 中创建/修改/删除文件的 before/after digest 与 artifact registration；
 - session ID、模型 requested/resolved、token usage、retry/compaction/timeout/cancel；
 - manifest 与 append-only `run-event` hash chain。
+
+每条桥接事件必须注明实际来源（Grok stdout/trace/export、hook、provider capture、workspace scan 或
+supervisor）和 completeness。来源无法一一对应时保持 `unknown`/`ambiguous`，禁止按时间邻近补出 tool event。
 
 ### 可降采样但不得伪装无损
 
@@ -97,15 +101,24 @@ bounded queue 和 backpressure：允许降低 telemetry 频率，不允许静默
    [`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](../docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md)。
 3. Windows Job Object supervisor：Grok 已接入 kill-on-close Job Object，并在成功与 timeout development run
    中记录 create/assign/close；当前仍有 start-to-assignment race，且尚缺显式 child-tree timeout fixture。
-4. local trace/export + workspace delta + hash-chain verifier。
-5. DeepSeek conformance 通过后，才请求一次真实 development call 的单独授权。
+4. trusted observed launch + local trace/export + event completeness bridge；Grok 在陌生 checkout 中会在
+   没有独立 trust prompt 的情况下应用项目配置，因此 trust 必须先于项目 discovery。
+5. fixture-only pre-tool checkpoint + workspace delta + conflict-aware restore receipt。
+6. child-tree timeout fixture + compaction provenance；summary 必须标为 derived/unverified，不能替代原始
+   observation。
+7. DeepSeek conformance 通过后，才请求一次真实 development call 的单独授权。
 
 两轮 fake tool/reasoning continuity 与 Job Object 结果见
 [`GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md`](../docs/GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md)。Grok
 `streaming-json` 未输出显式 tool event；当前必须用 provider 第二轮 `role=tool` 消息与 artifact digest 补足
 观测，不能声称 stdout 单独构成完整事件日志。
 
-阶段 1–4 均不得要求 API key，也不得产生模型费用。
+阶段 1–6 均不得要求 API key，也不得产生模型费用。
+
+开源 Agent 对照和 adopt/adapt/defer/reject 裁决见
+[`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。Grok 已有 permission、
+hook、sandbox、session 和 compaction lifecycle；本 envelope 只补它们无法提供的 LIF 可验证边界，
+不建立平行 runtime。
 
 云端 runtime 已由 [`ADR-0002`](../adr/ADR-0002-defer-cloud-runtime.md) 延期；本执行 envelope 当前只覆盖
 Windows 本机，不把 relay、云端队列或 D cloud-brain 纳入 implementation spike。

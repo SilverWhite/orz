@@ -75,10 +75,19 @@ git-ignored 的 `.tools/`，计算 SHA-256 后再运行。当前网络未能取�
 
 ## 6. 下一 implementation spike
 
-1. 安装前检查：校验 Windows 架构、磁盘占用、binary digest、`grok --version` 与 lock 匹配规则。
-2. 无密钥 fake provider：捕获 Grok 发出的最终 URL、headers、JSON body 和多轮 transcript。
-3. DeepSeek conformance verdict：分别报告 request-shape、reasoning-continuity 与 log-redaction。
-4. 通过后才实现 launcher；真实 DeepSeek development probe 仍需用户单独授权和费用确认。
+安装检查、无密钥 fake provider、DeepSeek 两轮 reasoning continuity 与 Windows Job Object 接入已经完成。
+下一步不是增加新的通用 Agent 组件，而是：
+
+1. 在 Grok 加载项目配置、hook、plugin、MCP 和规则前建立 workspace trust/restricted receipt；
+2. 执行 local trace/export，并把 stdout、provider capture、supervisor 与 workspace delta 合并成有来源的
+   append-only event bridge；
+3. 对 fixture workspace 增加 pre-tool checkpoint、delta 与冲突感知 restore receipt；
+4. 补 child-tree timeout fixture 和 compaction provenance；
+5. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。
+
+六个开源 Agent 的固定版本比较、取舍理由与 source ledger 见
+[`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。其中 repo map、
+architect/editor 双模型和云端 sandbox 明确延期；不迁入旧研究 `index/map/self-check`。
 
 ## 7. 官方依据
 

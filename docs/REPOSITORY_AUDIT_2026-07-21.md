@@ -85,8 +85,15 @@ Windows 后续路径已调整为轻量增量路线：先保持 Python/Win32 spik
 model-loop 现已对每轮/每次 retry 传递 attempt context，并由 broker 为三个 fake HTTPS attempt 分别签发 request-digest permit；每份可审计摘要只保留披露类别、计数、限额与 digest。fake-only 终端 UI 现要求逐次输入 digest challenge，allow/deny 写入 append-only hash-chain ledger，并由 result verifier 与三个 attempt 交叉核对。
 
 Grok Windows 预编译程序核验、zero-model dry-run、单轮 fake-provider，以及两轮 tool/reasoning
-continuity 与 Job Object 接入已完成。下一优先级是 local trace/export、workspace delta、hash-chain bridge 和
-显式 child-tree timeout fixture；不跳到真实 provider。只有请求形状、事件补全、进程树取消和 sealed-private
+continuity 与 Job Object 接入已完成。随后对 Codex CLI、Gemini CLI、OpenHands、Aider、Goose 与
+OpenCode 做了固定 commit 的官方源码/文档缺口审计。结论是不更换 Grok 底座、不扩张通用 Agent；下一优先级
+修订为 workspace trust/restricted preflight、local trace/export event-completeness bridge、fixture-only
+checkpoint/delta/restore、compaction provenance 和显式 child-tree timeout fixture。完整 source ledger 与
+取舍矩阵见
+[`../architecture/OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](../architecture/OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。
+
+这里的 repo map 只可能是未来代码导航 cache，不是旧研究 INDEX/MAP；当前仍不迁入
+`index/map/self-check`。只有请求形状、事件补全、进程树取消和 sealed-private
 边界均通过，用户另行授权且
 凭据安全置入后，才考虑一次最小真实 DeepSeek development probe；这不自动扩张为 evaluation、holdout 或
 通用工具授权。
