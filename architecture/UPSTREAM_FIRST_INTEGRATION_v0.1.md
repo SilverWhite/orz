@@ -79,17 +79,20 @@ git-ignored 的 `.tools/`，计算 SHA-256 后再运行。当前网络未能取�
 workspace trust、local trace/export、event bridge 与 hash-only fixture checkpoint/delta 也已完成首轮机械验证。
 进一步复核上游后，下一步不是增加新的通用 Agent 组件，而是：
 
-1. 先对 `grok agent stdio` 做 no-model ACP `initialize`/capability 探针；
-2. 用 fake provider 验证 ACP structured tool/permission/terminal continuity，并与 session files 对账；
-3. 用独立 shadow Git fixture 承担恢复，现有 hash-only checkpoint 继续作为 audit receipt；
-4. 补 ACP persistent process/background child-tree timeout fixture 和 compaction provenance；
-5. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。
+1. 先实现 no-model Global Progress Sentinel fixture，从计划/journal 生成全局摘要、WARN 与结构化 disposition；
+2. 对 `grok agent stdio` 做 no-model ACP `initialize`/capability 探针；
+3. 用 fake provider 验证 ACP structured tool/permission/terminal continuity，并与 session files 对账；
+4. 用独立 shadow Git fixture 承担恢复，现有 hash-only checkpoint 继续作为 audit receipt；
+5. 补 ACP persistent process/background child-tree timeout fixture 和 compaction provenance；
+6. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。
 
 六个开源 Agent 的固定版本比较、取舍理由与 source ledger 见
 [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。其中 repo map、
 architect/editor 双模型和云端 sandbox 明确延期；不迁入旧研究 `index/map/self-check`。
 职责深拆与 ACP-first 收缩见
 [`MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)。
+防止单方向过推进的全局回看层见
+[`GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`](GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md)。
 
 ## 7. 官方依据
 

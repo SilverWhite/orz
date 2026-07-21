@@ -1,0 +1,181 @@
+# Global Progress Sentinel contract v0.1
+
+状态：设计级、no-model-first、protocol-compatible。它增加一个由结构化步骤留痕派生的全局回看层，不改变
+protocol v0.1 的 task/action/evidence 状态、gate decision 或 reason-code 语义。
+
+## 1. 要解决的问题
+
+长任务中的模型容易在一个局部方向上持续获得“进展感”，同时遗忘最初目标、尚未覆盖的验收维度、用户限制、
+验证债务或更高优先级的并行方向。仅在 system prompt 中加入“请回看全局”不够可靠，因为模型可以复述提醒，
+却没有把回看结果与实际步骤记录对齐。
+
+本层称为 **Global Progress Sentinel（GPS）**。它不是第二个 Agent、planner 或科学 reviewer，而是一个确定性控制面：
+
+1. 从 task contract、计划项和 append-only journal 生成紧凑 progress snapshot；
+2. 用显式、可配置规则产生 WARN；
+3. 把 snapshot 和 WARN 注入下一次模型回合；
+4. 要求模型提交结构化 disposition，再决定继续、转向、延期、停止或重排计划；
+5. 把 snapshot、prompt digest 和 disposition 作为派生产物登记，供后续 verifier 重算。
+
+## 2. 复用的现有来源
+
+本设计只读取本仓库现有事实源：
+
+- [`PROTOCOL_DRAFT_v0.1.md`](../protocol/PROTOCOL_DRAFT_v0.1.md) 的 task lifecycle、task contract、
+  planned/completed counts、GateDecision 和 append-only journal 约束；
+- [`agent-protocol-v0.1.schema.json`](../protocol/agent-protocol-v0.1.schema.json) 的 `planned`、`reviewing`、
+  `warn`、`scope`、`review_required` 等现有形状；
+- [`run-event-v0.1.schema.json`](../runtime/run-event-v0.1.schema.json) 的 hash-chain run journal；
+- Grok ACP 的 plan、tool-call、permission 和 session updates，经 LIF bridge 脱敏后的结构化投影。
+
+旧研究工作区的 `index/map/self-check` 不成为 GPS 的运行依赖；具体 claim 任务仍按需跨文件读取并单独登记来源。
+
+## 3. 不变量
+
+### 3.1 Journal 是事实源，summary 是派生视图
+
+GPS 只能总结有 event/plan/contract reference 的内容。它不得从最终回答、模型语气或时间邻近推断“已完成”；
+无法关联的状态写 `unknown`。模型自己声称完成，若没有 terminal/artifact/verifier 支持，只能列入
+`reported_unverified`。
+
+### 3.2 不记录 private chain-of-thought
+
+snapshot 只含目标、步骤状态、方向覆盖、artifact/verifier 状态、限制和 warning。模型 disposition 只要求决策、
+短理由和下一步，不要求展示隐藏推理过程。
+
+### 3.3 WARN 不是自动 BLOCK
+
+方向集中可能是合理的。GPS 允许模型选择 `continue`，但必须指出关联 acceptance、仍未覆盖的方向和退出条件。
+只有 warning 同时命中既有 hard gate 时，才由原 GateDecision 产生 `block`/`defer`；GPS 不自创绕过权限或证据
+门禁的新优先级。
+
+### 3.4 回看不能改写历史
+
+snapshot 和 disposition 都是新派生产物；不能回写旧 plan/event。计划改变必须追加 revision reason，并保留被
+延期或放弃的方向。
+
+## 4. 输入与派生快照
+
+### 4.1 最小输入
+
+- immutable task contract digest：intent、MUST、MUST NOT、SOURCE OF TRUTH、ACCEPTANCE；
+- 当前 task state 与 plan revision；
+- plan items：稳定 `step_id`、`direction_id`、状态、acceptance refs、defer reason；
+- 自上次 review 以来的 journal span、action terminal、artifact registration、verifier/gate result；
+- 未解决的 user constraint、unknown、warning 和 blocker；
+- 当前资源边界：token/time/tool budget 只记配置与已观测用量，不猜剩余能力。
+
+`direction_id` 是工程覆盖标签，不是科学分类。例如当前仓库可用 `runtime_acp`、`windows_containment`、
+`deepseek_conformance`、`recovery`、`evidence_gates`、`documentation`。标签必须来自计划，GPS 不让模型事后为
+自己的动作挑有利分类。
+
+### 4.2 Snapshot 输出
+
+```json
+{
+  "review_id": "GPR-001",
+  "task_contract_sha256": "...",
+  "plan_revision": 3,
+  "journal_span": {"first_sequence": 41, "last_sequence": 67},
+  "objective": "short contract-derived text",
+  "progress": [
+    {"step_id": "STEP-ACP-01", "direction_id": "runtime_acp", "state": "completed", "source_refs": ["EVT-052"]}
+  ],
+  "acceptance_coverage": [
+    {"acceptance_ref": "ACC-03", "state": "uncovered", "source_refs": []}
+  ],
+  "unresolved": [],
+  "warnings": [],
+  "next_review_trigger": "before_external_or_costly_action"
+}
+```
+
+`objective` 可以由 contract 文本机械裁剪；任何模型生成的自然语言摘要必须标记 `derived_unverified`，不能替代
+上述结构字段。
+
+## 5. WARN 规则
+
+| warning kind | 最小机械条件 | 防误报条件 |
+|---|---|---|
+| `direction_concentration` | 最近可配置数量的 completed/running actions 均属于同一 direction，且其他 active direction 仍 pending | 若当前步骤是明确 critical path，允许 continue，但登记退出条件 |
+| `pending_direction_starvation` | 某 active direction 跨过可配置数量的 review 周期仍无 action/artifact，且未显式 defer | 已写 defer reason 或不在当前 acceptance scope 时不报 |
+| `plan_stale` | journal 出现未映射 action，或已完成步骤仍被计划标为 pending | 仅 UI/展示延迟不得自动提升为任务失败 |
+| `acceptance_uncovered` | 某 acceptance 没有 planned/completed step 或 verification source | 未到适用 phase 时保持 info/warn，不提前 block |
+| `verification_debt` | 连续产生写入/产物但没有对应 verifier/gate，或 verification 已 stale | 探索性 disposable fixture 可按 contract 延期，但必须可见 |
+| `scope_drift` | action direction、target 或产物不映射 task contract/plan revision | 只读诊断可解释后继续；新写入/外部副作用走现有权限门禁 |
+| `repeated_failure` | 同一 idempotency/action family 连续失败或 retry 达阈值 | 输入、实现或环境已发生有来源的实质变化时重置计数 |
+| `unresolved_user_constraint` | 用户明确限制仍未映射到 MUST/MUST NOT/plan/gate | 只有用户随后明确撤回才清除，不靠模型推断 |
+
+默认阈值不是科学常数，必须冻结在 run manifest；不同阈值只能改变提醒频率，不能改变 evidence/claim 状态。
+
+## 6. 触发时机
+
+为避免 token 与 warning fatigue，GPS 不在每个 tool call 后注入 prompt。v0.1 只在下列边界运行：
+
+1. `planned → ready` 前；
+2. 一个计划步骤完成、延期或失败后；
+3. 达到 action-count/review-cycle 阈值时；
+4. 多次失败、计划外 action 或方向饥饿出现时；
+5. 任何 destructive、外部网络写入、真实付费模型调用或大范围 restore 前；
+6. `executing → reviewing` 和 `reviewing → completed` 前。
+
+如果没有新 event，GPS 不重复生成同一 warning；使用 `(task contract digest, plan revision, journal head,
+warning kind)` 作为去重键。
+
+## 7. 注入给模型的最小提示
+
+```text
+[GLOBAL PROGRESS REVIEW]
+Objective: <contract-derived>
+Completed since last review: <source-linked steps>
+Still active/uncovered: <directions and acceptance refs>
+Warnings: <mechanical warning + evidence refs>
+Before continuing, return one disposition:
+continue | pivot | defer | stop | replan
+Include: selected next step, acceptance served, unresolved directions,
+verification needed, and the condition for reviewing again.
+Do not infer completion from this summary; consult referenced records when needed.
+```
+
+该提示不包含 raw reasoning、secret、完整工具输出或 reviewer-only/evaluation oracle。若 snapshot 超过预算，优先保留
+warning、uncovered acceptance、unresolved user constraint 和 source refs；已完成详情可以只留 count/digest。
+
+## 8. Disposition 与执行约束
+
+模型必须返回：
+
+- `decision`: `continue | pivot | defer | stop | replan`；
+- `selected_step_id` 或 `null`；
+- `acceptance_refs`；
+- `warning_dispositions`: 对每条 warning 选择 `accepted | mitigated | reasoned_continue | needs_user`；
+- `verification_before_claim`；
+- `next_review_condition`；
+- 不超过固定长度的 `rationale_summary`。
+
+缺失 disposition 时，框架不能把 review 标为已处理；普通低风险工作最多保持 WARN，外部/破坏性/claim promotion
+仍由既有 gate fail closed。模型若选择 `reasoned_continue`，后续 action 必须仍属于所选 step，或者先追加 replan。
+
+## 9. 与现有 protocol 的兼容方式
+
+v0.1 不扩展 `RunEvent.event_type` 枚举，也不把 heuristic warning 冒充 `GateDecision`：
+
+1. 生成 `global-progress-review.json` 和 `global-progress-disposition.json` 两个派生产物；
+2. 通过现有 `artifact_registered` event 登记路径、digest、journal span 和 producer；
+3. 下一次 `model_request` 只记录注入 prompt digest 与 review artifact ID；
+4. warning 若确实命中已有 reason code，另走正常 `gate_decision`；否则只留在 review artifact；
+5. verifier 从 contract + plan ledger + journal 重建 snapshot 的结构字段，并检查 prompt/disposition linkage。
+
+这避免为了一个提示层修改 protocol v0.1，同时保留未来把它升级为通用 framework event 的空间。
+
+## 10. 首个 implementation spike
+
+先做 no-model fixture，不接 Grok、DeepSeek 或用户真实 workspace：
+
+1. 固定一个含六个 direction 的 task contract/plan；
+2. 构造“单方向连续完成、另一 acceptance 未覆盖、一个 verifier stale”的 append-only fixture journal；
+3. 机械生成 snapshot，断言三类 WARN 及 source refs；
+4. 输入 `reasoned_continue` 与 `replan` 两种 disposition，验证 linkage、去重和下一 review 条件；
+5. 篡改 plan revision、journal head 或 warning disposition 时 verifier 必须失败；
+6. 通过后才评估如何从 Grok ACP plan/session updates 建立稳定 `step_id`/`direction_id` 映射。
+
+本 spike 只证明留痕、提醒和处置链可重放；不证明模型一定会克服 tunnel vision，也不把方向多样性当成正确性。
