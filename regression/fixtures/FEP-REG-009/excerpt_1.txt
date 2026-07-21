@@ -1,0 +1,35 @@
+#### 1.1.2 根因分析
+
+> **[R140 §1 二次分析修正 — 2026-06-15]**：以下"可能1""可能2""可能3"均为 R139 初版推测，已被 R140 实证核查否定。保留原文（带撤回标记）供追溯，**当前事实见下方 R140 结论**。
+
+**可能1（❌ 已撤回——R140 §1.1 核查 train_stdout.log 确认训练成功完成）**：~~`train_backbone()` 的 subprocess 调用返回了非零 exit code，但 `train_backbone()` 函数在 `proc.returncode != 0` 时打印错误并返回 `False`——然而调用方 `evaluate_run()` **并未检查** `train_backbone()` 的返回值！如果训练失败，`evaluate_run()` 会继续尝试加载 checkpoint，而 `train_lif3d.py` 可能在失败时留下了**旧的/拷贝的 checkpoint 文件**（或之前某次运行的残留）。如果该残留恰好是 R78 的 checkpoint，就会出现 36/36 tensors 完全一致的情况。~~
+
+**可能2（❌ 已撤回——用户观察确认训练已启动）**：~~`get_backbone_ckpt()` 构建的路径可能与 R78 的实验目录存在某种路径冲突。例如，若 `TRAIN_ROOT / run_name / f"seed_{seed}"` 解析到了 R78 的目录（因命名冲突），则 subprocess 可能会因 `ckpt.exists()` 而跳过训练（`train_backbone()` 第1行检查 `if ckpt.exists() and not force: return True`），直接返回 `True` 而不实际训练。~~
+
+**可能3（❌ 已撤回——R140 tensor check 确认四 seed 均为同配置确定性重复）**：~~`train_lif3d.py` 内部可能有 `--continue-from` 或 checkpoint 自动恢复逻辑——若检测到已有 checkpoint，自动从该点继续训练。wd=0 且配置相同时，1500ep 后权重可能未发生显著变化。~~
+
+**✅ R140 实际根因（R140 §1.2）**：**确定性训练。** 两次训练配置完全相同（相同 model seed=131、wd=0、架构、lr、optimizer、data pipeline），PyTorch 在固定 seed 下产生完全确定性的计算图——两次独立训练产生 bit-identical 的权重。这不是 bug，而是**确定性训练的自然结果**。
+
+#### 1.1.3 评判
+
+> **[R140 §1.3 修正]**：R139 初版判定"严重的数据完整性问题"措辞过强。
+
+**R140 修正后判定**：📋 **训练确实执行了**——`train_stdout.log` 确认 1500ep 完整完成（ep=1500/1500, loss=0.010988, mean_corr=0.7566）。10 个 checkpoint 文件时间戳 2026-06-06 22:12–22:46。R78 S2 wd=0 s131 checkpoint SHA256 完全相同（`AFE346A69DBD...`）。**根因是确定性训练，不是脚本 bug 或训练失败。**
+
+**对 R137 §1.4 的修正**（R140 保留）：R137 §1.4 的"warm-start"解释应替换为"确定性训练——相同 seed+相同配置→相同权重"。
+
+**对已有结论的影响**（R140 维持）：
+- P13v2 s131 不能作为独立 DES/noDES 训练——R136/R137 已确认。
+- P13v2 s171/s61/s71 三个 seed 也经 `_P13V2_TENSOR_INDEPENDENCE_CHECK.py` 确认与历史同 seed 参考 36/36 tensors 完全相同。
+- P13v3 s131 wd=1e-5 仍为当前唯一确认的独立 noDES 条件。
+
+#### 1.1.4 行动建议
+
+> **[R140 §1 更新]**：以下为 R139 初版行动项 + R140 完成状态。
+
+| 优先级 | 行动 | R140 状态 |
+|---|---|---|
+| **P0** | 核查 train_stdout.log | ✅ 已完成（R140 §1.1：训练确实执行，1500ep 完成） |
+| **P0** | 修复 `evaluate_run()` 返回值检查 | 🔵 降级为工程门禁（非本次根因，但仍应补强，防止未来训练失败后继续评估） |
+| **高H** | P13v2 s171/s61/s71 tensor-level 比对 | ✅ 已完成（R140 §1.5：`_P13V2_TENSOR_INDEPENDENCE_CHECK.json`——四 seed 均 36/36 tensors identical） |
+| ~~中H~~ | ~~重跑 P13v2 s131~~ | ❌ 取消——训练已完成且 checkpoint 与历史一致，重跑无增量信息 |

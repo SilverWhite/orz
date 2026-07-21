@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-SYN-007",
+  "case_id": "FEP-SYN-007",
+  "fixture_kind": "synthetic_machine_readable",
+  "visibility": "scenario_only",
+  "purpose": "Separate valid producer provenance and deterministic reproducibility from independent sample count.",
+  "files": [
+    {
+      "path": "evidence.json",
+      "media_type": "application/json",
+      "role": "visible_evidence",
+      "sha256": "113447ea7079a155a3776e8cc0bc6c690170c1c21118680f88b30b3a3c4476e2"
+    }
+  ],
+  "oracle_fields_present": false,
+  "notes": ["Identical content is intentionally valid provenance but not a new independence unit."]
+}

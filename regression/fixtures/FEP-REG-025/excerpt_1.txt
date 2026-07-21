@@ -1,0 +1,40 @@
+### 2.1 用户论点
+
+> 6.3 节发现二我记得并不是首次发现，在前面有关 decoder 偏转/漂移的相关内容中有同一发现。
+
+### 2.2 独立回查——decoder 方向漂移的发现历史
+
+**🚨 用户完全正确。** "Co-training 偏移 decoder 权重方向"这一现象的首次发现可追溯至 **2026 年 4 月**（R22e），远早于 R142（2026 年 6 月 18 日）。
+
+**完整发现链**：
+
+| 时间 | 文档 | 发现 | 证据 |
+|---|---|---|---|
+| **2026-04-12** | MAP1 K-29.5 / F-81 | **LIF 崩塌机制 = decoder 方向漂移（旋转 8-19°），非参数损伤** | R22e：4 seeds decoder.0.weight 方向旋转 8-19°（cos: s=121 0.81, s=161 0.92, healthy s=41 0.999） |
+| **2026-05-11** | R7_DISCUSSION_ROUND8 §Q2 | fc 漂移→decoder 漂移因果分析。确认 s171 decoder 旋转幅度最大，由 fc 方向高度重叠（underdifferentiation）驱动 | decoder 旋转角度测量 |
+| **2026-06-10** | R113 / H-DECODER-DRIFT-MODULATION 修订 | "LIF 内部参数重组可剧烈改变解码器读出子空间方向，导致表观 corr 崩溃；因果箭头为 LIF→decoder" | s171 wd=5e-5 个案 |
+| **2026-06-13** | R130 / F-R130-LINEAR-PURE-0768 | s171 wd=5e-5 frozen LIF linear_pure=0.768 vs 共训=0.368（2.09×）——**co-training 使 decoder 严重偏离最优读出方向** | 5 seeds linear_pure |
+| **2026-06-14** | R140 §4.1 / F-R140-P13V3-SCHEMEB-COTRAINING-PROTECTIVE | P13v3 低多样性下 co-trained=0.792 vs head-only=0.350, Δ=−0.442——**同 seed 下 co-training 与 head-only 的巨大性能差距是 decoder 方向偏移的直接功能证据** | 4 seeds head-only 消融 |
+| **2026-06-18** | R142 §6.3 "发现二" | 同 seed co-trained vs head-only cos mean=0.298（~72°）——**用 cosine similarity 量化了同一现象** | 4 seeds decoder weight cosine |
+
+### 2.3 判定
+
+**R142 §6.3 的"发现二"不是新发现，而是对已知现象的新的量化方式。**
+
+具体而言：
+- **F-81（4 月 12 日）**已经确立了"decoder 方向漂移"是崩塌机制的核心——测量了 peak→final decoder 权重旋转 8-19°
+- **F-R130-LINEAR-PURE-0768（6 月 13 日）**已经通过 2.09× 的性能差距证明了 co-training 使 decoder 偏离最优方向
+- **R140 §4.1（6 月 14 日）**通过 head-only 消融（Δ=−0.442）提供了同一现象的更强功能证据
+- **R142 §6.3**的贡献是首次用 **cosine similarity** 直接测量了 co-trained vs head-only decoder 权重的几何关系（cos≈0.3 ≈ 72°），将"性能差距"翻译成了"权重空间几何距离"
+
+**R142 §6.3 的正确表述应为**：
+
+> **发现二（受限，新量化而非新发现）**：通过 decoder 权重 cosine similarity 量化了已确立的"co-training 偏移 decoder 方向"现象——同 seed co-trained vs head-only cos≈0.3（~72°）。此现象的首次发现可追溯至 F-81（MAP1, 2026-04-12, decoder 方向漂移 8-19°），后经 F-R130-LINEAR-PURE-0768（2.09× 性能差距）和 R140 §4.1（Δ=−0.442）的功能证据不断加强。当前 cosine≈0.3 将该现象从"性能差距"翻译为"权重空间几何距离"——co-training 保留了 head-only 方向约 9% 的方差（cos²≈0.09），但偏移了约 72°。
+
+### 2.4 需修正的文档
+
+| 文档位置 | 原表述 | 修正 |
+|---|---|---|
+| R142 §6.3 标题 | "发现二（受限）：Co-training 可能偏移 decoder 权重方向" | "发现二（受限，新量化非新发现）：Co-training 偏移 decoder 权重方向的 cosine 量化——首次发现见 F-81（MAP1, 2026-04-12）" |
+| R142 §6.3 解读 | 暗示为首次发现 | 显式引用 F-81 → F-R130-LINEAR-PURE-0768 → R140 §4.1 的发现链 |
+| 若已写入 INDEX/MAP5 | 标注为新发现 | 修正为"新量化"并追加历史引用链 |

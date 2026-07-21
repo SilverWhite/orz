@@ -1,0 +1,33 @@
+因此两次独立训练产生了bit-identical的权重——这不是bug，而是**确定性训练的自然结果**。
+
+**用户判断验证**：用户说"可能2应该不太可能，因为我会盯着python窗口看着启动"——完全正确。训练确实启动了，也完成了，只是产生了与之前相同的确定性结果。
+
+### 1.3 修正 R139 的措辞
+
+| R139 位置 | 原表述 | 修正 |
+|---|---|---|
+| §1.1.2 可能1 | "subprocess训练失败但未检测" | ❌ 撤回——训练成功完成 |
+| §1.1.2 可能2 | "路径冲突导致跳过训练" | ❌ 撤回——用户观察确认训练启动 |
+| §1.1.4 P0行动 | "修复evaluate_run()返回值检查" | 非本次重复checkpoint根因；但仍应作为工程门禁补强，防止未来训练失败后继续评估 |
+| §1.1.3 根因 | "训练失败后仍将残留checkpoint当作训练产物" | 修正为："确定性训练——相同seed+相同配置→相同权重" |
+
+### 1.4 科学意义
+
+P13v2 s131 checkpoint与R78 wd=0完全相同，**不是因为训练失败，而是因为这是同一确定性训练的两次执行**。这进一步强化了R136/R137的核心结论：**P13v2 s131不能作为独立的noDES条件**——它只是R78 wd=0 DES的确定性重复，而非独立观测。
+
+Antigravity/Claude 审计后追加执行 `_P13V2_TENSOR_INDEPENDENCE_CHECK.py`：R93 P13v2 full-config rerun 的 s171/s61/s71 也分别与旧 R89 P13v2 同 seed checkpoint **36/36 tensors 完全相同**，且 R93 train_stdout.log 均包含 epoch1500 完成记录。结论：R93 P13v2 full-config 四个 seed 都是可复现的确定性重复/历史状态确认，而不是新增独立训练样本。
+
+**P13v3 s131 wd=1e-5 仍是当前唯一确认的独立noDES条件。**
+
+### 1.5 P13v2 s171/s61/s71 tensor-level 核查
+
+**已完成**：`_P13V2_TENSOR_INDEPENDENCE_CHECK.json`。
+
+| pair | identical | equal tensors | unequal tensors | R93 log epoch1500 |
+|---|---:|---:|---:|---:|
+| s131 R93 vs R78 S2 wd0 | True | 36 | 0 | True |
+| s171 R93 vs R89 same seed | True | 36 | 0 | True |
+| s61 R93 vs R89 same seed | True | 36 | 0 | True |
+| s71 R93 vs R89 same seed | True | 36 | 0 | True |
+
+**判定**：P13v2 full-config rerun 不能作为新增独立seed证据使用；其价值限于确认旧P13v2/R78相关状态在相同配置下可确定性复现。后续涉及独立seed计数时，P13v2 rerun 不应增加 N。

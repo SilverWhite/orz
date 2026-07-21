@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-REG-016",
+  "case_id": "FEP-REG-016",
+  "fixture_kind": "historical_excerpt",
+  "visibility": "reviewer_only",
+  "purpose": "Verify the curator's reconstruction of the configuration-label provenance failure.",
+  "files": [
+    { "path": "excerpt_1.txt", "media_type": "text/plain; charset=utf-8", "role": "historical correction excerpt", "sha256": "32ced6135f8e09a930ef9849597af2d1e01c0cfb28501b70223f879812963c88" },
+    { "path": "provenance.json", "media_type": "application/json", "role": "source hashes, line span, normalization, and limitations", "sha256": "ad419360188930cc540fc9edbca137675706d31f995fdd2e7b91d320ebc57f76" }
+  ],
+  "oracle_fields_present": false,
+  "notes": [
+    "The excerpt is semantically answer-bearing even though no structured oracle fields are present.",
+    "A harness must exclude this entire fixture from tested-Agent context."
+  ]
+}

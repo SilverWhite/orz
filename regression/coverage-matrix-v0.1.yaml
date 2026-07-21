@@ -1,0 +1,317 @@
+schema_version: "0.1.0-draft"
+matrix_id: FEP-AGENT-COVERAGE-v0.1
+created_at: "2026-07-19"
+revised_at: "2026-07-19"
+matrix_revision: 3
+status: challenge_coverage_complete_holdout_not_ready
+
+revision_history:
+  - revision: 1
+    date: "2026-07-19"
+    summary: Initial ten-cluster audit of corpus revision 2.
+  - revision: 2
+    date: "2026-07-19"
+    summary: >-
+      Added fixture-backed permission-reversal challenges for mapping,
+      lineage, independence, terminal fallback, and novelty; all ten clusters
+      now have a challenge and all seven high-frequency clusters have a
+      permission-reversal challenge.
+  - revision: 3
+    date: "2026-07-19"
+    summary: >-
+      Recorded five reviewer-only historical excerpt fixtures and the sealed
+      partition plus human-baseline design protocols. These improve auditability
+      but do not add evaluation or holdout cases.
+
+source_corpus:
+  corpus_id: FEP-AGENT-REGRESSION-v0.1
+  corpus_revision: 4
+  path: cases-v0.1.yaml
+  oracle_default_mode: guarded
+
+definitions:
+  corpus_frequency_threshold: 3
+  corpus_frequency_note: >-
+    high_frequency means at least three historical cases assigned in this seed
+    corpus. It does not estimate real-world or project-wide prevalence.
+  contrast_types:
+    permission_reversal: Surface-similar evidence changes an expected block or defer into pass or warn.
+    root_cause_contrast: Surface symptoms remain risky but require a different diagnosis or remediation.
+    mode_boundary: The correct decision changes between discussion, guarded, and strict modes.
+  coverage_statuses:
+    development_balanced: Historical detection cases and a permission-reversal challenge exist for the cluster.
+    partial_contrast: A challenge exists but covers only one subpattern or does not test permission reversal.
+    detection_only: Historical error detection exists without a canonical challenge.
+  independence_rule: >-
+    Case count is descriptive. Cases sharing a correction chain, source family,
+    or gate mechanism are not independent performance samples; cluster-macro
+    reporting is primary.
+
+readiness_summary:
+  historical_cases: 30
+  synthetic_countercases: 10
+  historical_cases_with_reviewer_fixture: 5
+  scenario_visible_fixture_cases: 5
+  clusters: 10
+  clusters_with_historical_detection: 10
+  clusters_with_any_challenge: 10
+  high_frequency_clusters: 7
+  high_frequency_clusters_with_any_challenge: 7
+  high_frequency_clusters_with_permission_reversal: 7
+  evaluation_cases: 0
+  holdout_cases: 0
+  readiness: blocked
+  blocking_reasons:
+    - No oracle-isolated evaluation or holdout partition exists.
+    - All current challenges remain development-time synthetic cases rather than unseen evaluation cases.
+    - No mode-boundary challenge exists yet.
+    - Five historical cases now have reviewer-only source-hashed excerpts, but most historical cases remain discussion-grounded rather than raw-artifact-grounded.
+    - Thresholds and adjudication rules have not been calibrated against human baselines.
+
+clusters:
+  - cluster_id: CLU-01
+    title: Declared label versus executed meaning
+    description: Names, flags, variable labels, or prose are trusted over code, resolved configuration, or producer schema.
+    primary_reason_codes:
+      - CFG-SEMANTIC-001
+      - EVD-EXECUTION-MATCH-001
+      - SEM-MAPPING-001
+      - EVD-PROVENANCE-001
+    historical_case_ids:
+      - FEP-REG-001
+      - FEP-REG-002
+      - FEP-REG-007
+      - FEP-REG-011
+      - FEP-REG-018
+      - FEP-REG-022
+      - FEP-REG-026
+      - FEP-REG-027
+      - FEP-REG-029
+    challenge_cases:
+      - case_id: FEP-SYN-002
+        contrast_type: permission_reversal
+        expected_delta: Current generator, manifest, and equations satisfy provenance despite a misleading compatibility label.
+    corpus_frequency: high
+    coverage_status: partial_contrast
+    gaps:
+      - No challenge shows a versioned implicit default that is genuinely explicit through a resolved configuration record.
+      - One challenge cannot represent flag semantics, feature mapping, physical source, and intervention placement simultaneously.
+
+  - cluster_id: CLU-02
+    title: Producer lineage, stale artifacts, and cross-run reuse
+    description: A file, result, or document is assigned to the wrong producer or reused as fresh evidence.
+    primary_reason_codes:
+      - ART-STALE-001
+      - EVD-PROVENANCE-001
+      - EVD-INDEPENDENCE-001
+      - SYNC-STATUS-001
+    historical_case_ids:
+      - FEP-REG-004
+      - FEP-REG-006
+      - FEP-REG-008
+      - FEP-REG-009
+      - FEP-REG-016
+      - FEP-REG-027
+    challenge_cases:
+      - case_id: FEP-SYN-001
+        contrast_type: root_cause_contrast
+        expected_delta: Identical content is stale reuse rather than a completed deterministic replay.
+      - case_id: FEP-SYN-007
+        contrast_type: permission_reversal
+        expected_delta: Current producer provenance passes while the unchanged sampling unit still blocks an increase in independent N.
+    corpus_frequency: high
+    coverage_status: development_balanced
+    gaps:
+      - The permission reversal is synthetic and has not been replayed against a historical raw artifact fixture.
+
+  - cluster_id: CLU-03
+    title: Configuration and intervention boundary
+    description: The executed factors do not isolate or implement the intervention named by the task.
+    primary_reason_codes:
+      - CFG-EXPLICIT-001
+      - CFG-SEMANTIC-001
+      - EVD-EXECUTION-MATCH-001
+      - EVD-CONFOUND-001
+    historical_case_ids:
+      - FEP-REG-003
+      - FEP-REG-005
+      - FEP-REG-012
+      - FEP-REG-017
+      - FEP-REG-018
+      - FEP-REG-026
+    challenge_cases:
+      - case_id: FEP-SYN-004
+        contrast_type: permission_reversal
+        expected_delta: Machine-readable manifests demonstrate that scheduler is the only changed factor.
+    corpus_frequency: high
+    coverage_status: partial_contrast
+    gaps:
+      - The shared scheduler countercase does not test safe resolved defaults or combined freeze semantics.
+
+  - cluster_id: CLU-04
+    title: Causal isolation and cross-result comparability
+    description: Association across runs is promoted to a causal comparison without paired or harmonized evidence.
+    primary_reason_codes:
+      - EVD-CONFOUND-001
+      - EVD-COMPARABILITY-001
+      - CLM-STRENGTH-001
+    historical_case_ids:
+      - FEP-REG-003
+      - FEP-REG-005
+      - FEP-REG-010
+      - FEP-REG-017
+      - FEP-REG-021
+      - FEP-REG-026
+      - FEP-REG-027
+    challenge_cases:
+      - case_id: FEP-SYN-004
+        contrast_type: permission_reversal
+        expected_delta: A complete paired A/B protocol permits a scoped causal scheduler claim.
+    corpus_frequency: high
+    coverage_status: development_balanced
+    gaps:
+      - Only a synthetic scheduler intervention supplies the positive comparison.
+
+  - cluster_id: CLU-05
+    title: Artifact, feature, and metric integrity
+    description: Parseability, field order, metric direction, or proxy identity is mistaken for semantic validity.
+    primary_reason_codes:
+      - ART-SCHEMA-001
+      - ART-FINITE-001
+      - ART-FEATURE-ORDER-001
+      - SEM-MAPPING-001
+    historical_case_ids:
+      - FEP-REG-008
+      - FEP-REG-013
+      - FEP-REG-014
+      - FEP-REG-028
+      - FEP-REG-029
+      - FEP-REG-030
+    challenge_cases:
+      - case_id: FEP-SYN-006
+        contrast_type: permission_reversal
+        expected_delta: Producer schema and sentinel reconstruction satisfy feature-order and semantic-mapping gates despite a low score.
+    corpus_frequency: high
+    coverage_status: development_balanced
+    gaps:
+      - The positive mapping evidence is synthetic and covers one schema shape.
+
+  - cluster_id: CLU-06
+    title: Coverage and scoped generalization
+    description: Incomplete grids or narrow samples are expanded beyond the population actually observed.
+    primary_reason_codes:
+      - EVD-COVERAGE-001
+      - CLM-GENERALITY-001
+    historical_case_ids:
+      - FEP-REG-012
+      - FEP-REG-013
+      - FEP-REG-019
+    challenge_cases:
+      - case_id: FEP-SYN-003
+        contrast_type: permission_reversal
+        expected_delta: Preregistered representative coverage supports a claim limited to the sampled population.
+    corpus_frequency: high
+    coverage_status: development_balanced
+    gaps:
+      - No challenge tests an incomplete grid paired with a deliberately narrower valid claim.
+
+  - cluster_id: CLU-07
+    title: Proxy, bridge hypothesis, and mechanism promotion
+    description: A proxy, convenient explanation, or non-discriminating statistic is promoted to mechanism.
+    primary_reason_codes:
+      - SEM-MAPPING-001
+      - CLM-STRENGTH-001
+      - CLM-MECHANISM-001
+      - BIAS-CONFIRM-001
+    historical_case_ids:
+      - FEP-REG-005
+      - FEP-REG-010
+      - FEP-REG-018
+      - FEP-REG-020
+      - FEP-REG-022
+      - FEP-REG-023
+      - FEP-REG-024
+      - FEP-REG-028
+      - FEP-REG-030
+    challenge_cases:
+      - case_id: FEP-SYN-005
+        contrast_type: permission_reversal
+        expected_delta: A preregistered discriminating intervention supports the measured mechanism within scope.
+    corpus_frequency: high
+    coverage_status: partial_contrast
+    gaps:
+      - The positive challenge covers intervention evidence but not validated proxy-to-target mappings.
+
+  - cluster_id: CLU-08
+    title: Independence and effective sample size
+    description: Replays, copies, or shared lineage are counted as additional independent support.
+    primary_reason_codes:
+      - EVD-INDEPENDENCE-001
+      - EVD-PROVENANCE-001
+    historical_case_ids:
+      - FEP-REG-009
+      - FEP-REG-016
+    challenge_cases:
+      - case_id: FEP-SYN-001
+        contrast_type: root_cause_contrast
+        expected_delta: The same hash comes from stale reuse, not deterministic reproduction.
+      - case_id: FEP-SYN-008
+        contrast_type: permission_reversal
+        expected_delta: Distinct preregistered seed, data draw, action, and producer units permit an additional independent N.
+    corpus_frequency: medium
+    coverage_status: development_balanced
+    gaps:
+      - Independence is tested only for one declared composite sampling unit.
+
+  - cluster_id: CLU-09
+    title: Runtime terminal state and narrative status
+    description: Exit state, completion artifacts, sibling safety, and status documents are collapsed into one signal.
+    primary_reason_codes:
+      - PROC-TERMINAL-001
+      - PROC-EXIT-UNKNOWN-001
+      - EVD-COVERAGE-001
+      - SYNC-STATUS-001
+    historical_case_ids:
+      - FEP-REG-006
+      - FEP-REG-015
+    challenge_cases:
+      - case_id: FEP-SYN-009
+        contrast_type: permission_reversal
+        expected_delta: Exit code remains unknown while a registered complete-artifact fallback permits action completion.
+    corpus_frequency: medium
+    coverage_status: development_balanced
+    gaps:
+      - No mode-boundary case distinguishes historical status prose from an erroneous stale status.
+
+  - cluster_id: CLU-10
+    title: Routing, prior existence, and novelty
+    description: Current authoritative sources or earlier discovery chains are skipped before status and novelty claims.
+    primary_reason_codes:
+      - ROUTE-SOURCE-001
+      - ROUTE-PRIOR-EXISTENCE-001
+      - SYNC-STATUS-001
+    historical_case_ids:
+      - FEP-REG-006
+      - FEP-REG-025
+    challenge_cases:
+      - case_id: FEP-SYN-010
+        contrast_type: permission_reversal
+        expected_delta: A complete multi-alias negative scan permits novelty only within the declared registry scope.
+    corpus_frequency: medium
+    coverage_status: development_balanced
+    gaps:
+      - A negative scan cannot establish external literature novelty and remains synthetic.
+
+next_actions_before_holdout:
+  - priority: P0
+    action: Create the physically separate sealed store and populate it with newly sourced evaluation cases under the partition protocol.
+    rationale: The isolation contract now exists, but no sealed partition instance or unseen case exists.
+  - priority: P0
+    action: Run a two-reviewer blind human baseline before setting thresholds.
+    rationale: The baseline protocol exists, but difficulty, agreement, and adjudication remain unmeasured.
+  - priority: P1
+    action: Replace additional discussion-only counterparts with reviewer-only source excerpts or raw-artifact snapshots where provenance permits.
+    rationale: The first five fixtures audit source fidelity but do not upgrade evidence tier or cover the other historical cases.
+  - priority: P1
+    action: Add at least one mode-boundary challenge and external non-project cases.
+    rationale: Current coverage is project-shaped and lacks discussion-versus-strict decision reversal.

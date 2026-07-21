@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-SYN-009",
+  "case_id": "FEP-SYN-009",
+  "fixture_kind": "synthetic_machine_readable",
+  "visibility": "scenario_only",
+  "purpose": "Test documented completion fallback without converting a null Windows exit code into a numeric success code.",
+  "files": [
+    {
+      "path": "evidence.json",
+      "media_type": "application/json",
+      "role": "visible_evidence",
+      "sha256": "52a91f496d6229bded8d99dc8803982c84f663bdc84bd4108d0b695a51a95968"
+    }
+  ],
+  "oracle_fields_present": false,
+  "notes": ["The fallback applies only because every registered completeness condition is satisfied."]
+}

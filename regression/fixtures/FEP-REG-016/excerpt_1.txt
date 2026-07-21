@@ -1,0 +1,13 @@
+
+**数据来源**: `eval_metrics.csv`（`valid==True` 行，per-seed 平均，4 eval seed 均值）
+**运行日期**: 2026-05-10
+
+| 实验 | 架构 | mean corr | ± std | [s41, s51, s121, s161] | 有效？ |
+|---|---|---|---|---|---|
+| **R22f** (baseline) | 64d×4p, joint, lr=1e-2 | **0.7508** | 0.040 | [0.7045, 0.7325, 0.7713, 0.7948] | ✅ |
+| **A1c-ctrl** (TRUE resume+optim) | 64d×4p, continue, lr=1e-2 | **0.7362** | 0.051 | [0.6918, 0.6945, 0.7633, 0.7951] | ✅ |
+| **A3-ctrl** (rand init full joint) | 64d×4p, joint, lr=1e-2 | 0.7508 | 0.040 | [same as R22f] | ❌ **无效（R22f平凡副本）** |
+| **R7_P3RO** (Stage A基线) | 64d×4p, freeze-bio, lin dec | **0.6304** | 0.021 | [0.6140, 0.6615, 0.6231, 0.6231] | ✅ |
+| **R7_A1** (from R22f, frz readout) | 64d×4p, frz readout, bio训练 | **0.7247** | 0.052 | [0.7121, 0.6926, 0.6929, 0.8013] | ✅ |
+| **R7_A1ctrl** (from R22f, cont jt) | 64d×4p, joint, no optim state | **0.7001** | 0.077 | [0.7331, 0.6369, 0.6375, 0.7929] | ✅ |
+| **R7-A3** (rand init, frz readout) | 64d×4p, frz readout, bio训练 | **0.3475** | 0.107 | [0.2014, 0.3388, 0.4496, 0.4003] | ✅ |

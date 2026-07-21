@@ -1,0 +1,33 @@
+{
+  "record_type": "synthetic_independent_sampling_units",
+  "independence_definition": "seed_data_draw_and_producer_action",
+  "runs": [
+    {
+      "run_id": "RUN-A",
+      "action_id": "ACT-A",
+      "seed": 41,
+      "data_draw_id": "DRAW-1001",
+      "producer_manifest": "MAN-A",
+      "code_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "protocol_id": "PROTO-X"
+    },
+    {
+      "run_id": "RUN-B",
+      "action_id": "ACT-B",
+      "seed": 171,
+      "data_draw_id": "DRAW-2002",
+      "producer_manifest": "MAN-B",
+      "code_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "protocol_id": "PROTO-X"
+    }
+  ],
+  "checks": {
+    "distinct_seed": true,
+    "distinct_data_draw": true,
+    "distinct_action": true,
+    "distinct_producer_manifest": true,
+    "same_registered_protocol": true,
+    "both_complete": true
+  },
+  "limitations": ["Independence is established only for the declared sampling unit and protocol scope."]
+}

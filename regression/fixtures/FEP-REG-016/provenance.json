@@ -1,0 +1,24 @@
+{
+  "record_type": "historical_excerpt_provenance",
+  "schema_version": "0.1.0-draft",
+  "case_id": "FEP-REG-016",
+  "visibility": "reviewer_only",
+  "normalization": "rstrip_each_line_then_join_lf",
+  "excerpts": [
+    {
+      "fixture_path": "excerpt_1.txt",
+      "fixture_sha256": "32ced6135f8e09a930ef9849597af2d1e01c0cfb28501b70223f879812963c88",
+      "source_path": "R7_DISCUSSION_ROUND4_2026-05-10.md",
+      "source_sha256": "ee65458b4928ff12c2f1305046d681766724318626f1054a164814f15ab2b2d0",
+      "line_start": 35,
+      "line_end": 47,
+      "normalized_excerpt_sha256": "edd5c7f7b47f5a1f0ed4aff35bd2ecbc4fbcd24fa9c7ae5c53767513da1df797",
+      "role": "historical configuration-label provenance correction"
+    }
+  ],
+  "limitations": [
+    "The excerpt contains a final historical correction and is answer-bearing.",
+    "This fixture is for curator and reviewer source-fidelity checks only and must never enter tested-Agent context.",
+    "The discussion record is not a substitute for inspecting the executable generator and manifest in a current task."
+  ]
+}

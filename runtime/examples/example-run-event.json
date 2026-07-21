@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-EXAMPLE-ONLY",
+  "event_id": "EVT-EXAMPLE-000",
+  "sequence": 0,
+  "timestamp": "2026-07-19T00:00:03Z",
+  "event_type": "run_preflight",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "example-only",
+  "payload": {
+    "example_only": true
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

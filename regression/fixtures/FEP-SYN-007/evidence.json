@@ -1,0 +1,27 @@
+{
+  "record_type": "synthetic_deterministic_replay_lineage",
+  "action": {
+    "action_id": "ACT-REPLAY-007",
+    "idempotency_key": "cfg-a1-seed-41-code-c1",
+    "wait_for_exit_completed": true,
+    "terminal_state": "succeeded"
+  },
+  "producer_binding": {
+    "manifest_action_id": "ACT-REPLAY-007",
+    "output_path": "outputs/checkpoint.bin",
+    "artifact_created_after_action_start": true,
+    "artifact_registered_by_terminal_event": true
+  },
+  "content": {
+    "current_checkpoint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "historical_checkpoint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "determinism_expected": true
+  },
+  "sampling_unit": {
+    "declared_unit": "seed_configuration_data_draw",
+    "current_unit_id": "seed41-cfgA-dataD1",
+    "historical_unit_id": "seed41-cfgA-dataD1",
+    "same_unit": true
+  },
+  "limitations": ["Valid current producer and reproducibility evidence do not create a new independent sampling unit."]
+}

@@ -1,0 +1,23 @@
+{
+  "record_type": "synthetic_feature_mapping_evidence",
+  "producer_schema_version": "feature-schema-3",
+  "producer_feature_order": [
+    {"name": "spk", "start": 0, "end_exclusive": 64, "sentinel": "binary_spike_channel"},
+    {"name": "mem", "start": 64, "end_exclusive": 128, "sentinel": "continuous_voltage_channel"}
+  ],
+  "analysis_request": {
+    "feature_name": "mem",
+    "start": 64,
+    "end_exclusive": 128,
+    "target_metric": "heldout_corr"
+  },
+  "independent_reconstruction": {
+    "method": "sentinel_and_schema_crosscheck",
+    "resolved_feature": "mem",
+    "resolved_start": 64,
+    "resolved_end_exclusive": 128,
+    "agreement": true
+  },
+  "observation": {"heldout_corr": 0.21, "finite": true},
+  "limitations": ["Synthetic fixture; the low score is an observation, not a mechanism explanation."]
+}

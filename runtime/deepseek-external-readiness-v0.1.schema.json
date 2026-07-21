@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/runtime/deepseek-external-readiness/v0.1/schema.json",
+  "title": "DeepSeek External Transport Offline Readiness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "valid",
+    "ready_for_network",
+    "provider",
+    "endpoint",
+    "transport",
+    "model_requested",
+    "model_resolved",
+    "profile_valid",
+    "tls",
+    "credential",
+    "approval",
+    "network_request_performed",
+    "blockers",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-prototype" },
+    "valid": { "type": "boolean" },
+    "ready_for_network": { "const": false },
+    "provider": { "const": "deepseek" },
+    "endpoint": { "const": "https://api.deepseek.com/chat/completions" },
+    "transport": { "const": "deepseek-direct-https-v0.1" },
+    "model_requested": { "type": "string", "minLength": 1 },
+    "model_resolved": {
+      "oneOf": [
+        { "enum": ["deepseek-v4-pro", "deepseek-v4-flash"] },
+        { "type": "null" }
+      ]
+    },
+    "profile_valid": { "type": "boolean" },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["certificate_verification", "hostname_verification", "minimum_version", "system_trust"],
+      "properties": {
+        "certificate_verification": { "const": true },
+        "hostname_verification": { "const": true },
+        "minimum_version": { "const": "TLSv1.2" },
+        "system_trust": { "const": true }
+      }
+    },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "target", "provider_implementation_available", "accessed", "raw_key_cli_argument_supported"],
+      "properties": {
+        "provider": { "const": "windows-credential-manager-current-user" },
+        "target": { "const": "FEP-Agent/DeepSeek" },
+        "provider_implementation_available": { "type": "boolean" },
+        "accessed": { "const": false },
+        "raw_key_cli_argument_supported": { "const": false }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issued", "one_shot", "request_digest_bound", "endpoint_bound", "maximum_ttl_seconds"],
+      "properties": {
+        "issued": { "const": false },
+        "one_shot": { "const": true },
+        "request_digest_bound": { "const": true },
+        "endpoint_bound": { "const": true },
+        "maximum_ttl_seconds": { "const": 300 }
+      }
+    },
+    "network_request_performed": { "const": false },
+    "blockers": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

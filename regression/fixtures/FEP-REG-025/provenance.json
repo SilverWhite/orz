@@ -1,0 +1,24 @@
+{
+  "record_type": "historical_excerpt_provenance",
+  "schema_version": "0.1.0-draft",
+  "case_id": "FEP-REG-025",
+  "visibility": "reviewer_only",
+  "normalization": "rstrip_each_line_then_join_lf",
+  "excerpts": [
+    {
+      "fixture_path": "excerpt_1.txt",
+      "fixture_sha256": "25dacd63ee094eec38124b067d472687a1d0013bbc56b08215fe1c76a0b24e9a",
+      "source_path": "R8_DISCUSSION_ROUND143_2026-06-19.md",
+      "source_sha256": "ce123291f986c983a832af2887afef234b060a2bcfc6bcf081f30c47d3c329c4",
+      "line_start": 220,
+      "line_end": 259,
+      "normalized_excerpt_sha256": "c1e235346c2ffb819e168bc1204d48b3ffce1979f5f35ef18d708e7195612c07",
+      "role": "prior-existence scan correction and scoped novelty boundary"
+    }
+  ],
+  "limitations": [
+    "The excerpt contains the historical novelty ruling and is answer-bearing.",
+    "This fixture is for curator and reviewer source-fidelity checks only and must never enter tested-Agent context.",
+    "The excerpt supports curation provenance only; a new novelty claim still requires a fresh prior-existence scan."
+  ]
+}

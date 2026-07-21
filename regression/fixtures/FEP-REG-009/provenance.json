@@ -1,0 +1,34 @@
+{
+  "record_type": "historical_excerpt_provenance",
+  "schema_version": "0.1.0-draft",
+  "case_id": "FEP-REG-009",
+  "visibility": "reviewer_only",
+  "normalization": "rstrip_each_line_then_join_lf",
+  "excerpts": [
+    {
+      "fixture_path": "excerpt_1.txt",
+      "fixture_sha256": "343907a4c163dec8cb4461e178d9b367c3ff068ccbbbeb8fbd76f6eeaffb24c3",
+      "source_path": "R8_DISCUSSION_ROUND139_2026-06-14.md",
+      "source_sha256": "d4c2ca91c829cdc25cfacc375010b7abaf99b5a8a999e5c09a9ffa106ef52a81",
+      "line_start": 66,
+      "line_end": 100,
+      "normalized_excerpt_sha256": "ad6a3a89fa10a800c73e4d9f60700643ccf133c0b46a342aa395917787857ac8",
+      "role": "historical error and correction record"
+    },
+    {
+      "fixture_path": "excerpt_2.txt",
+      "fixture_sha256": "b4f7186af273f8988d6fb27bcb233a1b0f17647e41cd8a060112f167162bd7fb",
+      "source_path": "R8_DISCUSSION_ROUND140_2026-06-14.md",
+      "source_sha256": "a86c44ad065e2fd7fc68ca80698b74ed2b96353b88f85d6799c837ff423ab078",
+      "line_start": 130,
+      "line_end": 162,
+      "normalized_excerpt_sha256": "750a1e65ede418608db9ad3990b3041df57c9d8af5fde16fc5866d97a4219107",
+      "role": "follow-up correction and claim boundary"
+    }
+  ],
+  "limitations": [
+    "The excerpts contain historical correction rulings and are answer-bearing.",
+    "This fixture is for curator and reviewer source-fidelity checks only and must never enter tested-Agent context.",
+    "Discussion excerpts do not substitute for raw experiment artifacts."
+  ]
+}

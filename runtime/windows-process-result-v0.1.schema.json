@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/runtime/windows-process-result/v0.1/schema.json",
+  "title": "Windows Process Runtime Spike Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "runner",
+    "run_id",
+    "valid",
+    "runtime_ready",
+    "started_at",
+    "completed_at",
+    "duration_ms",
+    "command",
+    "process",
+    "containment",
+    "capture",
+    "cancellation",
+    "terminal_event",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-prototype" },
+    "runner": { "const": "windows-process-spike" },
+    "run_id": { "type": "string", "pattern": "^WPROC-[A-F0-9-]+$" },
+    "valid": { "type": "boolean" },
+    "runtime_ready": { "type": "boolean" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "duration_ms": { "type": "number", "minimum": 0 },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable", "argument_count", "arguments_sha256", "command_sha256", "cwd", "shell"],
+      "properties": {
+        "executable": { "type": "string", "minLength": 1 },
+        "argument_count": { "type": "integer", "minimum": 0 },
+        "arguments_sha256": { "$ref": "#/$defs/sha256" },
+        "command_sha256": { "$ref": "#/$defs/sha256" },
+        "cwd": { "type": "string", "minLength": 1 },
+        "shell": { "const": false }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "exit_code", "terminal_state", "timed_out"],
+      "properties": {
+        "pid": { "type": ["integer", "null"], "minimum": 1 },
+        "exit_code": { "type": ["integer", "null"] },
+        "terminal_state": { "enum": ["succeeded", "failed", "cancelled", "unknown"] },
+        "timed_out": { "type": "boolean" }
+      }
+    },
+    "containment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "job_object_created", "job_object_assigned", "kill_on_close", "degraded_reason"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "job_object_created": { "type": "boolean" },
+        "job_object_assigned": { "type": "boolean" },
+        "kill_on_close": { "type": "boolean" },
+        "degraded_reason": { "type": ["string", "null"] }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit_bytes_per_stream", "stdout", "stderr"],
+      "properties": {
+        "limit_bytes_per_stream": { "type": "integer", "minimum": 0 },
+        "stdout": { "$ref": "#/$defs/streamCapture" },
+        "stderr": { "$ref": "#/$defs/streamCapture" }
+      }
+    },
+    "cancellation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "trigger", "ctrl_break_attempted", "ctrl_break_error", "escalation"],
+      "properties": {
+        "requested": { "type": "boolean" },
+        "trigger": { "enum": ["none", "timeout", "containment_failure"] },
+        "ctrl_break_attempted": { "type": "boolean" },
+        "ctrl_break_error": { "type": ["string", "null"] },
+        "escalation": { "enum": ["none", "job_close", "terminate_root", "kill_root"] }
+      }
+    },
+    "terminal_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_kind", "event_type", "terminal_state", "exit_code", "reason_codes"],
+      "properties": {
+        "event_kind": { "const": "terminal" },
+        "event_type": {
+          "enum": ["process.succeeded", "process.failed", "process.cancelled", "process.unknown"]
+        },
+        "terminal_state": { "enum": ["succeeded", "failed", "cancelled", "unknown"] },
+        "exit_code": { "type": ["integer", "null"] },
+        "reason_codes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "streamCapture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total_bytes", "retained_bytes", "sha256", "truncated", "content_in_report"],
+      "properties": {
+        "total_bytes": { "type": "integer", "minimum": 0 },
+        "retained_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "truncated": { "type": "boolean" },
+        "content_in_report": { "const": false }
+      }
+    }
+  }
+}

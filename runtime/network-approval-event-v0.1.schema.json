@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/runtime/network-approval-event/v0.1/schema.json",
+  "title": "External Network Approval Decision Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "event_type", "sequence", "recorded_at",
+    "previous_event_sha256", "provider", "endpoint", "turn", "attempt",
+    "request_body_sha256", "confirmation_summary_sha256", "decision",
+    "authority", "confirmation_method", "raw_message_content_recorded",
+    "raw_reasoning_recorded", "authorization_recorded",
+    "confirmation_token_recorded", "event_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-prototype" },
+    "event_type": { "const": "network_approval_decision" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "previous_event_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "provider": { "const": "deepseek" },
+    "endpoint": { "const": "https://api.deepseek.com/chat/completions" },
+    "turn": { "type": "integer", "minimum": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "request_body_sha256": { "$ref": "#/$defs/sha256" },
+    "confirmation_summary_sha256": { "$ref": "#/$defs/sha256" },
+    "decision": { "enum": ["allow", "deny"] },
+    "authority": { "const": "local-interactive-user" },
+    "confirmation_method": { "const": "typed-summary-digest" },
+    "raw_message_content_recorded": { "const": false },
+    "raw_reasoning_recorded": { "const": false },
+    "authorization_recorded": { "const": false },
+    "confirmation_token_recorded": { "const": false },
+    "event_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

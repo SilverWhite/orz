@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-REG-025",
+  "case_id": "FEP-REG-025",
+  "fixture_kind": "historical_excerpt",
+  "visibility": "reviewer_only",
+  "purpose": "Verify the curator's reconstruction of the prior-existence and scoped-novelty correction.",
+  "files": [
+    { "path": "excerpt_1.txt", "media_type": "text/plain; charset=utf-8", "role": "historical correction excerpt", "sha256": "25dacd63ee094eec38124b067d472687a1d0013bbc56b08215fe1c76a0b24e9a" },
+    { "path": "provenance.json", "media_type": "application/json", "role": "source hashes, line span, normalization, and limitations", "sha256": "46bd5d9202bed560795c39ff128d5a7f5d8b3758b39d9f32c71596a02b33e93d" }
+  ],
+  "oracle_fields_present": false,
+  "notes": [
+    "The excerpt is semantically answer-bearing even though no structured oracle fields are present.",
+    "A harness must exclude this entire fixture from tested-Agent context."
+  ]
+}

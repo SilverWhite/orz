@@ -1,0 +1,186 @@
+schema_version: "0.1.0-draft"
+matrix_id: FEP-AGENT-GATE-MATRIX-v0.1
+status: frozen_for_design_review
+
+modes:
+  discussion:
+    purpose: Source-routed exploration and hypothesis formation.
+    durable_claim_promotion: false
+    mutating_action_default: outside_mode
+  guarded:
+    purpose: Default local CLI work with mechanical and evidence safeguards.
+    durable_claim_promotion: limited
+    mutating_action_default: contract_bound
+  strict:
+    purpose: Long-run launch, result registration, MAP or INDEX update, and strong claim promotion.
+    durable_claim_promotion: true
+    mutating_action_default: contract_bound
+
+decision_semantics:
+  pass: Applicable requirement is satisfied by current evidence.
+  warn: Work may continue, but the unresolved limit must remain visible.
+  defer: The subject may be inspected, but the dependent action or claim cannot yet advance.
+  block: The dependent action or claim is prohibited in the current state.
+
+precedence:
+  order: [block, defer, warn, pass]
+  aggregation: The strongest applicable unresolved decision wins for each dependent object.
+  locality: A blocked claim does not automatically invalidate its source artifact or a weaker descriptive claim.
+
+bypass_policy:
+  action_authorization:
+    rule: User authorization can satisfy a permission requirement but cannot prove provenance, coverage, independence, or mechanism.
+  evidence_relabeling:
+    rule: No user preference, model confidence, or historical precedent may relabel rejected or confounded evidence as independent.
+  claim_downgrade:
+    rule: A claim gate may be resolved by narrowing scope or certainty only when the revised wording is recorded as a new claim revision.
+  emergency_override:
+    rule: Not defined in v0.1; fail closed for destructive, irreversible, external, or costly actions.
+
+stages:
+  - stage_id: G01-routing
+    entry_condition: A task or claim-bearing review begins.
+    dependencies: []
+    gate_codes:
+      - ROUTE-SOURCE-001
+      - ROUTE-PRIOR-EXISTENCE-001
+    exit_condition: Applicable live sources are routed and novelty claims have a prior-existence result.
+
+  - stage_id: G02-contract
+    entry_condition: Work scope is known well enough to describe.
+    dependencies: [G01-routing]
+    gate_codes:
+      - TASK-CONTRACT-001
+    exit_condition: Acceptance, scope, permissions, and forbidden actions are explicit enough for the next action.
+
+  - stage_id: G03-independent-precommitment
+    entry_condition: Historical case retrieval may influence reasoning.
+    dependencies: [G01-routing]
+    gate_codes:
+      - BIAS-PRECOMMIT-001
+      - BIAS-SURFACE-001
+      - BIAS-CONFIRM-001
+      - BIAS-LEAKAGE-001
+    exit_condition: Blind assessment, retrieval boundary, disanalogies, counterevidence plan, and oracle isolation are recorded.
+
+  - stage_id: G04-action-proposal
+    entry_condition: A mutating, costly, or formal action is proposed.
+    dependencies: [G02-contract]
+    gate_codes:
+      - ACT-IDEMPOTENCY-001
+      - CFG-EXPLICIT-001
+      - CFG-SEMANTIC-001
+    exit_condition: The action is identifiable, authorized, explicit, and semantically aligned.
+
+  - stage_id: G05-execution-terminal
+    entry_condition: An action has started or a past action is reconstructed.
+    dependencies: [G04-action-proposal]
+    gate_codes:
+      - PROC-TERMINAL-001
+      - PROC-EXIT-UNKNOWN-001
+      - EVD-EXECUTION-MATCH-001
+    exit_condition: Terminal state and executed computation are known, or explicitly remain unknown without success inference.
+
+  - stage_id: G06-artifact-validation
+    entry_condition: An output is proposed as a result artifact.
+    dependencies: [G05-execution-terminal]
+    gate_codes:
+      - ART-SCHEMA-001
+      - ART-FINITE-001
+      - ART-STALE-001
+      - ART-FEATURE-ORDER-001
+    exit_condition: Schema, numeric validity, producer binding, and semantic field mapping pass.
+
+  - stage_id: G07-evidence-acceptance
+    entry_condition: A validated artifact is proposed as evidence.
+    dependencies: [G06-artifact-validation]
+    gate_codes:
+      - EVD-PROVENANCE-001
+      - EVD-COVERAGE-001
+      - EVD-INDEPENDENCE-001
+      - EVD-CONFOUND-001
+      - EVD-COMPARABILITY-001
+    exit_condition: Evidence state, effective N, scope, comparability, and causal limits are recorded.
+
+  - stage_id: G08-claim-promotion
+    entry_condition: Evidence is used to create or revise a claim.
+    dependencies: [G03-independent-precommitment, G07-evidence-acceptance]
+    gate_codes:
+      - SEM-MAPPING-001
+      - CLM-STRENGTH-001
+      - CLM-GENERALITY-001
+      - CLM-MECHANISM-001
+    exit_condition: Claim wording does not exceed operational meaning or the weakest evidence assessment.
+
+  - stage_id: G09-state-sync
+    entry_condition: A durable result, status, MAP, INDEX, or registry change is proposed.
+    dependencies: [G08-claim-promotion]
+    gate_codes:
+      - SYNC-STATUS-001
+    exit_condition: Authoritative artifacts and narrative state agree through an auditable patch.
+
+mode_overrides:
+  discussion:
+    hard_blocks:
+      - BIAS-LEAKAGE-001
+    notes:
+      - Hard block applies only to a scored independent evaluation attempt.
+      - Other failed gates constrain wording but do not prohibit forming an explicitly labeled hypothesis.
+  guarded:
+    hard_blocks:
+      - CFG-EXPLICIT-001
+      - CFG-SEMANTIC-001
+      - ACT-IDEMPOTENCY-001
+      - PROC-TERMINAL-001
+      - ART-SCHEMA-001
+      - ART-FINITE-001
+      - ART-STALE-001
+      - ART-FEATURE-ORDER-001
+      - EVD-INDEPENDENCE-001
+      - EVD-EXECUTION-MATCH-001
+      - SEM-MAPPING-001
+      - BIAS-LEAKAGE-001
+    deferred_claim_codes:
+      - ROUTE-SOURCE-001
+      - ROUTE-PRIOR-EXISTENCE-001
+      - EVD-PROVENANCE-001
+      - EVD-COVERAGE-001
+      - EVD-CONFOUND-001
+      - EVD-COMPARABILITY-001
+      - CLM-STRENGTH-001
+      - CLM-GENERALITY-001
+      - CLM-MECHANISM-001
+      - BIAS-PRECOMMIT-001
+      - BIAS-SURFACE-001
+      - BIAS-CONFIRM-001
+      - SYNC-STATUS-001
+  strict:
+    fail_closed_codes:
+      - ROUTE-SOURCE-001
+      - ROUTE-PRIOR-EXISTENCE-001
+      - TASK-CONTRACT-001
+      - CFG-EXPLICIT-001
+      - CFG-SEMANTIC-001
+      - ACT-IDEMPOTENCY-001
+      - PROC-TERMINAL-001
+      - ART-SCHEMA-001
+      - ART-FINITE-001
+      - ART-STALE-001
+      - ART-FEATURE-ORDER-001
+      - EVD-PROVENANCE-001
+      - EVD-COVERAGE-001
+      - EVD-INDEPENDENCE-001
+      - EVD-CONFOUND-001
+      - EVD-COMPARABILITY-001
+      - EVD-EXECUTION-MATCH-001
+      - SEM-MAPPING-001
+      - CLM-STRENGTH-001
+      - CLM-GENERALITY-001
+      - CLM-MECHANISM-001
+      - SYNC-STATUS-001
+      - BIAS-PRECOMMIT-001
+      - BIAS-SURFACE-001
+      - BIAS-LEAKAGE-001
+      - BIAS-CONFIRM-001
+    special_case:
+      PROC-EXIT-UNKNOWN-001: May remain defer rather than block only when an explicit complete-artifact fallback rule passes.

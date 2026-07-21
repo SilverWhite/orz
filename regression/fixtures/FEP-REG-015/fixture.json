@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-REG-015",
+  "case_id": "FEP-REG-015",
+  "fixture_kind": "historical_excerpt",
+  "visibility": "reviewer_only",
+  "purpose": "Verify the curator's source selection for the sampling-unit independence discipline.",
+  "files": [
+    { "path": "excerpt_1.txt", "media_type": "text/plain; charset=utf-8", "role": "historical MAP discipline excerpt", "sha256": "9c834d3da5fd9da76dede946d7ff696f21cd6c82148347af41d96f7c0af418eb" },
+    { "path": "provenance.json", "media_type": "application/json", "role": "source hashes, line span, normalization, and limitations", "sha256": "dd303a058c1253d7c69834828c7f340bbd4d990512f53c85775e046f3c7d93a0" }
+  ],
+  "oracle_fields_present": false,
+  "notes": [
+    "The excerpt is semantically answer-bearing even though no structured oracle fields are present.",
+    "A harness must exclude this entire fixture from tested-Agent context."
+  ]
+}

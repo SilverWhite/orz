@@ -1,0 +1,24 @@
+{
+  "record_type": "historical_excerpt_provenance",
+  "schema_version": "0.1.0-draft",
+  "case_id": "FEP-REG-029",
+  "visibility": "reviewer_only",
+  "normalization": "rstrip_each_line_then_join_lf",
+  "excerpts": [
+    {
+      "fixture_path": "excerpt_1.txt",
+      "fixture_sha256": "d6e59071edbf83337f6456e6cdf1d105e1aa193ce46267ab1cab3bebaa2974ce",
+      "source_path": "R8_DISCUSSION_ROUND156_2026-06-21.md",
+      "source_sha256": "75f9239a8fd26a732f7dcd0131c195cf200450051b43cdf686a17cf48f9e2187",
+      "line_start": 350,
+      "line_end": 375,
+      "normalized_excerpt_sha256": "d055e6bc019f735002ae4717b6dc04faf09ccdfd55202d0fdfa158cab960ae0e",
+      "role": "feature-slice semantic mapping correction"
+    }
+  ],
+  "limitations": [
+    "The excerpt contains the historical semantic-mapping correction and is answer-bearing.",
+    "This fixture is for curator and reviewer source-fidelity checks only and must never enter tested-Agent context.",
+    "The discussion record does not establish the feature order of any current artifact."
+  ]
+}

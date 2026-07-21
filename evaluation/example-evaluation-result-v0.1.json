@@ -1,0 +1,133 @@
+{
+  "schema_version": "0.1.0-draft",
+  "scoring_protocol_version": "0.1.0-draft",
+  "evaluation_id": "EXAMPLE-NOT-A-RUN",
+  "attempt_id": "EXAMPLE-ATTEMPT-001",
+  "status": "descriptive_only",
+  "started_at": "2026-07-19T00:00:00Z",
+  "completed_at": "2026-07-19T00:00:01Z",
+  "corpus_ref": {
+    "corpus_id": "FEP-AGENT-REGRESSION-v0.1",
+    "revision": 3,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "partitions": ["development"],
+    "oracle_default_mode": "guarded"
+  },
+  "protocol_ref": {
+    "agent_protocol_version": "0.1.0-draft",
+    "reason_registry_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "gate_matrix_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "coverage_matrix_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "scoring_protocol_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "system_profile": {
+    "system_id": "EXAMPLE-SYSTEM",
+    "model_id": "example-only",
+    "provider": "none",
+    "adapter_version": "example-only",
+    "system_prompt_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "project_instructions_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "tool_policy_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "retrieval_policy_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "temperature": null,
+    "random_seed": null,
+    "time_budget_seconds": 1
+  },
+  "integrity": {
+    "valid": true,
+    "checks": [
+      {
+        "check_id": "EXAMPLE-SCHEMA-CHECK",
+        "status": "pass",
+        "evidence_refs": ["ART-EXAMPLE-001"]
+      }
+    ]
+  },
+  "counts": {
+    "planned_cases": 1,
+    "completed_cases": 1,
+    "valid_cases": 1,
+    "clusters": 1,
+    "contrast_pairs": 0,
+    "model_calls": 1,
+    "retries": 0
+  },
+  "metrics": {
+    "gate_identification": {
+      "precision": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "recall": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "f1": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0}
+    },
+    "decision_calibration": {
+      "exact": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "mean_ordinal_distance": 0.0,
+      "assessed_count": 1,
+      "unassessed_count": 0,
+      "overblock": {"numerator": 0, "denominator": 1, "value": 0.0},
+      "underblock": {"numerator": 0, "denominator": 1, "value": 0.0}
+    },
+    "state_alignment": {
+      "action": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "evidence": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "claim": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "claim_type": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0}
+    },
+    "source_fidelity": {
+      "valid_reference_rate": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "unsupported_source_rate": {"numerator": 0, "denominator": 1, "value": 0.0}
+    },
+    "claim_discipline": {
+      "forbidden_claim_violation": {"numerator": 0, "denominator": 1, "value": 0.0},
+      "scope_limitation_pass": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0},
+      "falsifier_preservation_pass": {"case_micro": {"numerator": 1, "denominator": 1, "value": 1.0}, "cluster_macro": 1.0}
+    },
+    "independence": {
+      "precommitment_order_pass": {"numerator": 1, "denominator": 1, "value": 1.0},
+      "retrieval_record_pass": {"numerator": 1, "denominator": 1, "value": 1.0},
+      "oracle_isolation_pass": {"numerator": 1, "denominator": 1, "value": 1.0}
+    },
+    "countercase_discrimination": {
+      "all_pairs": {"numerator": 0, "denominator": 0, "value": null},
+      "permission_reversal": {"numerator": 0, "denominator": 0, "value": null},
+      "root_cause_contrast": {"numerator": 0, "denominator": 0, "value": null},
+      "mode_boundary": {"numerator": 0, "denominator": 0, "value": null}
+    }
+  },
+  "cluster_results": [
+    {
+      "cluster_id": "CLU-01",
+      "case_ids": ["FEP-REG-001"],
+      "gate_f1": 1.0,
+      "decision_exact": 1.0,
+      "red_line_count": 0
+    }
+  ],
+  "pair_results": [],
+  "red_lines": [],
+  "adjudication": {
+    "required": true,
+    "completed": false,
+    "reviewer_count": 0,
+    "identity_blinded": false,
+    "raw_agreement": null,
+    "cohen_kappa": null,
+    "disagreement_count": 0
+  },
+  "acceptance": {
+    "status": "not_calibrated",
+    "threshold_set": null,
+    "reasons": ["Schema example only; this object is not an evaluation run."]
+  },
+  "limitations": [
+    "All-zero digests are placeholders.",
+    "The metrics are illustrative and must not be interpreted as measured performance."
+  ],
+  "artifacts": [
+    {
+      "artifact_id": "ART-EXAMPLE-001",
+      "role": "schema_example",
+      "path": "example-evaluation-result-v0.1.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

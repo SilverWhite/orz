@@ -1,0 +1,32 @@
+{
+  "schema_version": "0.1.0-draft",
+  "scan_id": "LEAKSCAN-EXAMPLE-ONLY",
+  "export_id": "EXP-EXAMPLE-ONLY",
+  "visibility": "reviewer_only",
+  "policy_mode": "development",
+  "scanner_version": "example-only",
+  "started_at": "2026-07-19T00:00:00Z",
+  "completed_at": "2026-07-19T00:00:01Z",
+  "target_bundle_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "checks": [
+    {
+      "rule_id": "LEAK-STRUCT-FIELD-001",
+      "layer": "structural",
+      "status": "pass",
+      "evidence": "Schema-only example check."
+    }
+  ],
+  "findings": [],
+  "semantic_review": {
+    "method": "model_assisted_candidate_only",
+    "status": "pass",
+    "reviewer_role_id": "example-reviewer",
+    "completed_at": "2026-07-19T00:00:01Z",
+    "independence_attested": false
+  },
+  "verdict": "pass",
+  "gate_action": "allow",
+  "limitations": [
+    "Schema-only example; no bundle was scanned and this report cannot authorize a run."
+  ]
+}

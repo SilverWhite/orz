@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/scenario-export-manifest-v0.1.schema.json",
+  "title": "FEP Agent Scenario Export Manifest v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "export_id",
+    "created_at",
+    "partition",
+    "source_corpus",
+    "policy_version",
+    "case_count",
+    "case_tokens",
+    "bundle_files",
+    "bundle_sha256",
+    "identity_map_location",
+    "policy_assertions",
+    "leak_scan",
+    "status",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "export_id": { "type": "string", "pattern": "^EXP-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "partition": { "enum": ["development", "challenge", "evaluation", "holdout"] },
+    "source_corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpus_id", "revision", "sha256"],
+      "properties": {
+        "corpus_id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "policy_version": { "type": "string", "minLength": 1 },
+    "case_count": { "type": "integer", "minimum": 1 },
+    "case_tokens": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token", "scenario_path", "sha256"],
+        "properties": {
+          "token": { "type": "string", "pattern": "^SCN-[a-f0-9]{16}$" },
+          "scenario_path": { "$ref": "#/$defs/relativePath" },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "bundle_files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "role", "size_bytes", "sha256"],
+        "properties": {
+          "path": { "$ref": "#/$defs/relativePath" },
+          "role": { "enum": ["scenario_case", "allowed_fixture", "output_schema", "bundle_index"] },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "bundle_sha256": { "$ref": "#/$defs/sha256" },
+    "identity_map_location": { "const": "sealed_external" },
+    "policy_assertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "oracle_removed",
+        "classification_removed",
+        "source_paths_removed",
+        "countercase_links_removed",
+        "curation_fixtures_removed",
+        "hidden_from_subject_removed",
+        "case_tokens_opaque",
+        "allowed_fixture_visibility",
+        "memory_disabled",
+        "historical_retrieval_disabled"
+      ],
+      "properties": {
+        "oracle_removed": { "const": true },
+        "classification_removed": { "const": true },
+        "source_paths_removed": { "const": true },
+        "countercase_links_removed": { "const": true },
+        "curation_fixtures_removed": { "const": true },
+        "hidden_from_subject_removed": { "const": true },
+        "case_tokens_opaque": { "const": true },
+        "allowed_fixture_visibility": { "const": "scenario_only" },
+        "memory_disabled": { "type": "boolean" },
+        "historical_retrieval_disabled": { "type": "boolean" }
+      }
+    },
+    "leak_scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["report_path", "report_sha256", "verdict"],
+      "properties": {
+        "report_path": { "$ref": "#/$defs/relativePath" },
+        "report_sha256": { "$ref": "#/$defs/sha256" },
+        "verdict": { "enum": ["pass", "warn", "fail"] }
+      }
+    },
+    "status": { "enum": ["ready", "blocked"] },
+    "notes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "ready" },
+          "partition": { "const": "development" }
+        },
+        "required": ["status", "partition"]
+      },
+      "then": {
+        "properties": {
+          "leak_scan": { "properties": { "verdict": { "enum": ["pass", "warn"] } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "ready" },
+          "partition": { "enum": ["challenge", "evaluation", "holdout"] }
+        },
+        "required": ["status", "partition"]
+      },
+      "then": {
+        "properties": {
+          "leak_scan": { "properties": { "verdict": { "const": "pass" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "partition": { "enum": ["evaluation", "holdout"] } }, "required": ["partition"] },
+      "then": {
+        "properties": {
+          "policy_assertions": {
+            "properties": {
+              "memory_disabled": { "const": true },
+              "historical_retrieval_disabled": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+    }
+  }
+}

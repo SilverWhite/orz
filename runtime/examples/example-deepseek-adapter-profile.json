@@ -1,0 +1,31 @@
+{
+  "schema_version": "0.1.0-prototype",
+  "transport": "openai_chat_completions",
+  "base_url": "https://api.deepseek.com",
+  "model": "deepseek-v4-pro",
+  "thinking": {
+    "type": "enabled",
+    "reasoning_effort": "max"
+  },
+  "sampling": {},
+  "tools": {
+    "enabled": true,
+    "strict": false
+  },
+  "structured_output": {
+    "mode": "json_object",
+    "prompt_mentions_json": true,
+    "example_provided": true,
+    "max_tokens": 4096
+  },
+  "user_id": "RUN_4B7F2A1C",
+  "timeouts": {
+    "connect_seconds": 30,
+    "first_inference_seconds": 600,
+    "total_seconds": 1800
+  },
+  "retry": {
+    "max_attempts": 3,
+    "retry_http_statuses": [429, 500, 503]
+  }
+}

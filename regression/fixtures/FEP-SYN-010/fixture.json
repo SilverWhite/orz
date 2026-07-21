@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-SYN-010",
+  "case_id": "FEP-SYN-010",
+  "fixture_kind": "synthetic_machine_readable",
+  "visibility": "scenario_only",
+  "purpose": "Test whether a documented multi-alias prior-existence scan can permit a narrowly scoped novelty claim.",
+  "files": [
+    {
+      "path": "evidence.json",
+      "media_type": "application/json",
+      "role": "visible_evidence",
+      "sha256": "d8f7cfabdde98525b26fd6f0cf56ae424407193990b7c66d2572fb02ecb667b0"
+    }
+  ],
+  "oracle_fields_present": false,
+  "notes": ["The fixture cannot establish novelty beyond its declared synthetic registry scope."]
+}

@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/leak-scan-report-v0.1.schema.json",
+  "title": "FEP Agent Leak Scan Report v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scan_id",
+    "export_id",
+    "visibility",
+    "policy_mode",
+    "scanner_version",
+    "started_at",
+    "completed_at",
+    "target_bundle_sha256",
+    "checks",
+    "findings",
+    "semantic_review",
+    "verdict",
+    "gate_action",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "scan_id": { "type": "string", "pattern": "^LEAKSCAN-[A-Z0-9._-]+$" },
+    "export_id": { "type": "string", "pattern": "^EXP-[A-Z0-9._-]+$" },
+    "visibility": { "const": "reviewer_only" },
+    "policy_mode": { "enum": ["development", "challenge", "evaluation", "holdout"] },
+    "scanner_version": { "type": "string", "minLength": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "target_bundle_sha256": { "$ref": "#/$defs/sha256" },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule_id", "layer", "status", "evidence"],
+        "properties": {
+          "rule_id": { "type": "string", "pattern": "^LEAK-[A-Z0-9-]+-[0-9]{3}$" },
+          "layer": { "enum": ["structural", "path", "digest", "semantic", "mount"] },
+          "status": { "enum": ["pass", "warn", "fail", "review_required"] },
+          "evidence": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "severity", "location", "fingerprint", "summary"],
+        "properties": {
+          "finding_id": { "type": "string", "pattern": "^FIND-[0-9]{3,}$" },
+          "severity": { "enum": ["info", "warn", "fail"] },
+          "location": { "type": "string", "minLength": 1 },
+          "fingerprint": { "$ref": "#/$defs/sha256" },
+          "summary": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "semantic_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "status", "reviewer_role_id", "completed_at", "independence_attested"],
+      "properties": {
+        "method": { "enum": ["independent_human", "model_assisted_candidate_only", "not_run"] },
+        "status": { "enum": ["pass", "warn", "fail", "not_run"] },
+        "reviewer_role_id": { "type": ["string", "null"], "minLength": 1 },
+        "completed_at": { "type": ["string", "null"], "format": "date-time" },
+        "independence_attested": { "type": "boolean" }
+      }
+    },
+    "verdict": { "enum": ["pass", "warn", "fail"] },
+    "gate_action": { "enum": ["allow", "defer", "block"] },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "pass" } }, "required": ["verdict"] },
+      "then": { "properties": { "gate_action": { "const": "allow" } } }
+    },
+    {
+      "if": { "properties": { "verdict": { "const": "fail" } }, "required": ["verdict"] },
+      "then": { "properties": { "gate_action": { "const": "block" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "policy_mode": { "const": "development" },
+          "verdict": { "const": "warn" }
+        },
+        "required": ["policy_mode", "verdict"]
+      },
+      "then": { "properties": { "gate_action": { "const": "allow" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "policy_mode": { "const": "challenge" },
+          "verdict": { "const": "warn" }
+        },
+        "required": ["policy_mode", "verdict"]
+      },
+      "then": { "properties": { "gate_action": { "const": "defer" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "policy_mode": { "enum": ["evaluation", "holdout"] },
+          "verdict": { "const": "warn" }
+        },
+        "required": ["policy_mode", "verdict"]
+      },
+      "then": { "properties": { "gate_action": { "const": "block" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "policy_mode": { "enum": ["evaluation", "holdout"] },
+          "verdict": { "const": "pass" }
+        },
+        "required": ["policy_mode", "verdict"]
+      },
+      "then": {
+        "properties": {
+          "semantic_review": {
+            "properties": {
+              "method": { "const": "independent_human" },
+              "status": { "const": "pass" },
+              "reviewer_role_id": { "type": "string", "minLength": 1 },
+              "completed_at": { "type": "string", "format": "date-time" },
+              "independence_attested": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

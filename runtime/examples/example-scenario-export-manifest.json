@@ -1,0 +1,51 @@
+{
+  "schema_version": "0.1.0-draft",
+  "export_id": "EXP-EXAMPLE-ONLY",
+  "created_at": "2026-07-19T00:00:00Z",
+  "partition": "development",
+  "source_corpus": {
+    "corpus_id": "FEP-AGENT-REGRESSION-v0.1",
+    "revision": 4,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "policy_version": "scenario-export-policy-v0.1",
+  "case_count": 1,
+  "case_tokens": [
+    {
+      "token": "SCN-0123456789abcdef",
+      "scenario_path": "cases/SCN-0123456789abcdef.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "bundle_files": [
+    {
+      "path": "cases/SCN-0123456789abcdef.json",
+      "role": "scenario_case",
+      "size_bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "bundle_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "identity_map_location": "sealed_external",
+  "policy_assertions": {
+    "oracle_removed": true,
+    "classification_removed": true,
+    "source_paths_removed": true,
+    "countercase_links_removed": true,
+    "curation_fixtures_removed": true,
+    "hidden_from_subject_removed": true,
+    "case_tokens_opaque": true,
+    "allowed_fixture_visibility": "scenario_only",
+    "memory_disabled": true,
+    "historical_retrieval_disabled": true
+  },
+  "leak_scan": {
+    "report_path": "review/leak-scan-report.json",
+    "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "verdict": "pass"
+  },
+  "status": "ready",
+  "notes": [
+    "Schema-only example; zero digests and empty file size are not evidence of a real export."
+  ]
+}

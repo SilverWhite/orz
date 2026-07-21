@@ -1,0 +1,25 @@
+{
+  "record_type": "synthetic_windows_terminal_fallback",
+  "process_record": {
+    "action_id": "ACT-WIN-009",
+    "wait_for_exit_completed": true,
+    "has_exited": true,
+    "exit_code": null,
+    "exit_state": "unknown"
+  },
+  "registered_fallback_rule": {
+    "rule_id": "FALLBACK-COMPLETE-SUMMARY-v1",
+    "requires_wait_for_exit": true,
+    "requires_complete_summary": true,
+    "requires_all_artifacts_valid": true
+  },
+  "completion_summary": {
+    "planned_count": 12,
+    "completed_count": 12,
+    "valid_artifact_count": 12,
+    "summary_complete": true,
+    "missing_conditions": []
+  },
+  "sibling_actions": [{"action_id": "ACT-SIBLING", "state": "running", "termination_authorized": false}],
+  "limitations": ["Artifact fallback establishes completion under the registered rule; it does not invent a numeric exit code."]
+}

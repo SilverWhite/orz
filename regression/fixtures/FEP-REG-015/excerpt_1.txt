@@ -1,0 +1,9 @@
+### DUAL2 CT结束误判与NB选择性恢复（2026-07-15 13:57 UTC+8）
+
+| 项目 | 状态 |
+|---|---|
+| CT结果边界 | CT_FEP完成12/12（累计18,000/18,000 epoch）；CT_noFEP无完成摘要，累计17,999/18,000 epoch，3d/s171停在1499/1500。按用户决定不续训、不改产物；后续不得把CT_noFEP登记为完整12/12 |
+| 失败原因 | Windows `Start-Process`在当前环境中进程结束后暴露空`ExitCode`；旧判断`$null -ne 0`误判CT_FEP失败并递归停止兄弟。两个NB 1-epoch smoke复现空退出码但均生成1/1完整摘要 |
+| launcher修复 | 新增显式`-Conditions`选择面；退出后先`WaitForExit()`，空退出码仅在12/12摘要完整时接受，否则fail-closed；manifest显式写每run=1500ep、每条件12 runs、累计18,000ep及launcher SHA |
+| 训练脚本一致性 | `D:\AGI\training\train_lif3d.py`保持SHA=`18b280a3...0224d`，未修CLI帮助文本裸`%`缺陷，以免NB与CT出现脚本SHA差异；该缺陷只影响`--help`，正常参数解析和smoke不受影响 |
+| 旧状态留档 | 失败manifest归档为`parallel_launcher_manifest.failed_20260715T055741Z.json` |

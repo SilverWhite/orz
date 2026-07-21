@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/regression-fixture-v0.1.schema.json",
+  "title": "FEP Agent Regression Fixture Manifest v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fixture_id",
+    "case_id",
+    "fixture_kind",
+    "visibility",
+    "purpose",
+    "files",
+    "oracle_fields_present",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "fixture_id": { "type": "string", "pattern": "^FIX-FEP-(?:REG|SYN)-[0-9]{3}$" },
+    "case_id": { "type": "string", "pattern": "^FEP-(?:REG|SYN)-[0-9]{3}$" },
+    "fixture_kind": { "enum": ["synthetic_machine_readable", "historical_excerpt", "raw_artifact_snapshot"] },
+    "visibility": { "enum": ["scenario_only", "reviewer_only"] },
+    "purpose": { "type": "string", "minLength": 1 },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "media_type", "role", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "media_type": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" }
+        }
+      }
+    },
+    "oracle_fields_present": { "const": false },
+    "notes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "fixture_kind": { "const": "historical_excerpt" } }, "required": ["fixture_kind"] },
+      "then": { "properties": { "visibility": { "const": "reviewer_only" } } }
+    },
+    {
+      "if": { "properties": { "fixture_kind": { "const": "synthetic_machine_readable" } }, "required": ["fixture_kind"] },
+      "then": { "properties": { "visibility": { "const": "scenario_only" } } }
+    }
+  ]
+}

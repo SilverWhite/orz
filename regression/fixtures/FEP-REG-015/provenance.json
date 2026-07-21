@@ -1,0 +1,24 @@
+{
+  "record_type": "historical_excerpt_provenance",
+  "schema_version": "0.1.0-draft",
+  "case_id": "FEP-REG-015",
+  "visibility": "reviewer_only",
+  "normalization": "rstrip_each_line_then_join_lf",
+  "excerpts": [
+    {
+      "fixture_path": "excerpt_1.txt",
+      "fixture_sha256": "9c834d3da5fd9da76dede946d7ff696f21cd6c82148347af41d96f7c0af418eb",
+      "source_path": "fep_env_research/EXPERIMENT_PROGRESS_MAP6_2026-06-22.md",
+      "source_sha256": "040015b4206c0758a8b6a8fea371a50846cc936619086ed54986f53368d44b51",
+      "line_start": 1695,
+      "line_end": 1703,
+      "normalized_excerpt_sha256": "052ce01ee12a4e37b7ae300821d62ca41debf5e3194dbf8d8dc1449a751cd07b",
+      "role": "MAP discipline record for sampling-unit independence"
+    }
+  ],
+  "limitations": [
+    "The excerpt contains an explicit project discipline ruling and is answer-bearing.",
+    "This fixture is for curator and reviewer source-fidelity checks only and must never enter tested-Agent context.",
+    "A MAP excerpt records project discipline but does not establish current-run independence by itself."
+  ]
+}

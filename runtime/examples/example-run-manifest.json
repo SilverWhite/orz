@@ -1,0 +1,76 @@
+{
+  "schema_version": "0.1.0-draft",
+  "manifest_kind": "immutable_precommit",
+  "run_id": "RUN-EXAMPLE-ONLY",
+  "created_at": "2026-07-19T00:00:02Z",
+  "execution_mode": "development",
+  "scenario_export": {
+    "export_id": "EXP-EXAMPLE-ONLY",
+    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bundle_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "leak_scan_report_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "adapter": {
+    "provider": "example",
+    "model_id": "example-model",
+    "adapter_id": "example-stdio-adapter",
+    "adapter_version": "0.0.0",
+    "capabilities": {
+      "structured_output": true,
+      "tool_calling": true,
+      "streaming": true,
+      "seed_control": false,
+      "cancellation": true,
+      "context_limit_tokens": 1
+    }
+  },
+  "prompts": {
+    "system_prompt_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "project_rules_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "generated_context_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "tools": {
+    "allowlist": [],
+    "policy_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "permission_mode": "deny_by_default",
+    "filesystem_profile": "strict_ephemeral",
+    "network_profile": "disabled"
+  },
+  "isolation": {
+    "memory": "disabled",
+    "historical_case_retrieval": "disabled",
+    "oracle_mounted": false,
+    "reviewer_fixtures_mounted": false,
+    "inherited_user_config": false,
+    "writable_roots": ["example-ephemeral-output"]
+  },
+  "budgets": {
+    "wall_time_seconds": 1,
+    "max_turns": 1,
+    "max_input_tokens": 1,
+    "max_output_tokens": 1,
+    "max_tool_calls": 0
+  },
+  "randomness": {
+    "seed": null,
+    "temperature": 0,
+    "retry_policy": "none"
+  },
+  "protocol_digests": {
+    "agent_protocol": "0000000000000000000000000000000000000000000000000000000000000000",
+    "reason_codes": "0000000000000000000000000000000000000000000000000000000000000000",
+    "gate_matrix": "0000000000000000000000000000000000000000000000000000000000000000",
+    "scoring_protocol": "0000000000000000000000000000000000000000000000000000000000000000",
+    "output_schema": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "journal_policy": {
+    "format": "jsonl",
+    "event_schema_version": "0.1.0-draft",
+    "canonicalization": "RFC8785",
+    "hash_chain": "sha256",
+    "redaction_policy_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "notes": [
+    "Schema-only example; zero digests and one-token budgets cannot represent a real run."
+  ]
+}

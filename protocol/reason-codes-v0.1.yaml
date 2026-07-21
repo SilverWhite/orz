@@ -1,0 +1,257 @@
+schema_version: "0.1.0-draft"
+registry_id: FEP-AGENT-REASON-CODES-v0.1
+status: frozen_for_design_review
+
+policy:
+  code_meaning_is_stable_within_minor_version: true
+  classifier_may_propose_but_not_canonize: true
+  user_preference_cannot_relabel_evidence: true
+  claim_gate_is_satisfied_by_evidence_or_scope_downgrade: true
+  notes:
+    - A reason code identifies a failed or pending question, not a historical answer.
+    - Default decisions are overridden only by a recorded gate rule or stronger current evidence.
+    - Discussion mode preserves exploration; strict mode governs durable claim promotion and long-run launch.
+
+reason_codes:
+  - code: ROUTE-SOURCE-001
+    domain: routing
+    summary: Current workspace sources required by the routing order were not inspected.
+    applies_to: [task, claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Were INDEX, environment, current MAP, relevant R/raw sources, and self-check routed as applicable?
+    false_positive_guard: Do not require irrelevant layers; record why a layer is not applicable.
+    remediation: Inspect the missing live source and revise source ledger.
+
+  - code: ROUTE-PRIOR-EXISTENCE-001
+    domain: routing
+    summary: A novelty or first-discovery claim lacks a prior-existence scan.
+    applies_to: [claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Does an earlier INDEX, MAP, R, raw artifact, or code record already contain the phenomenon or method?
+    false_positive_guard: Distinguish new phenomenon, new metric, new scope, and improved precision.
+    remediation: Run and record a term, artifact, and code-symbol search before novelty promotion.
+
+  - code: TASK-CONTRACT-001
+    domain: task
+    summary: Scope, acceptance, permissions, or forbidden actions are incomplete.
+    applies_to: [task, action]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Can completion and authorization be decided without guessing user intent?
+    false_positive_guard: Do not require ceremony for a self-contained read-only answer.
+    remediation: Complete the task contract or narrow work to the authorized read-only scope.
+
+  - code: CFG-EXPLICIT-001
+    domain: configuration
+    summary: A task-defining or high-risk value relies on an implicit default.
+    applies_to: [action, evidence]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Is every high-risk dimension explicit in the execution record?
+    false_positive_guard: A versioned, hashed configuration may be explicit without appearing on the CLI.
+    remediation: Materialize the resolved configuration and record its source.
+
+  - code: CFG-SEMANTIC-001
+    domain: configuration
+    summary: A flag or parameter does not implement the declared experimental meaning.
+    applies_to: [action, evidence, claim]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Does the resolved configuration implement the named task and intervention?
+    false_positive_guard: Judge executed semantics, not spelling or naming convention alone.
+    remediation: Repair the configuration or relabel the result to its actual task.
+
+  - code: ACT-IDEMPOTENCY-001
+    domain: action
+    summary: A formal mutating or costly action lacks an idempotency identity.
+    applies_to: [action]
+    defaults: {discussion: pass, guarded: block, strict: block}
+    decisive_question: Can a retry be distinguished from a new independent action?
+    false_positive_guard: Pure read-only inspection need not carry a run identity.
+    remediation: Add action ID, input fingerprint, output target, and retry semantics.
+
+  - code: PROC-TERMINAL-001
+    domain: execution
+    summary: An action has zero or multiple terminal events.
+    applies_to: [action]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Is there exactly one append-only terminal event for the action?
+    false_positive_guard: A running action legitimately has no terminal event until it ends.
+    remediation: Reconcile events without rewriting history and emit one authoritative terminal record.
+
+  - code: PROC-EXIT-UNKNOWN-001
+    domain: execution
+    summary: Process exit status is unavailable or ambiguous.
+    applies_to: [action, evidence]
+    defaults: {discussion: warn, guarded: defer, strict: defer}
+    decisive_question: Can completion be established from a documented artifact fallback rule?
+    false_positive_guard: Unknown is neither failure nor success; complete artifacts may satisfy an explicit fallback.
+    remediation: Wait for terminal state or validate the full expected artifact set.
+
+  - code: ART-SCHEMA-001
+    domain: artifact
+    summary: An output fails its registered schema or required-field contract.
+    applies_to: [artifact, evidence]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Does the exact produced artifact validate against the applicable schema?
+    false_positive_guard: Validate against the producer's registered version, not a guessed schema.
+    remediation: Repair producer or migrate into a new derived artifact with provenance.
+
+  - code: ART-FINITE-001
+    domain: artifact
+    summary: A numeric artifact contains non-finite values or non-standard JSON tokens.
+    applies_to: [artifact, evidence]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Are all claim-bearing numeric values finite and standards-compliant?
+    false_positive_guard: Explicit missingness represented by schema-approved null is not a numeric observation.
+    remediation: Trace the producer, represent missingness explicitly, and regenerate.
+
+  - code: ART-STALE-001
+    domain: artifact
+    summary: An artifact may predate or belong to a different action.
+    applies_to: [artifact, evidence]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Do manifest, timestamp, hash, and producer records bind this artifact to the current action?
+    false_positive_guard: Deterministic identical content is valid when producer provenance is independently established.
+    remediation: Reconstruct producer identity or reject the artifact for the current run.
+
+  - code: ART-FEATURE-ORDER-001
+    domain: artifact
+    summary: Feature names or slices were not reconciled with producer order.
+    applies_to: [artifact, evidence, claim]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Does each analyzed column map to the producer's canonical feature index?
+    false_positive_guard: Do not infer order from familiar labels when a manifest or code declaration exists.
+    remediation: Rebuild the mapping from producer code or schema and rerun dependent analysis.
+
+  - code: EVD-PROVENANCE-001
+    domain: provenance
+    summary: A label, document, or filename was not reconciled with the actual execution chain.
+    applies_to: [evidence, claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Which code, resolved configuration, action, and artifact produced the evidence?
+    false_positive_guard: A complete signed or hashed manifest may satisfy provenance without replay.
+    remediation: Build the source-to-action-to-artifact lineage or downgrade to unverified context.
+
+  - code: EVD-COVERAGE-001
+    domain: coverage
+    summary: Planned, completed, valid, and claim-scoped counts are inconsistent.
+    applies_to: [evidence, claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Does the valid completed set cover the population named by the claim?
+    false_positive_guard: A narrow claim may be valid on a complete narrow subset.
+    remediation: Narrow scope, locate missing artifacts, or run a targeted completion.
+
+  - code: EVD-INDEPENDENCE-001
+    domain: independence
+    summary: Reuse, replay, or shared lineage is being counted as independent evidence.
+    applies_to: [evidence, claim]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: What independent stochastic, data, intervention, or producer unit supports the added N?
+    false_positive_guard: A deterministic replay can verify reproducibility even when it does not increase independent N.
+    remediation: Mark dependence explicitly and recompute effective coverage.
+
+  - code: EVD-CONFOUND-001
+    domain: causal_inference
+    summary: A comparison changes more than the claimed causal factor.
+    applies_to: [evidence, claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Are plausible outcome-relevant deltas controlled or modeled?
+    false_positive_guard: A fully paired manifest-proven intervention can pass this gate.
+    remediation: Downgrade to association or run an isolated comparison.
+
+  - code: EVD-COMPARABILITY-001
+    domain: causal_inference
+    summary: Compared results do not share the task, protocol, metric, or evaluation population required by the claim.
+    applies_to: [evidence, claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Are task definition, code path, data, metric, and evaluation scope comparable?
+    false_positive_guard: Explicit harmonization can make differently stored results comparable.
+    remediation: Restrict to descriptive cross-study context or create a paired comparable run.
+
+  - code: EVD-EXECUTION-MATCH-001
+    domain: execution
+    summary: The named intervention or method differs from the executed computation.
+    applies_to: [evidence, claim]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Does source-level execution preserve all components required by the intervention definition?
+    false_positive_guard: Equivalent refactoring may pass when semantic equivalence is demonstrated.
+    remediation: Repair implementation or relabel as a distinct control.
+
+  - code: SEM-MAPPING-001
+    domain: semantic_mapping
+    summary: Metric direction, column identity, scope, or scientific terminology is mapped incorrectly.
+    applies_to: [evidence, claim]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Does the operational measure directly denote the property named by the claim?
+    false_positive_guard: Allow explicitly qualified proxy language when the mapping limit is stated.
+    remediation: Correct mapping and regenerate every dependent interpretation.
+
+  - code: CLM-STRENGTH-001
+    domain: claim_strength
+    summary: Claim certainty or scope exceeds the weakest applicable evidence assessment.
+    applies_to: [claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Is the wording no stronger than the available provenance, coverage, independence, and test design?
+    false_positive_guard: Do not block a clearly labeled observation or hypothesis merely because mechanism is unresolved.
+    remediation: Downgrade certainty or scope, or add the missing evidence.
+
+  - code: CLM-GENERALITY-001
+    domain: claim_strength
+    summary: A generalization exceeds the sampled and validated population.
+    applies_to: [claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Is the claim population identical to or defensibly sampled by the evidence population?
+    false_positive_guard: Scoped preregistered representative coverage can satisfy the gate.
+    remediation: Limit the population or expand representative coverage.
+
+  - code: CLM-MECHANISM-001
+    domain: claim_strength
+    summary: A mechanism or explanation lacks a discriminating measurement or intervention.
+    applies_to: [claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: What observation excludes credible alternative mechanisms?
+    false_positive_guard: A preregistered isolated intervention with appropriate controls may pass.
+    remediation: Relabel as hypothesis or run a discriminating test.
+
+  - code: SYNC-STATUS-001
+    domain: state_sync
+    summary: Narrative status disagrees with current authoritative artifacts.
+    applies_to: [task, claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Which live manifest or result summary is authoritative for the status?
+    false_positive_guard: A document may intentionally preserve historical state when dated and labeled.
+    remediation: Update status through an explicit patch while preserving history.
+
+  - code: BIAS-PRECOMMIT-001
+    domain: independence
+    summary: Historical case retrieval occurred before an independent current-source assessment.
+    applies_to: [task, claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Was a timestamped precommitment recorded before case retrieval?
+    false_positive_guard: Direct user-provided historical comparison tasks may expose cases, but evaluation independence is then unavailable.
+    remediation: Record a blind assessment first or mark the result non-independent.
+
+  - code: BIAS-SURFACE-001
+    domain: independence
+    summary: Retrieval recorded similarities without testing disanalogies.
+    applies_to: [claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: Which current facts could make the historical correction inapplicable or reverse it?
+    false_positive_guard: A historical case may remain applicable after explicit disanalogy testing.
+    remediation: Add disanalogies and at least one conclusion-changing condition.
+
+  - code: BIAS-LEAKAGE-001
+    domain: independence
+    summary: Evaluation or holdout oracle entered the tested Agent context.
+    applies_to: [task, evidence, claim]
+    defaults: {discussion: warn, guarded: block, strict: block}
+    decisive_question: Can the model context be shown to exclude oracle labels and expected answers?
+    false_positive_guard: Development or teaching partitions may intentionally expose labels when not scored as independent evaluation.
+    remediation: Invalidate the scored attempt, rotate the holdout, and rerun blind.
+
+  - code: BIAS-CONFIRM-001
+    domain: independence
+    summary: No active search for contrary evidence or alternative explanation was recorded.
+    applies_to: [claim]
+    defaults: {discussion: warn, guarded: defer, strict: block}
+    decisive_question: What evidence, if found, would weaken or reverse the current conclusion?
+    false_positive_guard: A documented failed contrary search satisfies process but not necessarily evidential strength.
+    remediation: Run the stated contrary search and record its limits.

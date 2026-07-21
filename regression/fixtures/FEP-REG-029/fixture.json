@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-REG-029",
+  "case_id": "FEP-REG-029",
+  "fixture_kind": "historical_excerpt",
+  "visibility": "reviewer_only",
+  "purpose": "Verify the curator's reconstruction of the feature-slice semantic-mapping correction.",
+  "files": [
+    { "path": "excerpt_1.txt", "media_type": "text/plain; charset=utf-8", "role": "historical correction excerpt", "sha256": "d6e59071edbf83337f6456e6cdf1d105e1aa193ce46267ab1cab3bebaa2974ce" },
+    { "path": "provenance.json", "media_type": "application/json", "role": "source hashes, line span, normalization, and limitations", "sha256": "0755fd27077368cc19c857641cc6fff4a0cf2fa4e21e88489030615c8917ca93" }
+  ],
+  "oracle_fields_present": false,
+  "notes": [
+    "The excerpt is semantically answer-bearing even though no structured oracle fields are present.",
+    "A harness must exclude this entire fixture from tested-Agent context."
+  ]
+}

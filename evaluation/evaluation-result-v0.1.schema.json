@@ -1,0 +1,431 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/evaluation-result-v0.1.schema.json",
+  "title": "FEP Agent Evaluation Result v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scoring_protocol_version",
+    "evaluation_id",
+    "attempt_id",
+    "status",
+    "started_at",
+    "completed_at",
+    "corpus_ref",
+    "protocol_ref",
+    "system_profile",
+    "integrity",
+    "counts",
+    "metrics",
+    "cluster_results",
+    "pair_results",
+    "red_lines",
+    "adjudication",
+    "acceptance",
+    "limitations",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "scoring_protocol_version": { "const": "0.1.0-draft" },
+    "evaluation_id": { "$ref": "#/$defs/id" },
+    "attempt_id": { "$ref": "#/$defs/id" },
+    "status": {
+      "enum": ["invalid", "descriptive_only", "calibration_pending", "eligible_for_comparison"]
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "corpus_ref": { "$ref": "#/$defs/corpusRef" },
+    "protocol_ref": { "$ref": "#/$defs/protocolRef" },
+    "system_profile": { "$ref": "#/$defs/systemProfile" },
+    "integrity": { "$ref": "#/$defs/integrity" },
+    "counts": { "$ref": "#/$defs/counts" },
+    "metrics": { "$ref": "#/$defs/metrics" },
+    "cluster_results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/clusterResult" }
+    },
+    "pair_results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pairResult" }
+    },
+    "red_lines": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/redLine" }
+    },
+    "adjudication": { "$ref": "#/$defs/adjudication" },
+    "acceptance": { "$ref": "#/$defs/acceptance" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifactRef" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "unitRatio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator", "value"],
+      "properties": {
+        "numerator": { "type": "integer", "minimum": 0 },
+        "denominator": { "type": "integer", "minimum": 0 },
+        "value": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "denominator": { "const": 0 } } },
+          "then": {
+            "properties": {
+              "numerator": { "const": 0 },
+              "value": { "type": "null" }
+            }
+          },
+          "else": {
+            "properties": { "value": { "type": "number" } }
+          }
+        }
+      ]
+    },
+    "metricSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_micro", "cluster_macro"],
+      "properties": {
+        "case_micro": { "$ref": "#/$defs/unitRatio" },
+        "cluster_macro": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "corpusRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpus_id", "revision", "sha256", "partitions", "oracle_default_mode"],
+      "properties": {
+        "corpus_id": { "$ref": "#/$defs/nonEmptyString" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "partitions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["teaching", "development", "evaluation", "holdout", "challenge"] }
+        },
+        "oracle_default_mode": { "enum": ["discussion", "guarded", "strict"] }
+      }
+    },
+    "protocolRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_protocol_version",
+        "reason_registry_sha256",
+        "gate_matrix_sha256",
+        "coverage_matrix_sha256",
+        "scoring_protocol_sha256"
+      ],
+      "properties": {
+        "agent_protocol_version": { "$ref": "#/$defs/nonEmptyString" },
+        "reason_registry_sha256": { "$ref": "#/$defs/sha256" },
+        "gate_matrix_sha256": { "$ref": "#/$defs/sha256" },
+        "coverage_matrix_sha256": { "$ref": "#/$defs/sha256" },
+        "scoring_protocol_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "systemProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system_id",
+        "model_id",
+        "provider",
+        "adapter_version",
+        "system_prompt_sha256",
+        "project_instructions_sha256",
+        "tool_policy_sha256",
+        "retrieval_policy_sha256",
+        "temperature",
+        "random_seed",
+        "time_budget_seconds"
+      ],
+      "properties": {
+        "system_id": { "$ref": "#/$defs/id" },
+        "model_id": { "$ref": "#/$defs/nonEmptyString" },
+        "provider": { "$ref": "#/$defs/nonEmptyString" },
+        "adapter_version": { "$ref": "#/$defs/nonEmptyString" },
+        "system_prompt_sha256": { "$ref": "#/$defs/sha256" },
+        "project_instructions_sha256": { "$ref": "#/$defs/sha256" },
+        "tool_policy_sha256": { "$ref": "#/$defs/sha256" },
+        "retrieval_policy_sha256": { "$ref": "#/$defs/sha256" },
+        "temperature": { "type": ["number", "null"], "minimum": 0 },
+        "random_seed": { "type": ["integer", "null"] },
+        "time_budget_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "integrityCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "status", "evidence_refs"],
+      "properties": {
+        "check_id": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["pass", "fail", "not_applicable"] },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "checks"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/integrityCheck" }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planned_cases",
+        "completed_cases",
+        "valid_cases",
+        "clusters",
+        "contrast_pairs",
+        "model_calls",
+        "retries"
+      ],
+      "properties": {
+        "planned_cases": { "type": "integer", "minimum": 0 },
+        "completed_cases": { "type": "integer", "minimum": 0 },
+        "valid_cases": { "type": "integer", "minimum": 0 },
+        "clusters": { "type": "integer", "minimum": 0 },
+        "contrast_pairs": { "type": "integer", "minimum": 0 },
+        "model_calls": { "type": "integer", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "gateIdentification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["precision", "recall", "f1"],
+      "properties": {
+        "precision": { "$ref": "#/$defs/metricSummary" },
+        "recall": { "$ref": "#/$defs/metricSummary" },
+        "f1": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "decisionCalibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact", "mean_ordinal_distance", "assessed_count", "unassessed_count", "overblock", "underblock"],
+      "properties": {
+        "exact": { "$ref": "#/$defs/metricSummary" },
+        "mean_ordinal_distance": { "type": ["number", "null"], "minimum": 0, "maximum": 3 },
+        "assessed_count": { "type": "integer", "minimum": 0 },
+        "unassessed_count": { "type": "integer", "minimum": 0 },
+        "overblock": { "$ref": "#/$defs/unitRatio" },
+        "underblock": { "$ref": "#/$defs/unitRatio" }
+      }
+    },
+    "stateAlignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "evidence", "claim", "claim_type"],
+      "properties": {
+        "action": { "$ref": "#/$defs/metricSummary" },
+        "evidence": { "$ref": "#/$defs/metricSummary" },
+        "claim": { "$ref": "#/$defs/metricSummary" },
+        "claim_type": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "sourceFidelity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid_reference_rate", "unsupported_source_rate"],
+      "properties": {
+        "valid_reference_rate": { "$ref": "#/$defs/metricSummary" },
+        "unsupported_source_rate": { "$ref": "#/$defs/unitRatio" }
+      }
+    },
+    "claimDiscipline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forbidden_claim_violation", "scope_limitation_pass", "falsifier_preservation_pass"],
+      "properties": {
+        "forbidden_claim_violation": { "$ref": "#/$defs/unitRatio" },
+        "scope_limitation_pass": { "$ref": "#/$defs/metricSummary" },
+        "falsifier_preservation_pass": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "independence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["precommitment_order_pass", "retrieval_record_pass", "oracle_isolation_pass"],
+      "properties": {
+        "precommitment_order_pass": { "$ref": "#/$defs/unitRatio" },
+        "retrieval_record_pass": { "$ref": "#/$defs/unitRatio" },
+        "oracle_isolation_pass": { "$ref": "#/$defs/unitRatio" }
+      }
+    },
+    "countercase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["all_pairs", "permission_reversal", "root_cause_contrast", "mode_boundary"],
+      "properties": {
+        "all_pairs": { "$ref": "#/$defs/unitRatio" },
+        "permission_reversal": { "$ref": "#/$defs/unitRatio" },
+        "root_cause_contrast": { "$ref": "#/$defs/unitRatio" },
+        "mode_boundary": { "$ref": "#/$defs/unitRatio" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_identification",
+        "decision_calibration",
+        "state_alignment",
+        "source_fidelity",
+        "claim_discipline",
+        "independence",
+        "countercase_discrimination"
+      ],
+      "properties": {
+        "gate_identification": { "$ref": "#/$defs/gateIdentification" },
+        "decision_calibration": { "$ref": "#/$defs/decisionCalibration" },
+        "state_alignment": { "$ref": "#/$defs/stateAlignment" },
+        "source_fidelity": { "$ref": "#/$defs/sourceFidelity" },
+        "claim_discipline": { "$ref": "#/$defs/claimDiscipline" },
+        "independence": { "$ref": "#/$defs/independence" },
+        "countercase_discrimination": { "$ref": "#/$defs/countercase" }
+      }
+    },
+    "clusterResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cluster_id", "case_ids", "gate_f1", "decision_exact", "red_line_count"],
+      "properties": {
+        "cluster_id": { "type": "string", "pattern": "^CLU-[0-9]{2}$" },
+        "case_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^FEP-(?:REG|SYN)-[0-9]{3}$" }
+        },
+        "gate_f1": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "decision_exact": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "red_line_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "pairResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "historical_case_id",
+        "challenge_case_id",
+        "contrast_type",
+        "historical_pass",
+        "challenge_pass",
+        "decisive_delta_named",
+        "pair_pass"
+      ],
+      "properties": {
+        "historical_case_id": { "type": "string", "pattern": "^FEP-REG-[0-9]{3}$" },
+        "challenge_case_id": { "type": "string", "pattern": "^FEP-SYN-[0-9]{3}$" },
+        "contrast_type": { "enum": ["permission_reversal", "root_cause_contrast", "mode_boundary"] },
+        "historical_pass": { "type": "boolean" },
+        "challenge_pass": { "type": "boolean" },
+        "decisive_delta_named": { "type": "boolean" },
+        "pair_pass": { "type": "boolean" }
+      }
+    },
+    "redLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["red_line_id", "case_id", "kind", "evidence_refs", "message"],
+      "properties": {
+        "red_line_id": { "$ref": "#/$defs/id" },
+        "case_id": { "type": "string", "pattern": "^FEP-(?:REG|SYN)-[0-9]{3}$" },
+        "kind": {
+          "enum": [
+            "critical_underblock",
+            "forbidden_claim",
+            "historical_case_as_current_evidence",
+            "false_independent_n",
+            "mechanical_countercase_block"
+          ]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "message": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "completed", "reviewer_count", "identity_blinded", "raw_agreement", "disagreement_count"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "completed": { "type": "boolean" },
+        "reviewer_count": { "type": "integer", "minimum": 0 },
+        "identity_blinded": { "type": "boolean" },
+        "raw_agreement": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "cohen_kappa": { "type": ["number", "null"], "minimum": -1, "maximum": 1 },
+        "disagreement_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "threshold_set", "reasons"],
+      "properties": {
+        "status": { "enum": ["not_calibrated", "pass", "fail"] },
+        "threshold_set": { "type": ["string", "null"] },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "role", "path", "sha256"],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/id" },
+        "role": { "$ref": "#/$defs/nonEmptyString" },
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

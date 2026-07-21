@@ -1,0 +1,24 @@
+{
+  "record_type": "synthetic_prior_existence_scan",
+  "proposed_claim": {
+    "phenomenon": "phase-conditioned decoder braid reversal",
+    "scope": "synthetic protocol P with metric M"
+  },
+  "scan": {
+    "exact_terms": ["phase-conditioned decoder braid reversal"],
+    "aliases": ["decoder braid inversion", "phase braid sign flip"],
+    "opposite_claims": ["phase-conditioned decoder braid preservation"],
+    "withdrawal_terms": ["withdrawn braid", "deprecated braid"],
+    "code_symbols": ["braid_reversal_score", "phase_braid_flip"],
+    "sources_scanned": ["INDEX", "current_MAP", "R_documents", "result_registry", "code_symbols"],
+    "search_complete_for_declared_scope": true,
+    "equivalent_prior_entry_found": false,
+    "nearby_but_non_equivalent_entries": [
+      {"term": "decoder direction drift", "disanalogy": "does not define phase-conditioned braid reversal or metric M"}
+    ]
+  },
+  "limitations": [
+    "Novelty is limited to the declared synthetic registry and scan scope.",
+    "Absence from this fixture cannot establish novelty outside the declared sources."
+  ]
+}

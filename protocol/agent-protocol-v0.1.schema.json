@@ -1,0 +1,692 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/agent-protocol/v0.1/schema.json",
+  "title": "Evidence-Constrained Agent Session Record",
+  "description": "Language-neutral draft contract for the local evidence-constrained Agent kernel.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "session",
+    "task_contract",
+    "sources",
+    "actions",
+    "artifacts",
+    "evidence",
+    "gate_decisions",
+    "case_retrievals",
+    "claims"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "0.1.0-draft"
+    },
+    "session": {
+      "$ref": "#/$defs/session"
+    },
+    "task_contract": {
+      "$ref": "#/$defs/taskContract"
+    },
+    "reasoning_precommitment": {
+      "oneOf": [
+        { "$ref": "#/$defs/reasoningPrecommitment" },
+        { "type": "null" }
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceRecord" }
+    },
+    "actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/actionRecord" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifactRecord" }
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidenceRecord" }
+    },
+    "gate_decisions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/gateDecision" }
+    },
+    "case_retrievals": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/caseRetrievalRecord" }
+    },
+    "claims": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/claimCandidate" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" },
+      "uniqueItems": true
+    },
+    "idArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/id" },
+      "uniqueItems": true
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*(?:-[A-Z][A-Z0-9_]*)+-[0-9]{3}$"
+    },
+    "taskState": {
+      "enum": [
+        "discovered",
+        "routed",
+        "contracted",
+        "planned",
+        "ready",
+        "executing",
+        "reviewing",
+        "completed",
+        "needs_input",
+        "paused",
+        "rejected",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "actionState": {
+      "enum": [
+        "proposed",
+        "policy_checked",
+        "approved",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "unknown"
+      ]
+    },
+    "evidenceState": {
+      "enum": [
+        "unchecked",
+        "observed",
+        "mechanically_validated",
+        "source_grounded",
+        "coverage_assessed",
+        "independence_assessed",
+        "claim_eligible",
+        "rejected",
+        "degraded",
+        "superseded",
+        "withdrawn"
+      ]
+    },
+    "assessmentState": {
+      "enum": [
+        "unchecked",
+        "pass",
+        "warn",
+        "limited",
+        "fail",
+        "not_applicable"
+      ]
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "workspace_root",
+        "created_at",
+        "updated_at",
+        "task_state",
+        "mode",
+        "agent_profile_id"
+      ],
+      "properties": {
+        "session_id": { "$ref": "#/$defs/id" },
+        "workspace_root": { "$ref": "#/$defs/nonEmptyString" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "task_state": { "$ref": "#/$defs/taskState" },
+        "mode": {
+          "enum": ["discussion", "guarded", "strict", "regression_evaluation"]
+        },
+        "agent_profile_id": { "$ref": "#/$defs/id" },
+        "model_adapter_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "null" }
+          ]
+        },
+        "journal_head": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "taskContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "intent",
+        "mode",
+        "must",
+        "must_not",
+        "source_of_truth",
+        "acceptance",
+        "risk_class"
+      ],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/id" },
+        "intent": { "$ref": "#/$defs/nonEmptyString" },
+        "mode": {
+          "enum": [
+            "discussion",
+            "design",
+            "implementation",
+            "experiment",
+            "analysis",
+            "result_registration",
+            "claim_promotion",
+            "regression"
+          ]
+        },
+        "must": {
+          "allOf": [
+            { "$ref": "#/$defs/stringArray" },
+            { "minItems": 1 }
+          ]
+        },
+        "must_not": {
+          "allOf": [
+            { "$ref": "#/$defs/stringArray" },
+            { "minItems": 1 }
+          ]
+        },
+        "source_of_truth": {
+          "allOf": [
+            { "$ref": "#/$defs/idArray" },
+            { "minItems": 1 }
+          ]
+        },
+        "acceptance": {
+          "allOf": [
+            { "$ref": "#/$defs/stringArray" },
+            { "minItems": 1 }
+          ]
+        },
+        "risk_class": {
+          "enum": [
+            "ordinary",
+            "workspace_mutation",
+            "long_running",
+            "claim_bearing_design",
+            "claim_bearing_science",
+            "destructive"
+          ]
+        }
+      }
+    },
+    "sourceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "kind",
+        "path_or_uri",
+        "accessed_at",
+        "usage",
+        "epistemic_role"
+      ],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/id" },
+        "kind": {
+          "enum": [
+            "workspace_file",
+            "raw_artifact",
+            "command_output",
+            "web_source",
+            "user_statement",
+            "memory_hint"
+          ]
+        },
+        "path_or_uri": { "$ref": "#/$defs/nonEmptyString" },
+        "content_hash": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "line_start": { "type": ["integer", "null"], "minimum": 1 },
+        "line_end": { "type": ["integer", "null"], "minimum": 1 },
+        "accessed_at": { "type": "string", "format": "date-time" },
+        "usage": {
+          "enum": ["routed", "read", "searched", "cited", "unchecked"]
+        },
+        "epistemic_role": {
+          "enum": [
+            "source_grounded",
+            "direct_comparison",
+            "bridge_hypothesis",
+            "user_supplied_unverified",
+            "agent_inferred",
+            "unchecked"
+          ]
+        }
+      }
+    },
+    "hypothesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hypothesis", "status"],
+      "properties": {
+        "hypothesis": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "enum": ["open", "weakened", "rejected", "supported"] },
+        "source_ids": { "$ref": "#/$defs/idArray" }
+      }
+    },
+    "factRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "source_ids"],
+      "properties": {
+        "text": { "$ref": "#/$defs/nonEmptyString" },
+        "source_ids": {
+          "allOf": [
+            { "$ref": "#/$defs/idArray" },
+            { "minItems": 1 }
+          ]
+        }
+      }
+    },
+    "reasoningPrecommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "precommitment_id",
+        "created_at",
+        "created_before_case_retrieval",
+        "minimum_facts",
+        "candidate_hypotheses",
+        "disconfirming_evidence_sought",
+        "uncertainties",
+        "forbidden_promotions",
+        "recommended_current_sources"
+      ],
+      "properties": {
+        "precommitment_id": { "$ref": "#/$defs/id" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "created_before_case_retrieval": { "const": true },
+        "minimum_facts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/factRecord" }
+        },
+        "candidate_hypotheses": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/hypothesis" }
+        },
+        "disconfirming_evidence_sought": { "$ref": "#/$defs/stringArray" },
+        "uncertainties": { "$ref": "#/$defs/stringArray" },
+        "forbidden_promotions": { "$ref": "#/$defs/stringArray" },
+        "recommended_current_sources": { "$ref": "#/$defs/stringArray" },
+        "revision_of": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "null" }
+          ]
+        },
+        "revision_reason": {
+          "oneOf": [
+            { "$ref": "#/$defs/nonEmptyString" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "toolEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "sequence",
+        "timestamp",
+        "action_id",
+        "event_kind",
+        "event_type",
+        "payload"
+      ],
+      "properties": {
+        "event_id": { "$ref": "#/$defs/id" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "action_id": { "$ref": "#/$defs/id" },
+        "event_kind": { "enum": ["progress", "terminal"] },
+        "event_type": { "$ref": "#/$defs/nonEmptyString" },
+        "payload": { "type": "object", "additionalProperties": true },
+        "causal_parent": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "null" }
+          ]
+        },
+        "exit_code": { "type": ["integer", "null"] },
+        "terminal_state": {
+          "oneOf": [
+            { "enum": ["succeeded", "failed", "cancelled", "unknown"] },
+            { "type": "null" }
+          ]
+        },
+        "produced_artifact_ids": { "$ref": "#/$defs/idArray" },
+        "reason_codes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reasonCode" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "actionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "action_type",
+        "requested_by",
+        "state",
+        "arguments",
+        "risk_class",
+        "expected_outputs",
+        "required_gate_ids",
+        "idempotency_key",
+        "events"
+      ],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/id" },
+        "action_type": { "$ref": "#/$defs/nonEmptyString" },
+        "requested_by": { "$ref": "#/$defs/id" },
+        "state": { "$ref": "#/$defs/actionState" },
+        "arguments": { "type": "object", "additionalProperties": true },
+        "risk_class": {
+          "enum": ["read_only", "reversible_write", "long_running", "destructive"]
+        },
+        "expected_outputs": { "$ref": "#/$defs/stringArray" },
+        "required_gate_ids": { "$ref": "#/$defs/idArray" },
+        "idempotency_key": {
+          "oneOf": [
+            { "$ref": "#/$defs/nonEmptyString" },
+            { "type": "null" }
+          ]
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/toolEvent" }
+        }
+      }
+    },
+    "artifactRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "path_or_uri",
+        "producer_action_id",
+        "media_type",
+        "schema_id",
+        "checks",
+        "planned_count",
+        "completed_count"
+      ],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/id" },
+        "path_or_uri": { "$ref": "#/$defs/nonEmptyString" },
+        "sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "producer_action_id": { "$ref": "#/$defs/id" },
+        "media_type": { "$ref": "#/$defs/nonEmptyString" },
+        "schema_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/nonEmptyString" },
+            { "type": "null" }
+          ]
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["atomic_write", "parse", "finite", "schema", "sidecar"],
+          "properties": {
+            "atomic_write": { "$ref": "#/$defs/assessmentState" },
+            "parse": { "$ref": "#/$defs/assessmentState" },
+            "finite": { "$ref": "#/$defs/assessmentState" },
+            "schema": { "$ref": "#/$defs/assessmentState" },
+            "sidecar": { "$ref": "#/$defs/assessmentState" }
+          }
+        },
+        "planned_count": { "type": ["integer", "null"], "minimum": 0 },
+        "completed_count": { "type": ["integer", "null"], "minimum": 0 },
+        "record_count": { "type": ["integer", "null"], "minimum": 0 },
+        "manifest_artifact_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "assessmentSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "completeness",
+        "coverage",
+        "independence",
+        "controls",
+        "statistics",
+        "semantic_mapping"
+      ],
+      "properties": {
+        "provenance": { "$ref": "#/$defs/assessmentState" },
+        "completeness": { "$ref": "#/$defs/assessmentState" },
+        "coverage": { "$ref": "#/$defs/assessmentState" },
+        "independence": { "$ref": "#/$defs/assessmentState" },
+        "controls": { "$ref": "#/$defs/assessmentState" },
+        "statistics": { "$ref": "#/$defs/assessmentState" },
+        "semantic_mapping": { "$ref": "#/$defs/assessmentState" }
+      }
+    },
+    "evidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "artifact_ids",
+        "claim_ids",
+        "state",
+        "assessments",
+        "source_ids",
+        "limitations",
+        "independence_key"
+      ],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/id" },
+        "artifact_ids": { "$ref": "#/$defs/idArray" },
+        "claim_ids": { "$ref": "#/$defs/idArray" },
+        "state": { "$ref": "#/$defs/evidenceState" },
+        "assessments": { "$ref": "#/$defs/assessmentSet" },
+        "source_ids": { "$ref": "#/$defs/idArray" },
+        "limitations": { "$ref": "#/$defs/stringArray" },
+        "independence_key": {
+          "oneOf": [
+            { "$ref": "#/$defs/nonEmptyString" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "gateDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "gate_id",
+        "level",
+        "decision",
+        "reason_codes",
+        "subject_refs",
+        "source_ids",
+        "message",
+        "remediation",
+        "decided_at",
+        "decided_by"
+      ],
+      "properties": {
+        "decision_id": { "$ref": "#/$defs/id" },
+        "gate_id": { "$ref": "#/$defs/id" },
+        "level": { "enum": ["observe", "guarded", "strict"] },
+        "decision": { "enum": ["pass", "warn", "block", "defer", "not_applicable"] },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/reasonCode" },
+          "uniqueItems": true
+        },
+        "subject_refs": { "$ref": "#/$defs/idArray" },
+        "source_ids": { "$ref": "#/$defs/idArray" },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "remediation": { "$ref": "#/$defs/stringArray" },
+        "decided_at": { "type": "string", "format": "date-time" },
+        "decided_by": { "$ref": "#/$defs/id" }
+      }
+    },
+    "caseRetrievalRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retrieval_id",
+        "performed_at",
+        "performed_after_precommitment",
+        "oracle_exposure",
+        "query",
+        "retrieved_case_ids",
+        "similarities",
+        "disanalogies",
+        "missing_current_evidence",
+        "countercase_ids",
+        "retrieval_influence"
+      ],
+      "properties": {
+        "retrieval_id": { "$ref": "#/$defs/id" },
+        "performed_at": { "type": "string", "format": "date-time" },
+        "performed_after_precommitment": { "type": "boolean" },
+        "oracle_exposure": { "type": "boolean" },
+        "query": { "$ref": "#/$defs/nonEmptyString" },
+        "retrieved_case_ids": { "$ref": "#/$defs/idArray" },
+        "similarities": { "$ref": "#/$defs/stringArray" },
+        "disanalogies": { "$ref": "#/$defs/stringArray" },
+        "missing_current_evidence": { "$ref": "#/$defs/stringArray" },
+        "countercase_ids": { "$ref": "#/$defs/idArray" },
+        "retrieval_influence": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "priorExistenceScan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed", "terms", "matched_ids", "source_ids"],
+      "properties": {
+        "performed": { "type": "boolean" },
+        "terms": { "$ref": "#/$defs/stringArray" },
+        "matched_ids": { "$ref": "#/$defs/idArray" },
+        "source_ids": { "$ref": "#/$defs/idArray" }
+      }
+    },
+    "claimCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "text",
+        "claim_type",
+        "scope",
+        "strength",
+        "supporting_evidence_ids",
+        "refuting_evidence_ids",
+        "limitations",
+        "falsifiers",
+        "prior_existence_scan",
+        "registry_target",
+        "state"
+      ],
+      "properties": {
+        "claim_id": { "$ref": "#/$defs/id" },
+        "text": { "$ref": "#/$defs/nonEmptyString" },
+        "claim_type": {
+          "enum": [
+            "fact",
+            "comparison",
+            "hypothesis",
+            "mechanism",
+            "recommendation",
+            "correction",
+            "withdrawal"
+          ]
+        },
+        "scope": { "$ref": "#/$defs/nonEmptyString" },
+        "strength": {
+          "enum": [
+            "observation",
+            "signal",
+            "compatible_with",
+            "supports",
+            "confirmed_within_scope",
+            "mechanism_candidate",
+            "mechanism_supported"
+          ]
+        },
+        "supporting_evidence_ids": { "$ref": "#/$defs/idArray" },
+        "refuting_evidence_ids": { "$ref": "#/$defs/idArray" },
+        "limitations": { "$ref": "#/$defs/stringArray" },
+        "falsifiers": { "$ref": "#/$defs/stringArray" },
+        "prior_existence_scan": { "$ref": "#/$defs/priorExistenceScan" },
+        "registry_target": {
+          "oneOf": [
+            { "$ref": "#/$defs/nonEmptyString" },
+            { "type": "null" }
+          ]
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "review_required",
+            "eligible",
+            "registered",
+            "degraded",
+            "withdrawn",
+            "rejected"
+          ]
+        }
+      }
+    }
+  }
+}

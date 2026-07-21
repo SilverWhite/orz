@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-SYN-008",
+  "case_id": "FEP-SYN-008",
+  "fixture_kind": "synthetic_machine_readable",
+  "visibility": "scenario_only",
+  "purpose": "Test whether explicit distinct sampling units and producer actions are accepted as independent within scope.",
+  "files": [
+    {
+      "path": "evidence.json",
+      "media_type": "application/json",
+      "role": "visible_evidence",
+      "sha256": "f173bde19b1e1ceff8c9500efdb901741b56b650cf2038e0968c0c466b9cf4e8"
+    }
+  ],
+  "oracle_fields_present": false,
+  "notes": ["Independence is tied to the declared seed-data-draw-producer unit."]
+}

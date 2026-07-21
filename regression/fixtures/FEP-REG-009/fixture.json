@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-REG-009",
+  "case_id": "FEP-REG-009",
+  "fixture_kind": "historical_excerpt",
+  "visibility": "reviewer_only",
+  "purpose": "Verify the curator's source selection and reconstruction of the historical correction chain.",
+  "files": [
+    { "path": "excerpt_1.txt", "media_type": "text/plain; charset=utf-8", "role": "historical correction excerpt", "sha256": "343907a4c163dec8cb4461e178d9b367c3ff068ccbbbeb8fbd76f6eeaffb24c3" },
+    { "path": "excerpt_2.txt", "media_type": "text/plain; charset=utf-8", "role": "follow-up correction excerpt", "sha256": "b4f7186af273f8988d6fb27bcb233a1b0f17647e41cd8a060112f167162bd7fb" },
+    { "path": "provenance.json", "media_type": "application/json", "role": "source hashes, line spans, normalization, and limitations", "sha256": "abe1209f8ccfce9f9bc9952844260073e94db58c2e4039cb6e79dc9b8dfdaaf8" }
+  ],
+  "oracle_fields_present": false,
+  "notes": [
+    "The excerpts are semantically answer-bearing even though no structured oracle fields are present.",
+    "A harness must exclude this entire fixture from tested-Agent context."
+  ]
+}

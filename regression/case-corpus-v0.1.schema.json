@@ -1,0 +1,358 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/case-corpus-v0.1.schema.json",
+  "title": "FEP Agent Regression Case Corpus v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "corpus_id",
+    "created_at",
+    "revised_at",
+    "corpus_revision",
+    "status",
+    "revision_history",
+    "purpose",
+    "corpus_policy",
+    "taxonomy",
+    "reason_codes",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "corpus_id": { "$ref": "#/$defs/nonEmptyString" },
+    "created_at": { "type": "string", "format": "date" },
+    "revised_at": { "type": "string", "format": "date" },
+    "corpus_revision": { "type": "integer", "minimum": 1 },
+    "status": { "$ref": "#/$defs/nonEmptyString" },
+    "revision_history": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/revisionRecord" }
+    },
+    "purpose": { "$ref": "#/$defs/nonEmptyString" },
+    "corpus_policy": { "$ref": "#/$defs/corpusPolicy" },
+    "taxonomy": { "$ref": "#/$defs/taxonomy" },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/reasonCode" }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/case" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*(?:-[A-Z][A-Z0-9_]*)+-[0-9]{3}$"
+    },
+    "caseId": {
+      "type": "string",
+      "pattern": "^FEP-(?:REG|SYN)-[0-9]{3}$"
+    },
+    "revisionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "date", "summary"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "date": { "type": "string", "format": "date" },
+        "summary": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "corpusPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_partition",
+        "oracle_default_mode",
+        "blind_first_required",
+        "oracle_visible_to_subject",
+        "retrieval_allowed_only_after_precommitment",
+        "canonical_labels_require_review",
+        "historical_cases_are_not_current_task_evidence",
+        "evaluation_and_holdout_storage",
+        "notes"
+      ],
+      "properties": {
+        "default_partition": { "$ref": "#/$defs/nonEmptyString" },
+        "oracle_default_mode": { "enum": ["discussion", "guarded", "strict"] },
+        "blind_first_required": { "const": true },
+        "oracle_visible_to_subject": { "const": false },
+        "retrieval_allowed_only_after_precommitment": { "const": true },
+        "canonical_labels_require_review": { "const": true },
+        "historical_cases_are_not_current_task_evidence": { "const": true },
+        "evaluation_and_holdout_storage": { "$ref": "#/$defs/nonEmptyString" },
+        "notes": { "$ref": "#/$defs/nonEmptyStringArray" }
+      }
+    },
+    "taxonomy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "bias_tags", "shortcut_tags"],
+      "properties": {
+        "primary": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "bias_tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "shortcut_tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "line_start", "line_end", "role"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "role": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary",
+        "secondary",
+        "stage",
+        "bias_tags",
+        "shortcut_tags",
+        "trigger_features"
+      ],
+      "properties": {
+        "primary": { "$ref": "#/$defs/nonEmptyString" },
+        "secondary": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "stage": { "$ref": "#/$defs/nonEmptyString" },
+        "bias_tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "shortcut_tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "trigger_features": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task", "visible_facts", "hidden_from_subject"],
+      "properties": {
+        "task": { "$ref": "#/$defs/nonEmptyString" },
+        "visible_facts": { "$ref": "#/$defs/nonEmptyStringArray" },
+        "hidden_from_subject": { "$ref": "#/$defs/nonEmptyStringArray" },
+        "fixture_manifest": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "gateDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_id", "decision"],
+      "properties": {
+        "gate_id": { "$ref": "#/$defs/reasonCode" },
+        "decision": { "enum": ["pass", "warn", "defer", "block"] }
+      }
+    },
+    "expectedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "evidence", "claim", "claim_type"],
+      "properties": {
+        "action": { "enum": ["proposed", "succeeded", "failed", "unknown"] },
+        "evidence": {
+          "enum": [
+            "unchecked",
+            "source_grounded",
+            "coverage_assessed",
+            "independence_assessed",
+            "independent",
+            "confounded",
+            "degraded",
+            "rejected"
+          ]
+        },
+        "claim": {
+          "enum": [
+            "review_required",
+            "eligible",
+            "deferred",
+            "degraded",
+            "rejected",
+            "withdrawn"
+          ]
+        },
+        "claim_type": {
+          "enum": [
+            "hypothesis",
+            "recommendation",
+            "causal",
+            "mechanism",
+            "generalization",
+            "correction",
+            "withdrawal"
+          ]
+        }
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_gate_decisions",
+        "required_questions",
+        "expected_state",
+        "allowed_claims",
+        "forbidden_claims",
+        "correction_summary"
+      ],
+      "properties": {
+        "expected_gate_decisions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/gateDecision" }
+        },
+        "required_questions": { "$ref": "#/$defs/nonEmptyStringArray" },
+        "expected_state": { "$ref": "#/$defs/expectedState" },
+        "allowed_claims": { "$ref": "#/$defs/nonEmptyStringArray" },
+        "forbidden_claims": { "$ref": "#/$defs/nonEmptyStringArray" },
+        "correction_summary": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "title",
+        "case_kind",
+        "partition",
+        "evidence_tier",
+        "curation_status",
+        "classification",
+        "sources",
+        "scenario",
+        "oracle",
+        "countercase_ids"
+      ],
+      "properties": {
+        "case_id": { "$ref": "#/$defs/caseId" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "case_kind": { "enum": ["historical", "synthetic_countercase"] },
+        "partition": { "enum": ["teaching", "development", "evaluation", "holdout", "challenge"] },
+        "evidence_tier": {
+          "enum": [
+            "discussion_grounded",
+            "discussion_grounded_with_source_excerpt",
+            "discussion_grounded_with_audit_reference",
+            "discussion_grounded_with_tensor_audit_reference",
+            "map_grounded",
+            "raw_artifact_grounded",
+            "synthetic",
+            "synthetic_fixture_grounded"
+          ]
+        },
+        "curation_status": { "enum": ["machine_proposed", "curated_initial", "reviewed", "retired"] },
+        "curation_fixture_manifest": { "$ref": "#/$defs/nonEmptyString" },
+        "classification": { "$ref": "#/$defs/classification" },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/source" }
+        },
+        "scenario": { "$ref": "#/$defs/scenario" },
+        "oracle": { "$ref": "#/$defs/oracle" },
+        "countercase_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/caseId" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "case_kind": { "const": "historical" } },
+            "required": ["case_kind"]
+          },
+          "then": {
+            "properties": { "sources": { "minItems": 1 } }
+          }
+        },
+        {
+          "if": {
+            "required": ["curation_fixture_manifest"]
+          },
+          "then": {
+            "properties": { "case_kind": { "const": "historical" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "case_kind": { "const": "synthetic_countercase" } },
+            "required": ["case_kind"]
+          },
+          "then": {
+            "properties": {
+              "partition": { "const": "challenge" },
+              "evidence_tier": { "enum": ["synthetic", "synthetic_fixture_grounded"] },
+              "countercase_ids": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "evidence_tier": { "const": "synthetic_fixture_grounded" } },
+            "required": ["evidence_tier"]
+          },
+          "then": {
+            "properties": {
+              "scenario": { "required": ["fixture_manifest"] }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

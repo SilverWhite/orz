@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0-draft",
+  "fixture_id": "FIX-FEP-SYN-006",
+  "case_id": "FEP-SYN-006",
+  "fixture_kind": "synthetic_machine_readable",
+  "visibility": "scenario_only",
+  "purpose": "Test whether verified producer schema and sentinels permit a low-score observation without inventing a feature-order failure.",
+  "files": [
+    {
+      "path": "evidence.json",
+      "media_type": "application/json",
+      "role": "visible_evidence",
+      "sha256": "dd73d522ebcd5e3e7a09db0b1e6e209b68dda4b846ac8d3a277f3737eb63d704"
+    }
+  ],
+  "oracle_fields_present": false,
+  "notes": ["Synthetic evidence only; no historical project fact is encoded."]
+}

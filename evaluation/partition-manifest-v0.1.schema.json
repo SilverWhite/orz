@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/partition-manifest-v0.1.schema.json",
+  "title": "FEP Agent Sealed Partition Manifest v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "partition_id",
+    "partition_kind",
+    "status",
+    "created_at",
+    "maintainer_role_id",
+    "case_count",
+    "cluster_counts",
+    "public_scenario_bundle_sha256",
+    "sealed_oracle_bundle_sha256",
+    "scoring_protocol_sha256",
+    "exposure_policy",
+    "contamination_events",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "partition_id": { "type": "string", "pattern": "^FEP-(?:EVAL|HOLDOUT)-[A-Z0-9._-]+$" },
+    "partition_kind": { "enum": ["evaluation", "holdout"] },
+    "status": { "enum": ["candidate", "sealed", "active", "retired", "contaminated"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "sealed_at": { "type": "string", "format": "date-time" },
+    "maintainer_role_id": { "type": "string", "minLength": 1 },
+    "case_count": { "type": "integer", "minimum": 1 },
+    "cluster_counts": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^CLU-[0-9]{2}$" },
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "public_scenario_bundle_sha256": { "$ref": "#/$defs/sha256" },
+    "sealed_oracle_bundle_sha256": { "$ref": "#/$defs/sha256" },
+    "scoring_protocol_sha256": { "$ref": "#/$defs/sha256" },
+    "exposure_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tested_agent_access", "runner_access", "reviewer_access", "reuse_limit"],
+      "properties": {
+        "tested_agent_access": { "const": "scenario_bundle_only" },
+        "runner_access": { "const": "scenario_bundle_and_anonymous_outputs_only" },
+        "reviewer_access": { "const": "blind_scenario_and_anonymous_output_only" },
+        "reuse_limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "contamination_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["detected_at", "scope", "description", "disposition"],
+        "properties": {
+          "detected_at": { "type": "string", "format": "date-time" },
+          "scope": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "disposition": { "enum": ["case_to_development", "partition_contaminated", "run_invalidated"] }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["sealed", "active", "retired"] } }, "required": ["status"] },
+      "then": { "required": ["sealed_at"] }
+    },
+    {
+      "if": { "properties": { "partition_kind": { "const": "holdout" } }, "required": ["partition_kind"] },
+      "then": { "properties": { "exposure_policy": { "properties": { "reuse_limit": { "const": 1 } } } } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/runtime/deepseek-adapter-profile/v0.1/schema.json",
+  "title": "DeepSeek Adapter Development Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "transport",
+    "base_url",
+    "model",
+    "thinking",
+    "sampling",
+    "tools",
+    "structured_output",
+    "user_id",
+    "timeouts",
+    "retry"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-prototype" },
+    "transport": {
+      "enum": ["openai_chat_completions", "anthropic_messages"]
+    },
+    "base_url": { "type": "string", "format": "uri" },
+    "model": { "type": "string", "minLength": 1 },
+    "thinking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "reasoning_effort"],
+      "properties": {
+        "type": { "enum": ["enabled", "disabled"] },
+        "reasoning_effort": {
+          "oneOf": [
+            { "enum": ["high", "max"] },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "top_p": { "type": "number", "minimum": 0, "maximum": 1 },
+        "presence_penalty": { "type": "number", "minimum": -2, "maximum": 2 },
+        "frequency_penalty": { "type": "number", "minimum": -2, "maximum": 2 }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "strict"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "strict": {
+          "description": "Beta strict tool mode is intentionally deferred in this spike.",
+          "const": false
+        }
+      }
+    },
+    "structured_output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "prompt_mentions_json", "example_provided", "max_tokens"],
+      "properties": {
+        "mode": { "enum": ["none", "json_object"] },
+        "prompt_mentions_json": { "type": "boolean" },
+        "example_provided": { "type": "boolean" },
+        "max_tokens": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "user_id": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        { "type": "null" }
+      ]
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connect_seconds", "first_inference_seconds", "total_seconds"],
+      "properties": {
+        "connect_seconds": { "type": "integer", "minimum": 1 },
+        "first_inference_seconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "total_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_attempts", "retry_http_statuses"],
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "retry_http_statuses": {
+          "type": "array",
+          "items": { "enum": [429, 500, 503] },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "transport": { "const": "openai_chat_completions" } },
+        "required": ["transport"]
+      },
+      "then": {
+        "properties": { "base_url": { "const": "https://api.deepseek.com" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "transport": { "const": "anthropic_messages" } },
+        "required": ["transport"]
+      },
+      "then": {
+        "properties": { "base_url": { "const": "https://api.deepseek.com/anthropic" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "thinking": {
+            "properties": { "type": { "const": "enabled" } },
+            "required": ["type"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "thinking": {
+            "properties": { "reasoning_effort": { "enum": ["high", "max"] } }
+          },
+          "sampling": { "maxProperties": 0 }
+        }
+      },
+      "else": {
+        "properties": {
+          "thinking": {
+            "properties": { "reasoning_effort": { "type": "null" } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "structured_output": {
+            "properties": { "mode": { "const": "json_object" } },
+            "required": ["mode"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "structured_output": {
+            "properties": {
+              "prompt_mentions_json": { "const": true },
+              "example_provided": { "const": true },
+              "max_tokens": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "structured_output": {
+            "properties": {
+              "prompt_mentions_json": { "const": false },
+              "example_provided": { "const": false },
+              "max_tokens": { "type": "null" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
