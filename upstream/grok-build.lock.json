@@ -1,0 +1,57 @@
+{
+  "schema_version": "0.1.0",
+  "repository": "https://github.com/xai-org/grok-build",
+  "observed_at": "2026-07-21",
+  "build_repo_commit": "a881e6703f46b01d8c7d4a5437683546df30449d",
+  "source_rev": "c5c4ce03436b4bb2cec43d3feaa27dee0109bf37",
+  "readme_sha256": "322066de9f5bc136295bd0ae4f1752cef3d8dcb1a8f9d88044609e7b6d7abcf7",
+  "integration_mode": "prebuilt-headless-sidecar",
+  "distribution": {
+    "windows_prebuilt": "published",
+    "windows_source_build": "best-effort-not-supported-host"
+  },
+  "binary_release": {
+    "status": "verified-local",
+    "channel": "stable",
+    "version": "0.2.106",
+    "build_id": "bde89716f6",
+    "artifact_url": "https://x.ai/cli/grok-0.2.106-windows-x86_64.exe",
+    "bytes": 130120520,
+    "md5": "e91fa7c4ec65fbbe862526806cbb7ea7",
+    "sha256": "a6a25d55daadca0c2458a5aceb4c1873eb7c76964ef307647d079e344c53969a",
+    "authenticode_status": "Valid",
+    "signer_common_name": "X.AI LLC",
+    "installed_path": ".tools/grok/0.2.106/grok.exe",
+    "source_correspondence": "unverified"
+  },
+  "ownership": {
+    "upstream_runtime": [
+      "acp",
+      "headless_cli",
+      "model_http_transport",
+      "permissions",
+      "sandbox",
+      "session_persistence",
+      "tool_runtime",
+      "tui",
+      "workspace"
+    ],
+    "lif_integration": [
+      "claim_boundary",
+      "evidence_kernel",
+      "evaluation_runner",
+      "leak_scanner",
+      "scenario_exporter",
+      "source_router",
+      "task_contract",
+      "validator_bridge",
+      "windows_launch_and_credential_bridge"
+    ],
+    "conformance_fixtures": [
+      "deepseek_reasoning_continuity",
+      "deepseek_request_shape",
+      "journal_redaction",
+      "windows_process_cancellation"
+    ]
+  }
+}

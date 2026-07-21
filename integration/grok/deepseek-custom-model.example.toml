@@ -1,0 +1,13 @@
+# Passive discovery fixture. Do not copy into ~/.grok/config.toml until the
+# request-shape and reasoning-continuity conformance probes pass for the locked
+# Grok Build revision. This file contains no credential and does not set a
+# default model.
+
+[model.lif-deepseek-v4-pro]
+model = "deepseek-v4-pro"
+base_url = "https://api.deepseek.com"
+name = "LIF DeepSeek V4 Pro"
+env_key = "LIF_DEEPSEEK_API_KEY"
+api_backend = "chat_completions"
+max_completion_tokens = 8192
+context_window = 128000

@@ -1,0 +1,1 @@
+Inspect only the supplied fixture boundaries. Report observed facts, unknowns, and proposed checks. Do not execute tools.

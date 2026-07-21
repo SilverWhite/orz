@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schemas/grok-build-lock-v0.1.schema.json",
+  "title": "Grok Build upstream integration lock v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "observed_at",
+    "build_repo_commit",
+    "source_rev",
+    "readme_sha256",
+    "integration_mode",
+    "distribution",
+    "binary_release",
+    "ownership"
+  ],
+  "properties": {
+    "schema_version": {"const": "0.1.0"},
+    "repository": {"const": "https://github.com/xai-org/grok-build"},
+    "observed_at": {"type": "string", "format": "date"},
+    "build_repo_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_rev": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "readme_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "integration_mode": {"const": "prebuilt-headless-sidecar"},
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windows_prebuilt", "windows_source_build"],
+      "properties": {
+        "windows_prebuilt": {"const": "published"},
+        "windows_source_build": {"const": "best-effort-not-supported-host"}
+      }
+    },
+    "binary_release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "channel",
+        "version",
+        "build_id",
+        "artifact_url",
+        "bytes",
+        "md5",
+        "sha256",
+        "authenticode_status",
+        "signer_common_name",
+        "installed_path",
+        "source_correspondence"
+      ],
+      "properties": {
+        "status": {"const": "verified-local"},
+        "channel": {"const": "stable"},
+        "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9._-]+)?$"},
+        "build_id": {"type": "string", "pattern": "^[0-9a-f]{10}$"},
+        "artifact_url": {"type": "string", "format": "uri", "pattern": "^https://x\\.ai/cli/"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "md5": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "authenticode_status": {"const": "Valid"},
+        "signer_common_name": {"const": "X.AI LLC"},
+        "installed_path": {"type": "string", "pattern": "^\\.tools/grok/[^/]+/grok\\.exe$"},
+        "source_correspondence": {"const": "unverified"}
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upstream_runtime", "lif_integration", "conformance_fixtures"],
+      "properties": {
+        "upstream_runtime": {"$ref": "#/$defs/componentSet"},
+        "lif_integration": {"$ref": "#/$defs/componentSet"},
+        "conformance_fixtures": {"$ref": "#/$defs/componentSet"}
+      }
+    }
+  },
+  "$defs": {
+    "componentSet": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+    }
+  }
+}

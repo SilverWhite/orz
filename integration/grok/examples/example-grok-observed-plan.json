@@ -1,0 +1,74 @@
+{
+  "schema_version": "0.1.0",
+  "plan_kind": "dry-run-no-execution",
+  "created_at": "2026-07-21T00:00:00Z",
+  "run_id": "DRYRUN-00000000000000000000000000000000",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "binary": {
+    "path": "C:\\example\\grok.exe",
+    "version_output": "grok 0.2.106 (bde89716f6)",
+    "bytes": 130120520,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "authenticode_status": "Valid",
+    "verified": true
+  },
+  "workspace": {
+    "root": "C:\\example\\lif-cli",
+    "git_head": null,
+    "git_unborn": true,
+    "git_status_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "git_status_line_count": 0
+  },
+  "inputs": {
+    "prompt_file": {
+      "path": "C:\\example\\prompt.txt",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "config_file": {
+      "path": "C:\\example\\config.toml",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "model": {
+    "alias": "lif-deepseek-v4-pro",
+    "reasoning_effort": "high"
+  },
+  "controls": {
+    "max_turns": 2,
+    "sandbox_profile": "read-only",
+    "permission_mode": "plan",
+    "network_policy": "disabled",
+    "tool_allowlist": [],
+    "memory": false,
+    "subagents": false,
+    "web_search": false
+  },
+  "environment": {
+    "grok_home_planned": "C:\\example\\run\\grok-home",
+    "credential_variable": "LIF_DEEPSEEK_API_KEY",
+    "credential_present": false,
+    "secret_values_recorded": false
+  },
+  "planned_argv": ["C:\\example\\grok.exe", "--prompt-file", "C:\\example\\prompt.txt"],
+  "outputs": {
+    "plan": "C:\\example\\run\\plan.json",
+    "stdout": "C:\\example\\run\\stdout.streaming.jsonl",
+    "stderr": "C:\\example\\run\\stderr.log",
+    "debug": "C:\\example\\run\\grok-debug.log",
+    "journal": "C:\\example\\run\\journal.jsonl",
+    "trace": "C:\\example\\run\\trace.json",
+    "export": "C:\\example\\run\\session.md"
+  },
+  "safety": {
+    "model_invoked": false,
+    "network_attempted": false,
+    "tools_executed": false,
+    "credentials_read": false,
+    "files_mutated_outside_output": false
+  },
+  "limitations": [
+    "Schema fixture only; zero digests and example paths are not evidence of a run."
+  ]
+}

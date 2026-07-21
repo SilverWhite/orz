@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-observed-plan-v0.1.schema.json",
+  "title": "Grok observed dry-run plan v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_kind",
+    "created_at",
+    "run_id",
+    "session_id",
+    "binary",
+    "workspace",
+    "inputs",
+    "model",
+    "controls",
+    "environment",
+    "planned_argv",
+    "outputs",
+    "safety",
+    "limitations"
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fileInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "plan_kind": { "const": "dry-run-no-execution" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string", "pattern": "^DRYRUN-[0-9a-f]{32}$" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version_output", "bytes", "sha256", "authenticode_status", "verified"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "version_output": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "authenticode_status": { "type": "string", "minLength": 1 },
+        "verified": { "const": true }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "git_head", "git_unborn", "git_status_sha256", "git_status_line_count"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1 },
+        "git_head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+        "git_unborn": { "type": "boolean" },
+        "git_status_sha256": { "$ref": "#/$defs/sha256" },
+        "git_status_line_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_file", "config_file"],
+      "properties": {
+        "prompt_file": { "$ref": "#/$defs/fileInput" },
+        "config_file": { "$ref": "#/$defs/fileInput" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "reasoning_effort"],
+      "properties": {
+        "alias": { "type": "string", "minLength": 1 },
+        "reasoning_effort": { "enum": ["high", "max"] }
+      }
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_turns", "sandbox_profile", "permission_mode", "network_policy", "tool_allowlist", "memory", "subagents", "web_search"],
+      "properties": {
+        "max_turns": { "type": "integer", "minimum": 1 },
+        "sandbox_profile": { "type": "string", "minLength": 1 },
+        "permission_mode": { "const": "plan" },
+        "network_policy": { "enum": ["disabled", "fake-loopback-only"] },
+        "tool_allowlist": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "memory": { "const": false },
+        "subagents": { "const": false },
+        "web_search": { "const": false }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grok_home_planned", "credential_variable", "credential_present", "secret_values_recorded"],
+      "properties": {
+        "grok_home_planned": { "type": "string", "minLength": 1 },
+        "credential_variable": { "const": "LIF_DEEPSEEK_API_KEY" },
+        "credential_present": { "type": "boolean" },
+        "secret_values_recorded": { "const": false }
+      }
+    },
+    "planned_argv": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "type": "string" }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "required": ["plan", "stdout", "stderr", "debug", "journal", "trace", "export"]
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_invoked", "network_attempted", "tools_executed", "credentials_read", "files_mutated_outside_output"],
+      "properties": {
+        "model_invoked": { "const": false },
+        "network_attempted": { "const": false },
+        "tools_executed": { "const": false },
+        "credentials_read": { "const": false },
+        "files_mutated_outside_output": { "const": false }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
