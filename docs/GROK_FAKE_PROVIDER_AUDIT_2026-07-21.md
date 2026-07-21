@@ -61,3 +61,29 @@ artifact SHA-256：
 本次没有证明：真实 DeepSeek TLS/认证、thinking/reasoning continuity、tool-call continuation、retry、长上下文、
 usage 准确性、Grok 子进程的网络继承、真实 prompt 的 sealed-private 存储，或任何 FEP/LIF claim。下一 spike
 应增加第二轮 tool transcript 与 Windows Job Object supervisor，仍保持 fake-only。
+
+## 5. Workspace-trust 强制入口复测
+
+后续实现没有改写上述历史 `0.1.0` 结果，而是新增
+[`grok-fake-provider-result-v0.2.schema.json`](../integration/grok/grok-fake-provider-result-v0.2.schema.json)。
+launcher 现在先创建隔离 workspace，然后在任何 Grok 进程（包括 binary verification 的 `grok --version`）和
+fake provider 之前生成第一张 restricted receipt；建立临时防火墙规则后、创建 Grok agent 进程前再生成
+第二张。两次都必须 scan complete、candidate count `0`、`launch_permitted=true`，且 aggregate 与 scan-policy
+digest 完全相同，否则留下 failure artifact 并保持 `grok_started=false`。
+
+最终顺序修正版 run：`FAKE-7c2c210692f543bfb272ea88b0ab3bda`；session：
+`28c5068b-a911-4e40-ba6a-712bade9e661`；本地目录
+`.observed-runs/fake-provider-trust-gated-v2/`。
+
+- schema `0.2.0`、专用 Draft 2020-12 validation 与全部 result checks 通过；
+- preflight/launch candidate count 都是 `0`，aggregate 都是标准空内容 SHA-256
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`；
+- scan-policy SHA-256 都是 `6962d0a6281ede7dc5ef8dabb8131a6e697c2e93ceff351fe04bfa13dba63f85`；
+- Grok exit `0`，一个 primary loopback request，临时 firewall rule 残留 `0`；
+- `result.json` SHA-256：`835a5f8672bda0674eee26789ec45815de0e13f75a4cbe1c4b55f0f53686cf44`；
+- preflight receipt SHA-256：`efab594d43bc5b4c971540bd841fa7267f0bbcb485159cac0f86fb1d2066805a`；
+- launch receipt SHA-256：`b2370ccfd16d0c082d6d83b1112f17c34dd8ae773046dc2652b83dd21d4c1cfd`。
+
+两张 receipt 缩小但不消除最后一次检查到进程创建之间的 TOCTOU 窗口；它们也不是 Grok upstream
+folder-trust grant。通用 FEP artifact board 给出 JSON/sidecar/finite PASS 和 artifact-shape WARN；后者由本项目
+专用 schema 与逐字段审计补充，但不被提升为安全或科学证明。

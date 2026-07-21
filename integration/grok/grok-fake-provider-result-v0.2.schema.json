@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schema/grok-fake-provider-result-v0.2.schema.json",
+  "title": "Grok fake provider conformance result v0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_kind", "run_id", "session_id", "created_at", "binary", "isolation", "process", "provider", "workspace_trust", "artifacts", "checks", "valid", "limitations"],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "workspace_trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "preflight_receipt_id", "launch_receipt_id", "preflight_created_at", "launch_created_at", "candidate_count", "aggregate_sha256", "scan_policy_sha256"],
+      "properties": {
+        "mode": { "const": "restricted" },
+        "preflight_receipt_id": { "type": "string", "pattern": "^TRUST-[0-9a-f]{32}$" },
+        "launch_receipt_id": { "type": "string", "pattern": "^TRUST-[0-9a-f]{32}$" },
+        "preflight_created_at": { "type": "string", "format": "date-time" },
+        "launch_created_at": { "type": "string", "format": "date-time" },
+        "candidate_count": { "const": 0 },
+        "aggregate_sha256": { "$ref": "#/$defs/sha256" },
+        "scan_policy_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "0.2.0" },
+    "run_kind": { "const": "grok-fake-provider-conformance" },
+    "run_id": { "type": "string", "pattern": "^FAKE-[0-9a-f]{32}$" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version_output", "sha256", "verified"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "version_output": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "verified": { "const": true }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_isolated", "workspace_isolated", "temp_isolated", "provider_host", "temporary_firewall_enforced", "firewall_rules_removed", "real_credential_present"],
+      "properties": {
+        "profile_isolated": { "const": true },
+        "workspace_isolated": { "const": true },
+        "temp_isolated": { "const": true },
+        "provider_host": { "const": "127.0.0.1" },
+        "temporary_firewall_enforced": { "const": true },
+        "firewall_rules_removed": { "const": true },
+        "real_credential_present": { "const": false }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "exit_code", "timed_out", "duration_ms"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "exit_code": { "type": "integer" },
+        "timed_out": { "type": "boolean" },
+        "duration_ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "provider": { "type": "object" },
+    "workspace_trust": { "$ref": "#/$defs/workspace_trust" },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/artifact" },
+      "required": ["config", "prompt", "stdout", "stderr", "provider_result", "provider_private", "workspace_trust_receipt_preflight", "workspace_trust_receipt_launch"]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "required": [
+        "grok_exit_zero", "one_loopback_request", "deepseek_path", "model_match", "stream_requested",
+        "authorization_redacted", "response_marker_observed", "no_tool_event_observed",
+        "credential_value_absent_from_artifacts", "debug_capture_disabled",
+        "workspace_trust_preflight_valid", "workspace_trust_launch_valid", "workspace_trust_scan_complete",
+        "workspace_control_candidate_count_zero", "workspace_trust_launch_permitted",
+        "workspace_control_aggregate_unchanged", "workspace_scan_policy_unchanged"
+      ]
+    },
+    "valid": { "type": "boolean" },
+    "limitations": {
+      "type": "array",
+      "minItems": 6,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

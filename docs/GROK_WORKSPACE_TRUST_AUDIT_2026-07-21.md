@@ -85,11 +85,17 @@ SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`、
   补充，但这仍不是安全或科学证明；
 - fail-closed proxy 已配置，但没有 packet capture/防火墙计量，不能声称机械证明零网络 attempt；
 - inspect 进程有 timeout，但本 probe 尚未接入 Job Object；
-- preflight 当前尚未成为 fake-provider launcher 的强制入口，这是下一小步。
+- preflight 已成为 fake-provider launcher 的强制入口；两张 receipt 分别位于任何 Grok/provider 进程之前和
+  Grok agent 进程创建之前。
 
 ## 6. 下一步
 
-1. 在 fake-provider launcher 创建 workspace 后、启动 Grok 前生成并复核 receipt；digest/decision 不匹配即不启动。
-2. 为现有 fake result schema 做显式版本升级，记录 trust receipt artifact 与 checks，不原地改变旧 schema 语义。
-3. 之后接 local trace/export event-completeness bridge；真实 session trust grant 另设无 provider fixture，不与
+1. 已完成：fake-provider `0.2.0` 与 tool-continuity `0.3.0` result 显式记录双 receipt；旧 schema 未改写。
+2. 已完成：顺序修正版管理员实测中，single/tool 两条链的 receipt、专用 schema、全部 checks 与防火墙清理通过。
+3. 下一步接 local trace/export event-completeness bridge；真实 session trust grant 另设无 provider fixture，不与
    DeepSeek 调用混在一起。
+
+最终复测 locator 与 digest 见
+[`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md) 和
+[`GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md`](GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md)。双 receipt 缩小但不
+消除 TOCTOU 窗口，也不替代 upstream folder trust。

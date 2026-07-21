@@ -84,6 +84,12 @@ prompt，不能承载敏感输入。
 全部 IPv6。它还清空子进程继承环境，只重新加入最小 Windows 环境、隔离的 HOME/profile/temp、假 credential
 和 fail-closed proxy。规则在 `finally` 中按 run UUID 删除；创建规则失败时 Grok 不启动。
 
+launcher 还会生成两张 restricted workspace-trust receipt：第一张早于任何 Grok 进程和 provider，第二张紧邻
+Grok agent 进程创建。两张都必须完整、零候选、允许启动，而且 aggregate/scan-policy digest 一致。single 结果
+使用新增 `grok-fake-provider-result-v0.2.schema.json`，tool-continuity 使用新增
+`grok-tool-continuity-result-v0.3.schema.json`；旧 `0.1/0.2` schema 保留为历史格式。双检查只缩小 TOCTOU，不是
+upstream folder-trust grant。
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_fake_provider_conformance.ps1 `
   -OutputDirectory ..\..\.observed-runs\fake-provider-smoke

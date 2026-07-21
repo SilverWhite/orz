@@ -67,3 +67,25 @@ artifact SHA-256：
 没有证明：真实 DeepSeek thinking/tool 协议、真实 TLS、任意其他工具、并发工具、retry/compaction、无 race
 的 suspended launch、子进程外连阻断、trace/export 完整性或科学正确性。下一步应增加 local trace/export、
 workspace delta 与 hash-chain event bridge，并为 timeout 使用一个显式 child-process fixture 验证整树终止。
+
+## 5. Workspace-trust 强制入口复测
+
+历史 `0.2.0` schema 保持不变；新增
+[`grok-tool-continuity-result-v0.3.schema.json`](../integration/grok/grok-tool-continuity-result-v0.3.schema.json)
+记录两张 receipt artifact、摘要字段与七个 trust checks。最终顺序修正版 run：
+`FAKE-18c9c39d65174b9b9a5b37124a7d5b94`；session：
+`cfc74882-d9ae-4d01-bb2d-7d2f973cc25b`；本地目录
+`.observed-runs/tool-continuity-trust-gated-v2/`。
+
+- schema `0.3.0` 与全部 result checks 通过；两张 receipt 都在 restricted 零候选策略下有效；
+- aggregate 与 scan-policy digest 在 preflight/launch 间不变；
+- Grok exit `0`，primary request `2`、auxiliary request `0`；
+- reasoning marker、tool call ID、tool result、fixture marker 与 Job Object checks 全部通过；
+- `thought=true`、terminal event `true`、显式 tool event 仍为 `false`；
+- 临时 firewall rule 残留 `0`；
+- `result.json` SHA-256：`3fbe0ed54eeb5796b93c9571bf21301d56941b8aebc1f3994de5ab376fbe609b`；
+- preflight receipt SHA-256：`74d8b9d7d8a09657bcac86b630cdd85443932e0fe92f191dc7cf588ad4e8fc49`；
+- launch receipt SHA-256：`801a7e10d13002c9944242cc90ccb4e84162df64577b4c6f0553467856f4c491`。
+
+这次复测强化了启动前 provenance，但没有填补 streaming-json 的 tool-event 缺口，也没有证明真实 DeepSeek
+协议、任意工具或科学正确性。下一阶段仍是 local trace/export event-completeness bridge。

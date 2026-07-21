@@ -101,9 +101,9 @@ bounded queue 和 backpressure：允许降低 telemetry 频率，不允许静默
    [`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](../docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md)。
 3. Windows Job Object supervisor：Grok 已接入 kill-on-close Job Object，并在成功与 timeout development run
    中记录 create/assign/close；当前仍有 start-to-assignment race，且尚缺显式 child-tree timeout fixture。
-4. trusted observed launch + local trace/export + event completeness bridge；Grok 已 gate project
-   hook/MCP/LSP/plugin code，但未信任 instruction/skill/permission config 仍进入 discovery，因此 sidecar
-   receipt 必须先于任何 Grok 进程。
+4. workspace trust/restricted launch gate 已接入：双 receipt 早于任何 Grok 进程并在 agent process 前复查；
+   fake-provider `0.2.0` 与 tool-continuity `0.3.0` 管理员实测通过。下一子步是 local trace/export + event
+   completeness bridge。
 5. fixture-only pre-tool checkpoint + workspace delta + conflict-aware restore receipt。
 6. child-tree timeout fixture + compaction provenance；summary 必须标为 derived/unverified，不能替代原始
    observation。

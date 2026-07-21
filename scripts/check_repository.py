@@ -268,6 +268,12 @@ def check_repository() -> dict[str, Any]:
         "reasoning_marker_preserved",
         "credential_value_absent_from_artifacts",
         "debug_capture_disabled",
+        "New-RestrictedWorkspaceTrustReceipt",
+        "workspace_trust_receipt_preflight",
+        "workspace_trust_receipt_launch",
+        "workspace_control_aggregate_unchanged",
+        "workspace_scan_policy_unchanged",
+        "Workspace control surface changed between preflight and launch receipts",
     )
     for marker in provider_required:
         if marker not in fake_provider_source:
@@ -275,8 +281,27 @@ def check_repository() -> dict[str, Any]:
     for marker in launcher_required:
         if marker not in fake_launcher_source:
             errors.append(f"fake-provider launcher is missing safety marker: {marker}")
+    ordered_launcher_markers = (
+        "$workspaceTrustReceiptPreflight = New-RestrictedWorkspaceTrustReceipt",
+        "$inspectionArgs = @(",
+        "$providerHandle = Start-RedirectedProcess",
+        "$workspaceTrustReceiptLaunch = New-RestrictedWorkspaceTrustReceipt",
+        "$grokHandle = Start-RedirectedProcess",
+    )
+    marker_positions = [fake_launcher_source.find(marker) for marker in ordered_launcher_markers]
+    if any(position < 0 for position in marker_positions) or marker_positions != sorted(marker_positions):
+        errors.append(
+            "fake-provider launcher must order preflight receipt before binary/provider "
+            "processes and launch receipt immediately before the Grok agent process"
+        )
     if "'--debug-file'" in fake_launcher_source or '"--debug-file"' in fake_launcher_source:
         errors.append("fake-provider launcher must not enable Grok debug-file on build 0.2.106")
+    for schema_name in (
+        "grok-fake-provider-result-v0.2.schema.json",
+        "grok-tool-continuity-result-v0.3.schema.json",
+    ):
+        if not (ROOT / "integration/grok" / schema_name).is_file():
+            errors.append(f"missing trust-integrated result schema: {schema_name}")
     counts["grok_fake_provider_fixtures"] = 1
     counts["grok_tool_continuity_fixtures"] = 1
 

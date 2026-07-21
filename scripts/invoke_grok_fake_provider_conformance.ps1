@@ -169,6 +169,53 @@ function Get-ArtifactRecord {
     }
 }
 
+function New-RestrictedWorkspaceTrustReceipt {
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkspacePath,
+        [Parameter(Mandatory = $true)][string]$ReceiptPath
+    )
+    $receiptScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'new_grok_workspace_trust_receipt.ps1')).Path
+    $receiptArguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $receiptScript,
+        '-WorkspacePath', $WorkspacePath,
+        '-OutputPath', $ReceiptPath,
+        '-Decision', 'restricted'
+    )
+    $receiptJson = (& powershell @receiptArguments 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Workspace trust preflight failed: $receiptJson"
+    }
+    try {
+        $receipt = $receiptJson | ConvertFrom-Json
+    } catch {
+        throw "Workspace trust preflight did not return JSON: $($_.Exception.Message)"
+    }
+    $canonicalWorkspace = (Resolve-Path -LiteralPath $WorkspacePath).Path
+    if (
+        $receipt.schema_version -ne '0.1.0' -or
+        $receipt.receipt_kind -ne 'grok-workspace-trust-preflight' -or
+        $receipt.valid -ne $true -or
+        $receipt.discovery.complete -ne $true -or
+        $receipt.discovery.candidate_count -ne 0 -or
+        $receipt.decision.mode -ne 'restricted' -or
+        $receipt.decision.launch_permitted -ne $true -or
+        $receipt.decision.expires_on_control_change -ne $true -or
+        $receipt.upstream_folder_trust.store_modified -ne $false -or
+        $receipt.safety.model_invoked -ne $false -or
+        $receipt.safety.network_attempted -ne $false -or
+        $receipt.safety.tools_executed -ne $false -or
+        $receipt.safety.project_code_executed -ne $false -or
+        $receipt.safety.file_contents_recorded -ne $false -or
+        $receipt.safety.output_overwritten -ne $false -or
+        -not $receipt.workspace.canonical_path.Equals($canonicalWorkspace, [System.StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw 'Workspace trust receipt did not satisfy the restricted zero-candidate launch policy.'
+    }
+    return $receipt
+}
+
 function Start-RedirectedProcess {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -229,16 +276,6 @@ function Start-RedirectedProcess {
     }
 }
 
-$inspectionArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'inspect_grok_install.ps1'))
-if ($BinaryPath) {
-    $inspectionArgs += @('-BinaryPath', $BinaryPath)
-}
-$inspectionJson = (& powershell @inspectionArgs 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0) {
-    throw "Grok binary verification failed: $inspectionJson"
-}
-$inspection = $inspectionJson | ConvertFrom-Json
-
 if (-not $PythonPath) {
     $pythonCommand = Get-Command python -ErrorAction Stop
     $PythonPath = $pythonCommand.Source
@@ -267,6 +304,8 @@ $stdoutPath = Join-Path $outputRoot 'grok.stdout.streaming.jsonl'
 $stderrPath = Join-Path $outputRoot 'grok.stderr.log'
 $resultPath = Join-Path $outputRoot 'result.json'
 $failurePath = Join-Path $outputRoot 'failure.json'
+$workspaceTrustReceiptPreflightPath = Join-Path $outputRoot 'workspace-trust-receipt.preflight.json'
+$workspaceTrustReceiptLaunchPath = Join-Path $outputRoot 'workspace-trust-receipt.launch.json'
 
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 New-Item -ItemType Directory -Path $grokConfigDirectory | Out-Null
@@ -283,8 +322,27 @@ $createdFirewallRules = New-Object System.Collections.Generic.List[string]
 $firewallRulesRemoved = $false
 $jobClosed = $false
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$workspaceTrustReceiptPreflight = $null
+$workspaceTrustReceiptLaunch = $null
+$inspection = $null
 
 try {
+    # First gate: no provider, firewall rule, model, tool, or project code has started.
+    $workspaceTrustReceiptPreflight = New-RestrictedWorkspaceTrustReceipt `
+        -WorkspacePath $workspace `
+        -ReceiptPath $workspaceTrustReceiptPreflightPath
+
+    # Binary verification invokes `grok --version`, so it also stays behind the first trust gate.
+    $inspectionArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'inspect_grok_install.ps1'))
+    if ($BinaryPath) {
+        $inspectionArgs += @('-BinaryPath', $BinaryPath)
+    }
+    $inspectionJson = (& powershell @inspectionArgs 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Grok binary verification failed: $inspectionJson"
+    }
+    $inspection = $inspectionJson | ConvertFrom-Json
+
     $providerArguments = @(
         $providerScript,
         '--output-directory', $providerDirectory,
@@ -405,6 +463,18 @@ context_window = 4096
         '--verbatim',
         '--prompt-file', $promptPath
     )
+
+    # Second gate: narrow the control-surface TOCTOU window immediately before Grok starts.
+    $workspaceTrustReceiptLaunch = New-RestrictedWorkspaceTrustReceipt `
+        -WorkspacePath $workspace `
+        -ReceiptPath $workspaceTrustReceiptLaunchPath
+    if (
+        $workspaceTrustReceiptLaunch.discovery.aggregate_sha256 -ne $workspaceTrustReceiptPreflight.discovery.aggregate_sha256 -or
+        $workspaceTrustReceiptLaunch.discovery.scan_policy_sha256 -ne $workspaceTrustReceiptPreflight.discovery.scan_policy_sha256 -or
+        $workspaceTrustReceiptLaunch.discovery.candidate_count -ne $workspaceTrustReceiptPreflight.discovery.candidate_count
+    ) {
+        throw 'Workspace control surface changed between preflight and launch receipts.'
+    }
     $grokHandle = Start-RedirectedProcess `
         -FilePath $inspection.binary_path `
         -Arguments $grokArguments `
@@ -439,13 +509,15 @@ context_window = 4096
     Write-Utf8Atomic -Path (Join-Path $outputRoot 'provider.stderr.log') -Content $providerStderr
 } catch {
     $failure = [ordered]@{
-        schema_version = '0.1.0'
-        run_kind = 'grok-fake-provider-conformance'
+        schema_version = if ($Scenario -eq 'tool-continuity') { '0.3.0' } else { '0.2.0' }
+        run_kind = if ($Scenario -eq 'tool-continuity') { 'grok-tool-continuity-conformance' } else { 'grok-fake-provider-conformance' }
         run_id = $runId
         failed_at = (Get-Date).ToUniversalTime().ToString('o')
         error_type = $_.Exception.GetType().FullName
         message = $_.Exception.Message
         grok_started = ($null -ne $grokHandle)
+        workspace_trust_receipt_preflight_created = (Test-Path -LiteralPath $workspaceTrustReceiptPreflightPath -PathType Leaf)
+        workspace_trust_receipt_launch_created = (Test-Path -LiteralPath $workspaceTrustReceiptLaunchPath -PathType Leaf)
     }
     Write-Utf8Atomic -Path $failurePath -Content (($failure | ConvertTo-Json -Depth 6) + [Environment]::NewLine)
     throw
@@ -503,6 +575,13 @@ $checks = [ordered]@{
     authorization_redacted = (@($allRequests | Where-Object { $_.authorization_present -ne $true -or $_.authorization_value_recorded -ne $false }).Count -eq 0)
     credential_value_absent_from_artifacts = ($credentialValueHits.Count -eq 0)
     debug_capture_disabled = (-not (Test-Path -LiteralPath (Join-Path $outputRoot 'grok.debug.log')))
+    workspace_trust_preflight_valid = ($workspaceTrustReceiptPreflight.valid -eq $true)
+    workspace_trust_launch_valid = ($workspaceTrustReceiptLaunch.valid -eq $true)
+    workspace_trust_scan_complete = ($workspaceTrustReceiptPreflight.discovery.complete -eq $true -and $workspaceTrustReceiptLaunch.discovery.complete -eq $true)
+    workspace_control_candidate_count_zero = ($workspaceTrustReceiptPreflight.discovery.candidate_count -eq 0 -and $workspaceTrustReceiptLaunch.discovery.candidate_count -eq 0)
+    workspace_trust_launch_permitted = ($workspaceTrustReceiptPreflight.decision.launch_permitted -eq $true -and $workspaceTrustReceiptLaunch.decision.launch_permitted -eq $true)
+    workspace_control_aggregate_unchanged = ($workspaceTrustReceiptPreflight.discovery.aggregate_sha256 -eq $workspaceTrustReceiptLaunch.discovery.aggregate_sha256)
+    workspace_scan_policy_unchanged = ($workspaceTrustReceiptPreflight.discovery.scan_policy_sha256 -eq $workspaceTrustReceiptLaunch.discovery.scan_policy_sha256)
 }
 if ($Scenario -eq 'tool-continuity') {
     $checks['two_loopback_requests'] = ($providerResult.primary_request_count -eq 2 -and @($allRequests | Where-Object { $_.client_ip -ne '127.0.0.1' }).Count -eq 0)
@@ -532,7 +611,9 @@ foreach ($entry in @(
     @{ Name = 'stdout'; Path = $stdoutPath },
     @{ Name = 'stderr'; Path = $stderrPath },
     @{ Name = 'provider_result'; Path = $providerResultPath },
-    @{ Name = 'provider_private'; Path = (Join-Path $providerDirectory 'requests.private.jsonl') }
+    @{ Name = 'provider_private'; Path = (Join-Path $providerDirectory 'requests.private.jsonl') },
+    @{ Name = 'workspace_trust_receipt_preflight'; Path = $workspaceTrustReceiptPreflightPath },
+    @{ Name = 'workspace_trust_receipt_launch'; Path = $workspaceTrustReceiptLaunchPath }
 )) {
     if (Test-Path -LiteralPath $entry.Path -PathType Leaf) {
         $artifacts[$entry.Name] = Get-ArtifactRecord -Path $entry.Path
@@ -543,6 +624,8 @@ $limitations = @(
     'The temporary firewall rules apply to the verified Grok executable path; descendant executables are not covered by those program rules.',
     'Grok 0.2.106 debug-file capture is disabled because a rejected probe observed the Authorization value in plaintext debug output.',
     'The provider private capture is plaintext and restricted to checked-in inert fixtures; sensitive prompts require the future sealed-private layer.',
+    'Two workspace trust receipts narrow but do not eliminate the time-of-check/time-of-use race before process creation.',
+    'The sidecar receipt is not a Grok upstream folder-trust grant.',
     'This validates fixed fake SSE responses and does not establish real DeepSeek compatibility, correctness, or scientific validity.'
 )
 if ($Scenario -eq 'tool-continuity') {
@@ -555,7 +638,7 @@ if ($Scenario -eq 'tool-continuity') {
     $limitations += 'Absence of a tool event is established only from the captured streaming-json output for this fixed response.'
 }
 $result = [ordered]@{
-    schema_version = if ($Scenario -eq 'tool-continuity') { '0.2.0' } else { '0.1.0' }
+    schema_version = if ($Scenario -eq 'tool-continuity') { '0.3.0' } else { '0.2.0' }
     run_kind = if ($Scenario -eq 'tool-continuity') { 'grok-tool-continuity-conformance' } else { 'grok-fake-provider-conformance' }
     run_id = $runId
     session_id = $sessionId
@@ -582,6 +665,16 @@ $result = [ordered]@{
         duration_ms = [math]::Round($stopwatch.Elapsed.TotalMilliseconds, 3)
     }
     provider = $providerResult
+    workspace_trust = [ordered]@{
+        mode = 'restricted'
+        preflight_receipt_id = $workspaceTrustReceiptPreflight.receipt_id
+        launch_receipt_id = $workspaceTrustReceiptLaunch.receipt_id
+        preflight_created_at = $workspaceTrustReceiptPreflight.created_at
+        launch_created_at = $workspaceTrustReceiptLaunch.created_at
+        candidate_count = [int]$workspaceTrustReceiptLaunch.discovery.candidate_count
+        aggregate_sha256 = $workspaceTrustReceiptLaunch.discovery.aggregate_sha256
+        scan_policy_sha256 = $workspaceTrustReceiptLaunch.discovery.scan_policy_sha256
+    }
     artifacts = $artifacts
     checks = $checks
     valid = $valid
