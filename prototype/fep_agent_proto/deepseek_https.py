@@ -112,6 +112,7 @@ class DeepSeekHttpsTransport:
         connection: Any | None = None
         response: Any | None = None
         credential_source_id: str | None = None
+        failure_stage = "credential_acquire"
         try:
             with self._credential_provider.acquire() as credential:
                 credential_source_id = credential.source_id
@@ -130,6 +131,7 @@ class DeepSeekHttpsTransport:
                     context,
                 )
                 try:
+                    failure_stage = "connect"
                     connection.connect()
                     if selected.cancelled:
                         raise TransportCancelled(
@@ -137,12 +139,14 @@ class DeepSeekHttpsTransport:
                         )
                     if time.monotonic() - started > selected.connect_seconds:
                         raise TransportTimeout("connect")
+                    failure_stage = "request"
                     connection.request(
                         "POST",
                         DEEPSEEK_CHAT_PATH,
                         body=prepared.body,
                         headers=headers,
                     )
+                    failure_stage = "response_headers"
                     response = connection.getresponse()
                 except socket.timeout as exc:
                     raise TransportTimeout("response_headers") from exc
@@ -150,6 +154,7 @@ class DeepSeekHttpsTransport:
                     authorization = "<cleared>"
                     headers.clear()
 
+            failure_stage = "response_headers_validate"
             response_headers = {
                 str(name).lower(): str(value) for name, value in response.getheaders()
             }
@@ -179,6 +184,7 @@ class DeepSeekHttpsTransport:
             first_semantic_at: float | None = None
             total_bytes = 0
             lines: list[str] = []
+            failure_stage = "response_body"
             while True:
                 now = time.monotonic()
                 if selected.cancelled:
@@ -192,9 +198,10 @@ class DeepSeekHttpsTransport:
                     raise TransportTimeout("first_semantic")
                 try:
                     raw = response.readline()
-                except socket.timeout as exc:
-                    phase = "first_semantic" if first_semantic_at is None else "read_idle"
-                    raise TransportTimeout(phase) from exc
+                except socket.timeout:
+                    # The short socket timeout is a cancellation/deadline polling
+                    # interval, not the semantic or total deadline itself.
+                    continue
                 if not raw:
                     break
                 total_bytes += len(raw)
@@ -240,8 +247,15 @@ class DeepSeekHttpsTransport:
         except (ConnectionError, http.client.HTTPException, OSError, ssl.SSLError) as exc:
             if isinstance(exc, (TransportCancelled, TransportTimeout)):
                 raise
+            error_number = getattr(exc, "winerror", None)
+            if error_number is None:
+                error_number = getattr(exc, "errno", None)
+            number_suffix = (
+                f", error_number={error_number}" if error_number is not None else ""
+            )
             raise PrototypeError(
-                f"DeepSeek HTTPS transport failed ({type(exc).__name__})"
+                "DeepSeek HTTPS transport failed at "
+                f"{failure_stage} ({type(exc).__name__}{number_suffix})"
             ) from None
         finally:
             if response is not None:

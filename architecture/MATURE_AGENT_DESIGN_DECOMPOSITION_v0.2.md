@@ -124,8 +124,8 @@ validator verdict 或 claim evidence。
 - repo map、architect/editor 双模型、多 Agent orchestration；
 - server/UI 级 event query、全文索引维护；
 - cloud sandbox、remote queue 和持续云运维；
-- 超过一次、带工具、带研究数据或可重试的真实 DeepSeek call。一次最小 development
-  call 已获单独授权并具备 two-phase one-shot 入口，但仍被固定 credential 缺失阻断。
+- 超过一次、带工具、带研究数据或可重试的真实 DeepSeek call。首个最小 development
+  permit 已消费并以 transport `OSError` fail closed；任何第二次 attempt 仍需单独授权。
 
 ### Reject as default
 

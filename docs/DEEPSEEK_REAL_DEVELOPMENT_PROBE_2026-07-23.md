@@ -1,7 +1,7 @@
 # DeepSeek one-shot 真实 development probe（2026-07-23）
 
-状态：实现与离线测试 PASS；用户已授权一次最小真实请求及对应小额费用，但固定
-Windows Credential Manager 项不存在，因此没有发出 DNS/TLS/HTTP 请求，也没有计费。
+状态：实现与离线测试 PASS；用户授权的一次最小 real transport attempt 已消费 permit，
+随后以脱敏 `OSError` fail closed。没有 retry；provider 是否收到 POST、是否计费未知。
 
 ## 1. 固定边界
 
@@ -22,8 +22,10 @@ prompt、回复正文、provider-private reasoning、confirmation token 与 Auth
 
 ## 2. 离线验证
 
-- 新增两个 unit test：one-shot 成功路径使用无 socket injected connection，确认 request
+- one-shot 成功路径使用无 socket injected connection，确认 request
   count 恰为 1，并扫描结果和 ledger 不含 marker、假 key 或 confirmation token；
+- 真实启动前发现 250ms socket poll timeout 被误当作整体 deadline；修正为持续轮询到
+  120 秒 first-semantic / 180 秒 total deadline，并增加延迟 SSE unit test；
 - real broker 与内建 in-process fake provider 在构造期互斥；
 - 原有 fake-only broker 仍不能接真实 connection factory；
 - `fep-script-validation` legacy task board：8 PASS、14 WARN、0 FAIL、0 catastrophic；
@@ -31,12 +33,12 @@ prompt、回复正文、provider-private reasoning、confirmation token 与 Auth
 - plan artifact board：3 PASS、2 WARN、0 FAIL；项目专用 schema 和逐字段 digest
   对账承担其非表格 artifact 的验证。
 
-## 3. 本机固定计划
+## 3. 本机实际计划与 attempt
 
 本地忽略目录：
 
 ```text
-.observed-runs/deepseek-real-development-plan-20260723/
+.observed-runs/deepseek-real-development-live-20260723/
 ```
 
 - request body：291 bytes；
@@ -48,20 +50,37 @@ prompt、回复正文、provider-private reasoning、confirmation token 与 Auth
 - plan 中 `network_attempted=false`、`credential_read=false`、
   `billable_request_made=false`。
 
-## 4. 当前 blocker
+execute 阶段重新构造并对上同一 request/summary digest，写入一条有效 allow event：
 
-通过项目的 `WindowsCredentialManagerProvider` 只做存在性预检，系统返回 WinError
-1168（找不到固定 target）。预检没有输出、散列或记录 key，也没有尝试环境变量、
-配置文件或命令行 secret fallback。
+- ledger event count / allow count：1 / 1；
+- terminal event SHA-256：
+  `cff432db23ad01229086bb7b8214887764f61c26acc53831462d3a2b78a5070a`；
+- execute outcome：`DeepSeek HTTPS transport failed (OSError)`；
+- retry count：0；
+- `result.json`：不存在，因为没有 provider success。
 
-因此本阶段没有把缺失 credential 误写成 provider 失败，也没有消耗实际 permit。
-下一步只有一个：由用户在 Windows Credential Manager 安全建立 Generic Credential
-`FEP-Agent/DeepSeek` 后，基于全新计划执行一次明确确认的 probe。不能复用环境变量
-或把 key 放入 Git、shell history、命令行参数。
+旧实现只保留了异常类型，没有保留失败 stage/errno，因此不能从该 attempt 追溯
+connect、request、response-header 或 response-body 的精确阶段；也不能断言 provider
+已收到请求或产生费用。
+
+## 4. 独立诊断与后续保护
+
+- 固定 Credential Manager target 在沙箱外可读取、可释放；
+- key 只检查到常见 `sk-` 前缀与合理长度，未输出、散列或保存 key；
+- DNS 可解析、TCP 443 成功；
+- 无 HTTP、无凭据 TLS probe 成功协商 TLS 1.3 /
+  `TLS_AES_128_GCM_SHA256`；
+- 没有再次访问 `/chat/completions`、`/models` 或余额接口。
+
+transport 现已把后续安全错误压缩为 `stage + exception type + numeric errno`，仍不记录
+异常正文；poll timeout 修复和总 deadline 测试通过。任何第二次 provider attempt
+都必须创建新计划、签发新 permit，并取得新的费用授权，不能把本次 allow 当作 retry
+budget。
 
 ## 5. 结论边界
 
-直接证明的是：固定请求可被离线计划、摘要绑定和独立测试；代码路径能在测试 connection
-上执行一次并生成脱敏结果。没有证明真实 DNS、证书链、账户认证、余额、模型可用性、
-SSE shape 或 provider marker。即使后续真实 probe 成功，也只证明当次 development
-transport conformance，不构成 Agent 质量、evaluation、holdout 或 FEP/LIF claim。
+直接证明的是：固定请求可被离线计划、摘要绑定；真实 credential boundary、DNS/TCP/TLS
+前置条件分别可用；一个 allow permit 被消费并 fail closed。没有证明 POST 抵达、账户
+认证、余额、模型可用性、SSE shape 或 provider marker，也不能从失败推断计费。即使
+后续真实 probe 成功，也只证明当次 development transport conformance，不构成 Agent
+质量、evaluation、holdout 或 FEP/LIF claim。

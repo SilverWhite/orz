@@ -945,6 +945,73 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertFalse(factory_called[0])
         self.assertTrue(permit.consumed)
 
+    def test_deepseek_https_transport_polls_through_short_socket_timeout(self) -> None:
+        import socket
+
+        class FakeSocket:
+            def settimeout(self, value: float) -> None:
+                self.timeout = value
+
+        class DelayedResponse:
+            status = 200
+
+            def __init__(self) -> None:
+                self._items: list[bytes | BaseException] = [
+                    socket.timeout(),
+                    b'data: {"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\r\n',
+                    b"data: [DONE]\r\n",
+                    b"",
+                ]
+
+            def getheaders(self) -> list[tuple[str, str]]:
+                return [("Content-Type", "text/event-stream")]
+
+            def readline(self) -> bytes:
+                item = self._items.pop(0)
+                if isinstance(item, BaseException):
+                    raise item
+                return item
+
+            def close(self) -> None:
+                pass
+
+        class DelayedConnection:
+            def __init__(self) -> None:
+                self.sock = FakeSocket()
+                self.response = DelayedResponse()
+
+            def connect(self) -> None:
+                pass
+
+            def request(self, method: str, path: str, **kwargs: object) -> None:
+                pass
+
+            def getresponse(self) -> DelayedResponse:
+                return self.response
+
+            def close(self) -> None:
+                pass
+
+        request = {"model": "deepseek-v4-pro", "stream": True, "messages": []}
+        prepared = prepare_deepseek_https_request(request)
+        transport = DeepSeekHttpsTransport(
+            permit=OneShotNetworkPermit.issue_for_deepseek_chat(
+                request_sha256=prepared.body_sha256
+            ),
+            credential_provider=InMemoryCredentialProvider(b"sk-test-not-real"),
+            connection_factory=lambda host, port, timeout, context: DelayedConnection(),
+        )
+        response = transport.send(
+            request,
+            TransportControl(
+                connect_seconds=1,
+                first_semantic_seconds=1,
+                total_seconds=2,
+            ),
+        )
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.metadata["first_semantic_observed"])
+
     def test_deepseek_https_transport_sanitizes_connection_errors(self) -> None:
         class FailingConnection:
             sock = None
@@ -970,6 +1037,7 @@ class PrototypeRegressionTests(unittest.TestCase):
         with self.assertRaises(PrototypeError) as captured:
             transport.send(request)
         self.assertNotIn("sk-test-not-real", str(captured.exception))
+        self.assertIn("failed at request (OSError)", str(captured.exception))
         self.assertIsNone(captured.exception.__cause__)
 
     def test_real_development_probe_is_one_shot_and_persists_only_redacted_result(

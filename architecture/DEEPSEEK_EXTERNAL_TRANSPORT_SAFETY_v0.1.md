@@ -1,8 +1,8 @@
 # DeepSeek External HTTPS Transport 安全契约 v0.1
 
-状态：development-only。底层 transport 已离线验证；现有两阶段 one-shot
-probe 提供唯一真实联网入口，但截至 2026-07-23 尚未因缺少固定 Windows
-Credential Manager 项而发出请求。
+状态：development-only。底层 transport 已离线验证；两阶段 one-shot probe
+提供唯一真实联网入口。2026-07-23 首个真实 permit 已消费，transport 以脱敏
+`OSError` 终止；没有重试，provider receipt 与计费状态未知。
 
 ## 1. 目标与非目标
 
@@ -93,8 +93,15 @@ TLS/HTTP/provider 失败都不能重放。成功结果不保存 prompt、回复�
 reasoning、confirmation token 或 Authorization，只保存 digest、长度、usage、固定
 marker 比对和脱敏 transport metadata。该入口不接 model loop、工具或研究场景。
 
-截至 2026-07-23 的本机预检得到 WinError 1168（固定 credential 不存在），所以只完成了
-离线实现与测试，没有真实请求、计费或 provider 成功观测。
+沙箱内预检曾得到 WinError 1168；同一凭据在沙箱外通过固定 provider 成功读取并释放，
+说明前者来自 credential-vault 隔离，不是 target 缺失。首个 execute 消费一条 allow
+ledger event 后以通用脱敏 `OSError` 退出，没有 `result.json`，也没有 retry。随后独立
+诊断确认 DNS、TCP 443、TLS 1.3 以及 key 的 `sk-` 前缀/长度范围正常；这些检查不证明
+POST 已抵达 provider，也不能判定是否计费。
+
+首个 attempt 还暴露了 socket 轮询缺口：250ms poll timeout 原本会被误当作整体超时。
+实现已改为持续轮询到冻结的 first-semantic/total deadline，并补充 unit test。错误包装
+也新增脱敏 stage 和 numeric errno，供下一次单独授权的 attempt 定位，不记录异常正文。
 
 ## 8. 仍未开放
 
