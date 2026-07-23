@@ -58,7 +58,7 @@
   },
   "promotion": {
     "status": "eligible",
-    "selected_as_default": false,
+    "selected_as_default": true,
     "gates": [
       { "id": "binary_identity", "status": "passed" },
       { "id": "acp_initialize", "status": "passed" },
@@ -73,6 +73,6 @@
     "The stable pointer was observed independently from the lagging public changelog; the pointer does not prove behavioral compatibility.",
     "GitHub compare returned the API maximum of 300 files, so returned addition/deletion/change totals are explicitly partial.",
     "Authenticode, size, MD5, SHA-256, PE header, and version output prove local artifact identity, not correspondence to the open-source source snapshot.",
-    "All required conformance gates passed, but the eligible candidate is not the project default until a separate promotion decision is recorded."
+    "All required conformance gates passed; the separate 2026-07-23 promotion decision selected this release as the project default."
   ]
 }

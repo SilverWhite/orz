@@ -181,14 +181,24 @@ def check_repository() -> dict[str, Any]:
     candidate_discovery = upstream_candidate.get("discovery", {})
     candidate_release = upstream_candidate.get("binary_release", {})
     candidate_promotion = upstream_candidate.get("promotion", {})
-    if candidate_baseline.get("version") != upstream_lock.get("binary_release", {}).get(
-        "version"
-    ):
-        errors.append("upstream candidate baseline version does not match observed lock")
-    if candidate_baseline.get("sha256") != upstream_lock.get("binary_release", {}).get(
-        "sha256"
-    ):
-        errors.append("upstream candidate baseline SHA-256 does not match observed lock")
+    lock_release = upstream_lock.get("binary_release", {})
+    candidate_selected = candidate_promotion.get("selected_as_default") is True
+    if candidate_selected:
+        if candidate_release.get("version") != lock_release.get("version"):
+            errors.append("selected upstream candidate version does not match default lock")
+        if candidate_release.get("sha256") != lock_release.get("sha256"):
+            errors.append(
+                "selected upstream candidate SHA-256 does not match default lock"
+            )
+    else:
+        if candidate_baseline.get("version") != lock_release.get("version"):
+            errors.append(
+                "unselected upstream candidate baseline version does not match default lock"
+            )
+        if candidate_baseline.get("sha256") != lock_release.get("sha256"):
+            errors.append(
+                "unselected upstream candidate baseline SHA-256 does not match default lock"
+            )
     if candidate_discovery.get("channel_pointer_version") != candidate_release.get(
         "version"
     ):
@@ -224,9 +234,15 @@ def check_repository() -> dict[str, Any]:
         errors.append("upstream candidate promotion gate set is incomplete")
     if (
         candidate_promotion.get("status") != "eligible"
-        and candidate_promotion.get("selected_as_default") is True
+        and candidate_selected
     ):
         errors.append("non-eligible upstream candidate cannot be selected as default")
+    if candidate_selected and any(
+        gate.get("status") != "passed"
+        for gate in candidate_promotion.get("gates", [])
+        if isinstance(gate, dict)
+    ):
+        errors.append("selected upstream candidate has an unpassed promotion gate")
     counts["upstream_candidates"] = 1
 
     grok_config_path = ROOT / "integration/grok/deepseek-custom-model.example.toml"
@@ -356,7 +372,10 @@ def check_repository() -> dict[str, Any]:
             "processes and launch receipt immediately before the Grok agent process"
         )
     if "'--debug-file'" in fake_launcher_source or '"--debug-file"' in fake_launcher_source:
-        errors.append("fake-provider launcher must not enable Grok debug-file on build 0.2.106")
+        errors.append(
+            "fake-provider launcher must not enable Grok debug-file after the "
+            "0.2.106 credential-leak observation"
+        )
     for schema_name in (
         "grok-fake-provider-result-v0.2.schema.json",
         "grok-tool-continuity-result-v0.3.schema.json",
@@ -385,6 +404,7 @@ def check_repository() -> dict[str, Any]:
         "clientCapabilities = [ordered]@{}",
         "session_or_prompt_requests_sent = 0",
         "_x.ai/mcp/servers_updated",
+        "$lock.binary_release.installed_path",
     ):
         if marker not in acp_probe_source:
             errors.append(f"ACP initialize probe is missing safety marker: {marker}")

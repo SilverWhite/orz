@@ -106,5 +106,5 @@ pre-trigger 观测竞态；修复均收紧或补全证据链，没有放宽通�
 ## Promotion 裁决
 
 candidate `0.2.111` 三场景的 `result.valid=true`、独立 `verification.valid=true`、防火墙残留为零已经满足；
-仓库回归通过后可把 `windows_child_tree_timeout` 改为 `passed` 并把候选状态改为 `eligible`。默认版本切换仍需
-单独 promotion 提交；本 probe 实现与验收提交不夹带版本提升。
+`windows_child_tree_timeout` 已改为 `passed`，候选状态为 `eligible`。后续独立 promotion 提交已将它选择为
+默认版本；本 probe 实现与验收提交本身没有夹带版本提升。

@@ -6,14 +6,16 @@ Grok 单一底座与多源借鉴定位见
 
 ## 1. 决策
 
-本项目不把某个 Grok Build 版本永久固定为产品上限。版本状态分为两条轨：
+本项目不把某个 Grok Build 版本永久固定为产品上限。版本状态分为三条轨：
 
-1. **observed baseline**：已经完成可复现实测的版本，用来重放历史 artifact、定位回归和比较行为；
-2. **current candidate**：从官方 stable 指针发现、已核验本地身份、正在通过本项目 conformance gate 的升级候选。
+1. **historical baseline**：已经完成可复现实测的旧版本，用来重放历史 artifact、定位回归和比较行为；
+2. **current candidate**：从官方 stable 指针发现、已核验本地身份、正在通过本项目 conformance gate 的升级候选；
+3. **selected default**：全部必要门禁通过、由独立 promotion 提交写入 checked-in lock 的默认版本。
 
-`upstream/grok-build.lock.json` 当前记录 baseline `0.2.106`，不是“只能使用 0.2.106”的政策。
-`upstream/grok-build.candidate.json` 当前记录 candidate `0.2.111`。候选只有在必要门禁通过并另行登记 promotion
-决策后，才能成为新的默认目标；升级后旧 baseline 仍保留为历史证据。
+`upstream/grok-build.lock.json` 当前记录已提升的默认版本 `0.2.111`。
+`upstream/grok-build.candidate.json` 保留 `0.2.111` 从 candidate 到 selected default 的完整 receipt，其中
+`baseline` 继续指向对照版本 `0.2.106`，不随默认 lock 重写。promotion 裁决见
+[`GROK_UPSTREAM_PROMOTION_2026-07-23.md`](../docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md)。
 
 ## 2. 为什么不能简单追 latest
 
@@ -59,7 +61,7 @@ session persistence、permission 和 worktree 等相关变化。这些是升级�
 
 ## 5. 工程约束
 
-- launcher 接受显式 release metadata；默认仍使用 observed baseline，避免静默漂移。
+- launcher 接受显式 release metadata；省略时使用 checked-in default lock，避免跟随网络 latest 静默漂移。
 - 候选下载到 `.tools/grok/<version>/`，不覆盖其他版本、不修改 PATH、不自动登录。
 - `.observed-runs` 按版本分目录，原始 transcript 与失败链不进入 Git。
 - checked-in candidate receipt 记录发现时刻和局限；stable 指针变化时新增审计，不原地伪装成同一观察。

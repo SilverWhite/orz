@@ -90,7 +90,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ```
 
 当前代码、结果/verification Schema、synthetic/tamper tests 与管理员 observed 矩阵均已完成；
-candidate `0.2.111` 三场景全部通过，promotion gate 为 passed，候选状态为 eligible。baseline `0.2.106`
+candidate `0.2.111` 三场景全部通过，promotion gate 为 passed，并已被选择为默认版本。baseline `0.2.106`
 仅 tool-timeout 路径在返回终态后未退出。完整边界、digest 与六次 baseline/candidate 命令见
 [`GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](../../docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)。
 

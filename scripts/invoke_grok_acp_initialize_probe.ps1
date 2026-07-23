@@ -18,10 +18,6 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if ([string]::IsNullOrWhiteSpace($GrokPath)) {
-    $GrokPath = Join-Path $PSScriptRoot '..\.tools\grok\0.2.106\grok.exe'
-}
-
 if ($env:OS -ne 'Windows_NT') {
     throw 'The ACP initialize containment probe is Windows-only.'
 }
@@ -306,7 +302,12 @@ $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Jso
 if ($null -eq $lock.binary_release) {
     throw "Release metadata does not contain binary_release: $lockPath"
 }
-$binaryPath = (Resolve-Path -LiteralPath $GrokPath -ErrorAction Stop).Path
+$selectedGrokPath = if ([string]::IsNullOrWhiteSpace($GrokPath)) {
+    Join-Path $repoRoot ([string]$lock.binary_release.installed_path -replace '/', '\')
+} else {
+    $GrokPath
+}
+$binaryPath = (Resolve-Path -LiteralPath $selectedGrokPath -ErrorAction Stop).Path
 $binaryItem = Get-Item -LiteralPath $binaryPath -Force
 $binarySha256 = (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $lockedSha256 = [string]$lock.binary_release.sha256

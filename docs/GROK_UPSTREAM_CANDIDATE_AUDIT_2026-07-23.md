@@ -2,7 +2,7 @@
 
 状态：`0.2.111` 已完成本地身份、ACP initialize、fake-tool allow/cancel、fake DeepSeek reasoning
 continuity、Windows child-tree 三场景 observed 验收与完整 repository regression；全部 promotion gate
-已通过，候选状态为 `eligible`，但仍未提升为默认目标。
+已通过，候选状态为 `eligible`，并已由独立 promotion 提交选择为默认目标。
 
 ## 1. 发现
 
@@ -78,12 +78,13 @@ session `tool_completed`。
 
 ## 6. 当前裁决
 
-`0.2.111` 已成为 eligible 候选，但还不是默认版本。candidate 的 `tool_timeout`、`task_cancel`、
+`0.2.111` 已成为 eligible 候选并被选择为默认版本。candidate 的 `tool_timeout`、`task_cancel`、
 `parent_exit` 三场景均满足 `result.valid=true`、独立 `verification.valid=true`、触发后进程残留为零和
 防火墙残留为零。baseline `0.2.106` 的 cancel 与 parent-exit 通过，但 tool-timeout 在已经输出终态后仍未
 退出，最终由外层 60 秒超时收束；该失败及清理 receipt 已保留。
 
-因此 `windows_child_tree_timeout` gate 改为 `passed`，candidate receipt 改为 `eligible`。下一步不再是补门禁，
-而是签发一个独立、可审计的 promotion 提交，将默认 lock 从 `0.2.106` 切换到 `0.2.111`；本次实现与验收提交
-不夹带该版本切换。完整 run 名称、digest、复现命令和失败链见
+因此 `windows_child_tree_timeout` gate 改为 `passed`，candidate receipt 保持 `eligible` 并登记
+`selected_as_default=true`；独立 promotion 提交将默认 lock 从 `0.2.106` 切换到 `0.2.111`。candidate receipt
+中的 baseline 字段继续保留原始 `0.2.106` 对照，不伪装为当前默认版本。完整裁决见
+[`GROK_UPSTREAM_PROMOTION_2026-07-23.md`](GROK_UPSTREAM_PROMOTION_2026-07-23.md)，run 名称、digest、复现命令和失败链见
 [`GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)。

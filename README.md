@@ -44,8 +44,9 @@
 - [`docs/GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md`](docs/GROK_TOOL_CONTINUITY_AUDIT_2026-07-21.md)：两轮 `read_file`、DeepSeek reasoning continuity、Job Object 与 streaming-json 工具事件缺口审计。
 - [`docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md`](docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md)：锁定 Windows binary 的 ACP protocol v1/capability/扩展通知无模型实测、独立验证与下一步 fake-tool 边界。
 - [`docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)：ACP fake tool allow/cancel 双场景的 Windows 实测、三路证据对账、取消竞态与独立 verifier。
-- [`docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md`](docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md)：Grok `0.2.111` 候选的官方发现、本地身份、ACP/DeepSeek fake-only 对照与尚未完成的 promotion gate。
-- [`docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)：`run_terminal_command` timeout、background task cancel 与 parent-exit 三场景的 Windows 子进程树门禁；代码与 synthetic verifier 已完成，管理员 observed run 待执行。
+- [`docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md`](docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md)：Grok `0.2.111` 的官方发现、本地身份、ACP/DeepSeek fake-only 对照与已完成的 promotion gate。
+- [`docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md`](docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md)：将默认 Grok 从 `0.2.106` 提升到 `0.2.111` 的独立裁决与回退锚点。
+- [`docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)：`run_terminal_command` timeout、background task cancel 与 parent-exit 三场景的 Windows 子进程树门禁及已完成的管理员 observed 矩阵。
 - [`architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md`](architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md)：基于 DeepSeek 官方 API 文档的专项 adapter、thinking/tool-call、兼容层和重试边界。
 - [`architecture/WINDOWS_RUNTIME_CONTRACT_v0.1.md`](architecture/WINDOWS_RUNTIME_CONTRACT_v0.1.md)：Windows-first Job Object、进程树、取消、输出 drain 与 terminal-event 契约。
 - [`architecture/ACTION_KERNEL_CONTRACT_v0.1.md`](architecture/ACTION_KERNEL_CONTRACT_v0.1.md)：将 manifest、journal、Windows runner、artifact 与 session 串联的 no-model action-kernel spike。

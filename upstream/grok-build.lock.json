@@ -1,9 +1,9 @@
 {
   "schema_version": "0.1.0",
   "repository": "https://github.com/xai-org/grok-build",
-  "observed_at": "2026-07-21",
-  "build_repo_commit": "a881e6703f46b01d8c7d4a5437683546df30449d",
-  "source_rev": "c5c4ce03436b4bb2cec43d3feaa27dee0109bf37",
+  "observed_at": "2026-07-23",
+  "build_repo_commit": "a5727c5960452e7527a154b25cb5bf00cda0545e",
+  "source_rev": "30192d2eef5d91a8fff0e53957de5bd05b43398c",
   "readme_sha256": "322066de9f5bc136295bd0ae4f1752cef3d8dcb1a8f9d88044609e7b6d7abcf7",
   "integration_mode": "prebuilt-headless-sidecar",
   "distribution": {
@@ -13,15 +13,15 @@
   "binary_release": {
     "status": "verified-local",
     "channel": "stable",
-    "version": "0.2.106",
-    "build_id": "bde89716f6",
-    "artifact_url": "https://x.ai/cli/grok-0.2.106-windows-x86_64.exe",
-    "bytes": 130120520,
-    "md5": "e91fa7c4ec65fbbe862526806cbb7ea7",
-    "sha256": "a6a25d55daadca0c2458a5aceb4c1873eb7c76964ef307647d079e344c53969a",
+    "version": "0.2.111",
+    "build_id": "94172f2aa4",
+    "artifact_url": "https://x.ai/cli/grok-0.2.111-windows-x86_64.exe",
+    "bytes": 137980232,
+    "md5": "ab3b37ddc85e8fa9c7bdb2633bdfcf19",
+    "sha256": "a3614df24080471709d096a2e47ce7f6c84443af1cb59b7363967858858bc9bc",
     "authenticode_status": "Valid",
     "signer_common_name": "X.AI LLC",
-    "installed_path": ".tools/grok/0.2.106/grok.exe",
+    "installed_path": ".tools/grok/0.2.111/grok.exe",
     "source_correspondence": "unverified"
   },
   "ownership": {

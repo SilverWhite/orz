@@ -35,7 +35,7 @@ $report = [ordered]@{
     limitations = @(
         'Authenticode validity confirms the local signature chain at check time, not source correspondence.',
         'The released binary build ID is not proven to correspond to the open-source build_repo_commit or SOURCE_REV.',
-        'A candidate release receipt proves local identity only; it does not select that version as the project default.',
+        'A release receipt alone proves local identity only; project-default selection is determined by the checked-in default lock.',
         'This command performs no login, model request, tool execution, update, or network access.'
     )
 }
