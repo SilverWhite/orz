@@ -977,32 +977,32 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertFalse(factory_called[0])
         self.assertTrue(permit.consumed)
 
-    def test_deepseek_https_transport_polls_through_short_socket_timeout(self) -> None:
+    def test_deepseek_https_transport_does_not_reuse_timed_out_buffered_reader(
+        self,
+    ) -> None:
         import socket
 
         class FakeSocket:
+            def __init__(self) -> None:
+                self.timeouts: list[float] = []
+
             def settimeout(self, value: float) -> None:
-                self.timeout = value
+                self.timeouts.append(value)
 
         class DelayedResponse:
             status = 200
 
             def __init__(self) -> None:
-                self._items: list[bytes | BaseException] = [
-                    socket.timeout(),
-                    b'data: {"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\r\n',
-                    b"data: [DONE]\r\n",
-                    b"",
-                ]
+                self.read_count = 0
 
             def getheaders(self) -> list[tuple[str, str]]:
                 return [("Content-Type", "text/event-stream")]
 
             def readline(self) -> bytes:
-                item = self._items.pop(0)
-                if isinstance(item, BaseException):
-                    raise item
-                return item
+                self.read_count += 1
+                if self.read_count == 1:
+                    raise socket.timeout()
+                raise OSError("timed-out buffered reader must not be reused")
 
             def close(self) -> None:
                 pass
@@ -1033,16 +1033,16 @@ class PrototypeRegressionTests(unittest.TestCase):
             credential_provider=InMemoryCredentialProvider(b"sk-test-not-real"),
             connection_factory=lambda host, port, timeout, context: DelayedConnection(),
         )
-        response = transport.send(
-            request,
-            TransportControl(
-                connect_seconds=1,
-                first_semantic_seconds=1,
-                total_seconds=2,
-            ),
-        )
-        self.assertEqual(response.status, 200)
-        self.assertTrue(response.metadata["first_semantic_observed"])
+        with self.assertRaises(TransportTimeout) as captured:
+            transport.send(
+                request,
+                TransportControl(
+                    connect_seconds=1,
+                    first_semantic_seconds=1,
+                    total_seconds=2,
+                ),
+            )
+        self.assertEqual(captured.exception.phase, "first_semantic")
 
     def test_deepseek_https_transport_sanitizes_connection_errors(self) -> None:
         class FailingConnection:

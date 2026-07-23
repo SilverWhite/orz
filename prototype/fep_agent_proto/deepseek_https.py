@@ -191,18 +191,6 @@ class DeepSeekHttpsTransport:
             ).lower().startswith("text/event-stream"):
                 raise PrototypeError("successful DeepSeek response must be text/event-stream")
 
-            sock = getattr(connection, "sock", None)
-            if sock is not None:
-                sock.settimeout(
-                    max(
-                        0.01,
-                        min(
-                            0.25,
-                            selected.first_semantic_seconds,
-                            selected.total_seconds,
-                        ),
-                    )
-                )
             request_sent_at = time.monotonic()
             first_semantic_at: float | None = None
             total_bytes = 0
@@ -219,12 +207,27 @@ class DeepSeekHttpsTransport:
                     and now - request_sent_at >= selected.first_semantic_seconds
                 ):
                     raise TransportTimeout("first_semantic")
+                total_remaining = selected.total_seconds - (now - started)
+                timeout_phase = "total"
+                read_timeout = total_remaining
+                if first_semantic_at is None:
+                    first_semantic_remaining = selected.first_semantic_seconds - (
+                        now - request_sent_at
+                    )
+                    if first_semantic_remaining <= total_remaining:
+                        timeout_phase = "first_semantic"
+                        read_timeout = first_semantic_remaining
+                sock = getattr(connection, "sock", None)
+                if sock is not None:
+                    # A timeout from HTTPResponse.readline() can permanently mark
+                    # its buffered SocketIO as timed out. Set the actual remaining
+                    # deadline and never retry the same buffered reader after a
+                    # socket timeout.
+                    sock.settimeout(max(0.01, read_timeout))
                 try:
                     raw = response.readline()
                 except socket.timeout:
-                    # The short socket timeout is a cancellation/deadline polling
-                    # interval, not the semantic or total deadline itself.
-                    continue
+                    raise TransportTimeout(timeout_phase) from None
                 if not raw:
                     break
                 total_bytes += len(raw)

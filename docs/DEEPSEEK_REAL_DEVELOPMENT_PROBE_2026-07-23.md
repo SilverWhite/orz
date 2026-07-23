@@ -1,7 +1,8 @@
 # DeepSeek one-shot 真实 development probe（2026-07-23）
 
-状态：实现与离线测试 PASS；用户授权的一次最小 real transport attempt 已消费 permit，
-随后以脱敏 `OSError` fail closed。没有 retry；provider 是否收到 POST、是否计费未知。
+状态：实现与离线测试 PASS；hardened real attempt 已通过桌面用户 Credential Manager、
+TLS 和响应头阶段，在读取响应正文时以脱敏 `OSError` fail closed。没有 retry；
+provider 计数与计费仍需由控制台确认。
 
 ## 1. 固定边界
 
@@ -24,8 +25,10 @@ prompt、回复正文、provider-private reasoning、confirmation token 与 Auth
 
 - one-shot 成功路径使用无 socket injected connection，确认 request
   count 恰为 1，并扫描结果和 ledger 不含 marker、假 key 或 confirmation token；
-- 真实启动前发现 250ms socket poll timeout 被误当作整体 deadline；修正为持续轮询到
-  120 秒 first-semantic / 180 秒 total deadline，并增加延迟 SSE unit test；
+- 真实启动前发现 250ms socket poll timeout 被误当作整体 deadline；hardened attempt
+  又证明 `HTTPResponse.readline()` 的 buffered reader 在一次短 timeout 后可能不能
+  继续使用；最终修正为按 120 秒 first-semantic / 180 秒 total 的实际剩余期限读取，
+  timeout 后不重用同一 buffered reader；
 - real broker 与内建 in-process fake provider 在构造期互斥；
 - 原有 fake-only broker 仍不能接真实 connection factory；
 - `fep-script-validation` legacy task board：8 PASS、14 WARN、0 FAIL、0 catastrophic；
@@ -77,15 +80,36 @@ connect、request、response-header 或 response-body 的精确阶段；也不�
 - 没有再次访问 `/chat/completions`、`/models` 或余额接口。
 
 transport 现已把后续安全错误压缩为 `stage + exception type + numeric errno`，仍不记录
-异常正文；poll timeout 修复和总 deadline 测试通过。任何第二次 provider attempt
-都必须创建新计划、签发新 permit，并取得新的费用授权，不能把本次 allow 当作 retry
-budget。
+异常正文；deadline timeout 和“不得复用 timed-out buffered reader”测试通过。任何后续
+provider attempt 都必须创建新计划、签发新 permit，并取得新的费用授权，不能把既有
+allow 当作 retry budget。
 
 后续 credential hardening 又要求下一次 execute 在读 key 前验证 WER `NOHEAP`、关闭
 Python faulthandler；固定无 proxy/redirect/HTTP debug；无论成功或失败都生成 terminal
 artifact，并在写入前对全部 output artifacts 做不读取真实 key 的 common-secret-pattern
 scan。详见
 [`DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md`](DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md)。
+
+### 4.1 Hardened attempt 记录
+
+新增的本地忽略目录：
+
+```text
+.observed-runs/deepseek-real-development-hardened-20260723-01/
+.observed-runs/deepseek-real-development-hardened-20260723-02/
+```
+
+- `-01` 在 Codex 沙箱账户 `SWITCH\CodexSandboxOnline` 内执行；该账户看不到桌面用户
+  Credential Manager，因此在 credential acquire 阶段停止，没有建立 provider 连接；
+- 桌面用户上下文只列出凭据 metadata，确认存在
+  `LegacyGeneric:target=FEP-Agent/DeepSeek`、Generic、user=`HL`，没有显示 secret；
+- `-02` 在桌面用户上下文执行，WER `NOHEAP` 与 Python faulthandler 控制均已验证；
+- request/confirmation digest 与前述固定值一致，ledger 恰好 1 allow、0 retry；
+- terminal failure 为 `stage=response_body`、`error_type=OSError`、无异常正文；
+- 该 stage 表示 credential、connect、request、response headers 以及 headers validation
+  已执行；但不能仅由客户端断言 provider 控制台计数或计费；
+- terminal artifact scan 完整，3 个文件，0 命中；没有保存 Authorization、prompt、
+  response body、confirmation token 或异常正文。
 
 ## 5. 结论边界
 

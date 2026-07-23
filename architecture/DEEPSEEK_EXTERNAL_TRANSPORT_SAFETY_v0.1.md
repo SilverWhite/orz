@@ -111,8 +111,12 @@ ledger event 后以通用脱敏 `OSError` 退出，没有 `result.json`，也没
 POST 已抵达 provider，也不能判定是否计费。
 
 首个 attempt 还暴露了 socket 轮询缺口：250ms poll timeout 原本会被误当作整体超时。
-实现已改为持续轮询到冻结的 first-semantic/total deadline，并补充 unit test。错误包装
-也新增脱敏 stage 和 numeric errno，供下一次单独授权的 attempt 定位，不记录异常正文。
+第一次修正试图在短 timeout 后继续复用 `HTTPResponse.readline()`；后续 hardened real
+attempt 在 `response_body` 阶段证明该假设不成立，因为 Python buffered `SocketIO`
+可能在一次 timeout 后永久进入 timed-out 状态并改抛 `OSError`。实现现改为每次读取前
+设置冻结 first-semantic/total deadline 的实际剩余时间；底层 timeout 直接映射为对应
+deadline，绝不重用已 timeout 的 buffered reader。错误包装只保留脱敏 stage、exception
+type 和 numeric errno，不记录异常正文。
 
 ## 8. 仍未开放
 
