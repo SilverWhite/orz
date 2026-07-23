@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/integration/grok/grok-compaction-provenance-probe-verification/v0.1/schema.json",
+  "title": "Grok compaction provenance probe verification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verifier",
+    "verified_at_unix_ns",
+    "result_path",
+    "result_sha256",
+    "lock_path",
+    "lock_sha256",
+    "checks",
+    "passed",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "verifier": { "const": "verify_grok_compaction_provenance_probe.py" },
+    "verified_at_unix_ns": { "type": "integer", "minimum": 1 },
+    "result_path": { "type": "string", "minLength": 1 },
+    "result_sha256": { "$ref": "#/$defs/sha256" },
+    "lock_path": { "type": "string", "minLength": 1 },
+    "lock_sha256": { "$ref": "#/$defs/sha256" },
+    "checks": {
+      "type": "object",
+      "minProperties": 12,
+      "additionalProperties": { "const": true }
+    },
+    "passed": { "const": true },
+    "limitations": {
+      "type": "array",
+      "minItems": 3,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -69,6 +69,7 @@ class AcpClient:
         model: str,
         scenario: str,
         timeout_seconds: float,
+        environment: dict[str, str] | None = None,
     ) -> None:
         self.binary = binary
         self.workspace = workspace
@@ -94,6 +95,7 @@ class AcpClient:
         self.process = subprocess.Popen(
             [str(binary), "agent", "--model", model, "stdio"],
             cwd=workspace,
+            env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -431,11 +433,13 @@ class AcpClient:
             }
         )
 
-    def prompt(self, session_id: str, text: str) -> dict[str, Any]:
+    def prompt(
+        self, session_id: str, text: str, request_id: str = "acp-prompt-1"
+    ) -> dict[str, Any]:
         self.send(
             {
                 "jsonrpc": "2.0",
-                "id": "acp-prompt-1",
+                "id": request_id,
                 "method": "session/prompt",
                 "params": {
                     "sessionId": session_id,
@@ -446,7 +450,7 @@ class AcpClient:
         while True:
             message = self.receive()
             self._handle_agent_message(message)
-            if str(message.get("id")) == "acp-prompt-1" and "method" not in message:
+            if str(message.get("id")) == request_id and "method" not in message:
                 self.prompt_responses.append(message)
                 if "error" in message:
                     raise RuntimeError(

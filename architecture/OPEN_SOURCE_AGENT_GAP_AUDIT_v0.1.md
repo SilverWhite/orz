@@ -170,14 +170,16 @@ commit/tree ID、expected-current digest 和 conflict-only plan；不得修改�
 
 ### Spike C：Windows containment race
 
-显式 child-tree timeout/background cancel/parent-exit fixture 与独立 verifier 已实现；下一步完成
-baseline/candidate 管理员 observed 矩阵，并评估 suspended launch 后先 assign Job Object 再 resume。若只能在
-自编译 Grok 或大幅接管 runtime 时完成，则保留已知 race，不因此启动完整上游源码构建。
+显式 child-tree timeout/background cancel/parent-exit fixture、独立 verifier 与 baseline/candidate 管理员
+observed 矩阵已完成。candidate `0.2.111` 全部通过；baseline `0.2.106` 的 tool-timeout 在返回终态后未退出。
+suspended launch 仍未实现；若只能靠自编译 Grok 或大幅接管 runtime，则保留已知 race，不启动完整源码构建。
 
 ### Spike D：compaction provenance
 
-使用 fake 长上下文触发 `PreCompact`/`PostCompact`，验证 trace/export 能否给出原始边界；缺失部分以
-`not_observed` 登记。完成前不进行真实 DeepSeek development probe。
+manual `/compact` fake-only observed run 已完成：`PreCompact`/`PostCompact`、request `chat_history` source
+span/digest、checkpoint、派生摘要与压缩后 continuation 均经独立 verifier 通过。摘要标为
+`derived_unverified`；上游未逐 item 记录的 retained/discarded 映射保持 `unknown`，不从摘要反推。automatic
+threshold 仍未观测。真实 DeepSeek development probe 仍需单独授权。
 
 ## 7. 明确不扩张
 

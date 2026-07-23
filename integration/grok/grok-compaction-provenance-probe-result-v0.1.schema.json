@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/integration/grok/grok-compaction-provenance-probe-result/v0.1/schema.json",
+  "title": "Grok compaction provenance probe result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "probe_id",
+    "terminal_state",
+    "started_at_unix_ns",
+    "finished_at_unix_ns",
+    "release",
+    "session",
+    "lifecycle",
+    "provenance",
+    "canary_checks",
+    "containment",
+    "artifacts",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "probe_id": { "type": "string", "pattern": "^COMPACT-[0-9a-f]{32}$" },
+    "terminal_state": { "const": "succeeded" },
+    "started_at_unix_ns": { "type": "integer", "minimum": 1 },
+    "finished_at_unix_ns": { "type": "integer", "minimum": 1 },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metadata_path",
+        "binary_path",
+        "binary_sha256",
+        "version",
+        "build_id",
+        "inspection_valid"
+      ],
+      "properties": {
+        "metadata_path": { "type": "string", "minLength": 1 },
+        "binary_path": { "type": "string", "minLength": 1 },
+        "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "version": { "type": "string", "minLength": 1 },
+        "build_id": { "type": "string", "minLength": 1 },
+        "inspection_valid": { "const": true }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "workspace",
+        "profile",
+        "trigger",
+        "model_alias",
+        "provider_model",
+        "request_count",
+        "first_prompt_stop_reason",
+        "compact_stop_reason",
+        "post_prompt_stop_reason",
+        "event_count",
+        "update_count"
+      ],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1 },
+        "workspace": { "type": "string", "minLength": 1 },
+        "profile": { "type": "string", "minLength": 1 },
+        "trigger": { "const": "manual" },
+        "model_alias": { "const": "lif-fake-deepseek" },
+        "provider_model": { "const": "deepseek-v4-pro" },
+        "request_count": { "const": 3 },
+        "first_prompt_stop_reason": { "const": "end_turn" },
+        "compact_stop_reason": { "const": "end_turn" },
+        "post_prompt_stop_reason": { "const": "end_turn" },
+        "event_count": { "type": "integer", "minimum": 1 },
+        "update_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pre_compact_observed",
+        "post_compact_observed",
+        "ordered_events",
+        "sources",
+        "session_ids_match",
+        "manual_trigger_only"
+      ],
+      "properties": {
+        "pre_compact_observed": { "const": true },
+        "post_compact_observed": { "const": true },
+        "ordered_events": {
+          "const": ["pre_compact", "post_compact"]
+        },
+        "sources": { "const": ["manual", "manual"] },
+        "session_ids_match": { "const": true },
+        "manual_trigger_only": { "const": true }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_span", "boundary", "summary", "ranges"],
+      "properties": {
+        "source_span": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "item_count",
+            "first_index",
+            "last_index",
+            "canonical_sha256",
+            "recorded_before_summary_replacement"
+          ],
+          "properties": {
+            "kind": { "const": "compaction_request.chat_history" },
+            "item_count": { "type": "integer", "minimum": 1 },
+            "first_index": { "const": 0 },
+            "last_index": { "type": "integer", "minimum": 0 },
+            "canonical_sha256": { "$ref": "#/$defs/sha256" },
+            "recorded_before_summary_replacement": { "const": true }
+          }
+        },
+        "boundary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "trigger",
+            "checkpoint_id",
+            "prompt_index_at_compaction"
+          ],
+          "properties": {
+            "request_id": { "type": "string", "minLength": 1 },
+            "trigger": { "const": "manual" },
+            "checkpoint_id": { "type": "string", "minLength": 1 },
+            "prompt_index_at_compaction": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "chars",
+            "sha256",
+            "may_replace_source_evidence"
+          ],
+          "properties": {
+            "status": { "const": "derived_unverified" },
+            "chars": { "type": "integer", "minimum": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "may_replace_source_evidence": { "const": false }
+          }
+        },
+        "ranges": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summarized", "retained", "discarded", "unknown"],
+          "properties": {
+            "summarized": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "object" }
+            },
+            "retained": { "const": [] },
+            "discarded": { "const": [] },
+            "unknown": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["scope", "reason"],
+                "properties": {
+                  "scope": { "type": "string", "minLength": 1 },
+                  "reason": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "canary_checks": {
+      "type": "object",
+      "minProperties": 8,
+      "additionalProperties": { "const": true }
+    },
+    "containment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "loopback_only_provider",
+        "firewall_added",
+        "job_created",
+        "job_assigned",
+        "real_model_invoked"
+      ],
+      "properties": {
+        "loopback_only_provider": { "const": true },
+        "firewall_added": { "const": true },
+        "job_created": { "const": true },
+        "job_assigned": { "const": true },
+        "real_model_invoked": { "const": false }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "config",
+        "hook_config",
+        "hook_receipts",
+        "source_snapshot",
+        "compaction_request",
+        "compaction_checkpoint",
+        "session_events",
+        "session_updates",
+        "provider_capture",
+        "provider_result"
+      ],
+      "properties": {
+        "config": { "$ref": "#/$defs/artifact" },
+        "hook_config": { "$ref": "#/$defs/artifact" },
+        "hook_receipts": { "$ref": "#/$defs/artifact" },
+        "source_snapshot": { "$ref": "#/$defs/artifact" },
+        "compaction_request": { "$ref": "#/$defs/artifact" },
+        "compaction_checkpoint": { "$ref": "#/$defs/artifact" },
+        "session_events": { "$ref": "#/$defs/artifact" },
+        "session_updates": { "$ref": "#/$defs/artifact" },
+        "provider_capture": { "$ref": "#/$defs/artifact" },
+        "provider_result": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 4,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256", "classification"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "classification": {
+          "enum": ["fake-fixture", "fake-fixture-private"]
+        }
+      }
+    }
+  }
+}

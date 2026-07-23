@@ -557,6 +557,63 @@ def check_repository() -> dict[str, Any]:
         errors.append("missing Windows child-tree verifier regression tests")
     counts["grok_windows_child_tree_fixtures"] = 3
 
+    compaction_launcher_source = (
+        ROOT / "scripts/invoke_grok_compaction_provenance_probe.ps1"
+    ).read_text(encoding="utf-8")
+    compaction_driver_source = (
+        ROOT / "scripts/run_grok_compaction_provenance_probe.py"
+    ).read_text(encoding="utf-8")
+    compaction_hook_source = (
+        ROOT / "scripts/record_grok_compaction_hook.py"
+    ).read_text(encoding="utf-8")
+    compaction_verifier_source = (
+        ROOT / "scripts/verify_grok_compaction_provenance_probe.py"
+    ).read_text(encoding="utf-8")
+    for schema_name in (
+        "grok-compaction-provenance-probe-result-v0.1.schema.json",
+        "grok-compaction-provenance-probe-verification-v0.1.schema.json",
+    ):
+        if not (ROOT / "integration/grok" / schema_name).is_file():
+            errors.append(f"missing Grok compaction provenance schema: {schema_name}")
+    for marker in (
+        "Administrator token required",
+        "ReleaseMetadataPath",
+        "TimeoutSeconds",
+    ):
+        if marker not in compaction_launcher_source:
+            errors.append(f"compaction launcher is missing safety marker: {marker}")
+    for marker in (
+        "refusing to overwrite output directory",
+        "KillOnCloseJob",
+        "compaction_requests",
+        "compaction_checkpoints",
+        "derived_unverified",
+        "source-index retention/discard mapping",
+        "real_model_invoked",
+        "LIFGrokChild-Compact",
+    ):
+        if marker not in compaction_driver_source:
+            errors.append(f"compaction driver is missing provenance marker: {marker}")
+    for marker in ("pre_compact", "post_compact", "LIF_COMPACTION_HOOK_LOG"):
+        if marker not in compaction_hook_source:
+            errors.append(f"compaction hook recorder is missing marker: {marker}")
+    for marker in (
+        "artifact_hashes_valid",
+        "derived_summary_boundary",
+        "source_snapshot_matches_first_request",
+        "unknown_mapping_explicit",
+        "containment_declared",
+    ):
+        if marker not in compaction_verifier_source:
+            errors.append(f"compaction verifier is missing replay marker: {marker}")
+    if "compaction-provenance" not in fake_provider_source:
+        errors.append("fake provider is missing the compaction provenance scenario")
+    if not (
+        ROOT / "integration/grok/tests/test_compaction_provenance_probe.py"
+    ).is_file():
+        errors.append("missing compaction provenance verifier regression tests")
+    counts["grok_compaction_provenance_fixtures"] = 1
+
     bridge_builder_source = (
         ROOT / "scripts/build_grok_event_bridge.py"
     ).read_text(encoding="utf-8")

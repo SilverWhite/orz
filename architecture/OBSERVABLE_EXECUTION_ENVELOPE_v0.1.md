@@ -107,8 +107,10 @@ fixture 与管理员 observed 矩阵均已完成；candidate `0.2.111` 三场景
    fake-provider `0.2.0` 与 tool-continuity `0.3.0` 管理员实测通过。local trace/export + event completeness
    bridge 已完成首轮 `partial` 实测；纠正后的 v4 已成功取得 local trace/export。
 5. fixture-only hash-only checkpoint + workspace delta + 独立 verifier 已完成；它是 audit receipt，不是恢复系统。
-6. child-tree observed 矩阵已完成；下一项为 compaction provenance，summary 必须标为
-   derived/unverified，不能替代原始 observation。
+6. compaction provenance 的 manual `/compact` fake-only observed run 已完成：`PreCompact`/`PostCompact`、
+   source span/digest、request、checkpoint 与压缩后 continuation 均经独立 verifier 通过；summary 标为
+   `derived_unverified`，不能替代原始 observation。未直接记录的 retained/discarded 映射保持 `unknown`，
+   automatic threshold 尚未观测。
 7. DeepSeek conformance 通过后，才请求一次真实 development call 的单独授权。
 
 local event-completeness bridge 现已完成第一轮实测：stdout、session events/updates、provider、supervisor 与

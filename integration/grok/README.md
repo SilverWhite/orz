@@ -94,6 +94,25 @@ candidate `0.2.111` 三场景全部通过，promotion gate 为 passed，并已�
 仅 tool-timeout 路径在返回终态后未退出。完整边界、digest 与六次 baseline/candidate 命令见
 [`GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](../../docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)。
 
+## Compaction provenance probe
+
+[`invoke_grok_compaction_provenance_probe.ps1`](../../scripts/invoke_grok_compaction_provenance_probe.ps1)
+在隔离 profile 中驱动三次固定主请求：首轮写入来源 canary，第二轮执行 `/compact`，第三轮验证压缩后继续。
+全局 hook 记录 `PreCompact`/`PostCompact`；探针另对 `chat_history` source span、compaction request、
+checkpoint、session files 和 provider capture 计算 digest。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File ..\..\scripts\invoke_grok_compaction_provenance_probe.ps1 `
+  -OutputDirectory ..\..\.observed-runs\grok-compaction-provenance-v1 `
+  -ReleaseMetadataPath ..\..\upstream\grok-build.lock.json
+```
+
+Grok `0.2.111` 的管理员 fake-only observed run 已通过独立 verifier 16/16 checks；摘要状态固定为
+`derived_unverified`，不能替代原始 observation。runtime 未直接给出的 retained/discarded 逐 item 映射保持
+`unknown`。该探针不调用真实模型，且只覆盖 manual `/compact`，详见
+[`GROK_COMPACTION_PROVENANCE_2026-07-23.md`](../../docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md)。
+
 ## Observed dry-run
 
 [`new_grok_observed_dry_run.ps1`](../../scripts/new_grok_observed_dry_run.ps1) 生成一个

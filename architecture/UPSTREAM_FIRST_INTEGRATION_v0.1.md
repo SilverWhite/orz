@@ -92,9 +92,10 @@ workspace trust、local trace/export、event bridge 与 hash-only fixture checkp
 3. ACP structured tool/permission/cancel/terminal continuity 的双场景 launcher、Schema、session-file 对账与独立
    verifier 已通过 synthetic/tamper tests 和管理员级 Windows fake-only live smoke；
 4. 用独立 shadow Git fixture 承担恢复，现有 hash-only checkpoint 继续作为 audit receipt；
-5. child-tree timeout/cancel/parent-exit fixture、Schema 与 synthetic verifier 已实现；先完成
-   baseline/candidate 管理员 observed 矩阵，再推进 compaction provenance；
-6. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。
+5. child-tree timeout/cancel/parent-exit 管理员矩阵已完成，candidate `0.2.111` 通过并提升为默认；
+6. manual `/compact` provenance 已完成 fake-only observed 验证：lifecycle、source span/digest、request、
+   checkpoint、`derived_unverified` 和 unknown mapping 边界均由独立 verifier 重放；
+7. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。
 
 六个开源 Agent 的固定版本比较、取舍理由与 source ledger 见
 [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。其中 repo map、

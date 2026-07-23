@@ -20,6 +20,30 @@ PROCESS_TREE_TOOL_CALL_ID = "call_lif_process_tree_001"
 PROCESS_TREE_KILL_CALL_ID = "call_lif_process_tree_kill_001"
 PROCESS_TREE_OUTPUT_CALL_ID = "call_lif_process_tree_output_001"
 PROCESS_TREE_PRE_TRIGGER_MARKER = "driver-pre-trigger-ready.json"
+COMPACTION_SOURCE_RETAINED_MARKER = "LIF_COMPACTION_SOURCE_RETAINED_001"
+COMPACTION_SOURCE_OMITTED_MARKER = "LIF_COMPACTION_SOURCE_OMITTED_001"
+COMPACTION_FIRST_RESPONSE_MARKER = "LIF_COMPACTION_FIRST_RESPONSE_001"
+COMPACTION_SUMMARY_MARKER = "LIF_COMPACTION_DERIVED_SUMMARY_001"
+COMPACTION_POST_RESPONSE_MARKER = "LIF_COMPACTION_POST_RESPONSE_001"
+COMPACTION_SUMMARY_TEXT = (
+    f"{COMPACTION_SUMMARY_MARKER}\n"
+    f"Retained canary: {COMPACTION_SOURCE_RETAINED_MARKER}.\n"
+    "This is a fixed, derived test summary created only for the compaction "
+    "provenance fixture. It records that the prior conversation established a "
+    "controlled fake-provider session, a source-span digest, and a manual "
+    "compaction boundary. The summary is deliberately treated as unverified "
+    "derived material and cannot replace the original request capture.\n"
+    "The continuation should preserve the probe purpose, keep network access "
+    "contained to loopback, retain the locked binary identity, and write no "
+    "claims based solely on this summary. The verifier must use the persisted "
+    "compaction request, checkpoint, hook receipts, and hashes as independent "
+    "mechanical evidence.\n"
+    "No per-message retained or discarded classification is asserted unless "
+    "the runtime records it directly. Any unavailable mapping remains unknown. "
+    "This additional fixed prose exceeds Grok's minimum healthy summary seed "
+    "length without adding semantic claims or copying the deliberately omitted "
+    "source canary."
+)
 MAX_BODY_BYTES = 1024 * 1024
 
 
@@ -553,6 +577,13 @@ def make_handler(state: CaptureState) -> type[BaseHTTPRequestHandler]:
                 return
             elif state.scenario in {"process-timeout", "process-cancel"}:
                 response = _completion_chunks(model, "LIF_PROCESS_TREE_PROBE_OK")
+            elif state.scenario == "compaction-provenance":
+                marker = {
+                    1: COMPACTION_FIRST_RESPONSE_MARKER,
+                    2: COMPACTION_SUMMARY_TEXT,
+                    3: COMPACTION_POST_RESPONSE_MARKER,
+                }.get(primary_sequence, "LIF_COMPACTION_UNEXPECTED_REQUEST")
+                response = _completion_chunks(model, marker)
             else:
                 response = _completion_chunks(model)
             self.send_response(200)
@@ -631,6 +662,7 @@ def run_server(
         "process-timeout": 2,
         "process-cancel": 4,
         "process-parent-exit": 2,
+        "compaction-provenance": 3,
     }.get(scenario, 1)
     while len(state.primary_requests()) < expected_requests and time.monotonic() - started < timeout_seconds:
         server.handle_request()
@@ -723,6 +755,8 @@ def run_server(
                 if scenario in {"process-timeout", "process-cancel"}
                 else "LIF_PARENT_EXIT_HOLD"
                 if scenario == "process-parent-exit"
+                else COMPACTION_POST_RESPONSE_MARKER
+                if scenario == "compaction-provenance"
                 else RESPONSE_MARKER
             ),
             "streaming_sse": True,
@@ -767,6 +801,7 @@ def main() -> int:
             "process-timeout",
             "process-cancel",
             "process-parent-exit",
+            "compaction-provenance",
         ),
         default="single",
     )

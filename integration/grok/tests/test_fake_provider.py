@@ -73,6 +73,52 @@ class FakeProviderTests(unittest.TestCase):
         self.assertTrue(ready_path.is_file())
         return process, output
 
+    def test_compaction_provenance_emits_three_fixed_responses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            process, output = self._start_process_provider(
+                Path(temporary), "compaction-provenance"
+            )
+            try:
+                ready = json.loads(
+                    (output / "ready.json").read_text(encoding="utf-8")
+                )
+                responses = [
+                    self._post(
+                        ready["port"],
+                        {
+                            "model": "deepseek-v4-pro",
+                            "stream": True,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": f"fixture request {index}",
+                                }
+                            ],
+                        },
+                    )
+                    for index in range(1, 4)
+                ]
+                self.assertIn("LIF_COMPACTION_FIRST_RESPONSE_001", responses[0])
+                self.assertIn("LIF_COMPACTION_DERIVED_SUMMARY_001", responses[1])
+                self.assertIn("LIF_COMPACTION_SOURCE_RETAINED_001", responses[1])
+                self.assertNotIn("LIF_COMPACTION_SOURCE_OMITTED_001", responses[1])
+                self.assertIn("LIF_COMPACTION_POST_RESPONSE_001", responses[2])
+                _stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stderr)
+                result = json.loads(
+                    (output / "provider-result.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(result["primary_request_count"], 3)
+                self.assertEqual(
+                    result["response"]["marker"],
+                    "LIF_COMPACTION_POST_RESPONSE_001",
+                )
+                self.assertFalse(result["response"]["real_model_invoked"])
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+
     def test_process_timeout_emits_fixed_terminal_tool_call(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             process, output = self._start_process_provider(
