@@ -15,6 +15,66 @@ PROVIDER = ROOT / "scripts" / "fake_deepseek_provider.py"
 
 
 class FakeProviderTests(unittest.TestCase):
+    def test_tool_cancel_stops_after_one_tool_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "provider"
+            fixture = root / "tool-fixture.txt"
+            fixture.write_text("LIF_TOOL_FIXTURE_CONTENT_001\n", encoding="utf-8")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(PROVIDER),
+                    "--output-directory",
+                    str(output),
+                    "--timeout-seconds",
+                    "10",
+                    "--scenario",
+                    "tool-cancel",
+                    "--tool-fixture-path",
+                    str(fixture),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                ready_path = output / "ready.json"
+                deadline = time.monotonic() + 5
+                while not ready_path.is_file() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                ready = json.loads(ready_path.read_text(encoding="utf-8"))
+                connection = http.client.HTTPConnection(
+                    "127.0.0.1", ready["port"], timeout=5
+                )
+                connection.request(
+                    "POST",
+                    "/chat/completions",
+                    body=json.dumps(
+                        {
+                            "model": "deepseek-v4-pro",
+                            "stream": True,
+                            "messages": [{"role": "user", "content": "read fixture"}],
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse().read().decode("utf-8")
+                connection.close()
+                self.assertIn("read_file", response)
+                _stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stderr)
+                result = json.loads(
+                    (output / "provider-result.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(result["primary_request_count"], 1)
+                self.assertFalse(result["continuity"]["second_request_observed"])
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+
     def test_tool_continuity_requires_two_requests_and_preserves_markers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

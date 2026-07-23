@@ -45,6 +45,30 @@ artifact hash、JSON-RPC 语义、capability/meta 投影和 workspace receipt。
 正式 Windows 结果、调试失败链与未证明项见
 [`GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md`](../../docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md)。
 
+## ACP fake-tool continuity probe
+
+[`invoke_grok_acp_fake_tool_probe.ps1`](../../scripts/invoke_grok_acp_fake_tool_probe.ps1) 在 initialize 探针之上新增
+两个固定 fake-only prompt-turn 场景：
+
+- `allow_once`：响应 `session/request_permission` 的 allow-once option，要求同一 `toolCallId` 从
+  `tool_call` 到唯一 completed terminal，并与 provider 第二轮和 session files 对账；
+- `cancel_permission`：permission pending 时发送 `session/cancel` 和 `cancelled` outcome，要求 prompt
+  返回 `cancelled`、provider 没有第二次请求、session 没有 `tool_completed`。
+
+launcher 继续要求 Administrator token、三张 restricted workspace receipt、已锁定 binary 的 non-loopback
+IPv4/全 IPv6 临时阻断、clean environment、read-only sandbox 和 kill-on-close Job Object。原始 ACP transcript
+只保存在被忽略的 fake fixture 目录；result 只投影 method、ID、status、计数与 artifact digest。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_acp_fake_tool_probe.ps1 `
+  -OutputDirectory ..\..\.observed-runs\acp-fake-tool-allow-v1 `
+  -Scenario allow_once
+```
+
+当前代码、Schema、synthetic verifier/tamper tests 已通过；本次 Codex sandbox 没有管理员令牌，因此 Windows
+live smoke 尚未执行，不能把实现状态描述为 observed PASS。验收边界与 cancel 命令见
+[`GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](../../docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)。
+
 ## Observed dry-run
 
 [`new_grok_observed_dry_run.ps1`](../../scripts/new_grok_observed_dry_run.ps1) 生成一个

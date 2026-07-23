@@ -268,7 +268,7 @@ def make_handler(state: CaptureState) -> type[BaseHTTPRequestHandler]:
             primary_sequence = len(state.primary_requests())
             if model != "deepseek-v4-pro":
                 response = _completion_chunks(model, "LIF fake session")
-            elif state.scenario == "tool-continuity" and primary_sequence == 1:
+            elif state.scenario in {"tool-continuity", "tool-cancel"} and primary_sequence == 1:
                 assert state.tool_fixture_path is not None
                 response = _tool_call_chunks(model, state.tool_fixture_path)
             elif state.scenario == "tool-continuity":
@@ -301,9 +301,9 @@ def run_server(
     if output_directory.exists():
         raise ValueError(f"refusing to overwrite provider output: {output_directory}")
     output_directory.mkdir(parents=True)
-    if scenario == "tool-continuity":
+    if scenario in {"tool-continuity", "tool-cancel"}:
         if tool_fixture_path is None or not tool_fixture_path.is_file():
-            raise ValueError("tool-continuity requires an existing --tool-fixture-path")
+            raise ValueError(f"{scenario} requires an existing --tool-fixture-path")
         tool_fixture_path = tool_fixture_path.resolve()
     state = CaptureState(output_directory, scenario, tool_fixture_path)
     server = HTTPServer((HOST, 0), make_handler(state))
@@ -402,15 +402,26 @@ def run_server(
             "classification": "fake-fixture-private",
         },
         "response": {
-            "marker": TOOL_RESPONSE_MARKER
-            if scenario == "tool-continuity"
-            else RESPONSE_MARKER,
+            "marker": (
+                TOOL_RESPONSE_MARKER
+                if scenario == "tool-continuity"
+                else TOOL_CALL_ID
+                if scenario == "tool-cancel"
+                else RESPONSE_MARKER
+            ),
             "streaming_sse": True,
             "real_model_invoked": False,
         },
-        "continuity": _continuity_summary(state.primary_requests())
-        if scenario == "tool-continuity"
-        else None,
+        "continuity": (
+            _continuity_summary(state.primary_requests())
+            if scenario == "tool-continuity"
+            else {
+                "first_tool_request_observed": len(state.primary_requests()) == 1,
+                "second_request_observed": len(state.primary_requests()) > 1,
+            }
+            if scenario == "tool-cancel"
+            else None
+        ),
         "limitations": [
             "This fake fixture captures request bodies in an ignored local artifact and is not suitable for sensitive prompts.",
             "Successful parsing proves compatibility only with this fixed SSE response, not with the real DeepSeek service.",
@@ -425,7 +436,9 @@ def main() -> int:
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
     parser.add_argument(
-        "--scenario", choices=("single", "tool-continuity"), default="single"
+        "--scenario",
+        choices=("single", "tool-continuity", "tool-cancel"),
+        default="single",
     )
     parser.add_argument("--tool-fixture-path", type=Path)
     args = parser.parse_args()

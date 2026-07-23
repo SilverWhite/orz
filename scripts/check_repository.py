@@ -339,6 +339,62 @@ def check_repository() -> dict[str, Any]:
         errors.append("missing ACP initialize verifier regression tests")
     counts["grok_acp_initialize_probe_fixtures"] = 1
 
+    acp_tool_probe_source = (
+        ROOT / "scripts/invoke_grok_acp_fake_tool_probe.ps1"
+    ).read_text(encoding="utf-8")
+    acp_tool_client_source = (
+        ROOT / "scripts/run_grok_acp_fake_tool_client.py"
+    ).read_text(encoding="utf-8")
+    acp_tool_verifier_source = (
+        ROOT / "scripts/verify_grok_acp_fake_tool_probe.py"
+    ).read_text(encoding="utf-8")
+    fake_provider_source = (
+        ROOT / "scripts/fake_deepseek_provider.py"
+    ).read_text(encoding="utf-8")
+    for schema_name in (
+        "grok-acp-fake-tool-probe-result-v0.1.schema.json",
+        "grok-acp-fake-tool-probe-verification-v0.1.schema.json",
+    ):
+        if not (ROOT / "integration/grok" / schema_name).is_file():
+            errors.append(f"missing ACP fake-tool probe schema: {schema_name}")
+    for marker in (
+        "New-NetFirewallRule",
+        "EnvironmentVariables.Clear()",
+        "CreateKillOnClose",
+        "GROK_SANDBOX",
+        "workspace-trust.preflight.json",
+        "workspace-trust.launch.json",
+        "workspace-trust.postrun.json",
+        "allow_once",
+        "cancel_permission",
+    ):
+        if marker not in acp_tool_probe_source:
+            errors.append(f"ACP fake-tool launcher is missing safety marker: {marker}")
+    for marker in (
+        "session/request_permission",
+        "session/cancel",
+        "tool_call_update",
+        "transcript.private.jsonl",
+        "inherited_job_at_start",
+    ):
+        if marker not in acp_tool_client_source:
+            errors.append(f"ACP fake-tool client is missing protocol marker: {marker}")
+    for marker in (
+        "binary_lock_matches",
+        "transcript_projection_matches",
+        "provider_capture_matches",
+        "session_evidence_matches",
+        "workspace_receipts_match",
+        "scenario_semantics_match",
+    ):
+        if marker not in acp_tool_verifier_source:
+            errors.append(f"ACP fake-tool verifier is missing replay marker: {marker}")
+    if "tool-cancel" not in fake_provider_source:
+        errors.append("fake provider is missing the ACP tool-cancel scenario")
+    if not (ROOT / "integration/grok/tests/test_acp_fake_tool_probe.py").is_file():
+        errors.append("missing ACP fake-tool verifier regression tests")
+    counts["grok_acp_fake_tool_probe_fixtures"] = 2
+
     bridge_builder_source = (
         ROOT / "scripts/build_grok_event_bridge.py"
     ).read_text(encoding="utf-8")
