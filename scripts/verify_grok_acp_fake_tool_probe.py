@@ -26,7 +26,21 @@ VERIFICATION_SCHEMA = (
 )
 UPSTREAM_LOCK = ROOT / "upstream" / "grok-build.lock.json"
 TERMINAL_TOOL_STATUSES = {"completed", "failed"}
-ALLOWED_EXTENSION_NOTIFICATIONS = {"_x.ai/mcp/servers_updated"}
+ALLOWED_EXTENSION_NOTIFICATIONS = {
+    "_x.ai/mcp/servers_updated",
+    "_x.ai/mcp_initialized",
+    "_x.ai/queue/changed",
+    "_x.ai/session/prompt_complete",
+    "_x.ai/session_notification",
+    "_x.ai/sessions/changed",
+}
+ALLOWED_SESSION_NOTIFICATION_UPDATES = {
+    "interaction_resolved",
+    "pending_interaction",
+    "session_summary_generated",
+    "tool_call_delta_chunk",
+    "turn_completed",
+}
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -85,6 +99,134 @@ def _response_for_id(
     ]
 
 
+def _is_allowed_extension_notification(
+    message: dict[str, Any], session_id: str
+) -> bool:
+    method = message.get("method")
+    params = message.get("params")
+    if (
+        method not in ALLOWED_EXTENSION_NOTIFICATIONS
+        or message.get("jsonrpc") != "2.0"
+        or "id" in message
+        or not isinstance(params, dict)
+    ):
+        return False
+    if method == "_x.ai/mcp/servers_updated":
+        return set(params) == {"mcpServers"} and params.get("mcpServers") == []
+    if method == "_x.ai/mcp_initialized":
+        return (
+            set(params) == {"elapsedMs", "mcpToolCount", "sessionId"}
+            and type(params.get("elapsedMs")) is int
+            and params["elapsedMs"] >= 0
+            and params.get("mcpToolCount") == 0
+            and params.get("sessionId") == session_id
+        )
+    if method == "_x.ai/queue/changed":
+        entries = params.get("entries")
+        valid_entries = isinstance(entries, list) and all(
+            isinstance(entry, dict)
+            and set(entry) == {"id", "kind", "position", "text", "version"}
+            and isinstance(entry.get("id"), str)
+            and entry.get("kind") == "prompt"
+            and type(entry.get("position")) is int
+            and isinstance(entry.get("text"), str)
+            and type(entry.get("version")) is int
+            for entry in entries
+        )
+        return (
+            set(params).issubset({"entries", "runningPromptId", "sessionId"})
+            and {"entries", "sessionId"}.issubset(params)
+            and valid_entries
+            and params.get("sessionId") == session_id
+            and (
+                "runningPromptId" not in params
+                or isinstance(params.get("runningPromptId"), str)
+            )
+        )
+    if method == "_x.ai/session/prompt_complete":
+        return (
+            set(params) == {"agentResult", "promptId", "sessionId", "stopReason"}
+            and params.get("agentResult") is None
+            and isinstance(params.get("promptId"), str)
+            and params.get("sessionId") == session_id
+            and params.get("stopReason") in {"end_turn", "cancelled"}
+        )
+    if method == "_x.ai/session_notification":
+        update = params.get("update")
+        if not (
+            set(params).issubset({"_meta", "sessionId", "update"})
+            and {"sessionId", "update"}.issubset(params)
+            and params.get("sessionId") == session_id
+            and isinstance(update, dict)
+            and update.get("sessionUpdate") in ALLOWED_SESSION_NOTIFICATION_UPDATES
+            and ("_meta" not in params or isinstance(params.get("_meta"), dict))
+        ):
+            return False
+        update_type = update["sessionUpdate"]
+        if update_type == "tool_call_delta_chunk":
+            return (
+                set(update)
+                == {
+                    "arguments_delta",
+                    "name",
+                    "sessionUpdate",
+                    "tool_call_id",
+                    "tool_index",
+                }
+                and isinstance(update.get("arguments_delta"), str)
+                and update.get("name") == "read_file"
+                and isinstance(update.get("tool_call_id"), str)
+                and type(update.get("tool_index")) is int
+            )
+        if update_type == "pending_interaction":
+            return (
+                set(update) == {"kind", "sessionUpdate", "tool_call_id"}
+                and update.get("kind") == "permission"
+                and isinstance(update.get("tool_call_id"), str)
+            )
+        if update_type == "interaction_resolved":
+            return (
+                set(update) == {"sessionUpdate", "tool_call_id"}
+                and isinstance(update.get("tool_call_id"), str)
+            )
+        if update_type == "session_summary_generated":
+            return (
+                set(update) == {"sessionUpdate", "session_summary"}
+                and isinstance(update.get("session_summary"), str)
+            )
+        return (
+            set(update) == {"prompt_id", "sessionUpdate", "stop_reason", "usage"}
+            and isinstance(update.get("prompt_id"), str)
+            and update.get("stop_reason") in {"end_turn", "cancelled"}
+            and isinstance(update.get("usage"), dict)
+        )
+    if method == "_x.ai/sessions/changed":
+        upserted = params.get("upserted")
+        return (
+            set(params) == {"removed", "upserted"}
+            and params.get("removed") == []
+            and isinstance(upserted, list)
+            and len(upserted) == 1
+            and isinstance(upserted[0], dict)
+            and set(upserted[0])
+            == {
+                "activity",
+                "cwd",
+                "isWorktree",
+                "lastChangeUnixMs",
+                "modelId",
+                "origin",
+                "resident",
+                "sessionId",
+                "title",
+                "yolo",
+            }
+            and upserted[0].get("activity") in {"working", "idle"}
+            and upserted[0].get("sessionId") == session_id
+        )
+    return False
+
+
 def project_transcript(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for expected_sequence, row in enumerate(rows, start=1):
         if row.get("sequence") != expected_sequence:
@@ -130,6 +272,9 @@ def project_transcript(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     updates: list[dict[str, Any]] = []
     permission_requests: list[dict[str, Any]] = []
+    extension_counts = {
+        method: 0 for method in sorted(ALLOWED_EXTENSION_NOTIFICATIONS)
+    }
     unexpected = 0
     for message in agent_messages:
         method = message.get("method")
@@ -142,7 +287,8 @@ def project_transcript(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 unexpected += 1
         elif method == "session/request_permission" and "id" in message:
             permission_requests.append(message)
-        elif method in ALLOWED_EXTENSION_NOTIFICATIONS:
+        elif _is_allowed_extension_notification(message, session_id):
+            extension_counts[str(method)] += 1
             continue
         elif "method" in message:
             unexpected += 1
@@ -238,6 +384,7 @@ def project_transcript(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "cancel_notification_sent": cancel_sent,
         "prompt_response_count": len(prompt_responses),
         "prompt_stop_reason": prompt_stop_reason,
+        "extension_notification_counts": extension_counts,
         "unexpected_message_count": unexpected,
         "parse_failure_count": 0,
     }
@@ -292,6 +439,36 @@ def project_provider(
         if isinstance(row.get("body"), dict)
         and row["body"].get("model") == "deepseek-v4-pro"
     ]
+    auxiliary = [row for row in private_rows if row not in primary]
+    auxiliary_valid = len(auxiliary) == 1
+    if auxiliary_valid:
+        row = auxiliary[0]
+        body = row.get("body")
+        headers = row.get("headers")
+        tools = body.get("tools") if isinstance(body, dict) else None
+        tool_choice = body.get("tool_choice") if isinstance(body, dict) else None
+        tool = tools[0] if isinstance(tools, list) and len(tools) == 1 else None
+        tool_function = tool.get("function") if isinstance(tool, dict) else None
+        choice_function = (
+            tool_choice.get("function") if isinstance(tool_choice, dict) else None
+        )
+        auxiliary_valid = (
+            row.get("method") == "POST"
+            and row.get("path") == "/chat/completions"
+            and row.get("client_ip") == "127.0.0.1"
+            and isinstance(body, dict)
+            and body.get("model") == "grok-4.5"
+            and body.get("stream") is True
+            and isinstance(tools, list)
+            and len(tools) == 1
+            and isinstance(tool_function, dict)
+            and tool_function.get("name") == "session_title"
+            and isinstance(choice_function, dict)
+            and choice_function.get("name") == "session_title"
+            and isinstance(headers, dict)
+            and headers.get("authorization", {}).get("present") is True
+            and headers.get("authorization", {}).get("value_recorded") is False
+        )
     scenario = provider_result.get("scenario")
     continuity = provider_result.get("continuity")
     continuity = continuity if isinstance(continuity, dict) else {}
@@ -300,7 +477,8 @@ def project_provider(
         "scenario": scenario,
         "terminal_state": provider_result.get("terminal_state"),
         "primary_request_count": len(primary),
-        "auxiliary_request_count": len(private_rows) - len(primary),
+        "auxiliary_request_count": len(auxiliary),
+        "auxiliary_request_validated": auxiliary_valid,
         "second_request_observed": len(primary) > 1,
         "reasoning_marker_preserved": bool(
             continuity.get("reasoning_marker_preserved")
@@ -354,7 +532,8 @@ def _scenario_matches(result: dict[str, Any]) -> bool:
         and acp["parse_failure_count"] == 0
         and acp["tool_call_id"] in session["tool_call_ids"]
         and provider["terminal_state"] == "succeeded"
-        and provider["auxiliary_request_count"] == 0
+        and provider["auxiliary_request_count"] == 1
+        and provider["auxiliary_request_validated"]
         and not provider["real_model_invoked"]
     )
     if scenario == "allow_once":
@@ -373,7 +552,7 @@ def _scenario_matches(result: dict[str, Any]) -> bool:
                 provider["tool_result_observed"],
                 provider["tool_result_marker_observed"],
                 session["completed_tool_event_count"] == 1,
-                "allow" in session["permission_decisions"],
+                session["permission_decisions"] == ["allow"],
             ]
         )
     return common and all(
@@ -381,12 +560,14 @@ def _scenario_matches(result: dict[str, Any]) -> bool:
             acp["permission_outcome"] == "cancelled",
             acp["cancel_notification_sent"],
             acp["prompt_stop_reason"] == "cancelled",
-            acp["terminal_tool_update_count"] <= 1,
+            acp["terminal_tool_update_count"] in {0, 1},
+            set(acp["tool_statuses"]).issubset({"failed"}),
             provider["scenario"] == "tool-cancel",
             provider["primary_request_count"] == 1,
             not provider["second_request_observed"],
             not provider["tool_result_observed"],
             session["completed_tool_event_count"] == 0,
+            session["permission_decisions"] == ["cancelled"],
         ]
     )
 
@@ -514,7 +695,12 @@ def verify(result_path: Path, *, lock_path: Path = UPSTREAM_LOCK) -> dict[str, A
         errors.append("workspace trust receipts do not preserve one restricted state")
 
     if checks["result_schema_valid"]:
-        checks["scenario_semantics_match"] = _scenario_matches(result)
+        checks["scenario_semantics_match"] = (
+            checks["transcript_projection_matches"]
+            and checks["provider_capture_matches"]
+            and checks["session_evidence_matches"]
+            and _scenario_matches(result)
+        )
         checks["safety_checks_all_true"] = (
             all(value is True for value in result["checks"].values())
             and result["process"]["exit_code"] == 0

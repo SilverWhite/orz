@@ -141,9 +141,10 @@ validator verdict 或 claim evidence。
    `initialize`，冻结 protocol/capability/x.ai extension 响应、进程 terminal、全出站阻断和泄漏扫描；未创建
    session 或模型 turn。详见
    [`../docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md`](../docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md)。
-2. **ACP fake tool continuity（实现已落地，管理员实测待完成）**：disposable workspace + fake provider 的
-   allow-once/cancel 双场景、structured tool ID、状态转换、permission response、唯一 terminal、session-file
-   对账与独立 verifier 已实现并通过 synthetic/tamper tests；尚无管理员级 Windows live PASS。见
+2. **ACP fake tool continuity（已完成 Windows fake-only 实测）**：disposable workspace + fake provider 的
+   allow-once/cancel 双场景、structured tool ID、状态转换、permission response、terminal、session-file
+   对账与独立 verifier 已通过；取消允许无 terminal 或唯一 failed terminal，但严格禁止 completed、第二次
+   primary request 和 `tool_completed`。见
    [`../docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](../docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)。
 3. **shadow Git recovery fixture**：在现有 hash-only checkpoint 收据中引用 shadow commit/tree；生成显式
    files-only restore plan 和冲突报告，仍不自动 restore 真实 workspace。

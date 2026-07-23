@@ -63,7 +63,9 @@ def _transcript_row(
     }
 
 
-def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
+def _build_fixture(
+    root: Path, scenario: str, *, cancel_failed_terminal: bool = False
+) -> tuple[Path, Path]:
     session_id = "session-fixture-001"
     tool_id = "call_lif_read_fixture_001"
     binary = root / "grok.exe"
@@ -236,6 +238,25 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
                 ),
             ]
         )
+        if cancel_failed_terminal:
+            messages.insert(
+                -1,
+                (
+                    "agent_to_client",
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "tool_call_update",
+                                "toolCallId": tool_id,
+                                "status": "failed",
+                            },
+                        },
+                    },
+                ),
+            )
     transcript = root / "transcript.private.jsonl"
     transcript_rows = [
         _transcript_row(index, direction, message)
@@ -257,6 +278,14 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
                 },
                 {"type": "tool_completed", "tool_name": "read_file"},
             ]
+        )
+    else:
+        event_rows.append(
+            {
+                "type": "permission_resolved",
+                "tool_name": "read_file",
+                "decision": "cancelled",
+            }
         )
     _write_jsonl(events, event_rows)
 
@@ -287,12 +316,52 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
                 },
             }
         )
+    elif cancel_failed_terminal:
+        session_updates.append(
+            {
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": tool_id,
+                        "status": "failed",
+                    },
+                },
+            }
+        )
     _write_jsonl(updates, session_updates)
 
     provider_private = root / "requests.private.jsonl"
     private_rows = [
         {
             "sequence": 1,
+            "method": "POST",
+            "path": "/chat/completions",
+            "client_ip": "127.0.0.1",
+            "headers": {
+                "authorization": {
+                    "present": True,
+                    "value_recorded": False,
+                }
+            },
+            "body": {
+                "model": "grok-4.5",
+                "stream": True,
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": "session_title"},
+                },
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "session_title"},
+                    }
+                ],
+            },
+        },
+        {
+            "sequence": 2,
             "body": {
                 "model": "deepseek-v4-pro",
                 "messages": [{"role": "user"}],
@@ -302,7 +371,7 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
     if scenario == "allow_once":
         private_rows.append(
             {
-                "sequence": 2,
+                "sequence": 3,
                 "body": {
                     "model": "deepseek-v4-pro",
                     "messages": [{"role": "tool"}],
@@ -361,12 +430,24 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
         "session_id": session_id,
         "request_methods": ["initialize", "session/new", "session/prompt"],
         "update_types": ["tool_call"]
-        + (["tool_call_update"] if scenario == "allow_once" else []),
+        + (
+            ["tool_call_update"]
+            if scenario == "allow_once" or cancel_failed_terminal
+            else []
+        ),
         "tool_call_id": tool_id,
         "tool_call_count": 1,
-        "tool_update_count": 1 if scenario == "allow_once" else 0,
-        "terminal_tool_update_count": 1 if scenario == "allow_once" else 0,
-        "tool_statuses": ["completed"] if scenario == "allow_once" else [],
+        "tool_update_count": (
+            1 if scenario == "allow_once" or cancel_failed_terminal else 0
+        ),
+        "terminal_tool_update_count": (
+            1 if scenario == "allow_once" or cancel_failed_terminal else 0
+        ),
+        "tool_statuses": (
+            ["completed"]
+            if scenario == "allow_once"
+            else (["failed"] if cancel_failed_terminal else [])
+        ),
         "permission_request_count": 1,
         "permission_option_kinds": ["allow_once", "reject_once"],
         "permission_outcome": "allow_once"
@@ -377,6 +458,9 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
         "prompt_stop_reason": "end_turn"
         if scenario == "allow_once"
         else "cancelled",
+        "extension_notification_counts": {
+            method: 0 for method in sorted(verifier.ALLOWED_EXTENSION_NOTIFICATIONS)
+        },
         "unexpected_message_count": 0,
         "parse_failure_count": 0,
     }
@@ -384,9 +468,15 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
         "discovered": True,
         "event_types": [row["type"] for row in event_rows],
         "update_types": ["tool_call"]
-        + (["tool_call_update"] if scenario == "allow_once" else []),
+        + (
+            ["tool_call_update"]
+            if scenario == "allow_once" or cancel_failed_terminal
+            else []
+        ),
         "tool_call_ids": [tool_id],
-        "permission_decisions": ["allow"] if scenario == "allow_once" else [],
+        "permission_decisions": ["allow"]
+        if scenario == "allow_once"
+        else ["cancelled"],
         "completed_tool_event_count": 1 if scenario == "allow_once" else 0,
     }
     provider = {
@@ -395,7 +485,8 @@ def _build_fixture(root: Path, scenario: str) -> tuple[Path, Path]:
         else "tool-cancel",
         "terminal_state": "succeeded",
         "primary_request_count": 2 if scenario == "allow_once" else 1,
-        "auxiliary_request_count": 0,
+        "auxiliary_request_count": 1,
+        "auxiliary_request_validated": True,
         "second_request_observed": scenario == "allow_once",
         "reasoning_marker_preserved": scenario == "allow_once",
         "tool_call_id_preserved": scenario == "allow_once",
@@ -476,6 +567,16 @@ class AcpFakeToolVerifierTests(unittest.TestCase):
             report = verifier.verify(result_path, lock_path=lock_path)
             self.assertTrue(report["valid"], report["errors"])
 
+    def test_cancel_fixture_accepts_failed_terminal_without_tool_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result_path, lock_path = _build_fixture(
+                Path(temporary),
+                "cancel_permission",
+                cancel_failed_terminal=True,
+            )
+            report = verifier.verify(result_path, lock_path=lock_path)
+            self.assertTrue(report["valid"], report["errors"])
+
     def test_transcript_tampering_is_detected_even_when_result_is_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result_path, lock_path = _build_fixture(Path(temporary), "allow_once")
@@ -491,6 +592,59 @@ class AcpFakeToolVerifierTests(unittest.TestCase):
             self.assertFalse(report["valid"])
             self.assertFalse(report["checks"]["artifact_digests_match"])
             self.assertFalse(report["checks"]["transcript_projection_matches"])
+
+    def test_invalid_extension_shape_is_not_accepted_after_rehash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result_path, lock_path = _build_fixture(Path(temporary), "allow_once")
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            transcript = Path(result["artifacts"]["transcript"]["path"])
+            rows = [
+                json.loads(line)
+                for line in transcript.read_text(encoding="utf-8").splitlines()
+            ]
+            rows.append(
+                _transcript_row(
+                    len(rows) + 1,
+                    "agent_to_client",
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "_x.ai/mcp_initialized",
+                        "params": {
+                            "elapsedMs": 0,
+                            "mcpToolCount": 0,
+                            "sessionId": "wrong-session",
+                        },
+                    },
+                )
+            )
+            _write_jsonl(transcript, rows)
+            result["artifacts"]["transcript"] = _artifact(transcript)
+            _write_json(result_path, result)
+            report = verifier.verify(result_path, lock_path=lock_path)
+            self.assertFalse(report["valid"])
+            self.assertTrue(report["checks"]["artifact_digests_match"])
+            self.assertFalse(report["checks"]["transcript_projection_matches"])
+
+    def test_non_title_auxiliary_request_is_rejected_after_rehash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result_path, lock_path = _build_fixture(Path(temporary), "allow_once")
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            private_path = Path(
+                result["artifacts"]["provider_private_capture"]["path"]
+            )
+            rows = [
+                json.loads(line)
+                for line in private_path.read_text(encoding="utf-8").splitlines()
+            ]
+            rows[0]["body"]["tools"][0]["function"]["name"] = "unexpected_tool"
+            _write_jsonl(private_path, rows)
+            result["artifacts"]["provider_private_capture"] = _artifact(private_path)
+            _write_json(result_path, result)
+            report = verifier.verify(result_path, lock_path=lock_path)
+            self.assertFalse(report["valid"])
+            self.assertTrue(report["checks"]["artifact_digests_match"])
+            self.assertFalse(report["checks"]["provider_capture_matches"])
+            self.assertFalse(report["checks"]["scenario_semantics_match"])
 
 
 if __name__ == "__main__":

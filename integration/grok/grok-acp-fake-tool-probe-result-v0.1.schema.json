@@ -86,6 +86,7 @@
         "cancel_notification_sent",
         "prompt_response_count",
         "prompt_stop_reason",
+        "extension_notification_counts",
         "unexpected_message_count",
         "parse_failure_count"
       ],
@@ -123,6 +124,26 @@
         "cancel_notification_sent": { "type": "boolean" },
         "prompt_response_count": { "type": "integer", "minimum": 0 },
         "prompt_stop_reason": { "enum": ["end_turn", "cancelled"] },
+        "extension_notification_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "_x.ai/mcp/servers_updated",
+            "_x.ai/mcp_initialized",
+            "_x.ai/queue/changed",
+            "_x.ai/session/prompt_complete",
+            "_x.ai/session_notification",
+            "_x.ai/sessions/changed"
+          ],
+          "properties": {
+            "_x.ai/mcp/servers_updated": { "type": "integer", "minimum": 0 },
+            "_x.ai/mcp_initialized": { "type": "integer", "minimum": 0 },
+            "_x.ai/queue/changed": { "type": "integer", "minimum": 0 },
+            "_x.ai/session/prompt_complete": { "type": "integer", "minimum": 0 },
+            "_x.ai/session_notification": { "type": "integer", "minimum": 0 },
+            "_x.ai/sessions/changed": { "type": "integer", "minimum": 0 }
+          }
+        },
         "unexpected_message_count": { "type": "integer", "minimum": 0 },
         "parse_failure_count": { "type": "integer", "minimum": 0 }
       }
@@ -155,6 +176,7 @@
         "terminal_state",
         "primary_request_count",
         "auxiliary_request_count",
+        "auxiliary_request_validated",
         "second_request_observed",
         "reasoning_marker_preserved",
         "tool_call_id_preserved",
@@ -167,6 +189,7 @@
         "terminal_state": { "enum": ["succeeded", "timed_out"] },
         "primary_request_count": { "type": "integer", "minimum": 0 },
         "auxiliary_request_count": { "type": "integer", "minimum": 0 },
+        "auxiliary_request_validated": { "type": "boolean" },
         "second_request_observed": { "type": "boolean" },
         "reasoning_marker_preserved": { "type": "boolean" },
         "tool_call_id_preserved": { "type": "boolean" },

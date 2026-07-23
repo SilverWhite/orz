@@ -83,7 +83,7 @@ workspace trust、local trace/export、event bridge 与 hash-only fixture checkp
 2. no-model ACP `initialize`/capability 探针已完成：protocol v1、capability/meta、扩展通知、Job Object、
    全出站阻断与独立 verifier 均有 Windows 实测；
 3. ACP structured tool/permission/cancel/terminal continuity 的双场景 launcher、Schema、session-file 对账与独立
-   verifier 已实现并通过 synthetic tests；管理员级 Windows live smoke 尚未完成；
+   verifier 已通过 synthetic/tamper tests 和管理员级 Windows fake-only live smoke；
 4. 用独立 shadow Git fixture 承担恢复，现有 hash-only checkpoint 继续作为 audit receipt；
 5. 补 ACP persistent process/background child-tree timeout fixture 和 compaction provenance；
 6. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。

@@ -595,6 +595,7 @@ rules = [
     $firewallRemoved = $remainingRuleCount -eq 0
 }
 
+try {
 if (-not $firewallRemoved) {
     throw 'Temporary ACP fake-tool firewall rules were not fully removed.'
 }
@@ -606,11 +607,26 @@ $workspaceDigestAfter = Get-WorkspaceDigest -WorkspacePath $workspace
 $workspaceModified = $workspaceDigestBefore -ne $workspaceDigestAfter
 
 $continuity = $providerResult.continuity
+$auxiliaryRequests = @(
+    $providerResult.requests | Where-Object { $_.request_class -eq 'auxiliary' }
+)
+$auxiliaryRequestValidated = (
+    $auxiliaryRequests.Count -eq 1 -and
+    $auxiliaryRequests[0].method -eq 'POST' -and
+    $auxiliaryRequests[0].path -eq '/chat/completions' -and
+    $auxiliaryRequests[0].client_ip -eq '127.0.0.1' -and
+    $auxiliaryRequests[0].model -eq 'grok-4.5' -and
+    $auxiliaryRequests[0].authorization_present -eq $true -and
+    $auxiliaryRequests[0].authorization_value_recorded -eq $false -and
+    @($auxiliaryRequests[0].tool_names).Count -eq 1 -and
+    @($auxiliaryRequests[0].tool_names)[0] -eq 'session_title'
+)
 $providerProjection = [ordered]@{
     scenario = [string]$providerResult.scenario
     terminal_state = [string]$providerResult.terminal_state
     primary_request_count = [int]$providerResult.primary_request_count
     auxiliary_request_count = [int]$providerResult.auxiliary_request_count
+    auxiliary_request_validated = $auxiliaryRequestValidated
     second_request_observed = if ($Scenario -eq 'allow_once') { [bool]$continuity.second_request_observed } else { $false }
     reasoning_marker_preserved = if ($Scenario -eq 'allow_once') { [bool]$continuity.reasoning_marker_preserved } else { $false }
     tool_call_id_preserved = if ($Scenario -eq 'allow_once') { [bool]$continuity.tool_call_id_preserved } else { $false }
@@ -622,7 +638,11 @@ $providerProjection = [ordered]@{
 $rawCredential = 'loopback-fixture-not-a-secret'
 $credentialRecorded = $false
 foreach ($path in @($transcriptPath, $providerResultPath, $clientResultPath, (Join-Path $clientDirectory 'grok.stderr.log'))) {
-    if ((Get-Content -LiteralPath $path -Raw -Encoding UTF8).Contains($rawCredential)) {
+    $artifactText = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    if ($null -eq $artifactText) {
+        $artifactText = ''
+    }
+    if ($artifactText.Contains($rawCredential)) {
         $credentialRecorded = $true
     }
 }
@@ -644,6 +664,7 @@ $commonChecks = [ordered]@{
     )
     provider_loopback_only = ($providerResult.bind.host -eq '127.0.0.1' -and -not $providerResult.bind.external)
     provider_succeeded = ($providerResult.terminal_state -eq 'succeeded')
+    provider_auxiliary_title_only = $auxiliaryRequestValidated
     acp_request_sequence = (@($acp.request_methods) -join ',') -eq 'initialize,session/new,session/prompt'
     one_tool_call = ($acp.tool_call_count -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$acp.tool_call_id))
     one_permission_request = ($acp.permission_request_count -eq 1)
@@ -668,14 +689,24 @@ if ($Scenario -eq 'allow_once') {
             $providerProjection.tool_result_observed -and
             $providerProjection.tool_result_marker_observed
         )
-        session_tool_completed_once = ($sessionEvidence.completed_tool_event_count -eq 1 -and @($sessionEvidence.permission_decisions) -contains 'allow')
+        session_tool_completed_once = (
+            $sessionEvidence.completed_tool_event_count -eq 1 -and
+            (@($sessionEvidence.permission_decisions) -join ',') -eq 'allow'
+        )
     }
 } else {
     $scenarioChecks = [ordered]@{
         pending_permission_cancelled = ($acp.permission_outcome -eq 'cancelled' -and $acp.cancel_notification_sent)
         prompt_cancelled = ($acp.prompt_stop_reason -eq 'cancelled')
         provider_stopped_after_first_request = ($providerProjection.primary_request_count -eq 1 -and -not $providerProjection.second_request_observed)
-        no_completed_tool = ($sessionEvidence.completed_tool_event_count -eq 0)
+        no_completed_tool = (
+            $acp.terminal_tool_update_count -le 1 -and
+            @($acp.tool_statuses | Where-Object { $_ -ne 'failed' }).Count -eq 0 -and
+            $sessionEvidence.completed_tool_event_count -eq 0
+        )
+        session_permission_cancelled = (
+            (@($sessionEvidence.permission_decisions) -join ',') -eq 'cancelled'
+        )
     }
 }
 $checks = [ordered]@{}
@@ -753,3 +784,24 @@ if (-not $verification.valid) {
     throw 'ACP fake-tool verifier returned valid=false.'
 }
 $result | ConvertTo-Json -Depth 100
+} catch {
+    $failure = [ordered]@{
+        schema_version = '0.1.0'
+        failure_kind = 'grok-acp-fake-tool-probe'
+        failure_stage = 'postprocess_or_verification'
+        probe_id = $probeId
+        scenario = $Scenario
+        message = $_.Exception.Message
+        started_at = $startedAt
+        failed_at = [DateTime]::UtcNow.ToString('o')
+        firewall_rule_names = @($firewallRules)
+        firewall_removed = $firewallRemoved
+        remaining_firewall_rule_count = $remainingRuleCount
+        result_written = (Test-Path -LiteralPath $resultPath)
+        verification_written = (Test-Path -LiteralPath $verificationPath)
+    }
+    if (-not (Test-Path -LiteralPath $failurePath)) {
+        Write-Utf8Atomic -Path $failurePath -Content (($failure | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
+    }
+    throw
+}

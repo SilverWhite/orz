@@ -13,7 +13,21 @@ import time
 from typing import Any
 
 
-ALLOWED_EXTENSION_NOTIFICATIONS = {"_x.ai/mcp/servers_updated"}
+ALLOWED_EXTENSION_NOTIFICATIONS = {
+    "_x.ai/mcp/servers_updated",
+    "_x.ai/mcp_initialized",
+    "_x.ai/queue/changed",
+    "_x.ai/session/prompt_complete",
+    "_x.ai/session_notification",
+    "_x.ai/sessions/changed",
+}
+ALLOWED_SESSION_NOTIFICATION_UPDATES = {
+    "interaction_resolved",
+    "pending_interaction",
+    "session_summary_generated",
+    "tool_call_delta_chunk",
+    "turn_completed",
+}
 TERMINAL_TOOL_STATUSES = {"completed", "failed"}
 
 
@@ -65,6 +79,10 @@ class AcpClient:
         self.sequence = 0
         self.parse_failure_count = 0
         self.unexpected_message_count = 0
+        self.extension_notification_counts = {
+            method: 0 for method in sorted(ALLOWED_EXTENSION_NOTIFICATIONS)
+        }
+        self.session_id = ""
         self.updates: list[dict[str, Any]] = []
         self.permission_requests: list[dict[str, Any]] = []
         self.permission_outcome = ""
@@ -162,6 +180,140 @@ class AcpClient:
         self._record("agent_to_client", message)
         return message
 
+    def _is_allowed_extension_notification(
+        self, message: dict[str, Any]
+    ) -> bool:
+        method = message.get("method")
+        params = message.get("params")
+        if (
+            method not in ALLOWED_EXTENSION_NOTIFICATIONS
+            or message.get("jsonrpc") != "2.0"
+            or "id" in message
+            or not isinstance(params, dict)
+        ):
+            return False
+        if method == "_x.ai/mcp/servers_updated":
+            return set(params) == {"mcpServers"} and params.get("mcpServers") == []
+        if method == "_x.ai/mcp_initialized":
+            return (
+                set(params) == {"elapsedMs", "mcpToolCount", "sessionId"}
+                and type(params.get("elapsedMs")) is int
+                and params["elapsedMs"] >= 0
+                and params.get("mcpToolCount") == 0
+                and params.get("sessionId") == self.session_id
+            )
+        if method == "_x.ai/queue/changed":
+            entries = params.get("entries")
+            valid_entries = isinstance(entries, list) and all(
+                isinstance(entry, dict)
+                and set(entry) == {"id", "kind", "position", "text", "version"}
+                and isinstance(entry.get("id"), str)
+                and entry.get("kind") == "prompt"
+                and type(entry.get("position")) is int
+                and isinstance(entry.get("text"), str)
+                and type(entry.get("version")) is int
+                for entry in entries
+            )
+            return (
+                set(params).issubset({"entries", "runningPromptId", "sessionId"})
+                and {"entries", "sessionId"}.issubset(params)
+                and valid_entries
+                and params.get("sessionId") == self.session_id
+                and (
+                    "runningPromptId" not in params
+                    or isinstance(params.get("runningPromptId"), str)
+                )
+            )
+        if method == "_x.ai/session/prompt_complete":
+            return (
+                set(params)
+                == {"agentResult", "promptId", "sessionId", "stopReason"}
+                and params.get("agentResult") is None
+                and isinstance(params.get("promptId"), str)
+                and params.get("sessionId") == self.session_id
+                and params.get("stopReason") in {"end_turn", "cancelled"}
+            )
+        if method == "_x.ai/session_notification":
+            update = params.get("update")
+            if not (
+                set(params).issubset({"_meta", "sessionId", "update"})
+                and {"sessionId", "update"}.issubset(params)
+                and params.get("sessionId") == self.session_id
+                and isinstance(update, dict)
+                and update.get("sessionUpdate")
+                in ALLOWED_SESSION_NOTIFICATION_UPDATES
+                and (
+                    "_meta" not in params
+                    or isinstance(params.get("_meta"), dict)
+                )
+            ):
+                return False
+            update_type = update["sessionUpdate"]
+            if update_type == "tool_call_delta_chunk":
+                return (
+                    set(update)
+                    == {
+                        "arguments_delta",
+                        "name",
+                        "sessionUpdate",
+                        "tool_call_id",
+                        "tool_index",
+                    }
+                    and isinstance(update.get("arguments_delta"), str)
+                    and update.get("name") == "read_file"
+                    and isinstance(update.get("tool_call_id"), str)
+                    and type(update.get("tool_index")) is int
+                )
+            if update_type == "pending_interaction":
+                return (
+                    set(update)
+                    == {"kind", "sessionUpdate", "tool_call_id"}
+                    and update.get("kind") == "permission"
+                    and isinstance(update.get("tool_call_id"), str)
+                )
+            if update_type == "interaction_resolved":
+                return (
+                    set(update) == {"sessionUpdate", "tool_call_id"}
+                    and isinstance(update.get("tool_call_id"), str)
+                )
+            if update_type == "session_summary_generated":
+                return (
+                    set(update) == {"sessionUpdate", "session_summary"}
+                    and isinstance(update.get("session_summary"), str)
+                )
+            return (
+                set(update)
+                == {"prompt_id", "sessionUpdate", "stop_reason", "usage"}
+                and isinstance(update.get("prompt_id"), str)
+                and update.get("stop_reason") in {"end_turn", "cancelled"}
+                and isinstance(update.get("usage"), dict)
+            )
+        if method == "_x.ai/sessions/changed":
+            upserted = params.get("upserted")
+            return (
+                set(params) == {"removed", "upserted"}
+                and params.get("removed") == []
+                and isinstance(upserted, list)
+                and len(upserted) == 1
+                and isinstance(upserted[0], dict)
+                and set(upserted[0])
+                == {
+                    "activity",
+                    "cwd",
+                    "isWorktree",
+                    "lastChangeUnixMs",
+                    "modelId",
+                    "origin",
+                    "resident",
+                    "sessionId",
+                    "title",
+                    "yolo",
+                }
+                and upserted[0].get("activity") in {"working", "idle"}
+                and upserted[0].get("sessionId") == self.session_id
+            )
+        return False
+
     def _handle_agent_message(self, message: dict[str, Any]) -> None:
         method = message.get("method")
         if method == "session/update":
@@ -174,7 +326,8 @@ class AcpClient:
             self.permission_requests.append(message)
             self._answer_permission(message)
             return
-        elif method in ALLOWED_EXTENSION_NOTIFICATIONS:
+        elif self._is_allowed_extension_notification(message):
+            self.extension_notification_counts[str(method)] += 1
             return
         elif method is None and "id" in message:
             return
@@ -336,6 +489,7 @@ class AcpClient:
             "cancel_notification_sent": self.cancel_sent,
             "prompt_response_count": len(self.prompt_responses),
             "prompt_stop_reason": prompt_result.get("stopReason", ""),
+            "extension_notification_counts": self.extension_notification_counts,
             "unexpected_message_count": self.unexpected_message_count,
             "parse_failure_count": self.parse_failure_count,
         }
@@ -394,6 +548,51 @@ def _session_projection(events_path: Path, updates_path: Path) -> dict[str, Any]
         ],
         "completed_tool_event_count": event_types.count("tool_completed"),
     }
+
+
+def _wait_for_session_projection(
+    events_path: Path,
+    updates_path: Path,
+    *,
+    scenario: str,
+    tool_call_id: str,
+    timeout_seconds: float = 5.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_fingerprint: tuple[int, int, int, int] | None = None
+    stable_since: float | None = None
+    latest: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        latest = _session_projection(events_path, updates_path)
+        expected_decision = "allow" if scenario == "allow_once" else "cancelled"
+        sufficient = (
+            tool_call_id in latest["tool_call_ids"]
+            and latest["permission_decisions"] == [expected_decision]
+            and (
+                latest["completed_tool_event_count"] == 1
+                if scenario == "allow_once"
+                else latest["completed_tool_event_count"] == 0
+            )
+        )
+        event_stat = events_path.stat()
+        update_stat = updates_path.stat()
+        fingerprint = (
+            event_stat.st_size,
+            event_stat.st_mtime_ns,
+            update_stat.st_size,
+            update_stat.st_mtime_ns,
+        )
+        now = time.monotonic()
+        if sufficient and fingerprint == last_fingerprint:
+            if stable_since is not None and now - stable_since >= 0.25:
+                return latest
+        else:
+            stable_since = now if sufficient else None
+        last_fingerprint = fingerprint
+        time.sleep(0.05)
+    raise RuntimeError(
+        "session evidence did not settle with the expected tool and permission state"
+    )
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -458,13 +657,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         session_id = session.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise RuntimeError("session/new did not return a non-empty sessionId")
+        client.session_id = session_id
         prompt_result = client.prompt(session_id, prompt)
         client.close_input()
         events_path, updates_path = _find_session_files(
             args.profile_root.resolve(), session_id
         )
         acp = client.projection(session_id, prompt_result)
-        session_evidence = _session_projection(events_path, updates_path)
+        session_evidence = _wait_for_session_projection(
+            events_path,
+            updates_path,
+            scenario=args.scenario,
+            tool_call_id=acp["tool_call_id"],
+        )
         result = {
             "schema_version": "0.1.0",
             "scenario": args.scenario,

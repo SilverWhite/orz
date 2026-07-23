@@ -65,8 +65,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ..\..\scripts\invoke_grok_ac
   -Scenario allow_once
 ```
 
-当前代码、Schema、synthetic verifier/tamper tests 已通过；本次 Codex sandbox 没有管理员令牌，因此 Windows
-live smoke 尚未执行，不能把实现状态描述为 observed PASS。验收边界与 cancel 命令见
+当前代码、Schema、synthetic verifier/tamper tests 与管理员级 Windows fake-only live smoke 均已通过；
+allow/cancel 结果经独立 verifier 重建，临时防火墙规则残留为零，且没有真实模型调用。验收边界、取消竞态和
+artifact digest 见
 [`GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](../../docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)。
 
 ## Observed dry-run
