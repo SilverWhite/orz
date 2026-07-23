@@ -46,6 +46,7 @@
 - [`docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)：ACP fake tool allow/cancel 双场景的 Windows 实测、三路证据对账、取消竞态与独立 verifier。
 - [`docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md`](docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md)：Grok `0.2.111` 的官方发现、本地身份、ACP/DeepSeek fake-only 对照与已完成的 promotion gate。
 - [`docs/DEEPSEEK_REAL_DEVELOPMENT_PROBE_2026-07-23.md`](docs/DEEPSEEK_REAL_DEVELOPMENT_PROBE_2026-07-23.md)：一次性真实 DeepSeek probe 的两阶段入口、离线测试、首个 real transport attempt 与 fail-closed 结果。
+- [`docs/DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md`](docs/DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md)：WER `NOHEAP`、短进程、固定 endpoint、无 proxy/redirect/debug、失败 artifact 与无真实 key 模式扫描的安全边界。
 - [`docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md`](docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md)：将默认 Grok 从 `0.2.106` 提升到 `0.2.111` 的独立裁决与回退锚点。
 - [`docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)：`run_terminal_command` timeout、background task cancel 与 parent-exit 三场景的 Windows 子进程树门禁及已完成的管理员 observed 矩阵。
 - [`docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md`](docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md)：Grok `0.2.111` 手工 compaction 的 `PreCompact`/`PostCompact`、source span/digest、checkpoint、`derived_unverified` 摘要边界与独立 verifier。

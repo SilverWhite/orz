@@ -20,6 +20,8 @@
     "response",
     "transport",
     "approval",
+    "process_security",
+    "artifact_leak_scan",
     "claim_eligibility",
     "limitations"
   ],
@@ -101,6 +103,10 @@
         "duration_ms",
         "tls_verification",
         "credential_source_id",
+        "endpoint_pinned",
+        "proxy_environment_used",
+        "redirects_followed",
+        "http_debug_output",
         "authorization_recorded"
       ],
       "properties": {
@@ -115,6 +121,10 @@
         "credential_source_id": {
           "const": "windows-credential-manager-current-user"
         },
+        "endpoint_pinned": { "const": true },
+        "proxy_environment_used": { "const": false },
+        "redirects_followed": { "const": false },
+        "http_debug_output": { "const": false },
         "authorization_recorded": { "const": false }
       }
     },
@@ -134,6 +144,8 @@
         "confirmation_token_recorded": { "const": false }
       }
     },
+    "process_security": { "$ref": "#/$defs/processSecurity" },
+    "artifact_leak_scan": { "$ref": "#/$defs/artifactLeakScan" },
     "claim_eligibility": { "const": "not_assessed" },
     "limitations": {
       "type": "array",
@@ -142,6 +154,48 @@
     }
   },
   "$defs": {
-    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "processSecurity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "windows_wer_noheap_verified",
+        "python_faulthandler_disabled",
+        "scope",
+        "limitations"
+      ],
+      "properties": {
+        "windows_wer_noheap_verified": { "const": true },
+        "python_faulthandler_disabled": { "const": true },
+        "scope": { "const": "current-short-lived-cli-process" },
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "artifactLeakScan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "complete",
+        "scanned_file_count",
+        "pending_document_scanned",
+        "actual_credential_read_for_scan",
+        "hit_count"
+      ],
+      "properties": {
+        "policy": {
+          "const": "deepseek-artifact-common-secret-patterns-v0.1"
+        },
+        "complete": { "const": true },
+        "scanned_file_count": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "pending_document_scanned": { "const": true },
+        "actual_credential_read_for_scan": { "const": false },
+        "hit_count": { "const": 0 }
+      }
+    }
   }
 }

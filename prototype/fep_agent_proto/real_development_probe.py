@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
+import re
 import ssl
 from typing import Any, Callable
 
@@ -19,22 +21,44 @@ from .credentials import (
 )
 from .deepseek_adapter import classify_sse_line
 from .deepseek_client import consume_deepseek_sse
+from .deepseek_https import SanitizedDeepSeekTransportError
 from .errors import PrototypeError
-from .io_utils import atomic_write_json, load_json, sha256_bytes, utc_now
+from .io_utils import (
+    atomic_write_json,
+    is_link_or_reparse,
+    load_json,
+    sha256_bytes,
+    utc_now,
+)
 from .layout import RUNTIME_ROOT
-from .model_transport import TransportAttemptContext, TransportControl
+from .model_transport import (
+    TransportAttemptContext,
+    TransportControl,
+    TransportTimeout,
+)
 from .network_broker import (
     build_network_confirmation_summary,
     confirmation_summary_sha256,
 )
 from .schema import validate_instance
+from .windows_process_security import configure_secret_process_security
 
 
 PROBE_MODEL = "deepseek-v4-pro"
 PROBE_MARKER = "LIF_REAL_DEEPSEEK_OK"
 PLAN_FILENAME = "plan.json"
 RESULT_FILENAME = "result.json"
+FAILURE_FILENAME = "failure.json"
 LEDGER_FILENAME = "network-approvals.jsonl"
+_MAX_SCAN_FILES = 32
+_MAX_SCAN_BYTES = 4 * 1024 * 1024
+_SECRET_PATTERNS = (
+    ("deepseek_key_shape", re.compile(rb"(?i)(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}")),
+    (
+        "bearer_credential",
+        re.compile(rb"(?i)(?<![A-Za-z0-9_-])bearer[ \t]+[!-~]{8,}"),
+    ),
+)
 
 
 def _fixed_request() -> dict[str, Any]:
@@ -81,6 +105,102 @@ def _resolved_response_model(lines: tuple[str, ...]) -> str:
     if len(models) != 1:
         raise PrototypeError("DeepSeek SSE response must identify exactly one resolved model")
     return next(iter(models))
+
+
+def _strict_json_bytes(value: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _scan_artifact_candidates(
+    *,
+    output_dir: Path,
+    pending_name: str,
+    pending_bytes: bytes,
+) -> dict[str, Any]:
+    candidates: list[tuple[str, bytes]] = []
+    total_bytes = len(pending_bytes)
+    for path in sorted(output_dir.iterdir(), key=lambda item: item.name.casefold()):
+        if path.name == pending_name:
+            raise PrototypeError(f"refusing to overwrite existing probe artifact: {path}")
+        if is_link_or_reparse(path) or not path.is_file():
+            raise PrototypeError("probe output root contains a non-regular artifact")
+        payload = path.read_bytes()
+        total_bytes += len(payload)
+        candidates.append((path.name, payload))
+    candidates.append((pending_name, pending_bytes))
+    if len(candidates) > _MAX_SCAN_FILES or total_bytes > _MAX_SCAN_BYTES:
+        raise PrototypeError("probe artifact leak scan exceeded its fixed limits")
+    for _name, payload in candidates:
+        for pattern_name, pattern in _SECRET_PATTERNS:
+            if pattern.search(payload):
+                raise PrototypeError(
+                    f"probe artifact leak scan detected forbidden pattern: {pattern_name}"
+                )
+    return {
+        "policy": "deepseek-artifact-common-secret-patterns-v0.1",
+        "complete": True,
+        "scanned_file_count": len(candidates),
+        "pending_document_scanned": True,
+        "actual_credential_read_for_scan": False,
+        "hit_count": 0,
+    }
+
+
+def _attach_verified_leak_scan(
+    *,
+    output_dir: Path,
+    pending_name: str,
+    document: dict[str, Any],
+) -> None:
+    initial = _scan_artifact_candidates(
+        output_dir=output_dir,
+        pending_name=pending_name,
+        pending_bytes=_strict_json_bytes(document),
+    )
+    document["artifact_leak_scan"] = initial
+    final = _scan_artifact_candidates(
+        output_dir=output_dir,
+        pending_name=pending_name,
+        pending_bytes=_strict_json_bytes(document),
+    )
+    if final["scanned_file_count"] != initial["scanned_file_count"]:
+        raise PrototypeError("probe artifact leak scan file count changed")
+    document["artifact_leak_scan"] = final
+
+
+def _failure_fields(exc: PrototypeError) -> dict[str, Any]:
+    if isinstance(exc, SanitizedDeepSeekTransportError):
+        return {
+            "category": "sanitized_transport_error",
+            "stage": exc.stage,
+            "error_type": exc.error_type,
+            "error_number": exc.error_number,
+            "raw_exception_recorded": False,
+        }
+    if isinstance(exc, TransportTimeout):
+        return {
+            "category": "transport_timeout",
+            "stage": exc.phase,
+            "error_type": type(exc).__name__,
+            "error_number": None,
+            "raw_exception_recorded": False,
+        }
+    return {
+        "category": "prototype_error",
+        "stage": "protocol_or_provider_validation",
+        "error_type": type(exc).__name__,
+        "error_number": None,
+        "raw_exception_recorded": False,
+    }
 
 
 def create_real_development_plan(*, output_dir: Path) -> dict[str, Any]:
@@ -141,6 +261,7 @@ def execute_real_development_probe(
     confirmation_io: ConfirmationIO,
     credential_provider: CredentialProvider | None = None,
     connection_factory: Callable[[str, int, float, ssl.SSLContext], Any] | None = None,
+    process_security_configurator: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     plan = load_json(plan_path)
     validate_instance(
@@ -150,8 +271,12 @@ def execute_real_development_probe(
     )
     output_dir = plan_path.parent
     result_path = output_dir / RESULT_FILENAME
-    if result_path.exists():
-        raise PrototypeError(f"refusing to overwrite existing probe result: {result_path}")
+    failure_path = output_dir / FAILURE_FILENAME
+    for terminal_path in (result_path, failure_path):
+        if terminal_path.exists():
+            raise PrototypeError(
+                f"refusing to overwrite existing probe terminal artifact: {terminal_path}"
+            )
     request = _fixed_request()
     control = _fixed_control()
     attempt_context = TransportAttemptContext(turn=1, attempt=1)
@@ -166,6 +291,16 @@ def execute_real_development_probe(
     if plan["confirmation_summary_sha256"] != summary_sha256:
         raise PrototypeError("probe plan confirmation digest no longer matches fixed request")
 
+    configure_security = (
+        process_security_configurator or configure_secret_process_security
+    )
+    process_security = configure_security()
+    if (
+        process_security.get("windows_wer_noheap_verified") is not True
+        or process_security.get("python_faulthandler_disabled") is not True
+    ):
+        raise PrototypeError("secret process security controls are not verified")
+
     ledger_path = output_dir / LEDGER_FILENAME
     broker = InteractiveRealNetworkPermitBroker(
         ledger=ApprovalLedger(ledger_path),
@@ -179,18 +314,65 @@ def execute_real_development_probe(
     if not transport.real_network:
         raise PrototypeError("real development probe requires the real-network transport")
 
-    response = transport.send(
-        request,
-        control,
-        attempt_context,
-    )
-    if response.status != 200:
-        raise PrototypeError(f"DeepSeek real development probe returned HTTP {response.status}")
-    resolved_model = _resolved_response_model(response.lines)
-    private_message, public_response = consume_deepseek_sse(response.lines)
-    content = private_message.get("content")
-    if not isinstance(content, str):
-        raise PrototypeError("DeepSeek real development probe content is not text")
+    try:
+        response = transport.send(
+            request,
+            control,
+            attempt_context,
+        )
+        if response.status != 200:
+            raise PrototypeError(
+                f"DeepSeek real development probe returned HTTP {response.status}"
+            )
+        resolved_model = _resolved_response_model(response.lines)
+        private_message, public_response = consume_deepseek_sse(response.lines)
+        content = private_message.get("content")
+        if not isinstance(content, str):
+            raise PrototypeError("DeepSeek real development probe content is not text")
+    except PrototypeError as exc:
+        approval = verify_approval_ledger(ledger_path)
+        allowed = approval["valid"] and approval["allow_count"] == 1
+        failure = {
+            "schema_version": "0.1.0-development",
+            "result_kind": "deepseek-real-development-one-shot-failure",
+            "completed_at": utc_now(),
+            "valid": False,
+            "provider": "deepseek",
+            "model": PROBE_MODEL,
+            "endpoint": summary["endpoint"],
+            "authorized_attempt_count": 1 if allowed else 0,
+            "retry_count": 0,
+            "provider_request_received": "unknown" if allowed else "not_attempted",
+            "billing_status": "unknown" if allowed else "not_attempted",
+            "error": _failure_fields(exc),
+            "process_security": process_security,
+            "approval": {
+                "confirmation_summary_sha256": summary_sha256,
+                "ledger_event_count": approval["event_count"],
+                "ledger_allow_count": approval["allow_count"],
+                "ledger_deny_count": approval["deny_count"],
+                "ledger_terminal_event_sha256": approval["terminal_event_sha256"],
+                "confirmation_token_recorded": False,
+            },
+            "claim_eligibility": "not_assessed",
+            "limitations": [
+                "Provider receipt and billing cannot be inferred from an allowed transport failure.",
+                "The pattern scan does not prove absence from process memory, pagefile, hibernation, external dumps, or provider systems.",
+            ],
+        }
+        _attach_verified_leak_scan(
+            output_dir=output_dir,
+            pending_name=FAILURE_FILENAME,
+            document=failure,
+        )
+        validate_instance(
+            failure,
+            RUNTIME_ROOT / "deepseek-real-development-failure-v0.1.schema.json",
+            label="DeepSeek real development failure",
+        )
+        atomic_write_json(failure_path, failure)
+        return failure
+
     marker_matched = content == PROBE_MARKER
     approval = verify_approval_ledger(ledger_path)
     result = {
@@ -226,6 +408,10 @@ def execute_real_development_probe(
             "duration_ms": response.metadata["duration_ms"],
             "tls_verification": response.metadata["tls_verification"],
             "credential_source_id": response.metadata["credential_source_id"],
+            "endpoint_pinned": response.metadata["endpoint_pinned"],
+            "proxy_environment_used": response.metadata["proxy_environment_used"],
+            "redirects_followed": response.metadata["redirects_followed"],
+            "http_debug_output": response.metadata["http_debug_output"],
             "authorization_recorded": False,
         },
         "approval": {
@@ -234,12 +420,19 @@ def execute_real_development_probe(
             "ledger_terminal_event_sha256": approval["terminal_event_sha256"],
             "confirmation_token_recorded": False,
         },
+        "process_security": process_security,
         "claim_eligibility": "not_assessed",
         "limitations": [
             "This is a single development transport probe, not a reliability or quality evaluation.",
             "No prompt, response content, provider-private reasoning, or credential value is persisted.",
+            "The pattern scan does not prove absence from process memory, pagefile, hibernation, external dumps, or provider systems.",
         ],
     }
+    _attach_verified_leak_scan(
+        output_dir=output_dir,
+        pending_name=RESULT_FILENAME,
+        document=result,
+    )
     validate_instance(
         result,
         RUNTIME_ROOT / "deepseek-real-development-result-v0.1.schema.json",

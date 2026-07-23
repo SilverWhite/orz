@@ -30,6 +30,27 @@ DEEPSEEK_PORT = 443
 DEEPSEEK_CHAT_PATH = "/chat/completions"
 
 
+class SanitizedDeepSeekTransportError(PrototypeError):
+    """External transport failure carrying only non-secret diagnostic fields."""
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        error_type: str,
+        error_number: int | None,
+    ) -> None:
+        self.stage = stage
+        self.error_type = error_type
+        self.error_number = error_number
+        number_suffix = (
+            f", error_number={error_number}" if error_number is not None else ""
+        )
+        super().__init__(
+            f"DeepSeek HTTPS transport failed at {stage} ({error_type}{number_suffix})"
+        )
+
+
 @dataclass(frozen=True)
 class PreparedDeepSeekRequest:
     body: bytes
@@ -130,6 +151,8 @@ class DeepSeekHttpsTransport:
                     selected.connect_seconds,
                     context,
                 )
+                if getattr(connection, "debuglevel", 0) != 0:
+                    raise PrototypeError("DeepSeek HTTPS debug output must be disabled")
                 try:
                     failure_stage = "connect"
                     connection.connect()
@@ -241,6 +264,10 @@ class DeepSeekHttpsTransport:
                     "connection_factory": (
                         "injected" if self._injected_connection_factory else "stdlib-direct"
                     ),
+                    "endpoint_pinned": True,
+                    "proxy_environment_used": False,
+                    "redirects_followed": False,
+                    "http_debug_output": False,
                     "authorization_recorded": False,
                 },
             )
@@ -250,12 +277,10 @@ class DeepSeekHttpsTransport:
             error_number = getattr(exc, "winerror", None)
             if error_number is None:
                 error_number = getattr(exc, "errno", None)
-            number_suffix = (
-                f", error_number={error_number}" if error_number is not None else ""
-            )
-            raise PrototypeError(
-                "DeepSeek HTTPS transport failed at "
-                f"{failure_stage} ({type(exc).__name__}{number_suffix})"
+            raise SanitizedDeepSeekTransportError(
+                stage=failure_stage,
+                error_type=type(exc).__name__,
+                error_number=error_number,
             ) from None
         finally:
             if response is not None:

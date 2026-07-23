@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/runtime/deepseek-real-development-failure/v0.1/schema.json",
+  "title": "DeepSeek Real Development One-Shot Failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "completed_at",
+    "valid",
+    "provider",
+    "model",
+    "endpoint",
+    "authorized_attempt_count",
+    "retry_count",
+    "provider_request_received",
+    "billing_status",
+    "error",
+    "process_security",
+    "approval",
+    "artifact_leak_scan",
+    "claim_eligibility",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-development" },
+    "result_kind": { "const": "deepseek-real-development-one-shot-failure" },
+    "completed_at": { "type": "string", "minLength": 1 },
+    "valid": { "const": false },
+    "provider": { "const": "deepseek" },
+    "model": { "const": "deepseek-v4-pro" },
+    "endpoint": { "const": "https://api.deepseek.com/chat/completions" },
+    "authorized_attempt_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+    "retry_count": { "const": 0 },
+    "provider_request_received": { "enum": ["unknown", "not_attempted"] },
+    "billing_status": { "enum": ["unknown", "not_attempted"] },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "stage",
+        "error_type",
+        "error_number",
+        "raw_exception_recorded"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "sanitized_transport_error",
+            "transport_timeout",
+            "prototype_error"
+          ]
+        },
+        "stage": { "type": "string", "minLength": 1 },
+        "error_type": { "type": "string", "minLength": 1 },
+        "error_number": {
+          "oneOf": [
+            { "type": "integer" },
+            { "type": "null" }
+          ]
+        },
+        "raw_exception_recorded": { "const": false }
+      }
+    },
+    "process_security": { "$ref": "#/$defs/processSecurity" },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "confirmation_summary_sha256",
+        "ledger_event_count",
+        "ledger_allow_count",
+        "ledger_deny_count",
+        "ledger_terminal_event_sha256",
+        "confirmation_token_recorded"
+      ],
+      "properties": {
+        "confirmation_summary_sha256": { "$ref": "#/$defs/sha256" },
+        "ledger_event_count": { "const": 1 },
+        "ledger_allow_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "ledger_deny_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "ledger_terminal_event_sha256": { "$ref": "#/$defs/sha256" },
+        "confirmation_token_recorded": { "const": false }
+      }
+    },
+    "artifact_leak_scan": { "$ref": "#/$defs/artifactLeakScan" },
+    "claim_eligibility": { "const": "not_assessed" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "processSecurity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "windows_wer_noheap_verified",
+        "python_faulthandler_disabled",
+        "scope",
+        "limitations"
+      ],
+      "properties": {
+        "windows_wer_noheap_verified": { "const": true },
+        "python_faulthandler_disabled": { "const": true },
+        "scope": { "const": "current-short-lived-cli-process" },
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "artifactLeakScan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "complete",
+        "scanned_file_count",
+        "pending_document_scanned",
+        "actual_credential_read_for_scan",
+        "hit_count"
+      ],
+      "properties": {
+        "policy": {
+          "const": "deepseek-artifact-common-secret-patterns-v0.1"
+        },
+        "complete": { "const": true },
+        "scanned_file_count": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "pending_document_scanned": { "const": true },
+        "actual_credential_read_for_scan": { "const": false },
+        "hit_count": { "const": 0 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "authorized_attempt_count": { "const": 0 } },
+        "required": ["authorized_attempt_count"]
+      },
+      "then": {
+        "properties": {
+          "provider_request_received": { "const": "not_attempted" },
+          "billing_status": { "const": "not_attempted" }
+        }
+      },
+      "else": {
+        "properties": {
+          "provider_request_received": { "const": "unknown" },
+          "billing_status": { "const": "unknown" }
+        }
+      }
+    }
+  ]
+}

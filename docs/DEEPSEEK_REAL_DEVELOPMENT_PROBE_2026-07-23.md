@@ -59,6 +59,10 @@ execute 阶段重新构造并对上同一 request/summary digest，写入一条�
 - retry count：0；
 - `result.json`：不存在，因为没有 provider success。
 
+用户随后报告 DeepSeek 控制台调用次数仍为 0。该外部观察与“POST 可能未抵达”一致，
+但未由本项目 API 独立读取，且控制台可能存在延迟，因此只记录为 user-observed
+corroboration，不把 billing=`unknown` 改写为确定的 `not_billed`。
+
 旧实现只保留了异常类型，没有保留失败 stage/errno，因此不能从该 attempt 追溯
 connect、request、response-header 或 response-body 的精确阶段；也不能断言 provider
 已收到请求或产生费用。
@@ -76,6 +80,12 @@ transport 现已把后续安全错误压缩为 `stage + exception type + numeric
 异常正文；poll timeout 修复和总 deadline 测试通过。任何第二次 provider attempt
 都必须创建新计划、签发新 permit，并取得新的费用授权，不能把本次 allow 当作 retry
 budget。
+
+后续 credential hardening 又要求下一次 execute 在读 key 前验证 WER `NOHEAP`、关闭
+Python faulthandler；固定无 proxy/redirect/HTTP debug；无论成功或失败都生成 terminal
+artifact，并在写入前对全部 output artifacts 做不读取真实 key 的 common-secret-pattern
+scan。详见
+[`DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md`](DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md)。
 
 ## 5. 结论边界
 

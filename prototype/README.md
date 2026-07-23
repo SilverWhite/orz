@@ -163,3 +163,10 @@ credential 入口。API key 只能来自当前用户 Windows Credential Manager 
 Credential `FEP-Agent/DeepSeek`。结果仅保存内容/reasoning digest、usage、transport
 metadata 与 approval ledger，不保存原始回复或 Authorization。它仍只是 development
 transport conformance，不产生科学证据。
+
+execute 在读取 credential 前还要求当前 Windows 短生命周期 CLI 进程成功启用并验证
+WER `NOHEAP`，关闭 Python `faulthandler`，且 transport 固定不使用 proxy environment、
+redirect 或 HTTP debug。成功和失败 terminal artifact 都会在写入前执行 bounded
+common-secret-pattern scan；扫描不会为此读取真实 API key。该层缩小但不能消除
+Python/HTTP/内核内存、pagefile、hibernation、外部 dump、管理员/debugger/malware 或
+provider 认证层的暴露面。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+import ctypes
 import io
 import json
 import os
@@ -42,10 +43,12 @@ from fep_agent_proto.credentials import (
     CredentialLease,
     InMemoryCredentialProvider,
     UnavailableCredentialProvider,
+    _copy_ascii_utf16le_credential_blob,
 )
 from fep_agent_proto.deepseek_external import inspect_deepseek_external_readiness
 from fep_agent_proto.deepseek_https import (
     DeepSeekHttpsTransport,
+    SanitizedDeepSeekTransportError,
     prepare_deepseek_https_request,
 )
 from fep_agent_proto.external_network import (
@@ -83,6 +86,7 @@ from fep_agent_proto.private_transcript import (
     save_private_transcript,
 )
 from fep_agent_proto.real_development_probe import (
+    _scan_artifact_candidates,
     create_real_development_plan,
     execute_real_development_probe,
 )
@@ -90,9 +94,19 @@ from fep_agent_proto.scanner import scan_bundle
 from fep_agent_proto.schema import validate_instance
 from fep_agent_proto.session_validator import validate_session_record
 from fep_agent_proto.windows_process import run_windows_process
+from fep_agent_proto.windows_process_security import configure_secret_process_security
 
 
 CORPUS = REGRESSION_ROOT / "cases-v0.1.yaml"
+
+
+def _fake_process_security() -> dict[str, object]:
+    return {
+        "windows_wer_noheap_verified": True,
+        "python_faulthandler_disabled": True,
+        "scope": "current-short-lived-cli-process",
+        "limitations": ["deterministic unit-test fixture"],
+    }
 
 
 class PrototypeRegressionTests(unittest.TestCase):
@@ -812,6 +826,20 @@ class PrototypeRegressionTests(unittest.TestCase):
         with self.assertRaises(PrototypeError):
             lease.authorization_value()
 
+        owned = bytearray(b"sk-owned-buffer-test")
+        owned_lease = CredentialLease._take_ownership(
+            owned,
+            source_id="owned-buffer-test",
+        )
+        self.assertEqual(owned_lease.authorization_value(), "Bearer sk-owned-buffer-test")
+        owned_lease.close()
+        self.assertEqual(owned, bytearray(len(owned)))
+
+        encoded = "sk-direct-pointer-test\x00".encode("utf-16-le")
+        native_blob = (ctypes.c_ubyte * len(encoded))(*encoded)
+        copied = _copy_ascii_utf16le_credential_blob(native_blob, len(encoded))
+        self.assertEqual(copied, bytearray(b"sk-direct-pointer-test"))
+
     def test_deepseek_https_transport_uses_fake_connection_and_records_no_key(self) -> None:
         class FakeSocket:
             def __init__(self) -> None:
@@ -914,6 +942,10 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertTrue(response.metadata["external_network"])
         self.assertEqual(response.metadata["connection_factory"], "injected")
+        self.assertTrue(response.metadata["endpoint_pinned"])
+        self.assertFalse(response.metadata["proxy_environment_used"])
+        self.assertFalse(response.metadata["redirects_followed"])
+        self.assertFalse(response.metadata["http_debug_output"])
         self.assertFalse(response.metadata["authorization_recorded"])
         self.assertNotIn("sk-test-not-real", json.dumps(response.metadata))
         self.assertTrue(fake.response.closed)
@@ -1036,6 +1068,9 @@ class PrototypeRegressionTests(unittest.TestCase):
         )
         with self.assertRaises(PrototypeError) as captured:
             transport.send(request)
+        self.assertIsInstance(captured.exception, SanitizedDeepSeekTransportError)
+        self.assertEqual(captured.exception.stage, "request")
+        self.assertEqual(captured.exception.error_type, "OSError")
         self.assertNotIn("sk-test-not-real", str(captured.exception))
         self.assertIn("failed at request (OSError)", str(captured.exception))
         self.assertIsNone(captured.exception.__cause__)
@@ -1109,6 +1144,7 @@ class PrototypeRegressionTests(unittest.TestCase):
             ),
             credential_provider=PinnedTestCredentialProvider(),
             connection_factory=lambda host, port, timeout, context: connection,
+            process_security_configurator=_fake_process_security,
         )
 
         self.assertTrue(result["valid"])
@@ -1117,6 +1153,11 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual(result["retry_count"], 0)
         self.assertEqual(result["resolved_model"], "deepseek-v4-pro")
         self.assertTrue(result["marker_matched"])
+        self.assertTrue(result["process_security"]["windows_wer_noheap_verified"])
+        self.assertEqual(result["artifact_leak_scan"]["hit_count"], 0)
+        self.assertFalse(result["transport"]["proxy_environment_used"])
+        self.assertFalse(result["transport"]["redirects_followed"])
+        self.assertFalse(result["transport"]["http_debug_output"])
         self.assertIn("REAL DEEPSEEK DEVELOPMENT REQUEST", confirmation_output.getvalue())
         persisted = (output_dir / "result.json").read_text(encoding="utf-8")
         ledger = (output_dir / "network-approvals.jsonl").read_text(encoding="utf-8")
@@ -1125,6 +1166,75 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertNotIn(token, persisted)
         self.assertNotIn(token, ledger)
         self.assertTrue(verify_approval_ledger(output_dir / "network-approvals.jsonl")["valid"])
+
+    def test_real_development_probe_writes_redacted_failure_artifact(self) -> None:
+        class FailingConnection:
+            sock = None
+
+            def connect(self) -> None:
+                pass
+
+            def request(self, method: str, path: str, **kwargs: object) -> None:
+                raise OSError("must-not-persist sk-test-not-real")
+
+            def close(self) -> None:
+                pass
+
+        class PinnedTestCredentialProvider:
+            source_id = "windows-credential-manager-current-user"
+
+            def acquire(self) -> CredentialLease:
+                return CredentialLease(
+                    b"sk-test-not-real",
+                    source_id=self.source_id,
+                )
+
+        output_dir = self.root / "real-probe-failure"
+        plan = create_real_development_plan(output_dir=output_dir)
+        token = "ALLOW-" + plan["confirmation_summary_sha256"][:12].upper()
+        failure = execute_real_development_probe(
+            plan_path=output_dir / "plan.json",
+            confirmation_io=ConsoleConfirmationIO(
+                input_func=lambda: token,
+                output=io.StringIO(),
+                attempt_label="real-network",
+            ),
+            credential_provider=PinnedTestCredentialProvider(),
+            connection_factory=lambda host, port, timeout, context: FailingConnection(),
+            process_security_configurator=_fake_process_security,
+        )
+
+        self.assertFalse(failure["valid"])
+        self.assertEqual(failure["authorized_attempt_count"], 1)
+        self.assertEqual(failure["retry_count"], 0)
+        self.assertEqual(failure["error"]["category"], "sanitized_transport_error")
+        self.assertEqual(failure["error"]["stage"], "request")
+        self.assertFalse(failure["error"]["raw_exception_recorded"])
+        self.assertEqual(failure["artifact_leak_scan"]["hit_count"], 0)
+        persisted = (output_dir / "failure.json").read_text(encoding="utf-8")
+        self.assertNotIn("must-not-persist", persisted)
+        self.assertNotIn("sk-test-not-real", persisted)
+
+    def test_real_development_artifact_scan_rejects_common_secret_shape(self) -> None:
+        output_dir = self.root / "real-probe-leak"
+        output_dir.mkdir()
+        (output_dir / "existing.txt").write_bytes(
+            b"sk-deliberately-long-test-secret-1234567890"
+        )
+        with self.assertRaises(PrototypeError) as captured:
+            _scan_artifact_candidates(
+                output_dir=output_dir,
+                pending_name="result.json",
+                pending_bytes=b'{"valid":true}\n',
+            )
+        self.assertIn("deepseek_key_shape", str(captured.exception))
+        self.assertNotIn("deliberately-long-test-secret", str(captured.exception))
+
+    @unittest.skipUnless(os.name == "nt", "Windows WER control")
+    def test_windows_secret_process_security_disables_wer_heap_collection(self) -> None:
+        result = configure_secret_process_security()
+        self.assertTrue(result["windows_wer_noheap_verified"])
+        self.assertTrue(result["python_faulthandler_disabled"])
 
     def test_real_network_broker_rejects_in_process_fake_provider(self) -> None:
         broker = InteractiveRealNetworkPermitBroker(

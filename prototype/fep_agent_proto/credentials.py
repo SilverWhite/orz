@@ -11,21 +11,74 @@ from .errors import PrototypeError
 WINDOWS_DEEPSEEK_CREDENTIAL_TARGET = "FEP-Agent/DeepSeek"
 
 
+def _copy_ascii_utf16le_credential_blob(
+    blob: ctypes.POINTER(ctypes.c_ubyte),
+    size: int,
+) -> bytearray:
+    if size % 2:
+        raise PrototypeError(
+            "pinned Windows DeepSeek credential has invalid UTF-16LE byte length"
+        )
+    unit_count = size // 2
+    while (
+        unit_count > 0
+        and blob[(unit_count - 1) * 2] == 0
+        and blob[(unit_count - 1) * 2 + 1] == 0
+    ):
+        unit_count -= 1
+    secret = bytearray(unit_count)
+    try:
+        for index in range(unit_count):
+            low = int(blob[index * 2])
+            high = int(blob[index * 2 + 1])
+            if high != 0 or low < 0x21 or low > 0x7E:
+                raise PrototypeError(
+                    "pinned Windows DeepSeek credential must be printable ASCII stored as UTF-16LE"
+                )
+            secret[index] = low
+        _validate_api_key(secret)
+        return secret
+    except Exception:
+        for index in range(len(secret)):
+            secret[index] = 0
+        raise
+
+
 class CredentialLease:
     """Best-effort, short-lived owner for an ASCII API key."""
 
-    def __init__(self, secret: bytes, *, source_id: str) -> None:
+    def __init__(self, secret: bytes | bytearray, *, source_id: str) -> None:
         _validate_api_key(secret)
+        self._initialize(bytearray(secret), source_id=source_id)
+
+    def _initialize(self, secret: bytearray, *, source_id: str) -> None:
         if not source_id or any(character.isspace() for character in source_id):
             raise PrototypeError("credential source ID must be a non-empty opaque token")
-        self._secret = bytearray(secret)
+        self._secret = secret
         self.source_id = source_id
         self._closed = False
+
+    @classmethod
+    def _take_ownership(
+        cls,
+        secret: bytearray,
+        *,
+        source_id: str,
+    ) -> CredentialLease:
+        _validate_api_key(secret)
+        instance = cls.__new__(cls)
+        try:
+            instance._initialize(secret, source_id=source_id)
+        except Exception:
+            for index in range(len(secret)):
+                secret[index] = 0
+            raise
+        return instance
 
     def authorization_value(self) -> str:
         if self._closed:
             raise PrototypeError("credential lease is already closed")
-        return "Bearer " + bytes(self._secret).decode("ascii")
+        return "Bearer " + self._secret.decode("ascii")
 
     def close(self) -> None:
         if not self._closed:
@@ -121,21 +174,17 @@ class WindowsCredentialManagerProvider:
             error = ctypes.get_last_error()
             raise PrototypeError(
                 f"cannot read the pinned Windows DeepSeek credential (WinError {error})"
-            )
+        )
         try:
             credential = credential_pointer.contents
-            blob = ctypes.string_at(
+            secret = _copy_ascii_utf16le_credential_blob(
                 credential.CredentialBlob,
-                credential.CredentialBlobSize,
+                int(credential.CredentialBlobSize),
             )
-            try:
-                text = blob.decode("utf-16-le").rstrip("\x00")
-                secret = text.encode("ascii")
-            except (UnicodeDecodeError, UnicodeEncodeError) as exc:
-                raise PrototypeError(
-                    "pinned Windows DeepSeek credential must be an ASCII key stored as UTF-16LE"
-                ) from exc
-            return CredentialLease(secret, source_id=self.source_id)
+            return CredentialLease._take_ownership(
+                secret,
+                source_id=self.source_id,
+            )
         finally:
             cred_free(credential_pointer)
 
@@ -146,9 +195,9 @@ class WindowsCredentialManagerProvider:
         )
 
 
-def _validate_api_key(secret: bytes) -> None:
-    if not isinstance(secret, bytes):
-        raise PrototypeError("DeepSeek API key must be supplied as bytes")
+def _validate_api_key(secret: bytes | bytearray) -> None:
+    if not isinstance(secret, (bytes, bytearray)):
+        raise PrototypeError("DeepSeek API key must be supplied as a byte buffer")
     if not 8 <= len(secret) <= 512:
         raise PrototypeError("DeepSeek API key length is outside the accepted local bound")
     if any(byte < 0x21 or byte > 0x7E for byte in secret):

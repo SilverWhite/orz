@@ -48,6 +48,11 @@ FEP-Agent/DeepSeek
 
 本项目不接受 API key CLI 参数、配置文件字段或环境变量。credential blob 契约为 UTF-16LE 保存的 printable ASCII key；读取后包装成短生命周期 `CredentialLease`，退出 context 时对其 bytearray 做 best-effort 覆盖。Python string、HTTP 库和内核缓冲可能产生不可控副本，因此这不宣称密码学意义上的内存零化。
 
+Windows provider 直接从 `CredReadW` buffer 逐 UTF-16LE code unit 填充 owned
+`bytearray`，不再创建中间 blob bytes、Unicode string 和第二份 ASCII bytes。
+`CredentialLease` 接管同一 buffer 并在 close 时原地覆盖；Authorization Python string
+和 HTTP/内核副本仍不可避免。
+
 `CredReadW` 返回的 credential 必须由 `CredFree` 释放。错误信息不包含 key，普通 metadata 只记录 provider source ID，并固定 `authorization_recorded=false`。
 
 ## 5. 调用顺序
@@ -93,6 +98,12 @@ TLS/HTTP/provider 失败都不能重放。成功结果不保存 prompt、回复�
 reasoning、confirmation token 或 Authorization，只保存 digest、长度、usage、固定
 marker 比对和脱敏 transport metadata。该入口不接 model loop、工具或研究场景。
 
+execute 在任何 credential access 前必须为当前短生命周期 CLI 进程设置并读回验证
+Windows WER `NOHEAP`，同时关闭 Python `faulthandler`。transport metadata 机械声明并
+由测试覆盖：endpoint pinned、proxy environment unused、redirect count 0、HTTP debug
+disabled。成功 `result.json` 和失败 `failure.json` 都在原子写入前扫描当前 output root
+及 pending document 的常见 `sk-...` / Bearer credential pattern；扫描不读取真实 key。
+
 沙箱内预检曾得到 WinError 1168；同一凭据在沙箱外通过固定 provider 成功读取并释放，
 说明前者来自 credential-vault 隔离，不是 target 缺失。首个 execute 消费一条 allow
 ledger event 后以通用脱敏 `OSError` 退出，没有 `result.json`，也没有 retry。随后独立
@@ -112,6 +123,11 @@ POST 已抵达 provider，也不能判定是否计费。
 - 没有 session-wide、retry-wide 或自动批准；
 - 没有 evaluation/holdout、研究数据或 claim-bearing 调用。
 
+WER `NOHEAP`、短进程和 artifact pattern scan 不能阻止管理员、debugger、恶意软件、
+pagefile、hibernation、外部 dump 工具或 provider 认证系统读取内存/Authorization。
+Python immutable string、HTTP 库和内核缓冲仍无法做密码学零化，因此不得宣称“API key
+绝对未被读取”或“绝对无任何残留”。
+
 ## 9. 官方来源
 
 - [DeepSeek first API call and Bearer authentication](https://api-docs.deepseek.com/)
@@ -121,3 +137,4 @@ POST 已抵达 provider，也不能判定是否计费。
 - [Microsoft CredReadW](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credreadw)
 - [Microsoft CREDENTIALW](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
 - [Microsoft CredFree](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credfree)
+- [Microsoft WerSetFlags / WER NOHEAP](https://learn.microsoft.com/en-us/windows/win32/api/werapi/nf-werapi-wersetflags)
