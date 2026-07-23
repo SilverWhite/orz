@@ -1,13 +1,22 @@
 [CmdletBinding()]
 param(
-    [string]$BinaryPath
+    [string]$BinaryPath,
+
+    [string]$ReleaseMetadataPath
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$lockPath = Join-Path $repoRoot 'upstream\grok-build.lock.json'
+$lockPath = if ($ReleaseMetadataPath) {
+    (Resolve-Path -LiteralPath $ReleaseMetadataPath -ErrorAction Stop).Path
+} else {
+    Join-Path $repoRoot 'upstream\grok-build.lock.json'
+}
 $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $expected = $lock.binary_release
+if ($null -eq $expected) {
+    throw "Release metadata does not contain binary_release: $lockPath"
+}
 
 if (-not $BinaryPath) {
     $relative = $expected.installed_path.Replace('/', '\')
@@ -17,7 +26,7 @@ if (-not $BinaryPath) {
 $report = [ordered]@{
     schema_version = '0.1.0'
     checked_at = (Get-Date).ToUniversalTime().ToString('o')
-    lock_path = 'upstream/grok-build.lock.json'
+    lock_path = $lockPath
     binary_path = $BinaryPath
     installed = $false
     valid = $false
@@ -26,6 +35,7 @@ $report = [ordered]@{
     limitations = @(
         'Authenticode validity confirms the local signature chain at check time, not source correspondence.',
         'The released binary build ID is not proven to correspond to the open-source build_repo_commit or SOURCE_REV.',
+        'A candidate release receipt proves local identity only; it does not select that version as the project default.',
         'This command performs no login, model request, tool execution, update, or network access.'
     )
 }

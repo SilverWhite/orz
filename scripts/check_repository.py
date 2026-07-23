@@ -168,6 +168,67 @@ def check_repository() -> dict[str, Any]:
                 )
     counts["upstream_locks"] = 1
 
+    upstream_candidate_path = ROOT / "upstream/grok-build.candidate.json"
+    upstream_candidate = _load_json(upstream_candidate_path)
+    errors.extend(
+        _validate_instance(
+            upstream_candidate,
+            ROOT / "upstream/grok-build-candidate-v0.1.schema.json",
+            "upstream/grok-build.candidate.json",
+        )
+    )
+    candidate_baseline = upstream_candidate.get("baseline", {})
+    candidate_discovery = upstream_candidate.get("discovery", {})
+    candidate_release = upstream_candidate.get("binary_release", {})
+    candidate_promotion = upstream_candidate.get("promotion", {})
+    if candidate_baseline.get("version") != upstream_lock.get("binary_release", {}).get(
+        "version"
+    ):
+        errors.append("upstream candidate baseline version does not match observed lock")
+    if candidate_baseline.get("sha256") != upstream_lock.get("binary_release", {}).get(
+        "sha256"
+    ):
+        errors.append("upstream candidate baseline SHA-256 does not match observed lock")
+    if candidate_discovery.get("channel_pointer_version") != candidate_release.get(
+        "version"
+    ):
+        errors.append("upstream candidate binary version does not match stable pointer")
+    try:
+        baseline_version = tuple(
+            int(part) for part in candidate_baseline["version"].split(".")
+        )
+        candidate_version = tuple(
+            int(part) for part in candidate_release["version"].split(".")
+        )
+        if candidate_version <= baseline_version:
+            errors.append("upstream candidate version must be newer than observed baseline")
+    except (KeyError, TypeError, ValueError):
+        errors.append("upstream candidate versions are not comparable numeric triples")
+    expected_candidate_gates = {
+        "binary_identity",
+        "acp_initialize",
+        "fake_tool_allow",
+        "fake_tool_cancel",
+        "windows_child_tree_timeout",
+        "deepseek_reasoning_continuity",
+        "repository_regression",
+    }
+    candidate_gate_ids = [
+        gate.get("id")
+        for gate in candidate_promotion.get("gates", [])
+        if isinstance(gate, dict)
+    ]
+    if len(candidate_gate_ids) != len(set(candidate_gate_ids)):
+        errors.append("upstream candidate promotion gates contain duplicate IDs")
+    if set(candidate_gate_ids) != expected_candidate_gates:
+        errors.append("upstream candidate promotion gate set is incomplete")
+    if (
+        candidate_promotion.get("status") != "eligible"
+        and candidate_promotion.get("selected_as_default") is True
+    ):
+        errors.append("non-eligible upstream candidate cannot be selected as default")
+    counts["upstream_candidates"] = 1
+
     grok_config_path = ROOT / "integration/grok/deepseek-custom-model.example.toml"
     with grok_config_path.open("rb") as handle:
         grok_config = tomllib.load(handle)

@@ -83,6 +83,7 @@ class AcpClient:
             method: 0 for method in sorted(ALLOWED_EXTENSION_NOTIFICATIONS)
         }
         self.session_id = ""
+        self.early_session_id = ""
         self.updates: list[dict[str, Any]] = []
         self.permission_requests: list[dict[str, Any]] = []
         self.permission_outcome = ""
@@ -195,13 +196,23 @@ class AcpClient:
         if method == "_x.ai/mcp/servers_updated":
             return set(params) == {"mcpServers"} and params.get("mcpServers") == []
         if method == "_x.ai/mcp_initialized":
-            return (
+            session_id = params.get("sessionId")
+            valid = (
                 set(params) == {"elapsedMs", "mcpToolCount", "sessionId"}
                 and type(params.get("elapsedMs")) is int
                 and params["elapsedMs"] >= 0
                 and params.get("mcpToolCount") == 0
-                and params.get("sessionId") == self.session_id
+                and isinstance(session_id, str)
+                and bool(session_id)
             )
+            if not valid:
+                return False
+            if self.session_id:
+                return session_id == self.session_id
+            if self.early_session_id and session_id != self.early_session_id:
+                return False
+            self.early_session_id = session_id
+            return True
         if method == "_x.ai/queue/changed":
             entries = params.get("entries")
             valid_entries = isinstance(entries, list) and all(
@@ -214,11 +225,29 @@ class AcpClient:
                 and type(entry.get("version")) is int
                 for entry in entries
             )
+            keys_valid = set(params).issubset(
+                {
+                    "entries",
+                    "runningKind",
+                    "runningPromptId",
+                    "runningText",
+                    "sessionId",
+                }
+            )
+            running_metadata_valid = (
+                "runningKind" not in params
+                and "runningText" not in params
+            ) or (
+                params.get("runningKind") == "prompt"
+                and isinstance(params.get("runningText"), str)
+                and isinstance(params.get("runningPromptId"), str)
+            )
             return (
-                set(params).issubset({"entries", "runningPromptId", "sessionId"})
+                keys_valid
                 and {"entries", "sessionId"}.issubset(params)
                 and valid_entries
                 and params.get("sessionId") == self.session_id
+                and running_metadata_valid
                 and (
                     "runningPromptId" not in params
                     or isinstance(params.get("runningPromptId"), str)
@@ -657,6 +686,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         session_id = session.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise RuntimeError("session/new did not return a non-empty sessionId")
+        if client.early_session_id and client.early_session_id != session_id:
+            raise RuntimeError(
+                "early MCP initialization sessionId does not match session/new"
+            )
         client.session_id = session_id
         prompt_result = client.prompt(session_id, prompt)
         client.close_input()

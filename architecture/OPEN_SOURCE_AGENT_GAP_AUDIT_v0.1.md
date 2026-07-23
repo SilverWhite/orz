@@ -5,7 +5,9 @@ provider 协议语义。
 
 ## 1. 结论
 
-继续以 Grok Build `0.2.106` Windows 预编译程序为 runtime，不更换底座，也不重建通用 Agent CLI。
+本审计以 Grok Build `0.2.106` Windows 预编译程序为当时的可复现实测 baseline，不重建通用 Agent CLI。
+baseline 不是版本上限；后续版本按
+[`UPSTREAM_VERSION_STRATEGY_v0.1.md`](UPSTREAM_VERSION_STRATEGY_v0.1.md) 进入 candidate/promotion gate。
 Codex CLI、Gemini CLI、OpenHands、Aider、Goose 与 OpenCode 的成熟设计表明，本项目当前真正缺少的是
 Grok 外侧的四类可验证边界：
 

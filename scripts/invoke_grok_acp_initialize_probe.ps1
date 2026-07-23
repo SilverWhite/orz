@@ -10,7 +10,9 @@ param(
     [ValidateRange(5, 120)]
     [int]$TimeoutSeconds = 20,
 
-    [string]$PythonPath = 'python'
+    [string]$PythonPath = 'python',
+
+    [string]$ReleaseMetadataPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -295,18 +297,25 @@ function Invoke-TrustReceipt {
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$lockPath = Join-Path $repoRoot 'upstream\grok-build.lock.json'
+$lockPath = if ($ReleaseMetadataPath) {
+    (Resolve-Path -LiteralPath $ReleaseMetadataPath -ErrorAction Stop).Path
+} else {
+    Join-Path $repoRoot 'upstream\grok-build.lock.json'
+}
 $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($null -eq $lock.binary_release) {
+    throw "Release metadata does not contain binary_release: $lockPath"
+}
 $binaryPath = (Resolve-Path -LiteralPath $GrokPath -ErrorAction Stop).Path
 $binaryItem = Get-Item -LiteralPath $binaryPath -Force
 $binarySha256 = (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $lockedSha256 = [string]$lock.binary_release.sha256
 if ($binarySha256 -ne $lockedSha256 -or $binaryItem.Length -ne [long]$lock.binary_release.bytes) {
-    throw 'Grok binary does not match the locked release digest/size.'
+    throw 'Grok binary does not match the selected release metadata digest/size.'
 }
 $signature = Get-AuthenticodeSignature -LiteralPath $binaryPath
 if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=X\.AI LLC(?:,|$)') {
-    throw 'Grok binary Authenticode signature is not the locked X.AI LLC signature.'
+    throw 'Grok binary Authenticode signature is not the selected X.AI LLC release signature.'
 }
 
 $outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory)

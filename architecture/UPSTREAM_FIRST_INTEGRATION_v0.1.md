@@ -61,8 +61,10 @@ thinking 配置，并在工具结果的后续请求中带回完整 `reasoning_co
 
 - 优先使用官方发布的 Windows 预编译程序，避免把 Rust workspace/source build 变成本项目门槛。
 - CI 保留 Windows；Ubuntu 只作为 schema/Python portability 检查，不要求用户迁移系统。
-- 薄 launcher 负责定位锁定版本、建立最小子进程环境、注入短时凭据并收集 headless 输出。
-- Grok 未安装、版本不匹配或 conformance 未通过时 fail closed；不静默下载、不自动登录、不真实调用。
+- 薄 launcher 负责定位显式 release metadata 对应的版本、建立最小子进程环境、注入短时凭据并收集 headless 输出。
+- observed baseline 用于重放，current candidate 用于升级评估；任一版本身份不匹配或 conformance 未通过时
+  fail closed。不静默下载、不自动登录、不真实调用。版本策略见
+  [`UPSTREAM_VERSION_STRATEGY_v0.1.md`](UPSTREAM_VERSION_STRATEGY_v0.1.md)。
 - Windows 源码构建仍按上游的 best-effort 状态处理，除非以后确有必须修改上游 Rust 的缺口。
 
 官方 Windows 安装器不是单纯解压到当前目录：它默认写入 `~/.grok`、生成 `config.toml` 和

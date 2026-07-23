@@ -1,0 +1,78 @@
+{
+  "schema_version": "0.1.0",
+  "receipt_kind": "grok-build-upstream-candidate",
+  "observed_at": "2026-07-23T06:53:01Z",
+  "repository": "https://github.com/xai-org/grok-build",
+  "baseline": {
+    "metadata_path": "upstream/grok-build.lock.json",
+    "version": "0.2.106",
+    "sha256": "a6a25d55daadca0c2458a5aceb4c1873eb7c76964ef307647d079e344c53969a"
+  },
+  "discovery": {
+    "channel": "stable",
+    "channel_pointer_url": "https://x.ai/cli/stable",
+    "channel_pointer_version": "0.2.111",
+    "installer_url": "https://x.ai/cli/install.ps1",
+    "changelog_url": "https://x.ai/build/changelog",
+    "changelog_latest_version": "0.2.106",
+    "changelog_lag_observed": true
+  },
+  "source_snapshot": {
+    "build_repo_commit": "a5727c5960452e7527a154b25cb5bf00cda0545e",
+    "source_rev": "30192d2eef5d91a8fff0e53957de5bd05b43398c",
+    "readme_sha256": "322066de9f5bc136295bd0ae4f1752cef3d8dcb1a8f9d88044609e7b6d7abcf7"
+  },
+  "source_compare": {
+    "base_commit": "a881e6703f46b01d8c7d4a5437683546df30449d",
+    "head_commit": "a5727c5960452e7527a154b25cb5bf00cda0545e",
+    "ahead_by": 2,
+    "total_commits": 2,
+    "files_returned": 300,
+    "file_list_complete": false,
+    "returned_additions": 12302,
+    "returned_deletions": 2070,
+    "returned_changes": 14372,
+    "relevant_surfaces": [
+      "acp",
+      "background_tasks",
+      "compaction",
+      "managed_config",
+      "permissions",
+      "session_persistence",
+      "worktree"
+    ]
+  },
+  "binary_release": {
+    "status": "candidate-identity-verified",
+    "channel": "stable",
+    "version": "0.2.111",
+    "build_id": "94172f2aa4",
+    "artifact_url": "https://x.ai/cli/grok-0.2.111-windows-x86_64.exe",
+    "bytes": 137980232,
+    "md5": "ab3b37ddc85e8fa9c7bdb2633bdfcf19",
+    "sha256": "a3614df24080471709d096a2e47ce7f6c84443af1cb59b7363967858858bc9bc",
+    "authenticode_status": "Valid",
+    "signer_common_name": "X.AI LLC",
+    "installed_path": ".tools/grok/0.2.111/grok.exe",
+    "source_correspondence": "unverified"
+  },
+  "promotion": {
+    "status": "conformance-in-progress",
+    "selected_as_default": false,
+    "gates": [
+      { "id": "binary_identity", "status": "passed" },
+      { "id": "acp_initialize", "status": "passed" },
+      { "id": "fake_tool_allow", "status": "passed" },
+      { "id": "fake_tool_cancel", "status": "passed" },
+      { "id": "windows_child_tree_timeout", "status": "pending" },
+      { "id": "deepseek_reasoning_continuity", "status": "passed" },
+      { "id": "repository_regression", "status": "passed" }
+    ]
+  },
+  "limitations": [
+    "The stable pointer was observed independently from the lagging public changelog; the pointer does not prove behavioral compatibility.",
+    "GitHub compare returned the API maximum of 300 files, so returned addition/deletion/change totals are explicitly partial.",
+    "Authenticode, size, MD5, SHA-256, PE header, and version output prove local artifact identity, not correspondence to the open-source source snapshot.",
+    "The candidate is not the project default until all required conformance gates pass and a separate promotion decision is recorded."
+  ]
+}

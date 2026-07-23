@@ -133,11 +133,28 @@ def _is_allowed_extension_notification(
             and type(entry.get("version")) is int
             for entry in entries
         )
+        keys_valid = set(params).issubset(
+            {
+                "entries",
+                "runningKind",
+                "runningPromptId",
+                "runningText",
+                "sessionId",
+            }
+        )
+        running_metadata_valid = (
+            "runningKind" not in params and "runningText" not in params
+        ) or (
+            params.get("runningKind") == "prompt"
+            and isinstance(params.get("runningText"), str)
+            and isinstance(params.get("runningPromptId"), str)
+        )
         return (
-            set(params).issubset({"entries", "runningPromptId", "sessionId"})
+            keys_valid
             and {"entries", "sessionId"}.issubset(params)
             and valid_entries
             and params.get("sessionId") == session_id
+            and running_metadata_valid
             and (
                 "runningPromptId" not in params
                 or isinstance(params.get("runningPromptId"), str)
@@ -743,8 +760,14 @@ def main() -> int:
     )
     parser.add_argument("--result", type=Path, required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--lock",
+        type=Path,
+        default=UPSTREAM_LOCK,
+        help="Release metadata containing the binary_release identity",
+    )
     args = parser.parse_args()
-    verification = verify(args.result.resolve())
+    verification = verify(args.result.resolve(), lock_path=args.lock.resolve())
     if args.output:
         _atomic_write_json(args.output.resolve(), verification)
     print(json.dumps(verification, ensure_ascii=False, sort_keys=True))

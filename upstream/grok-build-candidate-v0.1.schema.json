@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schemas/grok-build-candidate-v0.1.schema.json",
+  "title": "Grok Build current upstream candidate receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "observed_at",
+    "repository",
+    "baseline",
+    "discovery",
+    "source_snapshot",
+    "source_compare",
+    "binary_release",
+    "promotion",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "receipt_kind": { "const": "grok-build-upstream-candidate" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "repository": { "const": "https://github.com/xai-org/grok-build" },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metadata_path", "version", "sha256"],
+      "properties": {
+        "metadata_path": { "const": "upstream/grok-build.lock.json" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "channel_pointer_url",
+        "channel_pointer_version",
+        "installer_url",
+        "changelog_url",
+        "changelog_latest_version",
+        "changelog_lag_observed"
+      ],
+      "properties": {
+        "channel": { "const": "stable" },
+        "channel_pointer_url": { "const": "https://x.ai/cli/stable" },
+        "channel_pointer_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "installer_url": { "const": "https://x.ai/cli/install.ps1" },
+        "changelog_url": { "const": "https://x.ai/build/changelog" },
+        "changelog_latest_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "changelog_lag_observed": { "type": "boolean" }
+      }
+    },
+    "source_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build_repo_commit", "source_rev", "readme_sha256"],
+      "properties": {
+        "build_repo_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "source_rev": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "readme_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "source_compare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_commit",
+        "head_commit",
+        "ahead_by",
+        "total_commits",
+        "files_returned",
+        "file_list_complete",
+        "returned_additions",
+        "returned_deletions",
+        "returned_changes",
+        "relevant_surfaces"
+      ],
+      "properties": {
+        "base_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "head_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "ahead_by": { "type": "integer", "minimum": 0 },
+        "total_commits": { "type": "integer", "minimum": 0 },
+        "files_returned": { "type": "integer", "minimum": 0 },
+        "file_list_complete": { "type": "boolean" },
+        "returned_additions": { "type": "integer", "minimum": 0 },
+        "returned_deletions": { "type": "integer", "minimum": 0 },
+        "returned_changes": { "type": "integer", "minimum": 0 },
+        "relevant_surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "acp",
+              "background_tasks",
+              "compaction",
+              "managed_config",
+              "permissions",
+              "session_persistence",
+              "worktree"
+            ]
+          }
+        }
+      }
+    },
+    "binary_release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "channel",
+        "version",
+        "build_id",
+        "artifact_url",
+        "bytes",
+        "md5",
+        "sha256",
+        "authenticode_status",
+        "signer_common_name",
+        "installed_path",
+        "source_correspondence"
+      ],
+      "properties": {
+        "status": { "const": "candidate-identity-verified" },
+        "channel": { "const": "stable" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "build_id": { "type": "string", "pattern": "^[0-9a-f]{10}$" },
+        "artifact_url": { "type": "string", "format": "uri", "pattern": "^https://x\\.ai/cli/" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "md5": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "authenticode_status": { "const": "Valid" },
+        "signer_common_name": { "const": "X.AI LLC" },
+        "installed_path": { "type": "string", "pattern": "^\\.tools/grok/[^/]+/grok\\.exe$" },
+        "source_correspondence": { "const": "unverified" }
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "selected_as_default", "gates"],
+      "properties": {
+        "status": {
+          "enum": ["discovered", "conformance-in-progress", "eligible", "rejected"]
+        },
+        "selected_as_default": { "type": "boolean" },
+        "gates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status"],
+            "properties": {
+              "id": {
+                "enum": [
+                  "binary_identity",
+                  "acp_initialize",
+                  "fake_tool_allow",
+                  "fake_tool_cancel",
+                  "windows_child_tree_timeout",
+                  "deepseek_reasoning_continuity",
+                  "repository_regression"
+                ]
+              },
+              "status": { "enum": ["pending", "passed", "failed", "not-applicable"] }
+            }
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

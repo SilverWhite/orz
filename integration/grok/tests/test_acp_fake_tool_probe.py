@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[3]
 VERIFIER_PATH = ROOT / "scripts" / "verify_grok_acp_fake_tool_probe.py"
+CLIENT_PATH = ROOT / "scripts" / "run_grok_acp_fake_tool_client.py"
 RESULT_SCHEMA = (
     ROOT
     / "integration"
@@ -23,6 +24,13 @@ spec = importlib.util.spec_from_file_location("acp_fake_tool_verifier", VERIFIER
 assert spec and spec.loader
 verifier = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verifier)
+
+client_spec = importlib.util.spec_from_file_location(
+    "acp_fake_tool_client", CLIENT_PATH
+)
+assert client_spec and client_spec.loader
+client_module = importlib.util.module_from_spec(client_spec)
+client_spec.loader.exec_module(client_module)
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -552,6 +560,42 @@ def _build_fixture(
 
 
 class AcpFakeToolVerifierTests(unittest.TestCase):
+    def test_client_accepts_early_mcp_session_id_and_richer_running_queue(self) -> None:
+        client = client_module.AcpClient.__new__(client_module.AcpClient)
+        client.session_id = ""
+        client.early_session_id = ""
+        session_id = "session-fixture-001"
+        self.assertTrue(
+            client._is_allowed_extension_notification(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "_x.ai/mcp_initialized",
+                    "params": {
+                        "elapsedMs": 0,
+                        "mcpToolCount": 0,
+                        "sessionId": session_id,
+                    },
+                }
+            )
+        )
+        self.assertEqual(client.early_session_id, session_id)
+        client.session_id = session_id
+        self.assertTrue(
+            client._is_allowed_extension_notification(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "_x.ai/queue/changed",
+                    "params": {
+                        "entries": [],
+                        "runningKind": "prompt",
+                        "runningPromptId": "prompt-fixture-001",
+                        "runningText": "fixture prompt",
+                        "sessionId": session_id,
+                    },
+                }
+            )
+        )
+
     def test_allow_once_fixture_rebuilds_all_three_evidence_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result_path, lock_path = _build_fixture(Path(temporary), "allow_once")

@@ -37,7 +37,10 @@
         "bytes": { "type": "integer", "minimum": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },
         "locked_sha256": { "$ref": "#/$defs/sha256" },
-        "version": { "const": "0.2.106" },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9._-]+)?$"
+        },
         "authenticode_status": { "$ref": "#/$defs/nonEmptyString" },
         "signer_subject": { "$ref": "#/$defs/nonEmptyString" }
       }

@@ -11,7 +11,9 @@ param(
 
     [string]$BinaryPath,
 
-    [string]$PythonPath
+    [string]$PythonPath,
+
+    [string]$ReleaseMetadataPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -343,12 +345,23 @@ try {
     if ($BinaryPath) {
         $inspectionArgs += @('-BinaryPath', $BinaryPath)
     }
+    if ($ReleaseMetadataPath) {
+        $inspectionArgs += @('-ReleaseMetadataPath', $ReleaseMetadataPath)
+    }
     $inspectionJson = (& powershell @inspectionArgs 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         throw "Grok binary verification failed: $inspectionJson"
     }
     $inspection = $inspectionJson | ConvertFrom-Json
-    $upstreamLock = Get-Content -LiteralPath (Join-Path $repoRoot 'upstream\grok-build.lock.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $releaseMetadataPath = if ($ReleaseMetadataPath) {
+        (Resolve-Path -LiteralPath $ReleaseMetadataPath -ErrorAction Stop).Path
+    } else {
+        Join-Path $repoRoot 'upstream\grok-build.lock.json'
+    }
+    $upstreamLock = Get-Content -LiteralPath $releaseMetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($null -eq $upstreamLock.binary_release) {
+        throw "Release metadata does not contain binary_release: $releaseMetadataPath"
+    }
 
     $providerScenario = if ($Scenario -eq 'allow_once') { 'tool-continuity' } else { 'tool-cancel' }
     $providerHandle = Start-RedirectedProcess `
@@ -775,7 +788,7 @@ $result = [ordered]@{
 }
 Write-Utf8Atomic -Path $resultPath -Content (($result | ConvertTo-Json -Depth 100) + [Environment]::NewLine)
 
-$verificationJson = (& $PythonPath $verifyScript --result $resultPath --output $verificationPath 2>&1 | Out-String).Trim()
+$verificationJson = (& $PythonPath $verifyScript --result $resultPath --output $verificationPath --lock $releaseMetadataPath 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) {
     throw "ACP fake-tool verification failed: $verificationJson"
 }
