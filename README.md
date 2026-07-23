@@ -1,8 +1,9 @@
 # LIF Scientific-Assurance Agent CLI
 
 状态：基于 Grok Build 的 Windows-first LIF 专项 Agent；官方 Grok Windows binary 已完成锁定与离线核验，
-独立 DeepSeek one-shot transport conformance 已成功；Grok→DeepSeek 两阶段薄 launcher 已进入
-offline/fail-closed 验证，尚未执行真实 Grok provider request。
+独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
+真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
+误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。
 
 本仓库记录一个基于 Grok Build 深度特化的本地 Agent CLI。它服务于 FEP/LIF 研究工作流，目标是让接入的模型
 尽可能遵守来源先行、Ask-Don't-Guess、证据分层、机械验证、全程留痕和独立复核，从而降低幻觉补全、过度推进与
@@ -110,7 +111,7 @@ offline/fail-closed 验证，尚未执行真实 Grok provider request。
 ## 当前边界
 
 - 正式通用 runtime 采用 Grok Build，不再在本仓库复刻 model/session/tool/permission/sandbox 栈。
-- 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher 与已成功的显式确认、零重试 DeepSeek one-shot probe；Grok→DeepSeek 薄 launcher 已完成离线 plan 和沙箱账户启动前 fail-closed，尚未执行真实 Grok provider request、评分或生产 Agent session。
+- 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher、已成功的显式确认/零重试 DeepSeek one-shot probe，以及一次成功完成的固定 Grok→DeepSeek 真实模型会话；尚未执行任意 prompt、真实 workspace、评分或生产 Agent session，修复后的 terminal `result.json` 路径也尚未用第二次真实请求复验。
 - 不决定全部使用 Rust；只把 Rust 视为少量保障组件与 Windows 进程边界的候选实现语言。
 - 不把历史案例直接作为模型提示词答案。
 - 不自动修改 MAP/INDEX。

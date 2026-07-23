@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 from jsonschema import Draft202012Validator
@@ -15,6 +18,49 @@ FAILURE_SCHEMA = ROOT / "integration" / "grok" / "grok-real-deepseek-failure-v0.
 
 
 class RealDeepSeekLauncherTests(unittest.TestCase):
+    def run_leak_scanner(self, root: Path, pending_text: str) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment.pop("LIF_DEEPSEEK_API_KEY", None)
+        environment["LIF_TEST_LAUNCHER"] = str(LAUNCHER)
+        environment["LIF_TEST_SCAN_ROOT"] = str(root)
+        environment["LIF_TEST_PENDING_TEXT"] = pending_text
+        command = r"""
+$ErrorActionPreference = 'Stop'
+$launcher = [Environment]::GetEnvironmentVariable('LIF_TEST_LAUNCHER')
+$root = [Environment]::GetEnvironmentVariable('LIF_TEST_SCAN_ROOT')
+$pending = [Environment]::GetEnvironmentVariable('LIF_TEST_PENDING_TEXT')
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $launcher,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 21 }
+$scanner = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Assert-NoCommonSecretPattern'
+}, $true)
+if ($null -eq $scanner) { exit 22 }
+. ([scriptblock]::Create($scanner.Extent.Text))
+try {
+    Assert-NoCommonSecretPattern -Root $root -PendingText $pending |
+        ConvertTo-Json -Compress
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 23
+}
+"""
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+        )
+
     def test_launcher_has_no_raw_credential_input_or_debug_surface(self) -> None:
         source = LAUNCHER.read_text(encoding="utf-8")
         lowered = source.lower()
@@ -52,6 +98,52 @@ class RealDeepSeekLauncherTests(unittest.TestCase):
         self.assertNotIn("grok.stderr.log", source)
         self.assertIn("[ValidateSet('Plan', 'Execute')]", source)
         self.assertIn("retry_budget = 0", source)
+
+    def test_leak_scan_allows_only_explicit_bearer_placeholders(self) -> None:
+        source = LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn("bearerMatch.Groups['token'].Value", source)
+        self.assertIn("pendingBearerMatch.Groups['token'].Value", source)
+        self.assertIn("<[A-Za-z0-9_-]+>", source)
+        self.assertIn("your_[A-Za-z0-9_-]+", source)
+        self.assertIn(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", source)
+        self.assertIn(r"\$[A-Za-z_][A-Za-z0-9_]*", source)
+        self.assertIn("deepseek_key_shape", source)
+        self.assertIn(
+            "artifact leak scan failed; no terminal artifact was written.", source
+        )
+        self.assertLess(
+            source.index("deepseek_key_shape"),
+            source.index("bearerMatch.Groups['token'].Value"),
+        )
+
+    def test_leak_scanner_behavior_in_powershell(self) -> None:
+        placeholders = "\n".join(
+            (
+                "Authorization: Bearer <token>",
+                "Authorization: Bearer YOUR_TOKEN",
+                "Authorization: Bearer ${INTERNAL_MCP_TOKEN}",
+                "Authorization: Bearer $XAI_API_KEY",
+            )
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "generated-help.md").write_text(placeholders, encoding="utf-8")
+
+            accepted = self.run_leak_scanner(root, placeholders)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertTrue(json.loads(accepted.stdout)["complete"])
+
+            bearer = self.run_leak_scanner(
+                root, "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456"
+            )
+            self.assertEqual(bearer.returncode, 23)
+            self.assertIn("bearer_credential", bearer.stderr)
+
+            deepseek = self.run_leak_scanner(
+                root, "sk-abcdefghijklmnopqrstuvwxyz123456"
+            )
+            self.assertEqual(deepseek.returncode, 23)
+            self.assertIn("deepseek_key_shape", deepseek.stderr)
 
     def test_plan_and_result_schemas_accept_minimal_valid_documents(self) -> None:
         plan_schema = json.loads(PLAN_SCHEMA.read_text(encoding="utf-8"))

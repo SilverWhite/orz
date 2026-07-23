@@ -99,8 +99,11 @@ workspace trust、local trace/export、event bridge 与 hash-only fixture checkp
    conformance 已取得 HTTP 200、模型/marker 匹配和 1 request / 0 retry；
 8. 正式 Grok 薄 launcher 已完成 two-stage plan、固定 binary/model/endpoint、Credential
    Manager 内部注入、隔离 profile/workspace、Job Object、双 trust receipt、无工具/
-   debug/memory/subagent/web 和 artifact leak scan 的 offline/fail-closed 实现；真实
-   Grok→DeepSeek attempt 仍需单独授权。
+   debug/memory/subagent/web 和 artifact leak scan 的实现；
+9. 用户于 2026-07-23 单独授权的一次真实 Grok→DeepSeek attempt 已在 Grok session 中取得
+   `deepseek-v4-pro`、固定 marker、`completed`、1 turn / 0 tools / 0 errors；模型成功后的
+   terminal scan 因内置帮助文档的 Bearer 占位符误报而 fail closed，扫描器已离线修复且未
+   自动补跑第二次付费请求。
 
 六个开源 Agent 的固定版本比较、取舍理由与 source ledger 见
 [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。其中 repo map、

@@ -177,7 +177,15 @@ function Assert-NoCommonSecretPattern {
         if ($text -match '(?i)(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}') {
             throw 'Artifact leak scan detected forbidden pattern: deepseek_key_shape.'
         }
-        if ($text -match '(?i)(?<![A-Za-z0-9_-])bearer[ \t]+[!-~]{8,}') {
+        $bearerMatches = [regex]::Matches(
+            $text,
+            '(?i)(?<![A-Za-z0-9_-])bearer[ \t]+(?<token><[A-Za-z0-9_-]+>|your_[A-Za-z0-9_-]+|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z0-9._~+/=-]{8,})'
+        )
+        foreach ($bearerMatch in $bearerMatches) {
+            $candidate = $bearerMatch.Groups['token'].Value
+            if ($candidate -match '(?i)^(?:<[A-Za-z0-9_-]+>|your_[A-Za-z0-9_-]+|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)$') {
+                continue
+            }
             throw 'Artifact leak scan detected forbidden pattern: bearer_credential.'
         }
     }
@@ -189,7 +197,15 @@ function Assert-NoCommonSecretPattern {
         if ($PendingText -match '(?i)(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}') {
             throw 'Artifact leak scan detected forbidden pattern: deepseek_key_shape.'
         }
-        if ($PendingText -match '(?i)(?<![A-Za-z0-9_-])bearer[ \t]+[!-~]{8,}') {
+        $pendingBearerMatches = [regex]::Matches(
+            $PendingText,
+            '(?i)(?<![A-Za-z0-9_-])bearer[ \t]+(?<token><[A-Za-z0-9_-]+>|your_[A-Za-z0-9_-]+|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z0-9._~+/=-]{8,})'
+        )
+        foreach ($pendingBearerMatch in $pendingBearerMatches) {
+            $candidate = $pendingBearerMatch.Groups['token'].Value
+            if ($candidate -match '(?i)^(?:<[A-Za-z0-9_-]+>|your_[A-Za-z0-9_-]+|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)$') {
+                continue
+            }
             throw 'Artifact leak scan detected forbidden pattern: bearer_credential.'
         }
     }
@@ -584,16 +600,21 @@ try {
         )
     }
     $pendingResult = ($result | ConvertTo-Json -Depth 30) + [Environment]::NewLine
+    $failureStage = 'artifact_leak_scan'
     $result.artifact_leak_scan = Assert-NoCommonSecretPattern -Root $outputRoot -PendingText $pendingResult
     $finalResult = ($result | ConvertTo-Json -Depth 30) + [Environment]::NewLine
     $verifiedResultScan = Assert-NoCommonSecretPattern -Root $outputRoot -PendingText $finalResult
     if ($verifiedResultScan.scanned_file_count -ne $result.artifact_leak_scan.scanned_file_count) {
         throw 'Pending result leak-scan file count changed.'
     }
+    $failureStage = 'result_write'
     Write-Utf8Atomic -Path $resultPath -Content $finalResult
     $result | ConvertTo-Json -Depth 30
     exit 0
 } catch {
+    if ($failureStage -eq 'artifact_leak_scan') {
+        throw 'Grok real DeepSeek conformance artifact leak scan failed; no terminal artifact was written.'
+    }
     $failure = [ordered]@{
         schema_version = '0.1.0'
         result_kind = 'grok-real-deepseek-conformance-failure'

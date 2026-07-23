@@ -6,7 +6,10 @@
 [`invoke_grok_real_deepseek_conformance.ps1`](../../scripts/invoke_grok_real_deepseek_conformance.ps1)
 现提供 Grok Build 的两阶段薄 launcher：Plan 完全离线；Execute 固定单 turn、无工具、
 read-only、无 debug，并在 launcher 内部从 Windows Credential Manager 向 Grok 子进程
-注入短时环境变量。当前只完成离线/fail-closed 验证，尚未执行真实 Grok provider request。
+注入短时环境变量。一次真实 Grok provider request 已完成：session 记录模型
+`deepseek-v4-pro`、固定 marker 完全匹配、1 turn、0 tools、0 errors。请求后的首次
+terminal scan 因 Grok 内置帮助文档中的 Bearer 占位符误报而 fail closed；扫描器已离线修复，
+但遵守零重试边界，没有自动发起第二次真实请求。
 详细边界见
 [`GROK_REAL_DEEPSEEK_LAUNCHER_2026-07-23.md`](../../docs/GROK_REAL_DEEPSEEK_LAUNCHER_2026-07-23.md)。
 
