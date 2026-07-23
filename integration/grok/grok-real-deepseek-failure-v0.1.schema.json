@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/integration/grok-real-deepseek-failure/v0.1/schema.json",
+  "title": "Grok Real DeepSeek Conformance Failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "valid",
+    "failed_at",
+    "confirmation_summary_sha256",
+    "stage",
+    "error_type",
+    "raw_exception_recorded",
+    "grok_started",
+    "provider_receipt",
+    "billing_status",
+    "retry_count",
+    "artifact_leak_scan"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "result_kind": { "const": "grok-real-deepseek-conformance-failure" },
+    "valid": { "const": false },
+    "failed_at": { "type": "string", "minLength": 1 },
+    "confirmation_summary_sha256": { "$ref": "#/$defs/sha256" },
+    "stage": { "type": "string", "minLength": 1 },
+    "error_type": { "type": "string", "minLength": 1 },
+    "raw_exception_recorded": { "const": false },
+    "grok_started": { "type": "boolean" },
+    "provider_receipt": { "enum": ["not_attempted", "unknown"] },
+    "billing_status": { "enum": ["not_attempted", "unknown"] },
+    "retry_count": { "const": 0 },
+    "artifact_leak_scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "complete",
+        "scanned_file_count",
+        "pending_document_scanned",
+        "actual_credential_read_for_scan",
+        "hit_count"
+      ],
+      "properties": {
+        "policy": { "const": "grok-real-artifact-common-secret-patterns-v0.1" },
+        "complete": { "const": true },
+        "scanned_file_count": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "pending_document_scanned": { "const": true },
+        "actual_credential_read_for_scan": { "const": false },
+        "hit_count": { "const": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "grok_started": { "const": false } },
+        "required": ["grok_started"]
+      },
+      "then": {
+        "properties": {
+          "provider_receipt": { "const": "not_attempted" },
+          "billing_status": { "const": "not_attempted" }
+        }
+      }
+    }
+  ]
+}

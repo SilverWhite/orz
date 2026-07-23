@@ -1,7 +1,8 @@
 # LIF Scientific-Assurance Agent CLI
 
-状态：基于 Grok Build 的 Windows-first LIF 专项 Agent；官方 Grok Windows binary 已在忽略目录中完成离线核验，
-尚未登录或调用真实 Grok/DeepSeek 模型。
+状态：基于 Grok Build 的 Windows-first LIF 专项 Agent；官方 Grok Windows binary 已完成锁定与离线核验，
+独立 DeepSeek one-shot transport conformance 已成功；Grok→DeepSeek 两阶段薄 launcher 已进入
+offline/fail-closed 验证，尚未执行真实 Grok provider request。
 
 本仓库记录一个基于 Grok Build 深度特化的本地 Agent CLI。它服务于 FEP/LIF 研究工作流，目标是让接入的模型
 尽可能遵守来源先行、Ask-Don't-Guess、证据分层、机械验证、全程留痕和独立复核，从而降低幻觉补全、过度推进与
@@ -47,6 +48,7 @@
 - [`docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md`](docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md)：Grok `0.2.111` 的官方发现、本地身份、ACP/DeepSeek fake-only 对照与已完成的 promotion gate。
 - [`docs/DEEPSEEK_REAL_DEVELOPMENT_PROBE_2026-07-23.md`](docs/DEEPSEEK_REAL_DEVELOPMENT_PROBE_2026-07-23.md)：一次性真实 DeepSeek probe 的两阶段入口、离线测试、首个 real transport attempt 与 fail-closed 结果。
 - [`docs/DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md`](docs/DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md)：WER `NOHEAP`、短进程、固定 endpoint、无 proxy/redirect/debug、失败 artifact 与无真实 key 模式扫描的安全边界。
+- [`docs/GROK_REAL_DEEPSEEK_LAUNCHER_2026-07-23.md`](docs/GROK_REAL_DEEPSEEK_LAUNCHER_2026-07-23.md)：Grok Build 两阶段真实 DeepSeek 薄 launcher、Credential Manager 内部注入、Job Object、双 trust receipt 与离线 fail-closed 证据。
 - [`docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md`](docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md)：将默认 Grok 从 `0.2.106` 提升到 `0.2.111` 的独立裁决与回退锚点。
 - [`docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)：`run_terminal_command` timeout、background task cancel 与 parent-exit 三场景的 Windows 子进程树门禁及已完成的管理员 observed 矩阵。
 - [`docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md`](docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md)：Grok `0.2.111` 手工 compaction 的 `PreCompact`/`PostCompact`、source span/digest、checkpoint、`derived_unverified` 摘要边界与独立 verifier。
@@ -108,7 +110,7 @@
 ## 当前边界
 
 - 正式通用 runtime 采用 Grok Build，不再在本仓库复刻 model/session/tool/permission/sandbox 栈。
-- 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher 与一个显式确认、零重试的真实 DeepSeek one-shot probe；2026-07-23 首个 permit 已消费，但 transport 以脱敏 `OSError` 失败，provider 是否收到/计费未知且没有重试、评分或生产 runner。
+- 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher 与已成功的显式确认、零重试 DeepSeek one-shot probe；Grok→DeepSeek 薄 launcher 已完成离线 plan 和沙箱账户启动前 fail-closed，尚未执行真实 Grok provider request、评分或生产 Agent session。
 - 不决定全部使用 Rust；只把 Rust 视为少量保障组件与 Windows 进程边界的候选实现语言。
 - 不把历史案例直接作为模型提示词答案。
 - 不自动修改 MAP/INDEX。

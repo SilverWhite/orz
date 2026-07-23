@@ -2,6 +2,14 @@
 
 状态：被动配置与 conformance 入口；不是已启用的 provider 配置。
 
+真实 DeepSeek 直连已经通过独立 one-shot transport conformance。下一层
+[`invoke_grok_real_deepseek_conformance.ps1`](../../scripts/invoke_grok_real_deepseek_conformance.ps1)
+现提供 Grok Build 的两阶段薄 launcher：Plan 完全离线；Execute 固定单 turn、无工具、
+read-only、无 debug，并在 launcher 内部从 Windows Credential Manager 向 Grok 子进程
+注入短时环境变量。当前只完成离线/fail-closed 验证，尚未执行真实 Grok provider request。
+详细边界见
+[`GROK_REAL_DEEPSEEK_LAUNCHER_2026-07-23.md`](../../docs/GROK_REAL_DEEPSEEK_LAUNCHER_2026-07-23.md)。
+
 [`deepseek-custom-model.example.toml`](deepseek-custom-model.example.toml) 只证明 Grok Build 的
 custom-model 配置能够表达 DeepSeek 的模型名、官方 base URL、Chat Completions backend 和
 环境变量凭据入口。它故意不设置 `[models].default`，也不包含 `api_key`。

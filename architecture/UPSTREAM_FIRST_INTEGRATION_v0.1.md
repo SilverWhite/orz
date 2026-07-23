@@ -95,9 +95,12 @@ workspace trust、local trace/export、event bridge 与 hash-only fixture checkp
 5. child-tree timeout/cancel/parent-exit 管理员矩阵已完成，candidate `0.2.111` 通过并提升为默认；
 6. manual `/compact` provenance 已完成 fake-only observed 验证：lifecycle、source span/digest、request、
    checkpoint、`derived_unverified` 和 unknown mapping 边界均由独立 verifier 重放；
-7. 这些边界通过后，用户于 2026-07-23 单独授权一次最小真实 DeepSeek
-   development probe；one-shot permit 已消费，transport 以脱敏 `OSError`
-   fail closed，未重试。provider receipt/计费未知，任何第二次 attempt 必须重新授权。
+7. 这些边界通过后，用户于 2026-07-23 单独授权的最小真实 DeepSeek transport
+   conformance 已取得 HTTP 200、模型/marker 匹配和 1 request / 0 retry；
+8. 正式 Grok 薄 launcher 已完成 two-stage plan、固定 binary/model/endpoint、Credential
+   Manager 内部注入、隔离 profile/workspace、Job Object、双 trust receipt、无工具/
+   debug/memory/subagent/web 和 artifact leak scan 的 offline/fail-closed 实现；真实
+   Grok→DeepSeek attempt 仍需单独授权。
 
 六个开源 Agent 的固定版本比较、取舍理由与 source ledger 见
 [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。其中 repo map、
