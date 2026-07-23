@@ -1,17 +1,37 @@
-# Evidence-Constrained Agent CLI Design
+# LIF Scientific-Assurance Agent CLI
 
-状态：upstream-first 集成设计；官方 Grok Windows binary 已在忽略目录中完成离线核验，尚未登录或调用真实 Grok/DeepSeek 模型。
+状态：基于 Grok Build 的 Windows-first LIF 专项 Agent；官方 Grok Windows binary 已在忽略目录中完成离线核验，
+尚未登录或调用真实 Grok/DeepSeek 模型。
 
-本目录记录面向当前 FEP/LIF 共同研究工作流的本地 Agent CLI 设计。目标不是复活 D，也不是复制 Grok Build，而是把当前项目已经形成的证据纪律、纠错记录和机械 validator 固化为模型无关的协议、状态机和回归测试。
+本仓库记录一个基于 Grok Build 深度特化的本地 Agent CLI。它服务于 FEP/LIF 研究工作流，目标是让接入的模型
+尽可能遵守来源先行、Ask-Don't-Guess、证据分层、机械验证、全程留痕和独立复核，从而降低幻觉补全、过度推进与
+错误 claim promotion 的风险。它不能保证模型输出必然科学正确，也不把 LIF/FEP 理论本身实现为 Agent 控制算法。
+
+## 产品定位
+
+- **唯一底座**：Grok Build 负责通用 Agent runtime，包括 model/tool loop、session、ACP、permission、sandbox、
+  compaction、后台任务和通用工具能力。
+- **核心差异**：本仓库实现 **LIF 专项科学保障层**，负责来源/证据/claim 边界、validator、审计、全局进度 WARN、
+  DeepSeek conformance、Windows 进程监督和评测隔离。
+- **多源借鉴**：Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 只按各自强项提供设计参考；当前不建设
+  多 runtime 产品，也不因其他 CLI 开源而强制迁移底座。
+- **上游策略**：不追逐 Grok 的每一个版本，也不永久锁死；使用 observed baseline、current candidate 和
+  promotion gate 选择经过验证的版本。
+- **研究边界**：旧研究工作区的 INDEX/MAP/self-check 不迁入本仓库，只在具体 LIF claim-bearing 任务中按需
+  跨目录读取并登记来源。
+
+完整裁决见
+[`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
 ## 当前文件
 
 - [`adr/ADR-0001-evidence-constrained-local-agent-kernel.md`](adr/ADR-0001-evidence-constrained-local-agent-kernel.md)：产品边界、核心不变量、案例库和反捷径决策。
+- [`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)：固定 Grok 单一底座、多源借鉴分工、“LIF 专项科学保障层”术语和未来 LIF-informed Agent 想法的隔离边界。
 - [`architecture/GROK_BUILD_ADAPTATION_v0.1.md`](architecture/GROK_BUILD_ADAPTATION_v0.1.md)：基于官方开源快照的 adopt/adapt/defer/reject 矩阵与项目专化层。
-- [`architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`](architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md)：Windows 预编译 Grok + 薄 LIF sidecar 的正式范围，以及现有 prototype 的降级分类。
+- [`architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`](architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md)：Windows 预编译 Grok + LIF 专项科学保障层的正式范围，以及现有 prototype 的降级分类。
 - [`architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`](architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md)：将可复现实测 baseline 与当前上游 candidate 分离，以 conformance gate 选择更优版本而非永久锁死。
 - [`architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md`](architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md)：优先准确性的全程可观测 wrapper、记录分层、资源取舍与反补全约束。
-- [`architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)：对 Grok ACP、Codex、Gemini CLI、OpenCode、Goose 与 Cline 的职责深拆；将生产 runtime 收回 Grok，只保留 LIF assurance sidecar 与 shadow-Git 恢复边界。
+- [`architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)：对 Grok ACP、Codex、Gemini CLI、OpenCode、Goose 与 Cline 的职责深拆；将生产 runtime 收回 Grok，只保留 LIF 专项科学保障层与 shadow-Git 恢复边界。
 - [`architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`](architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md)：从 task contract、计划和 append-only journal 派生全局进度摘要与 WARN，要求模型结构化处置，降低单方向过推进和遗漏风险而不增加新协议状态。
 - [`architecture/D_SALVAGE_MATRIX_v0.1.md`](architecture/D_SALVAGE_MATRIX_v0.1.md)：Google Drive 中 Project D 核心源码的 source ledger、采用/改造/拒绝裁决与安全发现。
 - [`adr/ADR-0002-defer-cloud-runtime.md`](adr/ADR-0002-defer-cloud-runtime.md)：冻结云端执行/运维范围，保持 Windows 本地 runtime，并记录未来重启条件。
@@ -83,10 +103,11 @@
 
 - 正式通用 runtime 采用 Grok Build，不再在本仓库复刻 model/session/tool/permission/sandbox 栈。
 - 当前包含 development-only disposable conformance fixtures、zero-model dry-run 和 loopback fake-provider launcher；没有真实 provider 模型调用、评分或生产 runner。
-- 不决定全部使用 Rust；只把 Rust 视为控制面的候选实现语言。
+- 不决定全部使用 Rust；只把 Rust 视为少量保障组件与 Windows 进程边界的候选实现语言。
 - 不把历史案例直接作为模型提示词答案。
 - 不自动修改 MAP/INDEX。
 - D 的候选机制已完成定向源码 salvage；云端产品面依 ADR-0002 延期，未核本地 body 不作为当前依赖。
+- “让 LIF/FEP 原理参与 Agent 控制或规划”是单独的 deferred research concept，不属于当前保障层语义。
 
 ## 当前设计冻结点
 
@@ -97,4 +118,6 @@
 - 当前案例全属 development/challenge seed corpus，不宣称为未泄漏 holdout 成绩。
 - 当前 10 个错误簇均有历史检测案例和至少一个 challenge，7 个高频簇均有 permission-reversal challenge；但尚无 evaluation/holdout，评测阈值也未校准。
 - 5 个历史案例已有 source-hashed reviewer-only excerpt fixture；它们只提高 curation provenance 可审计性，不提高未见评测覆盖。
-- Grok Build 是正式通用 CLI/runtime 所有者；项目差异层冻结为 SourceRouter、EvidenceKernel、ValidatorBridge、ScenarioExporter、LeakScanner、EvaluationRunner 和窄 Windows/DeepSeek bridge，不扩张通用产品功能面。
+- Grok Build 是正式通用 CLI/runtime 所有者；LIF 专项科学保障层冻结为 SourceRouter、EvidenceKernel、
+  ValidatorBridge、ScenarioExporter、LeakScanner、EvaluationRunner、Global Progress Sentinel 和窄
+  Windows/DeepSeek bridge，不扩张通用产品功能面。

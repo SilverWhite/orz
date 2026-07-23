@@ -1,6 +1,8 @@
 # Grok Build 架构适配矩阵 v0.1
 
-状态：历史适配审计；当前实现路线已由 [`UPSTREAM_FIRST_INTEGRATION_v0.1.md`](UPSTREAM_FIRST_INTEGRATION_v0.1.md) 收缩为 upstream-first。
+状态：历史适配审计；当前实现路线已由
+[`UPSTREAM_FIRST_INTEGRATION_v0.1.md`](UPSTREAM_FIRST_INTEGRATION_v0.1.md) 收缩为 upstream-first，产品与术语
+定位见 [`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
 参考快照：`xai-org/grok-build` `main`，检查日期 2026-07-19，仓库 `SOURCE_REV` 为 `f9736c7b86f8e1c0e99e20ebbbd1195cd0c147e3`。
 
@@ -12,7 +14,11 @@
 
 ## 1. 结论
 
-通用 Agent CLI 的功能面无需大量自创。Grok Build 已提供 TUI、headless、ACP、session persistence、工具、workspace、MCP、skills、plugins、hooks、permissions、sandbox、memory、subagents、worktrees 和监控等完整参考面。我们的差异不应表现为“更多按钮”，而应集中在**证据约束控制面**：来源路由、任务契约、证据/claim 状态、validator、场景隔离、泄漏门禁和回归评测。
+通用 Agent CLI 的功能面无需大量自创。Grok Build 已提供 TUI、headless、ACP、session persistence、工具、
+workspace、MCP、skills、plugins、hooks、permissions、sandbox、memory、subagents、worktrees 和监控等完整
+参考面。我们的差异不应表现为“更多按钮”，而应集中在 **LIF 专项科学保障层**：来源路由、任务契约、
+证据/claim 状态、validator、场景隔离、泄漏门禁、全局进度回看和回归评测。这里的“保障”约束 Agent
+如何服务 LIF 研究，不表示 LIF/FEP 理论参与 Agent 控制算法。
 
 ## 2. 官方结构事实
 
@@ -58,9 +64,10 @@
 | external telemetry | 默认不采用 | 本地审计日志优先；任何外发必须显式 opt-in 和脱敏 |
 | vendor auth / update channel | 不采用 | 模型 provider 由 adapter 处理 |
 
-## 4. 项目专化层
+## 4. LIF 专项科学保障层
 
-Grok Build 的通用工具层之上，本项目仍需以下不可省略的能力：
+Grok Build 的通用 runtime 之外，本项目仍需以下不可省略的能力。旧研究工作区来源只在具体 claim-bearing
+任务中按需读取，不成为这些组件的启动依赖：
 
 1. `SourceRouter`：按 INDEX → env/current MAP → R/raw artifact/code → self-check 路由。
 2. `TaskContract`：固定 MUST、MUST NOT、SOURCE OF TRUTH、ACCEPTANCE。
@@ -78,21 +85,23 @@ Grok Build 的通用工具层之上，本项目仍需以下不可省略的能力
 
 ```mermaid
 flowchart LR
-    UI["CLI / Headless / future ACP"] --> K["Evidence Kernel"]
-    A["Model Adapters"] <--> K
-    K --> T["Tool Broker"]
-    T --> W["Workspace + Sandbox"]
-    K --> R["Source Router"]
-    K --> V["Validator Bridge"]
-    K --> J["Append-only Journal"]
+    U["LIF task / user constraints"] --> S["LIF Scientific Assurance"]
+    S --> G["Grok runtime / ACP"]
+    G <--> A["Model Provider"]
+    G --> T["Grok Tools + Workspace + Sandbox"]
+    G --> S
+    S --> R["Source Router"]
+    S --> V["Validator Bridge"]
+    S --> J["Append-only Journal + Verifier"]
     C["Regression Corpus"] --> X["Scenario Exporter"]
     X --> L["Leak Scanner"]
     L --> E["Evaluation Runner"]
-    E --> A
+    E --> G
     E --> J
 ```
 
-`ScenarioExporter`、`LeakScanner` 和 `EvaluationRunner` 是控制面组件，不是 prompt 技巧，也不应实现为普通 hook。
+`ScenarioExporter`、`LeakScanner` 和 `EvaluationRunner` 是科学保障组件，不是 prompt 技巧，也不应实现为普通
+fail-open hook。
 
 ## 6. Rust / Python 边界
 

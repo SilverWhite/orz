@@ -1,6 +1,8 @@
 # Upstream version strategy v0.1
 
 状态：2026-07-23 生效；不修改 LIF protocol、reason code、gate 或 claim 语义。
+Grok 单一底座与多源借鉴定位见
+[`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
 ## 1. 决策
 
@@ -38,8 +40,8 @@
 | DeepSeek reasoning continuity | 核验 tool 后续轮次保留 provider 所需 reasoning |
 | repository regression | Windows/Ubuntu CI 的 schema、fixture 与文档完整性 |
 
-门禁失败时有三种合法结论：修复 LIF adapter、等待/跳过该上游版本、或缩小 capability claim。不得为了升级而
-修改 LIF 协议语义，也不得把未验证的上游行为写成已采用能力。
+门禁失败时有三种合法结论：修复 LIF 专项科学保障层中的窄 adapter、等待/跳过该上游版本、或缩小
+capability claim。不得为了升级而修改 LIF 协议语义，也不得把未验证的上游行为写成已采用能力。
 
 ## 4. 选择更优内容
 
@@ -48,8 +50,8 @@
 1. 修复准确性、取消/进程泄漏、session persistence、compaction、permission 和 ACP 一致性的上游能力；
 2. 减少本项目平行实现，能够由 Grok runtime 原生承担的通用能力；
 3. Windows 实测可用且能被现有留痕/独立 verifier 重建；
-4. 不削弱 DeepSeek thinking/tool continuity、凭据隔离和 LIF hard gates；
-5. UI、主题或云端功能不优先于上述控制面。
+4. 不削弱 DeepSeek thinking/tool continuity、凭据隔离和 LIF 科学保障 hard gates；
+5. UI、主题或云端功能不优先于上述科学保障边界。
 
 当前源码 compare 暴露了 ACP tracker、background task、compaction relocation、managed config、
 session persistence、permission 和 worktree 等相关变化。这些是升级审查的候选收益，不等于已证明与

@@ -1,7 +1,8 @@
 # 成熟 Agent 设计深拆与职责收缩 v0.2
 
 状态：架构审计与 implementation spike 重排；**不修改现有协议语义**，不接入真实模型，不迁入旧研究
-`index/map/self-check`，不恢复云端范围。
+`index/map/self-check`，不恢复云端范围。产品与术语定位见
+[`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
 ## 1. 结论先行
 
@@ -12,8 +13,9 @@
 
 1. **Grok runtime**：模型循环、session、tool 执行、permission、sandbox、compaction、后台任务和结构化实时协议；
 2. **恢复与审计 plumbing**：shadow Git、append-only receipt、独立 verifier；只采用成熟的不变量，不复制产品；
-3. **LIF assurance sidecar**：workspace trust、来源/证据/claim 门禁、脱敏、科学 validator、DeepSeek conformance、
-   Windows 进程监督和评测隔离。
+3. **LIF 专项科学保障层**：workspace trust、来源/证据/claim 门禁、脱敏、科学 validator、DeepSeek
+   conformance、Windows 进程监督和评测隔离。它约束 Agent 如何服务 LIF 研究，不表示 LIF/FEP 理论参与
+   Agent 控制算法。
 
 因此 v0.2 的方向是收缩，不是继续堆功能。尤其是 Grok 已正式提供 ACP；生产集成不应长期围绕一次性
 headless stdout 重建 tool loop。
@@ -42,8 +44,8 @@ headless stdout 重建 tool loop。
 覆盖 background command、task ID、output poll/wait、kill、monitor、loop 和 scheduler。本地文件 SHA-256 为
 `9d2c094e0e2f59b9b98c743efcbde2a4cd0fa14b2063d9911fe28f3ea42ea11b`。
 
-所以本项目不建设通用后台任务管理器、调度器或云端队列。Windows sidecar 只验证进程树收束、取消和 terminal
-receipt 是否与 Grok 的任务状态一致。
+所以本项目不建设通用后台任务管理器、调度器或云端队列。LIF 专项科学保障层中的 Windows supervisor 只验证
+进程树收束、取消和 terminal receipt 是否与 Grok 的任务状态一致。
 
 ### 2.3 成熟设计强调“边界分离”，不是“大一统内核”
 
@@ -65,7 +67,7 @@ receipt 是否与 Grok 的任务状态一致。
 
 ## 3. 所有权矩阵
 
-| 能力 | 正式 owner | LIF 只做什么 | 不再做什么 |
+| 能力 | 正式 owner | LIF 专项科学保障层只做什么 | 不再做什么 |
 |---|---|---|---|
 | model/tool loop | Grok | DeepSeek 请求形状与两轮 continuity conformance | 自建生产 model adapter loop/action kernel |
 | live session/event | Grok ACP | 记录能力协商、ID、digest、terminal 与缺失项；post-run 交叉核验 | 从 headless 文本推断 tool loop；建立第二套 session protocol |
@@ -73,9 +75,9 @@ receipt 是否与 Grok 的任务状态一致。
 | sandbox/tool runtime | Grok | Windows Job Object、防火墙与实际副作用 receipt | 复制 shell/file/search/browser runtime |
 | background work | Grok | 验证 task ID、cancel、process-tree terminal 对齐 | scheduler、monitor service、remote queue |
 | compaction | Grok | 记录输入 span/digest、boundary、summary=`derived_unverified` | 自建 compactor；从 summary 反推未记录事实 |
-| audit receipt | LIF sidecar | hash chain、redaction、source/completeness、独立 verifier | 把 receipt 冒充模型正确性证明 |
+| audit receipt | LIF 专项科学保障层 | hash chain、redaction、source/completeness、独立 verifier | 把 receipt 冒充模型正确性证明 |
 | file recovery | 独立 shadow Git plumbing | 把 commit ID、before/after aggregate、conflict plan 写入 receipt | 自建 blob format；自动改写用户 Git history |
-| evidence/claim/evaluation | LIF sidecar | SourceRouter、EvidenceKernel、ValidatorBridge、LeakScanner、EvaluationRunner | 委托给 Grok permission 或 prompt 自律 |
+| evidence/claim/evaluation | LIF 专项科学保障层 | SourceRouter、EvidenceKernel、ValidatorBridge、LeakScanner、EvaluationRunner | 委托给 Grok permission 或 prompt 自律 |
 | cloud/mobile relay | deferred | 仅保留 ADR 中的未来重启条件 | 当前建设和持续运维 |
 
 ## 4. 必须保持的五个分离
@@ -98,7 +100,7 @@ scanner 输出 finding ID、证据与置信度；permission 另记 allow/deny/as
 
 ### 4.4 runtime event 与审计投影
 
-ACP/session event 是 runtime observation；LIF bridge 是经过脱敏的审计投影。投影可验证自己的 sequence/hash，
+ACP/session event 是 runtime observation；科学保障层 event bridge 是经过脱敏的审计投影。投影可验证自己的 sequence/hash，
 但不能声称保留了被策略省略的 raw content 或跨来源全局顺序。
 
 ### 4.5 context continuity 与事实真实性
@@ -114,7 +116,8 @@ validator verdict 或 claim evidence。
   `tool_call_update` → terminal continuity，并与 session files 对账。
 - **shadow Git recovery fixture**：采用独立 Git dir、容量上限、no-overwrite、conflict-only plan；不接触用户分支。
 - **typed identity**：稳定记录 run/session/turn/item/tool-call ID，terminal 恰好一次。
-- **narrow hard gates**：workspace trust、secret/network permit、evidence/claim promotion 仍在 sidecar fail closed。
+- **narrow hard gates**：workspace trust、secret/network permit、evidence/claim promotion 仍在 LIF 专项科学保障层
+  fail closed。
 
 ### Defer
 

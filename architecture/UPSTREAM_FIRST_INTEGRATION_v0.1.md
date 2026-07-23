@@ -1,23 +1,28 @@
 # Upstream-first 集成与范围收缩 v0.1
 
 状态：2026-07-21 工程路线裁决；不修改 protocol v0.1、reason code、gate 或 claim 语义。
+产品与术语定位见
+[`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
 ## 1. 裁决
 
 基于 Grok Build 继续做本项目，**不需要重做一个完整 Agent CLI**。正式实现采用：
 
 ```text
-LIF launcher / evidence sidecar
+LIF 专项科学保障层
         |
         +-- Grok Build Windows prebuilt (headless first; future ACP)
         |      `-- model / session / tools / workspace / permission / sandbox
         |
-        `-- LIF-only hard gates
-               `-- source / evidence / validator / scenario / leak / evaluation
+        +-- launcher / Windows supervisor / DeepSeek adapter
+        |
+        `-- scientific assurance hard gates
+               `-- source / evidence / claim / validator / scenario / leak / evaluation
 ```
 
 Grok Build 已原生提供 custom models、headless structured output、session persistence、工具、权限和
-sandbox。本项目只在这些能力之外保留 LIF 证据约束，以及 DeepSeek 与 Windows 的窄兼容桥。
+sandbox。本项目只在这些能力之外保留 LIF 专项科学保障，以及 DeepSeek 与 Windows 的窄兼容桥。“保障层”
+描述 Agent 为 LIF 研究服务时的来源、证据和验证约束，不表示 LIF/FEP 理论参与 runtime 控制算法。
 
 ## 2. 职责边界
 
@@ -28,8 +33,8 @@ sandbox。本项目只在这些能力之外保留 LIF 证据约束，以及 Deep
 | permission 与 OS sandbox | Grok Build | 配置并做 Windows 验证，不另造通用 broker |
 | DeepSeek request shape / thinking continuity | 窄 adapter 或必要的上游 patch | 先做 fake conformance，发现真实缺口后才写代码 |
 | Windows 凭据注入与进程启动 | 薄 launcher | 只向 Grok 子进程注入最小环境，不接管其 runtime |
-| SourceRouter、EvidenceKernel、ValidatorBridge | LIF sidecar | 保留为产品差异层 |
-| ScenarioExporter、LeakScanner、EvaluationRunner | LIF sidecar | 保留为 hard gate，不放入 fail-open hook |
+| SourceRouter、EvidenceKernel、ValidatorBridge | LIF 专项科学保障层 | 保留为产品差异层 |
+| ScenarioExporter、LeakScanner、EvaluationRunner | LIF 专项科学保障层 | 保留为 hard gate，不放入 fail-open hook |
 
 机器可读边界见 [`../upstream/grok-build.lock.json`](../upstream/grok-build.lock.json)。
 
