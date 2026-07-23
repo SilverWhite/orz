@@ -70,6 +70,30 @@ allow/cancel 结果经独立 verifier 重建，临时防火墙规则残留为零
 artifact digest 见
 [`GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](../../docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)。
 
+## Windows child-tree containment probe
+
+[`invoke_grok_windows_child_tree_probe.ps1`](../../scripts/invoke_grok_windows_child_tree_probe.ps1) 使用 Grok
+实际公布的 `run_terminal_command`、`kill_command_or_subagent` 与
+`get_command_or_subagent_output` schema，驱动固定 root → child → grandchild 进程树。三个场景分别覆盖
+tool timeout、background task cancel 和关闭 Grok 外层 Job Object 的 parent exit。
+
+launcher 要求显式传入 baseline 或 candidate release metadata；它不会自动选择 latest，也不会修改默认版本。
+exact Grok/Python executable 均临时阻断 non-loopback IPv4 与全部 IPv6，provider 只绑定 loopback，三张
+workspace receipt 和 finally firewall cleanup 均为 hard gate。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File ..\..\scripts\invoke_grok_windows_child_tree_probe.ps1 `
+  -OutputDirectory ..\..\.observed-runs\child-tree-0.2.111-tool-timeout-v1 `
+  -Scenario tool_timeout `
+  -ReleaseMetadataPath ..\..\upstream\grok-build.candidate.json
+```
+
+当前代码、结果/verification Schema、synthetic/tamper tests 与管理员 observed 矩阵均已完成；
+candidate `0.2.111` 三场景全部通过，promotion gate 为 passed，候选状态为 eligible。baseline `0.2.106`
+仅 tool-timeout 路径在返回终态后未退出。完整边界、digest 与六次 baseline/candidate 命令见
+[`GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](../../docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)。
+
 ## Observed dry-run
 
 [`new_grok_observed_dry_run.ps1`](../../scripts/new_grok_observed_dry_run.ps1) 生成一个

@@ -36,7 +36,7 @@ Grok 单一底座与多源借鉴定位见
 | ACP initialize | 比较 protocol、capability、扩展与无模型隔离 |
 | fake tool allow | 核验 permission、tool terminal、两轮 provider continuity 与三路证据 |
 | fake tool cancel | 核验 cancel、无 completed tool、无第二次 primary request |
-| Windows child-tree timeout | 核验 parent/tool/background descendants 的 bounded teardown |
+| Windows child-tree timeout | 以 tool timeout、background task cancel、parent exit 三场景核验 descendants 的 bounded teardown 与输出回收边界 |
 | DeepSeek reasoning continuity | 核验 tool 后续轮次保留 provider 所需 reasoning |
 | repository regression | Windows/Ubuntu CI 的 schema、fixture 与文档完整性 |
 

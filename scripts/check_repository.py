@@ -456,6 +456,87 @@ def check_repository() -> dict[str, Any]:
         errors.append("missing ACP fake-tool verifier regression tests")
     counts["grok_acp_fake_tool_probe_fixtures"] = 2
 
+    child_tree_launcher_source = (
+        ROOT / "scripts/invoke_grok_windows_child_tree_probe.ps1"
+    ).read_text(encoding="utf-8")
+    child_tree_driver_source = (
+        ROOT / "scripts/run_grok_windows_child_tree_probe.py"
+    ).read_text(encoding="utf-8")
+    child_tree_fixture_source = (
+        ROOT / "scripts/child_tree_fixture.py"
+    ).read_text(encoding="utf-8")
+    child_tree_verifier_source = (
+        ROOT / "scripts/verify_grok_windows_child_tree_probe.py"
+    ).read_text(encoding="utf-8")
+    firewall_source = (
+        ROOT / "scripts/manage_grok_probe_firewall.ps1"
+    ).read_text(encoding="utf-8")
+    for schema_name in (
+        "grok-windows-child-tree-probe-result-v0.1.schema.json",
+        "grok-windows-child-tree-probe-verification-v0.1.schema.json",
+    ):
+        if not (ROOT / "integration/grok" / schema_name).is_file():
+            errors.append(f"missing Windows child-tree probe schema: {schema_name}")
+    for marker in (
+        "Administrator token required",
+        "tool_timeout",
+        "task_cancel",
+        "parent_exit",
+        "ReleaseMetadataPath",
+    ):
+        if marker not in child_tree_launcher_source:
+            errors.append(f"child-tree launcher is missing safety marker: {marker}")
+    for marker in (
+        "KillOnCloseJob",
+        "refusing to overwrite output directory",
+        "process-timeout",
+        "process-cancel",
+        "process-parent-exit",
+        "post_trigger_residue_zero",
+        "output_drain_matches_policy",
+        "real_model_not_invoked",
+        "workspace-trust.preflight.json",
+        "workspace-trust.launch.json",
+        "workspace-trust.postrun.json",
+    ):
+        if marker not in child_tree_driver_source:
+            errors.append(f"child-tree driver is missing safety marker: {marker}")
+    for marker in (
+        "root",
+        "child",
+        "grandchild",
+        "normal_completion",
+        "refusing to overwrite role record",
+        "LIF_CHILD_TREE_STDOUT",
+        "LIF_CHILD_TREE_STDERR",
+    ):
+        if marker not in child_tree_fixture_source:
+            errors.append(f"child-tree fixture is missing process marker: {marker}")
+    for marker in (
+        "binary_live_matches",
+        "provider_tool_sequence_replays",
+        "replay_nonce_residue_zero",
+        "output_drain_policy_replays",
+        "workspace_control_replays",
+        "firewall_cleanup_replays",
+    ):
+        if marker not in child_tree_verifier_source:
+            errors.append(f"child-tree verifier is missing replay marker: {marker}")
+    for marker in (
+        "New-NetFirewallRule",
+        "Remove-NetFirewallRule",
+        "nonloopback_ipv4_blocked",
+        "all_ipv6_blocked",
+        "remaining_rule_count",
+    ):
+        if marker not in firewall_source:
+            errors.append(f"child-tree firewall helper is missing safety marker: {marker}")
+    if "process-timeout" not in fake_provider_source or "process-cancel" not in fake_provider_source:
+        errors.append("fake provider is missing Windows child-tree scenarios")
+    if not (ROOT / "integration/grok/tests/test_windows_child_tree_probe.py").is_file():
+        errors.append("missing Windows child-tree verifier regression tests")
+    counts["grok_windows_child_tree_fixtures"] = 3
+
     bridge_builder_source = (
         ROOT / "scripts/build_grok_event_bridge.py"
     ).read_text(encoding="utf-8")

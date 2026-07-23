@@ -1,0 +1,354 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/integration/grok/grok-windows-child-tree-probe-result/v0.1/schema.json",
+  "title": "Grok Windows Child-Tree Probe Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "probe_kind",
+    "probe_id",
+    "scenario",
+    "valid",
+    "started_at_unix_ns",
+    "completed_at_unix_ns",
+    "binary",
+    "fixture",
+    "process_tree",
+    "grok",
+    "provider",
+    "capture",
+    "workspace",
+    "firewall",
+    "checks",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "probe_kind": { "const": "grok-windows-child-tree" },
+    "probe_id": {
+      "type": "string",
+      "pattern": "^CHILDTREE-[a-f0-9]{32}$"
+    },
+    "scenario": {
+      "enum": ["tool_timeout", "task_cancel", "parent_exit"]
+    },
+    "valid": { "type": "boolean" },
+    "started_at_unix_ns": { "type": "integer", "minimum": 1 },
+    "completed_at_unix_ns": { "type": "integer", "minimum": 1 },
+    "binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "version",
+        "bytes",
+        "sha256",
+        "authenticode_status",
+        "release_metadata_path",
+        "release_metadata_sha256",
+        "release_version"
+      ],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "authenticode_status": { "const": "Valid" },
+        "release_metadata_path": { "type": "string", "minLength": 1 },
+        "release_metadata_sha256": { "$ref": "#/$defs/sha256" },
+        "release_version": {
+          "type": "string",
+          "pattern": "^0\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonce",
+        "script",
+        "command_sha256",
+        "tool_timeout_ms",
+        "hold_seconds"
+      ],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "pattern": "^LIFCHILD-[a-f0-9]{32}$"
+        },
+        "script": { "$ref": "#/$defs/artifact" },
+        "command_sha256": { "$ref": "#/$defs/sha256" },
+        "tool_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 30000
+        },
+        "hold_seconds": { "const": 300 }
+      }
+    },
+    "process_tree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roles",
+        "role_artifacts",
+        "pre_trigger_processes",
+        "post_trigger_processes",
+        "parent_exit_triggered",
+        "residue_zero"
+      ],
+      "properties": {
+        "roles": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/roleRecord" }
+        },
+        "role_artifacts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "pre_trigger_processes": {
+          "type": "array",
+          "minItems": 3,
+          "items": { "$ref": "#/$defs/processProjection" }
+        },
+        "post_trigger_processes": {
+          "type": "array",
+          "maxItems": 0,
+          "items": { "$ref": "#/$defs/processProjection" }
+        },
+        "parent_exit_triggered": { "type": "boolean" },
+        "residue_zero": { "const": true }
+      }
+    },
+    "grok": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "exit_code",
+        "outer_job_created",
+        "outer_job_assigned",
+        "outer_job_closed"
+      ],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "exit_code": { "type": "integer" },
+        "outer_job_created": { "const": true },
+        "outer_job_assigned": { "const": true },
+        "outer_job_closed": { "const": true }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario",
+        "primary_request_count",
+        "expected_primary_request_count",
+        "tool_sequence",
+        "expected_tool_sequence",
+        "real_model_invoked",
+        "private_capture",
+        "result"
+      ],
+      "properties": {
+        "scenario": {
+          "enum": ["process-timeout", "process-cancel", "process-parent-exit"]
+        },
+        "primary_request_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4
+        },
+        "expected_primary_request_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4
+        },
+        "tool_sequence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "enum": [
+              "run_terminal_command",
+              "kill_command_or_subagent",
+              "get_command_or_subagent_output"
+            ]
+          }
+        },
+        "expected_tool_sequence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "enum": [
+              "run_terminal_command",
+              "kill_command_or_subagent",
+              "get_command_or_subagent_output"
+            ]
+          }
+        },
+        "real_model_invoked": { "const": false },
+        "private_capture": { "$ref": "#/$defs/artifact" },
+        "result": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grok_stdout",
+        "grok_stderr",
+        "provider_stdout",
+        "provider_stderr",
+        "marker_projection",
+        "output_drain_required",
+        "output_drain_observed"
+      ],
+      "properties": {
+        "grok_stdout": { "$ref": "#/$defs/artifact" },
+        "grok_stderr": { "$ref": "#/$defs/artifact" },
+        "provider_stdout": { "$ref": "#/$defs/artifact" },
+        "provider_stderr": { "$ref": "#/$defs/artifact" },
+        "marker_projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["root", "child", "grandchild"],
+          "properties": {
+            "root": { "$ref": "#/$defs/markerPair" },
+            "child": { "$ref": "#/$defs/markerPair" },
+            "grandchild": { "$ref": "#/$defs/markerPair" }
+          }
+        },
+        "output_drain_required": { "type": "boolean" },
+        "output_drain_observed": { "type": "boolean" }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preflight",
+        "launch",
+        "postrun",
+        "control_aggregate_sha256",
+        "scan_policy_sha256"
+      ],
+      "properties": {
+        "preflight": { "$ref": "#/$defs/artifact" },
+        "launch": { "$ref": "#/$defs/artifact" },
+        "postrun": { "$ref": "#/$defs/artifact" },
+        "control_aggregate_sha256": { "$ref": "#/$defs/sha256" },
+        "scan_policy_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "firewall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt", "removed", "remaining_rule_count"],
+      "properties": {
+        "receipt": { "$ref": "#/$defs/artifact" },
+        "removed": { "const": true },
+        "remaining_rule_count": { "const": 0 }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "minProperties": 15,
+      "additionalProperties": { "const": true }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 3,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "roleRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "fixture_kind",
+        "nonce",
+        "role",
+        "pid",
+        "parent_pid",
+        "started_at_unix_ns",
+        "script_path",
+        "script_sha256",
+        "normal_completion"
+      ],
+      "properties": {
+        "schema_version": { "const": "0.1.0" },
+        "fixture_kind": { "const": "windows-child-tree" },
+        "nonce": {
+          "type": "string",
+          "pattern": "^LIFCHILD-[a-f0-9]{32}$"
+        },
+        "role": { "enum": ["root", "child", "grandchild"] },
+        "pid": { "type": "integer", "minimum": 1 },
+        "parent_pid": { "type": "integer", "minimum": 1 },
+        "started_at_unix_ns": { "type": "integer", "minimum": 1 },
+        "script_path": { "type": "string", "minLength": 1 },
+        "script_sha256": { "$ref": "#/$defs/sha256" },
+        "normal_completion": { "const": false }
+      }
+    },
+    "processProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "parent_pid",
+        "name",
+        "creation_date",
+        "command_line_bytes",
+        "command_line_sha256",
+        "nonce_present",
+        "command_line_recorded"
+      ],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "parent_pid": { "type": "integer", "minimum": 0 },
+        "name": { "type": "string", "minLength": 1 },
+        "creation_date": { "type": "string" },
+        "command_line_bytes": { "type": "integer", "minimum": 1 },
+        "command_line_sha256": { "$ref": "#/$defs/sha256" },
+        "nonce_present": { "const": true },
+        "command_line_recorded": { "const": false }
+      }
+    },
+    "markerPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stdout", "stderr"],
+      "properties": {
+        "stdout": { "type": "boolean" },
+        "stderr": { "type": "boolean" }
+      }
+    }
+  }
+}

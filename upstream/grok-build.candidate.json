@@ -1,7 +1,7 @@
 {
   "schema_version": "0.1.0",
   "receipt_kind": "grok-build-upstream-candidate",
-  "observed_at": "2026-07-23T06:53:01Z",
+  "observed_at": "2026-07-23T09:12:59Z",
   "repository": "https://github.com/xai-org/grok-build",
   "baseline": {
     "metadata_path": "upstream/grok-build.lock.json",
@@ -57,14 +57,14 @@
     "source_correspondence": "unverified"
   },
   "promotion": {
-    "status": "conformance-in-progress",
+    "status": "eligible",
     "selected_as_default": false,
     "gates": [
       { "id": "binary_identity", "status": "passed" },
       { "id": "acp_initialize", "status": "passed" },
       { "id": "fake_tool_allow", "status": "passed" },
       { "id": "fake_tool_cancel", "status": "passed" },
-      { "id": "windows_child_tree_timeout", "status": "pending" },
+      { "id": "windows_child_tree_timeout", "status": "passed" },
       { "id": "deepseek_reasoning_continuity", "status": "passed" },
       { "id": "repository_regression", "status": "passed" }
     ]
@@ -73,6 +73,6 @@
     "The stable pointer was observed independently from the lagging public changelog; the pointer does not prove behavioral compatibility.",
     "GitHub compare returned the API maximum of 300 files, so returned addition/deletion/change totals are explicitly partial.",
     "Authenticode, size, MD5, SHA-256, PE header, and version output prove local artifact identity, not correspondence to the open-source source snapshot.",
-    "The candidate is not the project default until all required conformance gates pass and a separate promotion decision is recorded."
+    "All required conformance gates passed, but the eligible candidate is not the project default until a separate promotion decision is recorded."
   ]
 }

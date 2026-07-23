@@ -151,8 +151,10 @@ validator verdict 或 claim evidence。
    [`../docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](../docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)。
 3. **shadow Git recovery fixture**：在现有 hash-only checkpoint 收据中引用 shadow commit/tree；生成显式
    files-only restore plan 和冲突报告，仍不自动 restore 真实 workspace。
-4. **Windows child-tree timeout**：核验 ACP persistent process、tool child 和 background task 的 Job Object 收束；
-   若 suspended-assign-resume 只能通过大幅 fork Grok 完成，则记录已知 race，不扩张 runtime。
+4. **Windows child-tree containment（代码完成，observed 待执行）**：固定
+   `run_terminal_command` timeout、background task cancel、parent exit 三场景及独立 verifier 已实现；需在
+   baseline/candidate 管理员矩阵通过后才提升 capability。若 suspended-assign-resume 只能通过大幅 fork Grok
+   完成，则记录已知 race，不扩张 runtime。
 5. **compaction provenance**：fake 长上下文只验证 lifecycle、source span/digest 与 derived summary 边界。
 
 每一项都先用 fake/no-key fixture。任何 spike 失败只缩小 capability claim，不修改协议语义来迁就实现。

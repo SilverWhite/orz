@@ -100,13 +100,15 @@ bounded queue 和 backpressure：允许降低 telemetry 频率，不允许静默
    并据此禁用；修复后的严格 smoke 已通过，详见
    [`GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`](../docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md)。
 3. Windows Job Object supervisor：Grok 已接入 kill-on-close Job Object，并在成功与 timeout development run
-   中记录 create/assign/close；当前仍有 start-to-assignment race，且尚缺显式 child-tree timeout fixture。
+中记录 create/assign/close；当前仍有 start-to-assignment race。显式 child-tree timeout/cancel/parent-exit
+fixture 与管理员 observed 矩阵均已完成；candidate `0.2.111` 三场景通过，baseline `0.2.106` 的 tool-timeout
+在输出终态后未退出并由外层超时收束。
 4. workspace trust/restricted launch gate 已接入：双 receipt 早于任何 Grok 进程并在 agent process 前复查；
    fake-provider `0.2.0` 与 tool-continuity `0.3.0` 管理员实测通过。local trace/export + event completeness
    bridge 已完成首轮 `partial` 实测；纠正后的 v4 已成功取得 local trace/export。
 5. fixture-only hash-only checkpoint + workspace delta + 独立 verifier 已完成；它是 audit receipt，不是恢复系统。
-6. child-tree timeout fixture + compaction provenance；summary 必须标为 derived/unverified，不能替代原始
-   observation。
+6. child-tree observed 矩阵已完成；下一项为 compaction provenance，summary 必须标为
+   derived/unverified，不能替代原始 observation。
 7. DeepSeek conformance 通过后，才请求一次真实 development call 的单独授权。
 
 local event-completeness bridge 现已完成第一轮实测：stdout、session events/updates、provider、supervisor 与

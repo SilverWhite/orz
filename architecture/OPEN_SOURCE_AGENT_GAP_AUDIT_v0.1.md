@@ -170,8 +170,9 @@ commit/tree ID、expected-current digest 和 conflict-only plan；不得修改�
 
 ### Spike C：Windows containment race
 
-增加显式 child-tree timeout fixture，并评估 suspended launch 后先 assign Job Object 再 resume。若只能在自编译
-Grok 或大幅接管 runtime 时完成，则保留已知 race，不因此启动完整上游源码构建。
+显式 child-tree timeout/background cancel/parent-exit fixture 与独立 verifier 已实现；下一步完成
+baseline/candidate 管理员 observed 矩阵，并评估 suspended launch 后先 assign Job Object 再 resume。若只能在
+自编译 Grok 或大幅接管 runtime 时完成，则保留已知 race，不因此启动完整上游源码构建。
 
 ### Spike D：compaction provenance
 
