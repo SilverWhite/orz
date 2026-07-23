@@ -1,8 +1,8 @@
 # DeepSeek one-shot 真实 development probe（2026-07-23）
 
-状态：实现与离线测试 PASS；hardened real attempt 已通过桌面用户 Credential Manager、
-TLS 和响应头阶段，在读取响应正文时以脱敏 `OSError` fail closed。没有 retry；
-provider 计数与计费仍需由控制台确认。
+状态：实现、离线测试与一次 hardened real conformance PASS。固定请求得到 HTTP 200，
+resolved model 和预期 marker 均匹配；恰好 1 request、0 retry。provider 控制台计数与
+最终计费仍需在账户侧确认。
 
 ## 1. 固定边界
 
@@ -97,6 +97,7 @@ scan。详见
 ```text
 .observed-runs/deepseek-real-development-hardened-20260723-01/
 .observed-runs/deepseek-real-development-hardened-20260723-02/
+.observed-runs/deepseek-real-development-hardened-20260723-03/
 ```
 
 - `-01` 在 Codex 沙箱账户 `SWITCH\CodexSandboxOnline` 内执行；该账户看不到桌面用户
@@ -110,11 +111,20 @@ scan。详见
   已执行；但不能仅由客户端断言 provider 控制台计数或计费；
 - terminal artifact scan 完整，3 个文件，0 命中；没有保存 Authorization、prompt、
   response body、confirmation token 或异常正文。
+- 修复提交 `5ca6906` 后，`-03` 在桌面用户上下文完成一次新授权 attempt：
+  HTTP 200、resolved model=`deepseek-v4-pro`、marker matched、finish reason=`stop`；
+- `-03` request count / retry count=`1 / 0`，duration=`1125 ms`，response body
+  `3480 bytes`，11 个 data event、9 个 semantic event；
+- provider usage 回执为 prompt/completion/total=`26 / 9 / 35` tokens；该回执证明本次
+  provider 调用成功，但账户控制台展示和最终计费仍属于外部状态；
+- `result.json` 通过项目 Schema；通用 artifact board 为 3 PASS、2 个非表格结构
+  WARN、0 FAIL、0 catastrophic；
+- `-03` terminal artifact scan 同样完整，3 个文件、0 命中；raw content、raw
+  reasoning 和 Authorization 均未记录。
 
 ## 5. 结论边界
 
-直接证明的是：固定请求可被离线计划、摘要绑定；真实 credential boundary、DNS/TCP/TLS
-前置条件分别可用；一个 allow permit 被消费并 fail closed。没有证明 POST 抵达、账户
-认证、余额、模型可用性、SSE shape 或 provider marker，也不能从失败推断计费。即使
-后续真实 probe 成功，也只证明当次 development transport conformance，不构成 Agent
-质量、evaluation、holdout 或 FEP/LIF claim。
+直接证明的是：固定请求可被离线计划、摘要绑定；真实 credential boundary、DNS/TCP/TLS、
+账户认证、固定模型、SSE 解析和 provider marker 在这一次请求上成功；allow permit
+恰好消费一次且没有 retry。它不证明长期可靠性、限流/余额状态、通用 prompt、tool loop、
+Agent 质量、evaluation、holdout 或任何 FEP/LIF claim。

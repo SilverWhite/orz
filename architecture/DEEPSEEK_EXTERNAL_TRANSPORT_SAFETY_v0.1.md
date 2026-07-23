@@ -122,7 +122,8 @@ type 和 numeric errno，不记录异常正文。
 
 - 没有真实 credential provisioning 命令；
 - 没有 provider `/models` capability discovery；
-- 没有对真实证书、DNS、限流、余额或账户权限的成功验证；
+- 已有一次固定请求的真实 HTTPS 200 conformance，但没有长期可靠性、限流、余额或
+  capability discovery 验证；
 - model loop 仍拒绝 real-network transport；
 - 没有 session-wide、retry-wide 或自动批准；
 - 没有 evaluation/holdout、研究数据或 claim-bearing 调用。

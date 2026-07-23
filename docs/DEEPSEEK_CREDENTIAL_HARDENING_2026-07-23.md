@@ -96,5 +96,6 @@ Authorization 时仍不可避免地产生一个 Python string 和 HTTP/内核副
 - 用户或外部 shell 主动重定向 stdout/stderr 到不受本项目控制的位置。
 
 因此正确表述是“额外泄露面被显著缩小并机械验证”，不是“key 绝对不会被读取或残留”。
-正常使用前仍需至少一次新授权的成功 real conformance，以及正式 Grok launcher 的同等级
-credential injection、session/tool/permission/sandbox 与 leak 验证。
+一次新授权的 real conformance 已在 `2026-07-23` 成功。正常使用前剩余正式 Grok
+launcher 的同等级 credential injection、session/tool/permission/sandbox 与 leak
+验证。
