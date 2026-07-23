@@ -35,9 +35,11 @@ from fep_agent_proto.approval_ledger import (
     ApprovalLedger,
     ConsoleConfirmationIO,
     InteractivePermitBroker,
+    InteractiveRealNetworkPermitBroker,
     verify_approval_ledger,
 )
 from fep_agent_proto.credentials import (
+    CredentialLease,
     InMemoryCredentialProvider,
     UnavailableCredentialProvider,
 )
@@ -79,6 +81,10 @@ from fep_agent_proto.model_transport import (
 from fep_agent_proto.private_transcript import (
     load_private_transcript,
     save_private_transcript,
+)
+from fep_agent_proto.real_development_probe import (
+    create_real_development_plan,
+    execute_real_development_probe,
 )
 from fep_agent_proto.scanner import scan_bundle
 from fep_agent_proto.schema import validate_instance
@@ -965,6 +971,112 @@ class PrototypeRegressionTests(unittest.TestCase):
             transport.send(request)
         self.assertNotIn("sk-test-not-real", str(captured.exception))
         self.assertIsNone(captured.exception.__cause__)
+
+    def test_real_development_probe_is_one_shot_and_persists_only_redacted_result(
+        self,
+    ) -> None:
+        class FakeSocket:
+            def settimeout(self, value: float) -> None:
+                self.timeout = value
+
+        class FakeResponse:
+            status = 200
+
+            def __init__(self) -> None:
+                self._lines = iter(
+                    (
+                        b'data: {"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"role":"assistant","content":"LIF_REAL_DEEPSEEK_OK"},"finish_reason":"stop"}]}\r\n',
+                        b'data: {"model":"deepseek-v4-pro","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}\r\n',
+                        b"data: [DONE]\r\n",
+                        b"",
+                    )
+                )
+
+            def getheaders(self) -> list[tuple[str, str]]:
+                return [("Content-Type", "text/event-stream")]
+
+            def readline(self) -> bytes:
+                return next(self._lines)
+
+            def close(self) -> None:
+                pass
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.sock = FakeSocket()
+                self.request_count = 0
+
+            def connect(self) -> None:
+                pass
+
+            def request(self, method: str, path: str, **kwargs: object) -> None:
+                self.request_count += 1
+
+            def getresponse(self) -> FakeResponse:
+                return FakeResponse()
+
+            def close(self) -> None:
+                pass
+
+        class PinnedTestCredentialProvider:
+            source_id = "windows-credential-manager-current-user"
+
+            def acquire(self) -> CredentialLease:
+                return CredentialLease(
+                    b"sk-test-not-real",
+                    source_id=self.source_id,
+                )
+
+        output_dir = self.root / "real-probe"
+        plan = create_real_development_plan(output_dir=output_dir)
+        token = "ALLOW-" + plan["confirmation_summary_sha256"][:12].upper()
+        confirmation_output = io.StringIO()
+        connection = FakeConnection()
+        result = execute_real_development_probe(
+            plan_path=output_dir / "plan.json",
+            confirmation_io=ConsoleConfirmationIO(
+                input_func=lambda: token,
+                output=confirmation_output,
+                attempt_label="real-network",
+            ),
+            credential_provider=PinnedTestCredentialProvider(),
+            connection_factory=lambda host, port, timeout, context: connection,
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(connection.request_count, 1)
+        self.assertEqual(result["request_count"], 1)
+        self.assertEqual(result["retry_count"], 0)
+        self.assertEqual(result["resolved_model"], "deepseek-v4-pro")
+        self.assertTrue(result["marker_matched"])
+        self.assertIn("REAL DEEPSEEK DEVELOPMENT REQUEST", confirmation_output.getvalue())
+        persisted = (output_dir / "result.json").read_text(encoding="utf-8")
+        ledger = (output_dir / "network-approvals.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("LIF_REAL_DEEPSEEK_OK", persisted)
+        self.assertNotIn("sk-test-not-real", persisted)
+        self.assertNotIn(token, persisted)
+        self.assertNotIn(token, ledger)
+        self.assertTrue(verify_approval_ledger(output_dir / "network-approvals.jsonl")["valid"])
+
+    def test_real_network_broker_rejects_in_process_fake_provider(self) -> None:
+        broker = InteractiveRealNetworkPermitBroker(
+            ledger=ApprovalLedger(self.root / "real-never-written.jsonl"),
+            confirmation_io=ConsoleConfirmationIO(
+                input_func=lambda: "DENY",
+                output=io.StringIO(),
+            ),
+        )
+        factory = type(
+            "MarkedFakeFactory",
+            (),
+            {"is_in_process_fake_provider": True, "__call__": lambda self, *args: None},
+        )()
+        with self.assertRaises(PrototypeError):
+            BrokeredDeepSeekHttpsTransport(
+                permit_broker=broker,
+                credential_provider=InMemoryCredentialProvider(b"sk-test-not-real"),
+                connection_factory=factory,
+            )
 
     def test_deepseek_external_readiness_cli_is_offline_and_blocked(self) -> None:
         profile_path = RUNTIME_ROOT / "examples/example-deepseek-adapter-profile.json"

@@ -95,7 +95,9 @@ workspace trust、local trace/export、event bridge 与 hash-only fixture checkp
 5. child-tree timeout/cancel/parent-exit 管理员矩阵已完成，candidate `0.2.111` 通过并提升为默认；
 6. manual `/compact` provenance 已完成 fake-only observed 验证：lifecycle、source span/digest、request、
    checkpoint、`derived_unverified` 和 unknown mapping 边界均由独立 verifier 重放；
-7. 这些边界通过后，真实 DeepSeek development probe 仍需用户单独授权和费用确认。
+7. 这些边界通过后，用户已于 2026-07-23 单独授权一次最小真实 DeepSeek
+   development probe；两阶段 one-shot 入口和固定请求计划已生成，但本机固定
+   Windows Credential Manager 项缺失，所以未发出 HTTP attempt、未产生费用。
 
 六个开源 Agent 的固定版本比较、取舍理由与 source ledger 见
 [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)。其中 repo map、

@@ -32,14 +32,16 @@ class ConsoleConfirmationIO:
         *,
         input_func: Callable[[], str] | None = None,
         output: TextIO | None = None,
+        attempt_label: str = "fake-provider",
     ) -> None:
         self._input = input_func or input
         self._output = output or sys.stderr
+        self._attempt_label = attempt_label
 
     def confirm(self, *, rendered_summary: str, expected_token: str) -> bool:
         print(rendered_summary, file=self._output)
         print(
-            f"Type {expected_token} to allow this fake-provider attempt; any other input denies:",
+            f"Type {expected_token} to allow this {self._attempt_label} attempt; any other input denies:",
             file=self._output,
         )
         self._output.flush()
@@ -156,6 +158,46 @@ class InteractivePermitBroker:
         )
         if not allowed:
             raise PrototypeError("interactive network confirmation denied the request")
+        return OneShotNetworkPermit.issue_for_deepseek_chat(
+            request_sha256=summary["request_body_sha256"]
+        )
+
+    @property
+    def summaries(self) -> list[dict[str, Any]]:
+        return deepcopy(self._summaries)
+
+
+class InteractiveRealNetworkPermitBroker:
+    """Digest-challenge broker for one explicitly disclosed real-network attempt."""
+
+    real_network_only = True
+
+    def __init__(self, *, ledger: ApprovalLedger, confirmation_io: ConfirmationIO) -> None:
+        self._ledger = ledger
+        self._confirmation_io = confirmation_io
+        self._summaries: list[dict[str, Any]] = []
+
+    def authorize(self, summary: dict[str, Any]) -> OneShotNetworkPermit:
+        if summary["attempt"] != 1 or summary["is_retry"]:
+            raise PrototypeError("real development broker forbids retries")
+        summary_sha256 = confirmation_summary_sha256(summary)
+        expected_token = "ALLOW-" + summary_sha256[:12].upper()
+        rendered = (
+            "REAL DEEPSEEK DEVELOPMENT REQUEST — external disclosure and billing may occur\n"
+            + render_network_confirmation(summary)
+            + "\nRetry budget: 0; this approval permits exactly one HTTP attempt"
+        )
+        self._summaries.append(deepcopy(summary))
+        allowed = self._confirmation_io.confirm(
+            rendered_summary=rendered,
+            expected_token=expected_token,
+        )
+        self._ledger.append(
+            summary=summary,
+            decision="allow" if allowed else "deny",
+        )
+        if not allowed:
+            raise PrototypeError("interactive real-network confirmation denied the request")
         return OneShotNetworkPermit.issue_for_deepseek_chat(
             request_sha256=summary["request_body_sha256"]
         )

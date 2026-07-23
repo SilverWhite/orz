@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/runtime/deepseek-real-development-result/v0.1/schema.json",
+  "title": "DeepSeek Real Development One-Shot Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "completed_at",
+    "valid",
+    "provider",
+    "model",
+    "resolved_model",
+    "endpoint",
+    "request_count",
+    "retry_count",
+    "http_status",
+    "marker_matched",
+    "response",
+    "transport",
+    "approval",
+    "claim_eligibility",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-development" },
+    "result_kind": { "const": "deepseek-real-development-one-shot" },
+    "completed_at": { "type": "string", "minLength": 1 },
+    "valid": { "type": "boolean" },
+    "provider": { "const": "deepseek" },
+    "model": { "const": "deepseek-v4-pro" },
+    "resolved_model": { "const": "deepseek-v4-pro" },
+    "endpoint": { "const": "https://api.deepseek.com/chat/completions" },
+    "request_count": { "const": 1 },
+    "retry_count": { "const": 0 },
+    "http_status": { "const": 200 },
+    "marker_matched": { "type": "boolean" },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finish_reason",
+        "content_bytes",
+        "content_sha256",
+        "reasoning_present",
+        "reasoning_bytes",
+        "reasoning_sha256",
+        "tool_call_count",
+        "tool_calls",
+        "keep_alive_count",
+        "data_event_count",
+        "semantic_event_count",
+        "usage",
+        "raw_content_recorded",
+        "raw_reasoning_recorded"
+      ],
+      "properties": {
+        "finish_reason": {
+          "enum": [
+            "stop",
+            "length",
+            "content_filter",
+            "tool_calls",
+            "insufficient_system_resource"
+          ]
+        },
+        "content_bytes": { "type": "integer", "minimum": 0 },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "reasoning_present": { "type": "boolean" },
+        "reasoning_bytes": { "type": "integer", "minimum": 0 },
+        "reasoning_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "tool_call_count": { "const": 0 },
+        "tool_calls": { "type": "array", "maxItems": 0 },
+        "keep_alive_count": { "type": "integer", "minimum": 0 },
+        "data_event_count": { "type": "integer", "minimum": 1 },
+        "semantic_event_count": { "type": "integer", "minimum": 1 },
+        "usage": {
+          "oneOf": [
+            { "type": "object" },
+            { "type": "null" }
+          ]
+        },
+        "raw_content_recorded": { "const": false },
+        "raw_reasoning_recorded": { "const": false }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_body_bytes",
+        "request_body_sha256",
+        "response_body_bytes",
+        "first_semantic_observed",
+        "duration_ms",
+        "tls_verification",
+        "credential_source_id",
+        "authorization_recorded"
+      ],
+      "properties": {
+        "request_body_bytes": { "type": "integer", "minimum": 1 },
+        "request_body_sha256": { "$ref": "#/$defs/sha256" },
+        "response_body_bytes": { "type": "integer", "minimum": 1 },
+        "first_semantic_observed": { "const": true },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "tls_verification": {
+          "const": "system-trust-hostname-required-min-tls1.2"
+        },
+        "credential_source_id": {
+          "const": "windows-credential-manager-current-user"
+        },
+        "authorization_recorded": { "const": false }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "confirmation_summary_sha256",
+        "ledger_event_count",
+        "ledger_terminal_event_sha256",
+        "confirmation_token_recorded"
+      ],
+      "properties": {
+        "confirmation_summary_sha256": { "$ref": "#/$defs/sha256" },
+        "ledger_event_count": { "const": 1 },
+        "ledger_terminal_event_sha256": { "$ref": "#/$defs/sha256" },
+        "confirmation_token_recorded": { "const": false }
+      }
+    },
+    "claim_eligibility": { "const": "not_assessed" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

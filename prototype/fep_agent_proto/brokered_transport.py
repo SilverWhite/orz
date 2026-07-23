@@ -50,6 +50,13 @@ class BrokeredDeepSeekHttpsTransport:
             raise PrototypeError(
                 "this interactive permit broker is restricted to the in-process fake provider"
             )
+        if (
+            getattr(permit_broker, "real_network_only", False) is True
+            and self._in_process_fake
+        ):
+            raise PrototypeError(
+                "this interactive permit broker is restricted to the real network transport"
+            )
         self.real_network = not self._in_process_fake
         self.transport_id = (
             "deepseek-brokered-fake-https-v0.1"

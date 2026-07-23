@@ -124,7 +124,8 @@ validator verdict 或 claim evidence。
 - repo map、architect/editor 双模型、多 Agent orchestration；
 - server/UI 级 event query、全文索引维护；
 - cloud sandbox、remote queue 和持续云运维；
-- 真实 DeepSeek development call，直到离线 ACP/恢复/Windows conformance 通过且用户另行授权费用。
+- 超过一次、带工具、带研究数据或可重试的真实 DeepSeek call。一次最小 development
+  call 已获单独授权并具备 two-phase one-shot 入口，但仍被固定 credential 缺失阻断。
 
 ### Reject as default
 

@@ -7,6 +7,7 @@ import sys
 from typing import Any, Sequence
 
 from .action_kernel import create_action_kernel_smoke, verify_action_kernel
+from .approval_ledger import ConsoleConfirmationIO
 from .errors import PrototypeError
 from .deepseek_adapter import validate_deepseek_profile, validate_tool_history
 from .deepseek_external import inspect_deepseek_external_readiness
@@ -20,6 +21,10 @@ from .model_loop import (
     create_deepseek_loopback_http_smoke,
     create_deepseek_model_loop_smoke,
     verify_model_loop,
+)
+from .real_development_probe import (
+    create_real_development_plan,
+    execute_real_development_probe,
 )
 from .scanner import scan_bundle
 from .schema import validate_instance
@@ -39,7 +44,10 @@ def _print_json(value: Any, *, stream: Any | None = None) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fep-agent-proto",
-        description="Development-only contract probe; it never invokes a model.",
+        description=(
+            "Development-only contract probes; real model access exists only in the "
+            "explicit two-phase one-shot command."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -145,6 +153,18 @@ def _build_parser() -> argparse.ArgumentParser:
     interactive_fake.add_argument("--export-root", type=Path, required=True)
     interactive_fake.add_argument("--profile", type=Path, required=True)
     interactive_fake.add_argument("--output-dir", type=Path, required=True)
+
+    real_plan = subparsers.add_parser(
+        "deepseek-real-development-plan",
+        help="Create a fixed, no-network plan for one minimal DeepSeek development request",
+    )
+    real_plan.add_argument("--output-dir", type=Path, required=True)
+
+    real_execute = subparsers.add_parser(
+        "deepseek-real-development-execute",
+        help="Interactively authorize and execute the exact planned one-shot request",
+    )
+    real_execute.add_argument("--plan", type=Path, required=True, dest="plan_path")
 
     verify_model = subparsers.add_parser(
         "verify-model-loop",
@@ -274,6 +294,17 @@ def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             output_dir=args.output_dir,
         )
         return result, 0 if result["valid"] and result["runtime_ready"] else 2
+
+    if args.command == "deepseek-real-development-plan":
+        result = create_real_development_plan(output_dir=args.output_dir)
+        return result, 0
+
+    if args.command == "deepseek-real-development-execute":
+        result = execute_real_development_probe(
+            plan_path=args.plan_path,
+            confirmation_io=ConsoleConfirmationIO(attempt_label="real-network"),
+        )
+        return result, 0 if result["valid"] else 2
 
     if args.command == "verify-model-loop":
         result = verify_model_loop(output_dir=args.output_dir)

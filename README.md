@@ -45,6 +45,7 @@
 - [`docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md`](docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md)：锁定 Windows binary 的 ACP protocol v1/capability/扩展通知无模型实测、独立验证与下一步 fake-tool 边界。
 - [`docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`](docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md)：ACP fake tool allow/cancel 双场景的 Windows 实测、三路证据对账、取消竞态与独立 verifier。
 - [`docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md`](docs/GROK_UPSTREAM_CANDIDATE_AUDIT_2026-07-23.md)：Grok `0.2.111` 的官方发现、本地身份、ACP/DeepSeek fake-only 对照与已完成的 promotion gate。
+- [`docs/DEEPSEEK_REAL_DEVELOPMENT_PROBE_2026-07-23.md`](docs/DEEPSEEK_REAL_DEVELOPMENT_PROBE_2026-07-23.md)：一次性真实 DeepSeek probe 的两阶段入口、离线测试、固定请求计划与本机 credential blocker。
 - [`docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md`](docs/GROK_UPSTREAM_PROMOTION_2026-07-23.md)：将默认 Grok 从 `0.2.106` 提升到 `0.2.111` 的独立裁决与回退锚点。
 - [`docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md`](docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md)：`run_terminal_command` timeout、background task cancel 与 parent-exit 三场景的 Windows 子进程树门禁及已完成的管理员 observed 矩阵。
 - [`docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md`](docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md)：Grok `0.2.111` 手工 compaction 的 `PreCompact`/`PostCompact`、source span/digest、checkpoint、`derived_unverified` 摘要边界与独立 verifier。
@@ -106,7 +107,7 @@
 ## 当前边界
 
 - 正式通用 runtime 采用 Grok Build，不再在本仓库复刻 model/session/tool/permission/sandbox 栈。
-- 当前包含 development-only disposable conformance fixtures、zero-model dry-run 和 loopback fake-provider launcher；没有真实 provider 模型调用、评分或生产 runner。
+- 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher 与一个显式确认、零重试的真实 DeepSeek one-shot probe；截至 2026-07-23 固定 credential 缺失，因此仍没有成功或失败的真实 provider HTTP attempt、评分或生产 runner。
 - 不决定全部使用 Rust；只把 Rust 视为少量保障组件与 Windows 进程边界的候选实现语言。
 - 不把历史案例直接作为模型提示词答案。
 - 不自动修改 MAP/INDEX。

@@ -24,10 +24,11 @@ is not a production runtime backlog. It implements:
   thinking/tool-call loop whose ordinary artifacts retain only content and
   reasoning digests.
 
-It does **not** run a model, score an Agent, create evaluation/holdout data,
-provide a sandbox, or modify MAP/INDEX. A development export may be `ready`
-with a leak warning because the semantic review is intentionally not performed.
-Challenge warnings remain blocked/deferred.
+Except for the separately authorized two-phase command described below, the
+fixture suite does **not** run a model. It does not score an Agent, create
+evaluation/holdout data, provide a sandbox, or modify MAP/INDEX. A development
+export may be `ready` with a leak warning because the semantic review is
+intentionally not performed. Challenge warnings remain blocked/deferred.
 
 Grok Build owns the production model transport, session, tool, permission and
 sandbox layers. The transport, loopback, fake-provider, broker and approval-ledger
@@ -92,6 +93,12 @@ python -m fep_agent_proto.cli deepseek-interactive-fake-https-smoke `
   --profile ..\runtime\examples\example-deepseek-adapter-profile.json `
   --output-dir ..\_prototype_smoke\interactive-fake-model
 
+python -m fep_agent_proto.cli deepseek-real-development-plan `
+  --output-dir ..\_prototype_smoke\real-development
+
+python -m fep_agent_proto.cli deepseek-real-development-execute `
+  --plan ..\_prototype_smoke\real-development\plan.json
+
 python -m fep_agent_proto.cli verify-model-loop `
   --output-dir ..\_prototype_smoke\model-loop
 ```
@@ -147,3 +154,12 @@ metadata。它不读取 Windows Credential Manager，也不调用真实 DeepSeek
 `network-approvals.jsonl`。摘要与提示走 stderr，JSON result 走 stdout。该 broker
 在构造期被限制为内建 fake provider，不能访问真实 endpoint。参见
 `../architecture/INTERACTIVE_APPROVAL_LEDGER_CONTRACT_v0.1.md`。
+
+`deepseek-real-development-plan` 是纯离线第一阶段：生成固定请求的脱敏确认摘要，
+不读取凭据、不解析 DNS、不建立 socket。`deepseek-real-development-execute` 只接受
+同一目录中未变化的计划，要求现场输入 `ALLOW-<摘要前12位>`，然后最多发出一次
+固定 `deepseek-v4-pro` 请求；没有 retry、工具、任意 prompt、任意 endpoint 或环境变量
+credential 入口。API key 只能来自当前用户 Windows Credential Manager 的 Generic
+Credential `FEP-Agent/DeepSeek`。结果仅保存内容/reasoning digest、usage、transport
+metadata 与 approval ledger，不保存原始回复或 Authorization。它仍只是 development
+transport conformance，不产生科学证据。

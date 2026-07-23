@@ -1,6 +1,8 @@
 # DeepSeek External HTTPS Transport 安全契约 v0.1
 
-状态：development-only、offline-verified implementation spike；实现真实外网 transport 的构造边界，但没有用户可执行的真实联网命令，也没有读取真实凭据或发起真实请求。
+状态：development-only。底层 transport 已离线验证；现有两阶段 one-shot
+probe 提供唯一真实联网入口，但截至 2026-07-23 尚未因缺少固定 Windows
+Credential Manager 项而发出请求。
 
 ## 1. 目标与非目标
 
@@ -31,7 +33,10 @@ transport 直接构造 `HTTPSConnection`，不读取 proxy URL、不实现 redir
 
 请求体变化、endpoint/provider 不同、过期或二次使用都会 fail closed。许可只存在内存，不能序列化或写入配置。日志只可记录随机 permit ID 的 SHA-256 receipt。
 
-permit 是调用方完成用户交互后传下来的窄 capability，不是“用户已经理解请求内容”的证明。新增的 scripted broker 只服务于内建 fake provider；本阶段没有签发真实 permit 的 CLI，因此普通命令无法触发真实 transport。
+permit 是调用方完成用户交互后传下来的窄 capability，不是“用户已经理解请求内容”的证明。scripted broker 只服务于内建 fake provider。真实 development probe
+先离线生成固定请求的 confirmation summary；execute 阶段必须重新构造并比对同一
+request/summary digest，再要求输入 `ALLOW-<摘要前12位>`。真实 broker 拒绝 retry，
+且不能与内建 fake provider 配对。
 
 ## 4. Windows 凭据边界
 
@@ -62,7 +67,7 @@ normalized request
 
 ## 6. 离线验证面
 
-`deepseek-external-readiness` 只检查 profile、TLS context 和静态阻断条件：
+`deepseek-external-readiness` 保留为原始离线 readiness 检查，只检查 profile、TLS context 和静态阻断条件：
 
 - 不读取 Credential Manager；
 - 不签发 permit；
@@ -71,16 +76,36 @@ normalized request
 
 HTTPS transport 单元测试注入 fake connection，验证 host、port、path、Bearer header、SSE、permit 一次性和 metadata 脱敏。`NETWORK_PERMIT_BROKER_CONTRACT_v0.1.md` 进一步用内建 in-process fake provider 接入完整两轮模型循环及一次 503 retry；生产默认 connection factory 没有在测试中调用。
 
-## 7. 尚未开放
+## 7. One-shot development probe
 
-- 没有真实联网 CLI 或自动 permit issuer；
+`deepseek-real-development-plan` / `deepseek-real-development-execute` 固定：
+
+- model=`deepseek-v4-pro`；
+- thinking disabled；
+- 两条无项目数据的固定 message；
+- `max_tokens=16`；
+- stream + usage；
+- 工具数 0、retry 数 0、HTTP attempt 上限 1；
+- 当前用户 Credential Manager target=`FEP-Agent/DeepSeek`。
+
+plan 阶段不读 credential、不联网。execute 在确认后消费一次 permit，缺 credential、
+TLS/HTTP/provider 失败都不能重放。成功结果不保存 prompt、回复正文、provider-private
+reasoning、confirmation token 或 Authorization，只保存 digest、长度、usage、固定
+marker 比对和脱敏 transport metadata。该入口不接 model loop、工具或研究场景。
+
+截至 2026-07-23 的本机预检得到 WinError 1168（固定 credential 不存在），所以只完成了
+离线实现与测试，没有真实请求、计费或 provider 成功观测。
+
+## 8. 仍未开放
+
 - 没有真实 credential provisioning 命令；
 - 没有 provider `/models` capability discovery；
-- 没有对真实证书、DNS、限流、余额或账户权限的验证；
-- real-network-capable transport 只通过明确的 in-process fake factory 接入 model loop；默认真实 connection factory 仍被拒绝；
-- 没有批准真实计费或外部数据披露。
+- 没有对真实证书、DNS、限流、余额或账户权限的成功验证；
+- model loop 仍拒绝 real-network transport；
+- 没有 session-wide、retry-wide 或自动批准；
+- 没有 evaluation/holdout、研究数据或 claim-bearing 调用。
 
-## 8. 官方来源
+## 9. 官方来源
 
 - [DeepSeek first API call and Bearer authentication](https://api-docs.deepseek.com/)
 - [DeepSeek Create Chat Completion](https://api-docs.deepseek.com/api/create-chat-completion/)
