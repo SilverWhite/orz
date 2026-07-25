@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-transition-verification-v0.1.schema.json",
+  "title": "Global Progress transition event verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "valid", "transition_id", "event_sha256", "checks", "errors"],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-transition-verification" },
+    "valid": { "type": "boolean" },
+    "transition_id": { "type": ["string", "null"], "pattern": "^GPT-[A-Z0-9._-]+$" },
+    "event_sha256": { "$ref": "#/$defs/sha256" },
+    "checks": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemas_valid", "source_bindings_valid", "event_rebuilt_exactly", "event_hashes_valid", "state_projection_valid"],
+      "properties": {
+        "schemas_valid": { "type": "boolean" },
+        "source_bindings_valid": { "type": "boolean" },
+        "event_rebuilt_exactly": { "type": "boolean" },
+        "event_hashes_valid": { "type": "boolean" },
+        "state_projection_valid": { "type": "boolean" }
+      }
+    },
+    "errors": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": { "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+}

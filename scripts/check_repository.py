@@ -1517,6 +1517,19 @@ def check_repository() -> dict[str, Any]:
                 f"{required_path.relative_to(ROOT)}"
             )
     counts["global_progress_checkpoint_policy_fixtures"] = 1
+    for required_path in (
+        ROOT / "runtime/global-progress-transition-request-v0.1.schema.json",
+        ROOT / "runtime/global-progress-transition-receipt-v0.1.schema.json",
+        ROOT / "runtime/global-progress-transition-verification-v0.1.schema.json",
+        ROOT / "scripts/build_global_progress_transition_event.py",
+        ROOT / "scripts/verify_global_progress_transition_event.py",
+    ):
+        if not required_path.is_file():
+            errors.append(
+                f"missing global-progress transition gate file: "
+                f"{required_path.relative_to(ROOT)}"
+            )
+    counts["global_progress_transition_gate_fixtures"] = 1
     errors.extend(
         _validate_instance(
             _load_json(ROOT / "evaluation/example-evaluation-result-v0.1.json"),

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-transition-receipt-v0.1.schema.json",
+  "title": "Global Progress transition gate receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "transition_id", "task_id", "transition_kind",
+    "state_before", "requested_state", "state_after", "transition_applied",
+    "decision", "control_codes", "source_bindings"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "transition_id": { "type": "string", "pattern": "^GPT-[A-Z0-9._-]+$" },
+    "task_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "transition_kind": { "enum": ["step_boundary", "task_completion"] },
+    "state_before": { "enum": ["executing", "reviewing"] },
+    "requested_state": { "enum": ["reviewing", "completed"] },
+    "state_after": { "enum": ["executing", "reviewing", "completed"] },
+    "transition_applied": { "type": "boolean" },
+    "decision": { "enum": ["pass", "block"] },
+    "control_codes": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {
+        "enum": [
+          "GPS-TRANSITION-PASS", "GPS-TRANSITION-NOT-ALLOWED",
+          "GPS-CHECKPOINT-INVALID", "GPS-FOCUS-WINDOW-EXCEEDED",
+          "GPS-HOLISTIC-INVALID", "GPS-COMPLETION-INELIGIBLE"
+        ]
+      }
+    },
+    "source_bindings": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "request_sha256", "checkpoint_id", "checkpoint_file_sha256",
+        "checkpoint_verification_sha256", "holistic_assessment_id",
+        "holistic_review_sha256", "holistic_verification_sha256"
+      ],
+      "properties": {
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "checkpoint_id": { "type": "string", "pattern": "^GPC-[A-Z0-9._-]+$" },
+        "checkpoint_file_sha256": { "$ref": "#/$defs/sha256" },
+        "checkpoint_verification_sha256": { "$ref": "#/$defs/sha256" },
+        "holistic_assessment_id": { "type": ["string", "null"], "pattern": "^GPH-[a-f0-9]{16}$" },
+        "holistic_review_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "holistic_verification_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    }
+  },
+  "$defs": { "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+}

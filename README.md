@@ -119,6 +119,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`runtime/global-progress-checkpoint-policy-v0.1.schema.json`](runtime/global-progress-checkpoint-policy-v0.1.schema.json)：冻结 task/contract 绑定、critical direction 与 acceptance 映射，防止跨周期静默缩小整体范围。
 - [`scripts/build_global_progress_checkpoint.py`](scripts/build_global_progress_checkpoint.py)：从 GPS input/review/disposition/verification、policy 和可选 focus artifact 链机械派生 checkpoint，并对动作上限/复查期限超限返回阻断状态。
 - [`scripts/verify_global_progress_checkpoint.py`](scripts/verify_global_progress_checkpoint.py)：重新运行上游独立 verifier、重建 checkpoint、检查 hash/provenance/policy continuity 与 focus 消耗。
+- [`scripts/build_global_progress_transition_event.py`](scripts/build_global_progress_transition_event.py)：将 checkpoint verification 投影为 hash-chained `gate_decision` run event；阻断时保持原状态并保留 receipt。
 - [`runtime/examples/`](runtime/examples/)：仅用于 schema 自证的零 digest 示例，不代表真实导出或运行。
 - [`prototype/`](prototype/)：一次性 Python conformance fixtures；固定 LIF schema、DeepSeek thinking continuity、redaction 与 Windows 进程边界，不是待扩展的生产 runner。
 - [`scripts/check_repository.py`](scripts/check_repository.py)：CI 使用的仓库级机械完整性检查；验证 schema、corpus、coverage、fixture digest、交叉引用和本地文档链接。

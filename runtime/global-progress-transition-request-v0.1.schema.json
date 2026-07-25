@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-transition-request-v0.1.schema.json",
+  "title": "Global Progress disposable transition request v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "transition_id", "task_id", "run_id",
+    "sequence", "timestamp", "run_manifest_sha256", "previous_event_sha256",
+    "transition_kind", "current_state", "requested_state", "checkpoint_id",
+    "checkpoint_file_sha256", "checkpoint_verification_sha256",
+    "holistic_assessment_id", "holistic_review_sha256",
+    "holistic_verification_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-transition-request" },
+    "transition_id": { "type": "string", "pattern": "^GPT-[A-Z0-9._-]+$" },
+    "task_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "previous_event_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "transition_kind": { "enum": ["step_boundary", "task_completion"] },
+    "current_state": { "enum": ["executing", "reviewing"] },
+    "requested_state": { "enum": ["reviewing", "completed"] },
+    "checkpoint_id": { "type": "string", "pattern": "^GPC-[A-Z0-9._-]+$" },
+    "checkpoint_file_sha256": { "$ref": "#/$defs/sha256" },
+    "checkpoint_verification_sha256": { "$ref": "#/$defs/sha256" },
+    "holistic_assessment_id": {
+      "type": ["string", "null"], "pattern": "^GPH-[a-f0-9]{16}$"
+    },
+    "holistic_review_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "holistic_verification_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
