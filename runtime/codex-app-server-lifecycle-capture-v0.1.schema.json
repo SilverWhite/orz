@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/codex-app-server-lifecycle-capture-v0.1.schema.json",
+  "title": "Codex app-server no-model lifecycle capture receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "capture_id", "supervisor_id",
+    "valid", "capture_status", "runtime_family", "runtime_version",
+    "source_stream_id", "started_at", "finished_at", "command_sha256",
+    "working_directory", "isolated_state_directory", "process_id",
+    "process_exit_code", "shutdown_method", "containment_kind",
+    "containment_assigned", "handshake", "capture_artifact",
+    "record_count", "stderr_artifact", "error_kind", "error_sha256",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": {
+      "const": "codex-app-server-lifecycle-capture"
+    },
+    "capture_id": {
+      "type": "string",
+      "pattern": "^CLICAP-CODEX-[A-Z0-9._-]+$"
+    },
+    "supervisor_id": {
+      "const": "CLICAPTURE-CODEX-APP-SERVER-V0.1"
+    },
+    "valid": { "type": "boolean" },
+    "capture_status": { "enum": ["captured", "failed"] },
+    "runtime_family": { "const": "codex-app-server" },
+    "runtime_version": { "type": "string", "minLength": 1 },
+    "source_stream_id": {
+      "type": "string",
+      "pattern": "^CLISTREAM-[A-Z0-9._-]+$"
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "command_sha256": { "$ref": "#/$defs/sha256" },
+    "working_directory": { "type": "string", "minLength": 1 },
+    "isolated_state_directory": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "process_id": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "process_exit_code": { "type": ["integer", "null"] },
+    "shutdown_method": {
+      "enum": [
+        "not_started", "natural_exit", "stdin_eof", "process_tree_close",
+        "process_group_terminate", "root_terminate", "process_group_kill",
+        "root_kill"
+      ]
+    },
+    "containment_kind": { "enum": ["windows_job", "process_group"] },
+    "containment_assigned": { "type": "boolean" },
+    "handshake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initialize_response_received", "initialized_sent",
+        "thread_start_response_received", "thread_started_received",
+        "thread_id"
+      ],
+      "properties": {
+        "initialize_response_received": { "type": "boolean" },
+        "initialized_sent": { "type": "boolean" },
+        "thread_start_response_received": { "type": "boolean" },
+        "thread_started_received": { "type": "boolean" },
+        "thread_id": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "capture_artifact": { "$ref": "#/$defs/artifact" },
+    "record_count": { "type": "integer", "minimum": 0 },
+    "stderr_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "bytes", "sha256", "total_bytes", "full_sha256", "truncated"
+      ],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "total_bytes": { "type": "integer", "minimum": 0 },
+        "full_sha256": { "$ref": "#/$defs/sha256" },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "error_kind": { "type": ["string", "null"], "minLength": 1 },
+    "error_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

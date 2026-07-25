@@ -8,7 +8,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend
 仍为 fail-closed/noncompliant。Grok Build 是当前证据最完整的参考框架，
 其官方 Windows binary 已完成锁定与离线核验。首个 Codex app-server 双向 ordered-capture lifecycle normalizer
-已完成 no-model 离线实现和独立重放，尚未进行 live app-server smoke。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
+已完成 no-model 离线实现、独立重放与隔离 live app-server smoke；live 路径只执行 initialize 和
+ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
 真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
 误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。
 
@@ -130,6 +131,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`scripts/append_cli_session_lifecycle_event.py`](scripts/append_cli_session_lifecycle_event.py)：有限、厂商无关的 CLI lifecycle ingress；把已标准化且有序的 session/turn/terminal observation 原子映射为 canonical run event，并复用 GPS journal-derived 完成态。
 - [`scripts/verify_cli_session_lifecycle_receipt.py`](scripts/verify_cli_session_lifecycle_receipt.py)：只读回放 observation、adapter receipt 与当前 journal，检查快照、事件唯一性和 lifecycle projection。
 - [`runtime/cli-session-lifecycle-observation-v0.2.schema.json`](runtime/cli-session-lifecycle-observation-v0.2.schema.json)：区分 completed/interrupted/failed turn terminal，并把 turn terminal 与 session terminal 分离的标准化 observation。
+- [`scripts/capture_codex_app_server_lifecycle.py`](scripts/capture_codex_app_server_lifecycle.py)：在 Windows Job Object/POSIX process group 内启动显式 app-server executable，只执行 initialize 与 ephemeral/read-only thread start，并原子输出双向 ordered capture、独立 stderr 和 digest-bound receipt。
+- [`scripts/verify_codex_app_server_lifecycle_capture.py`](scripts/verify_codex_app_server_lifecycle_capture.py)：独立核对 capture/receipt/stderr、连续 sequence、thread 身份、containment 和 no-turn/no-input 边界。
 - [`scripts/normalize_codex_app_server_lifecycle.py`](scripts/normalize_codex_app_server_lifecycle.py)：只读消费可信 supervisor 的单一双向有序 Codex app-server capture，用 turn/start request/response 证明 turn→thread 绑定，再把 thread/turn/close 通知投影为 lifecycle v0.2 observation；忽略正文类 item/delta，EOF 保持 partial。
 - [`scripts/verify_codex_app_server_lifecycle.py`](scripts/verify_codex_app_server_lifecycle.py)：独立重放 capture，核对 source/observation digest、状态投影、内容省略和 receipt。
 - [`runtime/fixtures/codex-app-server-lifecycle-v0.1/`](runtime/fixtures/codex-app-server-lifecycle-v0.1/)：happy、interrupted、failed、missing-terminal 与 sequence/thread/truncation 反例 capture。
