@@ -89,6 +89,8 @@
       ],
       "properties": {
         "checkpoint_id": { "type": "string", "pattern": "^GPC-[A-Z0-9._-]+$" },
+        "task_id": { "$ref": "#/$defs/id" },
+        "task_contract_sha256": { "$ref": "#/$defs/sha256" },
         "review_cycle": { "type": "integer", "minimum": 0 },
         "plan_revision": { "type": "integer", "minimum": 1 },
         "journal_head_sequence": { "type": "integer", "minimum": 0 },
@@ -96,6 +98,8 @@
         "review_sha256": { "$ref": "#/$defs/sha256" },
         "disposition_id": { "type": "string", "pattern": "^GPD-[A-Z0-9._-]+$" },
         "disposition_sha256": { "$ref": "#/$defs/sha256" },
+        "source_verification_sha256": { "$ref": "#/$defs/sha256" },
+        "checkpoint_policy_sha256": { "$ref": "#/$defs/sha256" },
         "decision": { "enum": ["continue", "pivot", "defer", "stop", "replan"] },
         "selected_direction_id": {
           "oneOf": [
@@ -144,6 +148,12 @@
           }
         },
         "unresolved_constraint_refs": { "$ref": "#/$defs/idArray" },
+        "focus_window_consumption": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/focusWindowConsumption" }
+          ]
+        },
         "previous_checkpoint_sha256": {
           "oneOf": [
             { "$ref": "#/$defs/sha256" },
@@ -151,6 +161,30 @@
           ]
         },
         "checkpoint_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "focusWindowConsumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition_id",
+        "disposition_sha256",
+        "authorized_direction_id",
+        "max_additional_actions",
+        "observed_actions",
+        "within_action_limit",
+        "review_by_cycle",
+        "within_review_deadline"
+      ],
+      "properties": {
+        "disposition_id": { "type": "string", "pattern": "^GHD-[A-Z0-9._-]+$" },
+        "disposition_sha256": { "$ref": "#/$defs/sha256" },
+        "authorized_direction_id": { "$ref": "#/$defs/directionId" },
+        "max_additional_actions": { "type": "integer", "minimum": 1 },
+        "observed_actions": { "type": "integer", "minimum": 0 },
+        "within_action_limit": { "type": "boolean" },
+        "review_by_cycle": { "type": "integer", "minimum": 0 },
+        "within_review_deadline": { "type": "boolean" }
       }
     }
   }

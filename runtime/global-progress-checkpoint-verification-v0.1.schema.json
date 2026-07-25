@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-checkpoint-verification-v0.1.schema.json",
+  "title": "Global Progress checkpoint adapter verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "valid",
+    "checkpoint_id",
+    "input_sha256",
+    "review_sha256",
+    "disposition_sha256",
+    "checkpoint_sha256",
+    "checks",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-checkpoint-verification" },
+    "valid": { "type": "boolean" },
+    "checkpoint_id": {
+      "type": ["string", "null"],
+      "pattern": "^GPC-[A-Z0-9._-]+$"
+    },
+    "input_sha256": { "$ref": "#/$defs/sha256" },
+    "review_sha256": { "$ref": "#/$defs/sha256" },
+    "disposition_sha256": { "$ref": "#/$defs/sha256" },
+    "checkpoint_sha256": { "$ref": "#/$defs/sha256" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_bundle_valid",
+        "source_artifact_digests_valid",
+        "previous_checkpoint_valid",
+        "focus_artifact_bundle_valid",
+        "checkpoint_schema_valid",
+        "checkpoint_rebuilt_exactly",
+        "checkpoint_hash_valid",
+        "focus_window_within_bounds"
+      ],
+      "properties": {
+        "source_bundle_valid": { "type": "boolean" },
+        "source_artifact_digests_valid": { "type": "boolean" },
+        "previous_checkpoint_valid": { "type": "boolean" },
+        "focus_artifact_bundle_valid": { "type": "boolean" },
+        "checkpoint_schema_valid": { "type": "boolean" },
+        "checkpoint_rebuilt_exactly": { "type": "boolean" },
+        "checkpoint_hash_valid": { "type": "boolean" },
+        "focus_window_within_bounds": { "type": "boolean" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-checkpoint-policy-v0.1.schema.json",
+  "title": "Global Progress checkpoint derivation policy v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "task_id",
+    "task_contract_sha256",
+    "critical_directions"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-checkpoint-policy" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "task_contract_sha256": { "$ref": "#/$defs/sha256" },
+    "critical_directions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["direction_id", "acceptance_refs"],
+        "properties": {
+          "direction_id": { "$ref": "#/$defs/directionId" },
+          "acceptance_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/id" },
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "directionId": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

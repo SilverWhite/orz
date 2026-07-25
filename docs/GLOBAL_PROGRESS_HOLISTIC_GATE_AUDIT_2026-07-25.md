@@ -79,5 +79,7 @@ LIF 内部任务用作复杂模型测试题。
 - 本层尚未接入真实 runtime checkpoint adapter，也未验证提示注入对模型行为的净收益。
 - 正式复杂测试任务应使用独立于 LIF 内部研究的问题集；本 fixture 只测试通用控制面机械语义。
 
-下一步应先实现 no-model checkpoint adapter：从已登记的 prior review/disposition、plan ledger 与 journal 机械生成历史
-记录并验证两侧 digest；通过后再设计 disposable reproduction，仍不直接调用真实模型。
+后续状态：no-model checkpoint adapter 已在
+[`GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md`](GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md)
+中完成；它从 prior artifacts、plan/journal 与冻结 policy 机械生成记录，并实际核算有界聚焦消耗。下一门槛转为
+runtime event integration 和 policy revision protocol，仍不直接调用真实模型。

@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1.0",
+  "artifact_kind": "global-progress-checkpoint-policy",
+  "task_id": "TASK-GPS-FIXTURE-001",
+  "task_contract_sha256": "1ef6e2f430d1de44c8a1db7207e1ba038746b638c14a0cd565c554108c358ebc",
+  "critical_directions": [
+    {
+      "direction_id": "evidence_gates",
+      "acceptance_refs": ["ACC-EVIDENCE"]
+    },
+    {
+      "direction_id": "runtime_acp",
+      "acceptance_refs": ["ACC-ACP"]
+    },
+    {
+      "direction_id": "windows_containment",
+      "acceptance_refs": ["ACC-WINDOWS"]
+    }
+  ]
+}

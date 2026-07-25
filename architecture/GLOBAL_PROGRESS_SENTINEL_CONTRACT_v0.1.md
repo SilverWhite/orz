@@ -228,10 +228,28 @@ protocol GateDecision；但 runtime 在接入时不得将 `ineligible` 当作完
 checkpoint 记录 prior review/disposition digest 并自身形成 hash chain，可检测历史投影被静默改写。当前 no-model
 spike 尚未同时接收 prior artifact 文件，因此只能验证 digest 被稳定引用，不能证明 checkpoint 中的投影与原始
 review/disposition 语义一致。正式 runtime adapter 必须从已登记 artifact 和 journal 机械生成 checkpoint，不能由
-模型自由填写；它还必须在下一 checkpoint 检查 `max_additional_actions` 是否已超限，当前 disposition verifier
-只验证授权声明本身。
+模型自由填写。
+
+### 11.4 来源绑定 checkpoint adapter
+
+no-model adapter 已实现上述来源约束。每个新 checkpoint 必须同时绑定：
+
+- 原始 GPS input、确定性 review、模型 disposition 与既有独立 verification report；
+- task/contract-bound critical-direction policy；
+- 前一 checkpoint（第二周期起）；
+- 若存在有界聚焦：产生授权的 history、holistic review/disposition/verification 四件套。
+
+adapter 不只读取 verification 中的 `valid=true`，还重新运行既有独立 verifier，并要求重算报告与输入报告完全一致。
+critical-direction policy digest 必须与前一 checkpoint 相同；当前版本没有 policy revision protocol，因此任何变化都
+fail closed。
+
+action budget 统计前一 journal head 之后该授权方向的所有 `action_terminal`，包括成功、失败与取消，防止失败重试
+绕过预算。等于 `max_additional_actions` 仍合法；超过动作上限或 `review_by_cycle` 时，adapter 会保留带
+`within_* = false` 的 checkpoint 作为审计证据，同时进程返回非零，独立 verifier 也将整体结果标记 invalid。
 
 实现与实测见
 [`GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md)。
-在 checkpoint adapter 和 prior-artifact linkage 完成前，不把本扩展注入真实模型回合，也不把它用于 LIF 专有任务
-替代通用复杂任务测试。
+checkpoint adapter 与 prior-artifact linkage 的 no-model spike 已完成，见
+[`GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md)。
+在 runtime event integration 和 policy revision protocol 完成前，仍不把本扩展注入真实模型回合，也不把它用于
+LIF 专有任务替代通用复杂任务测试。

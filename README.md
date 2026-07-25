@@ -116,6 +116,9 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`runtime/global-progress-holistic-review-v0.1.schema.json`](runtime/global-progress-holistic-review-v0.1.schema.json)：方向预算占比、同方向空转、关键延期债务和整体完成资格的确定性派生视图。
 - [`runtime/global-progress-holistic-disposition-v0.1.schema.json`](runtime/global-progress-holistic-disposition-v0.1.schema.json)：集中推进的有界许可，要求关键路径、退出条件、追加动作上限、下一复查周期和受影响关键方向。
 - [`runtime/fixtures/global-progress-holistic-v0.1/`](runtime/fixtures/global-progress-holistic-v0.1/)：四检查点 no-model 历史，覆盖四种整体性失效模式及有界聚焦 permission reversal。
+- [`runtime/global-progress-checkpoint-policy-v0.1.schema.json`](runtime/global-progress-checkpoint-policy-v0.1.schema.json)：冻结 task/contract 绑定、critical direction 与 acceptance 映射，防止跨周期静默缩小整体范围。
+- [`scripts/build_global_progress_checkpoint.py`](scripts/build_global_progress_checkpoint.py)：从 GPS input/review/disposition/verification、policy 和可选 focus artifact 链机械派生 checkpoint，并对动作上限/复查期限超限返回阻断状态。
+- [`scripts/verify_global_progress_checkpoint.py`](scripts/verify_global_progress_checkpoint.py)：重新运行上游独立 verifier、重建 checkpoint、检查 hash/provenance/policy continuity 与 focus 消耗。
 - [`runtime/examples/`](runtime/examples/)：仅用于 schema 自证的零 digest 示例，不代表真实导出或运行。
 - [`prototype/`](prototype/)：一次性 Python conformance fixtures；固定 LIF schema、DeepSeek thinking continuity、redaction 与 Windows 进程边界，不是待扩展的生产 runner。
 - [`scripts/check_repository.py`](scripts/check_repository.py)：CI 使用的仓库级机械完整性检查；验证 schema、corpus、coverage、fixture digest、交叉引用和本地文档链接。
@@ -124,6 +127,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`docs/REPOSITORY_AUDIT_2026-07-21.md`](docs/REPOSITORY_AUDIT_2026-07-21.md)：迁移后审计、初始提交边界和下一阶段 session-validator spike 范围。
 - [`docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md`](docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md)：no-model 全局回看生成、独立重建、合法处置、去重与篡改失败的实测记录。
 - [`docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md)：跨检查点整体性门禁、正反处置、hash-chain 篡改与保留边界的实测记录。
+- [`docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md)：来源绑定 checkpoint adapter、上游 verifier 重算、policy continuity 与有界聚焦实际消费核算记录。
 
 ## 证据路由
 

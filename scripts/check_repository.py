@@ -1495,6 +1495,28 @@ def check_repository() -> dict[str, Any]:
                 f"missing holistic global-progress file: {required_path.relative_to(ROOT)}"
             )
     counts["global_progress_holistic_fixtures"] = 1
+    checkpoint_policy_path = (
+        ROOT
+        / "runtime/fixtures/global-progress-checkpoint-adapter-v0.1/policy.json"
+    )
+    errors.extend(
+        _validate_instance(
+            _load_json(checkpoint_policy_path),
+            ROOT / "runtime/global-progress-checkpoint-policy-v0.1.schema.json",
+            "runtime/fixtures/global-progress-checkpoint-adapter-v0.1/policy.json",
+        )
+    )
+    for required_path in (
+        ROOT / "runtime/global-progress-checkpoint-verification-v0.1.schema.json",
+        ROOT / "scripts/build_global_progress_checkpoint.py",
+        ROOT / "scripts/verify_global_progress_checkpoint.py",
+    ):
+        if not required_path.is_file():
+            errors.append(
+                f"missing global-progress checkpoint adapter file: "
+                f"{required_path.relative_to(ROOT)}"
+            )
+    counts["global_progress_checkpoint_policy_fixtures"] = 1
     errors.extend(
         _validate_instance(
             _load_json(ROOT / "evaluation/example-evaluation-result-v0.1.json"),
