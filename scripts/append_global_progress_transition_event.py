@@ -21,6 +21,9 @@ from prototype.fep_agent_proto.journal_lock import (
     JournalLockError,
     exclusive_journal_lock,
 )
+from prototype.fep_agent_proto.global_progress_state import (
+    reduce_global_progress_events,
+)
 
 
 EVENT_SCHEMA = ROOT / "runtime" / "run-event-v0.1.schema.json"
@@ -127,6 +130,16 @@ def append_transition_event(
         timeout_seconds=lock_timeout_seconds,
     ):
         existing = _replay(journal)
+        reduction = reduce_global_progress_events(
+            existing,
+            expected_run_id=event["run_id"],
+            expected_manifest_sha256=event["run_manifest_sha256"],
+        )
+        if not reduction["valid"]:
+            raise AppendError(
+                "journal Global Progress state is invalid: "
+                + "; ".join(reduction["errors"][:3])
+            )
         if allow_idempotent:
             same_id = [
                 item for item in existing if item["event_id"] == event["event_id"]
@@ -141,8 +154,22 @@ def append_transition_event(
                         "append_status": "already_recorded",
                         "event_count": len(existing),
                         "last_event_sha256": existing[-1]["event_sha256"],
+                        "current_state": reduction["current_state"],
+                        "last_applied_checkpoint": (
+                            reduction["last_applied_checkpoint"]
+                        ),
                     }
                 raise AppendError("candidate event ID conflicts with recorded journal event")
+        payload = event["payload"]
+        if reduction["task_id"] is not None and payload["task_id"] != reduction["task_id"]:
+            raise AppendError(
+                "candidate task differs from journal-derived Global Progress task"
+            )
+        if payload["state_before"] != reduction["current_state"]:
+            raise AppendError(
+                "candidate state_before differs from journal-derived state: "
+                f"{payload['state_before']} != {reduction['current_state']}"
+            )
         if existing and existing[-1]["event_type"] in TERMINAL_EVENTS:
             raise AppendError("refusing to append after terminal event")
         previous = existing[-1]["event_sha256"] if existing else None
@@ -160,10 +187,22 @@ def append_transition_event(
             handle.flush()
             os.fsync(handle.fileno())
         replayed = _replay(journal)
+        reduced = reduce_global_progress_events(
+            replayed,
+            expected_run_id=event["run_id"],
+            expected_manifest_sha256=event["run_manifest_sha256"],
+        )
+        if not reduced["valid"]:
+            raise AppendError(
+                "journal Global Progress state invalid after append: "
+                + "; ".join(reduced["errors"][:3])
+            )
         return {
             "append_status": "appended",
             "event_count": len(replayed),
             "last_event_sha256": replayed[-1]["event_sha256"],
+            "current_state": reduced["current_state"],
+            "last_applied_checkpoint": reduced["last_applied_checkpoint"],
         }
 
 

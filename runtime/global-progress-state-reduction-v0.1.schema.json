@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-state-reduction-v0.1.schema.json",
+  "title": "Journal-derived Global Progress state reduction v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "valid", "run_id",
+    "run_manifest_sha256", "journal_event_count", "journal_head_sha256",
+    "state_anchor", "task_id", "current_state", "transition_count",
+    "applied_transition_count", "last_transition",
+    "last_applied_checkpoint", "checks", "errors", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-state-reduction" },
+    "valid": { "type": "boolean" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "journal_event_count": { "type": "integer", "minimum": 0 },
+    "journal_head_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "state_anchor": {
+      "oneOf": [
+        { "$ref": "#/$defs/stateAnchor" },
+        { "type": "null" }
+      ]
+    },
+    "task_id": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Z][A-Z0-9._-]+$"
+    },
+    "current_state": {
+      "type": ["string", "null"],
+      "enum": ["executing", "reviewing", "completed", null]
+    },
+    "transition_count": { "type": "integer", "minimum": 0 },
+    "applied_transition_count": { "type": "integer", "minimum": 0 },
+    "last_transition": {
+      "oneOf": [
+        { "$ref": "#/$defs/lastTransition" },
+        { "type": "null" }
+      ]
+    },
+    "last_applied_checkpoint": {
+      "oneOf": [
+        { "$ref": "#/$defs/checkpointBinding" },
+        { "type": "null" }
+      ]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journal_binding_valid", "run_started_anchor_valid",
+        "transition_receipts_valid", "task_continuity_valid",
+        "state_continuity_valid", "terminal_state_valid"
+      ],
+      "properties": {
+        "journal_binding_valid": { "type": "boolean" },
+        "run_started_anchor_valid": { "type": "boolean" },
+        "transition_receipts_valid": { "type": "boolean" },
+        "task_continuity_valid": { "type": "boolean" },
+        "state_continuity_valid": { "type": "boolean" },
+        "terminal_state_valid": { "type": "boolean" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stateAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "event_sha256", "sequence", "state"],
+      "properties": {
+        "event_id": { "type": "string", "pattern": "^EVT-[A-Z0-9._-]+$" },
+        "event_sha256": { "$ref": "#/$defs/sha256" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "state": { "const": "executing" }
+      }
+    },
+    "lastTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id", "event_id", "event_sha256", "sequence",
+        "decision", "state_after", "checkpoint_id"
+      ],
+      "properties": {
+        "transition_id": { "type": "string", "pattern": "^GPT-[A-Z0-9._-]+$" },
+        "event_id": { "type": "string", "pattern": "^EVT-[A-Z0-9._-]+$" },
+        "event_sha256": { "$ref": "#/$defs/sha256" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "decision": { "enum": ["pass", "block"] },
+        "state_after": { "enum": ["executing", "reviewing", "completed"] },
+        "checkpoint_id": { "type": "string", "pattern": "^GPC-[A-Z0-9._-]+$" }
+      }
+    },
+    "checkpointBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_id", "checkpoint_file_sha256",
+        "checkpoint_verification_sha256", "transition_id", "event_sha256"
+      ],
+      "properties": {
+        "checkpoint_id": { "type": "string", "pattern": "^GPC-[A-Z0-9._-]+$" },
+        "checkpoint_file_sha256": { "$ref": "#/$defs/sha256" },
+        "checkpoint_verification_sha256": { "$ref": "#/$defs/sha256" },
+        "transition_id": { "type": "string", "pattern": "^GPT-[A-Z0-9._-]+$" },
+        "event_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

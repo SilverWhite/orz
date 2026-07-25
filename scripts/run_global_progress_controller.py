@@ -223,7 +223,7 @@ def run_controller(
         {
             "controller_status": controller_status,
             "valid": True,
-            "state_after": payload["state_after"],
+            "state_after": append_result["current_state"],
             "transition_applied": payload["transition_applied"],
             "event_appended": not already_recorded,
             "event_sha256": event["event_sha256"],

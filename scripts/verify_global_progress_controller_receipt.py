@@ -20,6 +20,9 @@ if str(ROOT) not in sys.path:
 from append_global_progress_transition_event import _replay
 from build_global_progress_transition_event import TransitionError, build_event
 from prototype.fep_agent_proto.errors import PrototypeError
+from prototype.fep_agent_proto.global_progress_state import (
+    reduce_global_progress_events,
+)
 from prototype.fep_agent_proto.io_utils import (
     atomic_write_json,
     sha256_bytes,
@@ -167,6 +170,7 @@ def verify_controller_receipt(
     raw: bytes | None = None
     inspection: dict[str, Any] | None = None
     events: list[dict[str, Any]] = []
+    state_reduction: dict[str, Any] | None = None
     journal_error: str | None = None
     if journal.is_file() and isinstance(expected_run_id, str) and isinstance(
         expected_manifest, str
@@ -185,6 +189,11 @@ def verify_controller_receipt(
                 inspection = inspection_value.public()
                 if inspection["status"] == "valid":
                     events = _replay(journal)
+                    state_reduction = reduce_global_progress_events(
+                        events,
+                        expected_run_id=expected_run_id,
+                        expected_manifest_sha256=expected_manifest,
+                    )
                 else:
                     events = inspection_value.events
         except (JournalLockError, OSError, PrototypeError) as exc:
@@ -221,7 +230,10 @@ def verify_controller_receipt(
         checks["journal_condition_verified"] = True
     else:
         checks["journal_condition_verified"] = (
-            inspection is not None and inspection["status"] == "valid"
+            inspection is not None
+            and inspection["status"] == "valid"
+            and state_reduction is not None
+            and state_reduction["valid"]
         )
 
     exact_events: list[dict[str, Any]] = []
@@ -248,6 +260,14 @@ def verify_controller_receipt(
             and event["previous_event_sha256"] == previous
             and not terminal
             and not same_id
+            and state_reduction is not None
+            and state_reduction["valid"]
+            and event["payload"]["state_before"]
+            == state_reduction["current_state"]
+            and (
+                state_reduction["task_id"] is None
+                or event["payload"]["task_id"] == state_reduction["task_id"]
+            )
         )
         checks["event_presence_verified"] = not can_extend
     elif status in {"recovery_required", "journal_unrecoverable"} and event is not None:
@@ -264,6 +284,9 @@ def verify_controller_receipt(
                 and receipt.get("transition_applied")
                 == payload["transition_applied"]
                 and receipt.get("event_sha256") == event["event_sha256"]
+                and state_reduction is not None
+                and state_reduction["valid"]
+                and state_reduction["current_state"] == payload["state_after"]
             )
         else:
             checks["state_projection_verified"] = (

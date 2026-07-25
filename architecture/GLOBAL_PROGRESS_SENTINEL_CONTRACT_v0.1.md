@@ -322,3 +322,24 @@ controller verifier 必须只读，并在共享锁内观察 journal。它重新�
 
 最终 journal 快照无法证明 event 是本次 controller 刚追加还是此前已经存在，因此 verifier 不能把 `event_appended`
 当作独立可重建的历史事实；它只验证该声明与 receipt schema、候选状态和当前链快照不矛盾。
+
+### 11.10 Journal-derived controller state
+
+controller 不再把 transition request 的 `current_state` 当作状态权威。状态归约使用同一完整 journal，并采用以下冻结规则：
+
+1. 一个且仅一个 `run_started` event 将 controller 初态锚定为 `executing`；缺失、重复或 transition 早于该锚点均 fail closed；
+2. 只识别 `gate_decision` 中绑定 `global-progress-transition-receipt-v0.1.schema.json` 的 GPS transition；
+3. 每条 receipt 必须通过 schema 与 pass/block 语义检查，task ID 必须稳定，`state_before` 必须等于上一归约态；
+4. block event 保持状态，pass event 才前移；`completed` 后不得再出现 GPS transition；
+5. reducer 输出当前状态、最后 transition 与最近一次 gate 实际接受的 checkpoint binding。后者只证明 gate 接受，不是科学
+   正确性证明。
+
+appender 在共享独占锁内先 replay、再归约既有状态，并将 candidate 的 task/state 与归约结果比较；append 后再次 replay 与
+归约。精确链尾重试先验证既有归约结果，再返回链上当前状态，因此调用方无法用自报 `current_state` 跳过
+`executing → reviewing → completed`。独立 controller verifier 使用同一确定性 reducer 复核 success 与 state-conflict
+receipt，但不复用 controller 的写入路径。
+
+该规则把 `run_started` 作为控制器状态机的显式协议假设；它不声称从模型行为或外部 CLI session 中推断状态。成熟 CLI
+适配必须保证真实 session 的启动事件与该锚点语义一致，或在未来 protocol revision 中引入更细的 bootstrap event。
+实现与反例见
+[`GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md)。
