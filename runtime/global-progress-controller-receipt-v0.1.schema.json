@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-controller-receipt-v0.1.schema.json",
+  "title": "Disposable Global Progress controller receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "controller_status",
+    "valid",
+    "transition_id",
+    "task_id",
+    "run_id",
+    "state_before",
+    "state_after",
+    "transition_applied",
+    "event_appended",
+    "event_sha256",
+    "journal_sha256",
+    "journal_event_count",
+    "recovery_status",
+    "recovery_classification",
+    "source_bindings",
+    "errors",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-controller-receipt" },
+    "controller_status": {
+      "enum": [
+        "transition_applied",
+        "transition_blocked",
+        "already_recorded",
+        "recovery_required",
+        "journal_unrecoverable",
+        "conflict",
+        "rejected"
+      ]
+    },
+    "valid": { "type": "boolean" },
+    "transition_id": {
+      "type": ["string", "null"],
+      "pattern": "^GPT-[A-Z0-9._-]+$"
+    },
+    "task_id": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Z][A-Z0-9._-]+$"
+    },
+    "run_id": {
+      "type": ["string", "null"],
+      "pattern": "^RUN-[A-Z0-9._-]+$"
+    },
+    "state_before": {
+      "type": ["string", "null"],
+      "enum": ["executing", "reviewing", null]
+    },
+    "state_after": {
+      "type": ["string", "null"],
+      "enum": ["executing", "reviewing", "completed", null]
+    },
+    "transition_applied": { "type": "boolean" },
+    "event_appended": { "type": "boolean" },
+    "event_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "journal_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "journal_event_count": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "recovery_status": {
+      "enum": ["not_needed", "recoverable", "unrecoverable", "not_inspected"]
+    },
+    "recovery_classification": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "source_bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_sha256",
+        "checkpoint_sha256",
+        "checkpoint_verification_sha256",
+        "holistic_history_sha256",
+        "holistic_review_sha256",
+        "holistic_disposition_sha256",
+        "holistic_verification_sha256"
+      ],
+      "properties": {
+        "request_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "checkpoint_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "checkpoint_verification_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "holistic_history_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "holistic_review_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "holistic_disposition_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "holistic_verification_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "controller_status": {
+            "enum": ["transition_applied", "transition_blocked", "already_recorded"]
+          }
+        },
+        "required": ["controller_status"]
+      },
+      "then": {
+        "properties": {
+          "valid": { "const": true },
+          "event_sha256": { "$ref": "#/$defs/sha256" },
+          "recovery_status": { "const": "not_needed" },
+          "recovery_classification": { "type": "null" },
+          "errors": { "maxItems": 0 }
+        }
+      },
+      "else": {
+        "properties": {
+          "valid": { "const": false },
+          "event_appended": { "const": false },
+          "transition_applied": { "const": false },
+          "errors": { "minItems": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "controller_status": { "const": "transition_applied" }
+        },
+        "required": ["controller_status"]
+      },
+      "then": {
+        "properties": {
+          "transition_applied": { "const": true },
+          "event_appended": { "const": true }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "controller_status": { "const": "transition_blocked" }
+        },
+        "required": ["controller_status"]
+      },
+      "then": {
+        "properties": {
+          "transition_applied": { "const": false },
+          "event_appended": { "const": true }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "controller_status": { "const": "already_recorded" }
+        },
+        "required": ["controller_status"]
+      },
+      "then": {
+        "properties": {
+          "event_appended": { "const": false }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

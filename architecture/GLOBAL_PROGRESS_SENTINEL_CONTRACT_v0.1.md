@@ -296,3 +296,18 @@ journal recovery 默认是只读检查，且与 writer 使用同一 sidecar lock
 终态链不得追加事件，只能由外部恢复收据记录。journal 通过同一锁内的原子替换更新，随后必须重新 replay。
 
 此机制处理进程中断留下的 JSONL 尾部残片，不宣称提供磁盘控制器级断电持久性、目录项 fsync 保证或多主恢复共识。
+
+### 11.8 Disposable runtime controller
+
+controller adapter 只组合既有机械边界，不引入模型调用或新的科学判定：
+
+1. 从 transition request 与 source-bound checkpoint/holistic artifacts 纯函数式重建 gate event；
+2. 在共享锁内重放 journal，并验证 run、manifest、sequence、previous digest 与 terminal 状态；
+3. pass 和 block event 都必须入链，状态只从已入链 payload 的 `state_after` 投影；
+4. 精确相同且仍位于链尾的 event 重试返回 `already_recorded`；不同内容复用 event ID、旧 event 后已有新事件或陈旧
+   链头均返回 conflict；
+5. journal 尾部损坏返回 `recovery_required`，历史损坏返回 `journal_unrecoverable`，controller 不自动调用恢复；
+6. event 已追加但外部 controller receipt 尚未写出时，重试可从相同 event hash 收敛而不重复追加。
+
+该 controller 仍是 no-model disposable fixture。它不替代成熟 CLI 的 session/runtime controller，也不建立实际进程状态、
+模型回合、用户确认或外部副作用的生产级一致性。

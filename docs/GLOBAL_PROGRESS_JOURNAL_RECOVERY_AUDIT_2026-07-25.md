@@ -36,3 +36,7 @@ assurance 48、runtime 31）；仓库机械检查覆盖 100 个 schema 并返回
 本工具恢复的是可机械证明的 JSONL 尾部写入中断，不证明事件语义正确。`fsync` 与原子替换降低进程崩溃窗口，但本轮
 没有证明磁盘控制器断电、Windows/POSIX 目录项持久化、网络文件系统或多主恢复语义。终态链无法加入 recovery event；
 若 journal 替换后、外部 receipt 写入前再次崩溃，只能从 quarantine 与最终 journal 状态重建审计。
+
+后续组合：恢复分类已接入
+[`GLOBAL_PROGRESS_RUNTIME_CONTROLLER_AUDIT_2026-07-25.md`](GLOBAL_PROGRESS_RUNTIME_CONTROLLER_AUDIT_2026-07-25.md)；
+controller 只报告恢复需求，不自动执行本工具。

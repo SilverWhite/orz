@@ -114,6 +114,59 @@ def _replay(path: Path) -> list[dict[str, Any]]:
     return events
 
 
+def append_transition_event(
+    journal: Path,
+    event: dict[str, Any],
+    *,
+    lock_timeout_seconds: float = 5.0,
+    allow_idempotent: bool = False,
+) -> dict[str, Any]:
+    _validate_transition_candidate(event)
+    with exclusive_journal_lock(
+        journal,
+        timeout_seconds=lock_timeout_seconds,
+    ):
+        existing = _replay(journal)
+        if allow_idempotent:
+            same_id = [
+                item for item in existing if item["event_id"] == event["event_id"]
+            ]
+            if same_id:
+                if len(same_id) == 1 and same_id[0]["event_sha256"] == event["event_sha256"]:
+                    if same_id[0]["event_sha256"] != existing[-1]["event_sha256"]:
+                        raise AppendError(
+                            "candidate is already recorded but the journal has advanced"
+                        )
+                    return {
+                        "append_status": "already_recorded",
+                        "event_count": len(existing),
+                        "last_event_sha256": existing[-1]["event_sha256"],
+                    }
+                raise AppendError("candidate event ID conflicts with recorded journal event")
+        if existing and existing[-1]["event_type"] in TERMINAL_EVENTS:
+            raise AppendError("refusing to append after terminal event")
+        previous = existing[-1]["event_sha256"] if existing else None
+        if event["sequence"] != len(existing) or event["previous_event_sha256"] != previous:
+            raise AppendError("candidate sequence/previous digest does not extend journal")
+        if existing and (
+            event["run_id"] != existing[0]["run_id"]
+            or event["run_manifest_sha256"] != existing[0]["run_manifest_sha256"]
+        ):
+            raise AppendError("candidate run binding differs from journal")
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        encoded = _canonical(event) + b"\n"
+        with journal.open("ab") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        replayed = _replay(journal)
+        return {
+            "append_status": "appended",
+            "event_count": len(replayed),
+            "last_event_sha256": replayed[-1]["event_sha256"],
+        }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journal", required=True)
@@ -123,33 +176,15 @@ def main() -> int:
     journal = Path(args.journal)
     try:
         event = _load_event(Path(args.event))
-        _validate_transition_candidate(event)
-        with exclusive_journal_lock(
+        result = append_transition_event(
             journal,
-            timeout_seconds=args.lock_timeout_seconds,
-        ):
-            existing = _replay(journal)
-            if existing and existing[-1]["event_type"] in TERMINAL_EVENTS:
-                raise AppendError("refusing to append after terminal event")
-            previous = existing[-1]["event_sha256"] if existing else None
-            if event["sequence"] != len(existing) or event["previous_event_sha256"] != previous:
-                raise AppendError("candidate sequence/previous digest does not extend journal")
-            if existing and (
-                event["run_id"] != existing[0]["run_id"]
-                or event["run_manifest_sha256"] != existing[0]["run_manifest_sha256"]
-            ):
-                raise AppendError("candidate run binding differs from journal")
-            journal.parent.mkdir(parents=True, exist_ok=True)
-            encoded = _canonical(event) + b"\n"
-            with journal.open("ab") as handle:
-                handle.write(encoded)
-                handle.flush()
-                os.fsync(handle.fileno())
-            replayed = _replay(journal)
+            event,
+            lock_timeout_seconds=args.lock_timeout_seconds,
+        )
     except (AppendError, JournalLockError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps({"valid": True, "event_count": len(replayed), "last_event_sha256": replayed[-1]["event_sha256"]}))
+    print(json.dumps({"valid": True, **result}))
     return 0
 
 

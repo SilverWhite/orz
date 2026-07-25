@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "scripts" / "build_global_progress_transition_event.py"
 VERIFIER = ROOT / "scripts" / "verify_global_progress_transition_event.py"
 APPENDER = ROOT / "scripts" / "append_global_progress_transition_event.py"
+CONTROLLER = ROOT / "scripts" / "run_global_progress_controller.py"
 HOLISTIC_BUILDER = ROOT / "scripts" / "build_global_progress_holistic_review.py"
 HOLISTIC_VERIFIER = ROOT / "scripts" / "verify_global_progress_holistic_review.py"
 HISTORY_FIXTURE = ROOT / "runtime" / "fixtures" / "global-progress-holistic-v0.1" / "input.json"
@@ -183,6 +184,38 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
         completed = self._run(*args)
         self.assertEqual(completed.returncode, expected, completed.stderr)
         return event, json.loads(event.read_text(encoding="utf-8"))
+
+    def _control(
+        self,
+        root: Path,
+        request: Path,
+        checkpoint: Path,
+        verification: Path,
+        journal: Path,
+        *,
+        holistic: dict[str, Path] | None = None,
+        output_name: str = "controller-receipt.json",
+        expected: int = 0,
+    ) -> tuple[subprocess.CompletedProcess[str], dict]:
+        output = root / output_name
+        args = [
+            str(CONTROLLER),
+            "--request", str(request),
+            "--checkpoint", str(checkpoint),
+            "--checkpoint-verification", str(verification),
+            "--journal", str(journal),
+            "--output", str(output),
+        ]
+        if holistic:
+            args += [
+                "--holistic-history", str(holistic["history"]),
+                "--holistic-review", str(holistic["review"]),
+                "--holistic-disposition", str(holistic["disposition"]),
+                "--holistic-verification", str(holistic["verification"]),
+            ]
+        completed = self._run(*args)
+        self.assertEqual(completed.returncode, expected, completed.stderr)
+        return completed, json.loads(output.read_text(encoding="utf-8"))
 
     def test_valid_step_boundary_advances_state_and_verifies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -356,6 +389,240 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 2)
             self.assertIn("not a gate_decision", completed.stderr)
             self.assertFalse(empty_journal.exists())
+
+    def test_controller_applies_once_and_exact_retry_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            first = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            checkpoint, verification = self._sources(root)
+            request = self._request(
+                root,
+                checkpoint,
+                verification,
+                sequence=1,
+                previous_event_sha256=first["event_sha256"],
+            )
+            _, receipt = self._control(
+                root, request, checkpoint, verification, journal
+            )
+            self.assertEqual(receipt["controller_status"], "transition_applied")
+            self.assertTrue(receipt["event_appended"])
+            self.assertEqual(receipt["state_after"], "reviewing")
+            _, repeated = self._control(
+                root,
+                request,
+                checkpoint,
+                verification,
+                journal,
+                output_name="controller-retry.json",
+            )
+            self.assertEqual(repeated["controller_status"], "already_recorded")
+            self.assertFalse(repeated["event_appended"])
+            append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="artifact_registered",
+                payload_schema="fixture-artifact-v0.1",
+                payload={"fixture": "later-event"},
+            )
+            _, stale_retry = self._control(
+                root,
+                request,
+                checkpoint,
+                verification,
+                journal,
+                output_name="controller-stale-retry.json",
+                expected=3,
+            )
+            self.assertEqual(stale_retry["controller_status"], "conflict")
+            replay = replay_journal(
+                run_manifest_path=None,
+                journal_path=journal,
+                expected_manifest_sha256="a" * 64,
+                expected_run_id="RUN-GPS-TRANSITION-001",
+                require_terminal=False,
+            )
+            self.assertEqual(replay["event_count"], 3)
+
+    def test_controller_records_block_without_advancing_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            first = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            checkpoint, verification = self._sources(root, checkpoint_valid=False)
+            request = self._request(
+                root,
+                checkpoint,
+                verification,
+                sequence=1,
+                previous_event_sha256=first["event_sha256"],
+            )
+            _, receipt = self._control(
+                root, request, checkpoint, verification, journal, expected=2
+            )
+            self.assertEqual(receipt["controller_status"], "transition_blocked")
+            self.assertFalse(receipt["transition_applied"])
+            self.assertTrue(receipt["event_appended"])
+            self.assertEqual(receipt["state_before"], receipt["state_after"])
+
+    def test_controller_requires_recovery_without_mutating_torn_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            first = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            with journal.open("ab") as handle:
+                handle.write(b'{"torn":')
+            before = _digest(journal)
+            checkpoint, verification = self._sources(root)
+            request = self._request(
+                root,
+                checkpoint,
+                verification,
+                sequence=1,
+                previous_event_sha256=first["event_sha256"],
+            )
+            _, receipt = self._control(
+                root, request, checkpoint, verification, journal, expected=3
+            )
+            self.assertEqual(receipt["controller_status"], "recovery_required")
+            self.assertEqual(receipt["recovery_classification"], "torn_tail_removed")
+            self.assertFalse(receipt["event_appended"])
+            self.assertEqual(_digest(journal), before)
+
+    def test_controller_rejects_stale_head_as_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            first = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="artifact_registered",
+                payload_schema="fixture-artifact-v0.1",
+                payload={"fixture": "advanced-head"},
+            )
+            checkpoint, verification = self._sources(root)
+            request = self._request(
+                root,
+                checkpoint,
+                verification,
+                sequence=1,
+                previous_event_sha256=first["event_sha256"],
+            )
+            _, receipt = self._control(
+                root, request, checkpoint, verification, journal, expected=3
+            )
+            self.assertEqual(receipt["controller_status"], "conflict")
+            self.assertFalse(receipt["event_appended"])
+            self.assertEqual(receipt["journal_event_count"], 2)
+
+    def test_controller_applies_eligible_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            first = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            checkpoint, verification, holistic = self._holistic_sources(
+                root, eligible=True
+            )
+            request = self._request(
+                root,
+                checkpoint,
+                verification,
+                kind="task_completion",
+                current="reviewing",
+                requested="completed",
+                holistic=holistic,
+                sequence=1,
+                previous_event_sha256=first["event_sha256"],
+            )
+            _, receipt = self._control(
+                root,
+                request,
+                checkpoint,
+                verification,
+                journal,
+                holistic=holistic,
+            )
+            self.assertEqual(receipt["controller_status"], "transition_applied")
+            self.assertEqual(receipt["state_after"], "completed")
+
+    def test_controller_rejects_source_mismatch_without_journal_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            first = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            checkpoint, verification = self._sources(root)
+            request = self._request(
+                root,
+                checkpoint,
+                verification,
+                sequence=1,
+                previous_event_sha256=first["event_sha256"],
+            )
+            checkpoint_value = json.loads(checkpoint.read_text(encoding="utf-8"))
+            checkpoint_value["task_id"] = "TASK-CONTROLLER-MISMATCH"
+            checkpoint.write_text(
+                json.dumps(checkpoint_value, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _, receipt = self._control(
+                root, request, checkpoint, verification, journal, expected=3
+            )
+            self.assertEqual(receipt["controller_status"], "rejected")
+            self.assertFalse(receipt["event_appended"])
+            replay = replay_journal(
+                run_manifest_path=None,
+                journal_path=journal,
+                expected_manifest_sha256="a" * 64,
+                expected_run_id="RUN-GPS-TRANSITION-001",
+                require_terminal=False,
+            )
+            self.assertEqual(replay["event_count"], 1)
 
 
 if __name__ == "__main__":

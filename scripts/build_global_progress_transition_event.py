@@ -14,6 +14,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 
 from verify_global_progress_holistic_review import (
+    HolisticVerificationError,
     verify as independently_verify_holistic_review,
 )
 
@@ -116,11 +117,14 @@ def build_event(
         holistic_history = _read(holistic_history_path)
         _validate("holistic_review", holistic_review)
         _validate("holistic_verification", holistic_verification)
-        recomputed = independently_verify_holistic_review(
-            holistic_history_path,
-            holistic_review_path,
-            holistic_disposition_path,
-        )
+        try:
+            recomputed = independently_verify_holistic_review(
+                holistic_history_path,
+                holistic_review_path,
+                holistic_disposition_path,
+            )
+        except HolisticVerificationError as exc:
+            raise TransitionError(f"holistic verification failed: {exc}") from exc
         if (
             request["holistic_assessment_id"] != holistic_review["assessment_id"]
             or request["holistic_assessment_id"] != holistic_verification["assessment_id"]
