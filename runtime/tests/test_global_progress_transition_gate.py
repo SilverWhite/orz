@@ -8,15 +8,23 @@ import sys
 import tempfile
 import unittest
 
+from prototype.fep_agent_proto.journal import append_event, replay_journal
+
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "scripts" / "build_global_progress_transition_event.py"
 VERIFIER = ROOT / "scripts" / "verify_global_progress_transition_event.py"
+APPENDER = ROOT / "scripts" / "append_global_progress_transition_event.py"
+HOLISTIC_BUILDER = ROOT / "scripts" / "build_global_progress_holistic_review.py"
+HOLISTIC_VERIFIER = ROOT / "scripts" / "verify_global_progress_holistic_review.py"
 HISTORY_FIXTURE = ROOT / "runtime" / "fixtures" / "global-progress-holistic-v0.1" / "input.json"
 
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 class GlobalProgressTransitionGateTests(unittest.TestCase):
@@ -61,13 +69,80 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
         }
         return checkpoint_path, self._write(root, "checkpoint-verification.json", report)
 
+    def _holistic_sources(self, root: Path, *, eligible: bool) -> tuple[Path, Path, dict[str, Path]]:
+        history = json.loads(HISTORY_FIXTURE.read_text(encoding="utf-8"))
+        latest = history["checkpoints"][-1]
+        latest["task_id"] = history["task_id"]
+        if eligible:
+            latest["active_direction_ids"] = ["runtime_acp"]
+            latest["deferred_direction_ids"] = []
+            latest["unresolved_constraint_refs"] = []
+            for item in latest["critical_acceptance_states"]:
+                item["state"] = "verified"
+        previous = None
+        for checkpoint in history["checkpoints"]:
+            checkpoint["previous_checkpoint_sha256"] = previous
+            material = {key: value for key, value in checkpoint.items() if key != "checkpoint_sha256"}
+            checkpoint["checkpoint_sha256"] = hashlib.sha256(_canonical(material)).hexdigest()
+            previous = checkpoint["checkpoint_sha256"]
+        history_path = self._write(root, "holistic-history.json", history)
+        review_path = root / "holistic-review.json"
+        completed = self._run(str(HOLISTIC_BUILDER), "--input", str(history_path), "--output", str(review_path))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+        disposition = {
+            "schema_version": "0.1.0",
+            "artifact_kind": "global-progress-holistic-disposition",
+            "disposition_id": "GHD-TRANSITION-FIXTURE",
+            "assessment_id": review["assessment_id"],
+            "assessment_sha256": _digest(review_path),
+            "decision": "replan",
+            "selected_direction_id": None,
+            "warning_dispositions": [
+                {"warning_id": warning["warning_id"], "status": "accepted"}
+                for warning in review["warnings"]
+            ],
+            "bounded_focus": None,
+            "completion_acknowledgement": "eligible" if eligible else "completion_withheld",
+            "next_review_condition": "Before any later transition.",
+            "rationale_summary": "Fixture disposition for completion transition integration.",
+        }
+        disposition_path = self._write(root, "holistic-disposition.json", disposition)
+        holistic_verification = root / "holistic-verification.json"
+        completed = self._run(
+            str(HOLISTIC_VERIFIER), "--input", str(history_path), "--review", str(review_path),
+            "--disposition", str(disposition_path), "--output", str(holistic_verification),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        checkpoint_path = self._write(root, "checkpoint.json", history["checkpoints"][-1])
+        checkpoint = history["checkpoints"][-1]
+        checks = {name: True for name in (
+            "source_bundle_valid", "source_artifact_digests_valid", "previous_checkpoint_valid",
+            "focus_artifact_bundle_valid", "checkpoint_schema_valid", "checkpoint_rebuilt_exactly",
+            "checkpoint_hash_valid", "focus_window_within_bounds",
+        )}
+        report = {
+            "schema_version": "0.1.0", "artifact_kind": "global-progress-checkpoint-verification",
+            "valid": True, "checkpoint_id": checkpoint["checkpoint_id"],
+            "input_sha256": "1" * 64, "review_sha256": "2" * 64,
+            "disposition_sha256": "3" * 64, "checkpoint_sha256": _digest(checkpoint_path),
+            "checks": checks, "errors": [],
+        }
+        checkpoint_verification = self._write(root, "checkpoint-verification.json", report)
+        return checkpoint_path, checkpoint_verification, {
+            "history": history_path, "review": review_path,
+            "disposition": disposition_path, "verification": holistic_verification,
+        }
+
     def _request(
         self, root: Path, checkpoint: Path, verification: Path, *,
         kind: str = "step_boundary", current: str = "executing",
-        requested: str = "reviewing", holistic: tuple[Path, Path] | None = None,
+        requested: str = "reviewing", holistic: dict[str, Path] | None = None,
+        sequence: int = 1, previous_event_sha256: str | None = "b" * 64,
     ) -> Path:
         checkpoint_value = json.loads(checkpoint.read_text(encoding="utf-8"))
-        review_path, holistic_verification_path = holistic or (None, None)
+        review_path = holistic["review"] if holistic else None
+        holistic_verification_path = holistic["verification"] if holistic else None
         review = json.loads(review_path.read_text(encoding="utf-8")) if review_path else None
         value = {
             "schema_version": "0.1.0",
@@ -75,10 +150,10 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
             "transition_id": "GPT-FIXTURE-001",
             "task_id": "TASK-GPS-HOLISTIC-001",
             "run_id": "RUN-GPS-TRANSITION-001",
-            "sequence": 1,
+            "sequence": sequence,
             "timestamp": "2026-07-25T12:00:00Z",
             "run_manifest_sha256": "a" * 64,
-            "previous_event_sha256": "b" * 64,
+            "previous_event_sha256": previous_event_sha256,
             "transition_kind": kind,
             "current_state": current,
             "requested_state": requested,
@@ -92,12 +167,17 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
         return self._write(root, "request.json", value)
 
     def _build(self, root: Path, request: Path, checkpoint: Path, verification: Path, *,
-               holistic: tuple[Path, Path] | None = None, expected: int = 0) -> tuple[Path, dict]:
+               holistic: dict[str, Path] | None = None, expected: int = 0) -> tuple[Path, dict]:
         event = root / "event.json"
         args = [str(BUILDER), "--request", str(request), "--checkpoint", str(checkpoint),
                 "--checkpoint-verification", str(verification)]
         if holistic:
-            args += ["--holistic-review", str(holistic[0]), "--holistic-verification", str(holistic[1])]
+            args += [
+                "--holistic-history", str(holistic["history"]),
+                "--holistic-review", str(holistic["review"]),
+                "--holistic-disposition", str(holistic["disposition"]),
+                "--holistic-verification", str(holistic["verification"]),
+            ]
         args += ["--output", str(event)]
         completed = self._run(*args)
         self.assertEqual(completed.returncode, expected, completed.stderr)
@@ -147,6 +227,97 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
                                   "--checkpoint-verification", str(verification), "--output", str(root / "event.json"))
             self.assertEqual(completed.returncode, 3)
             self.assertIn("requires holistic", completed.stderr)
+
+    def test_ineligible_completion_blocks_and_preserves_reviewing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkpoint, verification, holistic = self._holistic_sources(root, eligible=False)
+            request = self._request(root, checkpoint, verification, kind="task_completion",
+                                    current="reviewing", requested="completed", holistic=holistic)
+            _, event = self._build(root, request, checkpoint, verification, holistic=holistic, expected=2)
+            self.assertEqual(event["payload"]["control_codes"], ["GPS-COMPLETION-INELIGIBLE"])
+            self.assertEqual(event["payload"]["state_after"], "reviewing")
+
+    def test_eligible_completion_advances_to_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkpoint, verification, holistic = self._holistic_sources(root, eligible=True)
+            request = self._request(root, checkpoint, verification, kind="task_completion",
+                                    current="reviewing", requested="completed", holistic=holistic)
+            event_path, event = self._build(root, request, checkpoint, verification, holistic=holistic)
+            self.assertEqual(event["payload"]["control_codes"], ["GPS-TRANSITION-PASS"])
+            self.assertTrue(event["payload"]["transition_applied"])
+            self.assertEqual(event["payload"]["state_after"], "completed")
+            output = root / "completion-event-verification.json"
+            completed = self._run(
+                str(VERIFIER), "--request", str(request), "--checkpoint", str(checkpoint),
+                "--checkpoint-verification", str(verification),
+                "--holistic-history", str(holistic["history"]),
+                "--holistic-review", str(holistic["review"]),
+                "--holistic-disposition", str(holistic["disposition"]),
+                "--holistic-verification", str(holistic["verification"]),
+                "--event", str(event_path), "--output", str(output),
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_transition_event_appends_once_and_replays(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "run-events.jsonl"
+            first = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            checkpoint, verification = self._sources(root)
+            request = self._request(
+                root, checkpoint, verification,
+                sequence=1, previous_event_sha256=first["event_sha256"],
+            )
+            event_path, event = self._build(root, request, checkpoint, verification)
+            completed = self._run(
+                str(APPENDER), "--journal", str(journal), "--event", str(event_path)
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            replay = replay_journal(
+                run_manifest_path=None,
+                journal_path=journal,
+                expected_manifest_sha256="a" * 64,
+                expected_run_id="RUN-GPS-TRANSITION-001",
+                require_terminal=False,
+            )
+            self.assertTrue(replay["valid"])
+            self.assertEqual(replay["event_count"], 2)
+            self.assertEqual(replay["last_event_sha256"], event["event_sha256"])
+            repeated = self._run(
+                str(APPENDER), "--journal", str(journal), "--event", str(event_path)
+            )
+            self.assertEqual(repeated.returncode, 2)
+            self.assertIn("does not extend journal", repeated.stderr)
+
+    def test_appender_rejects_non_transition_run_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "run-events.jsonl"
+            foreign = append_event(
+                journal,
+                run_id="RUN-GPS-TRANSITION-001",
+                run_manifest_sha256="a" * 64,
+                event_type="run_started",
+                payload_schema="fixture-run-started-v0.1",
+                payload={"fixture": True},
+            )
+            foreign_path = self._write(root, "foreign-event.json", foreign)
+            empty_journal = root / "empty-run-events.jsonl"
+            completed = self._run(
+                str(APPENDER), "--journal", str(empty_journal), "--event", str(foreign_path)
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("not a gate_decision", completed.stderr)
+            self.assertFalse(empty_journal.exists())
 
 
 if __name__ == "__main__":

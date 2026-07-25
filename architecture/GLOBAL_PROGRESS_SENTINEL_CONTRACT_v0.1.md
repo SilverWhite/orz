@@ -253,3 +253,16 @@ checkpoint adapter 与 prior-artifact linkage 的 no-model spike 已完成，见
 [`GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md)。
 在 runtime event integration 和 policy revision protocol 完成前，仍不把本扩展注入真实模型回合，也不把它用于
 LIF 专有任务替代通用复杂任务测试。
+
+### 11.5 Disposable transition gate
+
+transition gate 已把 checkpoint/holistic verification 接到 `executing → reviewing` 与
+`reviewing → completed` 前。结果写成现有 `run-event-v0.1` 的 `gate_decision`：
+
+- pass 才令 `state_after=requested_state`；
+- block 必须令 `state_after=state_before`，但仍保留事件；
+- completion 重新运行 holistic 独立 verifier，并要求 history head 与当前 checkpoint 完全一致；
+- event 只有在 run、manifest、sequence 与 previous digest 精确延伸现有 journal 时才能追加，追加后立即重放。
+
+runtime-local `GPS-*` control code 尚未注册为 protocol reason code，不能对外伪装为正式 GateDecision reason。详见
+[`GLOBAL_PROGRESS_TRANSITION_GATE_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_TRANSITION_GATE_AUDIT_2026-07-25.md)。

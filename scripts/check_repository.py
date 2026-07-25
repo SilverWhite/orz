@@ -1523,6 +1523,7 @@ def check_repository() -> dict[str, Any]:
         ROOT / "runtime/global-progress-transition-verification-v0.1.schema.json",
         ROOT / "scripts/build_global_progress_transition_event.py",
         ROOT / "scripts/verify_global_progress_transition_event.py",
+        ROOT / "scripts/append_global_progress_transition_event.py",
     ):
         if not required_path.is_file():
             errors.append(

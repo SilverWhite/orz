@@ -13,6 +13,10 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from verify_global_progress_holistic_review import (
+    verify as independently_verify_holistic_review,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "runtime"
@@ -70,7 +74,9 @@ def build_event(
     request_path: Path,
     checkpoint_path: Path,
     checkpoint_verification_path: Path,
+    holistic_history_path: Path | None,
     holistic_review_path: Path | None,
+    holistic_disposition_path: Path | None,
     holistic_verification_path: Path | None,
 ) -> dict[str, Any]:
     request = _read(request_path)
@@ -93,12 +99,28 @@ def build_event(
     holistic_review = None
     holistic_verification = None
     if request["transition_kind"] == "task_completion":
-        if holistic_review_path is None or holistic_verification_path is None:
-            raise TransitionError("task completion requires holistic review and verification")
+        if any(
+            path is None
+            for path in (
+                holistic_history_path,
+                holistic_review_path,
+                holistic_disposition_path,
+                holistic_verification_path,
+            )
+        ):
+            raise TransitionError(
+                "task completion requires holistic history, review, disposition, and verification"
+            )
         holistic_review = _read(holistic_review_path)
         holistic_verification = _read(holistic_verification_path)
+        holistic_history = _read(holistic_history_path)
         _validate("holistic_review", holistic_review)
         _validate("holistic_verification", holistic_verification)
+        recomputed = independently_verify_holistic_review(
+            holistic_history_path,
+            holistic_review_path,
+            holistic_disposition_path,
+        )
         if (
             request["holistic_assessment_id"] != holistic_review["assessment_id"]
             or request["holistic_assessment_id"] != holistic_verification["assessment_id"]
@@ -106,10 +128,14 @@ def build_event(
             or request["holistic_verification_sha256"] != _digest_file(holistic_verification_path)
             or holistic_verification["assessment_sha256"] != _digest_file(holistic_review_path)
             or holistic_review["window"]["last_checkpoint_id"] != request["checkpoint_id"]
+            or holistic_history["checkpoints"][-1] != checkpoint
+            or _canonical(recomputed) != _canonical(holistic_verification)
         ):
             raise TransitionError("holistic source binding mismatch")
     elif (
-        holistic_review_path is not None
+        holistic_history_path is not None
+        or holistic_review_path is not None
+        or holistic_disposition_path is not None
         or holistic_verification_path is not None
         or request["holistic_assessment_id"] is not None
         or request["holistic_review_sha256"] is not None
@@ -205,7 +231,9 @@ def main() -> int:
     parser.add_argument("--request", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--checkpoint-verification", required=True)
+    parser.add_argument("--holistic-history")
     parser.add_argument("--holistic-review")
+    parser.add_argument("--holistic-disposition")
     parser.add_argument("--holistic-verification")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -214,7 +242,9 @@ def main() -> int:
             Path(args.request),
             Path(args.checkpoint),
             Path(args.checkpoint_verification),
+            Path(args.holistic_history) if args.holistic_history else None,
             Path(args.holistic_review) if args.holistic_review else None,
+            Path(args.holistic_disposition) if args.holistic_disposition else None,
             Path(args.holistic_verification) if args.holistic_verification else None,
         )
         _write_new(Path(args.output), event)

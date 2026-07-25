@@ -54,13 +54,17 @@ def main() -> int:
     parser.add_argument("--request", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--checkpoint-verification", required=True)
+    parser.add_argument("--holistic-history")
     parser.add_argument("--holistic-review")
+    parser.add_argument("--holistic-disposition")
     parser.add_argument("--holistic-verification")
     parser.add_argument("--event", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     paths = {name: Path(getattr(args, name)) for name in ("request", "checkpoint", "checkpoint_verification", "event")}
     holistic_review = Path(args.holistic_review) if args.holistic_review else None
+    holistic_history = Path(args.holistic_history) if args.holistic_history else None
+    holistic_disposition = Path(args.holistic_disposition) if args.holistic_disposition else None
     holistic_verification = Path(args.holistic_verification) if args.holistic_verification else None
     try:
         event = _read(paths["event"])
@@ -76,7 +80,7 @@ def main() -> int:
         }
         expected = build_event(
             paths["request"], paths["checkpoint"], paths["checkpoint_verification"],
-            holistic_review, holistic_verification,
+            holistic_history, holistic_review, holistic_disposition, holistic_verification,
         )
         checks["event_rebuilt_exactly"] = _canonical(expected) == _canonical(event)
         if not checks["event_rebuilt_exactly"]:
