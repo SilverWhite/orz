@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,10 @@ from io import StringIO
 
 from assurance import AssuranceError, review_general_science_bundle
 from assurance.general_science_cli import main as review_cli_main
+from assurance.validator_bridge import (
+    load_general_science_validator_registry,
+    validate_validator_registry_semantics,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,6 +100,14 @@ class GeneralScienceReviewTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertEqual(first["decision"], "allow")
         self.assertEqual(len(first["files"]), 5)
+        self.assertEqual(len(first["validator_results"]), 4)
+        self.assertEqual(
+            [
+                item["status"]
+                for item in first["validator_results"]
+            ],
+            ["pass", "pass", "pass", "not_applicable"],
+        )
         claim = first["claim_decisions"][0]
         self.assertEqual(claim["decision"], "allow")
         self.assertEqual(
@@ -145,6 +158,14 @@ class GeneralScienceReviewTests(unittest.TestCase):
 
         shutil.rmtree(self.root)
         shutil.copytree(FIXTURE, self.root)
+        bundle = self._load_bundle()
+        bundle["sources"][0]["artifact_kind"] = "numerical_result"
+        self._write_bundle(bundle)
+        with self.assertRaises(AssuranceError):
+            review_general_science_bundle(bundle_root=self.root)
+
+        shutil.rmtree(self.root)
+        shutil.copytree(FIXTURE, self.root)
         result_path = self.root / "result.json"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         result["runs"]["dt_0_05"]["final_absolute_error"] = float("nan")
@@ -175,6 +196,84 @@ class GeneralScienceReviewTests(unittest.TestCase):
         self.assertEqual(claim["decision"], "defer")
         self.assertIn("UNCERTAIN_EVIDENCE_CLASS", claim["reason_codes"])
         self.assertIn("SUPPORT_NOT_OBSERVED", claim["reason_codes"])
+
+    def test_statistical_summary_requires_basic_reporting_fields(self) -> None:
+        bundle = self._load_bundle()
+        bundle["artifacts"][0]["artifact_kind"] = "statistical_summary"
+        self._write_bundle(bundle)
+
+        incomplete = review_general_science_bundle(bundle_root=self.root)
+        statistical = next(
+            item
+            for item in incomplete["validator_results"]
+            if item["validator_id"] == "GSV_STATISTICAL_REPORTING"
+        )
+        self.assertEqual(incomplete["decision"], "defer")
+        self.assertEqual(statistical["status"], "defer")
+        self.assertEqual(
+            statistical["reason_codes"], ["EVD-COVERAGE-001"]
+        )
+
+        def add_reporting(document: dict[str, object]) -> None:
+            document["statistical_reporting"] = {
+                "analysis_role": "confirmatory",
+                "sampling_unit": "synthetic independent run",
+                "sample_size": 20,
+                "effect_estimate": 0.25,
+                "uncertainty": {
+                    "kind": "confidence_interval",
+                    "level": 0.95,
+                    "lower": 0.1,
+                    "upper": 0.4,
+                },
+                "missing_data": {
+                    "count": 0,
+                    "handling": "not applicable; no observations missing",
+                },
+                "multiplicity": {
+                    "comparison_count": 1,
+                    "adjustment": "not applicable for one comparison",
+                },
+                "stopping_rule": "fixed sample size of 20",
+            }
+
+        self._rewrite_json_source(
+            "result.json",
+            add_reporting,
+            record_id="ART_DECAY_RESULT",
+        )
+        bundle = self._load_bundle()
+        bundle["artifacts"][0]["artifact_kind"] = "statistical_summary"
+        self._write_bundle(bundle)
+        complete = review_general_science_bundle(bundle_root=self.root)
+        statistical = next(
+            item
+            for item in complete["validator_results"]
+            if item["validator_id"] == "GSV_STATISTICAL_REPORTING"
+        )
+        self.assertEqual(complete["decision"], "allow")
+        self.assertEqual(statistical["status"], "pass")
+
+    def test_validator_registry_rejects_semantic_duplicate_ids(self) -> None:
+        invalid = (
+            ROOT
+            / "assurance"
+            / "fixtures"
+            / "general_science"
+            / "validator-registry.duplicate-id.semantic-invalid.json"
+        )
+        with self.assertRaisesRegex(AssuranceError, "IDs must be unique"):
+            load_general_science_validator_registry(invalid)
+
+        weakened = deepcopy(load_general_science_validator_registry())
+        finite = next(
+            item
+            for item in weakened["validators"]
+            if item["validator_id"] == "GSV_ARTIFACT_FINITE_JSON"
+        )
+        finite["failure_decision"] = "defer"
+        with self.assertRaisesRegex(AssuranceError, "weakens or changes"):
+            validate_validator_registry_semantics(weakened)
 
     def test_mechanism_claim_requires_controlled_intervention(self) -> None:
         bundle = self._load_bundle()
@@ -215,7 +314,7 @@ class GeneralScienceReviewTests(unittest.TestCase):
             duplicate_terminal,
             record_id="SRC_DECAY_RUN",
         )
-        with self.assertRaisesRegex(AssuranceError, "exactly one terminal"):
+        with self.assertRaisesRegex(AssuranceError, "validator bridge blocked"):
             review_general_science_bundle(bundle_root=self.root)
 
 

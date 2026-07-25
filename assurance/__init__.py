@@ -74,6 +74,11 @@ from .user_task_evaluation import (
     run_synthetic_user_task_evaluation,
     verify_synthetic_user_task_evaluation,
 )
+from .validator_bridge import (
+    load_general_science_validator_registry,
+    run_general_science_validators,
+    validate_validator_registry_semantics,
+)
 
 __all__ = [
     "ArchiveController",
@@ -100,6 +105,7 @@ __all__ = [
     "record_instruction_provenance",
     "review_general_science_bundle",
     "load_execution_backend_policy",
+    "load_general_science_validator_registry",
     "load_profile_registry",
     "load_readonly_task_projection",
     "load_synthetic_user_task_suite",
@@ -109,6 +115,7 @@ __all__ = [
     "resume_archived_conversation",
     "run_docker_sandbox_probe",
     "run_synthetic_user_task_evaluation",
+    "run_general_science_validators",
     "select_execution_backend",
     "verify_archive",
     "verify_audit_seal",
@@ -126,5 +133,6 @@ __all__ = [
     "verify_security_envelope",
     "verify_sensitive_action_permit",
     "validate_profile_registry_semantics",
+    "validate_validator_registry_semantics",
     "windows_native_strict_candidate",
 ]

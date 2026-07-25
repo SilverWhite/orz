@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-validator-registry-v0.1.schema.json",
+  "title": "General science validator registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "registry_kind",
+    "registry_id",
+    "validators"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "registry_kind": {
+      "const": "general_science_validator_registry"
+    },
+    "registry_id": {
+      "$ref": "#/$defs/id"
+    },
+    "validators": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "validator_id",
+          "version",
+          "stage",
+          "implementation",
+          "artifact_kinds",
+          "failure_decision",
+          "reason_code"
+        ],
+        "properties": {
+          "validator_id": {
+            "$ref": "#/$defs/id"
+          },
+          "version": {
+            "const": "0.1.0"
+          },
+          "stage": {
+            "enum": [
+              "design",
+              "action",
+              "artifact"
+            ]
+          },
+          "implementation": {
+            "enum": [
+              "json_schema",
+              "finite_json",
+              "statistical_reporting"
+            ]
+          },
+          "schema_name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9.-]*\\.schema\\.json$"
+          },
+          "artifact_kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/artifact_kind"
+            },
+            "uniqueItems": true
+          },
+          "failure_decision": {
+            "enum": [
+              "defer",
+              "block"
+            ]
+          },
+          "reason_code": {
+            "enum": [
+              "TASK-CONTRACT-001",
+              "ART-SCHEMA-001",
+              "ART-FINITE-001",
+              "EVD-COVERAGE-001"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "artifact_kind": {
+      "enum": [
+        "numerical_result",
+        "statistical_summary",
+        "tabular_result",
+        "other_json"
+      ]
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-action-manifest-v0.1.schema.json",
+  "title": "General science completed-action manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "action_id",
+    "kind",
+    "state",
+    "terminal_event_count",
+    "read_only_review_eligible",
+    "source_ids",
+    "artifact_ids",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "action_id": {
+      "$ref": "#/$defs/id"
+    },
+    "kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,95}$"
+    },
+    "state": {
+      "const": "completed"
+    },
+    "terminal_event_count": {
+      "const": 1
+    },
+    "read_only_review_eligible": {
+      "const": true
+    },
+    "source_ids": {
+      "$ref": "#/$defs/ids"
+    },
+    "artifact_ids": {
+      "$ref": "#/$defs/ids"
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generated_before_review",
+        "review_requires_execution",
+        "review_requires_network",
+        "review_requires_model"
+      ],
+      "properties": {
+        "generated_before_review": {
+          "const": true
+        },
+        "review_requires_execution": {
+          "const": false
+        },
+        "review_requires_network": {
+          "const": false
+        },
+        "review_requires_model": {
+          "const": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "uniqueItems": true
+    }
+  }
+}

@@ -57,6 +57,7 @@
       "path": "result.json",
       "sha256": "fc82bb94280744f776d474e8f15adf0dd8a4291d6e1eb0ea3d7d6faa7643156c",
       "media_type": "application/json",
+      "artifact_kind": "numerical_result",
       "producer_action_id": "ACT_DECAY_PRECOMPUTED"
     }
   ],

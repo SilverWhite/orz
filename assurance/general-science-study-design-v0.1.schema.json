@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-study-design-v0.1.schema.json",
+  "title": "General science study design",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "design_id",
+    "question",
+    "design_kind",
+    "hypotheses",
+    "controls",
+    "falsifiers",
+    "analysis_plan",
+    "coverage_complete"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "design_id": {
+      "$ref": "#/$defs/id"
+    },
+    "question": {
+      "$ref": "#/$defs/nonempty"
+    },
+    "design_kind": {
+      "enum": [
+        "descriptive_comparison",
+        "observational",
+        "controlled_intervention"
+      ]
+    },
+    "hypotheses": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hypothesis_id",
+          "text",
+          "status"
+        ],
+        "properties": {
+          "hypothesis_id": {
+            "$ref": "#/$defs/id"
+          },
+          "text": {
+            "$ref": "#/$defs/nonempty"
+          },
+          "status": {
+            "enum": [
+              "prospective",
+              "prospective_for_fixture",
+              "exploratory",
+              "retrospective"
+            ]
+          }
+        }
+      }
+    },
+    "controls": {
+      "$ref": "#/$defs/strings"
+    },
+    "falsifiers": {
+      "$ref": "#/$defs/strings"
+    },
+    "analysis_plan": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/strings"
+        },
+        {
+          "minItems": 1
+        }
+      ]
+    },
+    "coverage_complete": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "nonempty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonempty"
+      },
+      "uniqueItems": true
+    }
+  }
+}

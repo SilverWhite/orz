@@ -73,6 +73,20 @@ step 的最终绝对误差较小”这一窄 observation。强主张在专用 va
 [`GSA-CORE read-only audit`](../docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md)。
 这不是统计审查、实验复现、同行评审、正式 EvaluationRunner 或 production hard gate。
 
+## ValidatorBridge 初始实现
+
+`validator_bridge.py` 和 `general-science-validator-registry-v0.1.json` 把 validator 从只读 reviewer
+中分离出来，并把 registry ID/SHA-256 与每项 validator result 写入最终报告。当前登记：
+
+- study-design schema；
+- completed-action schema；
+- JSON finite-value；
+- statistical-summary 基础报告完整性。
+
+统计完整性只检查 sampling unit、N、effect、不确定性、缺失数据、多重比较、分析角色和停止规则是否
+明确；不判断统计选择或结果正确。非统计 artifact 返回 `not_applicable`。详细门禁、正反例和限制见
+[`ValidatorBridge audit`](../docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md)。
+
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。
 

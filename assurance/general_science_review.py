@@ -15,6 +15,7 @@ from .utils import (
     safe_relative_path,
     sha256_bytes,
 )
+from .validator_bridge import run_general_science_validators
 
 
 BUNDLE_SCHEMA = "general-science-review-bundle-v0.1.schema.json"
@@ -441,6 +442,23 @@ def review_general_science_bundle(
         raise AssuranceError("design source must use application/json")
     if action_source_id not in source_documents:
         raise AssuranceError("action source must use application/json")
+    validator_run = run_general_science_validators(
+        design=source_documents[design_id],
+        action=source_documents[action_source_id],
+        artifacts=artifacts,
+        artifact_documents=artifact_documents,
+    )
+    blocking_validators = [
+        item
+        for item in validator_run["results"]
+        if item["status"] == "block"
+    ]
+    if blocking_validators:
+        rendered = ", ".join(
+            f"{item['validator_id']}:{item['target_id']}"
+            for item in blocking_validators
+        )
+        raise AssuranceError(f"validator bridge blocked review: {rendered}")
     design = _validate_design(
         source_documents[design_id], expected_source_id=design_id
     )
@@ -494,11 +512,16 @@ def review_general_science_bundle(
         for claim in claims_by_id.values()
     ]
     decisions = {item["decision"] for item in claim_decisions}
+    validator_decisions = {
+        item["status"]
+        for item in validator_run["results"]
+        if item["status"] in {"defer", "block"}
+    }
     overall = (
         "block"
-        if "block" in decisions
+        if "block" in decisions or "block" in validator_decisions
         else "defer"
-        if "defer" in decisions
+        if "defer" in decisions or "defer" in validator_decisions
         else "allow"
     )
     bundle_digest = sha256_bytes(bundle_payload)
@@ -508,6 +531,8 @@ def review_general_science_bundle(
         "review_id": f"REVIEW_{bundle_digest[:24].upper()}",
         "bundle_id": bundle["bundle_id"],
         "bundle_sha256": bundle_digest,
+        "validator_registry_id": validator_run["registry_id"],
+        "validator_registry_sha256": validator_run["registry_sha256"],
         "valid": True,
         "decision": overall,
         "files": files,
@@ -518,7 +543,9 @@ def review_general_science_bundle(
             "references_resolve": True,
             "artifacts_parse": True,
             "comparisons_verified": True,
+            "validators_completed": True,
         },
+        "validator_results": validator_run["results"],
         "claim_decisions": claim_decisions,
         "safety": {
             "source_write_attempted": False,

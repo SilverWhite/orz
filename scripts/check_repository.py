@@ -114,6 +114,75 @@ def _profile_registry_semantic_errors(registry: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _validator_registry_semantic_errors(
+    registry: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    validators = registry.get("validators", [])
+    identifiers = [item.get("validator_id") for item in validators]
+    if len(identifiers) != len(set(identifiers)):
+        errors.append("validator registry IDs must be unique")
+    required = {
+        "GSV_DESIGN_SCHEMA": {
+            "stage": "design",
+            "implementation": "json_schema",
+            "failure_decision": "block",
+            "reason_code": "TASK-CONTRACT-001",
+        },
+        "GSV_ACTION_SCHEMA": {
+            "stage": "action",
+            "implementation": "json_schema",
+            "failure_decision": "block",
+            "reason_code": "TASK-CONTRACT-001",
+        },
+        "GSV_ARTIFACT_FINITE_JSON": {
+            "stage": "artifact",
+            "implementation": "finite_json",
+            "failure_decision": "block",
+            "reason_code": "ART-FINITE-001",
+        },
+        "GSV_STATISTICAL_REPORTING": {
+            "stage": "artifact",
+            "implementation": "statistical_reporting",
+            "failure_decision": "defer",
+            "reason_code": "EVD-COVERAGE-001",
+        },
+    }
+    missing = sorted(set(required) - set(identifiers))
+    if missing:
+        errors.append(f"validator registry missing required validators: {missing}")
+    for validator in validators:
+        implementation = validator.get("implementation")
+        stage = validator.get("stage")
+        schema_name = validator.get("schema_name")
+        artifact_kinds = validator.get("artifact_kinds", [])
+        if implementation == "json_schema":
+            if stage not in {"design", "action"} or artifact_kinds:
+                errors.append(
+                    f"{validator.get('validator_id')} has invalid control applicability"
+                )
+            if not schema_name or not (ROOT / "assurance" / schema_name).is_file():
+                errors.append(
+                    f"{validator.get('validator_id')} references a missing schema"
+                )
+        elif implementation in {"finite_json", "statistical_reporting"}:
+            if stage != "artifact" or not artifact_kinds or schema_name is not None:
+                errors.append(
+                    f"{validator.get('validator_id')} has invalid artifact applicability"
+                )
+        expected = required.get(validator.get("validator_id"))
+        if expected is not None:
+            observed = {
+                key: validator.get(key)
+                for key in expected
+            }
+            if observed != expected:
+                errors.append(
+                    f"{validator.get('validator_id')} weakens its base policy"
+                )
+    return errors
+
+
 def _load_yaml(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
         return yaml.load(handle, Loader=UniqueKeyLoader)
@@ -400,6 +469,62 @@ def check_repository() -> dict[str, Any]:
         except Exception as exc:
             errors.append(f"invalid general-science fixture record: {exc}")
     counts["general_science_review_fixtures"] = 1
+
+    validator_registry_path = (
+        assurance_root / "general-science-validator-registry-v0.1.json"
+    )
+    validator_registry = _load_json(validator_registry_path)
+    errors.extend(
+        _validate_instance(
+            validator_registry,
+            assurance_root
+            / "general-science-validator-registry-v0.1.schema.json",
+            str(validator_registry_path.relative_to(ROOT)),
+        )
+    )
+    errors.extend(
+        f"general-science validator registry semantic error: {error}"
+        for error in _validator_registry_semantic_errors(validator_registry)
+    )
+    for filename, schema_name in (
+        ("design.json", "general-science-study-design-v0.1.schema.json"),
+        (
+            "run-manifest.json",
+            "general-science-action-manifest-v0.1.schema.json",
+        ),
+    ):
+        fixture_path = general_science_fixture_root / filename
+        errors.extend(
+            _validate_instance(
+                _load_json(fixture_path),
+                assurance_root / schema_name,
+                str(fixture_path.relative_to(ROOT)),
+            )
+        )
+    invalid_validator_registry_path = (
+        assurance_root
+        / "fixtures/general_science/"
+        "validator-registry.duplicate-id.semantic-invalid.json"
+    )
+    invalid_validator_registry = _load_json(invalid_validator_registry_path)
+    structural_errors = _validate_instance(
+        invalid_validator_registry,
+        assurance_root / "general-science-validator-registry-v0.1.schema.json",
+        str(invalid_validator_registry_path.relative_to(ROOT)),
+    )
+    if structural_errors:
+        errors.append(
+            "duplicate-validator fixture must remain structurally valid: "
+            f"{structural_errors}"
+        )
+    if not _validator_registry_semantic_errors(invalid_validator_registry):
+        errors.append(
+            "duplicate-validator fixture unexpectedly passed semantic validation"
+        )
+    counts["general_science_validators"] = len(
+        validator_registry.get("validators", [])
+    )
+    counts["general_science_validator_semantic_negatives"] = 1
 
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]

@@ -69,7 +69,27 @@
       "type": "array",
       "minItems": 2,
       "items": {
-        "$ref": "#/$defs/file_record"
+        "allOf": [
+          {
+            "$ref": "#/$defs/file_record"
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "artifact_kind"
+                  ]
+                },
+                {
+                  "required": [
+                    "producer_action_id"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
       }
     },
     "artifacts": {
@@ -83,9 +103,18 @@
           {
             "type": "object",
             "required": [
+              "artifact_kind",
               "producer_action_id"
             ],
             "properties": {
+              "artifact_kind": {
+                "enum": [
+                  "numerical_result",
+                  "statistical_summary",
+                  "tabular_result",
+                  "other_json"
+                ]
+              },
               "producer_action_id": {
                 "$ref": "#/$defs/id"
               }
@@ -367,6 +396,14 @@
             "application/json",
             "text/markdown",
             "text/plain"
+          ]
+        },
+        "artifact_kind": {
+          "enum": [
+            "numerical_result",
+            "statistical_summary",
+            "tabular_result",
+            "other_json"
           ]
         },
         "producer_action_id": {

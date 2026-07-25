@@ -1,0 +1,28 @@
+{
+  "schema_version": "0.1.0-draft",
+  "registry_kind": "general_science_validator_registry",
+  "registry_id": "GSVR_DUPLICATE_FIXTURE",
+  "validators": [
+    {
+      "validator_id": "GSV_DUPLICATE",
+      "version": "0.1.0",
+      "stage": "design",
+      "implementation": "json_schema",
+      "schema_name": "general-science-study-design-v0.1.schema.json",
+      "artifact_kinds": [],
+      "failure_decision": "block",
+      "reason_code": "TASK-CONTRACT-001"
+    },
+    {
+      "validator_id": "GSV_DUPLICATE",
+      "version": "0.1.0",
+      "stage": "artifact",
+      "implementation": "statistical_reporting",
+      "artifact_kinds": [
+        "statistical_summary"
+      ],
+      "failure_decision": "defer",
+      "reason_code": "EVD-COVERAGE-001"
+    }
+  ]
+}

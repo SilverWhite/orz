@@ -70,7 +70,8 @@ assurance 44 tests，共 144 tests，repository error count 为 0。该结果只
 
 ## 保留缺口
 
-- 研究设计和动作文件目前由窄语义解析器验证，尚未形成可扩展 validator registry；
+- 研究设计、动作、finite JSON 和基础统计报告完整性已有初始 validator registry；尚无版本迁移、
+  第三方隔离、跨 artifact lineage/comparability 或领域 validator 动态组合；
 - 没有统计假设、不确定性、效应量、功效、稳健性、多重比较、缺失数据或独立样本量审查；
 - 没有执行研究动作或复现产物，generation provenance 只在摘要和交叉引用层得到验证；
 - 没有跨 artifact 变换、表格/图像/PDF 语义抽取或单位/量纲检查；

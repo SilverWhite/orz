@@ -10,10 +10,13 @@
     "review_id",
     "bundle_id",
     "bundle_sha256",
+    "validator_registry_id",
+    "validator_registry_sha256",
     "valid",
     "decision",
     "files",
     "checks",
+    "validator_results",
     "claim_decisions",
     "safety",
     "limitations"
@@ -32,6 +35,12 @@
       "$ref": "#/$defs/id"
     },
     "bundle_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "validator_registry_id": {
+      "$ref": "#/$defs/id"
+    },
+    "validator_registry_sha256": {
       "$ref": "#/$defs/sha256"
     },
     "valid": {
@@ -92,7 +101,8 @@
         "digests_match",
         "references_resolve",
         "artifacts_parse",
-        "comparisons_verified"
+        "comparisons_verified",
+        "validators_completed"
       ],
       "properties": {
         "contract_valid": {
@@ -112,6 +122,76 @@
         },
         "comparisons_verified": {
           "const": true
+        },
+        "validators_completed": {
+          "const": true
+        }
+      }
+    },
+    "validator_results": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "validator_id",
+          "target_type",
+          "target_id",
+          "applicable",
+          "status",
+          "reason_codes",
+          "details"
+        ],
+        "properties": {
+          "validator_id": {
+            "$ref": "#/$defs/id"
+          },
+          "target_type": {
+            "enum": [
+              "design",
+              "action",
+              "artifact"
+            ]
+          },
+          "target_id": {
+            "$ref": "#/$defs/id"
+          },
+          "applicable": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "not_applicable",
+              "defer",
+              "block"
+            ]
+          },
+          "reason_codes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "enum": [
+                "VALIDATOR_PASS",
+                "VALIDATOR_NOT_APPLICABLE",
+                "TASK-CONTRACT-001",
+                "ART-SCHEMA-001",
+                "ART-FINITE-001",
+                "EVD-COVERAGE-001"
+              ]
+            }
+          },
+          "details": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            }
+          }
         }
       }
     },

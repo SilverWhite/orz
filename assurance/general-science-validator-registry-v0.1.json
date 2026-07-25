@@ -1,0 +1,52 @@
+{
+  "schema_version": "0.1.0-draft",
+  "registry_kind": "general_science_validator_registry",
+  "registry_id": "GSVR_CORE_0_1",
+  "validators": [
+    {
+      "validator_id": "GSV_DESIGN_SCHEMA",
+      "version": "0.1.0",
+      "stage": "design",
+      "implementation": "json_schema",
+      "schema_name": "general-science-study-design-v0.1.schema.json",
+      "artifact_kinds": [],
+      "failure_decision": "block",
+      "reason_code": "TASK-CONTRACT-001"
+    },
+    {
+      "validator_id": "GSV_ACTION_SCHEMA",
+      "version": "0.1.0",
+      "stage": "action",
+      "implementation": "json_schema",
+      "schema_name": "general-science-action-manifest-v0.1.schema.json",
+      "artifact_kinds": [],
+      "failure_decision": "block",
+      "reason_code": "TASK-CONTRACT-001"
+    },
+    {
+      "validator_id": "GSV_ARTIFACT_FINITE_JSON",
+      "version": "0.1.0",
+      "stage": "artifact",
+      "implementation": "finite_json",
+      "artifact_kinds": [
+        "numerical_result",
+        "statistical_summary",
+        "tabular_result",
+        "other_json"
+      ],
+      "failure_decision": "block",
+      "reason_code": "ART-FINITE-001"
+    },
+    {
+      "validator_id": "GSV_STATISTICAL_REPORTING",
+      "version": "0.1.0",
+      "stage": "artifact",
+      "implementation": "statistical_reporting",
+      "artifact_kinds": [
+        "statistical_summary"
+      ],
+      "failure_decision": "defer",
+      "reason_code": "EVD-COVERAGE-001"
+    }
+  ]
+}
