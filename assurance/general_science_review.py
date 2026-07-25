@@ -533,6 +533,10 @@ def review_general_science_bundle(
         "bundle_sha256": bundle_digest,
         "validator_registry_id": validator_run["registry_id"],
         "validator_registry_sha256": validator_run["registry_sha256"],
+        "artifact_registry_id": validator_run["artifact_registry_id"],
+        "artifact_registry_sha256": validator_run[
+            "artifact_registry_sha256"
+        ],
         "valid": True,
         "decision": overall,
         "files": files,

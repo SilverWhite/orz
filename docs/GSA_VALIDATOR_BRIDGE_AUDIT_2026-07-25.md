@@ -15,6 +15,7 @@ reason code 和细节写入只读审查结果。
 |---|---|---|
 | `GSV_DESIGN_SCHEMA` | study design | 按版本化 schema 检查问题、假设、设计类型、对照、证伪条件、分析计划和 coverage 声明 |
 | `GSV_ACTION_SCHEMA` | completed action manifest | 检查 action identity、completed、exactly-one terminal、source/artifact 引用形状和 review-time 安全声明 |
+| `GSV_ARTIFACT_REGISTERED_SCHEMA` | registered artifact | 按独立 artifact registry 解析 schema ID，并验证 kind、media type 和 exact schema |
 | `GSV_ARTIFACT_FINITE_JSON` | JSON artifact | 拒绝非 JSON 或非有限数；不把 `NaN/Infinity` 当作可用科学数值 |
 | `GSV_STATISTICAL_REPORTING` | `statistical_summary` | 检查 sampling unit、N、effect estimate、不确定性、缺失数据、多重比较、分析角色和停止规则是否明确报告 |
 
@@ -37,7 +38,7 @@ registry schema 限制 stage、implementation、schema filename、artifact kind�
 code。语义解析器另行要求：
 
 - validator ID 唯一；
-- 四个基础 validator 不能缺失；
+- 五个基础 validator 不能缺失；
 - schema validator 只能用于 design/action，且目标 schema 必须真实存在；
 - built-in artifact validator 必须声明非空 applicability，不能伪装成 schema validator。
 - 四个基础 validator 的 stage、implementation、failure decision 和 reason code 固定为最小策略；
@@ -57,7 +58,7 @@ code。语义解析器另行要求：
 6. finite 基础策略从 `block` 弱化为 `defer` 被语义解析器拒绝；
 7. 原有摘要篡改、路径逃逸、非有限数、未知 bridge、机制过强、无支持和多 terminal 负例继续保留。
 
-提交前机械结果：84 schemas、4 个登记 validator、1 个结构合法但语义无效的 registry 负例、
+初始桥接提交时的机械结果：84 schemas、4 个登记 validator、1 个结构合法但语义无效的 registry 负例、
 prototype 50 tests、Grok integration 44 tests、runtime 6 tests、assurance 46 tests，共 146 tests，
 repository error count 为 0。该结果不构成统计正确性或科学有效性证据。
 

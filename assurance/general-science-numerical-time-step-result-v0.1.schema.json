@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-numerical-time-step-result-v0.1.schema.json",
+  "title": "General science deterministic time-step result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "method",
+    "equation",
+    "initial_value",
+    "final_time",
+    "exact_final_value",
+    "runs"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "method": {
+      "$ref": "#/$defs/nonempty"
+    },
+    "equation": {
+      "$ref": "#/$defs/nonempty"
+    },
+    "initial_value": {
+      "type": "number"
+    },
+    "final_time": {
+      "type": "number"
+    },
+    "exact_final_value": {
+      "type": "number"
+    },
+    "runs": {
+      "type": "object",
+      "minProperties": 2,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{2,95}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step_size",
+          "step_count",
+          "final_value",
+          "final_absolute_error"
+        ],
+        "properties": {
+          "step_size": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "step_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "final_value": {
+            "type": "number"
+          },
+          "final_absolute_error": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonempty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    }
+  }
+}

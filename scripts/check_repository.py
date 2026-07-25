@@ -135,6 +135,12 @@ def _validator_registry_semantic_errors(
             "failure_decision": "block",
             "reason_code": "TASK-CONTRACT-001",
         },
+        "GSV_ARTIFACT_REGISTERED_SCHEMA": {
+            "stage": "artifact",
+            "implementation": "registered_artifact_schema",
+            "failure_decision": "block",
+            "reason_code": "ART-SCHEMA-001",
+        },
         "GSV_ARTIFACT_FINITE_JSON": {
             "stage": "artifact",
             "implementation": "finite_json",
@@ -165,7 +171,11 @@ def _validator_registry_semantic_errors(
                 errors.append(
                     f"{validator.get('validator_id')} references a missing schema"
                 )
-        elif implementation in {"finite_json", "statistical_reporting"}:
+        elif implementation in {
+            "registered_artifact_schema",
+            "finite_json",
+            "statistical_reporting",
+        }:
             if stage != "artifact" or not artifact_kinds or schema_name is not None:
                 errors.append(
                     f"{validator.get('validator_id')} has invalid artifact applicability"
@@ -179,6 +189,61 @@ def _validator_registry_semantic_errors(
             if observed != expected:
                 errors.append(
                     f"{validator.get('validator_id')} weakens its base policy"
+                )
+    return errors
+
+
+def _artifact_registry_semantic_errors(
+    registry: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    records = registry.get("artifact_schemas", [])
+    identifiers = [item.get("artifact_schema_id") for item in records]
+    if len(identifiers) != len(set(identifiers)):
+        errors.append("artifact schema registry IDs must be unique")
+    schema_names = [item.get("schema_name") for item in records]
+    if len(schema_names) != len(set(schema_names)):
+        errors.append("artifact schema registry schema names must be unique")
+    required = {
+        "GSAS_NUMERICAL_TIME_STEP_0_1": {
+            "version": "0.1.0",
+            "artifact_kind": "numerical_result",
+            "media_type": "application/json",
+            "schema_name": (
+                "general-science-numerical-time-step-result-v0.1.schema.json"
+            ),
+            "failure_decision": "block",
+            "reason_code": "ART-SCHEMA-001",
+        },
+        "GSAS_STATISTICAL_SUMMARY_BASE_0_1": {
+            "version": "0.1.0",
+            "artifact_kind": "statistical_summary",
+            "media_type": "application/json",
+            "schema_name": (
+                "general-science-statistical-summary-base-v0.1.schema.json"
+            ),
+            "failure_decision": "block",
+            "reason_code": "ART-SCHEMA-001",
+        },
+    }
+    missing = sorted(set(required) - set(identifiers))
+    if missing:
+        errors.append(f"artifact registry missing required entries: {missing}")
+    for record in records:
+        schema_name = record.get("schema_name")
+        if not schema_name or not (ROOT / "assurance" / schema_name).is_file():
+            errors.append(
+                f"{record.get('artifact_schema_id')} references a missing schema"
+            )
+        expected = required.get(record.get("artifact_schema_id"))
+        if expected is not None:
+            observed = {
+                key: record.get(key)
+                for key in expected
+            }
+            if observed != expected:
+                errors.append(
+                    f"{record.get('artifact_schema_id')} weakens its base policy"
                 )
     return errors
 
@@ -525,6 +590,77 @@ def check_repository() -> dict[str, Any]:
         validator_registry.get("validators", [])
     )
     counts["general_science_validator_semantic_negatives"] = 1
+
+    artifact_registry_path = (
+        assurance_root / "general-science-artifact-registry-v0.1.json"
+    )
+    artifact_registry = _load_json(artifact_registry_path)
+    errors.extend(
+        _validate_instance(
+            artifact_registry,
+            assurance_root
+            / "general-science-artifact-registry-v0.1.schema.json",
+            str(artifact_registry_path.relative_to(ROOT)),
+        )
+    )
+    errors.extend(
+        f"general-science artifact registry semantic error: {error}"
+        for error in _artifact_registry_semantic_errors(artifact_registry)
+    )
+    artifact_schemas = {
+        item["artifact_schema_id"]: item
+        for item in artifact_registry.get("artifact_schemas", [])
+    }
+    for artifact in general_science_bundle.get("artifacts", []):
+        registration = artifact_schemas.get(artifact.get("artifact_schema_id"))
+        if registration is None:
+            errors.append(
+                "general-science fixture uses an unknown artifact schema: "
+                f"{artifact.get('artifact_schema_id')}"
+            )
+            continue
+        if artifact.get("artifact_kind") != registration["artifact_kind"]:
+            errors.append(
+                f"{artifact['record_id']} kind disagrees with artifact registry"
+            )
+        if artifact.get("media_type") != registration["media_type"]:
+            errors.append(
+                f"{artifact['record_id']} media type disagrees with artifact registry"
+            )
+        artifact_path = general_science_fixture_root / Path(
+            *_safe_fixture_path(artifact["path"]).parts
+        )
+        if artifact_path.is_file():
+            errors.extend(
+                _validate_instance(
+                    _load_json(artifact_path),
+                    assurance_root / registration["schema_name"],
+                    str(artifact_path.relative_to(ROOT)),
+                )
+            )
+    invalid_artifact_registry_path = (
+        assurance_root
+        / "fixtures/general_science/"
+        "artifact-registry.duplicate-id.semantic-invalid.json"
+    )
+    invalid_artifact_registry = _load_json(invalid_artifact_registry_path)
+    artifact_structural_errors = _validate_instance(
+        invalid_artifact_registry,
+        assurance_root / "general-science-artifact-registry-v0.1.schema.json",
+        str(invalid_artifact_registry_path.relative_to(ROOT)),
+    )
+    if artifact_structural_errors:
+        errors.append(
+            "duplicate-artifact-schema fixture must remain structurally valid: "
+            f"{artifact_structural_errors}"
+        )
+    if not _artifact_registry_semantic_errors(invalid_artifact_registry):
+        errors.append(
+            "duplicate-artifact-schema fixture unexpectedly passed semantic "
+            "validation"
+        )
+    counts["general_science_artifact_schemas"] = len(artifact_schemas)
+    counts["general_science_artifact_registry_semantic_negatives"] = 1
 
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]

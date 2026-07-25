@@ -4,6 +4,11 @@ import math
 from pathlib import Path
 from typing import Any
 
+from .artifact_registry import (
+    DEFAULT_ARTIFACT_REGISTRY,
+    index_artifact_schemas,
+    load_general_science_artifact_registry,
+)
 from .contracts import ASSURANCE_ROOT, validate_contract
 from .errors import AssuranceError
 from .utils import load_json, sha256_file
@@ -25,6 +30,12 @@ REQUIRED_VALIDATORS = {
         "implementation": "json_schema",
         "failure_decision": "block",
         "reason_code": "TASK-CONTRACT-001",
+    },
+    "GSV_ARTIFACT_REGISTERED_SCHEMA": {
+        "stage": "artifact",
+        "implementation": "registered_artifact_schema",
+        "failure_decision": "block",
+        "reason_code": "ART-SCHEMA-001",
     },
     "GSV_ARTIFACT_FINITE_JSON": {
         "stage": "artifact",
@@ -272,9 +283,17 @@ def run_general_science_validators(
     artifacts: dict[str, dict[str, Any]],
     artifact_documents: dict[str, Any],
     registry_path: Path | None = None,
+    artifact_registry_path: Path | None = None,
 ) -> dict[str, Any]:
     registry_file = registry_path or DEFAULT_VALIDATOR_REGISTRY
     registry = load_general_science_validator_registry(registry_file)
+    artifact_registry_file = (
+        artifact_registry_path or DEFAULT_ARTIFACT_REGISTRY
+    )
+    artifact_registry = load_general_science_artifact_registry(
+        artifact_registry_file
+    )
+    artifact_schemas = index_artifact_schemas(artifact_registry)
     results: list[dict[str, Any]] = []
     for validator in registry["validators"]:
         implementation = validator["implementation"]
@@ -333,7 +352,60 @@ def run_general_science_validators(
                 )
                 continue
             document = artifact_documents.get(artifact_id)
-            if implementation == "finite_json":
+            if implementation == "registered_artifact_schema":
+                schema_id = artifact["artifact_schema_id"]
+                registration = artifact_schemas.get(schema_id)
+                details: list[str] = []
+                if registration is None:
+                    details.append(
+                        f"artifact schema is not registered: {schema_id}"
+                    )
+                else:
+                    if registration["artifact_kind"] != artifact_kind:
+                        details.append(
+                            "artifact kind does not match schema registration"
+                        )
+                    if registration["media_type"] != artifact["media_type"]:
+                        details.append(
+                            "artifact media type does not match schema registration"
+                        )
+                    if document is None:
+                        details.append(
+                            "registered JSON artifact has no parsed document"
+                        )
+                    if not details:
+                        try:
+                            validate_contract(
+                                document,
+                                registration["schema_name"],
+                                label=(
+                                    f"{validator['validator_id']} "
+                                    f"target {artifact_id}"
+                                ),
+                            )
+                        except AssuranceError as exc:
+                            details.append(str(exc))
+                results.append(
+                    _result(
+                        validator,
+                        target_type="artifact",
+                        target_id=artifact_id,
+                        applicable=True,
+                        status=(
+                            validator["failure_decision"]
+                            if details
+                            else "pass"
+                        ),
+                        details=(
+                            details
+                            if details
+                            else [
+                                f"validated registered schema {schema_id}"
+                            ]
+                        ),
+                    )
+                )
+            elif implementation == "finite_json":
                 passed = document is not None and _finite(document)
                 results.append(
                     _result(
@@ -378,5 +450,7 @@ def run_general_science_validators(
     return {
         "registry_id": registry["registry_id"],
         "registry_sha256": sha256_file(registry_file),
+        "artifact_registry_id": artifact_registry["registry_id"],
+        "artifact_registry_sha256": sha256_file(artifact_registry_file),
         "results": results,
     }

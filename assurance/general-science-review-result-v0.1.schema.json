@@ -12,6 +12,8 @@
     "bundle_sha256",
     "validator_registry_id",
     "validator_registry_sha256",
+    "artifact_registry_id",
+    "artifact_registry_sha256",
     "valid",
     "decision",
     "files",
@@ -43,6 +45,12 @@
     "validator_registry_sha256": {
       "$ref": "#/$defs/sha256"
     },
+    "artifact_registry_id": {
+      "$ref": "#/$defs/id"
+    },
+    "artifact_registry_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
     "valid": {
       "const": true
     },
@@ -55,7 +63,7 @@
     },
     "files": {
       "type": "array",
-      "minItems": 4,
+      "minItems": 5,
       "items": {
         "type": "object",
         "additionalProperties": false,

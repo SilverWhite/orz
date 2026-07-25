@@ -1,0 +1,25 @@
+{
+  "schema_version": "0.1.0-draft",
+  "registry_kind": "general_science_artifact_schema_registry",
+  "registry_id": "GSAR_DUPLICATE_FIXTURE",
+  "artifact_schemas": [
+    {
+      "artifact_schema_id": "GSAS_DUPLICATE",
+      "version": "0.1.0",
+      "artifact_kind": "numerical_result",
+      "media_type": "application/json",
+      "schema_name": "general-science-numerical-time-step-result-v0.1.schema.json",
+      "failure_decision": "block",
+      "reason_code": "ART-SCHEMA-001"
+    },
+    {
+      "artifact_schema_id": "GSAS_DUPLICATE",
+      "version": "0.1.0",
+      "artifact_kind": "statistical_summary",
+      "media_type": "application/json",
+      "schema_name": "general-science-statistical-summary-base-v0.1.schema.json",
+      "failure_decision": "block",
+      "reason_code": "ART-SCHEMA-001"
+    }
+  ]
+}

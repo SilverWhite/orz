@@ -1,86 +1,62 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.scientific-assurance.invalid/schema/general-science-validator-registry-v0.1.schema.json",
-  "title": "General science validator registry",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-artifact-registry-v0.1.schema.json",
+  "title": "General science artifact schema registry",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "registry_kind",
     "registry_id",
-    "validators"
+    "artifact_schemas"
   ],
   "properties": {
     "schema_version": {
       "const": "0.1.0-draft"
     },
     "registry_kind": {
-      "const": "general_science_validator_registry"
+      "const": "general_science_artifact_schema_registry"
     },
     "registry_id": {
       "$ref": "#/$defs/id"
     },
-    "validators": {
+    "artifact_schemas": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "validator_id",
+          "artifact_schema_id",
           "version",
-          "stage",
-          "implementation",
-          "artifact_kinds",
+          "artifact_kind",
+          "media_type",
+          "schema_name",
           "failure_decision",
           "reason_code"
         ],
         "properties": {
-          "validator_id": {
+          "artifact_schema_id": {
             "$ref": "#/$defs/id"
           },
           "version": {
             "const": "0.1.0"
           },
-          "stage": {
-            "enum": [
-              "design",
-              "action",
-              "artifact"
-            ]
+          "artifact_kind": {
+            "$ref": "#/$defs/artifact_kind"
           },
-          "implementation": {
-            "enum": [
-              "json_schema",
-              "registered_artifact_schema",
-              "finite_json",
-              "statistical_reporting"
-            ]
+          "media_type": {
+            "const": "application/json"
           },
           "schema_name": {
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9.-]*\\.schema\\.json$"
           },
-          "artifact_kinds": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/artifact_kind"
-            },
-            "uniqueItems": true
-          },
           "failure_decision": {
-            "enum": [
-              "defer",
-              "block"
-            ]
+            "const": "block"
           },
           "reason_code": {
-            "enum": [
-              "TASK-CONTRACT-001",
-              "ART-SCHEMA-001",
-              "ART-FINITE-001",
-              "EVD-COVERAGE-001"
-            ]
+            "const": "ART-SCHEMA-001"
           }
         }
       }

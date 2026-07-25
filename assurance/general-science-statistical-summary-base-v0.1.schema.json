@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-statistical-summary-base-v0.1.schema.json",
+  "title": "General science statistical-summary base container",
+  "description": "A base registration contract only. Statistical reporting completeness is enforced by GSV_STATISTICAL_REPORTING.",
+  "type": "object",
+  "required": [
+    "schema_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    }
+  }
+}

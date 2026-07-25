@@ -83,6 +83,11 @@
                 },
                 {
                   "required": [
+                    "artifact_schema_id"
+                  ]
+                },
+                {
+                  "required": [
                     "producer_action_id"
                   ]
                 }
@@ -104,6 +109,7 @@
             "type": "object",
             "required": [
               "artifact_kind",
+              "artifact_schema_id",
               "producer_action_id"
             ],
             "properties": {
@@ -114,6 +120,9 @@
                   "tabular_result",
                   "other_json"
                 ]
+              },
+              "artifact_schema_id": {
+                "$ref": "#/$defs/id"
               },
               "producer_action_id": {
                 "$ref": "#/$defs/id"
@@ -405,6 +414,9 @@
             "tabular_result",
             "other_json"
           ]
+        },
+        "artifact_schema_id": {
+          "$ref": "#/$defs/id"
         },
         "producer_action_id": {
           "$ref": "#/$defs/id"

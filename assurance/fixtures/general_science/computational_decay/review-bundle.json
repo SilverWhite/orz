@@ -58,6 +58,7 @@
       "sha256": "fc82bb94280744f776d474e8f15adf0dd8a4291d6e1eb0ea3d7d6faa7643156c",
       "media_type": "application/json",
       "artifact_kind": "numerical_result",
+      "artifact_schema_id": "GSAS_NUMERICAL_TIME_STEP_0_1",
       "producer_action_id": "ACT_DECAY_PRECOMPUTED"
     }
   ],

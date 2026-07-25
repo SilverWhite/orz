@@ -24,6 +24,20 @@
       "reason_code": "TASK-CONTRACT-001"
     },
     {
+      "validator_id": "GSV_ARTIFACT_REGISTERED_SCHEMA",
+      "version": "0.1.0",
+      "stage": "artifact",
+      "implementation": "registered_artifact_schema",
+      "artifact_kinds": [
+        "numerical_result",
+        "statistical_summary",
+        "tabular_result",
+        "other_json"
+      ],
+      "failure_decision": "block",
+      "reason_code": "ART-SCHEMA-001"
+    },
+    {
       "validator_id": "GSV_ARTIFACT_FINITE_JSON",
       "version": "0.1.0",
       "stage": "artifact",

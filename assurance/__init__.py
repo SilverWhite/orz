@@ -9,6 +9,11 @@ development/conformance mechanisms rather than a production security boundary.
 
 from .archive import ArchiveController, resume_archived_conversation
 from .archive_verifier import verify_archive
+from .artifact_registry import (
+    index_artifact_schemas,
+    load_general_science_artifact_registry,
+    validate_artifact_registry_semantics,
+)
 from .audit import AuditLedger, verify_audit_seal
 from .conversation import ConversationNamespace
 from .envelope import create_security_envelope, verify_security_envelope
@@ -101,10 +106,12 @@ __all__ = [
     "execute_guarded_no_model_action",
     "execute_workspace_first_integrated_run",
     "initialize_workspace_marker",
+    "index_artifact_schemas",
     "issue_sensitive_action_permit",
     "record_instruction_provenance",
     "review_general_science_bundle",
     "load_execution_backend_policy",
+    "load_general_science_artifact_registry",
     "load_general_science_validator_registry",
     "load_profile_registry",
     "load_readonly_task_projection",
@@ -133,6 +140,7 @@ __all__ = [
     "verify_security_envelope",
     "verify_sensitive_action_permit",
     "validate_profile_registry_semantics",
+    "validate_artifact_registry_semantics",
     "validate_validator_registry_semantics",
     "windows_native_strict_candidate",
 ]

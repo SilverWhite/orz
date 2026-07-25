@@ -11,6 +11,10 @@ from contextlib import redirect_stdout
 from io import StringIO
 
 from assurance import AssuranceError, review_general_science_bundle
+from assurance.artifact_registry import (
+    load_general_science_artifact_registry,
+    validate_artifact_registry_semantics,
+)
 from assurance.general_science_cli import main as review_cli_main
 from assurance.validator_bridge import (
     load_general_science_validator_registry,
@@ -100,13 +104,13 @@ class GeneralScienceReviewTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertEqual(first["decision"], "allow")
         self.assertEqual(len(first["files"]), 5)
-        self.assertEqual(len(first["validator_results"]), 4)
+        self.assertEqual(len(first["validator_results"]), 5)
         self.assertEqual(
             [
                 item["status"]
                 for item in first["validator_results"]
             ],
-            ["pass", "pass", "pass", "not_applicable"],
+            ["pass", "pass", "pass", "pass", "not_applicable"],
         )
         claim = first["claim_decisions"][0]
         self.assertEqual(claim["decision"], "allow")
@@ -200,6 +204,9 @@ class GeneralScienceReviewTests(unittest.TestCase):
     def test_statistical_summary_requires_basic_reporting_fields(self) -> None:
         bundle = self._load_bundle()
         bundle["artifacts"][0]["artifact_kind"] = "statistical_summary"
+        bundle["artifacts"][0][
+            "artifact_schema_id"
+        ] = "GSAS_STATISTICAL_SUMMARY_BASE_0_1"
         self._write_bundle(bundle)
 
         incomplete = review_general_science_bundle(bundle_root=self.root)
@@ -244,6 +251,9 @@ class GeneralScienceReviewTests(unittest.TestCase):
         )
         bundle = self._load_bundle()
         bundle["artifacts"][0]["artifact_kind"] = "statistical_summary"
+        bundle["artifacts"][0][
+            "artifact_schema_id"
+        ] = "GSAS_STATISTICAL_SUMMARY_BASE_0_1"
         self._write_bundle(bundle)
         complete = review_general_science_bundle(bundle_root=self.root)
         statistical = next(
@@ -274,6 +284,48 @@ class GeneralScienceReviewTests(unittest.TestCase):
         finite["failure_decision"] = "defer"
         with self.assertRaisesRegex(AssuranceError, "weakens or changes"):
             validate_validator_registry_semantics(weakened)
+
+    def test_artifact_schema_registration_fails_closed(self) -> None:
+        bundle = self._load_bundle()
+        bundle["artifacts"][0]["artifact_schema_id"] = "GSAS_UNKNOWN"
+        self._write_bundle(bundle)
+        with self.assertRaisesRegex(AssuranceError, "validator bridge blocked"):
+            review_general_science_bundle(bundle_root=self.root)
+
+        shutil.rmtree(self.root)
+        shutil.copytree(FIXTURE, self.root)
+
+        def remove_required_runs(document: dict[str, object]) -> None:
+            del document["runs"]
+
+        self._rewrite_json_source(
+            "result.json",
+            remove_required_runs,
+            record_id="ART_DECAY_RESULT",
+        )
+        with self.assertRaisesRegex(AssuranceError, "validator bridge blocked"):
+            review_general_science_bundle(bundle_root=self.root)
+
+        invalid = (
+            ROOT
+            / "assurance"
+            / "fixtures"
+            / "general_science"
+            / "artifact-registry.duplicate-id.semantic-invalid.json"
+        )
+        with self.assertRaisesRegex(AssuranceError, "IDs must be unique"):
+            load_general_science_artifact_registry(invalid)
+
+        weakened = deepcopy(load_general_science_artifact_registry())
+        numerical = next(
+            item
+            for item in weakened["artifact_schemas"]
+            if item["artifact_schema_id"]
+            == "GSAS_NUMERICAL_TIME_STEP_0_1"
+        )
+        numerical["artifact_kind"] = "other_json"
+        with self.assertRaisesRegex(AssuranceError, "weakens or changes"):
+            validate_artifact_registry_semantics(weakened)
 
     def test_mechanism_claim_requires_controlled_intervention(self) -> None:
         bundle = self._load_bundle()
