@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-controller-verification-v0.1.schema.json",
+  "title": "Global Progress controller receipt verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "valid",
+    "controller_status",
+    "transition_id",
+    "receipt_sha256",
+    "journal_sha256",
+    "checks",
+    "errors",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-controller-verification" },
+    "valid": { "type": "boolean" },
+    "controller_status": {
+      "type": ["string", "null"],
+      "enum": [
+        "transition_applied",
+        "transition_blocked",
+        "already_recorded",
+        "recovery_required",
+        "journal_unrecoverable",
+        "conflict",
+        "rejected",
+        null
+      ]
+    },
+    "transition_id": {
+      "type": ["string", "null"],
+      "pattern": "^GPT-[A-Z0-9._-]+$"
+    },
+    "receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "journal_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_valid",
+        "source_bindings_valid",
+        "candidate_outcome_verified",
+        "journal_condition_verified",
+        "journal_snapshot_matches",
+        "event_presence_verified",
+        "state_projection_verified",
+        "controller_status_consistent"
+      ],
+      "properties": {
+        "receipt_schema_valid": { "type": "boolean" },
+        "source_bindings_valid": { "type": "boolean" },
+        "candidate_outcome_verified": { "type": "boolean" },
+        "journal_condition_verified": { "type": "boolean" },
+        "journal_snapshot_matches": { "type": "boolean" },
+        "event_presence_verified": { "type": "boolean" },
+        "state_projection_verified": { "type": "boolean" },
+        "controller_status_consistent": { "type": "boolean" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

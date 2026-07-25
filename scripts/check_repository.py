@@ -1526,10 +1526,12 @@ def check_repository() -> dict[str, Any]:
         ROOT / "runtime/global-progress-transition-receipt-v0.1.schema.json",
         ROOT / "runtime/global-progress-transition-verification-v0.1.schema.json",
         ROOT / "runtime/global-progress-controller-receipt-v0.1.schema.json",
+        ROOT / "runtime/global-progress-controller-verification-v0.1.schema.json",
         ROOT / "scripts/build_global_progress_transition_event.py",
         ROOT / "scripts/verify_global_progress_transition_event.py",
         ROOT / "scripts/append_global_progress_transition_event.py",
         ROOT / "scripts/run_global_progress_controller.py",
+        ROOT / "scripts/verify_global_progress_controller_receipt.py",
         ROOT / "scripts/recover_torn_journal.py",
         ROOT / "prototype/fep_agent_proto/journal_lock.py",
         ROOT / "prototype/fep_agent_proto/journal_recovery.py",
@@ -1545,6 +1547,7 @@ def check_repository() -> dict[str, Any]:
             )
     counts["global_progress_transition_gate_fixtures"] = 1
     counts["global_progress_controller_fixtures"] = 1
+    counts["global_progress_controller_verifier_fixtures"] = 1
     counts["journal_recovery_fixtures"] = 1
     errors.extend(
         _validate_instance(

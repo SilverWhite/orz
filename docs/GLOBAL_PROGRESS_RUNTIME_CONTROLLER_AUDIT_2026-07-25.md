@@ -38,3 +38,6 @@
 controller receipt 在 event append 之后写出，因此两者之间仍有进程崩溃窗口；相同 request 重试可借助 event hash 收敛，
 但外部 receipt 本身不是事务日志。fixture 没有接入真实 session state、模型回合、工具执行、用户授权或成熟 CLI 的取消/
 恢复生命周期，也不处理多机 writer。机械 PASS 不证明科学任务正确或完成。
+
+后续自证与 append→receipt 崩溃窗口故障注入见
+[`GLOBAL_PROGRESS_CONTROLLER_VERIFIER_AUDIT_2026-07-25.md`](GLOBAL_PROGRESS_CONTROLLER_VERIFIER_AUDIT_2026-07-25.md)。

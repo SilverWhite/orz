@@ -311,3 +311,14 @@ controller adapter 只组合既有机械边界，不引入模型调用或新的�
 
 该 controller 仍是 no-model disposable fixture。它不替代成熟 CLI 的 session/runtime controller，也不建立实际进程状态、
 模型回合、用户确认或外部副作用的生产级一致性。
+
+### 11.9 Controller receipt verification
+
+controller verifier 必须只读，并在共享锁内观察 journal。它重新运行 transition builder，独立计算所有输入文件 digest，
+并检查 receipt schema、候选 event、journal hash/count、事件唯一性、链尾状态与 `state_before/state_after` 投影。
+
+若 event 已追加而 controller receipt 因崩溃未写出，原 request 重试必须得到链尾 `already_recorded` receipt；verifier
+随后应通过。若 journal 已继续推进，旧 receipt 的 journal hash/count 必须失效。receipt 内容篡改不得通过状态投影检查。
+
+最终 journal 快照无法证明 event 是本次 controller 刚追加还是此前已经存在，因此 verifier 不能把 `event_appended`
+当作独立可重建的历史事实；它只验证该声明与 receipt schema、候选状态和当前链快照不矛盾。
