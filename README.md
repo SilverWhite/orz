@@ -43,6 +43,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md`](docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md)：首个非 LIF 通用科学多文件只读闭环、claim 强度门禁、正反回归与保留缺口。
 - [`docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md`](docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md)：版本化 validator registry、设计/动作 schema、artifact finite gate 与基础统计报告完整性边界。
 - [`docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md`](docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md)：artifact schema registry、结果摘要绑定、不可弱化映射与首个数值/统计基础 schema。
+- [`docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md`](docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md)：跨 artifact JSON Pointer、producer/source lineage、比较不变量和 permission-reversal 门禁。
 - [`docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)：P2 Docker 实测、Windows native fail-closed 状态、限制与正反例收敛策略。
 - [`docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md`](docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md)：P1 envelope、P2 selector、无模型 action、宿主/容器进程追踪、HMAC 回执与残留复核的端到端实测。
 - [`docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md`](docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md)：P3 来源不可提权、内核动作授权、能力子集委派与 digest-bound 一次性许可的测试和限制。

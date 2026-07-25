@@ -61,6 +61,15 @@
       ],
       "failure_decision": "defer",
       "reason_code": "EVD-COVERAGE-001"
+    },
+    {
+      "validator_id": "GSV_CROSS_ARTIFACT_COMPARABILITY",
+      "version": "0.1.0",
+      "stage": "evidence",
+      "implementation": "cross_artifact_comparability",
+      "artifact_kinds": [],
+      "failure_decision": "defer",
+      "reason_code": "EVD-COMPARABILITY-001"
     }
   ]
 }

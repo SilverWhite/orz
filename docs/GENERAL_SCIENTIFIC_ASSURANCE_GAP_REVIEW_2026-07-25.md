@@ -50,8 +50,9 @@ profile，不能再用 LIF 内部任务充当通用复杂测试或未见深度�
 | GSA-BASE-001 | 可复现基线未冻结 | **已关闭（development baseline）**：commit `6ddca3d`，tag `p0-p5-development-baseline-2026-07-25` | 后续正式评测仍需单独冻结 runner、任务包、oracle、模型和阈值 |
 | GSA-PROFILE-001 | 缺少通用科学 profile | **合同层已关闭**：`general-science` 为 domain-neutral root，`lif-research` 以 `additive_no_weakening` 只添加领域 delta | 核心实现继续由 GSA-CORE/RUNNER 等条目跟踪 |
 | GSA-CORE-001 | 科学保障核心没有可执行纵向切片 | **初始只读切片已完成，完整核心仍开放**：已接通非 LIF 多文件来源→任务契约→设计→既有动作/产物→JSON Pointer 比较→证据→claim→确定性报告 | 下一步增加可扩展 validator、统计/推断审查、跨制品语义与 disposable reproduction；不得把本机械切片视为完整科学审查 |
-| GSA-VALIDATOR-001 | ValidatorBridge 只有扩展名称 | **初始桥接已完成，完整 validator 体系仍开放**：5 个版本化 validator 覆盖设计/动作/registered-artifact schema、JSON finite 和统计报告完整性，registry 与结果均摘要绑定 | 增加跨 artifact lineage/comparability、版本迁移和隔离的第三方 validator；统计 PASS 不得解释为统计正确 |
-| GSA-ARTIFACT-001 | Artifact 没有版本化 schema registration | **初始 registration 已完成，完整 artifact 体系仍开放**：artifact 必须引用登记 schema ID；registry kind/media/schema 映射和摘要写入结果，未知或不匹配项在证据比较前 block | 增加表格、单位、图像、代码/环境 schema，版本迁移与撤销，以及跨 artifact lineage/comparability |
+| GSA-VALIDATOR-001 | ValidatorBridge 只有扩展名称 | **初始桥接已完成，完整 validator 体系仍开放**：6 个版本化 validator 覆盖设计/动作/registered-artifact schema、JSON finite、统计报告完整性和跨 artifact comparability，registry 与结果均摘要绑定 | 增加版本迁移和隔离的第三方 validator；统计/comparability PASS 不得解释为科学正确 |
+| GSA-ARTIFACT-001 | Artifact 没有版本化 schema registration | **初始 registration 已完成，完整 artifact 体系仍开放**：artifact 必须引用登记 schema ID；registry kind/media/schema 映射和摘要写入结果，未知或不匹配项在证据比较前 block | 增加表格、单位、图像、代码/环境 schema，以及版本迁移与撤销 |
+| GSA-LINEAGE-001 | 跨 artifact lineage/comparability 只能靠叙述 | **初始数值比较切片已完成，完整 lineage 仍开放**：left/right artifact 分别绑定 pointer；task/protocol/metric/population/unit、producer/source/transformation 和 condition 实值机械对账 | 接入输入数据/代码/环境/journal digest，增加 transformation DAG、单位换算、population harmonization、多 action/producer 和独立性核算 |
 | GSA-ADAPTER-001 | 真实 runtime/tool 入口未接保障层 | P3/P4 为 development API；P4.5 只允许固定进程内 roundtrip | 至少一个 runtime adapter 的读取、工具、授权、审计和 terminal 不可绕过同一 envelope/gate |
 | GSA-RUNNER-001 | 正式 EvaluationRunner 未实现 | 现有 exporter/scanner/journal 只是 contract probe | 实现 immutable RunManifest、adapter preflight、journal、结构化输出校验、失败分类与评分交接 |
 | GSA-PARTITION-001 | evaluation/holdout 为零 | 当前 40 个案例均为 development/challenge seed | 创建物理隔离的新来源 evaluation 和未见 holdout；冻结 digest、oracle、角色与污染生命周期 |
@@ -75,6 +76,12 @@ inheritance-cycle 负例、137 tests、0 errors。该计数不提升 GSA-CORE �
 [`artifact registration audit`](GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md)。schema PASS
 只证明 artifact 符合登记结构，不证明 producer、数值或科学解释正确。
 该登记完成后的机械结果为 87 schemas、5 validators、2 artifact schemas、147 tests、
+0 repository errors。
+
+`GSA-LINEAGE-001` 初始切片见
+[`cross-artifact audit`](GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md)。拆分文件不会
+增加独立 N；comparability PASS 只允许窄比较，不支持机制或普遍性升级。
+该切片完成后的机械结果为 88 schemas、6 validators、3 artifact schemas、148 tests、
 0 repository errors。
 
 ## 通用科研语义缺口

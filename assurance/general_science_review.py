@@ -135,19 +135,29 @@ def _verify_comparison(
     artifact_documents: dict[str, Any],
 ) -> dict[str, Any]:
     comparison = evidence["comparison"]
-    artifact_id = comparison["artifact_id"]
-    if artifact_id not in artifact_documents:
+    if "artifact_id" in comparison:
+        left_artifact_id = comparison["artifact_id"]
+        right_artifact_id = comparison["artifact_id"]
+    else:
+        left_artifact_id = comparison["left_artifact_id"]
+        right_artifact_id = comparison["right_artifact_id"]
+    if left_artifact_id not in artifact_documents:
         raise AssuranceError(
-            f"comparison references non-JSON or unknown artifact: {artifact_id}"
+            "comparison references non-JSON or unknown left artifact: "
+            f"{left_artifact_id}"
         )
-    document = artifact_documents[artifact_id]
+    if right_artifact_id not in artifact_documents:
+        raise AssuranceError(
+            "comparison references non-JSON or unknown right artifact: "
+            f"{right_artifact_id}"
+        )
     left = _json_pointer(
-        document,
+        artifact_documents[left_artifact_id],
         comparison["left_pointer"],
         label=evidence["evidence_id"],
     )
     right = _json_pointer(
-        document,
+        artifact_documents[right_artifact_id],
         comparison["right_pointer"],
         label=evidence["evidence_id"],
     )
@@ -179,7 +189,8 @@ def _verify_comparison(
         )
     return {
         "evidence_id": evidence["evidence_id"],
-        "artifact_id": artifact_id,
+        "left_artifact_id": left_artifact_id,
+        "right_artifact_id": right_artifact_id,
         "left_pointer": comparison["left_pointer"],
         "operator": op_name,
         "right_pointer": comparison["right_pointer"],
@@ -447,6 +458,7 @@ def review_general_science_bundle(
         action=source_documents[action_source_id],
         artifacts=artifacts,
         artifact_documents=artifact_documents,
+        evidence=bundle["evidence"],
     )
     blocking_validators = [
         item
@@ -487,10 +499,22 @@ def review_general_science_bundle(
         _require_ids(evidence["source_ids"], sources, label=evidence_id)
         _require_ids(evidence["artifact_ids"], artifacts, label=evidence_id)
         if evidence["evidence_class"] == "direct_comparison":
-            comparison_artifact = evidence["comparison"]["artifact_id"]
-            if comparison_artifact not in evidence["artifact_ids"]:
+            comparison = evidence["comparison"]
+            comparison_artifacts = (
+                [comparison["artifact_id"]]
+                if "artifact_id" in comparison
+                else [
+                    comparison["left_artifact_id"],
+                    comparison["right_artifact_id"],
+                ]
+            )
+            undeclared = sorted(
+                set(comparison_artifacts) - set(evidence["artifact_ids"])
+            )
+            if undeclared:
                 raise AssuranceError(
-                    f"{evidence_id} comparison artifact is not declared as evidence"
+                    f"{evidence_id} comparison artifacts are not declared "
+                    f"as evidence: {undeclared}"
                 )
             comparisons[evidence_id] = _verify_comparison(
                 evidence, artifact_documents

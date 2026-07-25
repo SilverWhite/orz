@@ -41,24 +41,33 @@
     {
       "record_id": "SRC_DECAY_DESIGN",
       "path": "design.json",
-      "sha256": "08e18f71edf90bcee8a99ca3d4e7494dc6b0ac9e252e0320c88b3cdab2bc6090",
+      "sha256": "10579f771b53b558ef221e2fbee50270aa3417eb7f8c43f5a0da526b767c3a92",
       "media_type": "application/json"
     },
     {
       "record_id": "SRC_DECAY_RUN",
       "path": "run-manifest.json",
-      "sha256": "dfa5455aefd59c70ebb44e4ee3c7b9d93da2a9db9d89904b87e1decae7c3eb1f",
+      "sha256": "3885a6517495837734fca73bf8b5331d355c77d72b07ccc6b643d7948379cb99",
       "media_type": "application/json"
     }
   ],
   "artifacts": [
     {
-      "record_id": "ART_DECAY_RESULT",
-      "path": "result.json",
-      "sha256": "fc82bb94280744f776d474e8f15adf0dd8a4291d6e1eb0ea3d7d6faa7643156c",
+      "record_id": "ART_DECAY_DT_0_1",
+      "path": "result-dt-0.1.json",
+      "sha256": "2486df1edb08caffd69693d322161fd656a2b3be5d68404ab9bee23f1e9f8e8c",
       "media_type": "application/json",
       "artifact_kind": "numerical_result",
-      "artifact_schema_id": "GSAS_NUMERICAL_TIME_STEP_0_1",
+      "artifact_schema_id": "GSAS_NUMERICAL_SINGLE_RUN_0_1",
+      "producer_action_id": "ACT_DECAY_PRECOMPUTED"
+    },
+    {
+      "record_id": "ART_DECAY_DT_0_05",
+      "path": "result-dt-0.05.json",
+      "sha256": "a0547b6bf9dee8a903aa2392bedf74a27d88f7b56af9001a86ce6eac1885b2a7",
+      "media_type": "application/json",
+      "artifact_kind": "numerical_result",
+      "artifact_schema_id": "GSAS_NUMERICAL_SINGLE_RUN_0_1",
       "producer_action_id": "ACT_DECAY_PRECOMPUTED"
     }
   ],
@@ -86,17 +95,19 @@
         "SRC_DECAY_RUN"
       ],
       "artifact_ids": [
-        "ART_DECAY_RESULT"
+        "ART_DECAY_DT_0_1",
+        "ART_DECAY_DT_0_05"
       ],
       "independence_key": "RESULT_DECAY_TWO_GRID",
       "limitations": [
         "This comparison does not estimate convergence order or uncertainty"
       ],
       "comparison": {
-        "artifact_id": "ART_DECAY_RESULT",
-        "left_pointer": "/runs/dt_0_05/final_absolute_error",
+        "left_artifact_id": "ART_DECAY_DT_0_05",
+        "left_pointer": "/run/final_absolute_error",
         "operator": "lt",
-        "right_pointer": "/runs/dt_0_1/final_absolute_error"
+        "right_artifact_id": "ART_DECAY_DT_0_1",
+        "right_pointer": "/run/final_absolute_error"
       }
     }
   ],

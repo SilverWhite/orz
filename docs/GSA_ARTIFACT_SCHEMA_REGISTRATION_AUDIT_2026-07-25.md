@@ -66,4 +66,4 @@ runtime 6 tests、assurance 47 tests，共 147 tests，repository error count �
 - schema 验证不证明数值由声明的代码、配置或数据产生；
 - 尚未验证跨 artifact 的 population、metric、unit、method 和 producer lineage 是否可比。
 
-下一步应实现跨 artifact lineage/comparability contract，再考虑 disposable reproduction。
+后续提交已实现首个跨 artifact lineage/comparability contract；下一阶段转向 disposable reproduction。

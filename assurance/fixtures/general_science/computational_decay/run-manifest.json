@@ -10,7 +10,8 @@
     "SRC_DECAY_DESIGN"
   ],
   "artifact_ids": [
-    "ART_DECAY_RESULT"
+    "ART_DECAY_DT_0_1",
+    "ART_DECAY_DT_0_05"
   ],
   "safety": {
     "generated_before_review": true,

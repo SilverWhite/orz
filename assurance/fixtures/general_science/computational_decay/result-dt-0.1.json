@@ -1,0 +1,37 @@
+{
+  "schema_version": "0.1.0-draft",
+  "result_kind": "deterministic_time_step_run",
+  "method": "explicit_euler",
+  "equation": "dy/dt=-y",
+  "initial_value": 1.0,
+  "final_time": 1.0,
+  "exact_final_value": 0.36787944117144233,
+  "comparison_context": {
+    "task_id": "TASK_DECAY_ERROR_COMPARISON",
+    "protocol_id": "PROTOCOL_EXPLICIT_EULER_FIXED_FINAL_TIME",
+    "metric_id": "METRIC_FINAL_ABSOLUTE_ERROR",
+    "population_id": "POPULATION_SYNTHETIC_DECAY_IVP",
+    "unit": "UNIT_DIMENSIONLESS",
+    "comparison_family_id": "FAMILY_DECAY_TWO_GRID",
+    "varied_dimension": "DIMENSION_STEP_SIZE",
+    "lineage": {
+      "producer_action_id": "ACT_DECAY_PRECOMPUTED",
+      "source_ids": [
+        "SRC_DECAY_NOTES",
+        "SRC_DECAY_DESIGN"
+      ],
+      "transformation_id": "TRANSFORM_EXPLICIT_EULER_V1"
+    },
+    "condition": {
+      "dimension": "DIMENSION_STEP_SIZE",
+      "value": 0.1,
+      "value_pointer": "/run/step_size"
+    }
+  },
+  "run": {
+    "step_size": 0.1,
+    "step_count": 10,
+    "final_value": 0.3486784401,
+    "final_absolute_error": 0.019201001071442347
+  }
+}

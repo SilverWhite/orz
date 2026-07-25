@@ -153,6 +153,12 @@ def _validator_registry_semantic_errors(
             "failure_decision": "defer",
             "reason_code": "EVD-COVERAGE-001",
         },
+        "GSV_CROSS_ARTIFACT_COMPARABILITY": {
+            "stage": "evidence",
+            "implementation": "cross_artifact_comparability",
+            "failure_decision": "defer",
+            "reason_code": "EVD-COMPARABILITY-001",
+        },
     }
     missing = sorted(set(required) - set(identifiers))
     if missing:
@@ -170,6 +176,12 @@ def _validator_registry_semantic_errors(
             if not schema_name or not (ROOT / "assurance" / schema_name).is_file():
                 errors.append(
                     f"{validator.get('validator_id')} references a missing schema"
+                )
+        elif implementation == "cross_artifact_comparability":
+            if stage != "evidence" or artifact_kinds or schema_name is not None:
+                errors.append(
+                    f"{validator.get('validator_id')} has invalid evidence "
+                    "applicability"
                 )
         elif implementation in {
             "registered_artifact_schema",
@@ -221,6 +233,16 @@ def _artifact_registry_semantic_errors(
             "media_type": "application/json",
             "schema_name": (
                 "general-science-statistical-summary-base-v0.1.schema.json"
+            ),
+            "failure_decision": "block",
+            "reason_code": "ART-SCHEMA-001",
+        },
+        "GSAS_NUMERICAL_SINGLE_RUN_0_1": {
+            "version": "0.1.0",
+            "artifact_kind": "numerical_result",
+            "media_type": "application/json",
+            "schema_name": (
+                "general-science-numerical-single-run-result-v0.1.schema.json"
             ),
             "failure_decision": "block",
             "reason_code": "ART-SCHEMA-001",
@@ -279,6 +301,134 @@ def _safe_fixture_path(value: str) -> PurePosixPath:
     ):
         raise ValueError(f"unsafe fixture path: {value!r}")
     return path
+
+
+def _json_pointer_value(document: Any, pointer: str) -> Any:
+    if pointer == "":
+        return document
+    current = document
+    for raw_token in pointer[1:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, list):
+            current = current[int(token)]
+        else:
+            current = current[token]
+    return current
+
+
+def _cross_artifact_fixture_errors(
+    bundle: dict[str, Any],
+    fixture_root: Path,
+) -> list[str]:
+    errors: list[str] = []
+    artifacts = {
+        item["record_id"]: item
+        for item in bundle.get("artifacts", [])
+    }
+    documents = {
+        artifact_id: _load_json(fixture_root / record["path"])
+        for artifact_id, record in artifacts.items()
+        if record.get("media_type") == "application/json"
+        and (fixture_root / record["path"]).is_file()
+    }
+    sources = {
+        item["record_id"]: item
+        for item in bundle.get("sources", [])
+    }
+    action_record = sources.get(bundle.get("action_source_id"))
+    if action_record is None:
+        return ["cross-artifact fixture has no action source"]
+    action = _load_json(fixture_root / action_record["path"])
+    direct = [
+        item
+        for item in bundle.get("evidence", [])
+        if item.get("evidence_class") == "direct_comparison"
+    ]
+    if len(direct) != 1:
+        return ["cross-artifact fixture must have exactly one direct comparison"]
+    evidence = direct[0]
+    comparison = evidence["comparison"]
+    left_id = comparison.get("left_artifact_id")
+    right_id = comparison.get("right_artifact_id")
+    if not left_id or not right_id or left_id == right_id:
+        return ["fixture direct comparison must use two distinct artifacts"]
+    if {left_id, right_id} - set(evidence.get("artifact_ids", [])):
+        errors.append("fixture comparison artifacts are not declared as evidence")
+    left_record = artifacts.get(left_id)
+    right_record = artifacts.get(right_id)
+    left = documents.get(left_id)
+    right = documents.get(right_id)
+    if (
+        left_record is None
+        or right_record is None
+        or not isinstance(left, dict)
+        or not isinstance(right, dict)
+    ):
+        return [*errors, "fixture cross-artifact documents are missing"]
+    left_context = left.get("comparison_context", {})
+    right_context = right.get("comparison_context", {})
+    for field in (
+        "task_id",
+        "protocol_id",
+        "metric_id",
+        "population_id",
+        "unit",
+        "comparison_family_id",
+        "varied_dimension",
+    ):
+        if left_context.get(field) != right_context.get(field):
+            errors.append(f"fixture comparison context differs: {field}")
+    for field in (
+        "method",
+        "equation",
+        "initial_value",
+        "final_time",
+        "exact_final_value",
+    ):
+        if left.get(field) != right.get(field):
+            errors.append(f"fixture artifact invariant differs: {field}")
+    for document, context, record, label in (
+        (left, left_context, left_record, "left"),
+        (right, right_context, right_record, "right"),
+    ):
+        lineage = context.get("lineage", {})
+        if lineage.get("producer_action_id") != record.get(
+            "producer_action_id"
+        ) or lineage.get("producer_action_id") != action.get("action_id"):
+            errors.append(f"fixture {label} producer lineage mismatch")
+        if set(lineage.get("source_ids", [])) != set(
+            action.get("source_ids", [])
+        ):
+            errors.append(f"fixture {label} source lineage mismatch")
+        condition = context.get("condition", {})
+        if condition.get("dimension") != context.get("varied_dimension"):
+            errors.append(f"fixture {label} condition dimension mismatch")
+        try:
+            observed = _json_pointer_value(
+                document, condition["value_pointer"]
+            )
+        except Exception:
+            errors.append(f"fixture {label} condition pointer is invalid")
+        else:
+            if observed != condition.get("value"):
+                errors.append(f"fixture {label} condition value mismatch")
+    if left_context.get("lineage", {}).get(
+        "transformation_id"
+    ) != right_context.get("lineage", {}).get("transformation_id"):
+        errors.append("fixture transformation lineage differs")
+    if left_context.get("condition", {}).get(
+        "value"
+    ) == right_context.get("condition", {}).get("value"):
+        errors.append("fixture comparison condition does not vary")
+    try:
+        left_value = _json_pointer_value(left, comparison["left_pointer"])
+        right_value = _json_pointer_value(right, comparison["right_pointer"])
+    except Exception:
+        errors.append("fixture evidence comparison pointer is invalid")
+    else:
+        if comparison.get("operator") != "lt" or not left_value < right_value:
+            errors.append("fixture direct comparison does not evaluate true")
+    return errors
 
 
 def _check_markdown_links() -> list[str]:
@@ -661,6 +811,14 @@ def check_repository() -> dict[str, Any]:
         )
     counts["general_science_artifact_schemas"] = len(artifact_schemas)
     counts["general_science_artifact_registry_semantic_negatives"] = 1
+    errors.extend(
+        f"general-science cross-artifact fixture error: {error}"
+        for error in _cross_artifact_fixture_errors(
+            general_science_bundle,
+            general_science_fixture_root,
+        )
+    )
+    counts["general_science_cross_artifact_comparisons"] = 1
 
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]

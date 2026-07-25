@@ -103,14 +103,24 @@ class GeneralScienceReviewTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(before, after)
         self.assertEqual(first["decision"], "allow")
-        self.assertEqual(len(first["files"]), 5)
-        self.assertEqual(len(first["validator_results"]), 5)
+        self.assertEqual(len(first["files"]), 6)
+        self.assertEqual(len(first["validator_results"]), 9)
         self.assertEqual(
             [
                 item["status"]
                 for item in first["validator_results"]
             ],
-            ["pass", "pass", "pass", "pass", "not_applicable"],
+            [
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "not_applicable",
+                "not_applicable",
+                "pass",
+            ],
         )
         claim = first["claim_decisions"][0]
         self.assertEqual(claim["decision"], "allow")
@@ -118,6 +128,12 @@ class GeneralScienceReviewTests(unittest.TestCase):
             claim["reason_codes"], ["DIRECT_OBSERVATION_SUPPORTED"]
         )
         comparison = claim["verified_comparisons"][0]
+        self.assertEqual(
+            comparison["left_artifact_id"], "ART_DECAY_DT_0_05"
+        )
+        self.assertEqual(
+            comparison["right_artifact_id"], "ART_DECAY_DT_0_1"
+        )
         self.assertLess(comparison["left_value"], comparison["right_value"])
         self.assertFalse(first["safety"]["source_write_attempted"])
         self.assertFalse(first["safety"]["analysis_code_executed"])
@@ -147,7 +163,7 @@ class GeneralScienceReviewTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_tampered_artifact_digest_fails_closed(self) -> None:
-        (self.root / "result.json").write_text(
+        (self.root / "result-dt-0.05.json").write_text(
             '{"tampered": true}\n', encoding="utf-8"
         )
         with self.assertRaisesRegex(AssuranceError, "digest mismatch"):
@@ -170,14 +186,19 @@ class GeneralScienceReviewTests(unittest.TestCase):
 
         shutil.rmtree(self.root)
         shutil.copytree(FIXTURE, self.root)
-        result_path = self.root / "result.json"
+        result_path = self.root / "result-dt-0.05.json"
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        result["runs"]["dt_0_05"]["final_absolute_error"] = float("nan")
+        result["run"]["final_absolute_error"] = float("nan")
         result_path.write_text(
             json.dumps(result, allow_nan=True) + "\n", encoding="utf-8"
         )
         bundle = self._load_bundle()
-        bundle["artifacts"][0]["sha256"] = _sha256(result_path)
+        fine_artifact = next(
+            item
+            for item in bundle["artifacts"]
+            if item["record_id"] == "ART_DECAY_DT_0_05"
+        )
+        fine_artifact["sha256"] = _sha256(result_path)
         self._write_bundle(bundle)
         with self.assertRaisesRegex(AssuranceError, "non-finite"):
             review_general_science_bundle(bundle_root=self.root)
@@ -245,9 +266,9 @@ class GeneralScienceReviewTests(unittest.TestCase):
             }
 
         self._rewrite_json_source(
-            "result.json",
+            "result-dt-0.1.json",
             add_reporting,
-            record_id="ART_DECAY_RESULT",
+            record_id="ART_DECAY_DT_0_1",
         )
         bundle = self._load_bundle()
         bundle["artifacts"][0]["artifact_kind"] = "statistical_summary"
@@ -295,13 +316,13 @@ class GeneralScienceReviewTests(unittest.TestCase):
         shutil.rmtree(self.root)
         shutil.copytree(FIXTURE, self.root)
 
-        def remove_required_runs(document: dict[str, object]) -> None:
-            del document["runs"]
+        def remove_required_run(document: dict[str, object]) -> None:
+            del document["run"]
 
         self._rewrite_json_source(
-            "result.json",
-            remove_required_runs,
-            record_id="ART_DECAY_RESULT",
+            "result-dt-0.1.json",
+            remove_required_run,
+            record_id="ART_DECAY_DT_0_1",
         )
         with self.assertRaisesRegex(AssuranceError, "validator bridge blocked"):
             review_general_science_bundle(bundle_root=self.root)
@@ -326,6 +347,81 @@ class GeneralScienceReviewTests(unittest.TestCase):
         numerical["artifact_kind"] = "other_json"
         with self.assertRaisesRegex(AssuranceError, "weakens or changes"):
             validate_artifact_registry_semantics(weakened)
+
+    def test_cross_artifact_comparability_mismatch_defers(self) -> None:
+        def change_unit(document: dict[str, object]) -> None:
+            document["comparison_context"]["unit"] = "UNIT_SECONDS"
+
+        self._rewrite_json_source(
+            "result-dt-0.05.json",
+            change_unit,
+            record_id="ART_DECAY_DT_0_05",
+        )
+        result = review_general_science_bundle(bundle_root=self.root)
+        comparability = next(
+            item
+            for item in result["validator_results"]
+            if item["validator_id"]
+            == "GSV_CROSS_ARTIFACT_COMPARABILITY"
+        )
+        self.assertEqual(result["decision"], "defer")
+        self.assertEqual(comparability["status"], "defer")
+        self.assertEqual(
+            comparability["reason_codes"], ["EVD-COMPARABILITY-001"]
+        )
+        self.assertIn(
+            "comparison_context.unit differs", comparability["details"]
+        )
+
+        shutil.rmtree(self.root)
+        shutil.copytree(FIXTURE, self.root)
+
+        def change_declared_condition(document: dict[str, object]) -> None:
+            document["comparison_context"]["condition"]["value"] = 0.04
+
+        self._rewrite_json_source(
+            "result-dt-0.05.json",
+            change_declared_condition,
+            record_id="ART_DECAY_DT_0_05",
+        )
+        result = review_general_science_bundle(bundle_root=self.root)
+        comparability = next(
+            item
+            for item in result["validator_results"]
+            if item["validator_id"]
+            == "GSV_CROSS_ARTIFACT_COMPARABILITY"
+        )
+        self.assertEqual(comparability["status"], "defer")
+        self.assertIn(
+            "left condition value disagrees with artifact",
+            comparability["details"],
+        )
+
+        shutil.rmtree(self.root)
+        shutil.copytree(FIXTURE, self.root)
+
+        def drop_lineage_source(document: dict[str, object]) -> None:
+            document["comparison_context"]["lineage"]["source_ids"] = [
+                "SRC_DECAY_NOTES"
+            ]
+
+        self._rewrite_json_source(
+            "result-dt-0.05.json",
+            drop_lineage_source,
+            record_id="ART_DECAY_DT_0_05",
+        )
+        result = review_general_science_bundle(bundle_root=self.root)
+        comparability = next(
+            item
+            for item in result["validator_results"]
+            if item["validator_id"]
+            == "GSV_CROSS_ARTIFACT_COMPARABILITY"
+        )
+        self.assertEqual(comparability["status"], "defer")
+        self.assertIn(
+            "left lineage sources do not match action manifest",
+            comparability["details"],
+        )
 
     def test_mechanism_claim_requires_controlled_intervention(self) -> None:
         bundle = self._load_bundle()

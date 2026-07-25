@@ -49,6 +49,12 @@ REQUIRED_VALIDATORS = {
         "failure_decision": "defer",
         "reason_code": "EVD-COVERAGE-001",
     },
+    "GSV_CROSS_ARTIFACT_COMPARABILITY": {
+        "stage": "evidence",
+        "implementation": "cross_artifact_comparability",
+        "failure_decision": "defer",
+        "reason_code": "EVD-COMPARABILITY-001",
+    },
 }
 
 
@@ -88,6 +94,12 @@ def validate_validator_registry_semantics(
                 raise AssuranceError(
                     f"{validator['validator_id']} schema does not exist: "
                     f"{schema_name}"
+                )
+        elif implementation == "cross_artifact_comparability":
+            if stage != "evidence" or artifact_kinds or schema_name is not None:
+                raise AssuranceError(
+                    f"{validator['validator_id']} evidence validator has "
+                    "invalid applicability"
                 )
         else:
             if stage != "artifact" or not artifact_kinds:
@@ -250,6 +262,169 @@ def _statistical_reporting_findings(document: Any) -> list[str]:
     return findings
 
 
+def _resolve_pointer(document: Any, pointer: str) -> Any:
+    if not isinstance(pointer, str):
+        raise KeyError(pointer)
+    if pointer == "":
+        return document
+    current = document
+    for raw_token in pointer[1:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, list):
+            if token == "-" or not token.isdigit():
+                raise KeyError(pointer)
+            current = current[int(token)]
+        elif isinstance(current, dict):
+            current = current[token]
+        else:
+            raise KeyError(pointer)
+    return current
+
+
+def _comparison_artifact_ids(
+    evidence: dict[str, Any],
+) -> tuple[str, str]:
+    comparison = evidence["comparison"]
+    if "artifact_id" in comparison:
+        return comparison["artifact_id"], comparison["artifact_id"]
+    return (
+        comparison["left_artifact_id"],
+        comparison["right_artifact_id"],
+    )
+
+
+def _cross_artifact_findings(
+    *,
+    left_id: str,
+    right_id: str,
+    artifacts: dict[str, dict[str, Any]],
+    artifact_documents: dict[str, Any],
+    action: dict[str, Any],
+) -> list[str]:
+    findings: list[str] = []
+    left_record = artifacts.get(left_id)
+    right_record = artifacts.get(right_id)
+    left = artifact_documents.get(left_id)
+    right = artifact_documents.get(right_id)
+    if left_record is None or right_record is None:
+        return ["comparison references an unknown artifact"]
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return ["cross-artifact comparison requires JSON object artifacts"]
+    left_context = left.get("comparison_context")
+    right_context = right.get("comparison_context")
+    if not isinstance(left_context, dict) or not isinstance(
+        right_context, dict
+    ):
+        return ["both artifacts must declare comparison_context"]
+
+    invariant_context_fields = (
+        "task_id",
+        "protocol_id",
+        "metric_id",
+        "population_id",
+        "unit",
+        "comparison_family_id",
+        "varied_dimension",
+    )
+    for field in invariant_context_fields:
+        if left_context.get(field) != right_context.get(field):
+            findings.append(f"comparison_context.{field} differs")
+    invariant_document_fields = (
+        "method",
+        "equation",
+        "initial_value",
+        "final_time",
+        "exact_final_value",
+    )
+    for field in invariant_document_fields:
+        if left.get(field) != right.get(field):
+            findings.append(f"artifact field {field} differs")
+
+    left_lineage = left_context.get("lineage")
+    right_lineage = right_context.get("lineage")
+    if not isinstance(left_lineage, dict) or not isinstance(
+        right_lineage, dict
+    ):
+        findings.append("both artifacts must declare lineage")
+    else:
+        action_source_ids = action.get("source_ids", [])
+        action_sources = (
+            set(action_source_ids)
+            if isinstance(action_source_ids, list)
+            and all(isinstance(item, str) for item in action_source_ids)
+            else None
+        )
+        for lineage, record, label in (
+            (left_lineage, left_record, "left"),
+            (right_lineage, right_record, "right"),
+        ):
+            if lineage.get("producer_action_id") != record.get(
+                "producer_action_id"
+            ):
+                findings.append(
+                    f"{label} lineage producer does not match artifact record"
+                )
+            if lineage.get("producer_action_id") != action.get("action_id"):
+                findings.append(
+                    f"{label} lineage producer does not match action manifest"
+                )
+            lineage_source_ids = lineage.get("source_ids", [])
+            lineage_sources = (
+                set(lineage_source_ids)
+                if isinstance(lineage_source_ids, list)
+                and all(
+                    isinstance(item, str)
+                    for item in lineage_source_ids
+                )
+                else None
+            )
+            if (
+                action_sources is None
+                or lineage_sources is None
+                or lineage_sources != action_sources
+            ):
+                findings.append(
+                    f"{label} lineage sources do not match action manifest"
+                )
+        if left_lineage.get("transformation_id") != right_lineage.get(
+            "transformation_id"
+        ):
+            findings.append("lineage transformation_id differs")
+
+    left_condition = left_context.get("condition")
+    right_condition = right_context.get("condition")
+    if not isinstance(left_condition, dict) or not isinstance(
+        right_condition, dict
+    ):
+        findings.append("both artifacts must declare comparison condition")
+    else:
+        varied_dimension = left_context.get("varied_dimension")
+        if left_condition.get("dimension") != varied_dimension:
+            findings.append("left condition does not match varied_dimension")
+        if right_condition.get("dimension") != varied_dimension:
+            findings.append("right condition does not match varied_dimension")
+        if left_condition.get("dimension") != right_condition.get("dimension"):
+            findings.append("condition dimensions differ")
+        if left_condition.get("value") == right_condition.get("value"):
+            findings.append("condition values do not differ")
+        for document, condition, label in (
+            (left, left_condition, "left"),
+            (right, right_condition, "right"),
+        ):
+            try:
+                observed = _resolve_pointer(
+                    document, condition.get("value_pointer", "")
+                )
+            except (KeyError, IndexError, TypeError):
+                findings.append(f"{label} condition value pointer is invalid")
+            else:
+                if observed != condition.get("value"):
+                    findings.append(
+                        f"{label} condition value disagrees with artifact"
+                    )
+    return findings
+
+
 def _result(
     validator: dict[str, Any],
     *,
@@ -282,6 +457,7 @@ def run_general_science_validators(
     action: dict[str, Any],
     artifacts: dict[str, dict[str, Any]],
     artifact_documents: dict[str, Any],
+    evidence: list[dict[str, Any]],
     registry_path: Path | None = None,
     artifact_registry_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -331,6 +507,54 @@ def run_general_science_validators(
                         applicable=True,
                         status="pass",
                         details=["registered schema validated"],
+                    )
+                )
+            continue
+
+        if stage == "evidence":
+            for evidence_item in evidence:
+                if evidence_item["evidence_class"] != "direct_comparison":
+                    continue
+                left_id, right_id = _comparison_artifact_ids(evidence_item)
+                if left_id == right_id:
+                    results.append(
+                        _result(
+                            validator,
+                            target_type="evidence",
+                            target_id=evidence_item["evidence_id"],
+                            applicable=False,
+                            status="not_applicable",
+                            details=[
+                                "comparison is contained in one artifact"
+                            ],
+                        )
+                    )
+                    continue
+                findings = _cross_artifact_findings(
+                    left_id=left_id,
+                    right_id=right_id,
+                    artifacts=artifacts,
+                    artifact_documents=artifact_documents,
+                    action=action,
+                )
+                results.append(
+                    _result(
+                        validator,
+                        target_type="evidence",
+                        target_id=evidence_item["evidence_id"],
+                        applicable=True,
+                        status=(
+                            validator["failure_decision"]
+                            if findings
+                            else "pass"
+                        ),
+                        details=(
+                            findings
+                            if findings
+                            else [
+                                "cross-artifact lineage and comparability match"
+                            ]
+                        ),
                     )
                 )
             continue

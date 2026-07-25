@@ -18,6 +18,7 @@ reason code 和细节写入只读审查结果。
 | `GSV_ARTIFACT_REGISTERED_SCHEMA` | registered artifact | 按独立 artifact registry 解析 schema ID，并验证 kind、media type 和 exact schema |
 | `GSV_ARTIFACT_FINITE_JSON` | JSON artifact | 拒绝非 JSON 或非有限数；不把 `NaN/Infinity` 当作可用科学数值 |
 | `GSV_STATISTICAL_REPORTING` | `statistical_summary` | 检查 sampling unit、N、effect estimate、不确定性、缺失数据、多重比较、分析角色和停止规则是否明确报告 |
+| `GSV_CROSS_ARTIFACT_COMPARABILITY` | direct-comparison evidence | 核对左右 artifact 的 context、producer/source lineage、transformation 和唯一变化条件 |
 
 注册表使用现有协议原因码：控制合同失败映射 `TASK-CONTRACT-001`，非有限 artifact 映射
 `ART-FINITE-001`，统计报告不完整映射 `EVD-COVERAGE-001`。没有另建与协议竞争的原因码体系。

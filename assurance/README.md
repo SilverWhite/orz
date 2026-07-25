@@ -94,6 +94,12 @@ Draft 2020-12 schema。未知 ID、映射不一致或 schema validation failure 
 弱化规则与限制见
 [`artifact registration audit`](../docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md)。
 
+`GSV_CROSS_ARTIFACT_COMPARABILITY` 允许 direct comparison 分别引用左右 artifact。单运行数值 artifact
+携带 task/protocol/metric/population/unit、producer/source/transformation lineage、comparison family
+和 condition pointer；validator 只在这些不变量一致且唯一变化条件与 artifact 实值对账时 PASS。
+不一致使用 `EVD-COMPARABILITY-001` defer。详见
+[`cross-artifact audit`](../docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md)。
+
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。
 

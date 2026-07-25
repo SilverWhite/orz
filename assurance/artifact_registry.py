@@ -35,6 +35,16 @@ REQUIRED_ARTIFACT_SCHEMAS = {
         "failure_decision": "block",
         "reason_code": "ART-SCHEMA-001",
     },
+    "GSAS_NUMERICAL_SINGLE_RUN_0_1": {
+        "version": "0.1.0",
+        "artifact_kind": "numerical_result",
+        "media_type": "application/json",
+        "schema_name": (
+            "general-science-numerical-single-run-result-v0.1.schema.json"
+        ),
+        "failure_decision": "block",
+        "reason_code": "ART-SCHEMA-001",
+    },
 }
 
 

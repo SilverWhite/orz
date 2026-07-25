@@ -138,7 +138,7 @@
     },
     "validator_results": {
       "type": "array",
-      "minItems": 4,
+      "minItems": 5,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -159,7 +159,8 @@
             "enum": [
               "design",
               "action",
-              "artifact"
+              "artifact",
+              "evidence"
             ]
           },
           "target_id": {
@@ -187,7 +188,8 @@
                 "TASK-CONTRACT-001",
                 "ART-SCHEMA-001",
                 "ART-FINITE-001",
-                "EVD-COVERAGE-001"
+                "EVD-COVERAGE-001",
+                "EVD-COMPARABILITY-001"
               ]
             }
           },
@@ -258,7 +260,8 @@
               "additionalProperties": false,
               "required": [
                 "evidence_id",
-                "artifact_id",
+                "left_artifact_id",
+                "right_artifact_id",
                 "left_pointer",
                 "operator",
                 "right_pointer",
@@ -270,7 +273,10 @@
                 "evidence_id": {
                   "$ref": "#/$defs/id"
                 },
-                "artifact_id": {
+                "left_artifact_id": {
+                  "$ref": "#/$defs/id"
+                },
+                "right_artifact_id": {
                   "$ref": "#/$defs/id"
                 },
                 "left_pointer": {

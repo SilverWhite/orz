@@ -19,7 +19,7 @@
     "The dt=0.05 final absolute error is greater than or equal to the dt=0.1 final absolute error"
   ],
   "analysis_plan": [
-    "Read both final absolute errors from the checked-in result artifact",
+    "Read both final absolute errors from the checked-in result artifacts",
     "Evaluate the preregistered less-than comparison without executing analysis code"
   ],
   "coverage_complete": false

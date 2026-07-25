@@ -46,7 +46,8 @@
             "enum": [
               "design",
               "action",
-              "artifact"
+              "artifact",
+              "evidence"
             ]
           },
           "implementation": {
@@ -54,7 +55,8 @@
               "json_schema",
               "registered_artifact_schema",
               "finite_json",
-              "statistical_reporting"
+              "statistical_reporting",
+              "cross_artifact_comparability"
             ]
           },
           "schema_name": {
@@ -79,7 +81,8 @@
               "TASK-CONTRACT-001",
               "ART-SCHEMA-001",
               "ART-FINITE-001",
-              "EVD-COVERAGE-001"
+              "EVD-COVERAGE-001",
+              "EVD-COMPARABILITY-001"
             ]
           }
         }

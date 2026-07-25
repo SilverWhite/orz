@@ -184,13 +184,18 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "artifact_id",
               "left_pointer",
               "operator",
               "right_pointer"
             ],
             "properties": {
               "artifact_id": {
+                "$ref": "#/$defs/id"
+              },
+              "left_artifact_id": {
+                "$ref": "#/$defs/id"
+              },
+              "right_artifact_id": {
                 "$ref": "#/$defs/id"
               },
               "left_pointer": {
@@ -209,7 +214,39 @@
               "right_pointer": {
                 "$ref": "#/$defs/json_pointer"
               }
-            }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "artifact_id"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "left_artifact_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "right_artifact_id"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "left_artifact_id",
+                  "right_artifact_id"
+                ],
+                "not": {
+                  "required": [
+                    "artifact_id"
+                  ]
+                }
+              }
+            ]
           }
         },
         "allOf": [
