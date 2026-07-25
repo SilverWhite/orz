@@ -1536,6 +1536,9 @@ def check_repository() -> dict[str, Any]:
         ROOT / "runtime/cli-session-lifecycle-event-v0.2.schema.json",
         ROOT / "runtime/cli-session-lifecycle-adapter-receipt-v0.2.schema.json",
         ROOT / "runtime/cli-session-lifecycle-adapter-verification-v0.2.schema.json",
+        ROOT / "runtime/codex-app-server-capture-record-v0.1.schema.json",
+        ROOT / "runtime/codex-app-server-lifecycle-normalization-v0.1.schema.json",
+        ROOT / "runtime/codex-app-server-lifecycle-verification-v0.1.schema.json",
         ROOT / "scripts/build_global_progress_transition_event.py",
         ROOT / "scripts/verify_global_progress_transition_event.py",
         ROOT / "scripts/append_global_progress_transition_event.py",
@@ -1544,11 +1547,14 @@ def check_repository() -> dict[str, Any]:
         ROOT / "scripts/reduce_global_progress_state.py",
         ROOT / "scripts/append_cli_session_lifecycle_event.py",
         ROOT / "scripts/verify_cli_session_lifecycle_receipt.py",
+        ROOT / "scripts/normalize_codex_app_server_lifecycle.py",
+        ROOT / "scripts/verify_codex_app_server_lifecycle.py",
         ROOT / "scripts/recover_torn_journal.py",
         ROOT / "prototype/fep_agent_proto/journal_lock.py",
         ROOT / "prototype/fep_agent_proto/journal_recovery.py",
         ROOT / "prototype/fep_agent_proto/global_progress_state.py",
         ROOT / "prototype/fep_agent_proto/cli_session_lifecycle.py",
+        ROOT / "prototype/fep_agent_proto/codex_app_server_lifecycle.py",
         ROOT / "runtime/journal-recovery-event-v0.1.schema.json",
         ROOT / "runtime/journal-recovery-receipt-v0.1.schema.json",
         ROOT / "protocol/global-progress-reason-code-migration-v0.1.schema.json",
@@ -1564,6 +1570,49 @@ def check_repository() -> dict[str, Any]:
     counts["global_progress_controller_verifier_fixtures"] = 1
     counts["global_progress_state_reducer_fixtures"] = 1
     counts["cli_session_lifecycle_adapter_fixtures"] = 1
+    codex_fixture_root = (
+        ROOT / "runtime/fixtures/codex-app-server-lifecycle-v0.1"
+    )
+    codex_positive_fixtures = (
+        "happy.capture.jsonl",
+        "interrupted-then-second-turn.capture.jsonl",
+        "failed-turn.capture.jsonl",
+        "interrupt-without-terminal.capture.jsonl",
+    )
+    codex_negative_fixtures = (
+        "duplicate-sequence.invalid.jsonl",
+        "cross-thread.invalid.jsonl",
+        "truncated.invalid.jsonl",
+    )
+    capture_record_schema = (
+        ROOT / "runtime/codex-app-server-capture-record-v0.1.schema.json"
+    )
+    for fixture_name in codex_positive_fixtures:
+        fixture_path = codex_fixture_root / fixture_name
+        for line_number, line in enumerate(
+            fixture_path.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            errors.extend(
+                _validate_instance(
+                    json.loads(line),
+                    capture_record_schema,
+                    (
+                        "runtime/fixtures/codex-app-server-lifecycle-v0.1/"
+                        f"{fixture_name}:{line_number}"
+                    ),
+                )
+            )
+    for fixture_name in codex_negative_fixtures:
+        fixture_path = codex_fixture_root / fixture_name
+        if not fixture_path.is_file():
+            errors.append(
+                "missing Codex lifecycle negative fixture: "
+                f"{fixture_path.relative_to(ROOT)}"
+            )
+    counts["codex_app_server_lifecycle_fixtures"] = (
+        len(codex_positive_fixtures) + len(codex_negative_fixtures)
+    )
     counts["journal_recovery_fixtures"] = 1
     errors.extend(
         _validate_instance(

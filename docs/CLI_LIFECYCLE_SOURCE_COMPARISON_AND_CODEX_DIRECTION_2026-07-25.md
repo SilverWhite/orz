@@ -1,6 +1,7 @@
 # CLI lifecycle source 比较与 Codex normalizer 方向（2026-07-25）
 
-状态：设计记录；已修正通用 lifecycle schema 的 turn/session 终止混淆，尚未实现厂商专用 normalizer。
+状态：设计与实现记录；通用 lifecycle v0.2 已冻结，首个 Codex app-server 离线只读 normalizer、独立 verifier
+和正反 fixture 已实现；尚未进行 live app-server smoke。
 
 ## 1. 术语边界
 
@@ -34,7 +35,7 @@
 
 | CLI | 官方 lifecycle surface | 可复用设计 | 尚不能直接假定的部分 | 本项目定位 |
 |---|---|---|---|---|
-| OpenAI Codex app-server | stdio 上的双向 JSON-RPC 2.0；JSONL notification stream | `thread/started`、`turn/started`、`item/*`、`turn/completed`；turn terminal status 明确为 `completed`、`interrupted` 或 `failed`；取消后必须等 terminal notification | transport EOF 不等于 thread 正常关闭；一个 app-server 进程也可能承载多个 thread | 第一 concrete normalizer |
+| OpenAI Codex app-server | stdio 上的双向 JSON-RPC 2.0；JSONL notification stream | `thread/started`、`turn/started`、`item/*`、`turn/completed`、`thread/closed`；turn terminal status 明确为 `completed`、`interrupted` 或 `failed`；取消后必须等 terminal notification | transport EOF 不等于 thread 正常关闭；一个 app-server 进程也可能承载多个 thread | 第一 concrete normalizer |
 | Google Gemini CLI | Session/Agent/Model/Tool hooks | `SessionStart/End`、`BeforeAgent/AfterAgent` 提供较完整 callback 边界，适合无 core patch 接入 | 未承诺跨 hook 的全局单调序号；`SessionEnd` 为 best-effort；部分 hook 异步 | 第二 hook-based compatibility target |
 | Alibaba Qwen Code | Session、prompt、stop/failure、tool、subagent hooks | `Stop`/`StopFailure` 区分正常停止和失败，terminal taxonomy 可参考 | 部分 hook fire-and-forget；未见统一全局 source sequence 契约 | 补充 hook 兼容参考 |
 | GitHub Copilot CLI | 官方 lifecycle hooks | session end reason 包含 complete/error/abort/timeout/user_exit，可参考 run terminal reason | hooks 本身不证明完整、单调的单源事件流 | 协议语义参考，不作为首个开源实现样本 |
@@ -86,20 +87,23 @@ v0.1 schema 文件继续保留，以维持提交 `6f28192` 的可复现基线；
 
 ## 5. 第一 concrete normalizer：Codex app-server
 
-下一步实现固定为 read-only `Codex app-server → cli-session-lifecycle-observation v0.2` normalizer。第一阶段不接 TUI
-文本、不解析 `codex exec` 的人类可读 stdout，也不把 post-run 文件合并顺序当作 source order。
+已实现 read-only `Codex app-server ordered capture → cli-session-lifecycle-observation v0.2` normalizer。第一阶段不接 TUI
+文本、不解析 `codex exec` 的人类可读 stdout，不启动 app-server，也不把 post-run 文件合并顺序当作 source order。
 
 ### 5.1 输入与排序
 
-1. 启动或连接 `codex app-server` 的 stdio JSONL transport；
-2. 每成功读取一个完整 JSON-RPC message，按该连接的接收顺序分配 `source_record_sequence`；
+1. 可信 supervisor 在读取/写入 app-server stdio JSONL 时，把每条完整 message 包封为带
+   `direction/source_stream_id/source_record_sequence/received_at` 的双向 capture record；
+2. 离线 normalizer 只读该单一 capture，要求 `source_record_sequence` 从 0 连续递增；
 3. 只对产生 lifecycle observation 的 message 分配连续 `source_sequence`；
-4. 保存原始 message 的 SHA-256，canonical observation 只带允许的 metadata 和 digest；
-5. 用固定 `adapter_id + runtime_version + thread_id + source_stream_id` 绑定 source identity；
+4. observation 保存 capture record 的 SHA-256；原始 message 仍只留在 capture，prompt/reasoning/tool/output 正文不复制；
+5. 用固定 `adapter_id + runtime_version + thread_id + source_stream_id` 绑定 source identity；`turn/started`
+   必须先由同一 capture 中的 `turn/start(threadId)` 请求及其 response `turn.id` 建立 thread 绑定；
 6. malformed JSON、倒退/重复 source record sequence、thread/stream identity 漂移和连接异常 fail closed，不伪造缺失
    lifecycle event。
 
-`source_record_sequence` 证明的是“normalizer 在一条连接上的接收顺序”，不是模型内部并行工作的隐藏因果顺序。
+`source_record_sequence` 证明的是“supervisor 在一条连接上的接收顺序”，不是模型内部并行工作的隐藏因果顺序。
+capture wrapper 是 normalizer 的 source record；当前阶段尚未声称已观测真实 live stdout 字节。
 
 ### 5.2 首批映射
 
@@ -110,14 +114,14 @@ v0.1 schema 文件继续保留，以维持提交 `6f28192` 的可复现基线；
 | `turn/completed`, status=`completed` | `turn_completed`, turn_status=`completed` | `in_turn → active` |
 | `turn/completed`, status=`interrupted` | `turn_completed`, turn_status=`interrupted` | `in_turn → active` |
 | `turn/completed`, status=`failed` | `turn_completed`, turn_status=`failed` | `in_turn → active` |
-| 明确的 thread close/normalizer-supervisor terminal | 对应 session terminal observation | completed 只允许从 active；failed/cancelled 可从 active/in_turn，均需单独证明 |
+| `thread/closed` | `session_completed`, outcome=`thread_closed` | `active → terminal` |
 
 `turn/interrupt` 请求本身不生成 terminal observation；只有后续 `turn/completed(status=interrupted)` 才结束 turn。
 同理，turn failed 不自动等于 session failed。
 
 ### 5.3 fixture 与验收
 
-首个 implementation spike 使用 no-model、离线 JSONL fixture：
+首个 implementation spike 使用 no-model、离线 ordered-capture JSONL fixture：
 
 1. happy path：thread start → turn start → item events → completed turn → session terminal；
 2. interrupted turn 后同一 thread 能开始第二个 turn；
@@ -126,6 +130,14 @@ v0.1 schema 文件继续保留，以维持提交 `6f28192` 的可复现基线；
 5. 重复、乱序、跨 thread identity 和 truncated JSON 全部 fail closed；
 6. raw source digest、observation digest、canonical journal event 和 verifier receipt 可独立重放；
 7. fixture 通过后才进行受限 live smoke；live smoke 仍不使用 LIF 内部研究任务。
+
+实现入口：
+
+- `scripts/normalize_codex_app_server_lifecycle.py`
+- `scripts/verify_codex_app_server_lifecycle.py`
+- `prototype/fep_agent_proto/codex_app_server_lifecycle.py`
+- `runtime/fixtures/codex-app-server-lifecycle-v0.1/`
+- `runtime/tests/test_codex_app_server_lifecycle_normalizer.py`
 
 ### 5.4 暂不纳入第一阶段
 

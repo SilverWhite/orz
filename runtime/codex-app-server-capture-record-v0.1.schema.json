@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/codex-app-server-capture-record-v0.1.schema.json",
+  "title": "Codex app-server ordered capture record v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "source_stream_id",
+    "source_record_sequence", "received_at", "direction", "message"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "codex-app-server-capture-record" },
+    "source_stream_id": {
+      "type": "string",
+      "pattern": "^CLISTREAM-[A-Z0-9._-]+$"
+    },
+    "source_record_sequence": { "type": "integer", "minimum": 0 },
+    "received_at": { "type": "string", "format": "date-time" },
+    "direction": {
+      "enum": ["client_to_server", "server_to_client"]
+    },
+    "message": {
+      "type": "object",
+      "minProperties": 1
+    }
+  }
+}

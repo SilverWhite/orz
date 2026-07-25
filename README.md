@@ -7,7 +7,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 已启动并通过；GSA-CORE 已新增首个非 LIF、多文件、确定性只读审查切片。标准模式默认使用受限工作区内的固定动作；Docker 只保留为显式、
 按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend
 仍为 fail-closed/noncompliant。Grok Build 是当前证据最完整的参考框架，
-其官方 Windows binary 已完成锁定与离线核验。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
+其官方 Windows binary 已完成锁定与离线核验。首个 Codex app-server 双向 ordered-capture lifecycle normalizer
+已完成 no-model 离线实现和独立重放，尚未进行 live app-server smoke。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
 真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
 误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。
 
@@ -129,6 +130,9 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`scripts/append_cli_session_lifecycle_event.py`](scripts/append_cli_session_lifecycle_event.py)：有限、厂商无关的 CLI lifecycle ingress；把已标准化且有序的 session/turn/terminal observation 原子映射为 canonical run event，并复用 GPS journal-derived 完成态。
 - [`scripts/verify_cli_session_lifecycle_receipt.py`](scripts/verify_cli_session_lifecycle_receipt.py)：只读回放 observation、adapter receipt 与当前 journal，检查快照、事件唯一性和 lifecycle projection。
 - [`runtime/cli-session-lifecycle-observation-v0.2.schema.json`](runtime/cli-session-lifecycle-observation-v0.2.schema.json)：区分 completed/interrupted/failed turn terminal，并把 turn terminal 与 session terminal 分离的标准化 observation。
+- [`scripts/normalize_codex_app_server_lifecycle.py`](scripts/normalize_codex_app_server_lifecycle.py)：只读消费可信 supervisor 的单一双向有序 Codex app-server capture，用 turn/start request/response 证明 turn→thread 绑定，再把 thread/turn/close 通知投影为 lifecycle v0.2 observation；忽略正文类 item/delta，EOF 保持 partial。
+- [`scripts/verify_codex_app_server_lifecycle.py`](scripts/verify_codex_app_server_lifecycle.py)：独立重放 capture，核对 source/observation digest、状态投影、内容省略和 receipt。
+- [`runtime/fixtures/codex-app-server-lifecycle-v0.1/`](runtime/fixtures/codex-app-server-lifecycle-v0.1/)：happy、interrupted、failed、missing-terminal 与 sequence/thread/truncation 反例 capture。
 - [`protocol/global-progress-reason-code-migration-v0.1.yaml`](protocol/global-progress-reason-code-migration-v0.1.yaml)：GPS runtime-local control code 到冻结 protocol registry 的设计期迁移登记；候选码不视为已注册 reason code。
 - [`runtime/examples/`](runtime/examples/)：仅用于 schema 自证的零 digest 示例，不代表真实导出或运行。
 - [`prototype/`](prototype/)：一次性 Python conformance fixtures；固定 LIF schema、DeepSeek thinking continuity、redaction 与 Windows 进程边界，不是待扩展的生产 runner。
@@ -141,7 +145,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md)：来源绑定 checkpoint adapter、上游 verifier 重算、policy continuity 与有界聚焦实际消费核算记录。
 - [`docs/GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md)：journal-derived 状态权威、初态锚点、锁内连续性校验及伪造状态反例记录。
 - [`docs/CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md`](docs/CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md)：有限成熟 CLI 接入面、生命周期映射、厂商 normalizer 边界及 receipt 独立复核记录。
-- [`docs/CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md`](docs/CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md)：Codex、Gemini、Qwen 与 Copilot lifecycle surface 比较，以及首个 Codex app-server read-only normalizer 的冻结实现方向。
+- [`docs/CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md`](docs/CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md)：Codex、Gemini、Qwen 与 Copilot lifecycle surface 比较，以及首个 Codex app-server read-only normalizer 的冻结方向和离线实现。
+- [`docs/CODEX_APP_SERVER_LIFECYCLE_NORMALIZER_AUDIT_2026-07-25.md`](docs/CODEX_APP_SERVER_LIFECYCLE_NORMALIZER_AUDIT_2026-07-25.md)：ordered capture、正文省略、partial/terminal 语义、独立 verifier 与 canonical adapter 端到端实测。
 
 ## 证据路由
 

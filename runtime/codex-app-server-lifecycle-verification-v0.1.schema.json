@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/codex-app-server-lifecycle-verification-v0.1.schema.json",
+  "title": "Codex app-server lifecycle normalization verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "valid", "normalization_id",
+    "run_id", "session_id", "source_stream_id", "checks",
+    "errors", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": {
+      "const": "codex-app-server-lifecycle-verification"
+    },
+    "valid": { "type": "boolean" },
+    "normalization_id": {
+      "type": ["string", "null"],
+      "pattern": "^CLINORM-[A-Z0-9._-]+$"
+    },
+    "run_id": {
+      "type": ["string", "null"],
+      "pattern": "^RUN-[A-Z0-9._-]+$"
+    },
+    "session_id": { "type": ["string", "null"], "minLength": 1 },
+    "source_stream_id": {
+      "type": ["string", "null"],
+      "pattern": "^CLISTREAM-[A-Z0-9._-]+$"
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_valid", "source_artifact_matches",
+        "normalization_replayed", "receipt_projection_matches",
+        "observations_artifact_matches", "observation_content_matches",
+        "raw_content_omitted"
+      ],
+      "properties": {
+        "receipt_schema_valid": { "type": "boolean" },
+        "source_artifact_matches": { "type": "boolean" },
+        "normalization_replayed": { "type": "boolean" },
+        "receipt_projection_matches": { "type": "boolean" },
+        "observations_artifact_matches": { "type": "boolean" },
+        "observation_content_matches": { "type": "boolean" },
+        "raw_content_omitted": { "type": "boolean" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

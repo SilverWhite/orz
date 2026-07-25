@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/codex-app-server-lifecycle-normalization-v0.1.schema.json",
+  "title": "Codex app-server lifecycle normalization receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "normalization_id", "normalizer_id",
+    "adapter_id", "valid", "normalization_status", "runtime_family",
+    "runtime_version", "run_id", "run_manifest_sha256", "session_id",
+    "source_stream_id", "source_artifact", "record_count",
+    "ignored_record_count", "observation_count", "observation_breakdown",
+    "lifecycle_state", "active_turn_id", "observations_artifact",
+    "errors", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": {
+      "const": "codex-app-server-lifecycle-normalization"
+    },
+    "normalization_id": {
+      "type": "string",
+      "pattern": "^CLINORM-[A-Z0-9._-]+$"
+    },
+    "normalizer_id": {
+      "const": "CLINORMALIZER-CODEX-APP-SERVER-V0.1"
+    },
+    "adapter_id": { "const": "CLIADAPTER-CODEX-APP-SERVER-V0.1" },
+    "valid": { "type": "boolean" },
+    "normalization_status": {
+      "enum": ["complete", "partial", "rejected"]
+    },
+    "runtime_family": { "const": "codex-app-server" },
+    "runtime_version": { "type": "string", "minLength": 1 },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Z0-9._-]+$"
+    },
+    "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "session_id": { "type": ["string", "null"], "minLength": 1 },
+    "source_stream_id": {
+      "type": ["string", "null"],
+      "pattern": "^CLISTREAM-[A-Z0-9._-]+$"
+    },
+    "source_artifact": { "$ref": "#/$defs/artifact" },
+    "record_count": { "type": "integer", "minimum": 0 },
+    "ignored_record_count": { "type": "integer", "minimum": 0 },
+    "observation_count": { "type": "integer", "minimum": 0 },
+    "observation_breakdown": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "lifecycle_state": {
+      "enum": ["new", "active", "in_turn", "terminal", "unknown"]
+    },
+    "active_turn_id": { "type": ["string", "null"], "minLength": 1 },
+    "observations_artifact": {
+      "oneOf": [{ "$ref": "#/$defs/artifact" }, { "type": "null" }]
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}
