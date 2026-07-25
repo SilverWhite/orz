@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/audit-seal-receipt-v0.1.schema.json",
+  "title": "Metadata-only Audit Seal Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "ledger_id",
+    "conversation_id",
+    "envelope_id",
+    "envelope_sha256",
+    "created_at",
+    "journal",
+    "sources",
+    "counts",
+    "terminal",
+    "compaction",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "metadata_audit_seal" },
+    "receipt_id": { "type": "string", "pattern": "^ASR-[A-F0-9]+$" },
+    "ledger_id": { "type": "string", "pattern": "^AUDIT-[A-F0-9]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "envelope_sha256": { "$ref": "#/$defs/sha256" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "bytes", "event_count", "head_sha256"],
+      "properties": {
+        "relative_path": {
+          "type": "string",
+          "pattern": "^artifacts/redacted_conversation/audit/AUDIT-[A-F0-9]+\\.events\\.jsonl$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "event_count": { "type": "integer", "minimum": 1 },
+        "head_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "declared_completeness", "observed_event_count"],
+        "properties": {
+          "kind": {
+            "enum": [
+              "acp",
+              "session",
+              "provider",
+              "supervisor",
+              "tool",
+              "runtime",
+              "kernel"
+            ]
+          },
+          "declared_completeness": {
+            "enum": ["complete", "partial", "unknown"]
+          },
+          "observed_event_count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "by_source", "by_type"],
+      "properties": {
+        "events": { "type": "integer", "minimum": 1 },
+        "by_source": { "$ref": "#/$defs/count_map" },
+        "by_type": { "$ref": "#/$defs/count_map" }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exactly_once", "event_id", "outcome"],
+      "properties": {
+        "exactly_once": { "const": true },
+        "event_id": { "type": "string", "pattern": "^AEV-[0-9]{6}$" },
+        "outcome": {
+          "enum": ["succeeded", "failed", "cancelled", "unknown"]
+        }
+      }
+    },
+    "compaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_count", "summary_statuses"],
+      "properties": {
+        "event_count": { "type": "integer", "minimum": 0 },
+        "summary_statuses": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "const": "derived_unverified" }
+        }
+      }
+    },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "count_map": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_.:-]{0,127}$" },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_id",
+        "signature_algorithm",
+        "signed_payload_sha256",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_id": { "type": "string", "pattern": "^KEY-[A-Z0-9._-]+$" },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+      }
+    }
+  }
+}

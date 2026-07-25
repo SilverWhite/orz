@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/sandbox-selection-receipt-v0.1.schema.json",
+  "title": "Runtime-neutral Sandbox Selection Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "conversation_id",
+    "created_at",
+    "requested_backend",
+    "candidates",
+    "decision"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "sandbox_selection_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^SBX-[A-Z0-9._-]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "requested_backend": {
+      "type": "string",
+      "pattern": "^(?:auto|[a-z][a-z0-9._-]{0,63})$"
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "backend_id",
+          "backend_kind",
+          "availability",
+          "compliance_status",
+          "evidence_status",
+          "receipt_digest",
+          "rejection_reasons"
+        ],
+        "properties": {
+          "backend_id": { "type": "string", "pattern": "^BACKEND-[A-Z0-9._-]+$" },
+          "backend_kind": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+          },
+          "availability": { "enum": ["available", "unavailable", "unknown"] },
+          "compliance_status": { "enum": ["compliant", "noncompliant", "unknown"] },
+          "evidence_status": {
+            "enum": ["observed", "derived", "user_asserted", "unknown"]
+          },
+          "receipt_digest": {
+            "oneOf": [
+              { "type": "null" },
+              { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            ]
+          },
+          "rejection_reasons": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "terminal_state",
+        "selected_backend",
+        "fallback_used",
+        "fallback_authorization_digest",
+        "rationale"
+      ],
+      "properties": {
+        "outcome": { "enum": ["allow", "fail_closed"] },
+        "terminal_state": { "enum": ["selected", "no_compliant_backend"] },
+        "selected_backend": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "backend_id",
+                "backend_kind",
+                "compliance_status",
+                "evidence_status",
+                "receipt_digest"
+              ],
+              "properties": {
+                "backend_id": {
+                  "type": "string",
+                  "pattern": "^BACKEND-[A-Z0-9._-]+$"
+                },
+                "backend_kind": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+                },
+                "compliance_status": { "const": "compliant" },
+                "evidence_status": { "const": "observed" },
+                "receipt_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          ]
+        },
+        "fallback_used": { "const": false },
+        "fallback_authorization_digest": { "type": "null" },
+        "rationale": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "outcome": { "const": "allow" } },
+            "required": ["outcome"]
+          },
+          "then": {
+            "properties": {
+              "terminal_state": { "const": "selected" },
+              "selected_backend": { "type": "object" }
+            }
+          },
+          "else": {
+            "properties": {
+              "terminal_state": { "const": "no_compliant_backend" },
+              "selected_backend": { "type": "null" },
+              "fallback_used": { "const": false },
+              "fallback_authorization_digest": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

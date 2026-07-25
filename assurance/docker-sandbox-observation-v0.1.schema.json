@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/docker-sandbox-observation-v0.1.schema.json",
+  "title": "Observed Docker Strict Sandbox Result v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_kind",
+    "observation_id",
+    "created_at",
+    "profile_sha256",
+    "workspace_path_sha256",
+    "docker",
+    "image",
+    "container",
+    "checks",
+    "outcome",
+    "evidence_status",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "observation_kind": { "const": "docker_strict_sandbox_observation" },
+    "observation_id": { "type": "string", "pattern": "^DSO-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "profile_sha256": { "$ref": "#/$defs/sha256" },
+    "workspace_path_sha256": { "$ref": "#/$defs/sha256" },
+    "docker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client_version",
+        "server_version",
+        "server_os",
+        "server_arch",
+        "security_options"
+      ],
+      "properties": {
+        "client_version": { "type": "string", "minLength": 1 },
+        "server_version": { "type": "string", "minLength": 1 },
+        "server_os": { "type": "string", "minLength": 1 },
+        "server_arch": { "type": "string", "minLength": 1 },
+        "security_options": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "image_id", "repo_digests"],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+        },
+        "image_id": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "repo_digests": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_id",
+        "user",
+        "read_only_rootfs",
+        "network_mode",
+        "cap_drop",
+        "cap_add",
+        "security_opt",
+        "memory_bytes",
+        "nano_cpus",
+        "pids_limit",
+        "mounts",
+        "tmpfs",
+        "exit_code",
+        "removed"
+      ],
+      "properties": {
+        "container_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "user": { "type": "string", "pattern": "^[1-9][0-9]*:[1-9][0-9]*$" },
+        "read_only_rootfs": { "const": true },
+        "network_mode": { "const": "none" },
+        "cap_drop": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": { "const": "ALL" }
+        },
+        "cap_add": { "type": "array", "maxItems": 0 },
+        "security_opt": {
+          "type": "array",
+          "contains": {
+            "pattern": "^no-new-privileges(?:[=:]true)?$"
+          }
+        },
+        "memory_bytes": { "type": "integer", "minimum": 1 },
+        "nano_cpus": { "type": "integer", "minimum": 1 },
+        "pids_limit": { "type": "integer", "minimum": 1 },
+        "mounts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "target",
+              "read_only",
+              "source_path_sha256"
+            ],
+            "properties": {
+              "type": { "const": "bind" },
+              "target": { "const": "/workspace" },
+              "read_only": { "const": false },
+              "source_path_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
+        "tmpfs": {
+          "type": "object",
+          "required": ["/tmp"],
+          "properties": {
+            "/tmp": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": true
+        },
+        "exit_code": { "const": 0 },
+        "removed": { "const": true }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "non_root",
+        "rootfs_write_blocked",
+        "workspace_write_succeeded",
+        "tmpfs_write_succeeded",
+        "network_connect_blocked",
+        "docker_socket_absent",
+        "host_home_mount_absent",
+        "probe_file_cleaned"
+      ],
+      "properties": {
+        "non_root": { "type": "boolean" },
+        "rootfs_write_blocked": { "type": "boolean" },
+        "workspace_write_succeeded": { "type": "boolean" },
+        "tmpfs_write_succeeded": { "type": "boolean" },
+        "network_connect_blocked": { "type": "boolean" },
+        "docker_socket_absent": { "type": "boolean" },
+        "host_home_mount_absent": { "type": "boolean" },
+        "probe_file_cleaned": { "type": "boolean" }
+      }
+    },
+    "outcome": { "enum": ["compliant", "noncompliant"] },
+    "evidence_status": { "const": "observed" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "outcome": { "const": "compliant" } },
+        "required": ["outcome"]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "properties": {
+              "non_root": { "const": true },
+              "rootfs_write_blocked": { "const": true },
+              "workspace_write_succeeded": { "const": true },
+              "tmpfs_write_succeeded": { "const": true },
+              "network_connect_blocked": { "const": true },
+              "docker_socket_absent": { "const": true },
+              "host_home_mount_absent": { "const": true },
+              "probe_file_cleaned": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

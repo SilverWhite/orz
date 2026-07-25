@@ -1,0 +1,47 @@
+{
+  "schema_version": "0.1.0-draft",
+  "suite_kind": "synthetic_user_task_suite",
+  "suite_id": "P5-SYNTHETIC-PREFLIGHT-001",
+  "partition": "development",
+  "personas": [
+    "novice",
+    "experienced"
+  ],
+  "safeguards": {
+    "disposable_workspace_only": true,
+    "fake_credentials_only": true,
+    "real_project_data_allowed": false,
+    "network_allowed": false,
+    "model_calls_allowed": false,
+    "external_participant_count": 0,
+    "human_comprehension_assessed": false
+  },
+  "tasks": [
+    {
+      "task_id": "P5-TASK-NOVICE-STANDARD",
+      "persona": "novice",
+      "intent_code": "VERIFY_DISPOSABLE_WORKSPACE_STANDARD",
+      "requested_mode": "standard",
+      "expected": {
+        "outcome": "completed",
+        "reason_code": "STANDARD_WORKSPACE_GUARDED_COMPLETED",
+        "message_code": "STANDARD_COMPLETED_LOGICAL_BOUNDARY",
+        "boundary_code": "LOGICAL_WORKSPACE_BOUNDARY_ONLY",
+        "next_action_code": "NONE_REQUIRED"
+      }
+    },
+    {
+      "task_id": "P5-TASK-EXPERIENCED-STRICT",
+      "persona": "experienced",
+      "intent_code": "REQUIRE_STRICT_WITHOUT_OBSERVATION",
+      "requested_mode": "strict",
+      "expected": {
+        "outcome": "fail_closed",
+        "reason_code": "STRICT_OBSERVED_DOCKER_REQUIRED",
+        "message_code": "STRICT_UNAVAILABLE_NO_FALLBACK",
+        "boundary_code": "STRICT_PHYSICAL_BOUNDARY_NOT_ESTABLISHED",
+        "next_action_code": "EXPLICITLY_START_DOCKER_AND_RUN_P2_OBSERVATION"
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "0.1.0-draft",
+  "state_kind": "conversation_namespace_state",
+  "conversation_id": "CONV-SYNTHETIC-001",
+  "envelope_id": "ENV-SYNTHETIC-001",
+  "state": "active",
+  "revision": 0,
+  "updated_at": "2026-07-24T14:00:00Z",
+  "terminal_deletion_receipt_sha256": null
+}

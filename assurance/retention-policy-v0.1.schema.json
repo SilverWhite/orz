@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/retention-policy-v0.1.schema.json",
+  "title": "Conversation-scoped Retention Policy v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_kind",
+    "policy_id",
+    "scope",
+    "cross_conversation_recall",
+    "persist_after_archive",
+    "delete_on_archive",
+    "never_persist",
+    "storage_boundaries",
+    "cleanup_failure_policy"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "policy_kind": { "const": "conversation_retention_policy" },
+    "policy_id": { "type": "string", "pattern": "^RET-[A-Z0-9._-]+$" },
+    "scope": { "const": "single_conversation" },
+    "cross_conversation_recall": { "const": "disabled_by_default" },
+    "persist_after_archive": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "redacted_conversation",
+          "user_pinned_snapshot",
+          "terminal_deletion_receipt"
+        ]
+      },
+      "allOf": [
+        { "contains": { "const": "redacted_conversation" } },
+        { "contains": { "const": "user_pinned_snapshot" } },
+        { "contains": { "const": "terminal_deletion_receipt" } }
+      ]
+    },
+    "delete_on_archive": {
+      "type": "array",
+      "minItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{1,63}$"
+      },
+      "allOf": [
+        { "contains": { "const": "raw_provider_payload" } },
+        { "contains": { "const": "private_reasoning" } },
+        { "contains": { "const": "raw_tool_result" } },
+        { "contains": { "const": "full_stdout_stderr" } },
+        { "contains": { "const": "network_body" } },
+        { "contains": { "const": "credential_lease" } },
+        { "contains": { "const": "confirmation_token" } },
+        { "contains": { "const": "one_shot_permit" } },
+        { "contains": { "const": "unpinned_snapshot" } },
+        { "contains": { "const": "temporary_checkpoint" } },
+        { "contains": { "const": "temporary_profile" } },
+        { "contains": { "const": "sandbox_ephemeral_storage" } },
+        { "contains": { "const": "session_recall_index" } },
+        { "contains": { "const": "active_security_envelope" } },
+        { "contains": { "const": "temporary_lifecycle_receipt" } },
+        { "contains": { "const": "temporary_import_receipt" } }
+      ]
+    },
+    "never_persist": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{1,63}$"
+      },
+      "allOf": [
+        { "contains": { "const": "credential_secret_value" } },
+        { "contains": { "const": "raw_authorization_header" } },
+        { "contains": { "const": "stable_hardware_fingerprint" } }
+      ]
+    },
+    "storage_boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "boundary_id",
+          "evidence_status",
+          "deletion_supported",
+          "limitations"
+        ],
+        "properties": {
+          "boundary_id": { "type": "string", "minLength": 1 },
+          "evidence_status": {
+            "enum": ["observed", "derived", "user_asserted", "unknown"]
+          },
+          "deletion_supported": { "type": ["boolean", "null"] },
+          "limitations": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "evidence_status": { "const": "unknown" } },
+              "required": ["evidence_status"]
+            },
+            "then": {
+              "properties": { "deletion_supported": { "type": "null" } }
+            },
+            "else": {
+              "properties": { "deletion_supported": { "type": "boolean" } }
+            }
+          }
+        ]
+      }
+    },
+    "cleanup_failure_policy": { "const": "archive_complete_false" }
+  }
+}

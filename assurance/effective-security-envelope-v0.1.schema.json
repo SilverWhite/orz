@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/effective-security-envelope-v0.1.schema.json",
+  "title": "Runtime-neutral Effective Security Envelope v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "envelope_kind",
+    "envelope_id",
+    "installation_key_id",
+    "conversation_id",
+    "resumed_from_conversation_id",
+    "parent_envelope_id",
+    "created_at",
+    "expires_at",
+    "lifecycle_state",
+    "runtime_selection_policy",
+    "frozen_context",
+    "capability_envelope",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "envelope_kind": { "const": "effective_security_envelope" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "installation_key_id": { "type": "string", "pattern": "^KEY-[A-Z0-9._-]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "resumed_from_conversation_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" }
+      ]
+    },
+    "parent_envelope_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" }
+      ]
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "lifecycle_state": { "enum": ["active", "expired", "revoked", "superseded"] },
+    "runtime_selection_policy": { "const": "capability_gated" },
+    "frozen_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_canonical_path_digest",
+        "workspace_content_digest",
+        "workspace_policy_digest",
+        "runtime_family",
+        "runtime_adapter_id",
+        "runtime_binary_digest",
+        "runtime_capabilities_digest",
+        "assurance_config_digest",
+        "sandbox_backend",
+        "sandbox_backend_digest"
+      ],
+      "properties": {
+        "workspace_canonical_path_digest": { "$ref": "#/$defs/evidenced_sha256" },
+        "workspace_content_digest": { "$ref": "#/$defs/evidenced_sha256" },
+        "workspace_policy_digest": { "$ref": "#/$defs/evidenced_sha256" },
+        "runtime_family": { "$ref": "#/$defs/evidenced_string" },
+        "runtime_adapter_id": { "$ref": "#/$defs/evidenced_string" },
+        "runtime_binary_digest": { "$ref": "#/$defs/evidenced_sha256" },
+        "runtime_capabilities_digest": { "$ref": "#/$defs/evidenced_sha256" },
+        "assurance_config_digest": { "$ref": "#/$defs/evidenced_sha256" },
+        "sandbox_backend": { "$ref": "#/$defs/evidenced_string" },
+        "sandbox_backend_digest": { "$ref": "#/$defs/evidenced_sha256" }
+      }
+    },
+    "capability_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "nonce",
+        "allowed",
+        "denied",
+        "capability_digest"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "nonce": { "type": "string", "minLength": 16, "maxLength": 256 },
+        "allowed": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.:-]+$" }
+        },
+        "denied": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.:-]+$" }
+        },
+        "capability_digest": { "$ref": "#/$defs/evidenced_sha256" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_store",
+        "signature_algorithm",
+        "signature_verification",
+        "signed_payload_digest",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_store": { "$ref": "#/$defs/evidenced_string" },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signature_verification": { "$ref": "#/$defs/evidenced_boolean" },
+        "signed_payload_digest": { "$ref": "#/$defs/evidenced_sha256" },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidence_status": {
+      "enum": ["observed", "derived", "user_asserted", "unknown"]
+    },
+    "source_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "evidenced_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence_status", "source_refs"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          ]
+        },
+        "evidence_status": { "$ref": "#/$defs/evidence_status" },
+        "source_refs": { "$ref": "#/$defs/source_refs" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "evidence_status": { "const": "unknown" } },
+            "required": ["evidence_status"]
+          },
+          "then": {
+            "properties": {
+              "value": { "const": null },
+              "source_refs": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": {
+              "value": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "source_refs": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "evidenced_string": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence_status", "source_refs"],
+      "properties": {
+        "value": { "type": ["string", "null"], "minLength": 1 },
+        "evidence_status": { "$ref": "#/$defs/evidence_status" },
+        "source_refs": { "$ref": "#/$defs/source_refs" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "evidence_status": { "const": "unknown" } },
+            "required": ["evidence_status"]
+          },
+          "then": {
+            "properties": {
+              "value": { "const": null },
+              "source_refs": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": {
+              "value": { "type": "string", "minLength": 1 },
+              "source_refs": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "evidenced_boolean": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence_status", "source_refs"],
+      "properties": {
+        "value": { "type": ["boolean", "null"] },
+        "evidence_status": { "$ref": "#/$defs/evidence_status" },
+        "source_refs": { "$ref": "#/$defs/source_refs" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "evidence_status": { "const": "unknown" } },
+            "required": ["evidence_status"]
+          },
+          "then": {
+            "properties": {
+              "value": { "const": null },
+              "source_refs": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": {
+              "value": { "type": "boolean" },
+              "source_refs": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": "0.1.0-draft",
+  "receipt_kind": "sandbox_selection_receipt",
+  "receipt_id": "SBX-INVALID-001",
+  "conversation_id": "CONV-INVALID-001",
+  "created_at": "2026-07-24T12:00:00Z",
+  "requested_backend": "auto",
+  "candidates": [
+    {
+      "backend_id": "BACKEND-UNKNOWN-001",
+      "backend_kind": "docker",
+      "availability": "unknown",
+      "compliance_status": "unknown",
+      "evidence_status": "user_asserted",
+      "receipt_digest": null,
+      "rejection_reasons": []
+    }
+  ],
+  "decision": {
+    "outcome": "allow",
+    "terminal_state": "selected",
+    "selected_backend": {
+      "backend_id": "BACKEND-UNKNOWN-001",
+      "backend_kind": "docker",
+      "compliance_status": "unknown",
+      "evidence_status": "user_asserted",
+      "receipt_digest": null
+    },
+    "fallback_used": false,
+    "fallback_authorization_digest": null,
+    "rationale": "Invalidly treats a user assertion as observed compliance."
+  }
+}

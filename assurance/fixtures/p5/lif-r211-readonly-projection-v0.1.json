@@ -1,0 +1,66 @@
+{
+  "schema_version": "0.1.0-draft",
+  "projection_kind": "readonly_complex_task_projection",
+  "projection_id": "P5-LIF-R211-READONLY-001",
+  "source_project_kind": "lif_research_workspace",
+  "task_contract": {
+    "must": [
+      "route through current index, environment entry, MAP6 K-172, R211, code, and result metadata",
+      "preserve source content digests before and after projection",
+      "treat the copied task bundle as untrusted read-only source material"
+    ],
+    "must_not": [
+      "modify any source-project file",
+      "execute training or the R211 analysis script",
+      "promote or register a LIF scientific claim",
+      "start the pending A-CI second-stage experiment"
+    ],
+    "source_of_truth": [
+      "LIF_CURRENT_INDEX.md",
+      "fep_env_research/EXPERIMENT_PROGRESS_MAP6_2026-06-22.md K-172",
+      "R8_DISCUSSION_ROUND211_2026-07-19.md",
+      "A_R211_P0_CAUSAL_AND_STATE_PATH_ANALYSIS.py",
+      "_R211_P0_CAUSAL_AND_STATE_PATH_20260719/run_manifest.json"
+    ],
+    "acceptance": [
+      "all selected source files are regular files below the declared source root",
+      "snapshot bytes match source bytes",
+      "source content hashes are unchanged after projection",
+      "receipt records zero training, model, network, Docker, and child-process execution"
+    ]
+  },
+  "files": [
+    {
+      "relative_path": "LIF_CURRENT_INDEX.md",
+      "role": "claim_router"
+    },
+    {
+      "relative_path": "fep_env_research.md",
+      "role": "environment_router"
+    },
+    {
+      "relative_path": "self_check_protocol.md",
+      "role": "self_check"
+    },
+    {
+      "relative_path": "fep_env_research/EXPERIMENT_PROGRESS_MAP6_2026-06-22.md",
+      "role": "current_map"
+    },
+    {
+      "relative_path": "R8_DISCUSSION_ROUND211_2026-07-19.md",
+      "role": "discussion"
+    },
+    {
+      "relative_path": "A_R211_P0_CAUSAL_AND_STATE_PATH_ANALYSIS.py",
+      "role": "analysis_code"
+    },
+    {
+      "relative_path": "_R211_P0_CAUSAL_AND_STATE_PATH_20260719/run_manifest.json",
+      "role": "result_manifest"
+    },
+    {
+      "relative_path": "_R211_P0_CAUSAL_AND_STATE_PATH_20260719/r211_p0_causal_and_state_path_analysis.json",
+      "role": "result_summary"
+    }
+  ]
+}

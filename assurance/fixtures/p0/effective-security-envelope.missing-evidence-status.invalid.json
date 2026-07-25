@@ -1,0 +1,95 @@
+{
+  "schema_version": "0.1.0-draft",
+  "envelope_kind": "effective_security_envelope",
+  "envelope_id": "ENV-INVALID-001",
+  "installation_key_id": "KEY-INVALID-001",
+  "conversation_id": "CONV-INVALID-001",
+  "resumed_from_conversation_id": null,
+  "parent_envelope_id": null,
+  "created_at": "2026-07-24T12:00:00Z",
+  "expires_at": "2026-07-24T13:00:00Z",
+  "lifecycle_state": "active",
+  "runtime_selection_policy": "capability_gated",
+  "frozen_context": {
+    "workspace_canonical_path_digest": {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "workspace_content_digest": {
+      "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "workspace_policy_digest": {
+      "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "runtime_family": {
+      "value": "forced-runtime",
+      "source_refs": ["fixture:missing-evidence-status"]
+    },
+    "runtime_adapter_id": {
+      "value": "invalid-adapter",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "runtime_binary_digest": {
+      "value": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "runtime_capabilities_digest": {
+      "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "assurance_config_digest": {
+      "value": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "sandbox_backend": {
+      "value": "invalid",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "sandbox_backend_digest": {
+      "value": "1111111111111111111111111111111111111111111111111111111111111111",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    }
+  },
+  "capability_envelope": {
+    "sequence": 0,
+    "nonce": "synthetic-nonce-0001",
+    "allowed": [],
+    "denied": ["network.unrestricted"],
+    "capability_digest": {
+      "value": "2222222222222222222222222222222222222222222222222222222222222222",
+      "evidence_status": "derived",
+      "source_refs": ["fixture:synthetic"]
+    }
+  },
+  "integrity": {
+    "canonicalization": "RFC8785",
+    "key_store": {
+      "value": "memory-test-only",
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "signature_algorithm": "hmac-sha256",
+    "signature_verification": {
+      "value": true,
+      "evidence_status": "observed",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "signed_payload_digest": {
+      "value": "3333333333333333333333333333333333333333333333333333333333333333",
+      "evidence_status": "derived",
+      "source_refs": ["fixture:synthetic"]
+    },
+    "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "schema_version": "0.1.0-draft",
+  "registry_kind": "assurance_profile_registry",
+  "registry_id": "APR-CORE-0.1",
+  "runtime_selection_policy": "capability_gated",
+  "profiles": [
+    {
+      "profile_id": "general-code",
+      "description": "General code work with conversation-scoped audit and explicit capability gates.",
+      "assurance_extensions": [],
+      "required_capabilities": [
+        "audit.terminal_exactly_once",
+        "session.conversation_namespace",
+        "workspace.trust_before_discovery"
+      ],
+      "reference_runtimes": [],
+      "acceptance_gate": {
+        "adapter_contract_required": true,
+        "observed_capability_receipt_required": true,
+        "negative_fixture_required": true,
+        "independent_verifier_required": true,
+        "reference_status_grants_acceptance": false
+      }
+    },
+    {
+      "profile_id": "restricted-review",
+      "description": "Read-oriented review with deny-by-default external side effects.",
+      "assurance_extensions": [],
+      "required_capabilities": [
+        "audit.terminal_exactly_once",
+        "external_side_effect.deny_by_default",
+        "session.conversation_namespace",
+        "workspace.trust_before_discovery"
+      ],
+      "reference_runtimes": [],
+      "acceptance_gate": {
+        "adapter_contract_required": true,
+        "observed_capability_receipt_required": true,
+        "negative_fixture_required": true,
+        "independent_verifier_required": true,
+        "reference_status_grants_acceptance": false
+      }
+    },
+    {
+      "profile_id": "headless-ci",
+      "description": "Non-interactive execution with precommitted actions and fail-closed missing approvals.",
+      "assurance_extensions": [],
+      "required_capabilities": [
+        "action.precommitted",
+        "audit.terminal_exactly_once",
+        "network.disabled_by_default",
+        "session.conversation_namespace",
+        "workspace.trust_before_discovery"
+      ],
+      "reference_runtimes": [],
+      "acceptance_gate": {
+        "adapter_contract_required": true,
+        "observed_capability_receipt_required": true,
+        "negative_fixture_required": true,
+        "independent_verifier_required": true,
+        "reference_status_grants_acceptance": false
+      }
+    },
+    {
+      "profile_id": "lif-research",
+      "description": "LIF scientific-assurance profile layered on any runtime that passes the required gates.",
+      "assurance_extensions": [
+        "ClaimBoundary",
+        "EvidenceKernel",
+        "EvaluationRunner",
+        "LeakScanner",
+        "ScenarioExporter",
+        "SourceRouter",
+        "ValidatorBridge"
+      ],
+      "required_capabilities": [
+        "audit.terminal_exactly_once",
+        "evidence.source_first",
+        "evaluation.oracle_isolation",
+        "network.digest_bound_permit",
+        "session.conversation_namespace",
+        "workspace.trust_before_discovery"
+      ],
+      "reference_runtimes": [
+        {
+          "runtime_family": "grok-build",
+          "role": "reference_only",
+          "evidence_status": "observed",
+          "evidence_refs": [
+            "upstream/grok-build.lock.json",
+            "docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md",
+            "docs/GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md"
+          ]
+        }
+      ],
+      "acceptance_gate": {
+        "adapter_contract_required": true,
+        "observed_capability_receipt_required": true,
+        "negative_fixture_required": true,
+        "independent_verifier_required": true,
+        "reference_status_grants_acceptance": false
+      }
+    }
+  ]
+}

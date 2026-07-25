@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/synthetic-user-task-evaluation-receipt-v0.1.schema.json",
+  "title": "P5 synthetic user task evaluation receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "created_at",
+    "suite_id",
+    "status",
+    "bindings",
+    "environment",
+    "task_results",
+    "aggregate",
+    "claims",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "synthetic_user_task_evaluation" },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^UTE-[A-Z0-9._-]+$"
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "suite_id": { "const": "P5-SYNTHETIC-PREFLIGHT-001" },
+    "status": {
+      "enum": ["mechanical_preflight_passed", "mechanical_preflight_failed"]
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suite_sha256", "backend_policy_sha256"],
+      "properties": {
+        "suite_sha256": { "$ref": "#/$defs/sha256" },
+        "backend_policy_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partition",
+        "disposable_workspace_only",
+        "fake_credentials_only",
+        "real_project_data_used",
+        "network_requested",
+        "model_invoked",
+        "docker_invoked",
+        "child_process_spawned",
+        "external_participant_count"
+      ],
+      "properties": {
+        "partition": { "const": "development" },
+        "disposable_workspace_only": { "const": true },
+        "fake_credentials_only": { "const": true },
+        "real_project_data_used": { "const": false },
+        "network_requested": { "const": false },
+        "model_invoked": { "const": false },
+        "docker_invoked": { "const": false },
+        "child_process_spawned": { "const": false },
+        "external_participant_count": { "const": 0 }
+      }
+    },
+    "task_results": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/taskResult" },
+      "allOf": [
+        {
+          "contains": {
+            "properties": { "requested_mode": { "const": "standard" } },
+            "required": ["requested_mode"]
+          }
+        },
+        {
+          "contains": {
+            "properties": { "requested_mode": { "const": "strict" } },
+            "required": ["requested_mode"]
+          }
+        }
+      ]
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planned_tasks",
+        "completed_tasks",
+        "conformance_passed_tasks",
+        "conformance_failed_tasks"
+      ],
+      "properties": {
+        "planned_tasks": { "const": 2 },
+        "completed_tasks": { "const": 2 },
+        "conformance_passed_tasks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "conformance_failed_tasks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mechanical_conformance_assessed",
+        "human_comprehension_assessed",
+        "human_usability_assessed",
+        "ordinary_user_safety_established",
+        "production_readiness_established"
+      ],
+      "properties": {
+        "mechanical_conformance_assessed": { "const": true },
+        "human_comprehension_assessed": { "const": false },
+        "human_usability_assessed": { "const": false },
+        "ordinary_user_safety_established": { "const": false },
+        "production_readiness_established": { "const": false }
+      }
+    },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "nullableSha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "nullableConversation": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^CONV-[A-Z0-9._-]+$"
+        }
+      ]
+    },
+    "taskResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "persona",
+        "requested_mode",
+        "observed_outcome",
+        "reason_code",
+        "backend",
+        "evidence",
+        "execution",
+        "ux_projection",
+        "conformance_passed"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^P5-TASK-[A-Z0-9._-]+$"
+        },
+        "persona": { "enum": ["novice", "experienced"] },
+        "requested_mode": { "enum": ["standard", "strict"] },
+        "observed_outcome": { "enum": ["completed", "fail_closed"] },
+        "reason_code": {
+          "enum": [
+            "STANDARD_WORKSPACE_GUARDED_COMPLETED",
+            "STRICT_OBSERVED_DOCKER_REQUIRED"
+          ]
+        },
+        "backend": {
+          "oneOf": [
+            { "type": "null" },
+            { "const": "workspace_guarded" }
+          ]
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversation_id",
+            "integrated_receipt_sha256",
+            "archive_complete",
+            "verification_valid"
+          ],
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/nullableConversation"
+            },
+            "integrated_receipt_sha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "archive_complete": { "type": ["boolean", "null"] },
+            "verification_valid": { "const": true }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "docker_invoked",
+            "child_process_spawned",
+            "model_invoked",
+            "network_requested",
+            "fallback_used"
+          ],
+          "properties": {
+            "docker_invoked": { "const": false },
+            "child_process_spawned": { "const": false },
+            "model_invoked": { "const": false },
+            "network_requested": { "const": false },
+            "fallback_used": { "const": false }
+          }
+        },
+        "ux_projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "message_code",
+            "boundary_code",
+            "next_action_code",
+            "human_comprehension_assessed",
+            "actual_human_response"
+          ],
+          "properties": {
+            "message_code": {
+              "enum": [
+                "STANDARD_COMPLETED_LOGICAL_BOUNDARY",
+                "STRICT_UNAVAILABLE_NO_FALLBACK"
+              ]
+            },
+            "boundary_code": {
+              "enum": [
+                "LOGICAL_WORKSPACE_BOUNDARY_ONLY",
+                "STRICT_PHYSICAL_BOUNDARY_NOT_ESTABLISHED"
+              ]
+            },
+            "next_action_code": {
+              "enum": [
+                "NONE_REQUIRED",
+                "EXPLICITLY_START_DOCKER_AND_RUN_P2_OBSERVATION"
+              ]
+            },
+            "human_comprehension_assessed": { "const": false },
+            "actual_human_response": { "type": "null" }
+          }
+        },
+        "conformance_passed": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "requested_mode": { "const": "standard" } },
+            "required": ["requested_mode"]
+          },
+          "then": {
+            "properties": {
+              "observed_outcome": { "const": "completed" },
+              "reason_code": {
+                "const": "STANDARD_WORKSPACE_GUARDED_COMPLETED"
+              },
+              "backend": { "const": "workspace_guarded" },
+              "evidence": {
+                "properties": {
+                  "conversation_id": {
+                    "type": "string",
+                    "pattern": "^CONV-[A-Z0-9._-]+$"
+                  },
+                  "integrated_receipt_sha256": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "archive_complete": { "const": true }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "observed_outcome": { "const": "fail_closed" },
+              "reason_code": {
+                "const": "STRICT_OBSERVED_DOCKER_REQUIRED"
+              },
+              "backend": { "type": "null" },
+              "evidence": {
+                "properties": {
+                  "conversation_id": { "type": "null" },
+                  "integrated_receipt_sha256": { "type": "null" },
+                  "archive_complete": { "type": "null" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_id",
+        "signature_algorithm",
+        "signed_payload_sha256",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_id": {
+          "type": "string",
+          "pattern": "^KEY-[A-Z0-9._-]+$"
+        },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    }
+  }
+}

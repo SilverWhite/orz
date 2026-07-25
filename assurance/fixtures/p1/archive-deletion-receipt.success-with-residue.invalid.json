@@ -1,0 +1,32 @@
+{
+  "schema_version": "0.1.0-draft",
+  "receipt_kind": "archive_deletion_receipt",
+  "receipt_id": "DEL-INVALID-001",
+  "conversation_id": "CONV-INVALID-001",
+  "envelope_id": "ENV-INVALID-001",
+  "created_at": "2026-07-24T14:00:00Z",
+  "outcome": "archived",
+  "archive_complete": true,
+  "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "categories": [
+    {
+      "category": "raw_provider_payload",
+      "discovered_count": 1,
+      "deleted_count": 0,
+      "remaining_count": 1,
+      "deleted_content_aggregate_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "totals": {
+    "discovered": 1,
+    "deleted": 0,
+    "remaining": 1
+  },
+  "errors": [],
+  "integrity": {
+    "key_id": "KEY-INVALID-001",
+    "algorithm": "hmac-sha256",
+    "signed_payload_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

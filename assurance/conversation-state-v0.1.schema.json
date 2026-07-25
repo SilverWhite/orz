@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/conversation-state-v0.1.schema.json",
+  "title": "Conversation Namespace State v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "state_kind",
+    "conversation_id",
+    "envelope_id",
+    "state",
+    "revision",
+    "updated_at",
+    "terminal_deletion_receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "state_kind": { "const": "conversation_namespace_state" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "state": { "enum": ["active", "archiving", "archived", "failed"] },
+    "revision": { "type": "integer", "minimum": 0 },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "terminal_deletion_receipt_sha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "state": { "enum": ["archived", "failed"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "terminal_deletion_receipt_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "else": {
+        "properties": { "terminal_deletion_receipt_sha256": { "type": "null" } }
+      }
+    }
+  ]
+}

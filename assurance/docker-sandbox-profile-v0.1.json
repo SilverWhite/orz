@@ -1,0 +1,51 @@
+{
+  "schema_version": "0.1.0-draft",
+  "profile_kind": "docker_strict_sandbox_profile",
+  "profile_id": "DSP-PYTHON-3.10-SLIM-OFFLINE-001",
+  "image": {
+    "reference": "python@sha256:4b0a8ebf16cf4563f3d3732bd4f4a464abb2f671b3b9d00aab281d705d224457",
+    "digest": "4b0a8ebf16cf4563f3d3732bd4f4a464abb2f671b3b9d00aab281d705d224457",
+    "pull_policy": "never"
+  },
+  "identity": {
+    "user": "65532:65532"
+  },
+  "filesystem": {
+    "read_only_rootfs": true,
+    "workspace_target": "/workspace",
+    "workspace_mode": "read_write",
+    "workspace_source_policy": "explicit_canonical_path",
+    "tmpfs": [
+      {
+        "target": "/tmp",
+        "options": "rw,noexec,nosuid,nodev,size=67108864"
+      }
+    ],
+    "forbidden_host_mounts": [
+      "host_home",
+      "docker_socket",
+      "credential_store",
+      "ssh_agent"
+    ]
+  },
+  "network": {
+    "mode": "none"
+  },
+  "capabilities": {
+    "drop": [
+      "ALL"
+    ],
+    "add": [],
+    "no_new_privileges": true
+  },
+  "resources": {
+    "memory_bytes": 268435456,
+    "nano_cpus": 500000000,
+    "pids_limit": 64,
+    "wall_time_seconds": 30
+  },
+  "lifecycle": {
+    "cleanup_required": true,
+    "reuse_container": false
+  }
+}

@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/guarded-execution-receipt-v0.1.schema.json",
+  "title": "Guarded No-Model Docker Execution Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "execution_id",
+    "conversation_id",
+    "envelope_id",
+    "created_at",
+    "completed_at",
+    "action",
+    "bindings",
+    "process_trace",
+    "container",
+    "result",
+    "cleanup",
+    "outcome",
+    "evidence_status",
+    "limitations",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "guarded_no_model_docker_execution" },
+    "execution_id": { "type": "string", "pattern": "^GEX-[A-F0-9]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "required_capability",
+        "template_sha256",
+        "model_invoked",
+        "network_requested"
+      ],
+      "properties": {
+        "kind": { "const": "fixed_workspace_roundtrip" },
+        "required_capability": { "const": "action.fixed_no_model" },
+        "template_sha256": { "$ref": "#/$defs/sha256" },
+        "model_invoked": { "const": false },
+        "network_requested": { "const": false }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "envelope_signed_payload_sha256",
+        "workspace_path_sha256",
+        "workspace_content_sha256",
+        "workspace_policy_sha256",
+        "sandbox_selection_receipt_sha256",
+        "docker_observation_sha256",
+        "docker_profile_sha256"
+      ],
+      "properties": {
+        "envelope_signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "workspace_path_sha256": { "$ref": "#/$defs/sha256" },
+        "workspace_content_sha256": { "$ref": "#/$defs/sha256" },
+        "workspace_policy_sha256": { "$ref": "#/$defs/sha256" },
+        "sandbox_selection_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "docker_observation_sha256": { "$ref": "#/$defs/sha256" },
+        "docker_profile_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "process_trace": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sequence",
+          "role",
+          "executable",
+          "argument_count",
+          "arguments_sha256",
+          "pid",
+          "started_at",
+          "completed_at",
+          "duration_ms",
+          "exit_code",
+          "timed_out",
+          "stdout_bytes",
+          "stdout_sha256",
+          "stderr_bytes",
+          "stderr_sha256"
+        ],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 0 },
+          "role": {
+            "enum": [
+              "create",
+              "start",
+              "inspect_running",
+              "top",
+              "wait",
+              "logs",
+              "inspect_terminal",
+              "remove",
+              "inspect_absent"
+            ]
+          },
+          "executable": { "const": "docker" },
+          "argument_count": { "type": "integer", "minimum": 1 },
+          "arguments_sha256": { "$ref": "#/$defs/sha256" },
+          "pid": { "type": "integer", "minimum": 1 },
+          "started_at": { "type": "string", "format": "date-time" },
+          "completed_at": { "type": "string", "format": "date-time" },
+          "duration_ms": { "type": "number", "minimum": 0 },
+          "exit_code": { "type": "integer" },
+          "timed_out": { "const": false },
+          "stdout_bytes": { "type": "integer", "minimum": 0 },
+          "stdout_sha256": { "$ref": "#/$defs/sha256" },
+          "stderr_bytes": { "type": "integer", "minimum": 0 },
+          "stderr_sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_id",
+        "running_host_pid",
+        "running_observed",
+        "process_rows",
+        "terminal_exit_code",
+        "state_sequence"
+      ],
+      "properties": {
+        "container_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "running_host_pid": { "type": "integer", "minimum": 1 },
+        "running_observed": { "const": true },
+        "process_rows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pid", "ppid", "command"],
+            "properties": {
+              "pid": { "type": "integer", "minimum": 1 },
+              "ppid": { "type": "integer", "minimum": 0 },
+              "command": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "terminal_exit_code": { "const": 0 },
+        "state_sequence": {
+          "prefixItems": [
+            { "const": "created" },
+            { "const": "running" },
+            { "const": "exited" },
+            { "const": "removed" },
+            { "const": "absent" }
+          ],
+          "minItems": 5,
+          "maxItems": 5
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe_sha256", "probe_bytes", "container_report_sha256"],
+      "properties": {
+        "probe_sha256": { "$ref": "#/$defs/sha256" },
+        "probe_bytes": { "type": "integer", "minimum": 1 },
+        "container_report_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container_removed", "container_absent", "workspace_probe_removed"],
+      "properties": {
+        "container_removed": { "const": true },
+        "container_absent": { "const": true },
+        "workspace_probe_removed": { "const": true }
+      }
+    },
+    "outcome": { "const": "completed_verified" },
+    "evidence_status": { "const": "observed" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_id",
+        "signature_algorithm",
+        "signed_payload_sha256",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_id": { "type": "string", "pattern": "^KEY-[A-Z0-9._-]+$" },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

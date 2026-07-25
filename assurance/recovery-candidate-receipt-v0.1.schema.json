@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/recovery-candidate-receipt-v0.1.schema.json",
+  "title": "Recovery Candidate Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "candidate_id",
+    "created_at",
+    "source",
+    "destination",
+    "decision",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "recovery_candidate" },
+    "receipt_id": { "type": "string", "pattern": "^RCR-[A-F0-9]+$" },
+    "candidate_id": { "type": "string", "pattern": "^RCV-[A-F0-9]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "audit_seal_sha256",
+        "snapshot_relative_path",
+        "snapshot_sha256",
+        "snapshot_bytes",
+        "classification"
+      ],
+      "properties": {
+        "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+        "audit_seal_sha256": { "$ref": "#/$defs/sha256" },
+        "snapshot_relative_path": {
+          "type": "string",
+          "pattern": "^artifacts/user_pinned_snapshot/[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"
+        },
+        "snapshot_sha256": { "$ref": "#/$defs/sha256" },
+        "snapshot_bytes": { "type": "integer", "minimum": 1 },
+        "classification": { "const": "untrusted_recovery_candidate" }
+      }
+    },
+    "destination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation_id", "envelope_id", "target_workspace_sha256"],
+      "properties": {
+        "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+        "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+        "target_workspace_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "authority_effect",
+        "action_authorized",
+        "permit_required",
+        "restoration_performed",
+        "reason_codes"
+      ],
+      "properties": {
+        "state": { "const": "candidate_untrusted" },
+        "authority_effect": { "const": "none" },
+        "action_authorized": { "const": false },
+        "permit_required": { "const": true },
+        "restoration_performed": { "const": false },
+        "reason_codes": {
+          "const": ["RECOVERY_CANDIDATE_REQUIRES_SEPARATE_AUTHORIZATION"]
+        }
+      }
+    },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_id",
+        "signature_algorithm",
+        "signed_payload_sha256",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_id": { "type": "string", "pattern": "^KEY-[A-Z0-9._-]+$" },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+      }
+    }
+  }
+}

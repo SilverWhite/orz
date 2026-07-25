@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/audit-event-v0.1.schema.json",
+  "title": "Metadata-only Audit Event v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ledger_id",
+    "conversation_id",
+    "envelope_id",
+    "sequence",
+    "event_id",
+    "canonical_event_type",
+    "occurred_at",
+    "source",
+    "correlation",
+    "facts",
+    "payload",
+    "provenance",
+    "compaction",
+    "terminal",
+    "previous_event_sha256",
+    "event_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "ledger_id": { "type": "string", "pattern": "^AUDIT-[A-F0-9]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "event_id": { "type": "string", "pattern": "^AEV-[0-9]{6}$" },
+    "canonical_event_type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.:-]{0,127}$"
+    },
+    "occurred_at": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "format": "date-time" }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source_id", "source_sequence", "completeness"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "acp",
+            "session",
+            "provider",
+            "supervisor",
+            "tool",
+            "runtime",
+            "kernel"
+          ]
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "source_sequence": { "type": "integer", "minimum": 0 },
+        "completeness": { "enum": ["complete", "partial", "unknown"] }
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_id", "tool_call_id", "request_id"],
+      "properties": {
+        "turn_id": { "$ref": "#/$defs/nullable_id" },
+        "tool_call_id": { "$ref": "#/$defs/nullable_id" },
+        "request_id": { "$ref": "#/$defs/nullable_id" }
+      }
+    },
+    "facts": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "boolean" },
+          { "type": "integer" },
+          { "type": "null" },
+          {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          }
+        ]
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "bytes",
+        "raw_payload_embedded",
+        "retention_category"
+      ],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "raw_payload_embedded": { "const": false },
+        "retention_category": {
+          "enum": [
+            "raw_provider_payload",
+            "private_reasoning",
+            "raw_tool_result",
+            "full_stdout_stderr",
+            "network_body"
+          ]
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source_refs"],
+      "properties": {
+        "status": { "enum": ["direct", "derived_unverified", "unknown"] },
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+          }
+        }
+      }
+    },
+    "compaction": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "summary_status",
+            "summary_sha256",
+            "source_span_sha256",
+            "ranges"
+          ],
+          "properties": {
+            "summary_status": { "const": "derived_unverified" },
+            "summary_sha256": { "$ref": "#/$defs/sha256" },
+            "source_span_sha256": { "$ref": "#/$defs/sha256" },
+            "ranges": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["retained", "discarded", "unknown"],
+              "properties": {
+                "retained": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/range" }
+                },
+                "discarded": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/range" }
+                },
+                "unknown": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/range" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["is_terminal", "outcome"],
+      "properties": {
+        "is_terminal": { "type": "boolean" },
+        "outcome": {
+          "enum": ["nonterminal", "succeeded", "failed", "cancelled", "unknown"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "is_terminal": { "const": false } },
+            "required": ["is_terminal"]
+          },
+          "then": {
+            "properties": { "outcome": { "const": "nonterminal" } }
+          },
+          "else": {
+            "properties": {
+              "outcome": {
+                "enum": ["succeeded", "failed", "cancelled", "unknown"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "previous_event_sha256": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }]
+    },
+    "event_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nullable_id": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      ]
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first_index", "last_index", "reason_code"],
+      "properties": {
+        "first_index": { "type": "integer", "minimum": 0 },
+        "last_index": { "type": "integer", "minimum": 0 },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9._-]{1,127}$"
+        }
+      }
+    }
+  }
+}

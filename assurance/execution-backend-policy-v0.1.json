@@ -1,0 +1,25 @@
+{
+  "schema_version": "0.1.0-draft",
+  "policy_kind": "execution_backend_policy",
+  "policy_id": "EBP-WORKSPACE-FIRST-001",
+  "default_mode": "standard",
+  "modes": {
+    "standard": {
+      "backend": "workspace_guarded",
+      "docker_required": false,
+      "model_invocation": false,
+      "process_spawn": false,
+      "network": false,
+      "security_claim": "logical_workspace_boundary_only"
+    },
+    "strict": {
+      "backend": "docker_strict",
+      "docker_required": true,
+      "docker_lifecycle": "externally_managed_on_demand",
+      "implicit_start": false,
+      "implicit_stop": false,
+      "fallback_to_standard": false,
+      "security_claim": "observed_profile_required"
+    }
+  }
+}

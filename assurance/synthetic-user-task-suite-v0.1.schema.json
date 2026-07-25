@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/synthetic-user-task-suite-v0.1.schema.json",
+  "title": "P5 synthetic user task suite v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "suite_kind",
+    "suite_id",
+    "partition",
+    "personas",
+    "safeguards",
+    "tasks"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "suite_kind": { "const": "synthetic_user_task_suite" },
+    "suite_id": { "const": "P5-SYNTHETIC-PREFLIGHT-001" },
+    "partition": { "const": "development" },
+    "personas": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "enum": ["novice", "experienced"] },
+      "allOf": [
+        { "contains": { "const": "novice" } },
+        { "contains": { "const": "experienced" } }
+      ]
+    },
+    "safeguards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposable_workspace_only",
+        "fake_credentials_only",
+        "real_project_data_allowed",
+        "network_allowed",
+        "model_calls_allowed",
+        "external_participant_count",
+        "human_comprehension_assessed"
+      ],
+      "properties": {
+        "disposable_workspace_only": { "const": true },
+        "fake_credentials_only": { "const": true },
+        "real_project_data_allowed": { "const": false },
+        "network_allowed": { "const": false },
+        "model_calls_allowed": { "const": false },
+        "external_participant_count": { "const": 0 },
+        "human_comprehension_assessed": { "const": false }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/task" },
+      "allOf": [
+        {
+          "contains": {
+            "properties": { "requested_mode": { "const": "standard" } },
+            "required": ["requested_mode"]
+          }
+        },
+        {
+          "contains": {
+            "properties": { "requested_mode": { "const": "strict" } },
+            "required": ["requested_mode"]
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "persona",
+        "intent_code",
+        "requested_mode",
+        "expected"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^P5-TASK-[A-Z0-9._-]+$"
+        },
+        "persona": { "enum": ["novice", "experienced"] },
+        "intent_code": {
+          "enum": [
+            "VERIFY_DISPOSABLE_WORKSPACE_STANDARD",
+            "REQUIRE_STRICT_WITHOUT_OBSERVATION"
+          ]
+        },
+        "requested_mode": { "enum": ["standard", "strict"] },
+        "expected": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "reason_code",
+            "message_code",
+            "boundary_code",
+            "next_action_code"
+          ],
+          "properties": {
+            "outcome": { "enum": ["completed", "fail_closed"] },
+            "reason_code": {
+              "enum": [
+                "STANDARD_WORKSPACE_GUARDED_COMPLETED",
+                "STRICT_OBSERVED_DOCKER_REQUIRED"
+              ]
+            },
+            "message_code": {
+              "enum": [
+                "STANDARD_COMPLETED_LOGICAL_BOUNDARY",
+                "STRICT_UNAVAILABLE_NO_FALLBACK"
+              ]
+            },
+            "boundary_code": {
+              "enum": [
+                "LOGICAL_WORKSPACE_BOUNDARY_ONLY",
+                "STRICT_PHYSICAL_BOUNDARY_NOT_ESTABLISHED"
+              ]
+            },
+            "next_action_code": {
+              "enum": [
+                "NONE_REQUIRED",
+                "EXPLICITLY_START_DOCKER_AND_RUN_P2_OBSERVATION"
+              ]
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "requested_mode": { "const": "standard" } },
+            "required": ["requested_mode"]
+          },
+          "then": {
+            "properties": {
+              "intent_code": {
+                "const": "VERIFY_DISPOSABLE_WORKSPACE_STANDARD"
+              },
+              "expected": {
+                "properties": {
+                  "outcome": { "const": "completed" },
+                  "reason_code": {
+                    "const": "STANDARD_WORKSPACE_GUARDED_COMPLETED"
+                  },
+                  "message_code": {
+                    "const": "STANDARD_COMPLETED_LOGICAL_BOUNDARY"
+                  },
+                  "boundary_code": {
+                    "const": "LOGICAL_WORKSPACE_BOUNDARY_ONLY"
+                  },
+                  "next_action_code": { "const": "NONE_REQUIRED" }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "intent_code": {
+                "const": "REQUIRE_STRICT_WITHOUT_OBSERVATION"
+              },
+              "expected": {
+                "properties": {
+                  "outcome": { "const": "fail_closed" },
+                  "reason_code": {
+                    "const": "STRICT_OBSERVED_DOCKER_REQUIRED"
+                  },
+                  "message_code": {
+                    "const": "STRICT_UNAVAILABLE_NO_FALLBACK"
+                  },
+                  "boundary_code": {
+                    "const": "STRICT_PHYSICAL_BOUNDARY_NOT_ESTABLISHED"
+                  },
+                  "next_action_code": {
+                    "const": "EXPLICITLY_START_DOCKER_AND_RUN_P2_OBSERVATION"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

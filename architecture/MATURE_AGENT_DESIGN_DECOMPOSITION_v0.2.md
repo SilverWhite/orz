@@ -11,14 +11,15 @@
 
 成熟项目的共同经验更接近三层所有权：
 
-1. **Grok runtime**：模型循环、session、tool 执行、permission、sandbox、compaction、后台任务和结构化实时协议；
+1. **外部 runtime**：模型循环、session、tool 执行、permission、sandbox、compaction、后台任务和结构化实时协议；
+   Grok 是当前证据最完整的 reference adapter，不是强制或唯一实现；
 2. **恢复与审计 plumbing**：shadow Git、append-only receipt、独立 verifier；只采用成熟的不变量，不复制产品；
 3. **LIF 专项科学保障层**：workspace trust、来源/证据/claim 门禁、脱敏、科学 validator、DeepSeek
    conformance、Windows 进程监督和评测隔离。它约束 Agent 如何服务 LIF 研究，不表示 LIF/FEP 理论参与
    Agent 控制算法。
 
-因此 v0.2 的方向是收缩，不是继续堆功能。尤其是 Grok 已正式提供 ACP；生产集成不应长期围绕一次性
-headless stdout 重建 tool loop。
+因此 v0.2 的方向是收缩，不是继续堆功能。对 Grok reference adapter 而言，Grok 已正式提供 ACP，
+该适配不应长期围绕一次性 headless stdout 重建 tool loop；其他 runtime 必须通过自己的窄 adapter 和门禁。
 
 ## 2. 本轮新增的上游事实
 

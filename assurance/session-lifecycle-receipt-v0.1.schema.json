@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/session-lifecycle-receipt-v0.1.schema.json",
+  "title": "Conversation Session Lifecycle Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "transition_id",
+    "conversation_id",
+    "envelope_id",
+    "created_at",
+    "from_state",
+    "to_state",
+    "terminal_state",
+    "resume_requires_new_envelope",
+    "cleanup"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "session_lifecycle_receipt" },
+    "transition_id": { "type": "string", "pattern": "^LIFE-[A-Z0-9._-]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "from_state": { "enum": ["active", "archiving"] },
+    "to_state": { "enum": ["archiving", "archived", "failed"] },
+    "terminal_state": { "enum": ["in_progress", "archive_complete", "archive_failed"] },
+    "resume_requires_new_envelope": { "const": true },
+    "cleanup": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "raw_payloads_remaining",
+            "credential_leases_remaining",
+            "temporary_storage_remaining",
+            "unpinned_snapshots_remaining",
+            "deletion_receipt_digest",
+            "unresolved_categories"
+          ],
+          "properties": {
+            "raw_payloads_remaining": { "type": "integer", "minimum": 0 },
+            "credential_leases_remaining": { "type": "integer", "minimum": 0 },
+            "temporary_storage_remaining": { "type": "integer", "minimum": 0 },
+            "unpinned_snapshots_remaining": { "type": "integer", "minimum": 0 },
+            "deletion_receipt_digest": {
+              "oneOf": [
+                { "type": "null" },
+                { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+              ]
+            },
+            "unresolved_categories": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "from_state": { "const": "active" },
+        "to_state": { "const": "archiving" },
+        "terminal_state": { "const": "in_progress" },
+        "cleanup": { "type": "null" }
+      }
+    },
+    {
+      "properties": {
+        "from_state": { "const": "archiving" },
+        "to_state": { "const": "archived" },
+        "terminal_state": { "const": "archive_complete" },
+        "cleanup": {
+          "type": "object",
+          "properties": {
+            "raw_payloads_remaining": { "const": 0 },
+            "credential_leases_remaining": { "const": 0 },
+            "temporary_storage_remaining": { "const": 0 },
+            "unpinned_snapshots_remaining": { "const": 0 },
+            "deletion_receipt_digest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "unresolved_categories": { "maxItems": 0 }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "from_state": { "const": "archiving" },
+        "to_state": { "const": "failed" },
+        "terminal_state": { "const": "archive_failed" },
+        "cleanup": {
+          "type": "object",
+          "properties": {
+            "unresolved_categories": { "minItems": 1 }
+          }
+        }
+      }
+    }
+  ]
+}

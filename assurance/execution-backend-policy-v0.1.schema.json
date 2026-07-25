@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/execution-backend-policy-v0.1.schema.json",
+  "title": "Execution backend policy v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_kind",
+    "policy_id",
+    "default_mode",
+    "modes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "policy_kind": { "const": "execution_backend_policy" },
+    "policy_id": { "const": "EBP-WORKSPACE-FIRST-001" },
+    "default_mode": { "const": "standard" },
+    "modes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["standard", "strict"],
+      "properties": {
+        "standard": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "backend",
+            "docker_required",
+            "model_invocation",
+            "process_spawn",
+            "network",
+            "security_claim"
+          ],
+          "properties": {
+            "backend": { "const": "workspace_guarded" },
+            "docker_required": { "const": false },
+            "model_invocation": { "const": false },
+            "process_spawn": { "const": false },
+            "network": { "const": false },
+            "security_claim": {
+              "const": "logical_workspace_boundary_only"
+            }
+          }
+        },
+        "strict": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "backend",
+            "docker_required",
+            "docker_lifecycle",
+            "implicit_start",
+            "implicit_stop",
+            "fallback_to_standard",
+            "security_claim"
+          ],
+          "properties": {
+            "backend": { "const": "docker_strict" },
+            "docker_required": { "const": true },
+            "docker_lifecycle": {
+              "const": "externally_managed_on_demand"
+            },
+            "implicit_start": { "const": false },
+            "implicit_stop": { "const": false },
+            "fallback_to_standard": { "const": false },
+            "security_claim": { "const": "observed_profile_required" }
+          }
+        }
+      }
+    }
+  }
+}

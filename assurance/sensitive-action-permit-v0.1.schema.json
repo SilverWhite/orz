@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/sensitive-action-permit-v0.1.schema.json",
+  "title": "Digest-Bound Sensitive Action Permit v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "permit_id",
+    "state",
+    "conversation_id",
+    "envelope_id",
+    "created_at",
+    "expires_at",
+    "authority",
+    "confirmation_sha256",
+    "binding",
+    "issued_permit_sha256",
+    "raw_confirmation_recorded",
+    "raw_action_recorded",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "sensitive_action_permit" },
+    "receipt_id": { "type": "string", "pattern": "^SAPR-[A-F0-9]+$" },
+    "permit_id": { "type": "string", "pattern": "^PERMIT-[A-F0-9]+$" },
+    "state": { "enum": ["issued", "consumed"] },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "authority": { "const": "local-interactive-user" },
+    "confirmation_sha256": { "$ref": "#/$defs/sha256" },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_sha256",
+        "target_sha256",
+        "impact_scope_sha256",
+        "attempt"
+      ],
+      "properties": {
+        "action_sha256": { "$ref": "#/$defs/sha256" },
+        "target_sha256": { "$ref": "#/$defs/sha256" },
+        "impact_scope_sha256": { "$ref": "#/$defs/sha256" },
+        "attempt": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "issued_permit_sha256": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }]
+    },
+    "raw_confirmation_recorded": { "const": false },
+    "raw_action_recorded": { "const": false },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_id",
+        "signature_algorithm",
+        "signed_payload_sha256",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_id": { "type": "string", "pattern": "^KEY-[A-Z0-9._-]+$" },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "issued" } } },
+      "then": { "properties": { "issued_permit_sha256": { "type": "null" } } },
+      "else": { "properties": { "issued_permit_sha256": { "type": "string" } } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

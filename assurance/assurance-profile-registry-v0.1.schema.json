@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/assurance-profile-registry-v0.1.schema.json",
+  "title": "Runtime-neutral Assurance Profile Registry v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "registry_kind",
+    "registry_id",
+    "runtime_selection_policy",
+    "profiles"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "registry_kind": { "const": "assurance_profile_registry" },
+    "registry_id": { "type": "string", "pattern": "^APR-[A-Z0-9._-]+$" },
+    "runtime_selection_policy": { "const": "capability_gated" },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/profile" }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "description",
+        "assurance_extensions",
+        "required_capabilities",
+        "reference_runtimes",
+        "acceptance_gate"
+      ],
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "assurance_extensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]+$" }
+        },
+        "required_capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.:-]+$" }
+        },
+        "reference_runtimes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "runtime_family",
+              "role",
+              "evidence_status",
+              "evidence_refs"
+            ],
+            "properties": {
+              "runtime_family": { "type": "string", "minLength": 1 },
+              "role": { "const": "reference_only" },
+              "evidence_status": {
+                "enum": ["observed", "derived", "user_asserted", "unknown"]
+              },
+              "evidence_refs": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "acceptance_gate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "adapter_contract_required",
+            "observed_capability_receipt_required",
+            "negative_fixture_required",
+            "independent_verifier_required",
+            "reference_status_grants_acceptance"
+          ],
+          "properties": {
+            "adapter_contract_required": { "const": true },
+            "observed_capability_receipt_required": { "const": true },
+            "negative_fixture_required": { "const": true },
+            "independent_verifier_required": { "const": true },
+            "reference_status_grants_acceptance": { "const": false }
+          }
+        }
+      }
+    }
+  }
+}

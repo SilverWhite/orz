@@ -1,46 +1,50 @@
 # 产品定位与多源借鉴策略 v0.1
 
-状态：2026-07-23 生效；记录产品定位与术语边界，不修改 protocol v0.1、reason code、gate、claim、
-evaluation 或 oracle-isolation 语义。
+状态：2026-07-24 依 ADR-0003 修订；记录产品定位与术语边界，不修改 protocol v0.1、reason code、
+gate、claim、evaluation 或 oracle-isolation 语义。
 
 ## 1. 决策
 
-本项目是**基于 Grok Build 深度特化的 LIF 研究 Agent CLI**。当前没有强制更换底座的必要，也不建设可在多个
-通用 Agent runtime 间任意切换的产品框架。
+本项目是 **runtime-neutral 的 LIF 研究 Agent 科学保障层**。它通过窄 adapter 接入通过 capability gate
+的外部 Agent runtime，但不自建或同时维护多个通用 runtime 产品。
 
 正式定位为：
 
-1. **Grok Build 是唯一产品底座和通用 Agent runtime owner**；
+1. **Grok Build 是当前证据最完整的 reference runtime，不是默认、强制或唯一底座**；
 2. **LIF 专项科学保障层是本项目的核心差异**；
-3. Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 是分工明确的设计参考，不是并列 runtime；
-4. Grok 上游版本通过 observed baseline / current candidate / promotion gate 管理，不追逐每个发布，也不永久
-   锁死在旧版本；
-5. 只有 Grok 出现经过 conformance 证明且无法通过窄 adapter、wrapper 或上游修复处理的关键缺口时，才重新评估
-   底座迁移。
+3. profile 只要求 capability、隔离和验收门禁，不要求 runtime family；
+4. Grok、Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 均可作为分工明确的设计参考；
+5. 任一实际 runtime 必须经自己的 adapter、observed fixture 和独立 verifier 通过同类门禁；
+6. reference 身份、开源状态或用户偏好都不能单独授予 runtime acceptance。
 
-“开源项目更多”本身不是迁移理由。已经完成的 Grok ACP、DeepSeek continuity、Windows 进程、事件桥和 verifier
-工作属于可复现实证；更换底座必须用同一套门禁证明收益大于重新验证成本。
+已经完成的 Grok ACP、DeepSeek continuity、Windows 进程、事件桥和 verifier 工作仍属于可复现实证，
+但只证明 Grok adapter 的已观测边界。其他 runtime 不能继承这些 PASS，Grok 也不能凭 reference 身份跳过
+未来新增的通用 hard gate。
 
 ## 2. 产品结构
 
 ```mermaid
 flowchart LR
     U["LIF 研究任务 / 用户约束"] --> S["LIF 专项科学保障层"]
-    S --> G["Grok Build Agent runtime"]
+    S --> A["runtime adapter + capability gate"]
+    A --> G["外部 Agent runtime"]
     G --> P["DeepSeek / 其他模型 provider"]
     G --> T["文件、终端、搜索、MCP 等工具"]
     P --> G
     T --> G
-    G --> S
+    G --> A
+    A --> S
     S --> O["来源记录、证据边界、validator、WARN、审计产物"]
 ```
 
-### 2.1 Grok Build 负责
+### 2.1 选中的外部 runtime 负责
 
-- TUI、headless 与 ACP；
+- runtime 自身支持的 TUI、headless 与结构化控制接口（支持 ACP 时使用 ACP）；
 - model/tool loop、session、compaction 与 background task；
 - 通用工具、workspace、permission、sandbox、skills、plugins、hooks 与 MCP；
-- 上游能够直接承担的通用 Agent 产品能力。
+- 该 runtime 能够直接承担的通用 Agent 产品能力。
+
+Grok Build 当前用于 reference adapter 和 observed baseline；上述职责不构成对 Grok 的全局绑定。
 
 ### 2.2 LIF 专项科学保障层负责
 
@@ -75,7 +79,8 @@ flowchart LR
 - 让旧研究工作区的 INDEX/MAP/self-check 成为 CLI 启动依赖；
 - 让 Agent 自动修改 LIF claim registry；
 - 让 trace、validator、回滚或多数模型意见保证输出必然正确；
-- 让本项目演化成与 LIF 研究目标无关的通用多 runtime Agent 平台。
+- 让本项目演化成与 LIF 研究目标无关的通用多 runtime Agent 平台；
+- 要求所有任务必须通过 Grok 或任何其他单一 runtime 执行。
 
 普通 CLI 工程工作只使用本仓库文件。具体 LIF claim-bearing 任务需要旧研究来源时，才跨目录读取原文件并登记
 绝对路径、内容 digest 和本次使用边界；本仓库摘要不能替代研究来源。
@@ -84,7 +89,7 @@ flowchart LR
 
 | 产品 | 当前角色 | 重点借鉴 | 不做什么 |
 |---|---|---|---|
-| Grok Build | 唯一底座 | ACP、session、tool/permission/sandbox、background task、custom model、Windows binary | 不追每个版本；不因公开快照更新而无门禁合并 |
+| Grok Build | 当前 reference runtime | ACP、session、tool/permission/sandbox、background task、custom model、Windows binary | reference 身份不授予 acceptance；不追每个版本 |
 | Codex CLI | 首要审计与执行参考 | typed event、rollout/replay、approval、sandbox、配置锁与进程边界 | 不迁入第二套 runtime 或 OpenAI 专属产品面 |
 | Gemini CLI | policy 与恢复参考 | policy engine、trusted folder、checkpoint、headless stream、skills/hooks/extensions | 不在其产品迁移期改作本项目底座 |
 | Claude Code | 行为与扩展 UX 参考 | `CLAUDE.md`、skills、hooks、plugins、subagents、permission UX | 核心 CLI 未以开源许可证发布，不作为可 fork 底座或源码移植来源 |
@@ -106,21 +111,24 @@ flowchart LR
 在另行形成研究问题、可证伪假设、对照基线、风险边界和独立评测前，该想法：
 
 - 不进入当前产品定位；
-- 不改变 Grok runtime 所有权；
+- 不改变 runtime-neutral 所有权和 capability-gated 选择；
 - 不改变现有协议、gate 或 claim 语义；
 - 不以“LIF 专项科学保障层”的名义静默实现。
 
-## 6. 重新评估底座的触发条件
+## 6. 接纳或替换 runtime adapter 的触发条件
 
-只有至少出现一项经可复现 fixture 证明的条件，才开启底座迁移 ADR：
+新增或替换实际 runtime adapter 必须由可复现 fixture 驱动；以下条件可触发比较，但不自动授予 acceptance：
 
-1. Grok 无法保持目标 provider 的必要协议语义，且窄 adapter/上游修复不可行；
+1. 当前 runtime 无法保持目标 provider 的必要协议语义，且窄 adapter/上游修复不可行；
 2. Windows 进程、取消或安全边界存在不可接受且无法外部收束的缺口；
 3. ACP/session 观测面无法支撑最低审计完整性，并且无法通过明确标注的 cross-check 补足；
 4. 上游分发、许可或可获得性发生实质变化；
 5. 另一候选在同一套 LIF conformance/evaluation 下证明有显著净收益。
 
-频繁发布、其他产品 star 数、UI 新功能或“也是开源”都不是单独触发条件。
+频繁发布、产品 star 数、UI 新功能、“也是开源”或“当前是 reference”都不是单独的选择条件。
+
+runtime-neutral 的正式所有权与禁止强绑规则见
+[`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md)。
 
 ## 7. 官方来源
 

@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/integrated-assurance-run-receipt-v0.1.schema.json",
+  "title": "P4.5 integrated assurance run receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "conversation_id",
+    "envelope_id",
+    "created_at",
+    "mode",
+    "backend",
+    "security_claim",
+    "bindings",
+    "execution",
+    "verification",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "integrated_assurance_run" },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^IAR-[A-Z0-9._-]+$"
+    },
+    "conversation_id": {
+      "type": "string",
+      "pattern": "^CONV-[A-Z0-9._-]+$"
+    },
+    "envelope_id": {
+      "type": "string",
+      "pattern": "^ENV-[A-Z0-9._-]+$"
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "mode": { "const": "standard" },
+    "backend": { "const": "workspace_guarded" },
+    "security_claim": { "const": "logical_workspace_boundary_only" },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_sha256",
+        "envelope_sha256",
+        "provenance_receipt_sha256",
+        "action_authorization_receipt_sha256",
+        "audit_seal_sha256",
+        "workspace_path_sha256",
+        "workspace_before_sha256",
+        "workspace_after_sha256"
+      ],
+      "properties": {
+        "policy_sha256": { "$ref": "#/$defs/sha256" },
+        "envelope_sha256": { "$ref": "#/$defs/sha256" },
+        "provenance_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "action_authorization_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "audit_seal_sha256": { "$ref": "#/$defs/sha256" },
+        "workspace_path_sha256": { "$ref": "#/$defs/sha256" },
+        "workspace_before_sha256": { "$ref": "#/$defs/sha256" },
+        "workspace_after_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_kind",
+        "outcome",
+        "probe_payload_sha256",
+        "probe_bytes",
+        "model_invoked",
+        "network_requested",
+        "process_spawned",
+        "docker_invoked",
+        "cleanup_complete"
+      ],
+      "properties": {
+        "action_kind": { "const": "fixed_workspace_roundtrip" },
+        "outcome": { "const": "succeeded" },
+        "probe_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "probe_bytes": { "type": "integer", "minimum": 1 },
+        "model_invoked": { "const": false },
+        "network_requested": { "const": false },
+        "process_spawned": { "const": false },
+        "docker_invoked": { "const": false },
+        "cleanup_complete": { "const": true }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance_prearchive_valid",
+        "authorization_prearchive_valid",
+        "audit_prearchive_valid",
+        "archive_complete_required"
+      ],
+      "properties": {
+        "provenance_prearchive_valid": { "const": true },
+        "authorization_prearchive_valid": { "const": true },
+        "audit_prearchive_valid": { "const": true },
+        "archive_complete_required": { "const": true }
+      }
+    },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_id",
+        "signature_algorithm",
+        "signed_payload_sha256",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_id": {
+          "type": "string",
+          "pattern": "^KEY-[A-Z0-9._-]+$"
+        },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    }
+  }
+}

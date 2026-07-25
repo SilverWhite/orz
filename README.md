@@ -1,39 +1,55 @@
 # LIF Scientific-Assurance Agent CLI
 
-状态：基于 Grok Build 的 Windows-first LIF 专项 Agent；官方 Grok Windows binary 已完成锁定与离线核验，
-独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
+状态：runtime-neutral、Windows-first 的 LIF 专项科学保障工程；P0 合同、P1 会话身份/归档删除、
+P2 Docker strict sandbox、P2.5 无模型 guarded execution、P3 指令来源/能力继承、
+P4 metadata-only 审计/compaction/恢复授权，以及 P4.5 workspace-first 集成链
+development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只读投影 mechanical preflight
+已启动并通过。标准模式默认使用受限工作区内的固定动作；Docker 只保留为显式、
+按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend
+仍为 fail-closed/noncompliant。Grok Build 是当前证据最完整的参考框架，
+其官方 Windows binary 已完成锁定与离线核验。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
 真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
 误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。
 
-本仓库记录一个基于 Grok Build 深度特化的本地 Agent CLI。它服务于 FEP/LIF 研究工作流，目标是让接入的模型
+本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它服务于 FEP/LIF 研究工作流，目标是让接入的模型
 尽可能遵守来源先行、Ask-Don't-Guess、证据分层、机械验证、全程留痕和独立复核，从而降低幻觉补全、过度推进与
 错误 claim promotion 的风险。它不能保证模型输出必然科学正确，也不把 LIF/FEP 理论本身实现为 Agent 控制算法。
 
 ## 产品定位
 
-- **唯一底座**：Grok Build 负责通用 Agent runtime，包括 model/tool loop、session、ACP、permission、sandbox、
-  compaction、后台任务和通用工具能力。
+- **runtime-neutral**：通用 model/tool/session runtime 由通过 capability gate 的外部框架提供；Grok Build
+  是当前 reference runtime，不是默认、强制或唯一底座。
 - **核心差异**：本仓库实现 **LIF 专项科学保障层**，负责来源/证据/claim 边界、validator、审计、全局进度 WARN、
   DeepSeek conformance、Windows 进程监督和评测隔离。
-- **多源借鉴**：Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 只按各自强项提供设计参考；当前不建设
-  多 runtime 产品，也不因其他 CLI 开源而强制迁移底座。
-- **上游策略**：不追逐 Grok 的每一个版本，也不永久锁死；使用 observed baseline、current candidate 和
-  promotion gate 选择经过验证的版本。
+- **多源借鉴**：Grok、Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 均可提供设计参考；新增
+  runtime adapter 必须独立通过同类门禁，不继承其他框架的 PASS。
+- **上游策略**：每个实际 adapter 各自维护 observed baseline、candidate 和 promotion gate；reference
+  身份不能代替 observed acceptance。
 - **研究边界**：旧研究工作区的 INDEX/MAP/self-check 不迁入本仓库，只在具体 LIF claim-bearing 任务中按需
   跨目录读取并登记来源。
 
 完整裁决见
+[`adr/ADR-0003-runtime-neutral-assurance-kernel.md`](adr/ADR-0003-runtime-neutral-assurance-kernel.md) 与
 [`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
 ## 当前文件
 
 - [`adr/ADR-0001-evidence-constrained-local-agent-kernel.md`](adr/ADR-0001-evidence-constrained-local-agent-kernel.md)：产品边界、核心不变量、案例库和反捷径决策。
-- [`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)：固定 Grok 单一底座、多源借鉴分工、“LIF 专项科学保障层”术语和未来 LIF-informed Agent 想法的隔离边界。
+- [`adr/ADR-0003-runtime-neutral-assurance-kernel.md`](adr/ADR-0003-runtime-neutral-assurance-kernel.md)：冻结 runtime-neutral 所有权、capability-gated 选择与 Grok `reference_only` 边界。
+- [`assurance/README.md`](assurance/README.md)：P0–P5 runtime-neutral 合同与 development fixture，包括会话生命周期、workspace-first/Docker backend policy、guarded execution、指令来源、能力子集、metadata audit、恢复授权和合成用户任务预检。
+- [`docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)：P2 Docker 实测、Windows native fail-closed 状态、限制与正反例收敛策略。
+- [`docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md`](docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md)：P1 envelope、P2 selector、无模型 action、宿主/容器进程追踪、HMAC 回执与残留复核的端到端实测。
+- [`docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md`](docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md)：P3 来源不可提权、内核动作授权、能力子集委派与 digest-bound 一次性许可的测试和限制。
+- [`docs/P4_AUDIT_COMPACTION_RECOVERY_AUDIT_2026-07-25.md`](docs/P4_AUDIT_COMPACTION_RECOVERY_AUDIT_2026-07-25.md)：P4 runtime-neutral metadata ledger、归档后复核、compaction provenance 与恢复候选/授权分离。
+- [`docs/P4_5_WORKSPACE_FIRST_INTEGRATION_AUDIT_2026-07-25.md`](docs/P4_5_WORKSPACE_FIRST_INTEGRATION_AUDIT_2026-07-25.md)：P4.5 标准模式 workspace-first 策略、P3→固定动作→P4→archive 实测与无 Docker/子进程残留复核。
+- [`docs/P5_SYNTHETIC_USER_TASK_PREFLIGHT_2026-07-25.md`](docs/P5_SYNTHETIC_USER_TASK_PREFLIGHT_2026-07-25.md)：P5 两项合成任务、R211 复杂任务只读投影、LIF 源文件不变证明及人类可用性未评估边界。
+- [`docs/GENERAL_SCIENTIFIC_ASSURANCE_GAP_REVIEW_2026-07-25.md`](docs/GENERAL_SCIENTIFIC_ASSURANCE_GAP_REVIEW_2026-07-25.md)：将本轮缺口登记为通用科学保障 backlog，并明确 LIF 内部任务不得作为通用复杂测试或 holdout。
+- [`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)：多源借鉴分工、“LIF 专项科学保障层”术语和未来 LIF-informed Agent 想法的隔离边界。
 - [`architecture/GROK_BUILD_ADAPTATION_v0.1.md`](architecture/GROK_BUILD_ADAPTATION_v0.1.md)：基于官方开源快照的 adopt/adapt/defer/reject 矩阵与项目专化层。
-- [`architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`](architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md)：Windows 预编译 Grok + LIF 专项科学保障层的正式范围，以及现有 prototype 的降级分类。
+- [`architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`](architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md)：Grok reference adapter 的 Windows 集成范围，以及现有 prototype 的降级分类。
 - [`architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`](architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md)：将可复现实测 baseline 与当前上游 candidate 分离，以 conformance gate 选择更优版本而非永久锁死。
 - [`architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md`](architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md)：优先准确性的全程可观测 wrapper、记录分层、资源取舍与反补全约束。
-- [`architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)：对 Grok ACP、Codex、Gemini CLI、OpenCode、Goose 与 Cline 的职责深拆；将生产 runtime 收回 Grok，只保留 LIF 专项科学保障层与 shadow-Git 恢复边界。
+- [`architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)：对 Grok ACP、Codex、Gemini CLI、OpenCode、Goose 与 Cline 的职责深拆；把通用 runtime 交给可替换的外部框架，只保留保障层与 shadow-Git 恢复边界。
 - [`architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md`](architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md)：将可迁移保障能力拆为通用 Assurance Kernel + LIF profile，登记物理沙箱/Docker、会话身份、单对话快照、归档删除、反注入和跨用户测试的主要缺口、优先级与完成条件。
 - [`architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`](architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md)：从 task contract、计划和 append-only journal 派生全局进度摘要与 WARN，要求模型结构化处置，降低单方向过推进和遗漏风险而不增加新协议状态。
 - [`architecture/D_SALVAGE_MATRIX_v0.1.md`](architecture/D_SALVAGE_MATRIX_v0.1.md)：Google Drive 中 Project D 核心源码的 source ledger、采用/改造/拒绝裁决与安全发现。
@@ -111,7 +127,8 @@
 
 ## 当前边界
 
-- 正式通用 runtime 采用 Grok Build，不再在本仓库复刻 model/session/tool/permission/sandbox 栈。
+- 正式通用 runtime 由通过门禁的外部框架提供；Grok Build 仅为当前 reference runtime。本仓库不复刻
+  model/session/tool/permission 栈。P2 只实现 runtime-neutral sandbox launcher/verifier，不实现平行 runtime。
 - 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher、已成功的显式确认/零重试 DeepSeek one-shot probe，以及一次成功完成的固定 Grok→DeepSeek 真实模型会话；尚未执行任意 prompt、真实 workspace、评分或生产 Agent session，修复后的 terminal `result.json` 路径也尚未用第二次真实请求复验。
 - 不决定全部使用 Rust；只把 Rust 视为少量保障组件与 Windows 进程边界的候选实现语言。
 - 不把历史案例直接作为模型提示词答案。
@@ -128,6 +145,6 @@
 - 当前案例全属 development/challenge seed corpus，不宣称为未泄漏 holdout 成绩。
 - 当前 10 个错误簇均有历史检测案例和至少一个 challenge，7 个高频簇均有 permission-reversal challenge；但尚无 evaluation/holdout，评测阈值也未校准。
 - 5 个历史案例已有 source-hashed reviewer-only excerpt fixture；它们只提高 curation provenance 可审计性，不提高未见评测覆盖。
-- Grok Build 是正式通用 CLI/runtime 所有者；LIF 专项科学保障层冻结为 SourceRouter、EvidenceKernel、
+- 实际选中的外部 runtime 是通用 model/tool/session 能力所有者；LIF 专项科学保障层冻结为 SourceRouter、EvidenceKernel、
   ValidatorBridge、ScenarioExporter、LeakScanner、EvaluationRunner、Global Progress Sentinel 和窄
-  Windows/DeepSeek bridge，不扩张通用产品功能面。
+  Windows/DeepSeek bridge。Grok 仅作为当前 reference adapter，不扩张通用产品功能面。

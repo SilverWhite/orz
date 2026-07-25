@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1.0-draft",
+  "receipt_kind": "session_lifecycle_receipt",
+  "transition_id": "LIFE-SYNTHETIC-001",
+  "conversation_id": "CONV-SYNTHETIC-001",
+  "envelope_id": "ENV-SYNTHETIC-001",
+  "created_at": "2026-07-24T13:00:00Z",
+  "from_state": "archiving",
+  "to_state": "archived",
+  "terminal_state": "archive_complete",
+  "resume_requires_new_envelope": true,
+  "cleanup": {
+    "raw_payloads_remaining": 0,
+    "credential_leases_remaining": 0,
+    "temporary_storage_remaining": 0,
+    "unpinned_snapshots_remaining": 0,
+    "deletion_receipt_digest": "5555555555555555555555555555555555555555555555555555555555555555",
+    "unresolved_categories": []
+  }
+}

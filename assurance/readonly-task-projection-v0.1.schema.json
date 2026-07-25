@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/readonly-task-projection-v0.1.schema.json",
+  "title": "P5 read-only complex task projection v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "projection_kind",
+    "projection_id",
+    "source_project_kind",
+    "task_contract",
+    "files"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "projection_kind": { "const": "readonly_complex_task_projection" },
+    "projection_id": { "const": "P5-LIF-R211-READONLY-001" },
+    "source_project_kind": { "const": "lif_research_workspace" },
+    "task_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "must",
+        "must_not",
+        "source_of_truth",
+        "acceptance"
+      ],
+      "properties": {
+        "must": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "must_not": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "source_of_truth": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "acceptance": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relative_path", "role"],
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\\\:].+$"
+          },
+          "role": {
+            "enum": [
+              "claim_router",
+              "environment_router",
+              "self_check",
+              "current_map",
+              "discussion",
+              "analysis_code",
+              "result_manifest",
+              "result_summary"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

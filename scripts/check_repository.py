@@ -115,6 +115,185 @@ def check_repository() -> dict[str, Any]:
         except Exception as exc:
             errors.append(f"invalid schema {schema_path.relative_to(ROOT)}: {exc}")
 
+    assurance_root = ROOT / "assurance"
+    assurance_fixture_root = assurance_root / "fixtures/p0"
+    assurance_positive_contracts = {
+        assurance_root / "profile-registry-v0.1.json": (
+            assurance_root / "assurance-profile-registry-v0.1.schema.json"
+        ),
+        assurance_root / "retention-policy-v0.1.json": (
+            assurance_root / "retention-policy-v0.1.schema.json"
+        ),
+        assurance_fixture_root / "effective-security-envelope.valid.json": (
+            assurance_root / "effective-security-envelope-v0.1.schema.json"
+        ),
+        assurance_fixture_root / "sandbox-selection-receipt.valid.json": (
+            assurance_root / "sandbox-selection-receipt-v0.1.schema.json"
+        ),
+        assurance_fixture_root / "session-lifecycle-receipt.valid.json": (
+            assurance_root / "session-lifecycle-receipt-v0.1.schema.json"
+        ),
+    }
+    for instance_path, schema_path in assurance_positive_contracts.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(instance_path),
+                schema_path,
+                str(instance_path.relative_to(ROOT)),
+            )
+        )
+    counts["assurance_p0_positive_contracts"] = len(assurance_positive_contracts)
+
+    assurance_negative_contracts = {
+        assurance_fixture_root
+        / "effective-security-envelope.missing-evidence-status.invalid.json": (
+            assurance_root / "effective-security-envelope-v0.1.schema.json"
+        ),
+        assurance_fixture_root / "profile-registry.required-runtime.invalid.json": (
+            assurance_root / "assurance-profile-registry-v0.1.schema.json"
+        ),
+        assurance_fixture_root
+        / "sandbox-selection-receipt.unverified-allow.invalid.json": (
+            assurance_root / "sandbox-selection-receipt-v0.1.schema.json"
+        ),
+        assurance_fixture_root
+        / "session-lifecycle-receipt.archived-with-residue.invalid.json": (
+            assurance_root / "session-lifecycle-receipt-v0.1.schema.json"
+        ),
+        assurance_fixture_root
+        / "retention-policy.private-reasoning-persisted.invalid.json": (
+            assurance_root / "retention-policy-v0.1.schema.json"
+        ),
+    }
+    for instance_path, schema_path in assurance_negative_contracts.items():
+        validator = Draft202012Validator(
+            _load_json(schema_path), format_checker=FormatChecker()
+        )
+        validation_errors = list(validator.iter_errors(_load_json(instance_path)))
+        if not validation_errors:
+            errors.append(
+                "negative assurance fixture unexpectedly validated: "
+                f"{instance_path.relative_to(ROOT)}"
+            )
+    counts["assurance_p0_negative_contracts"] = len(assurance_negative_contracts)
+
+    assurance_p1_fixture_root = assurance_root / "fixtures/p1"
+    assurance_p1_positive_contracts = {
+        assurance_p1_fixture_root / "installation-key-metadata.valid.json": (
+            assurance_root / "installation-key-metadata-v0.1.schema.json"
+        ),
+        assurance_p1_fixture_root / "conversation-state.active.valid.json": (
+            assurance_root / "conversation-state-v0.1.schema.json"
+        ),
+        assurance_p1_fixture_root / "archive-deletion-receipt.failed.valid.json": (
+            assurance_root / "archive-deletion-receipt-v0.1.schema.json"
+        ),
+    }
+    for instance_path, schema_path in assurance_p1_positive_contracts.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(instance_path),
+                schema_path,
+                str(instance_path.relative_to(ROOT)),
+            )
+        )
+    counts["assurance_p1_positive_contracts"] = len(
+        assurance_p1_positive_contracts
+    )
+
+    assurance_p1_negative_contracts = {
+        assurance_p1_fixture_root
+        / "installation-key-metadata.raw-secret.invalid.json": (
+            assurance_root / "installation-key-metadata-v0.1.schema.json"
+        ),
+        assurance_p1_fixture_root
+        / "conversation-state.archived-without-receipt.invalid.json": (
+            assurance_root / "conversation-state-v0.1.schema.json"
+        ),
+        assurance_p1_fixture_root
+        / "archive-deletion-receipt.success-with-residue.invalid.json": (
+            assurance_root / "archive-deletion-receipt-v0.1.schema.json"
+        ),
+    }
+    for instance_path, schema_path in assurance_p1_negative_contracts.items():
+        validator = Draft202012Validator(
+            _load_json(schema_path), format_checker=FormatChecker()
+        )
+        validation_errors = list(validator.iter_errors(_load_json(instance_path)))
+        if not validation_errors:
+            errors.append(
+                "negative assurance P1 fixture unexpectedly validated: "
+                f"{instance_path.relative_to(ROOT)}"
+            )
+    counts["assurance_p1_negative_contracts"] = len(
+        assurance_p1_negative_contracts
+    )
+
+    docker_profile_path = assurance_root / "docker-sandbox-profile-v0.1.json"
+    errors.extend(
+        _validate_instance(
+            _load_json(docker_profile_path),
+            assurance_root / "docker-sandbox-profile-v0.1.schema.json",
+            str(docker_profile_path.relative_to(ROOT)),
+        )
+    )
+    counts["assurance_p2_profiles"] = 1
+
+    retention_policy = _load_json(assurance_root / "retention-policy-v0.1.json")
+    expected_delete_categories = {
+        "active_security_envelope",
+        "confirmation_token",
+        "credential_lease",
+        "full_stdout_stderr",
+        "network_body",
+        "one_shot_permit",
+        "private_reasoning",
+        "raw_provider_payload",
+        "raw_tool_result",
+        "sandbox_ephemeral_storage",
+        "session_recall_index",
+        "temporary_checkpoint",
+        "temporary_import_receipt",
+        "temporary_lifecycle_receipt",
+        "temporary_profile",
+        "unpinned_snapshot",
+    }
+    actual_delete_categories = set(retention_policy.get("delete_on_archive", []))
+    missing_delete_categories = sorted(
+        expected_delete_categories - actual_delete_categories
+    )
+    if missing_delete_categories:
+        errors.append(
+            "assurance retention policy lost mandatory delete categories: "
+            f"{missing_delete_categories}"
+        )
+
+    profile_registry = _load_json(assurance_root / "profile-registry-v0.1.json")
+    profiles = profile_registry.get("profiles", [])
+    profile_ids = [profile.get("profile_id") for profile in profiles]
+    if len(profile_ids) != len(set(profile_ids)):
+        errors.append("assurance profile IDs are not unique")
+    lif_profiles = [
+        profile for profile in profiles if profile.get("profile_id") == "lif-research"
+    ]
+    if len(lif_profiles) != 1:
+        errors.append("assurance registry must contain exactly one lif-research profile")
+    else:
+        lif_profile = lif_profiles[0]
+        if "required_runtime_family" in lif_profile:
+            errors.append("lif-research profile must not bind a required runtime family")
+        grok_references = [
+            reference
+            for reference in lif_profile.get("reference_runtimes", [])
+            if reference.get("runtime_family") == "grok-build"
+        ]
+        if len(grok_references) != 1 or grok_references[0].get("role") != "reference_only":
+            errors.append("Grok Build must be represented exactly once as reference_only")
+        if lif_profile.get("acceptance_gate", {}).get(
+            "reference_status_grants_acceptance"
+        ) is not False:
+            errors.append("reference runtime status must not grant profile acceptance")
+
     corpus_path = ROOT / "regression/cases-v0.1.yaml"
     coverage_path = ROOT / "regression/coverage-matrix-v0.1.yaml"
     reason_path = ROOT / "protocol/reason-codes-v0.1.yaml"

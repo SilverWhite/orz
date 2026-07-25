@@ -36,7 +36,7 @@ jobs:
         run: python scripts/check_repository.py
 
       - name: Compile Python sources
-        run: python -m compileall -q prototype/fep_agent_proto scripts
+        run: python -m compileall -q assurance prototype/fep_agent_proto scripts
 
       - name: Check PowerShell script syntax
         if: runner.os == 'Windows'
@@ -66,3 +66,6 @@ jobs:
 
       - name: Run runtime control-plane fixture tests
         run: python -m unittest discover -s runtime/tests -v
+
+      - name: Run General Assurance Kernel P0-P5 tests
+        run: python -m unittest discover -s assurance/tests -v

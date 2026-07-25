@@ -30,11 +30,12 @@ evaluation/holdout data, provide a sandbox, or modify MAP/INDEX. A development
 export may be `ready` with a leak warning because the semantic review is
 intentionally not performed. Challenge warnings remain blocked/deferred.
 
-Grok Build owns the production model transport, session, tool, permission and
-sandbox layers. The transport, loopback, fake-provider, broker and approval-ledger
+The selected external runtime owns production model transport, session, tool,
+permission and base sandbox layers. Grok Build is the current reference adapter,
+not a required runtime. The transport, loopback, fake-provider, broker and approval-ledger
 modules below are frozen disposable fixtures. They may prove an upstream gap, but
 must not be expanded into a parallel general-purpose Agent stack. See
-`../architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`.
+`../adr/ADR-0003-runtime-neutral-assurance-kernel.md`.
 
 From the repository `prototype` directory:
 

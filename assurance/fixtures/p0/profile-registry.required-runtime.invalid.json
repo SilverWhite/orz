@@ -1,0 +1,30 @@
+{
+  "schema_version": "0.1.0-draft",
+  "registry_kind": "assurance_profile_registry",
+  "registry_id": "APR-INVALID-001",
+  "runtime_selection_policy": "capability_gated",
+  "profiles": [
+    {
+      "profile_id": "lif-research",
+      "description": "Invalid profile that tries to force one runtime.",
+      "assurance_extensions": ["EvidenceKernel"],
+      "required_capabilities": ["workspace.trust_before_discovery"],
+      "required_runtime_family": "grok-build",
+      "reference_runtimes": [
+        {
+          "runtime_family": "grok-build",
+          "role": "reference_only",
+          "evidence_status": "observed",
+          "evidence_refs": ["fixture:synthetic"]
+        }
+      ],
+      "acceptance_gate": {
+        "adapter_contract_required": true,
+        "observed_capability_receipt_required": true,
+        "negative_fixture_required": true,
+        "independent_verifier_required": true,
+        "reference_status_grants_acceptance": false
+      }
+    }
+  ]
+}

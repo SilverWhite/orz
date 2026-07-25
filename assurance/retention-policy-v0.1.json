@@ -1,0 +1,46 @@
+{
+  "schema_version": "0.1.0-draft",
+  "policy_kind": "conversation_retention_policy",
+  "policy_id": "RET-DEFAULT-0.1",
+  "scope": "single_conversation",
+  "cross_conversation_recall": "disabled_by_default",
+  "persist_after_archive": [
+    "redacted_conversation",
+    "user_pinned_snapshot",
+    "terminal_deletion_receipt"
+  ],
+  "delete_on_archive": [
+    "raw_provider_payload",
+    "private_reasoning",
+    "raw_tool_result",
+    "full_stdout_stderr",
+    "network_body",
+    "credential_lease",
+    "confirmation_token",
+    "one_shot_permit",
+    "unpinned_snapshot",
+    "temporary_checkpoint",
+    "temporary_profile",
+    "sandbox_ephemeral_storage",
+    "session_recall_index",
+    "active_security_envelope",
+    "temporary_lifecycle_receipt",
+    "temporary_import_receipt"
+  ],
+  "never_persist": [
+    "credential_secret_value",
+    "raw_authorization_header",
+    "stable_hardware_fingerprint"
+  ],
+  "storage_boundaries": [
+    {
+      "boundary_id": "local-conversation-store",
+      "evidence_status": "unknown",
+      "deletion_supported": null,
+      "limitations": [
+        "P0 freezes policy only; no retention controller has been implemented or observed."
+      ]
+    }
+  ],
+  "cleanup_failure_policy": "archive_complete_false"
+}

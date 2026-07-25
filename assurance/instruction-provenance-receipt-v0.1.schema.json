@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/instruction-provenance-receipt-v0.1.schema.json",
+  "title": "Instruction Provenance Decision Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "conversation_id",
+    "envelope_id",
+    "created_at",
+    "source",
+    "content",
+    "structured_action",
+    "decision",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "instruction_provenance_decision" },
+    "receipt_id": { "type": "string", "pattern": "^IPR-[A-F0-9]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "envelope_id": { "type": "string", "pattern": "^ENV-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "declared_type",
+        "effective_type",
+        "source_id",
+        "origin_conversation_id",
+        "workspace_trust"
+      ],
+      "properties": {
+        "declared_type": { "$ref": "#/$defs/sourceType" },
+        "effective_type": { "$ref": "#/$defs/sourceType" },
+        "source_id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]+$" },
+        "origin_conversation_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" }
+          ]
+        },
+        "workspace_trust": {
+          "enum": ["observed_trusted", "not_observed", "not_applicable"]
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "bytes", "raw_content_recorded"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "raw_content_recorded": { "const": false }
+      }
+    },
+    "structured_action": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action_id",
+            "action_type",
+            "risk_class",
+            "target_sha256",
+            "parameters_sha256",
+            "requested_capabilities"
+          ],
+          "properties": {
+            "action_id": { "type": "string", "pattern": "^ACT-[A-Z0-9._-]+$" },
+            "action_type": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.:-]{0,127}$"
+            },
+            "risk_class": {
+              "enum": ["normal", "sensitive", "external_side_effect"]
+            },
+            "target_sha256": { "$ref": "#/$defs/sha256" },
+            "parameters_sha256": { "$ref": "#/$defs/sha256" },
+            "requested_capabilities": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/capability" }
+            }
+          }
+        }
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routing",
+        "authority_effect",
+        "action_authorized",
+        "embedded_directive_ignored",
+        "capability_subset",
+        "permit_required",
+        "reason_codes"
+      ],
+      "properties": {
+        "routing": {
+          "enum": ["no_action", "data_only", "candidate", "rejected"]
+        },
+        "authority_effect": { "const": "none" },
+        "action_authorized": { "const": false },
+        "embedded_directive_ignored": { "type": "boolean" },
+        "capability_subset": { "type": ["boolean", "null"] },
+        "permit_required": { "type": "boolean" },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" }
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "key_id",
+        "signature_algorithm",
+        "signed_payload_sha256",
+        "signature"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "key_id": { "type": "string", "pattern": "^KEY-[A-Z0-9._-]+$" },
+        "signature_algorithm": { "const": "hmac-sha256" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "capability": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.:-]+$"
+    },
+    "sourceType": {
+      "enum": [
+        "platform",
+        "user",
+        "trusted_project",
+        "untrusted_project",
+        "external_content",
+        "tool_output",
+        "recalled_memory",
+        "derived_summary"
+      ]
+    }
+  }
+}
