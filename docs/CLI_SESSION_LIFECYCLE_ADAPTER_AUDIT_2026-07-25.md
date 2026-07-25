@@ -57,3 +57,25 @@ fail closed。精确相同且仍位于链尾的 observation 可幂等收敛；�
 
 下一步应选择一个已有单一有序 lifecycle source 的 CLI，先实现 read-only normalizer 与 fixture verifier；若只能获得多个
 无法证明全序的来源，应继续保持 partial，而不是合成权威顺序。
+
+## v0.2 schema 补全
+
+成熟 CLI 比较随后发现：v0.1 的 `turn_completed` 没有区分 completed、interrupted 和 failed。尤其 Codex app-server
+把三者都作为 `turn/completed` 的 status；其中 interrupted/failed 只结束 turn，不自动结束 thread/session。
+
+因此新增 observation、payload、receipt 和 verification v0.2：
+
+- `turn_completed` 必须携带 `turn_status=completed|interrupted|failed`；
+- 可选 `error_sha256` 只允许绑定 failed turn 或 failed session 的错误记录；
+- `source_sequence` 记录连续 lifecycle 投影序号，`source_record_sequence` 记录同一 `source_stream_id` 内严格递增但可跳号的
+  原始 transport 位置；
+- 三种 turn terminal 均执行 `in_turn → active`；
+- session terminal 仍只由 `session_completed/session_failed/session_cancelled` 产生；
+- canonical `model_output` 只表示 turn terminal record，成功与否以 payload `turn_status` 为准；
+- 已冻结 v0.1 schema 文件不修改，当前 adapter/verifier 切换到 v0.2。
+
+新增回归覆盖 interrupted turn 后继续第二 turn、failed turn 的 error digest、缺失 turn status 以及错误 digest 越界。
+当前 v0.2 定向测试为 14/14；全量回归为 207/207（prototype 58、Grok integration 44、runtime 57、
+assurance 48）；仓库机械检查覆盖 111 个 schema，返回 0 errors。
+具体 CLI 比较、官方来源和 Codex normalizer 实施边界见
+[`CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md`](CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md)。

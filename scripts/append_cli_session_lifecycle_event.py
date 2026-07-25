@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from append_global_progress_transition_event import AppendError, _canonical, _replay
 from prototype.fep_agent_proto.cli_session_lifecycle import (
     CliLifecycleError,
+    PAYLOAD_SCHEMA_NAME,
     build_run_event,
     digest,
     expected_next_state,
@@ -37,11 +38,12 @@ from prototype.fep_agent_proto.schema import validate_instance
 
 
 RECEIPT_SCHEMA = (
-    ROOT / "runtime" / "cli-session-lifecycle-adapter-receipt-v0.1.schema.json"
+    ROOT / "runtime" / "cli-session-lifecycle-adapter-receipt-v0.2.schema.json"
 )
 LIMITATIONS = [
     "The adapter trusts a normalized observation and does not parse a vendor-private event stream.",
     "Source-record digest binding does not prove the normalizer interpreted the source correctly.",
+    "A model_output event closes a turn; its turn_status, not the event type, determines success, interruption, or failure.",
     "Lifecycle mapping proves journal mechanics, not model or scientific correctness.",
 ]
 TERMINAL_EVENTS = {"run_finished", "run_failed", "run_cancelled", "run_invalidated"}
@@ -61,12 +63,14 @@ def _base_receipt(observation: dict[str, Any] | None, journal: Path) -> dict[str
     observation_id = observation.get("observation_id") if observation else None
     run_id = observation.get("run_id") if observation else None
     session_id = observation.get("session_id") if observation else None
+    turn_status = observation.get("turn_status") if observation else None
+    error_sha256 = observation.get("error_sha256") if observation else None
     try:
         observation_sha256 = digest(observation) if observation else None
     except (TypeError, ValueError):
         observation_sha256 = None
     return {
-        "schema_version": "0.1.0",
+        "schema_version": "0.2.0",
         "artifact_kind": "cli-session-lifecycle-adapter-receipt",
         "adapter_status": "rejected",
         "valid": False,
@@ -87,6 +91,17 @@ def _base_receipt(observation: dict[str, Any] | None, journal: Path) -> dict[str
         "lifecycle_state_before": None,
         "lifecycle_state_after": None,
         "active_turn_id": None,
+        "turn_status": (
+            turn_status
+            if turn_status in {"completed", "interrupted", "failed"}
+            else None
+        ),
+        "error_sha256": (
+            error_sha256
+            if isinstance(error_sha256, str)
+            and re.fullmatch(r"[a-f0-9]{64}", error_sha256)
+            else None
+        ),
         "canonical_event_type": None,
         "event_sha256": None,
         "journal_sha256": sha256_file(journal) if journal.is_file() else None,
@@ -125,8 +140,7 @@ def append_observation(
         same_id = [
             event
             for event in existing
-            if event.get("payload_schema")
-            == "cli-session-lifecycle-event-v0.1.schema.json"
+            if event.get("payload_schema") == PAYLOAD_SCHEMA_NAME
             and event.get("payload", {}).get("observation_id")
             == observation["observation_id"]
         ]
@@ -151,12 +165,22 @@ def append_observation(
             raise CliLifecycleError(
                 "observation source_sequence does not extend lifecycle sequence"
             )
+        last_source_record_sequence = reduction["last_source_record_sequence"]
+        if (
+            last_source_record_sequence is not None
+            and observation["source_record_sequence"]
+            <= last_source_record_sequence
+        ):
+            raise CliLifecycleError(
+                "observation source_record_sequence must be strictly increasing"
+            )
         identity = reduction["identity"]
         observed_identity = (
             observation["adapter_id"],
             observation["runtime_family"],
             observation["runtime_version"],
             observation["session_id"],
+            observation["source_stream_id"],
         )
         if identity is not None and identity != observed_identity:
             raise CliLifecycleError("observation source identity differs from journal")
@@ -276,6 +300,8 @@ def run_adapter(
             "lifecycle_state_before": reduction["state_before"],
             "lifecycle_state_after": reduction["state"],
             "active_turn_id": reduction["active_turn_id"],
+            "turn_status": observation["turn_status"],
+            "error_sha256": observation["error_sha256"],
             "canonical_event_type": event["event_type"],
             "event_sha256": event["event_sha256"],
             "journal_sha256": sha256_file(journal),

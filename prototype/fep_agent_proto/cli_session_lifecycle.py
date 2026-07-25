@@ -10,8 +10,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 from .layout import RUNTIME_ROOT
 
 
-PAYLOAD_SCHEMA_NAME = "cli-session-lifecycle-event-v0.1.schema.json"
-OBSERVATION_SCHEMA = RUNTIME_ROOT / "cli-session-lifecycle-observation-v0.1.schema.json"
+PAYLOAD_SCHEMA_NAME = "cli-session-lifecycle-event-v0.2.schema.json"
+OBSERVATION_SCHEMA = RUNTIME_ROOT / "cli-session-lifecycle-observation-v0.2.schema.json"
 PAYLOAD_SCHEMA = RUNTIME_ROOT / PAYLOAD_SCHEMA_NAME
 EVENT_SCHEMA = RUNTIME_ROOT / "run-event-v0.1.schema.json"
 EVENT_TYPE = {
@@ -63,21 +63,50 @@ def validate_observation(observation: dict[str, Any]) -> None:
     _validate(observation, OBSERVATION_SCHEMA, "lifecycle observation")
     kind = observation["event_kind"]
     turn_id = observation["turn_id"]
+    turn_status = observation["turn_status"]
     outcome = observation["outcome"]
-    if kind in {"turn_started", "turn_completed"}:
-        if turn_id is None or outcome is not None:
+    error_sha256 = observation["error_sha256"]
+    if kind == "turn_started":
+        if (
+            turn_id is None
+            or turn_status is not None
+            or outcome is not None
+            or error_sha256 is not None
+        ):
             raise CliLifecycleError(
-                "turn observation requires turn_id and forbids outcome"
+                "turn_started requires turn_id and forbids turn_status, "
+                "outcome, and error_sha256"
+            )
+    elif kind == "turn_completed":
+        if turn_id is None or turn_status is None or outcome is not None:
+            raise CliLifecycleError(
+                "turn_completed requires turn_id and turn_status and forbids outcome"
+            )
+        if error_sha256 is not None and turn_status != "failed":
+            raise CliLifecycleError(
+                "turn error_sha256 is only allowed when turn_status is failed"
             )
     elif kind == "session_started":
-        if turn_id is not None or outcome is not None:
+        if (
+            turn_id is not None
+            or turn_status is not None
+            or outcome is not None
+            or error_sha256 is not None
+        ):
             raise CliLifecycleError(
-                "session_started forbids turn_id and outcome"
+                "session_started forbids turn_id, turn_status, outcome, "
+                "and error_sha256"
             )
-    elif turn_id is not None or outcome is None:
-        raise CliLifecycleError(
-            "terminal observation forbids turn_id and requires outcome"
-        )
+    else:
+        if turn_id is not None or turn_status is not None or outcome is None:
+            raise CliLifecycleError(
+                "session terminal observation forbids turn_id and turn_status "
+                "and requires outcome"
+            )
+        if error_sha256 is not None and kind != "session_failed":
+            raise CliLifecycleError(
+                "session error_sha256 is only allowed for session_failed"
+            )
 
 
 def _payload_errors(payload: dict[str, Any]) -> list[str]:
@@ -97,8 +126,9 @@ def reduce_cli_lifecycle(
     errors: list[str] = []
     state = "new"
     active_turn_id: str | None = None
-    identity: tuple[str, str, str, str] | None = None
+    identity: tuple[str, str, str, str, str] | None = None
     source_count = 0
+    last_source_record_sequence: int | None = None
     last_observation_id: str | None = None
     last_event_sha256: str | None = None
 
@@ -129,6 +159,7 @@ def reduce_cli_lifecycle(
             payload["runtime_family"],
             payload["runtime_version"],
             payload["session_id"],
+            payload["source_stream_id"],
         )
         if identity is None:
             identity = current_identity
@@ -136,6 +167,14 @@ def reduce_cli_lifecycle(
             errors.append(f"lifecycle source identity changed at sequence {sequence}")
         if payload["source_sequence"] != source_count:
             errors.append(f"lifecycle source sequence mismatch at sequence {sequence}")
+        source_record_sequence = payload["source_record_sequence"]
+        if (
+            last_source_record_sequence is not None
+            and source_record_sequence <= last_source_record_sequence
+        ):
+            errors.append(
+                f"source record sequence is not strictly increasing at sequence {sequence}"
+            )
 
         kind = payload["source_event_kind"]
         if kind == "session_started":
@@ -167,6 +206,7 @@ def reduce_cli_lifecycle(
                 state = "terminal"
                 active_turn_id = None
         source_count += 1
+        last_source_record_sequence = source_record_sequence
         last_observation_id = payload["observation_id"]
         last_event_sha256 = event["event_sha256"]
 
@@ -175,6 +215,7 @@ def reduce_cli_lifecycle(
         "state": state,
         "active_turn_id": active_turn_id,
         "source_event_count": source_count,
+        "last_source_record_sequence": last_source_record_sequence,
         "identity": identity,
         "last_observation_id": last_observation_id,
         "last_event_sha256": last_event_sha256,
@@ -219,17 +260,21 @@ def build_run_event(
 ) -> dict[str, Any]:
     observation_sha256 = digest(observation)
     payload = {
-        "schema_version": "0.1.0",
+        "schema_version": "0.2.0",
         "observation_id": observation["observation_id"],
         "observation_sha256": observation_sha256,
         "adapter_id": observation["adapter_id"],
         "runtime_family": observation["runtime_family"],
         "runtime_version": observation["runtime_version"],
         "session_id": observation["session_id"],
+        "source_stream_id": observation["source_stream_id"],
         "source_sequence": observation["source_sequence"],
+        "source_record_sequence": observation["source_record_sequence"],
         "source_event_kind": observation["event_kind"],
         "turn_id": observation["turn_id"],
+        "turn_status": observation["turn_status"],
         "outcome": observation["outcome"],
+        "error_sha256": observation["error_sha256"],
         "source_record_sha256": observation["source_record_sha256"],
     }
     _validate(payload, PAYLOAD_SCHEMA, "lifecycle event payload")

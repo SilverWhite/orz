@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/cli-session-lifecycle-observation-v0.2.schema.json",
+  "title": "Normalized CLI session lifecycle observation v0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "observation_id", "adapter_id",
+    "runtime_family", "runtime_version", "session_id", "run_id",
+    "run_manifest_sha256", "source_stream_id", "source_sequence",
+    "source_record_sequence", "timestamp", "event_kind", "turn_id",
+    "turn_status", "outcome", "error_sha256",
+    "source_record_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.2.0" },
+    "artifact_kind": { "const": "cli-session-lifecycle-observation" },
+    "observation_id": { "type": "string", "pattern": "^CLIOBS-[A-Z0-9._-]+$" },
+    "adapter_id": { "type": "string", "pattern": "^CLIADAPTER-[A-Z0-9._-]+$" },
+    "runtime_family": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$" },
+    "runtime_version": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "source_stream_id": {
+      "type": "string",
+      "pattern": "^CLISTREAM-[A-Z0-9._-]+$"
+    },
+    "source_sequence": { "type": "integer", "minimum": 0 },
+    "source_record_sequence": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "event_kind": {
+      "enum": [
+        "session_started", "turn_started", "turn_completed",
+        "session_completed", "session_failed", "session_cancelled"
+      ]
+    },
+    "turn_id": { "type": ["string", "null"], "minLength": 1 },
+    "turn_status": {
+      "type": ["string", "null"],
+      "enum": ["completed", "interrupted", "failed", null]
+    },
+    "outcome": { "type": ["string", "null"], "minLength": 1 },
+    "error_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "source_record_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

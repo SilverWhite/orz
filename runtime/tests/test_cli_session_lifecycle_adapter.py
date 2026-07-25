@@ -44,13 +44,17 @@ class CliSessionLifecycleAdapterTests(unittest.TestCase):
         kind: str,
         *,
         turn_id: str | None = None,
+        turn_status: str | None = None,
         outcome: str | None = None,
+        error_sha256: str | None = None,
         observation_id: str | None = None,
         adapter_id: str = "CLIADAPTER-FIXTURE-001",
         session_id: str = "SESSION-FIXTURE-001",
+        source_stream_id: str = "CLISTREAM-FIXTURE-001",
+        source_record_sequence: int | None = None,
     ) -> dict:
         return {
-            "schema_version": "0.1.0",
+            "schema_version": "0.2.0",
             "artifact_kind": "cli-session-lifecycle-observation",
             "observation_id": observation_id or f"CLIOBS-FIXTURE-{sequence:03d}",
             "adapter_id": adapter_id,
@@ -59,11 +63,19 @@ class CliSessionLifecycleAdapterTests(unittest.TestCase):
             "session_id": session_id,
             "run_id": "RUN-CLI-LIFECYCLE-001",
             "run_manifest_sha256": "a" * 64,
+            "source_stream_id": source_stream_id,
             "source_sequence": sequence,
+            "source_record_sequence": (
+                sequence
+                if source_record_sequence is None
+                else source_record_sequence
+            ),
             "timestamp": f"2026-07-25T14:{sequence:02d}:00Z",
             "event_kind": kind,
             "turn_id": turn_id,
+            "turn_status": turn_status,
             "outcome": outcome,
+            "error_sha256": error_sha256,
             "source_record_sha256": hashlib.sha256(
                 f"source-{sequence}-{kind}".encode()
             ).hexdigest(),
@@ -200,7 +212,12 @@ class CliSessionLifecycleAdapterTests(unittest.TestCase):
                 self._append(
                     root,
                     journal,
-                    self._observation(2, "turn_completed", turn_id="TURN-001"),
+                    self._observation(
+                        2,
+                        "turn_completed",
+                        turn_id="TURN-001",
+                        turn_status="completed",
+                    ),
                     name="turn-complete",
                 ),
                 self._append(
@@ -267,6 +284,92 @@ class CliSessionLifecycleAdapterTests(unittest.TestCase):
             self.assertEqual(receipt["lifecycle_state_after"], "terminal")
             self.assertIsNone(receipt["active_turn_id"])
 
+    def test_interrupted_turn_closes_only_the_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            self._append(
+                root,
+                journal,
+                self._observation(0, "session_started"),
+                name="start",
+            )
+            self._append(
+                root,
+                journal,
+                self._observation(1, "turn_started", turn_id="TURN-001"),
+                name="turn-1",
+            )
+            interrupted = self._append(
+                root,
+                journal,
+                self._observation(
+                    2,
+                    "turn_completed",
+                    turn_id="TURN-001",
+                    turn_status="interrupted",
+                ),
+                name="turn-1-interrupted",
+            )
+            self.assertEqual(interrupted["canonical_event_type"], "model_output")
+            self.assertEqual(interrupted["turn_status"], "interrupted")
+            self.assertEqual(interrupted["lifecycle_state_after"], "active")
+            self.assertIsNone(interrupted["active_turn_id"])
+            next_turn = self._append(
+                root,
+                journal,
+                self._observation(3, "turn_started", turn_id="TURN-002"),
+                name="turn-2",
+            )
+            self.assertEqual(next_turn["lifecycle_state_after"], "in_turn")
+            self.assertEqual(next_turn["active_turn_id"], "TURN-002")
+            events = [
+                json.loads(line)
+                for line in journal.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertFalse(
+                any(
+                    event["event_type"]
+                    in {"run_finished", "run_failed", "run_cancelled"}
+                    for event in events
+                )
+            )
+
+    def test_failed_turn_preserves_error_digest_without_terminating_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            self._append(
+                root,
+                journal,
+                self._observation(0, "session_started"),
+                name="start",
+            )
+            self._append(
+                root,
+                journal,
+                self._observation(1, "turn_started", turn_id="TURN-001"),
+                name="turn",
+            )
+            error_sha256 = hashlib.sha256(b"fixture turn error").hexdigest()
+            failed = self._append(
+                root,
+                journal,
+                self._observation(
+                    2,
+                    "turn_completed",
+                    turn_id="TURN-001",
+                    turn_status="failed",
+                    error_sha256=error_sha256,
+                ),
+                name="turn-failed",
+            )
+            self.assertEqual(failed["turn_status"], "failed")
+            self.assertEqual(failed["error_sha256"], error_sha256)
+            self.assertEqual(failed["lifecycle_state_after"], "active")
+            verified = self._verify(root, journal, name="turn-failed")
+            self.assertTrue(verified["valid"])
+
     def test_failure_from_active_maps_to_run_failed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -298,12 +401,109 @@ class CliSessionLifecycleAdapterTests(unittest.TestCase):
             receipt = self._append(
                 root,
                 journal,
-                self._observation(1, "turn_completed", turn_id="TURN-001"),
+                self._observation(
+                    1,
+                    "turn_completed",
+                    turn_id="TURN-001",
+                    turn_status="completed",
+                ),
                 name="bad-complete",
                 expected=3,
             )
             self.assertEqual(receipt["adapter_status"], "conflict")
             self.assertEqual(len(journal.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_turn_terminal_status_is_required_and_error_digest_is_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            self._append(
+                root,
+                journal,
+                self._observation(0, "session_started"),
+                name="start",
+            )
+            self._append(
+                root,
+                journal,
+                self._observation(1, "turn_started", turn_id="TURN-001"),
+                name="turn",
+            )
+            missing_status = self._append(
+                root,
+                journal,
+                self._observation(
+                    2,
+                    "turn_completed",
+                    turn_id="TURN-001",
+                ),
+                name="missing-status",
+                expected=3,
+            )
+            self.assertEqual(missing_status["adapter_status"], "rejected")
+            self.assertIn("turn_status", missing_status["errors"][0])
+            invalid_error = self._append(
+                root,
+                journal,
+                self._observation(
+                    2,
+                    "turn_completed",
+                    turn_id="TURN-001",
+                    turn_status="interrupted",
+                    error_sha256="b" * 64,
+                ),
+                name="invalid-error",
+                expected=3,
+            )
+            self.assertEqual(invalid_error["adapter_status"], "rejected")
+            self.assertIn("only allowed", invalid_error["errors"][0])
+            self.assertEqual(len(journal.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_verifier_detects_turn_status_tampering(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            self._append(
+                root,
+                journal,
+                self._observation(0, "session_started"),
+                name="start",
+            )
+            self._append(
+                root,
+                journal,
+                self._observation(1, "turn_started", turn_id="TURN-001"),
+                name="turn",
+            )
+            self._append(
+                root,
+                journal,
+                self._observation(
+                    2,
+                    "turn_completed",
+                    turn_id="TURN-001",
+                    turn_status="interrupted",
+                ),
+                name="interrupted",
+            )
+            self.assertTrue(
+                self._verify(root, journal, name="interrupted")["valid"]
+            )
+            receipt_path = root / "interrupted.receipt.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["turn_status"] = "completed"
+            receipt_path.write_text(
+                json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            tampered = self._verify(
+                root,
+                journal,
+                name="interrupted",
+                output_name="interrupted-tampered",
+                expected=2,
+            )
+            self.assertFalse(tampered["checks"]["lifecycle_projection_verified"])
 
     def test_exact_tail_retry_is_idempotent_but_stale_retry_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -353,6 +553,48 @@ class CliSessionLifecycleAdapterTests(unittest.TestCase):
                 expected=3,
             )
             self.assertIn("source identity", receipt["errors"][0])
+
+    def test_source_record_sequence_allows_gaps_but_rejects_reordering(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "events.jsonl"
+            self._append(
+                root,
+                journal,
+                self._observation(
+                    0,
+                    "session_started",
+                    source_record_sequence=2,
+                ),
+                name="start",
+            )
+            self._append(
+                root,
+                journal,
+                self._observation(
+                    1,
+                    "turn_started",
+                    turn_id="TURN-001",
+                    source_record_sequence=7,
+                ),
+                name="turn",
+            )
+            reordered = self._append(
+                root,
+                journal,
+                self._observation(
+                    2,
+                    "turn_completed",
+                    turn_id="TURN-001",
+                    turn_status="completed",
+                    source_record_sequence=6,
+                ),
+                name="reordered",
+                expected=3,
+            )
+            self.assertEqual(reordered["adapter_status"], "conflict")
+            self.assertIn("strictly increasing", reordered["errors"][0])
+            self.assertEqual(len(journal.read_text(encoding="utf-8").splitlines()), 2)
 
     def test_turn_start_is_rejected_after_journal_derived_completion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

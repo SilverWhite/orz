@@ -39,12 +39,12 @@ from prototype.fep_agent_proto.schema import validate_instance
 
 
 RECEIPT_SCHEMA = (
-    ROOT / "runtime" / "cli-session-lifecycle-adapter-receipt-v0.1.schema.json"
+    ROOT / "runtime" / "cli-session-lifecycle-adapter-receipt-v0.2.schema.json"
 )
 VERIFICATION_SCHEMA = (
     ROOT
     / "runtime"
-    / "cli-session-lifecycle-adapter-verification-v0.1.schema.json"
+    / "cli-session-lifecycle-adapter-verification-v0.2.schema.json"
 )
 STATUSES = {"appended", "already_recorded", "conflict", "rejected"}
 
@@ -185,6 +185,8 @@ def verify_receipt(
             and receipt.get("lifecycle_state_before") == expected_before
             and receipt.get("lifecycle_state_after") == reduction["state"]
             and receipt.get("active_turn_id") == reduction["active_turn_id"]
+            and receipt.get("turn_status") == observation["turn_status"]
+            and receipt.get("error_sha256") == observation["error_sha256"]
             and receipt.get("canonical_event_type") == event["event_type"]
             and receipt.get("event_sha256") == event["event_sha256"]
         )
@@ -197,7 +199,7 @@ def verify_receipt(
         errors.append(f"journal inspection failed: {journal_error}")
     observation_id = observation.get("observation_id")
     result = {
-        "schema_version": "0.1.0",
+        "schema_version": "0.2.0",
         "artifact_kind": "cli-session-lifecycle-adapter-verification",
         "valid": not errors,
         "adapter_status": status if status in STATUSES else None,
@@ -214,6 +216,7 @@ def verify_receipt(
         "limitations": [
             "The final journal cannot prove whether the adapter appended the event or found an identical tail event.",
             "Verification does not validate vendor-specific normalization semantics.",
+            "A model_output event is not a success claim; verification preserves and checks turn_status separately.",
             "Mechanical consistency does not prove model or scientific correctness.",
         ],
     }

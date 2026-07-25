@@ -353,7 +353,7 @@ receipt，但不复用 controller 的写入路径。
 |---|---|
 | `session_started` | `run_started` |
 | `turn_started` | `model_request` |
-| `turn_completed` | `model_output` |
+| `turn_completed(turn_status=completed\|interrupted\|failed)` | `model_output` |
 | `session_completed` | `run_finished` |
 | `session_failed` | `run_failed` |
 | `session_cancelled` | `run_cancelled` |
@@ -362,6 +362,13 @@ adapter 在共享 journal lock 内重放既有链，归约 `new → active ↔ i
 session identity、turn ID 与 run/manifest binding，再追加一条 metadata-only event 并重新归约。精确链尾 observation 重试
 幂等；旧 observation、身份漂移、乱序 turn、terminal 后追加均 conflict。GPS 已从 journal 归约为 `completed` 时，adapter
 拒绝新的 `turn_started`，但不复制 GPS 状态规则。
+
+`turn_completed` 是 turn terminal envelope，不是成功断言。v0.2 observation 必须携带
+`turn_status=completed|interrupted|failed`；三种状态都只执行 `in_turn → active`，同一 session 随后仍可开始新 turn。
+只有显式 session terminal observation 才能产生 `run_finished/run_failed/run_cancelled`。`model_output` 消费者必须读取
+payload `turn_status`，不得仅由 event type 推断 turn 成功。
+v0.2 还区分连续 lifecycle `source_sequence` 与原始 transport `source_record_sequence`；后者绑定
+`source_stream_id`、只要求严格递增并允许跳号，从而保留被过滤 `item/*` 消息造成的原始位置间隔。
 
 该接入面不解析厂商私有日志，也不证明 normalizer 对源记录的解释正确。厂商层必须把原始 source record digest 写入
 observation；canonical event 只保存该 digest 与标准化 metadata，不复制 prompt、reasoning 或 tool content。当前 Grok
@@ -372,3 +379,5 @@ normalizer 必须从单一、有序 lifecycle source 或可证明的时序关系
 controller receipt 一样，最终快照不能区分“本次刚追加”和“已存在相同链尾”，故 `appended` 仍不是可独立重建的历史事实。
 实现与反例见
 [`CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md`](../docs/CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md)。
+成熟 CLI 比较与首个 Codex app-server normalizer 方向见
+[`CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md`](../docs/CLI_LIFECYCLE_SOURCE_COMPARISON_AND_CODEX_DIRECTION_2026-07-25.md)。
