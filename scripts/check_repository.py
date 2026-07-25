@@ -909,14 +909,18 @@ def check_repository() -> dict[str, Any]:
     coverage_path = ROOT / "regression/coverage-matrix-v0.1.yaml"
     reason_path = ROOT / "protocol/reason-codes-v0.1.yaml"
     gate_path = ROOT / "protocol/gate-matrix-v0.1.yaml"
+    progress_reason_migration_path = (
+        ROOT / "protocol/global-progress-reason-code-migration-v0.1.yaml"
+    )
     try:
         corpus = _load_yaml(corpus_path)
         coverage = _load_yaml(coverage_path)
         reasons = _load_yaml(reason_path)
         gates = _load_yaml(gate_path)
+        progress_reason_migration = _load_yaml(progress_reason_migration_path)
     except Exception as exc:
         errors.append(f"YAML load failed: {exc}")
-        corpus = coverage = reasons = gates = {}
+        corpus = coverage = reasons = gates = progress_reason_migration = {}
 
     if corpus:
         errors.extend(
@@ -1524,6 +1528,9 @@ def check_repository() -> dict[str, Any]:
         ROOT / "scripts/build_global_progress_transition_event.py",
         ROOT / "scripts/verify_global_progress_transition_event.py",
         ROOT / "scripts/append_global_progress_transition_event.py",
+        ROOT / "prototype/fep_agent_proto/journal_lock.py",
+        ROOT / "protocol/global-progress-reason-code-migration-v0.1.schema.json",
+        ROOT / "protocol/global-progress-reason-code-migration-v0.1.yaml",
     ):
         if not required_path.is_file():
             errors.append(
@@ -1540,6 +1547,54 @@ def check_repository() -> dict[str, Any]:
     )
 
     reason_codes = {item["code"] for item in reasons.get("reason_codes", [])}
+    if progress_reason_migration:
+        errors.extend(
+            _validate_instance(
+                progress_reason_migration,
+                ROOT / "protocol/global-progress-reason-code-migration-v0.1.schema.json",
+                "protocol/global-progress-reason-code-migration-v0.1.yaml",
+            )
+        )
+        raw_mappings = progress_reason_migration.get("mappings", [])
+        mappings = raw_mappings if isinstance(raw_mappings, list) else []
+        counts["global_progress_reason_code_mappings"] = len(mappings)
+        mapping_codes = [
+            item.get("control_code") for item in mappings if isinstance(item, dict)
+        ]
+        if len(mapping_codes) != len(set(mapping_codes)):
+            errors.append("global-progress reason-code migration has duplicate control codes")
+        receipt_schema = _load_json(
+            ROOT / "runtime/global-progress-transition-receipt-v0.1.schema.json"
+        )
+        expected_control_codes = set(
+            receipt_schema["properties"]["control_codes"]["items"]["enum"]
+        )
+        if set(mapping_codes) != expected_control_codes:
+            errors.append(
+                "global-progress reason-code migration does not exactly cover receipt control codes"
+            )
+        raw_source_registry = progress_reason_migration.get("source_registry", {})
+        source_registry = (
+            raw_source_registry if isinstance(raw_source_registry, dict) else {}
+        )
+        if source_registry.get("sha256") != _sha256(reason_path):
+            errors.append("global-progress reason-code migration source registry digest mismatch")
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            registered = set(mapping.get("registered_reason_codes", []))
+            unknown_registered = sorted(registered - reason_codes)
+            if unknown_registered:
+                errors.append(
+                    f"{mapping.get('control_code')} projects unknown registered reason codes: "
+                    f"{unknown_registered}"
+                )
+            candidate = mapping.get("candidate_reason_code")
+            if candidate in reason_codes:
+                errors.append(
+                    f"{mapping.get('control_code')} candidate reason code is already registered: "
+                    f"{candidate}"
+                )
     corpus_reason_codes = set(corpus.get("reason_codes", []))
     unknown_corpus_reasons = sorted(corpus_reason_codes - reason_codes)
     if unknown_corpus_reasons:

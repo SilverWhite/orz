@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-reason-code-migration-v0.1.schema.json",
+  "title": "Global Progress runtime control-code migration registry v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "registry_id",
+    "status",
+    "source_registry",
+    "mappings"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "registry_id": { "const": "FEP-GPS-REASON-CODE-MIGRATION-v0.1" },
+    "status": { "const": "design_only_not_protocol" },
+    "source_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry_id", "sha256"],
+      "properties": {
+        "registry_id": { "const": "FEP-AGENT-REASON-CODES-v0.1" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "mappings": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/mapping" }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "reason_code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9-]+-[0-9]{3}$"
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "control_code",
+        "control_semantics",
+        "migration_status",
+        "registered_reason_codes",
+        "candidate_reason_code",
+        "projection_rule",
+        "rationale"
+      ],
+      "properties": {
+        "control_code": {
+          "enum": [
+            "GPS-TRANSITION-PASS",
+            "GPS-TRANSITION-NOT-ALLOWED",
+            "GPS-CHECKPOINT-INVALID",
+            "GPS-FOCUS-WINDOW-EXCEEDED",
+            "GPS-HOLISTIC-INVALID",
+            "GPS-COMPLETION-INELIGIBLE"
+          ]
+        },
+        "control_semantics": { "enum": ["pass", "block"] },
+        "migration_status": {
+          "enum": [
+            "no_protocol_reason",
+            "candidate_for_next_revision",
+            "project_source_reasons"
+          ]
+        },
+        "registered_reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/reason_code" }
+        },
+        "candidate_reason_code": {
+          "oneOf": [
+            { "$ref": "#/$defs/reason_code" },
+            { "type": "null" }
+          ]
+        },
+        "projection_rule": { "type": "string", "minLength": 20 },
+        "rationale": { "type": "string", "minLength": 20 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "migration_status": { "const": "no_protocol_reason" }
+            },
+            "required": ["migration_status"]
+          },
+          "then": {
+            "properties": {
+              "control_semantics": { "const": "pass" },
+              "registered_reason_codes": { "maxItems": 0 },
+              "candidate_reason_code": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "migration_status": { "const": "candidate_for_next_revision" }
+            },
+            "required": ["migration_status"]
+          },
+          "then": {
+            "properties": {
+              "control_semantics": { "const": "block" },
+              "registered_reason_codes": { "maxItems": 0 },
+              "candidate_reason_code": { "$ref": "#/$defs/reason_code" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "migration_status": { "const": "project_source_reasons" }
+            },
+            "required": ["migration_status"]
+          },
+          "then": {
+            "properties": {
+              "control_semantics": { "const": "block" },
+              "registered_reason_codes": { "minItems": 1 },
+              "candidate_reason_code": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

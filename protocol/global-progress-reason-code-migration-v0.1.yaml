@@ -1,0 +1,63 @@
+schema_version: "0.1.0"
+registry_id: FEP-GPS-REASON-CODE-MIGRATION-v0.1
+status: design_only_not_protocol
+
+source_registry:
+  registry_id: FEP-AGENT-REASON-CODES-v0.1
+  sha256: b26e04ca1753b7142f56ea16327766a34c230da42b78e4d7a305aa673b70e613
+
+mappings:
+  - control_code: GPS-TRANSITION-PASS
+    control_semantics: pass
+    migration_status: no_protocol_reason
+    registered_reason_codes: []
+    candidate_reason_code: null
+    projection_rule: A passing control result emits no protocol reason code.
+    rationale: Protocol reasons identify failed or pending questions, so a success marker must remain runtime-local.
+
+  - control_code: GPS-TRANSITION-NOT-ALLOWED
+    control_semantics: block
+    migration_status: candidate_for_next_revision
+    registered_reason_codes: []
+    candidate_reason_code: STATE-TRANSITION-001
+    projection_rule: Keep the GPS code local until the candidate is accepted in a later protocol revision.
+    rationale: The frozen registry has no state-machine transition reason with the same decisive question.
+
+  - control_code: GPS-CHECKPOINT-INVALID
+    control_semantics: block
+    migration_status: project_source_reasons
+    registered_reason_codes:
+      - ART-SCHEMA-001
+      - EVD-PROVENANCE-001
+    candidate_reason_code: null
+    projection_rule: Project only reason codes explicitly justified by checkpoint verification errors; never emit the full list by default.
+    rationale: Checkpoint invalidity aggregates schema and source-binding failures and is too coarse to canonize directly.
+
+  - control_code: GPS-FOCUS-WINDOW-EXCEEDED
+    control_semantics: block
+    migration_status: candidate_for_next_revision
+    registered_reason_codes: []
+    candidate_reason_code: TASK-FOCUS-BOUNDS-001
+    projection_rule: Keep the GPS code local until bounded-focus consumption has a stable protocol-level decisive question.
+    rationale: Existing task and action codes do not distinguish an authorized focus window from its measured exhaustion.
+
+  - control_code: GPS-HOLISTIC-INVALID
+    control_semantics: block
+    migration_status: project_source_reasons
+    registered_reason_codes:
+      - ART-SCHEMA-001
+      - EVD-PROVENANCE-001
+      - EVD-COVERAGE-001
+      - EVD-INDEPENDENCE-001
+      - EVD-COMPARABILITY-001
+    candidate_reason_code: null
+    projection_rule: Project only independently reproduced holistic verification failures and preserve every unresolved source reason.
+    rationale: Holistic invalidity is an aggregate outcome whose causes already span several registered evidence questions.
+
+  - control_code: GPS-COMPLETION-INELIGIBLE
+    control_semantics: block
+    migration_status: candidate_for_next_revision
+    registered_reason_codes: []
+    candidate_reason_code: PROGRESS-COMPLETION-001
+    projection_rule: Keep the GPS code local and preserve underlying warnings until completion eligibility is standardized.
+    rationale: The frozen registry has no single reason covering unresolved directions, acceptance states, and completion acknowledgement.

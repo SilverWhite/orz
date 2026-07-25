@@ -13,8 +13,16 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from prototype.fep_agent_proto.journal_lock import (
+    JournalLockError,
+    exclusive_journal_lock,
+)
+
+
 EVENT_SCHEMA = ROOT / "runtime" / "run-event-v0.1.schema.json"
 RECEIPT_SCHEMA = ROOT / "runtime" / "global-progress-transition-receipt-v0.1.schema.json"
 RECEIPT_SCHEMA_NAME = RECEIPT_SCHEMA.name
@@ -110,30 +118,35 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journal", required=True)
     parser.add_argument("--event", required=True)
+    parser.add_argument("--lock-timeout-seconds", type=float, default=5.0)
     args = parser.parse_args()
     journal = Path(args.journal)
     try:
         event = _load_event(Path(args.event))
         _validate_transition_candidate(event)
-        existing = _replay(journal)
-        if existing and existing[-1]["event_type"] in TERMINAL_EVENTS:
-            raise AppendError("refusing to append after terminal event")
-        previous = existing[-1]["event_sha256"] if existing else None
-        if event["sequence"] != len(existing) or event["previous_event_sha256"] != previous:
-            raise AppendError("candidate sequence/previous digest does not extend journal")
-        if existing and (
-            event["run_id"] != existing[0]["run_id"]
-            or event["run_manifest_sha256"] != existing[0]["run_manifest_sha256"]
+        with exclusive_journal_lock(
+            journal,
+            timeout_seconds=args.lock_timeout_seconds,
         ):
-            raise AppendError("candidate run binding differs from journal")
-        journal.parent.mkdir(parents=True, exist_ok=True)
-        encoded = _canonical(event) + b"\n"
-        with journal.open("ab") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        replayed = _replay(journal)
-    except AppendError as exc:
+            existing = _replay(journal)
+            if existing and existing[-1]["event_type"] in TERMINAL_EVENTS:
+                raise AppendError("refusing to append after terminal event")
+            previous = existing[-1]["event_sha256"] if existing else None
+            if event["sequence"] != len(existing) or event["previous_event_sha256"] != previous:
+                raise AppendError("candidate sequence/previous digest does not extend journal")
+            if existing and (
+                event["run_id"] != existing[0]["run_id"]
+                or event["run_manifest_sha256"] != existing[0]["run_manifest_sha256"]
+            ):
+                raise AppendError("candidate run binding differs from journal")
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            encoded = _canonical(event) + b"\n"
+            with journal.open("ab") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            replayed = _replay(journal)
+    except (AppendError, JournalLockError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(json.dumps({"valid": True, "event_count": len(replayed), "last_event_sha256": replayed[-1]["event_sha256"]}))

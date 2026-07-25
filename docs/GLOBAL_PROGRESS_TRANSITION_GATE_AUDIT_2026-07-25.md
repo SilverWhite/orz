@@ -21,6 +21,6 @@ digest；builder 生成符合 `run-event-v0.1` 的 `gate_decision` event，paylo
 仓库完整性检查覆盖 97 个 schema，结果为 0 errors。控制码暂不冒充 protocol reason code；event verifier 会重建
 事件并检查 payload/event hash 与状态投影。
 
-保留缺口：appender 是 disposable 单进程 fixture，没有跨进程文件锁；并发 writer 仍可能在 replay 与 append 之间
-竞争。它尚未接入真实 runtime transition controller，`GPS-*` 也没有 protocol reason-code revision。下一步应先
-设计原子 journal writer/锁边界与 runtime-local control code 到正式协议的迁移策略。
+后续补全：跨进程 writer 竞争与 reason-code 迁移边界已在
+[`GLOBAL_PROGRESS_ATOMIC_JOURNAL_AND_REASON_MIGRATION_AUDIT_2026-07-25.md`](GLOBAL_PROGRESS_ATOMIC_JOURNAL_AND_REASON_MIGRATION_AUDIT_2026-07-25.md)
+实现和复核。本 transition gate 仍未接入真实 runtime controller；新增设计不改变其 disposable 状态。

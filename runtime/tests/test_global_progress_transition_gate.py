@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from prototype.fep_agent_proto.journal import append_event, replay_journal
+from prototype.fep_agent_proto.journal_lock import exclusive_journal_lock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -278,10 +279,28 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
                 sequence=1, previous_event_sha256=first["event_sha256"],
             )
             event_path, event = self._build(root, request, checkpoint, verification)
-            completed = self._run(
-                str(APPENDER), "--journal", str(journal), "--event", str(event_path)
+            command = [
+                sys.executable,
+                str(APPENDER),
+                "--journal", str(journal),
+                "--event", str(event_path),
+                "--lock-timeout-seconds", "2",
+            ]
+            first_append = subprocess.Popen(
+                command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
+            second_append = subprocess.Popen(
+                command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            first_stdout, first_stderr = first_append.communicate(timeout=10)
+            second_stdout, second_stderr = second_append.communicate(timeout=10)
+            results = [
+                (first_append.returncode, first_stdout, first_stderr),
+                (second_append.returncode, second_stdout, second_stderr),
+            ]
+            self.assertEqual(sorted(item[0] for item in results), [0, 2])
+            refused = next(item for item in results if item[0] == 2)
+            self.assertIn("does not extend journal", refused[2])
             replay = replay_journal(
                 run_manifest_path=None,
                 journal_path=journal,
@@ -292,11 +311,30 @@ class GlobalProgressTransitionGateTests(unittest.TestCase):
             self.assertTrue(replay["valid"])
             self.assertEqual(replay["event_count"], 2)
             self.assertEqual(replay["last_event_sha256"], event["event_sha256"])
-            repeated = self._run(
-                str(APPENDER), "--journal", str(journal), "--event", str(event_path)
+
+    def test_appender_times_out_while_cross_process_lock_is_held(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "run-events.jsonl"
+            checkpoint, verification = self._sources(root)
+            request = self._request(
+                root,
+                checkpoint,
+                verification,
+                sequence=0,
+                previous_event_sha256=None,
             )
-            self.assertEqual(repeated.returncode, 2)
-            self.assertIn("does not extend journal", repeated.stderr)
+            event_path, _ = self._build(root, request, checkpoint, verification)
+            with exclusive_journal_lock(journal):
+                completed = self._run(
+                    str(APPENDER),
+                    "--journal", str(journal),
+                    "--event", str(event_path),
+                    "--lock-timeout-seconds", "0.05",
+                )
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("timed out acquiring journal lock", completed.stderr)
+            self.assertFalse(journal.exists())
 
     def test_appender_rejects_non_transition_run_event(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

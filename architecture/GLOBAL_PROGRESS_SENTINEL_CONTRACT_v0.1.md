@@ -266,3 +266,20 @@ transition gate 已把 checkpoint/holistic verification 接到 `executing → re
 
 runtime-local `GPS-*` control code 尚未注册为 protocol reason code，不能对外伪装为正式 GateDecision reason。详见
 [`GLOBAL_PROGRESS_TRANSITION_GATE_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_TRANSITION_GATE_AUDIT_2026-07-25.md)。
+
+### 11.6 Atomic journal boundary and reason-code migration
+
+所有仓库内已知 journal writer 必须使用同一个 `<journal>.lock` sidecar，并在一把独占锁内完成：
+
+1. replay 现有 journal；
+2. 校验 terminal/run/manifest/sequence/previous digest；
+3. 追加一条完整 canonical JSON line 并 `fsync`；
+4. 必要时在释放锁前重放。
+
+锁文件作为稳定 inode 保留，不能在释放后删除；删除会使已等待旧 inode 的 writer 与新建 lock file 的 writer 分裂。
+该锁是同机协作进程的 advisory boundary，不宣称对不遵守锁的外部 writer 或网络文件系统提供多主一致性。
+
+冻结的 [`reason-codes-v0.1.yaml`](../protocol/reason-codes-v0.1.yaml) 不因 runtime 集成而原地扩写。
+[`global-progress-reason-code-migration-v0.1.yaml`](../protocol/global-progress-reason-code-migration-v0.1.yaml)
+只记录三种迁移状态：pass 不产生 protocol reason、稳定的新语义进入下一修订候选、聚合失败从独立 verifier
+投影已有细粒度原因。候选码在正式 protocol revision 接纳前不得写入 claim-bearing GateDecision。

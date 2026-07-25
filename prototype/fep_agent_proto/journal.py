@@ -16,6 +16,7 @@ from .io_utils import (
     utc_now,
 )
 from .layout import DESIGN_ROOT, RUNTIME_ROOT
+from .journal_lock import JournalLockError, exclusive_journal_lock
 from .schema import validate_instance
 
 
@@ -28,7 +29,7 @@ def _event_hash(event: dict[str, Any]) -> str:
     return sha256_bytes(canonical_bytes(projection))
 
 
-def append_event(
+def _append_event_unlocked(
     journal_path: Path,
     *,
     run_id: str,
@@ -41,7 +42,7 @@ def append_event(
     previous: str | None = None
     sequence = 0
     if journal_path.exists():
-        replay = replay_journal(
+        replay = _replay_journal_unlocked(
             run_manifest_path=None,
             journal_path=journal_path,
             expected_manifest_sha256=run_manifest_sha256,
@@ -87,7 +88,32 @@ def append_event(
     return event
 
 
-def replay_journal(
+def append_event(
+    journal_path: Path,
+    *,
+    run_id: str,
+    run_manifest_sha256: str,
+    event_type: str,
+    payload_schema: str,
+    payload: dict[str, Any],
+    redaction: str = "none",
+) -> dict[str, Any]:
+    try:
+        with exclusive_journal_lock(journal_path):
+            return _append_event_unlocked(
+                journal_path,
+                run_id=run_id,
+                run_manifest_sha256=run_manifest_sha256,
+                event_type=event_type,
+                payload_schema=payload_schema,
+                payload=payload,
+                redaction=redaction,
+            )
+    except JournalLockError as exc:
+        raise PrototypeError(str(exc)) from exc
+
+
+def _replay_journal_unlocked(
     *,
     run_manifest_path: Path | None,
     journal_path: Path,
@@ -171,6 +197,35 @@ def replay_journal(
         "checked_at": utc_now(),
         "limitations": ["Replay verifies mechanics and does not score model correctness."],
     }
+
+
+def replay_journal(
+    *,
+    run_manifest_path: Path | None,
+    journal_path: Path,
+    expected_manifest_sha256: str | None = None,
+    expected_run_id: str | None = None,
+    require_terminal: bool = True,
+) -> dict[str, Any]:
+    if not journal_path.is_file():
+        return _replay_journal_unlocked(
+            run_manifest_path=run_manifest_path,
+            journal_path=journal_path,
+            expected_manifest_sha256=expected_manifest_sha256,
+            expected_run_id=expected_run_id,
+            require_terminal=require_terminal,
+        )
+    try:
+        with exclusive_journal_lock(journal_path):
+            return _replay_journal_unlocked(
+                run_manifest_path=run_manifest_path,
+                journal_path=journal_path,
+                expected_manifest_sha256=expected_manifest_sha256,
+                expected_run_id=expected_run_id,
+                require_terminal=require_terminal,
+            )
+    except JournalLockError as exc:
+        raise PrototypeError(str(exc)) from exc
 
 
 def create_journal_smoke(*, export_root: Path, output_dir: Path) -> dict[str, Any]:
