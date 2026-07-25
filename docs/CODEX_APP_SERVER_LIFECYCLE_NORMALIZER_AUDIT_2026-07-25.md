@@ -1,7 +1,7 @@
 # Codex app-server lifecycle normalizer 审计（2026-07-25）
 
-状态：no-model ordered-capture 实现；离线正反 fixture、独立 verifier 和 Codex CLI 0.145.0 隔离 live
-app-server smoke 已通过。
+状态：ordered-capture、离线 normalizer 与独立 verifier 已实现；Codex CLI 0.145.0 隔离 live
+app-server 的 no-model 握手及 loopback synthetic-turn smoke 均已通过。
 
 ## 来源与边界
 
@@ -26,6 +26,15 @@ live 阶段使用临时安装于仓库忽略目录的官方 `@openai/codex` 0.14
 `initialize → initialized → thread/start(ephemeral=true, sandbox=read-only)`；没有 `turn/start`、prompt、
 模型请求、工具调用或 canonical journal append。首轮用 `readOnly` 被该版本以明确 schema error 拒绝；未覆盖失败
 产物，改为版本实际接受的 `read-only` 后用新目录重试成功。
+
+第二个 live 阶段由专用 turn probe 启动同一真实 binary，但把 custom Responses provider 固定到临时
+`127.0.0.1` listener。隔离配置关闭 apps、plugins 和 web search，provider 不配置 credential，
+请求必须是唯一的 `POST /v1/responses`、`stream=true`、固定 synthetic marker 且无 Authorization。
+loopback SSE 形状直接采用 Codex 官方测试 helper 的最小序列
+[`response.created → response.output_item.done → response.completed`](https://github.com/openai/codex/blob/main/codex-rs/core/tests/common/responses.rs)，
+而 Codex 官方 Responses endpoint 实现确认请求使用 `POST responses` 和 `Accept: text/event-stream`
+（[`codex-api/src/endpoint/responses.rs`](https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/endpoint/responses.rs)）。
+该阶段只使用固定 synthetic input/output，不读取或迁移 LIF 上游文件，也不调用付费模型。
 
 ## 实现
 
@@ -52,6 +61,15 @@ live 阶段使用临时安装于仓库忽略目录的官方 `@openai/codex` 0.14
 - receipt 不复制 command argv 和 stderr 正文，只保存 digest 与长度；capture verifier 独立检查 retained stderr；
 - verifier 重建三条 client message、initialize/thread response、thread notification 和 thread id，并确认 no turn/no input。
 
+`probe_codex_app_server_turn_lifecycle.py` 与 `verify_codex_app_server_turn_probe.py` 补齐受控真实 turn：
+
+- no-model capture 保持原安全默认；只有专用 probe 才发送固定 synthetic `turn/start`；
+- 自动生成隔离 user-level provider config，模型 endpoint 只能是 literal `127.0.0.1` ephemeral port；
+- provider 仅保留 request body digest、长度、model/stream/marker/header 布尔投影，不复制完整模型请求；
+- probe receipt 同时绑定 config、provider exchange、stdio capture、stderr 与 thread/turn terminal identity；
+- verifier 独立重放 `turn/start response → turn/started → turn/completed(completed)` 的实际 record order，
+  并检查 synthetic input/output/SSE digest。
+
 ## Fixture 与反例
 
 `runtime/fixtures/codex-app-server-lifecycle-v0.1/` 固定七类输入：
@@ -67,37 +85,48 @@ live 阶段使用临时安装于仓库忽略目录的官方 `@openai/codex` 0.14
 定向测试还覆盖 observation/receipt verifier、observation 篡改，以及
 capture → observation → canonical adapter → adapter verifier 的端到端链。
 
-fake app-server 另覆盖八项 supervisor 路径：正常握手、notification-before-response、timeout、malformed stdout、
+fake app-server 的 no-model 测试覆盖八项 supervisor 路径：正常握手、notification-before-response、timeout、malformed stdout、
 response/notification thread mismatch、capture tamper、stderr tamper 和拒绝覆盖。正常路径继续送入 normalizer，结果必须是
 `session_started` 一条、`active/partial`，不能因 EOF 变成 terminal。
 
+synthetic-turn probe 另有六项测试：成功 provider exchange + probe verifier + normalizer 双重回放、invalid provider
+exchange、capture tamper、provider projection tamper、config tamper 和拒绝覆盖。
+
 ## 当前实测
 
-- Codex capture + normalizer 定向测试：16/16（capture 8、normalizer 8）；
-- `python scripts/check_repository.py`：116 schemas、7 个 Codex lifecycle fixtures、0 errors；
+- Codex capture + normalizer 既有定向测试：16/16（capture 8、normalizer 8）；
+- synthetic-turn probe 定向测试：6/6；
+- `python scripts/check_repository.py`：118 schemas、7 个 Codex lifecycle fixtures、0 errors；
 - `python -m compileall -q prototype/fep_agent_proto scripts runtime/tests/...`：通过；
 - Codex CLI 0.145.0 live capture：6 records，capture verifier 7/7；
 - live normalization：1 个 `session_started`，`active/partial`，normalization verifier 7/7；
-- 当前源码全量回归：223/223（prototype 58、Grok integration 44、runtime 73、assurance 48）。
+- Codex CLI 0.145.0 synthetic-turn live probe：18 records、唯一 loopback provider request、terminal
+  `completed`，probe verifier 10/10；
+- synthetic-turn live normalization：3 个 observations（session start、turn start、turn completed），
+  `active/partial`，normalization verifier 7/7，raw content omission 通过；
+- 当前源码全量回归：229/229（prototype 58、Grok integration 44、runtime 79、assurance 48）。
 - `fep-script-validation` legacy-review task-board：capture CLI 为 PASS 9 / WARN 14 / FAIL 0，
   capture verifier 为 PASS 12 / WARN 11 / FAIL 0，red-lines 均为空。WARN 主要是实验脚本专用字段不适用，
   以及静态扫描未跨模块识别共用 atomic/no-overwrite 实现；未为清空 board 添加无用参数。
 - `fep-script-validation` legacy-review task-board：两个 CLI 均为 PASS 11 / WARN 12 / FAIL 0，red-lines 为空。
   WARN 主要是实验脚本专用的 seed/backend/checkpoint/神经动力学字段不适用于本 deterministic normalizer；
   atomic write 由共用 `io_utils.atomic_write_*` 实现，未为了清空通用 board 添加无用参数。
+- `fep-script-validation` legacy-review task-board：turn probe CLI 为 PASS 9 / WARN 14 / FAIL 0，
+  probe module 为 PASS 11 / WARN 12 / FAIL 0，probe verifier 为 PASS 12 / WARN 11 / FAIL 0；
+  三者 catastrophic red-lines 均为空。WARN 同样主要来自科研实验模板字段不适用，未做迎合式代码修改。
 
 ## 第二轮自查
 
 | 检查问题 | 状态 | 证据 | 未核风险 |
 |---|---|---|---|
 | 数据/计数是否可追溯 | 已核实 | unittest 四组输出；repository checker JSON | 测试计数不是 live 事件完整性 |
-| 代码与计算链路是否回查 | 已核实 | capture/normalizer modules、四个 CLI、五份 schema、14 项定向测试、真实 stdout capture | 尚无真实 turn |
+| 代码与计算链路是否回查 | 已核实 | capture/normalizer/turn-probe modules、六个 CLI、七份 schema、20 项定向测试、真实 stdout capture | 尚无 live interrupt/failed turn |
 | 参数性质是否透明 | 已核实 | CLI 显式要求 runtime version、run id、manifest digest 和三条路径 | 未做跨 Codex 版本兼容矩阵 |
 | 新代码是否先定义反例 | 已核实 | sequence、cross-thread、unbound turn、truncated、timeout、malformed、identity mismatch、tamper | 多 connection 尚未设计 |
 | 环境是否一致 | 已核实 | `D:\CLI` 当前源码；Python compile/test；官方 npm Codex 0.145.0；隔离状态目录 | Store-app binary ACL 仍不可直接执行 |
-| 结论强度是否受限 | 已核实 | 文档只写 no-model/offline/mechanical PASS | 不声称 production/live 正确性 |
+| 结论强度是否受限 | 已核实 | 文档只写受控 synthetic turn 的 mechanical PASS | 不声称 production 或真实任务正确性 |
 | source→observation 映射是否直接 | 已核实 | request/response turn binding、notification mapping、端到端 adapter test | app-server 未公开内部因果顺序 |
-| 普遍性是否过度外推 | 已核实 | runtime version 必填；当前只覆盖 ordered stdio capture | WebSocket、多 connection、其他 CLI 未测 |
+| 普遍性是否过度外推 | 已核实 | runtime version 必填；当前只覆盖 ordered stdio 与一个 completed turn | WebSocket、多 connection、其他 CLI 未测 |
 | 是否误写科学机制 | 已核实 | 无 LIF 数据、训练、机制或结果 claim | 无 |
 | 来源与状态是否真实 | 已核实 | 当前 Codex manual、官方 OpenAI Codex app-server README、0.145.0 实际 capture/receipt/verifier | 未做跨版本矩阵 |
 | 是否独立核查用户边界 | 已核实 | 实际读取 OneDrive 上游三文件；`D:\CLI` 未新增 LIF 路由副本 | 上游后续变化不由本仓库自动同步 |
@@ -109,9 +138,10 @@ response/notification thread mismatch、capture tamper、stderr tamper 和拒绝
 
 - 当前 capture wrapper 只证明 supervisor 在单一 stdio 连接上的接收顺序；
 - 本机 WindowsApps 内 Codex executable 仍因 ACL 不可直接运行；live smoke 使用官方 npm 0.145.0 临时 binary；
-- live startup 的 stderr 显示一次 featured-plugin 远程预热尝试失败；这不是模型请求，但说明 thread sandbox
-  `read-only` 不等同于 app-server 宿主进程绝对零网络；
-- 未测试真实 turn、取消、失败 turn、thread/closed 的 live 路径，也未实现多 connection 排序、WebSocket、
+- 早期 no-model live startup 的 stderr 显示一次 featured-plugin 远程预热尝试失败；新的 synthetic-turn
+  隔离配置关闭 apps/plugins 后未再出现该请求，但 `read-only` 仍不等同于 app-server 宿主进程绝对零网络；
+- 已测试一个真实 app-server + fake provider 的 completed turn；取消、失败 turn、thread/closed 的 live
+  路径仍未测试，也未实现多 connection 排序、WebSocket、
   Gemini/Qwen hooks；
 - receipt 和 observations 各自原子写入，但不构成跨文件原子事务；
 - mechanical PASS 不证明模型质量、任务完成质量或科学结论。

@@ -1,7 +1,8 @@
 # CLI lifecycle source 比较与 Codex normalizer 方向（2026-07-25）
 
 状态：设计与实现记录；通用 lifecycle v0.2 已冻结，首个 Codex app-server 离线只读 normalizer、独立 verifier、
-live capture supervisor 和正反 fixture 已实现；Codex CLI 0.145.0 的隔离 no-model live smoke 已通过。
+live capture supervisor 和正反 fixture 已实现；Codex CLI 0.145.0 的隔离 no-model 及 loopback
+synthetic-turn live smoke 已通过。
 
 ## 1. 术语边界
 
@@ -90,7 +91,9 @@ v0.1 schema 文件继续保留，以维持提交 `6f28192` 的可复现基线；
 已实现 read-only `Codex app-server ordered capture → cli-session-lifecycle-observation v0.2` normalizer。离线阶段不接
 TUI 文本、不解析 `codex exec` 的人类可读 stdout，也不把 post-run 文件合并顺序当作 source order；随后新增的
 live supervisor 只启动显式 app-server executable，发送 initialize、initialized 和
-ephemeral/read-only `thread/start`，不发送 `turn/start` 或模型输入。
+ephemeral/read-only `thread/start`，不发送 `turn/start` 或模型输入。该安全默认保持不变；另一个专用
+synthetic-turn probe 才会发送固定 marker，并把 custom Responses provider 锁定到
+`127.0.0.1`，用于验证实际 turn lifecycle 而非获取模型能力。
 
 ### 5.1 输入与排序
 
@@ -107,6 +110,11 @@ ephemeral/read-only `thread/start`，不发送 `turn/start` 或模型输入。
 `source_record_sequence` 证明的是“supervisor 在一条连接上的接收顺序”，不是模型内部并行工作的隐藏因果顺序。
 capture wrapper 是 normalizer 的 source record。Codex CLI 0.145.0 live smoke 已实际捕获六条 stdio JSONL message；
 `thread/started` 归一化为唯一 `session_started`，连接关闭后保持 `active/partial`。
+
+专用 live turn probe 又实际捕获 18 条同一 stdio stream records。唯一 Responses POST 命中 literal
+`127.0.0.1`，无 Authorization；capture 中的 `turn/start response` 先于 `turn/started`，随后明确收到
+`turn/completed(status=completed)`。现有 normalizer 将其投影成三个连续 observations，item/delta 仍只占
+raw record position，不进入 lifecycle sequence。
 
 ### 5.2 首批映射
 
@@ -133,18 +141,24 @@ capture wrapper 是 normalizer 的 source record。Codex CLI 0.145.0 live smoke 
 5. 重复、乱序、跨 thread identity 和 truncated JSON 全部 fail closed；
 6. raw source digest、observation digest、canonical journal event 和 verifier receipt 可独立重放；
 7. fixture 通过后才进行受限 live smoke；live smoke 仍不使用 LIF 内部研究任务。
+8. no-model smoke 通过后才进行真实 app-server + loopback fake provider 的 fixed synthetic turn；
+   provider request、SSE 和 stdio lifecycle 分别 digest-bind，并由两个 verifier 独立回放。
 
 实现入口：
 
 - `scripts/capture_codex_app_server_lifecycle.py`
 - `scripts/verify_codex_app_server_lifecycle_capture.py`
+- `scripts/probe_codex_app_server_turn_lifecycle.py`
+- `scripts/verify_codex_app_server_turn_probe.py`
 - `scripts/normalize_codex_app_server_lifecycle.py`
 - `scripts/verify_codex_app_server_lifecycle.py`
 - `prototype/fep_agent_proto/codex_app_server_capture.py`
+- `prototype/fep_agent_proto/codex_app_server_turn_probe.py`
 - `prototype/fep_agent_proto/codex_app_server_lifecycle.py`
 - `runtime/fixtures/codex-app-server-lifecycle-v0.1/`
 - `runtime/fixtures/fake_codex_app_server.py`
 - `runtime/tests/test_codex_app_server_lifecycle_capture.py`
+- `runtime/tests/test_codex_app_server_turn_probe.py`
 - `runtime/tests/test_codex_app_server_lifecycle_normalizer.py`
 
 ### 5.4 暂不纳入第一阶段

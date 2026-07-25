@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/codex-app-server-turn-probe-verification-v0.1.schema.json",
+  "title": "Codex app-server synthetic turn probe verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_kind", "valid", "probe_id",
+    "source_stream_id", "checks", "errors", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": {
+      "const": "codex-app-server-turn-probe-verification"
+    },
+    "valid": { "type": "boolean" },
+    "probe_id": {
+      "type": ["string", "null"],
+      "pattern": "^CLIPROBE-CODEX-[A-Z0-9._-]+$"
+    },
+    "source_stream_id": {
+      "type": ["string", "null"],
+      "pattern": "^CLISTREAM-[A-Z0-9._-]+$"
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_valid", "receipt_semantics_valid",
+        "capture_artifact_matches", "capture_records_valid",
+        "config_artifact_matches", "loopback_provider_config_valid",
+        "provider_request_valid", "synthetic_exchange_bound",
+        "ordered_lifecycle_replayed", "stderr_artifact_matches"
+      ],
+      "properties": {
+        "receipt_schema_valid": { "type": "boolean" },
+        "receipt_semantics_valid": { "type": "boolean" },
+        "capture_artifact_matches": { "type": "boolean" },
+        "capture_records_valid": { "type": "boolean" },
+        "config_artifact_matches": { "type": "boolean" },
+        "loopback_provider_config_valid": { "type": "boolean" },
+        "provider_request_valid": { "type": "boolean" },
+        "synthetic_exchange_bound": { "type": "boolean" },
+        "ordered_lifecycle_replayed": { "type": "boolean" },
+        "stderr_artifact_matches": { "type": "boolean" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

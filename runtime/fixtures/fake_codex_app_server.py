@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import sys
 import time
+import tomllib
+import urllib.error
+import urllib.request
 
 
 def receive() -> dict:
@@ -81,6 +86,81 @@ def main() -> int:
     else:
         send(response)
         send(notification)
+
+    if mode in {"turn-success", "turn-provider-invalid"}:
+        turn_request = receive()
+        if turn_request.get("method") != "turn/start":
+            return 9
+        turn_params = turn_request.get("params", {})
+        if (
+            turn_params.get("threadId") != "thr_fake_capture"
+            or turn_params.get("input")
+            != [
+                {
+                    "type": "text",
+                    "text": (
+                        "LIFECYCLE_PROBE_INPUT_0E99A0F4: reply with the "
+                        "fixed synthetic response only."
+                    ),
+                }
+            ]
+        ):
+            return 10
+        turn = {
+            "id": "turn_fake_probe",
+            "status": "inProgress",
+            "items": [],
+            "error": None,
+        }
+        send({"id": turn_request.get("id"), "result": {"turn": turn}})
+        send({"method": "turn/started", "params": {"turn": turn}})
+
+        config_path = Path(os.environ["CODEX_HOME"]) / "config.toml"
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        provider_id = config["model_provider"]
+        provider = config["model_providers"][provider_id]
+        input_text = turn_params["input"][0]["text"]
+        body = {
+            "model": config["model"],
+            "stream": mode != "turn-provider-invalid",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": input_text}],
+                }
+            ],
+        }
+        request_data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        provider_request = urllib.request.Request(
+            provider["base_url"].rstrip("/") + "/responses",
+            data=request_data,
+            headers={
+                "Accept": "text/event-stream",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        provider_ok = False
+        try:
+            with urllib.request.urlopen(provider_request, timeout=5) as upstream:
+                upstream.read()
+                provider_ok = upstream.status == 200
+        except urllib.error.HTTPError:
+            provider_ok = False
+
+        terminal = {
+            "id": "turn_fake_probe",
+            "status": "completed" if provider_ok else "failed",
+            "items": [],
+            "error": (
+                None
+                if provider_ok
+                else {"message": "synthetic provider request failed"}
+            ),
+        }
+        send({"method": "turn/completed", "params": {"turn": terminal}})
+
     sys.stderr.write("fake app-server diagnostic\n")
     sys.stderr.flush()
     while sys.stdin.readline():
