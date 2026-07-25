@@ -1,0 +1,378 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-review-bundle-v0.1.schema.json",
+  "title": "General science read-only review bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bundle_kind",
+    "bundle_id",
+    "task_contract",
+    "design_source_id",
+    "action_source_id",
+    "sources",
+    "artifacts",
+    "evidence",
+    "claims",
+    "review_safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "bundle_kind": {
+      "const": "general_science_readonly_review"
+    },
+    "bundle_id": {
+      "$ref": "#/$defs/id"
+    },
+    "task_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "intent",
+        "must",
+        "must_not",
+        "source_of_truth",
+        "acceptance"
+      ],
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/id"
+        },
+        "intent": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "must": {
+          "$ref": "#/$defs/nonempty_strings"
+        },
+        "must_not": {
+          "$ref": "#/$defs/nonempty_strings"
+        },
+        "source_of_truth": {
+          "$ref": "#/$defs/ids"
+        },
+        "acceptance": {
+          "$ref": "#/$defs/nonempty_strings"
+        }
+      }
+    },
+    "design_source_id": {
+      "$ref": "#/$defs/id"
+    },
+    "action_source_id": {
+      "$ref": "#/$defs/id"
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/file_record"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/file_record"
+          },
+          {
+            "type": "object",
+            "required": [
+              "producer_action_id"
+            ],
+            "properties": {
+              "producer_action_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence_id",
+          "evidence_class",
+          "status",
+          "source_ids",
+          "artifact_ids",
+          "independence_key",
+          "limitations"
+        ],
+        "properties": {
+          "evidence_id": {
+            "$ref": "#/$defs/id"
+          },
+          "evidence_class": {
+            "enum": [
+              "source_grounded_fact",
+              "direct_comparison",
+              "bridge_hypothesis",
+              "user_supplied_unverified",
+              "agent_inferred",
+              "unchecked_risk"
+            ]
+          },
+          "status": {
+            "enum": [
+              "observed",
+              "derived",
+              "unknown"
+            ]
+          },
+          "source_ids": {
+            "$ref": "#/$defs/ids_allow_empty"
+          },
+          "artifact_ids": {
+            "$ref": "#/$defs/ids_allow_empty"
+          },
+          "independence_key": {
+            "$ref": "#/$defs/id"
+          },
+          "limitations": {
+            "$ref": "#/$defs/strings"
+          },
+          "comparison": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "artifact_id",
+              "left_pointer",
+              "operator",
+              "right_pointer"
+            ],
+            "properties": {
+              "artifact_id": {
+                "$ref": "#/$defs/id"
+              },
+              "left_pointer": {
+                "$ref": "#/$defs/json_pointer"
+              },
+              "operator": {
+                "enum": [
+                  "lt",
+                  "lte",
+                  "gt",
+                  "gte",
+                  "eq",
+                  "neq"
+                ]
+              },
+              "right_pointer": {
+                "$ref": "#/$defs/json_pointer"
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "evidence_class": {
+                  "const": "direct_comparison"
+                }
+              },
+              "required": [
+                "evidence_class"
+              ]
+            },
+            "then": {
+              "required": [
+                "comparison"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "comparison"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "claim_id",
+          "text",
+          "claim_type",
+          "scope",
+          "supporting_evidence_ids",
+          "refuting_evidence_ids",
+          "limitations",
+          "falsifiers",
+          "requested_state"
+        ],
+        "properties": {
+          "claim_id": {
+            "$ref": "#/$defs/id"
+          },
+          "text": {
+            "$ref": "#/$defs/nonempty"
+          },
+          "claim_type": {
+            "enum": [
+              "observation",
+              "association",
+              "causal",
+              "mechanism",
+              "generality"
+            ]
+          },
+          "scope": {
+            "$ref": "#/$defs/nonempty"
+          },
+          "supporting_evidence_ids": {
+            "$ref": "#/$defs/ids_allow_empty"
+          },
+          "refuting_evidence_ids": {
+            "$ref": "#/$defs/ids_allow_empty"
+          },
+          "limitations": {
+            "$ref": "#/$defs/strings"
+          },
+          "falsifiers": {
+            "$ref": "#/$defs/strings"
+          },
+          "requested_state": {
+            "const": "candidate"
+          }
+        }
+      }
+    },
+    "review_safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_write_allowed",
+        "analysis_code_execution_allowed",
+        "model_invocation_allowed",
+        "network_allowed",
+        "child_process_allowed"
+      ],
+      "properties": {
+        "source_write_allowed": {
+          "const": false
+        },
+        "analysis_code_execution_allowed": {
+          "const": false
+        },
+        "model_invocation_allowed": {
+          "const": false
+        },
+        "network_allowed": {
+          "const": false
+        },
+        "child_process_allowed": {
+          "const": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "nonempty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonempty"
+      },
+      "uniqueItems": true
+    },
+    "nonempty_strings": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/strings"
+        },
+        {
+          "minItems": 1
+        }
+      ]
+    },
+    "ids_allow_empty": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "uniqueItems": true
+    },
+    "ids": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ids_allow_empty"
+        },
+        {
+          "minItems": 1
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relative_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$",
+      "maxLength": 512
+    },
+    "json_pointer": {
+      "type": "string",
+      "pattern": "^(?:/(?:[^~/]|~[01])*)*$",
+      "maxLength": 1024
+    },
+    "file_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_id",
+        "path",
+        "sha256",
+        "media_type"
+      ],
+      "properties": {
+        "record_id": {
+          "$ref": "#/$defs/id"
+        },
+        "path": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "media_type": {
+          "enum": [
+            "application/json",
+            "text/markdown",
+            "text/plain"
+          ]
+        },
+        "producer_action_id": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    }
+  }
+}

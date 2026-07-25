@@ -2,9 +2,9 @@
 
 P1-P5 provide testable contracts, lifecycle controls, guarded execution,
 instruction/capability authorization, retained metadata audit/recovery gates,
-a workspace-first integrated path, and synthetic user-task preflight. They
-remain development/conformance mechanisms rather than a production security
-boundary.
+a workspace-first integrated path, and synthetic user-task preflight.
+GSA-CORE adds a narrow domain-neutral multi-file read-only review. They remain
+development/conformance mechanisms rather than a production security boundary.
 """
 
 from .archive import ArchiveController, resume_archived_conversation
@@ -19,6 +19,7 @@ from .guarded_execution import (
     execute_guarded_no_model_action,
     verify_guarded_execution_receipt,
 )
+from .general_science_review import review_general_science_bundle
 from .keystore import MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore
 from .instruction_gate import (
     authorize_action_candidate,
@@ -97,6 +98,7 @@ __all__ = [
     "initialize_workspace_marker",
     "issue_sensitive_action_permit",
     "record_instruction_provenance",
+    "review_general_science_bundle",
     "load_execution_backend_policy",
     "load_profile_registry",
     "load_readonly_task_projection",

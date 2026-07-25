@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/general-science-review-result-v0.1.schema.json",
+  "title": "General science read-only review result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "review_id",
+    "bundle_id",
+    "bundle_sha256",
+    "valid",
+    "decision",
+    "files",
+    "checks",
+    "claim_decisions",
+    "safety",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "result_kind": {
+      "const": "general_science_readonly_review_result"
+    },
+    "review_id": {
+      "$ref": "#/$defs/id"
+    },
+    "bundle_id": {
+      "$ref": "#/$defs/id"
+    },
+    "bundle_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "valid": {
+      "const": true
+    },
+    "decision": {
+      "enum": [
+        "allow",
+        "defer",
+        "block"
+      ]
+    },
+    "files": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "record_type",
+          "record_id",
+          "path",
+          "bytes",
+          "sha256"
+        ],
+        "properties": {
+          "record_type": {
+            "enum": [
+              "bundle",
+              "source",
+              "artifact"
+            ]
+          },
+          "record_id": {
+            "$ref": "#/$defs/id"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_valid",
+        "paths_safe",
+        "digests_match",
+        "references_resolve",
+        "artifacts_parse",
+        "comparisons_verified"
+      ],
+      "properties": {
+        "contract_valid": {
+          "const": true
+        },
+        "paths_safe": {
+          "const": true
+        },
+        "digests_match": {
+          "const": true
+        },
+        "references_resolve": {
+          "const": true
+        },
+        "artifacts_parse": {
+          "const": true
+        },
+        "comparisons_verified": {
+          "const": true
+        }
+      }
+    },
+    "claim_decisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "claim_id",
+          "decision",
+          "reason_codes",
+          "supporting_evidence_ids",
+          "verified_comparisons"
+        ],
+        "properties": {
+          "claim_id": {
+            "$ref": "#/$defs/id"
+          },
+          "decision": {
+            "enum": [
+              "allow",
+              "defer",
+              "block"
+            ]
+          },
+          "reason_codes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "enum": [
+                "DIRECT_OBSERVATION_SUPPORTED",
+                "ASSOCIATION_SUPPORTED",
+                "MISSING_SUPPORT",
+                "REFUTING_EVIDENCE_PRESENT",
+                "UNCERTAIN_EVIDENCE_CLASS",
+                "SUPPORT_NOT_OBSERVED",
+                "CONTROLLED_INTERVENTION_REQUIRED",
+                "DESIGN_CONTROLS_REQUIRED",
+                "DESIGN_FALSIFIERS_REQUIRED",
+                "DIRECT_COMPARISON_REQUIRED",
+                "COVERAGE_INCOMPLETE",
+                "STRONG_CLAIM_VALIDATOR_UNAVAILABLE"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "supporting_evidence_ids": {
+            "$ref": "#/$defs/ids_allow_empty"
+          },
+          "verified_comparisons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "evidence_id",
+                "artifact_id",
+                "left_pointer",
+                "operator",
+                "right_pointer",
+                "left_value",
+                "right_value",
+                "passed"
+              ],
+              "properties": {
+                "evidence_id": {
+                  "$ref": "#/$defs/id"
+                },
+                "artifact_id": {
+                  "$ref": "#/$defs/id"
+                },
+                "left_pointer": {
+                  "type": "string"
+                },
+                "operator": {
+                  "enum": [
+                    "lt",
+                    "lte",
+                    "gt",
+                    "gte",
+                    "eq",
+                    "neq"
+                  ]
+                },
+                "right_pointer": {
+                  "type": "string"
+                },
+                "left_value": {
+                  "$ref": "#/$defs/scalar"
+                },
+                "right_value": {
+                  "$ref": "#/$defs/scalar"
+                },
+                "passed": {
+                  "const": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_write_attempted",
+        "analysis_code_executed",
+        "model_invoked",
+        "network_requested",
+        "child_process_spawned"
+      ],
+      "properties": {
+        "source_write_attempted": {
+          "const": false
+        },
+        "analysis_code_executed": {
+          "const": false
+        },
+        "model_invoked": {
+          "const": false
+        },
+        "network_requested": {
+          "const": false
+        },
+        "child_process_spawned": {
+          "const": false
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ids_allow_empty": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "uniqueItems": true
+    },
+    "scalar": {
+      "type": [
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "null"
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": "0.1.0-draft",
+  "design_id": "DESIGN_DECAY_TWO_GRID",
+  "question": "Within the two checked-in explicit-Euler runs, is the final absolute error smaller at dt=0.05 than at dt=0.1?",
+  "design_kind": "descriptive_comparison",
+  "hypotheses": [
+    {
+      "hypothesis_id": "H_SMALLER_STEP_SMALLER_ERROR",
+      "text": "The dt=0.05 run has smaller final absolute error than the dt=0.1 run.",
+      "status": "prospective_for_fixture"
+    }
+  ],
+  "controls": [
+    "Same differential equation and initial condition",
+    "Same explicit-Euler update rule",
+    "Same final time and exact-reference definition"
+  ],
+  "falsifiers": [
+    "The dt=0.05 final absolute error is greater than or equal to the dt=0.1 final absolute error"
+  ],
+  "analysis_plan": [
+    "Read both final absolute errors from the checked-in result artifact",
+    "Evaluate the preregistered less-than comparison without executing analysis code"
+  ],
+  "coverage_complete": false
+}

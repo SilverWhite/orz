@@ -1,0 +1,128 @@
+{
+  "schema_version": "0.1.0-draft",
+  "bundle_kind": "general_science_readonly_review",
+  "bundle_id": "BUNDLE_DECAY_TWO_GRID",
+  "task_contract": {
+    "task_id": "TASK_DECAY_ERROR_COMPARISON",
+    "intent": "Mechanically review a narrow comparison over an independent synthetic scientific fixture.",
+    "must": [
+      "Verify every declared source and artifact digest",
+      "Resolve the design and completed-action manifests from independent files",
+      "Evaluate the preregistered JSON-pointer comparison",
+      "Keep the claim within the two checked-in runs"
+    ],
+    "must_not": [
+      "Execute analysis code",
+      "Invoke a model or network service",
+      "Promote the result to convergence order, mechanism, causality, or generality",
+      "Modify any reviewed file"
+    ],
+    "source_of_truth": [
+      "SRC_DECAY_NOTES",
+      "SRC_DECAY_DESIGN",
+      "SRC_DECAY_RUN"
+    ],
+    "acceptance": [
+      "All paths and digests verify",
+      "The action manifest is completed with exactly one terminal event",
+      "The declared comparison evaluates true",
+      "The candidate observation has only observed direct support"
+    ]
+  },
+  "design_source_id": "SRC_DECAY_DESIGN",
+  "action_source_id": "SRC_DECAY_RUN",
+  "sources": [
+    {
+      "record_id": "SRC_DECAY_NOTES",
+      "path": "source-notes.md",
+      "sha256": "57b850214beab9f9ac1461b5979a5faa978d6583365831874ec7307b4fbcda6d",
+      "media_type": "text/markdown"
+    },
+    {
+      "record_id": "SRC_DECAY_DESIGN",
+      "path": "design.json",
+      "sha256": "08e18f71edf90bcee8a99ca3d4e7494dc6b0ac9e252e0320c88b3cdab2bc6090",
+      "media_type": "application/json"
+    },
+    {
+      "record_id": "SRC_DECAY_RUN",
+      "path": "run-manifest.json",
+      "sha256": "dfa5455aefd59c70ebb44e4ee3c7b9d93da2a9db9d89904b87e1decae7c3eb1f",
+      "media_type": "application/json"
+    }
+  ],
+  "artifacts": [
+    {
+      "record_id": "ART_DECAY_RESULT",
+      "path": "result.json",
+      "sha256": "fc82bb94280744f776d474e8f15adf0dd8a4291d6e1eb0ea3d7d6faa7643156c",
+      "media_type": "application/json",
+      "producer_action_id": "ACT_DECAY_PRECOMPUTED"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "EV_DECAY_DESIGN",
+      "evidence_class": "source_grounded_fact",
+      "status": "observed",
+      "source_ids": [
+        "SRC_DECAY_NOTES",
+        "SRC_DECAY_DESIGN"
+      ],
+      "artifact_ids": [],
+      "independence_key": "DESIGN_DECAY_TWO_GRID",
+      "limitations": [
+        "The design covers one equation, one method, two step sizes, and one final time"
+      ]
+    },
+    {
+      "evidence_id": "EV_DECAY_ERROR_LT",
+      "evidence_class": "direct_comparison",
+      "status": "observed",
+      "source_ids": [
+        "SRC_DECAY_DESIGN",
+        "SRC_DECAY_RUN"
+      ],
+      "artifact_ids": [
+        "ART_DECAY_RESULT"
+      ],
+      "independence_key": "RESULT_DECAY_TWO_GRID",
+      "limitations": [
+        "This comparison does not estimate convergence order or uncertainty"
+      ],
+      "comparison": {
+        "artifact_id": "ART_DECAY_RESULT",
+        "left_pointer": "/runs/dt_0_05/final_absolute_error",
+        "operator": "lt",
+        "right_pointer": "/runs/dt_0_1/final_absolute_error"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "CLAIM_DECAY_NARROW_OBSERVATION",
+      "text": "In the two checked-in synthetic runs, the dt=0.05 final absolute error is smaller than the dt=0.1 final absolute error.",
+      "claim_type": "observation",
+      "scope": "Only the two precomputed explicit-Euler runs in this bundle.",
+      "supporting_evidence_ids": [
+        "EV_DECAY_ERROR_LT"
+      ],
+      "refuting_evidence_ids": [],
+      "limitations": [
+        "No inference beyond the two checked-in runs",
+        "No claim about convergence order, causality, mechanism, or generality"
+      ],
+      "falsifiers": [
+        "The verified dt=0.05 error is greater than or equal to the verified dt=0.1 error"
+      ],
+      "requested_state": "candidate"
+    }
+  ],
+  "review_safety": {
+    "source_write_allowed": false,
+    "analysis_code_execution_allowed": false,
+    "model_invocation_allowed": false,
+    "network_allowed": false,
+    "child_process_allowed": false
+  }
+}

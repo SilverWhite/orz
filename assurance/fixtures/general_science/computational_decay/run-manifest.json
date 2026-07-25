@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1.0-draft",
+  "action_id": "ACT_DECAY_PRECOMPUTED",
+  "kind": "precomputed_synthetic_numerical_experiment",
+  "state": "completed",
+  "terminal_event_count": 1,
+  "read_only_review_eligible": true,
+  "source_ids": [
+    "SRC_DECAY_NOTES",
+    "SRC_DECAY_DESIGN"
+  ],
+  "artifact_ids": [
+    "ART_DECAY_RESULT"
+  ],
+  "safety": {
+    "generated_before_review": true,
+    "review_requires_execution": false,
+    "review_requires_network": false,
+    "review_requires_model": false
+  }
+}

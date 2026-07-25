@@ -359,6 +359,48 @@ def check_repository() -> dict[str, Any]:
         )
     counts["assurance_p0_semantic_negative_contracts"] = 1
 
+    general_science_fixture_root = (
+        assurance_root / "fixtures/general_science/computational_decay"
+    )
+    general_science_bundle_path = (
+        general_science_fixture_root / "review-bundle.json"
+    )
+    general_science_bundle = _load_json(general_science_bundle_path)
+    errors.extend(
+        _validate_instance(
+            general_science_bundle,
+            assurance_root / "general-science-review-bundle-v0.1.schema.json",
+            str(general_science_bundle_path.relative_to(ROOT)),
+        )
+    )
+    general_science_records = [
+        *general_science_bundle.get("sources", []),
+        *general_science_bundle.get("artifacts", []),
+    ]
+    record_ids = [item.get("record_id") for item in general_science_records]
+    if len(record_ids) != len(set(record_ids)):
+        errors.append("general-science fixture record IDs are not unique")
+    record_paths = [item.get("path") for item in general_science_records]
+    if len(record_paths) != len(set(record_paths)):
+        errors.append("general-science fixture paths are not unique")
+    for record in general_science_records:
+        try:
+            relative = _safe_fixture_path(record["path"])
+            file_path = general_science_fixture_root / Path(*relative.parts)
+            if not file_path.is_file():
+                errors.append(
+                    "general-science fixture file is missing: "
+                    f"{file_path.relative_to(ROOT)}"
+                )
+            elif _sha256(file_path) != record["sha256"]:
+                errors.append(
+                    "general-science fixture digest mismatch: "
+                    f"{file_path.relative_to(ROOT)}"
+                )
+        except Exception as exc:
+            errors.append(f"invalid general-science fixture record: {exc}")
+    counts["general_science_review_fixtures"] = 1
+
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]
     if len(profile_ids) != len(set(profile_ids)):

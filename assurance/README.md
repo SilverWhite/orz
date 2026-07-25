@@ -48,7 +48,30 @@ EvidenceKernel、ClaimBoundary、ResearchLifecycle、ValidatorBridge、ScenarioE
 
 `profile_registry.py` 验证 parent 存在、继承无环、child 不重复声明 inherited state，并按 root→leaf
 重建 effective profile。结构合法但含循环的 fixture 由该解析器和仓库检查器独立拒绝。这只关闭
-GSA-PROFILE-001 的合同层，不表示上述通用科学扩展已经实现。
+GSA-PROFILE-001 的合同层。
+
+## GSA-CORE 初始通用科学只读切片
+
+`general_science_review.py` 已接通一个刻意狭窄、domain-neutral、无模型的多文件路径：
+
+1. bundle 冻结任务 intent、must/must-not、source of truth 和 acceptance；
+2. 独立读取 source notes、研究设计、已完成动作 manifest 和结果 artifact；
+3. 拒绝路径逃逸、linked/reparse path、摘要不符、非有限 JSON、悬空引用和非 exactly-once terminal；
+4. 按 JSON Pointer 重建预声明的直接比较；
+5. 对 observation/association 与 causal/mechanism/generality 分级裁决；
+6. 输出不含时间和随机数的确定性 `allow/defer/block` 报告。
+
+可直接运行：
+
+```powershell
+python -m assurance.general_science_cli --bundle-root assurance/fixtures/general_science/computational_decay
+```
+
+首个 fixture 是与 LIF 无关的显式 Euler 指数衰减两网格比较，只允许“两次 checked-in run 中较小
+step 的最终绝对误差较小”这一窄 observation。强主张在专用 validator 缺失时固定 defer。正反例、
+限制和保留缺口见
+[`GSA-CORE read-only audit`](../docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md)。
+这不是统计审查、实验复现、同行评审、正式 EvaluationRunner 或 production hard gate。
 
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。
