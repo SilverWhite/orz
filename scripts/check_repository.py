@@ -50,6 +50,70 @@ def _load_json(path: Path) -> Any:
         return json.load(handle)
 
 
+def _profile_registry_semantic_errors(registry: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    profile_list = registry.get("profiles", [])
+    profiles = {
+        profile.get("profile_id"): profile
+        for profile in profile_list
+        if isinstance(profile, dict)
+    }
+    if len(profiles) != len(profile_list):
+        errors.append("profile IDs must be unique")
+        return errors
+
+    for profile_id, profile in profiles.items():
+        chain: list[dict[str, Any]] = []
+        seen: list[str] = []
+        cursor: str | None = profile_id
+        invalid_chain = False
+        while cursor is not None:
+            if cursor in seen:
+                cycle = " -> ".join([*seen[seen.index(cursor) :], cursor])
+                errors.append(f"profile inheritance cycle: {cycle}")
+                invalid_chain = True
+                break
+            seen.append(cursor)
+            current = profiles.get(cursor)
+            if current is None:
+                errors.append(
+                    f"profile {profile_id} references unknown parent: {cursor}"
+                )
+                invalid_chain = True
+                break
+            chain.append(current)
+            cursor = current.get("extends_profile_id")
+        if invalid_chain:
+            continue
+        chain.reverse()
+
+        inherited_extensions = {
+            item
+            for ancestor in chain[:-1]
+            for item in ancestor.get("assurance_extensions", [])
+        }
+        inherited_capabilities = {
+            item
+            for ancestor in chain[:-1]
+            for item in ancestor.get("required_capabilities", [])
+        }
+        direct_extensions = set(profile.get("assurance_extensions", []))
+        direct_capabilities = set(profile.get("required_capabilities", []))
+        duplicate_extensions = sorted(inherited_extensions & direct_extensions)
+        duplicate_capabilities = sorted(inherited_capabilities & direct_capabilities)
+        if duplicate_extensions:
+            errors.append(
+                f"profile {profile_id} redeclares inherited extensions: "
+                f"{duplicate_extensions}"
+            )
+        if duplicate_capabilities:
+            errors.append(
+                f"profile {profile_id} redeclares inherited capabilities: "
+                f"{duplicate_capabilities}"
+            )
+    return errors
+
+
 def _load_yaml(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
         return yaml.load(handle, Loader=UniqueKeyLoader)
@@ -269,17 +333,103 @@ def check_repository() -> dict[str, Any]:
         )
 
     profile_registry = _load_json(assurance_root / "profile-registry-v0.1.json")
+    profile_semantic_errors = _profile_registry_semantic_errors(profile_registry)
+    errors.extend(
+        f"assurance profile registry semantic error: {error}"
+        for error in profile_semantic_errors
+    )
+    semantic_invalid_path = (
+        assurance_fixture_root
+        / "profile-registry.inheritance-cycle.semantic-invalid.json"
+    )
+    semantic_invalid_registry = _load_json(semantic_invalid_path)
+    semantic_invalid_schema_errors = _validate_instance(
+        semantic_invalid_registry,
+        assurance_root / "assurance-profile-registry-v0.1.schema.json",
+        str(semantic_invalid_path.relative_to(ROOT)),
+    )
+    if semantic_invalid_schema_errors:
+        errors.append(
+            "profile inheritance-cycle fixture must remain structurally valid: "
+            f"{semantic_invalid_schema_errors}"
+        )
+    if not _profile_registry_semantic_errors(semantic_invalid_registry):
+        errors.append(
+            "profile inheritance-cycle fixture unexpectedly passed semantic validation"
+        )
+    counts["assurance_p0_semantic_negative_contracts"] = 1
+
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]
     if len(profile_ids) != len(set(profile_ids)):
         errors.append("assurance profile IDs are not unique")
+    general_science_profiles = [
+        profile
+        for profile in profiles
+        if profile.get("profile_id") == "general-science"
+    ]
     lif_profiles = [
         profile for profile in profiles if profile.get("profile_id") == "lif-research"
     ]
+    if len(general_science_profiles) != 1:
+        errors.append(
+            "assurance registry must contain exactly one general-science profile"
+        )
     if len(lif_profiles) != 1:
         errors.append("assurance registry must contain exactly one lif-research profile")
-    else:
+    if len(general_science_profiles) == 1 and len(lif_profiles) == 1:
+        general_science_profile = general_science_profiles[0]
         lif_profile = lif_profiles[0]
+        if general_science_profile.get("extends_profile_id") is not None:
+            errors.append("general-science must be a domain-neutral root profile")
+        if lif_profile.get("extends_profile_id") != "general-science":
+            errors.append("lif-research must extend general-science")
+        general_science_text = json.dumps(
+            general_science_profile, sort_keys=True
+        ).lower()
+        for forbidden in (
+            "lif-",
+            "lif_",
+            "lif ",
+            " fep",
+            "r211",
+            "current_index",
+            "map6",
+            "index/map/r",
+        ):
+            if forbidden in general_science_text:
+                errors.append(
+                    "general-science contains project-specific token: "
+                    f"{forbidden}"
+                )
+        required_general_extensions = {
+            "ClaimBoundary",
+            "EvidenceKernel",
+            "EvaluationRunner",
+            "LeakScanner",
+            "ResearchLifecycle",
+            "ScenarioExporter",
+            "SourceRouter",
+            "ValidatorBridge",
+        }
+        if set(general_science_profile.get("assurance_extensions", [])) != (
+            required_general_extensions
+        ):
+            errors.append(
+                "general-science assurance extensions do not match the frozen contract"
+            )
+        expected_lif_extensions = {
+            "LifCurrentSourceRouting",
+            "LifValidatorProfile",
+        }
+        if set(lif_profile.get("assurance_extensions", [])) != (
+            expected_lif_extensions
+        ):
+            errors.append("lif-research must contain only the frozen LIF delta")
+        if required_general_extensions.intersection(
+            lif_profile.get("assurance_extensions", [])
+        ):
+            errors.append("lif-research redeclares general-science extensions")
         if "required_runtime_family" in lif_profile:
             errors.append("lif-research profile must not bind a required runtime family")
         grok_references = [

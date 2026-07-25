@@ -9,6 +9,7 @@
     "registry_kind",
     "registry_id",
     "runtime_selection_policy",
+    "profile_inheritance_policy",
     "profiles"
   ],
   "properties": {
@@ -16,6 +17,7 @@
     "registry_kind": { "const": "assurance_profile_registry" },
     "registry_id": { "type": "string", "pattern": "^APR-[A-Z0-9._-]+$" },
     "runtime_selection_policy": { "const": "capability_gated" },
+    "profile_inheritance_policy": { "const": "additive_no_weakening" },
     "profiles": {
       "type": "array",
       "minItems": 1,
@@ -28,6 +30,7 @@
       "additionalProperties": false,
       "required": [
         "profile_id",
+        "extends_profile_id",
         "description",
         "assurance_extensions",
         "required_capabilities",
@@ -38,6 +41,15 @@
         "profile_id": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+        },
+        "extends_profile_id": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+            }
+          ]
         },
         "description": { "type": "string", "minLength": 1 },
         "assurance_extensions": {

@@ -41,6 +41,11 @@ from .permit import (
     issue_sensitive_action_permit,
     verify_sensitive_action_permit,
 )
+from .profile_registry import (
+    load_profile_registry,
+    resolve_effective_profile,
+    validate_profile_registry_semantics,
+)
 from .readonly_projection import (
     load_readonly_task_projection,
     project_complex_task_readonly,
@@ -93,10 +98,12 @@ __all__ = [
     "issue_sensitive_action_permit",
     "record_instruction_provenance",
     "load_execution_backend_policy",
+    "load_profile_registry",
     "load_readonly_task_projection",
     "load_synthetic_user_task_suite",
     "project_complex_task_readonly",
     "recovery_permit_binding",
+    "resolve_effective_profile",
     "resume_archived_conversation",
     "run_docker_sandbox_probe",
     "run_synthetic_user_task_evaluation",
@@ -116,5 +123,6 @@ __all__ = [
     "verify_sandbox_selection_receipt",
     "verify_security_envelope",
     "verify_sensitive_action_permit",
+    "validate_profile_registry_semantics",
     "windows_native_strict_candidate",
 ]

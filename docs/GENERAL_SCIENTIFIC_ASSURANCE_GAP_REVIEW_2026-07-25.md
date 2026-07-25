@@ -33,7 +33,8 @@ profile，不能再用 LIF 内部任务充当通用复杂测试或未见深度�
 - Grok reference integration：44 tests；
 - runtime + General Assurance Kernel：41 tests；
 - 合计：135 tests；
-- P0–P5 代码、schema、fixture、审计文档和 CI 接线仍处于待提交工作树，将在本轮完成基线冻结。
+- P0–P5 代码、schema、fixture、审计文档和 CI 已冻结在 commit `6ddca3d` 与
+  tag `p0-p5-development-baseline-2026-07-25`。
 
 这些结果只证明当前合同、fixture 和 development 实现自洽，不证明：
 
@@ -46,14 +47,17 @@ profile，不能再用 LIF 内部任务充当通用复杂测试或未见深度�
 
 | ID | 缺口 | 当前状态 | 初步完成条件 |
 |---|---|---|---|
-| GSA-BASE-001 | 可复现基线未冻结 | P0–P5 实现尚未形成单一 commit/tag 入口 | 提交代码、schema、fixture、审计和 CI；记录 commit、测试命令、计数与未关闭限制 |
-| GSA-PROFILE-001 | 缺少通用科学 profile | 当前科学扩展只挂在 `lif-research` | 新增不依赖 LIF 文件名和术语的 `general-science` profile；`lif-research` 只添加领域路由与 validator |
+| GSA-BASE-001 | 可复现基线未冻结 | **已关闭（development baseline）**：commit `6ddca3d`，tag `p0-p5-development-baseline-2026-07-25` | 后续正式评测仍需单独冻结 runner、任务包、oracle、模型和阈值 |
+| GSA-PROFILE-001 | 缺少通用科学 profile | **合同层已关闭**：`general-science` 为 domain-neutral root，`lif-research` 以 `additive_no_weakening` 只添加领域 delta | 核心实现继续由 GSA-CORE/RUNNER 等条目跟踪 |
 | GSA-CORE-001 | 科学保障核心没有可执行纵向切片 | SourceRouter、EvidenceKernel、ValidatorBridge、ClaimBoundary 等主要仍是合同/名称 | 接通来源→任务契约→设计→动作/产物→验证→证据→claim→报告的只读或 disposable 闭环 |
 | GSA-ADAPTER-001 | 真实 runtime/tool 入口未接保障层 | P3/P4 为 development API；P4.5 只允许固定进程内 roundtrip | 至少一个 runtime adapter 的读取、工具、授权、审计和 terminal 不可绕过同一 envelope/gate |
 | GSA-RUNNER-001 | 正式 EvaluationRunner 未实现 | 现有 exporter/scanner/journal 只是 contract probe | 实现 immutable RunManifest、adapter preflight、journal、结构化输出校验、失败分类与评分交接 |
 | GSA-PARTITION-001 | evaluation/holdout 为零 | 当前 40 个案例均为 development/challenge seed | 创建物理隔离的新来源 evaluation 和未见 holdout；冻结 digest、oracle、角色与污染生命周期 |
 | GSA-CAL-001 | 人类 baseline 和阈值为零 | 未招募 reviewer、未测一致性、无有效模型通过阈值 | 双人独立盲审、adjudication、可判定性与一致性检查后冻结阈值，再应用于未参与校准的 holdout |
 | GSA-CORPUS-001 | 案例仍为项目形状 | 十个错误簇来自 FEP/LIF 历史与合成 countercase | 增加跨领域、非 LIF、正反成对且来源独立的复杂科研任务 |
+
+`GSA-PROFILE-001` 合同增量完成后的机械结果为 79 schemas、1 个结构合法但语义无效的
+inheritance-cycle 负例、137 tests、0 errors。该计数不提升 GSA-CORE 或正式评测状态。
 
 ## 通用科研语义缺口
 

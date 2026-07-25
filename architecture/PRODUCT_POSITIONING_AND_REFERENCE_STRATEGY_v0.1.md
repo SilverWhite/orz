@@ -1,17 +1,18 @@
 # 产品定位与多源借鉴策略 v0.1
 
-状态：2026-07-24 依 ADR-0003 修订；记录产品定位与术语边界，不修改 protocol v0.1、reason code、
+状态：2026-07-25 依 ADR-0003/ADR-0004 修订；记录产品定位与术语边界，不修改 protocol v0.1、reason code、
 gate、claim、evaluation 或 oracle-isolation 语义。
 
 ## 1. 决策
 
-本项目是 **runtime-neutral 的 LIF 研究 Agent 科学保障层**。它通过窄 adapter 接入通过 capability gate
-的外部 Agent runtime，但不自建或同时维护多个通用 runtime 产品。
+本项目是 **runtime-neutral、LIF-first 的通用科学保障层**。它通过窄 adapter 接入通过 capability gate
+的外部 Agent runtime，但不自建或同时维护多个通用 runtime 产品。LIF 是首个领域 profile，
+不是通用科学能力的命名空间或测试语料来源。
 
 正式定位为：
 
 1. **Grok Build 是当前证据最完整的 reference runtime，不是默认、强制或唯一底座**；
-2. **LIF 专项科学保障层是本项目的核心差异**；
+2. **`general-science` 通用科学保障 profile 是核心差异，`lif-research` 只添加领域增量**；
 3. profile 只要求 capability、隔离和验收门禁，不要求 runtime family；
 4. Grok、Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 均可作为分工明确的设计参考；
 5. 任一实际 runtime 必须经自己的 adapter、observed fixture 和独立 verifier 通过同类门禁；
@@ -25,8 +26,10 @@ gate、claim、evaluation 或 oracle-isolation 语义。
 
 ```mermaid
 flowchart LR
-    U["LIF 研究任务 / 用户约束"] --> S["LIF 专项科学保障层"]
-    S --> A["runtime adapter + capability gate"]
+    U["通用科研任务 / 用户约束"] --> S["general-science"]
+    L["LIF 研究任务"] --> LP["lif-research 领域增量"]
+    LP --> S
+    S --> A["General Assurance Kernel + runtime adapter"]
     A --> G["外部 Agent runtime"]
     G --> P["DeepSeek / 其他模型 provider"]
     G --> T["文件、终端、搜索、MCP 等工具"]
@@ -46,7 +49,7 @@ flowchart LR
 
 Grok Build 当前用于 reference adapter 和 observed baseline；上述职责不构成对 Grok 的全局绑定。
 
-### 2.2 LIF 专项科学保障层负责
+### 2.2 `general-science` 负责
 
 - 要求来源先行、Ask-Don't-Guess，并记录实际读取来源；
 - 固定 task contract、用户约束、验收条件和 source of truth；
@@ -55,16 +58,24 @@ Grok Build 当前用于 reference adapter 和 observed baseline；上述职责�
 - 运行 validator 并保留输入、输出、版本和局限，不把机械 PASS 提升为科学证明；
 - 维护 oracle isolation、scenario export、leak scan 和 evaluation 边界；
 - 用 Global Progress Sentinel 对单方向过推进、遗漏验收和 verification debt 产生可追溯 WARN；
-- 对 DeepSeek thinking/tool transcript、模型解析和能力降级做专项 conformance；
-- 在 Windows 上核验进程树、取消、超时、凭据和真实副作用 receipt。
+- 建立不依赖项目文件名的多来源追踪、研究生命周期和 claim/evidence 边界。
 
 这层可以使用 launcher、adapter、wrapper、append-only journal、独立 verifier 和少量 hard gate 实现；“保障层”
 描述的是职责，不要求所有组件位于同一进程、语言或二进制。
 
+### 2.3 `lif-research` 只添加
+
+- LIF_CURRENT_INDEX → 当前环境/MAP → R/JSON/log/code → self-check 的当前来源路由；
+- claim registry prior-existence、撤回/降级/改名链检查；
+- LIF 实验与结果 schema 的领域 validator；
+- 已有 Grok/DeepSeek/Windows 专项 conformance 入口。
+
+LIF 内部任务不得用于通用复杂测试、阈值校准或 holdout。
+
 ## 3. 术语边界
 
-后续说明性文档统一优先使用 **LIF 专项科学保障层**（英文可写
-`LIF-specific scientific assurance layer`）。
+后续说明性文档使用 **通用科学保障层**（`general scientific assurance layer`）描述共同能力，
+使用 **LIF 领域 profile** 描述 INDEX/MAP/R 路由和领域 validator 增量。
 
 以下旧称只在精确描述实现形态时使用：
 
@@ -73,7 +84,7 @@ Grok Build 当前用于 reference adapter 和 observed baseline；上述职责�
 - `adapter`：处理 DeepSeek 等 provider 的协议差异；
 - `control plane`：仅指确定性的工程控制或 gate，不指 LIF/FEP 理论控制 Agent。
 
-“LIF 专项科学保障层”**不表示**：
+“通用科学保障层 + LIF 领域 profile”**不表示**：
 
 - 把 LIF/FEP 理论实现为 Agent 的控制算法；
 - 让旧研究工作区的 INDEX/MAP/self-check 成为 CLI 启动依赖；
@@ -113,7 +124,7 @@ Grok Build 当前用于 reference adapter 和 observed baseline；上述职责�
 - 不进入当前产品定位；
 - 不改变 runtime-neutral 所有权和 capability-gated 选择；
 - 不改变现有协议、gate 或 claim 语义；
-- 不以“LIF 专项科学保障层”的名义静默实现。
+- 不以 `general-science` 或 `lif-research` 的名义静默实现。
 
 ## 6. 接纳或替换 runtime adapter 的触发条件
 
@@ -128,7 +139,8 @@ Grok Build 当前用于 reference adapter 和 observed baseline；上述职责�
 频繁发布、产品 star 数、UI 新功能、“也是开源”或“当前是 reference”都不是单独的选择条件。
 
 runtime-neutral 的正式所有权与禁止强绑规则见
-[`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md)。
+[`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md)；profile 分层与测试隔离见
+[`ADR-0004`](../adr/ADR-0004-general-science-profile-layering.md)。
 
 ## 7. 官方来源
 

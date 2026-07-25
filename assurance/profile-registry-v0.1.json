@@ -3,9 +3,11 @@
   "registry_kind": "assurance_profile_registry",
   "registry_id": "APR-CORE-0.1",
   "runtime_selection_policy": "capability_gated",
+  "profile_inheritance_policy": "additive_no_weakening",
   "profiles": [
     {
       "profile_id": "general-code",
+      "extends_profile_id": null,
       "description": "General code work with conversation-scoped audit and explicit capability gates.",
       "assurance_extensions": [],
       "required_capabilities": [
@@ -24,6 +26,7 @@
     },
     {
       "profile_id": "restricted-review",
+      "extends_profile_id": null,
       "description": "Read-oriented review with deny-by-default external side effects.",
       "assurance_extensions": [],
       "required_capabilities": [
@@ -43,6 +46,7 @@
     },
     {
       "profile_id": "headless-ci",
+      "extends_profile_id": null,
       "description": "Non-interactive execution with precommitted actions and fail-closed missing approvals.",
       "assurance_extensions": [],
       "required_capabilities": [
@@ -62,24 +66,50 @@
       }
     },
     {
-      "profile_id": "lif-research",
-      "description": "LIF scientific-assurance profile layered on any runtime that passes the required gates.",
+      "profile_id": "general-science",
+      "extends_profile_id": null,
+      "description": "Domain-neutral scientific review and claim assurance without project-specific routing conventions.",
       "assurance_extensions": [
         "ClaimBoundary",
         "EvidenceKernel",
         "EvaluationRunner",
         "LeakScanner",
+        "ResearchLifecycle",
         "ScenarioExporter",
         "SourceRouter",
         "ValidatorBridge"
       ],
       "required_capabilities": [
         "audit.terminal_exactly_once",
+        "claim.evidence_boundary",
         "evidence.source_first",
         "evaluation.oracle_isolation",
+        "external_side_effect.deny_by_default",
         "network.digest_bound_permit",
+        "research.multi_source_traceability",
         "session.conversation_namespace",
         "workspace.trust_before_discovery"
+      ],
+      "reference_runtimes": [],
+      "acceptance_gate": {
+        "adapter_contract_required": true,
+        "observed_capability_receipt_required": true,
+        "negative_fixture_required": true,
+        "independent_verifier_required": true,
+        "reference_status_grants_acceptance": false
+      }
+    },
+    {
+      "profile_id": "lif-research",
+      "extends_profile_id": "general-science",
+      "description": "LIF domain profile that adds current-source routing and validators to general-science.",
+      "assurance_extensions": [
+        "LifCurrentSourceRouting",
+        "LifValidatorProfile"
+      ],
+      "required_capabilities": [
+        "research.lif.claim_registry_prior_existence",
+        "research.lif.current_source_routing"
       ],
       "reference_runtimes": [
         {

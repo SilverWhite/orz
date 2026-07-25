@@ -3,9 +3,11 @@
   "registry_kind": "assurance_profile_registry",
   "registry_id": "APR-INVALID-001",
   "runtime_selection_policy": "capability_gated",
+  "profile_inheritance_policy": "additive_no_weakening",
   "profiles": [
     {
       "profile_id": "lif-research",
+      "extends_profile_id": null,
       "description": "Invalid profile that tries to force one runtime.",
       "assurance_extensions": ["EvidenceKernel"],
       "required_capabilities": ["workspace.trust_before_discovery"],

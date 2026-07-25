@@ -1,6 +1,6 @@
-# LIF Scientific-Assurance Agent CLI
+# Scientific-Assurance Agent CLI（LIF-first）
 
-状态：runtime-neutral、Windows-first 的 LIF 专项科学保障工程；P0 合同、P1 会话身份/归档删除、
+状态：runtime-neutral、Windows-first 的通用科学保障工程，LIF 是首个领域 profile；P0 合同、P1 会话身份/归档删除、
 P2 Docker strict sandbox、P2.5 无模型 guarded execution、P3 指令来源/能力继承、
 P4 metadata-only 审计/compaction/恢复授权，以及 P4.5 workspace-first 集成链
 development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只读投影 mechanical preflight
@@ -11,7 +11,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
 误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。
 
-本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它服务于 FEP/LIF 研究工作流，目标是让接入的模型
+本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它从 FEP/LIF 工作流暴露的问题出发，但把
+来源先行、证据分层、独立性、反例搜索、机械验证和 claim 边界抽为通用科学保障能力，目标是让接入的模型
 尽可能遵守来源先行、Ask-Don't-Guess、证据分层、机械验证、全程留痕和独立复核，从而降低幻觉补全、过度推进与
 错误 claim promotion 的风险。它不能保证模型输出必然科学正确，也不把 LIF/FEP 理论本身实现为 Agent 控制算法。
 
@@ -19,8 +20,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 
 - **runtime-neutral**：通用 model/tool/session runtime 由通过 capability gate 的外部框架提供；Grok Build
   是当前 reference runtime，不是默认、强制或唯一底座。
-- **核心差异**：本仓库实现 **LIF 专项科学保障层**，负责来源/证据/claim 边界、validator、审计、全局进度 WARN、
-  DeepSeek conformance、Windows 进程监督和评测隔离。
+- **核心差异**：`general-science` profile 负责领域无关的来源/证据/claim 边界、研究生命周期、
+  validator、场景导出和评测隔离；`lif-research` 只添加 LIF 当前来源路由与 validator 增量。
 - **多源借鉴**：Grok、Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 均可提供设计参考；新增
   runtime adapter 必须独立通过同类门禁，不继承其他框架的 PASS。
 - **上游策略**：每个实际 adapter 各自维护 observed baseline、candidate 和 promotion gate；reference
@@ -30,12 +31,14 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 
 完整裁决见
 [`adr/ADR-0003-runtime-neutral-assurance-kernel.md`](adr/ADR-0003-runtime-neutral-assurance-kernel.md) 与
+[`adr/ADR-0004-general-science-profile-layering.md`](adr/ADR-0004-general-science-profile-layering.md)、
 [`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
 ## 当前文件
 
 - [`adr/ADR-0001-evidence-constrained-local-agent-kernel.md`](adr/ADR-0001-evidence-constrained-local-agent-kernel.md)：产品边界、核心不变量、案例库和反捷径决策。
 - [`adr/ADR-0003-runtime-neutral-assurance-kernel.md`](adr/ADR-0003-runtime-neutral-assurance-kernel.md)：冻结 runtime-neutral 所有权、capability-gated 选择与 Grok `reference_only` 边界。
+- [`adr/ADR-0004-general-science-profile-layering.md`](adr/ADR-0004-general-science-profile-layering.md)：冻结 `general-science → lif-research` 的只增不减分层和通用测试不得使用 LIF 内部任务的隔离边界。
 - [`assurance/README.md`](assurance/README.md)：P0–P5 runtime-neutral 合同与 development fixture，包括会话生命周期、workspace-first/Docker backend policy、guarded execution、指令来源、能力子集、metadata audit、恢复授权和合成用户任务预检。
 - [`docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)：P2 Docker 实测、Windows native fail-closed 状态、限制与正反例收敛策略。
 - [`docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md`](docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md)：P1 envelope、P2 selector、无模型 action、宿主/容器进程追踪、HMAC 回执与残留复核的端到端实测。
@@ -44,13 +47,13 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`docs/P4_5_WORKSPACE_FIRST_INTEGRATION_AUDIT_2026-07-25.md`](docs/P4_5_WORKSPACE_FIRST_INTEGRATION_AUDIT_2026-07-25.md)：P4.5 标准模式 workspace-first 策略、P3→固定动作→P4→archive 实测与无 Docker/子进程残留复核。
 - [`docs/P5_SYNTHETIC_USER_TASK_PREFLIGHT_2026-07-25.md`](docs/P5_SYNTHETIC_USER_TASK_PREFLIGHT_2026-07-25.md)：P5 两项合成任务、R211 复杂任务只读投影、LIF 源文件不变证明及人类可用性未评估边界。
 - [`docs/GENERAL_SCIENTIFIC_ASSURANCE_GAP_REVIEW_2026-07-25.md`](docs/GENERAL_SCIENTIFIC_ASSURANCE_GAP_REVIEW_2026-07-25.md)：将本轮缺口登记为通用科学保障 backlog，并明确 LIF 内部任务不得作为通用复杂测试或 holdout。
-- [`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)：多源借鉴分工、“LIF 专项科学保障层”术语和未来 LIF-informed Agent 想法的隔离边界。
+- [`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)：多源借鉴分工、通用科学保障与 LIF 领域增量分层，以及未来 LIF-informed Agent 想法的隔离边界。
 - [`architecture/GROK_BUILD_ADAPTATION_v0.1.md`](architecture/GROK_BUILD_ADAPTATION_v0.1.md)：基于官方开源快照的 adopt/adapt/defer/reject 矩阵与项目专化层。
 - [`architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`](architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md)：Grok reference adapter 的 Windows 集成范围，以及现有 prototype 的降级分类。
 - [`architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`](architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md)：将可复现实测 baseline 与当前上游 candidate 分离，以 conformance gate 选择更优版本而非永久锁死。
 - [`architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md`](architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md)：优先准确性的全程可观测 wrapper、记录分层、资源取舍与反补全约束。
 - [`architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)：对 Grok ACP、Codex、Gemini CLI、OpenCode、Goose 与 Cline 的职责深拆；把通用 runtime 交给可替换的外部框架，只保留保障层与 shadow-Git 恢复边界。
-- [`architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md`](architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md)：将可迁移保障能力拆为通用 Assurance Kernel + LIF profile，登记物理沙箱/Docker、会话身份、单对话快照、归档删除、反注入和跨用户测试的主要缺口、优先级与完成条件。
+- [`architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md`](architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md)：将能力拆为通用 Assurance Kernel、`general-science` 与 LIF 领域 profile，登记安全、审计和用户测试缺口。
 - [`architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`](architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md)：从 task contract、计划和 append-only journal 派生全局进度摘要与 WARN，要求模型结构化处置，降低单方向过推进和遗漏风险而不增加新协议状态。
 - [`architecture/D_SALVAGE_MATRIX_v0.1.md`](architecture/D_SALVAGE_MATRIX_v0.1.md)：Google Drive 中 Project D 核心源码的 source ledger、采用/改造/拒绝裁决与安全发现。
 - [`adr/ADR-0002-defer-cloud-runtime.md`](adr/ADR-0002-defer-cloud-runtime.md)：冻结云端执行/运维范围，保持 Windows 本地 runtime，并记录未来重启条件。
@@ -145,6 +148,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - 当前案例全属 development/challenge seed corpus，不宣称为未泄漏 holdout 成绩。
 - 当前 10 个错误簇均有历史检测案例和至少一个 challenge，7 个高频簇均有 permission-reversal challenge；但尚无 evaluation/holdout，评测阈值也未校准。
 - 5 个历史案例已有 source-hashed reviewer-only excerpt fixture；它们只提高 curation provenance 可审计性，不提高未见评测覆盖。
-- 实际选中的外部 runtime 是通用 model/tool/session 能力所有者；LIF 专项科学保障层冻结为 SourceRouter、EvidenceKernel、
-  ValidatorBridge、ScenarioExporter、LeakScanner、EvaluationRunner、Global Progress Sentinel 和窄
-  Windows/DeepSeek bridge。Grok 仅作为当前 reference adapter，不扩张通用产品功能面。
+- 实际选中的外部 runtime 是通用 model/tool/session 能力所有者；`general-science` 冻结为
+  SourceRouter、EvidenceKernel、ClaimBoundary、ResearchLifecycle、ValidatorBridge、ScenarioExporter、
+  LeakScanner 和 EvaluationRunner；`lif-research` 只添加当前来源路由与 validator 增量。Grok 仅作为
+  当前 reference adapter，不扩张通用产品功能面。

@@ -31,12 +31,15 @@ profiles
   - general-code
   - restricted-review
   - headless-ci
-  - lif-research
+  - general-science
+      |
+      +-- lif-research
 ```
 
 这里的“通用”指保障不变量可迁移，不指支持任意 runtime、任意云服务或面向公众运营。
-LIF profile 继续增加 SourceRouter、EvidenceKernel、ValidatorBridge、claim promotion、
-countercase、blind-first review 和科学自查；它不再承载本可被其他任务复用的沙箱、身份、留存和反注入逻辑。
+`general-science` 承载 SourceRouter、EvidenceKernel、ValidatorBridge、claim promotion、
+countercase、blind-first review 和科学自查；LIF profile 只增加当前来源路由、prior-existence
+和领域 validator，不再承载可被其他科研任务复用的通用科学或安全逻辑。
 
 ## 2. 本轮任务契约
 
@@ -280,7 +283,7 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 
 | ID | 缺口 | 当前证据/状态 | 严重度 | 下一产物与通过条件 |
 |---|---|---|---|---|
-| GAK-ARCH-001 | 通用内核与 LIF profile 的 P0 schema/ADR | 2026-07-24 已新增 Effective Security Envelope、profile registry、sandbox/session/retention schema、正反 fixture 与 ADR-0003 | P0 已关闭 | 后续实现必须消费这些合同；不得绑定单一 runtime 或复制通用 runtime |
+| GAK-ARCH-001 | 通用内核、general-science 与 LIF profile 的 P0 schema/ADR | 2026-07-25 已新增 Effective Security Envelope、additive profile registry、sandbox/session/retention schema、正反 fixture 与 ADR-0003/0004 | P0 已关闭 | 后续实现必须消费这些合同；不得绑定单一 runtime、复制通用 runtime 或把 LIF 路由回灌 general-science |
 | GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；Windows native 仍只有 Job Object/防火墙部分证据 | 阻断 | 实现 restricted token/AppContainer 或等价 native boundary；无 Docker 路径才可关闭 |
 | GAK-DOCKER-001 | Docker 一键启动与 digest/mount receipt | P2 已固定镜像摘要、唯一 workspace mount、无 socket/home、network-off、resource limits；P2.5 已接入固定 no-model action、conversation lifecycle、进程追踪与 HMAC receipt | P2/P2.5 development 已关闭 | 接入通用 runtime/tool broker、磁盘 quota、并发/crash recovery 后再评估 production closure |
 | GAK-TRUST-001 | trust receipt 尚未统一到所有入口 | Grok launcher 已有双 trust receipt；其他 future adapters 未统一 | 高 | discovery 前统一 receipt；文件变化使 grant 失效 |

@@ -8,14 +8,15 @@ development/conformance 实现。不实现 model/tool/session runtime，也不�
 Windows native sandbox 或 anti-injection hard gate 已达到生产可用状态。
 
 权威所有权裁决见
-[`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md)。
+[`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md) 与
+[`ADR-0004`](../adr/ADR-0004-general-science-profile-layering.md)。
 
 ## 当前合同
 
 - `effective-security-envelope-v0.1.schema.json`：把 conversation、workspace、runtime adapter、
   capability、sandbox 与签名验证冻结在同一 envelope；关键安全事实必须带证据状态。
 - `assurance-profile-registry-v0.1.schema.json`：profile 只要求能力和验收门禁；runtime reference
-  不能提升为 required runtime。
+  不能提升为 required runtime；继承固定为 `additive_no_weakening`。
 - `sandbox-selection-receipt-v0.1.schema.json`：只有 observed compliant backend 可以产生 `allow`；
   没有合格 backend 时必须进入 fail-closed terminal state。
 - `session-lifecycle-receipt-v0.1.schema.json`：冻结
@@ -39,8 +40,15 @@ Windows native sandbox 或 anti-injection hard gate 已达到生产可用状态�
 - `readonly-task-projection-v0.1.schema.json` 与配套 receipt：只读选取 LIF R211 的路由、讨论、
   代码和小型结果元数据，在 disposable snapshot 中复用，并证明源文件内容前后摘要不变。
 
-`profile-registry-v0.1.json` 将 Grok Build 登记为 `lif-research` 的 `reference_only` runtime。
-它不是默认、强制或唯一 runtime。任何实际选择仍需 adapter-specific observed evidence。
+`profile-registry-v0.1.json` 新增 domain-neutral `general-science`，承载 SourceRouter、
+EvidenceKernel、ClaimBoundary、ResearchLifecycle、ValidatorBridge、ScenarioExporter、LeakScanner
+与 EvaluationRunner 合同。`lif-research` 显式继承它，只添加 `LifCurrentSourceRouting`、
+`LifValidatorProfile` 和 LIF prior-existence/current-source capability。Grok Build 仅登记为
+`lif-research` 的 `reference_only` runtime，不是默认、强制或唯一 runtime。
+
+`profile_registry.py` 验证 parent 存在、继承无环、child 不重复声明 inherited state，并按 root→leaf
+重建 effective profile。结构合法但含循环的 fixture 由该解析器和仓库检查器独立拒绝。这只关闭
+GSA-PROFILE-001 的合同层，不表示上述通用科学扩展已经实现。
 
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。
