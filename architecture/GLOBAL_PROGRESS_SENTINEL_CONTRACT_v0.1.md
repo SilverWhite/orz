@@ -343,3 +343,32 @@ receipt，但不复用 controller 的写入路径。
 适配必须保证真实 session 的启动事件与该锚点语义一致，或在未来 protocol revision 中引入更细的 bootstrap event。
 实现与反例见
 [`GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md)。
+
+### 11.11 Limited CLI session lifecycle ingress
+
+成熟 CLI 的私有 event stream 不直接进入 GPS controller。有限 adapter 接受一条已经由厂商专用 normalizer 排序的
+`cli-session-lifecycle-observation`，并只执行以下固定映射：
+
+| observation | canonical run event |
+|---|---|
+| `session_started` | `run_started` |
+| `turn_started` | `model_request` |
+| `turn_completed` | `model_output` |
+| `session_completed` | `run_finished` |
+| `session_failed` | `run_failed` |
+| `session_cancelled` | `run_cancelled` |
+
+adapter 在共享 journal lock 内重放既有链，归约 `new → active ↔ in_turn → terminal`，检查 source sequence、adapter/runtime/
+session identity、turn ID 与 run/manifest binding，再追加一条 metadata-only event 并重新归约。精确链尾 observation 重试
+幂等；旧 observation、身份漂移、乱序 turn、terminal 后追加均 conflict。GPS 已从 journal 归约为 `completed` 时，adapter
+拒绝新的 `turn_started`，但不复制 GPS 状态规则。
+
+该接入面不解析厂商私有日志，也不证明 normalizer 对源记录的解释正确。厂商层必须把原始 source record digest 写入
+observation；canonical event 只保存该 digest 与标准化 metadata，不复制 prompt、reasoning 或 tool content。当前 Grok
+post-run bridge 的 `cross_source_runtime_order=not_established`，因此不能作为本 adapter 的权威有序输入；未来 Grok
+normalizer 必须从单一、有序 lifecycle source 或可证明的时序关系产生 observation。
+
+只读 verifier 独立检查 observation digest、receipt schema、journal 快照、唯一链尾事件与 lifecycle projection。和
+controller receipt 一样，最终快照不能区分“本次刚追加”和“已存在相同链尾”，故 `appended` 仍不是可独立重建的历史事实。
+实现与反例见
+[`CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md`](../docs/CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md)。

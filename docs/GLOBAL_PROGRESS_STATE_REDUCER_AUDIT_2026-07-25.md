@@ -41,3 +41,7 @@ assurance 48、runtime 43）；仓库机械检查覆盖 103 个 schema，返回 
 
 下一步才适合设计一个有限 CLI adapter：把真实 session 的启动、回合边界与终止 lifecycle 映射到已冻结的
 `run_started`/journal 状态语义，并保持 adapter 只做映射、不复制第二套状态机。
+
+该有限接入面现已实现，见
+[`CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md`](CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md)；具体
+CLI 的 vendor normalizer 仍是下一层工作。

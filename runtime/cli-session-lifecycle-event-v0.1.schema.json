@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/cli-session-lifecycle-event-v0.1.schema.json",
+  "title": "Canonical CLI session lifecycle run-event payload v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "observation_id", "observation_sha256", "adapter_id",
+    "runtime_family", "runtime_version", "session_id", "source_sequence",
+    "source_event_kind", "turn_id", "outcome", "source_record_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "observation_id": { "type": "string", "pattern": "^CLIOBS-[A-Z0-9._-]+$" },
+    "observation_sha256": { "$ref": "#/$defs/sha256" },
+    "adapter_id": { "type": "string", "pattern": "^CLIADAPTER-[A-Z0-9._-]+$" },
+    "runtime_family": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$" },
+    "runtime_version": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "source_sequence": { "type": "integer", "minimum": 0 },
+    "source_event_kind": {
+      "enum": [
+        "session_started", "turn_started", "turn_completed",
+        "session_completed", "session_failed", "session_cancelled"
+      ]
+    },
+    "turn_id": { "type": ["string", "null"], "minLength": 1 },
+    "outcome": { "type": ["string", "null"], "minLength": 1 },
+    "source_record_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

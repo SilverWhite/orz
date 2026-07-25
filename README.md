@@ -126,6 +126,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`scripts/run_global_progress_controller.py`](scripts/run_global_progress_controller.py)：no-model disposable controller；组合 transition builder、幂等锁内 append、journal 恢复分类与状态投影，但不自动修复 journal。
 - [`scripts/verify_global_progress_controller_receipt.py`](scripts/verify_global_progress_controller_receipt.py)：只读重建 controller 候选结果，并交叉检查 source digests、当前 journal 快照、事件唯一性与状态投影。
 - [`scripts/reduce_global_progress_state.py`](scripts/reduce_global_progress_state.py)：在共享锁内从完整 journal 归约 controller 状态；`run_started` 唯一锚定 `executing`，后续 transition 必须保持 task/state 连续，并输出最近一次 gate-accepted checkpoint binding。
+- [`scripts/append_cli_session_lifecycle_event.py`](scripts/append_cli_session_lifecycle_event.py)：有限、厂商无关的 CLI lifecycle ingress；把已标准化且有序的 session/turn/terminal observation 原子映射为 canonical run event，并复用 GPS journal-derived 完成态。
+- [`scripts/verify_cli_session_lifecycle_receipt.py`](scripts/verify_cli_session_lifecycle_receipt.py)：只读回放 observation、adapter receipt 与当前 journal，检查快照、事件唯一性和 lifecycle projection。
 - [`protocol/global-progress-reason-code-migration-v0.1.yaml`](protocol/global-progress-reason-code-migration-v0.1.yaml)：GPS runtime-local control code 到冻结 protocol registry 的设计期迁移登记；候选码不视为已注册 reason code。
 - [`runtime/examples/`](runtime/examples/)：仅用于 schema 自证的零 digest 示例，不代表真实导出或运行。
 - [`prototype/`](prototype/)：一次性 Python conformance fixtures；固定 LIF schema、DeepSeek thinking continuity、redaction 与 Windows 进程边界，不是待扩展的生产 runner。
@@ -137,6 +139,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md)：跨检查点整体性门禁、正反处置、hash-chain 篡改与保留边界的实测记录。
 - [`docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_CHECKPOINT_ADAPTER_AUDIT_2026-07-25.md)：来源绑定 checkpoint adapter、上游 verifier 重算、policy continuity 与有界聚焦实际消费核算记录。
 - [`docs/GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_STATE_REDUCER_AUDIT_2026-07-25.md)：journal-derived 状态权威、初态锚点、锁内连续性校验及伪造状态反例记录。
+- [`docs/CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md`](docs/CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md)：有限成熟 CLI 接入面、生命周期映射、厂商 normalizer 边界及 receipt 独立复核记录。
 
 ## 证据路由
 
