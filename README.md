@@ -122,6 +122,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`scripts/build_global_progress_transition_event.py`](scripts/build_global_progress_transition_event.py)：将 checkpoint verification 投影为 hash-chained `gate_decision` run event；阻断时保持原状态并保留 receipt。
 - [`scripts/append_global_progress_transition_event.py`](scripts/append_global_progress_transition_event.py)：在共享跨进程锁内，只把能精确延伸 run/manifest/sequence/hash chain 的 transition event 追加到 JSONL journal，并在追加后重放。
 - [`prototype/fep_agent_proto/journal_lock.py`](prototype/fep_agent_proto/journal_lock.py)：Windows/POSIX writer 共用的 sidecar advisory lock；覆盖 replay→append 临界区并提供有界超时。
+- [`scripts/recover_torn_journal.py`](scripts/recover_torn_journal.py)：默认只读检查 journal；仅在显式 `--apply`、有效前缀可独立重放且损坏限于无换行尾部时执行锁内恢复，并生成 quarantine 与恢复收据。
 - [`protocol/global-progress-reason-code-migration-v0.1.yaml`](protocol/global-progress-reason-code-migration-v0.1.yaml)：GPS runtime-local control code 到冻结 protocol registry 的设计期迁移登记；候选码不视为已注册 reason code。
 - [`runtime/examples/`](runtime/examples/)：仅用于 schema 自证的零 digest 示例，不代表真实导出或运行。
 - [`prototype/`](prototype/)：一次性 Python conformance fixtures；固定 LIF schema、DeepSeek thinking continuity、redaction 与 Windows 进程边界，不是待扩展的生产 runner。

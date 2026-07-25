@@ -43,3 +43,6 @@ runtime 31）。仓库机械检查覆盖 98 个 schema、6 个迁移项并返回
 sidecar 是 advisory lock：它保护仓库内协作 writer，但不能约束绕过该约定的外部写入者；本轮也没有证明 SMB/NFS
 等网络文件系统上的锁一致性或多主容错。锁层与迁移登记仍属于 disposable integration fixture，尚未注入成熟 CLI
 核心或真实模型回合。
+
+后续补全：进程中断导致的无换行尾部残片检测、quarantine 与显式恢复边界见
+[`GLOBAL_PROGRESS_JOURNAL_RECOVERY_AUDIT_2026-07-25.md`](GLOBAL_PROGRESS_JOURNAL_RECOVERY_AUDIT_2026-07-25.md)。

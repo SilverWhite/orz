@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/journal-recovery-event-v0.1.schema.json",
+  "title": "Journal recovery event payload v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "recovery_id",
+    "classification",
+    "original_journal_sha256",
+    "original_size_bytes",
+    "retained_size_bytes",
+    "discarded_offset_bytes",
+    "discarded_size_bytes",
+    "discarded_sha256",
+    "quarantine_sha256",
+    "prefix_last_event_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "journal-recovery-event" },
+    "recovery_id": { "type": "string", "pattern": "^JRR-[A-F0-9]{16}$" },
+    "classification": {
+      "enum": ["torn_tail_removed", "missing_newline_normalized"]
+    },
+    "original_journal_sha256": { "$ref": "#/$defs/sha256" },
+    "original_size_bytes": { "type": "integer", "minimum": 1 },
+    "retained_size_bytes": { "type": "integer", "minimum": 1 },
+    "discarded_offset_bytes": { "type": "integer", "minimum": 0 },
+    "discarded_size_bytes": { "type": "integer", "minimum": 0 },
+    "discarded_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "quarantine_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "prefix_last_event_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

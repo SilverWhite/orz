@@ -283,3 +283,16 @@ runtime-local `GPS-*` control code 尚未注册为 protocol reason code，不能
 [`global-progress-reason-code-migration-v0.1.yaml`](../protocol/global-progress-reason-code-migration-v0.1.yaml)
 只记录三种迁移状态：pass 不产生 protocol reason、稳定的新语义进入下一修订候选、聚合失败从独立 verifier
 投影已有细粒度原因。候选码在正式 protocol revision 接纳前不得写入 claim-bearing GateDecision。
+
+### 11.7 Torn-tail recovery boundary
+
+journal recovery 默认是只读检查，且与 writer 使用同一 sidecar lock。只有以下两种状态可进入显式修复：
+
+- 最后一个完整事件只缺最终换行，补换行后整条链可重放；
+- 最后一段无换行字节不是有效链成员，但它之前至少一个完整事件组成的前缀可独立重放。
+
+包含中间坏行、空白行、错误 digest/sequence/run/manifest、无有效前缀或以换行结束但无效的 journal 一律不可自动
+截断。torn bytes 必须先原样写入不覆盖的 quarantine；修复后的非终态链追加 metadata-only recovery event，
+终态链不得追加事件，只能由外部恢复收据记录。journal 通过同一锁内的原子替换更新，随后必须重新 replay。
+
+此机制处理进程中断留下的 JSONL 尾部残片，不宣称提供磁盘控制器级断电持久性、目录项 fsync 保证或多主恢复共识。

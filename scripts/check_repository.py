@@ -1528,7 +1528,11 @@ def check_repository() -> dict[str, Any]:
         ROOT / "scripts/build_global_progress_transition_event.py",
         ROOT / "scripts/verify_global_progress_transition_event.py",
         ROOT / "scripts/append_global_progress_transition_event.py",
+        ROOT / "scripts/recover_torn_journal.py",
         ROOT / "prototype/fep_agent_proto/journal_lock.py",
+        ROOT / "prototype/fep_agent_proto/journal_recovery.py",
+        ROOT / "runtime/journal-recovery-event-v0.1.schema.json",
+        ROOT / "runtime/journal-recovery-receipt-v0.1.schema.json",
         ROOT / "protocol/global-progress-reason-code-migration-v0.1.schema.json",
         ROOT / "protocol/global-progress-reason-code-migration-v0.1.yaml",
     ):
@@ -1538,6 +1542,7 @@ def check_repository() -> dict[str, Any]:
                 f"{required_path.relative_to(ROOT)}"
             )
     counts["global_progress_transition_gate_fixtures"] = 1
+    counts["journal_recovery_fixtures"] = 1
     errors.extend(
         _validate_instance(
             _load_json(ROOT / "evaluation/example-evaluation-result-v0.1.json"),

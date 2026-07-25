@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/journal-recovery-receipt-v0.1.schema.json",
+  "title": "Journal recovery receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "valid",
+    "recovery_id",
+    "classification",
+    "run_id",
+    "run_manifest_sha256",
+    "original_journal_sha256",
+    "original_size_bytes",
+    "retained_size_bytes",
+    "discarded_offset_bytes",
+    "discarded_size_bytes",
+    "discarded_sha256",
+    "quarantine_path",
+    "quarantine_sha256",
+    "recovery_event_sha256",
+    "final_journal_sha256",
+    "final_event_count",
+    "final_last_event_sha256",
+    "recovered_at",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "journal-recovery-receipt" },
+    "valid": { "const": true },
+    "recovery_id": { "type": "string", "pattern": "^JRR-[A-F0-9]{16}$" },
+    "classification": {
+      "enum": ["torn_tail_removed", "missing_newline_normalized"]
+    },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "original_journal_sha256": { "$ref": "#/$defs/sha256" },
+    "original_size_bytes": { "type": "integer", "minimum": 1 },
+    "retained_size_bytes": { "type": "integer", "minimum": 1 },
+    "discarded_offset_bytes": { "type": "integer", "minimum": 0 },
+    "discarded_size_bytes": { "type": "integer", "minimum": 0 },
+    "discarded_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "quarantine_path": { "type": ["string", "null"], "minLength": 1 },
+    "quarantine_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "recovery_event_sha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "final_journal_sha256": { "$ref": "#/$defs/sha256" },
+    "final_event_count": { "type": "integer", "minimum": 1 },
+    "final_last_event_sha256": { "$ref": "#/$defs/sha256" },
+    "recovered_at": { "type": "string", "format": "date-time" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
