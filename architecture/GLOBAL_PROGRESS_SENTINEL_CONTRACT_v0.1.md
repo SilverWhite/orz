@@ -183,5 +183,55 @@ v0.1 不扩展 `RunEvent.event_type` 枚举，也不把 heuristic warning 冒充
 当前进度：上述 no-model fixture 已完成。六方向输入机械产生 `direction_concentration`、
 `acceptance_uncovered`、`verification_debt` 三类 source-linked WARN；`reasoned_continue` 与 `replan` 两种 disposition
 均通过独立重建，plan revision、journal head、warning coverage 与 review digest 篡改均失败。详见
-[`GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md`](../docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md)。下一步只评估
-Grok ACP `initialize`/plan capability，不立即把 GPS 注入真实模型回合。
+[`GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md`](../docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md)。
+
+## 11. 跨检查点整体性扩展
+
+单次 snapshot 只能回答“现在是否集中”，不能区分短期关键路径和长期单方向发散。整体性扩展因此读取最近若干个
+GPS checkpoint 的 hash-chain 投影，并只使用可观测量：
+
+- 每个 direction 的已终止 action count，而不是猜测 token、认知努力或剩余能力；
+- 新登记的 evidence ref 与新通过的 acceptance ref；
+- 显式 `continue/pivot/defer/stop/replan`、selected direction 和延期方向；
+- 当前关键 acceptance 状态、未解决用户限制与是否请求整体完成。
+
+它派生四类 warning：
+
+| warning kind | 跨检查点条件 | 防误报/解除条件 |
+|---|---|---|
+| `direction_budget_dominance` | 窗口内一个方向的 action 占比达到冻结阈值，同时其他 active critical direction 存在 | 占比只是提醒；可通过有界聚焦处置继续 |
+| `evidence_stagnation` | 同方向连续 `continue` 达阈值，且没有新增 evidence ref 或 verified acceptance | 任一有来源的新证据会打断连续计数，但不会自动清除预算集中 |
+| `critical_direction_deferral_debt` | 同一 critical direction 连续多个 checkpoint 被显式延期 | 必须实际结束延期；改写理由或计划 revision 不清零 |
+| `local_pass_global_incomplete` | 请求整体完成，但仍有关键 acceptance 非 `verified` 或用户限制未解决 | 局部 verifier PASS 不能抵消其他 blocker |
+
+### 11.1 整体完成门
+
+整体完成门输出 `not_requested | eligible | ineligible`。它不创造新的科学结论，也不把 heuristic WARN 冒充
+protocol GateDecision；但 runtime 在接入时不得将 `ineligible` 当作完成授权。`ineligible` disposition 必须明确
+`completion_withheld`，从而区分“停止继续动作”和“宣称任务已整体完成”。
+
+### 11.2 有界聚焦 permission reversal
+
+方向集中有时是正确的关键路径，因此 `reasoned_continue` 不要求机械轮转。对预算集中或证据停滞继续推进时，处置
+必须同时给出：
+
+1. 当前 critical path reference 与所服务的 critical acceptance；
+2. 可机械计数的最多追加 action 数；
+3. 明确退出条件；
+4. 不晚于下一 review cycle 的复查期限；
+5. 被该聚焦窗口挤出的其他 active critical direction。
+
+缺少任一项时 verifier fail closed；满足这些条件只授权一个短窗口，不证明所选方向正确。
+
+### 11.3 来源边界
+
+checkpoint 记录 prior review/disposition digest 并自身形成 hash chain，可检测历史投影被静默改写。当前 no-model
+spike 尚未同时接收 prior artifact 文件，因此只能验证 digest 被稳定引用，不能证明 checkpoint 中的投影与原始
+review/disposition 语义一致。正式 runtime adapter 必须从已登记 artifact 和 journal 机械生成 checkpoint，不能由
+模型自由填写；它还必须在下一 checkpoint 检查 `max_additional_actions` 是否已超限，当前 disposition verifier
+只验证授权声明本身。
+
+实现与实测见
+[`GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md`](../docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md)。
+在 checkpoint adapter 和 prior-artifact linkage 完成前，不把本扩展注入真实模型回合，也不把它用于 LIF 专有任务
+替代通用复杂任务测试。

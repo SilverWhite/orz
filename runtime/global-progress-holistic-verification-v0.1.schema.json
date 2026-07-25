@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-holistic-verification-v0.1.schema.json",
+  "title": "Global Progress Sentinel holistic verification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "valid",
+    "assessment_id",
+    "input_sha256",
+    "assessment_sha256",
+    "disposition_sha256",
+    "warning_count",
+    "checks",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-holistic-verification" },
+    "valid": { "type": "boolean" },
+    "assessment_id": { "type": ["string", "null"], "pattern": "^GPH-[a-f0-9]{16}$" },
+    "input_sha256": { "$ref": "#/$defs/sha256" },
+    "assessment_sha256": { "$ref": "#/$defs/sha256" },
+    "disposition_sha256": { "$ref": "#/$defs/sha256" },
+    "warning_count": { "type": "integer", "minimum": 0 },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_valid",
+        "checkpoint_chain_valid",
+        "assessment_schema_valid",
+        "assessment_rebuilt_exactly",
+        "disposition_schema_valid",
+        "assessment_linkage_valid",
+        "warning_dispositions_complete",
+        "decision_semantics_valid",
+        "completion_gate_acknowledged"
+      ],
+      "properties": {
+        "input_valid": { "type": "boolean" },
+        "checkpoint_chain_valid": { "type": "boolean" },
+        "assessment_schema_valid": { "type": "boolean" },
+        "assessment_rebuilt_exactly": { "type": "boolean" },
+        "disposition_schema_valid": { "type": "boolean" },
+        "assessment_linkage_valid": { "type": "boolean" },
+        "warning_dispositions_complete": { "type": "boolean" },
+        "decision_semantics_valid": { "type": "boolean" },
+        "completion_gate_acknowledged": { "type": "boolean" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

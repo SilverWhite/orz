@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-holistic-disposition-v0.1.schema.json",
+  "title": "Global Progress Sentinel holistic disposition v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "disposition_id",
+    "assessment_id",
+    "assessment_sha256",
+    "decision",
+    "selected_direction_id",
+    "warning_dispositions",
+    "bounded_focus",
+    "completion_acknowledgement",
+    "next_review_condition",
+    "rationale_summary"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-holistic-disposition" },
+    "disposition_id": { "type": "string", "pattern": "^GHD-[A-Z0-9._-]+$" },
+    "assessment_id": { "type": "string", "pattern": "^GPH-[a-f0-9]{16}$" },
+    "assessment_sha256": { "$ref": "#/$defs/sha256" },
+    "decision": { "enum": ["continue", "pivot", "defer", "stop", "replan"] },
+    "selected_direction_id": {
+      "oneOf": [
+        { "$ref": "#/$defs/directionId" },
+        { "type": "null" }
+      ]
+    },
+    "warning_dispositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["warning_id", "status"],
+        "properties": {
+          "warning_id": { "type": "string", "pattern": "^GHW-[a-f0-9]{16}$" },
+          "status": { "enum": ["accepted", "mitigated", "reasoned_continue", "needs_user"] }
+        }
+      }
+    },
+    "bounded_focus": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/boundedFocus" }
+      ]
+    },
+    "completion_acknowledgement": {
+      "enum": ["not_requested", "eligible", "completion_withheld"]
+    },
+    "next_review_condition": { "$ref": "#/$defs/nonEmptyString" },
+    "rationale_summary": { "type": "string", "minLength": 1, "maxLength": 500 }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "directionId": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "directionArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/directionId" },
+      "uniqueItems": true
+    },
+    "idArray": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+      "uniqueItems": true
+    },
+    "boundedFocus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "direction_id",
+        "critical_path_ref",
+        "acceptance_refs",
+        "exit_condition",
+        "max_additional_actions",
+        "review_by_cycle",
+        "deferred_direction_ids"
+      ],
+      "properties": {
+        "direction_id": { "$ref": "#/$defs/directionId" },
+        "critical_path_ref": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9._-]+$"
+        },
+        "acceptance_refs": { "$ref": "#/$defs/idArray" },
+        "exit_condition": { "$ref": "#/$defs/nonEmptyString" },
+        "max_additional_actions": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "review_by_cycle": { "type": "integer", "minimum": 0 },
+        "deferred_direction_ids": { "$ref": "#/$defs/directionArray" }
+      }
+    }
+  }
+}

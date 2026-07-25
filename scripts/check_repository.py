@@ -1473,6 +1473,28 @@ def check_repository() -> dict[str, Any]:
             )
         )
     counts["global_progress_fixtures"] = len(progress_fixtures)
+    holistic_progress_fixture = (
+        ROOT / "runtime/fixtures/global-progress-holistic-v0.1/input.json"
+    )
+    errors.extend(
+        _validate_instance(
+            _load_json(holistic_progress_fixture),
+            ROOT / "runtime/global-progress-history-input-v0.1.schema.json",
+            "runtime/fixtures/global-progress-holistic-v0.1/input.json",
+        )
+    )
+    for required_path in (
+        ROOT / "runtime/global-progress-holistic-review-v0.1.schema.json",
+        ROOT / "runtime/global-progress-holistic-disposition-v0.1.schema.json",
+        ROOT / "runtime/global-progress-holistic-verification-v0.1.schema.json",
+        ROOT / "scripts/build_global_progress_holistic_review.py",
+        ROOT / "scripts/verify_global_progress_holistic_review.py",
+    ):
+        if not required_path.is_file():
+            errors.append(
+                f"missing holistic global-progress file: {required_path.relative_to(ROOT)}"
+            )
+    counts["global_progress_holistic_fixtures"] = 1
     errors.extend(
         _validate_instance(
             _load_json(ROOT / "evaluation/example-evaluation-result-v0.1.json"),

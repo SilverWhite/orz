@@ -58,7 +58,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md`](architecture/OBSERVABLE_EXECUTION_ENVELOPE_v0.1.md)：优先准确性的全程可观测 wrapper、记录分层、资源取舍与反补全约束。
 - [`architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md)：对 Grok ACP、Codex、Gemini CLI、OpenCode、Goose 与 Cline 的职责深拆；把通用 runtime 交给可替换的外部框架，只保留保障层与 shadow-Git 恢复边界。
 - [`architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md`](architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md)：将能力拆为通用 Assurance Kernel、`general-science` 与 LIF 领域 profile，登记安全、审计和用户测试缺口。
-- [`architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`](architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md)：从 task contract、计划和 append-only journal 派生全局进度摘要与 WARN，要求模型结构化处置，降低单方向过推进和遗漏风险而不增加新协议状态。
+- [`architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`](architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md)：从 task contract、计划和 append-only journal 派生全局进度摘要，并以跨检查点方向预算、证据停滞、延期债务和整体完成门降低单方向过推进与局部完成误判风险。
 - [`architecture/D_SALVAGE_MATRIX_v0.1.md`](architecture/D_SALVAGE_MATRIX_v0.1.md)：Google Drive 中 Project D 核心源码的 source ledger、采用/改造/拒绝裁决与安全发现。
 - [`adr/ADR-0002-defer-cloud-runtime.md`](adr/ADR-0002-defer-cloud-runtime.md)：冻结云端执行/运维范围，保持 Windows 本地 runtime，并记录未来重启条件。
 - [`integration/grok/grok-observed-plan-v0.1.schema.json`](integration/grok/grok-observed-plan-v0.1.schema.json)：不执行模型的 observed dry-run 计划格式；配套 PowerShell 生成器只冻结 provenance 与控制意图。
@@ -112,6 +112,10 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`runtime/global-progress-review-v0.1.schema.json`](runtime/global-progress-review-v0.1.schema.json)：由 task contract、计划和 journal 机械派生的全局进度、方向覆盖、验收覆盖与三类 WARN。
 - [`runtime/global-progress-disposition-v0.1.schema.json`](runtime/global-progress-disposition-v0.1.schema.json)：模型对每条全局 WARN 的显式处置，以及 `continue/pivot/defer/stop/replan` 决策边界。
 - [`runtime/fixtures/global-progress-sentinel-v0.1/`](runtime/fixtures/global-progress-sentinel-v0.1/)：六方向 no-model 输入与 `reasoned_continue`/`replan` 两种合法处置 fixture。
+- [`runtime/global-progress-history-input-v0.1.schema.json`](runtime/global-progress-history-input-v0.1.schema.json)：跨检查点 hash-chain 投影，记录已观测方向动作数、证据新颖性、关键延期和整体验收状态；不估算隐藏 token/努力。
+- [`runtime/global-progress-holistic-review-v0.1.schema.json`](runtime/global-progress-holistic-review-v0.1.schema.json)：方向预算占比、同方向空转、关键延期债务和整体完成资格的确定性派生视图。
+- [`runtime/global-progress-holistic-disposition-v0.1.schema.json`](runtime/global-progress-holistic-disposition-v0.1.schema.json)：集中推进的有界许可，要求关键路径、退出条件、追加动作上限、下一复查周期和受影响关键方向。
+- [`runtime/fixtures/global-progress-holistic-v0.1/`](runtime/fixtures/global-progress-holistic-v0.1/)：四检查点 no-model 历史，覆盖四种整体性失效模式及有界聚焦 permission reversal。
 - [`runtime/examples/`](runtime/examples/)：仅用于 schema 自证的零 digest 示例，不代表真实导出或运行。
 - [`prototype/`](prototype/)：一次性 Python conformance fixtures；固定 LIF schema、DeepSeek thinking continuity、redaction 与 Windows 进程边界，不是待扩展的生产 runner。
 - [`scripts/check_repository.py`](scripts/check_repository.py)：CI 使用的仓库级机械完整性检查；验证 schema、corpus、coverage、fixture digest、交叉引用和本地文档链接。
@@ -119,6 +123,7 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 - [`scripts/invoke_grok_windows_child_tree_probe.ps1`](scripts/invoke_grok_windows_child_tree_probe.ps1)：管理员级 fake-only Windows root/child/grandchild containment launcher；显式接受 baseline/candidate release metadata，不自动提升默认版本。
 - [`docs/REPOSITORY_AUDIT_2026-07-21.md`](docs/REPOSITORY_AUDIT_2026-07-21.md)：迁移后审计、初始提交边界和下一阶段 session-validator spike 范围。
 - [`docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md`](docs/GLOBAL_PROGRESS_SENTINEL_SPIKE_2026-07-21.md)：no-model 全局回看生成、独立重建、合法处置、去重与篡改失败的实测记录。
+- [`docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md`](docs/GLOBAL_PROGRESS_HOLISTIC_GATE_AUDIT_2026-07-25.md)：跨检查点整体性门禁、正反处置、hash-chain 篡改与保留边界的实测记录。
 
 ## 证据路由
 

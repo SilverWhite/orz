@@ -1,0 +1,136 @@
+{
+  "schema_version": "0.1.0",
+  "artifact_kind": "global-progress-history-input",
+  "task_id": "TASK-GPS-HOLISTIC-001",
+  "task_contract_sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "completion_requested": true,
+  "thresholds": {
+    "history_window_checkpoints": 4,
+    "direction_dominance_ratio": 0.7,
+    "direction_dominance_min_actions": 8,
+    "stagnation_checkpoints": 3,
+    "deferral_debt_checkpoints": 3
+  },
+  "checkpoints": [
+    {
+      "checkpoint_id": "GPC-FIXTURE-001",
+      "review_cycle": 1,
+      "plan_revision": 1,
+      "journal_head_sequence": 10,
+      "review_id": "GPR-FIXTURE-001",
+      "review_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "disposition_id": "GPD-FIXTURE-001",
+      "disposition_sha256": "2111111111111111111111111111111111111111111111111111111111111111",
+      "decision": "continue",
+      "selected_direction_id": "runtime_acp",
+      "direction_action_counts": [
+        { "direction_id": "evidence_gates", "action_count": 1 },
+        { "direction_id": "runtime_acp", "action_count": 3 },
+        { "direction_id": "windows_containment", "action_count": 0 }
+      ],
+      "active_direction_ids": ["evidence_gates", "runtime_acp"],
+      "critical_direction_ids": ["evidence_gates", "runtime_acp", "windows_containment"],
+      "deferred_direction_ids": ["windows_containment"],
+      "novel_evidence_refs": [],
+      "verified_acceptance_refs_added": [],
+      "critical_acceptance_states": [
+        { "acceptance_ref": "ACC-ACP", "state": "in_progress" },
+        { "acceptance_ref": "ACC-EVIDENCE", "state": "planned" },
+        { "acceptance_ref": "ACC-WINDOWS", "state": "deferred" }
+      ],
+      "unresolved_constraint_refs": [],
+      "previous_checkpoint_sha256": null,
+      "checkpoint_sha256": "4c21e13ef335f009551c22b293365c7f7283b3e1a648d337bb74c186c8f39cad"
+    },
+    {
+      "checkpoint_id": "GPC-FIXTURE-002",
+      "review_cycle": 2,
+      "plan_revision": 1,
+      "journal_head_sequence": 20,
+      "review_id": "GPR-FIXTURE-002",
+      "review_sha256": "1222222222222222222222222222222222222222222222222222222222222222",
+      "disposition_id": "GPD-FIXTURE-002",
+      "disposition_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "decision": "continue",
+      "selected_direction_id": "runtime_acp",
+      "direction_action_counts": [
+        { "direction_id": "evidence_gates", "action_count": 0 },
+        { "direction_id": "runtime_acp", "action_count": 4 },
+        { "direction_id": "windows_containment", "action_count": 0 }
+      ],
+      "active_direction_ids": ["evidence_gates", "runtime_acp"],
+      "critical_direction_ids": ["evidence_gates", "runtime_acp", "windows_containment"],
+      "deferred_direction_ids": ["windows_containment"],
+      "novel_evidence_refs": [],
+      "verified_acceptance_refs_added": [],
+      "critical_acceptance_states": [
+        { "acceptance_ref": "ACC-ACP", "state": "in_progress" },
+        { "acceptance_ref": "ACC-EVIDENCE", "state": "planned" },
+        { "acceptance_ref": "ACC-WINDOWS", "state": "deferred" }
+      ],
+      "unresolved_constraint_refs": [],
+      "previous_checkpoint_sha256": "4c21e13ef335f009551c22b293365c7f7283b3e1a648d337bb74c186c8f39cad",
+      "checkpoint_sha256": "06dbd9e3f1a76397c0f15d5f9db31f4f9f8be46ba137ee7bc1a502e94b670cac"
+    },
+    {
+      "checkpoint_id": "GPC-FIXTURE-003",
+      "review_cycle": 3,
+      "plan_revision": 2,
+      "journal_head_sequence": 30,
+      "review_id": "GPR-FIXTURE-003",
+      "review_sha256": "1333333333333333333333333333333333333333333333333333333333333333",
+      "disposition_id": "GPD-FIXTURE-003",
+      "disposition_sha256": "2333333333333333333333333333333333333333333333333333333333333333",
+      "decision": "continue",
+      "selected_direction_id": "runtime_acp",
+      "direction_action_counts": [
+        { "direction_id": "evidence_gates", "action_count": 0 },
+        { "direction_id": "runtime_acp", "action_count": 3 },
+        { "direction_id": "windows_containment", "action_count": 0 }
+      ],
+      "active_direction_ids": ["evidence_gates", "runtime_acp"],
+      "critical_direction_ids": ["evidence_gates", "runtime_acp", "windows_containment"],
+      "deferred_direction_ids": ["windows_containment"],
+      "novel_evidence_refs": [],
+      "verified_acceptance_refs_added": [],
+      "critical_acceptance_states": [
+        { "acceptance_ref": "ACC-ACP", "state": "in_progress" },
+        { "acceptance_ref": "ACC-EVIDENCE", "state": "planned" },
+        { "acceptance_ref": "ACC-WINDOWS", "state": "deferred" }
+      ],
+      "unresolved_constraint_refs": [],
+      "previous_checkpoint_sha256": "06dbd9e3f1a76397c0f15d5f9db31f4f9f8be46ba137ee7bc1a502e94b670cac",
+      "checkpoint_sha256": "996f98ac2ffc4b4e47f460fe43bcb871b79b277c6ad1094404c403efbbc1666e"
+    },
+    {
+      "checkpoint_id": "GPC-FIXTURE-004",
+      "review_cycle": 4,
+      "plan_revision": 2,
+      "journal_head_sequence": 40,
+      "review_id": "GPR-FIXTURE-004",
+      "review_sha256": "1444444444444444444444444444444444444444444444444444444444444444",
+      "disposition_id": "GPD-FIXTURE-004",
+      "disposition_sha256": "2444444444444444444444444444444444444444444444444444444444444444",
+      "decision": "continue",
+      "selected_direction_id": "runtime_acp",
+      "direction_action_counts": [
+        { "direction_id": "evidence_gates", "action_count": 0 },
+        { "direction_id": "runtime_acp", "action_count": 2 },
+        { "direction_id": "windows_containment", "action_count": 0 }
+      ],
+      "active_direction_ids": ["evidence_gates", "runtime_acp"],
+      "critical_direction_ids": ["evidence_gates", "runtime_acp", "windows_containment"],
+      "deferred_direction_ids": ["windows_containment"],
+      "novel_evidence_refs": [],
+      "verified_acceptance_refs_added": [],
+      "critical_acceptance_states": [
+        { "acceptance_ref": "ACC-ACP", "state": "verified" },
+        { "acceptance_ref": "ACC-EVIDENCE", "state": "planned" },
+        { "acceptance_ref": "ACC-WINDOWS", "state": "deferred" }
+      ],
+      "unresolved_constraint_refs": [],
+      "previous_checkpoint_sha256": "996f98ac2ffc4b4e47f460fe43bcb871b79b277c6ad1094404c403efbbc1666e",
+      "checkpoint_sha256": "6bf7124270321a7ea924d6f6347fc889d6f9542de33e9c37ab04c2cd8552de09"
+    }
+  ]
+}

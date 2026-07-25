@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-history-input-v0.1.schema.json",
+  "title": "Global Progress Sentinel cross-checkpoint history input v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "task_id",
+    "task_contract_sha256",
+    "completion_requested",
+    "thresholds",
+    "checkpoints"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-history-input" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "task_contract_sha256": { "$ref": "#/$defs/sha256" },
+    "completion_requested": { "type": "boolean" },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "history_window_checkpoints",
+        "direction_dominance_ratio",
+        "direction_dominance_min_actions",
+        "stagnation_checkpoints",
+        "deferral_debt_checkpoints"
+      ],
+      "properties": {
+        "history_window_checkpoints": { "type": "integer", "minimum": 2, "maximum": 50 },
+        "direction_dominance_ratio": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 1
+        },
+        "direction_dominance_min_actions": { "type": "integer", "minimum": 2 },
+        "stagnation_checkpoints": { "type": "integer", "minimum": 2, "maximum": 50 },
+        "deferral_debt_checkpoints": { "type": "integer", "minimum": 2, "maximum": 50 }
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/checkpoint" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "directionId": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "idArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/id" },
+      "uniqueItems": true
+    },
+    "directionArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/directionId" },
+      "uniqueItems": true
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_id",
+        "review_cycle",
+        "plan_revision",
+        "journal_head_sequence",
+        "review_id",
+        "review_sha256",
+        "disposition_id",
+        "disposition_sha256",
+        "decision",
+        "selected_direction_id",
+        "direction_action_counts",
+        "active_direction_ids",
+        "critical_direction_ids",
+        "deferred_direction_ids",
+        "novel_evidence_refs",
+        "verified_acceptance_refs_added",
+        "critical_acceptance_states",
+        "unresolved_constraint_refs",
+        "previous_checkpoint_sha256",
+        "checkpoint_sha256"
+      ],
+      "properties": {
+        "checkpoint_id": { "type": "string", "pattern": "^GPC-[A-Z0-9._-]+$" },
+        "review_cycle": { "type": "integer", "minimum": 0 },
+        "plan_revision": { "type": "integer", "minimum": 1 },
+        "journal_head_sequence": { "type": "integer", "minimum": 0 },
+        "review_id": { "type": "string", "pattern": "^GPR-[A-Za-z0-9._-]+$" },
+        "review_sha256": { "$ref": "#/$defs/sha256" },
+        "disposition_id": { "type": "string", "pattern": "^GPD-[A-Z0-9._-]+$" },
+        "disposition_sha256": { "$ref": "#/$defs/sha256" },
+        "decision": { "enum": ["continue", "pivot", "defer", "stop", "replan"] },
+        "selected_direction_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/directionId" },
+            { "type": "null" }
+          ]
+        },
+        "direction_action_counts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["direction_id", "action_count"],
+            "properties": {
+              "direction_id": { "$ref": "#/$defs/directionId" },
+              "action_count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "active_direction_ids": { "$ref": "#/$defs/directionArray" },
+        "critical_direction_ids": { "$ref": "#/$defs/directionArray" },
+        "deferred_direction_ids": { "$ref": "#/$defs/directionArray" },
+        "novel_evidence_refs": { "$ref": "#/$defs/idArray" },
+        "verified_acceptance_refs_added": { "$ref": "#/$defs/idArray" },
+        "critical_acceptance_states": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["acceptance_ref", "state"],
+            "properties": {
+              "acceptance_ref": { "$ref": "#/$defs/id" },
+              "state": {
+                "enum": [
+                  "verified",
+                  "in_progress",
+                  "planned",
+                  "deferred",
+                  "uncovered",
+                  "completed_unverified"
+                ]
+              }
+            }
+          }
+        },
+        "unresolved_constraint_refs": { "$ref": "#/$defs/idArray" },
+        "previous_checkpoint_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "checkpoint_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

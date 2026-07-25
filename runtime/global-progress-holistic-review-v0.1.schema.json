@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-assurance.local/schema/global-progress-holistic-review-v0.1.schema.json",
+  "title": "Global Progress Sentinel holistic review v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "assessment_id",
+    "source_history_sha256",
+    "task_id",
+    "task_contract_sha256",
+    "window",
+    "direction_budget",
+    "evidence_novelty",
+    "critical_deferral_debt",
+    "completion_gate",
+    "warnings",
+    "next_review_trigger",
+    "generator"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "artifact_kind": { "const": "global-progress-holistic-review" },
+    "assessment_id": { "type": "string", "pattern": "^GPH-[a-f0-9]{16}$" },
+    "source_history_sha256": { "$ref": "#/$defs/sha256" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "task_contract_sha256": { "$ref": "#/$defs/sha256" },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first_checkpoint_id",
+        "last_checkpoint_id",
+        "first_review_cycle",
+        "last_review_cycle",
+        "checkpoint_count"
+      ],
+      "properties": {
+        "first_checkpoint_id": { "$ref": "#/$defs/checkpointId" },
+        "last_checkpoint_id": { "$ref": "#/$defs/checkpointId" },
+        "first_review_cycle": { "type": "integer", "minimum": 0 },
+        "last_review_cycle": { "type": "integer", "minimum": 0 },
+        "checkpoint_count": { "type": "integer", "minimum": 2 }
+      }
+    },
+    "direction_budget": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["direction_id", "action_count", "share", "active", "critical", "source_refs"],
+        "properties": {
+          "direction_id": { "$ref": "#/$defs/directionId" },
+          "action_count": { "type": "integer", "minimum": 0 },
+          "share": { "type": "number", "minimum": 0, "maximum": 1 },
+          "active": { "type": "boolean" },
+          "critical": { "type": "boolean" },
+          "source_refs": { "$ref": "#/$defs/stringArray" }
+        }
+      }
+    },
+    "evidence_novelty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "same_direction_continue_without_novelty",
+        "direction_id",
+        "checkpoint_refs"
+      ],
+      "properties": {
+        "same_direction_continue_without_novelty": { "type": "integer", "minimum": 0 },
+        "direction_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/directionId" },
+            { "type": "null" }
+          ]
+        },
+        "checkpoint_refs": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "critical_deferral_debt": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["direction_id", "consecutive_checkpoints", "source_refs"],
+        "properties": {
+          "direction_id": { "$ref": "#/$defs/directionId" },
+          "consecutive_checkpoints": { "type": "integer", "minimum": 1 },
+          "source_refs": { "$ref": "#/$defs/stringArray" }
+        }
+      }
+    },
+    "completion_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "status", "blocker_refs"],
+      "properties": {
+        "requested": { "type": "boolean" },
+        "status": { "enum": ["not_requested", "eligible", "ineligible"] },
+        "blocker_refs": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/warning" }
+    },
+    "next_review_trigger": { "$ref": "#/$defs/nonEmptyString" },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "summary_state"],
+      "properties": {
+        "name": { "const": "build_global_progress_holistic_review.py" },
+        "version": { "const": "0.1.0" },
+        "summary_state": { "const": "deterministic_cross_checkpoint_projection" }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]+$" },
+    "checkpointId": { "type": "string", "pattern": "^GPC-[A-Z0-9._-]+$" },
+    "directionId": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" },
+      "uniqueItems": true
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warning_id",
+        "kind",
+        "severity",
+        "message",
+        "subject_refs",
+        "source_refs",
+        "review_required"
+      ],
+      "properties": {
+        "warning_id": { "type": "string", "pattern": "^GHW-[a-f0-9]{16}$" },
+        "kind": {
+          "enum": [
+            "direction_budget_dominance",
+            "evidence_stagnation",
+            "critical_direction_deferral_debt",
+            "local_pass_global_incomplete"
+          ]
+        },
+        "severity": { "const": "warn" },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "subject_refs": { "$ref": "#/$defs/stringArray" },
+        "source_refs": { "$ref": "#/$defs/stringArray" },
+        "review_required": { "const": true }
+      }
+    }
+  }
+}
