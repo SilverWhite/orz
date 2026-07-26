@@ -120,6 +120,9 @@ fake DeepSeek-shaped adapter boundary、structured answer packet、runtime JSONL
 该路径固定 `real_network_used=false`、tool allowlist 为空，并要求 `gate_decision` 先于 `model_request`。
 它证明 CLI 编排形状和门禁顺序，不证明真实 DeepSeek、真实检索、工具执行、评分或科学正确性。
 
+`cli.py` 与根级 `gsa.py` 新增 P0.5 用户入口：`doctor`、`source gate`、`run` 与 `verify`。这些入口只是
+当前 offline/fake 主路径的稳定 dispatcher；安装包、console script 和真实 adapter 仍未接入。
+
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。
 

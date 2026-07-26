@@ -1017,11 +1017,15 @@ def check_repository() -> dict[str, Any]:
     counts["source_visibility_fixtures"] = 1
 
     for required_path in (
+        ROOT / "gsa.py",
+        assurance_root / "cli.py",
         assurance_root / "canonical-cli-answer-packet-v0.1.schema.json",
         assurance_root / "canonical-cli-run-receipt-v0.1.schema.json",
         assurance_root / "canonical_cli.py",
         assurance_root / "canonical_cli_main.py",
+        assurance_root / "tests/test_cli_dispatcher.py",
         assurance_root / "tests/test_canonical_cli.py",
+        ROOT / "docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md",
     ):
         if not required_path.is_file():
             errors.append(

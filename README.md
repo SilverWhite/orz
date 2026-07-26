@@ -18,6 +18,8 @@ journal sidecar lock、只读 recovery inspection、受控 repair/quarantine rec
 和“不增加独立证据/不提升 claim 强度”边界。自我质询/反例 sentinel 已形成设计稿并暂存，尚未接入 runner。
 首个 canonical guarded CLI offline 纵向路径已开始接通：run manifest、source visibility gate、fake DeepSeek-shaped
 adapter boundary、answer packet、runtime JSONL journal 和独立 verifier，用于证明 CLI 编排不可绕过保障层，而非真实模型能力。
+P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；当前入口仍是 offline/fake，
+不调用真实模型、不联网、不读取 credential。
 
 本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它从 FEP/LIF 工作流暴露的问题出发，但把
 来源先行、证据分层、独立性、反例搜索、机械验证和 claim 边界抽为通用科学保障能力，目标是让接入的模型
@@ -50,6 +52,8 @@ adapter boundary、answer packet、runtime JSONL journal 和独立 verifier，�
 - [`assurance/README.md`](assurance/README.md)：P0–P5 runtime-neutral 合同与 development fixture，包括会话生命周期、workspace-first/Docker backend policy、guarded execution、指令来源、能力子集、metadata audit、恢复授权和合成用户任务预检。
 - [`assurance/source-visibility-ledger-v0.1.schema.json`](assurance/source-visibility-ledger-v0.1.schema.json)：外部文献、帖子和网页引用后的全文可见性 ledger；配套 gate receipt 会按 claim 类型要求 metadata/partial/full-text 状态并输出 allow/defer/block。
 - [`assurance/canonical_cli.py`](assurance/canonical_cli.py)：canonical guarded CLI 的 offline/fake P0 纵向路径；串联 run manifest、source visibility gate、fake adapter boundary、answer packet、runtime journal 和独立 verifier。
+- [`gsa.py`](gsa.py)：P0.5 顶层 CLI dispatcher；提供 `doctor`、`source gate`、`run` 和 `verify`。
+- [`docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md`](docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md)：当前 offline/fake CLI 入口的最短使用说明。
 - [`docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md`](docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md)：首个 canonical guarded CLI offline 主路径审计；确认 gate-before-model、fake no-network adapter、answer packet 与 verifier 边界。
 - [`docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md`](docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md)：首个非 LIF 通用科学多文件只读闭环、claim 强度门禁、正反回归与保留缺口。
 - [`docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md`](docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md)：版本化 validator registry、设计/动作 schema、artifact finite gate 与基础统计报告完整性边界。
