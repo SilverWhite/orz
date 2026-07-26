@@ -51,6 +51,7 @@ journal sidecar lock、只读 recovery inspection、受控 repair/quarantine rec
 - [`docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md`](docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md)：artifact schema registry、结果摘要绑定、不可弱化映射与首个数值/统计基础 schema。
 - [`docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md`](docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md)：跨 artifact JSON Pointer、producer/source lineage、比较不变量和 permission-reversal 门禁。
 - [`docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md`](docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md)：首个 no-model disposable reproduction manifest、固定 replay、receipt/verifier/run-proof/runtime projection、一次性 runtime journal write/replay、execution lock、no-model runner skeleton、runner journal lock/recovery repair receipt、lifecycle repair policy 与“不增加独立证据”边界。
+- [`docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md`](docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md)：文献、帖子、网页和 thread 检索时必须回报全文可见性状态；未完整抓取并浏览全文时明确标注 partial/metadata-only/unavailable，禁止摘要或片段冒充全文证据。
 - [`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`](docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md)：自我质询、反例候选队列，以及 DeepSeek/Grok 等 runtime 高重复输出截断与重启的未启用设计草案。
 - [`docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)：P2 Docker 实测、Windows native fail-closed 状态、限制与正反例收敛策略。
 - [`docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md`](docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md)：P1 envelope、P2 selector、无模型 action、宿主/容器进程追踪、HMAC 回执与残留复核的端到端实测。

@@ -109,6 +109,8 @@ claim 强度，也不构成正式 EvaluationRunner。
 ### 文献与外部证据
 
 - 可定位的引用、版本、DOI/稳定标识符和访问时间；
+- 文献、帖子、网页和 thread 检索必须报告全文可见性状态；未完整抓取并浏览全文时必须标注为
+  `partial_text_observed`、`metadata_only` 或 `unavailable`，不得用摘要/引言/片段冒充全文证据；
 - 原始来源与二手转述分层；
 - 撤回、勘误、版本替换与相反证据检查；
 - 文献检索范围、遗漏风险和“未检出不等于不存在”边界；
@@ -198,6 +200,8 @@ Windows native backend 误设为所有内部测试的前置条件；真实项目
   P5 audit、代码/测试/CI 和本轮机械命令。
 - **user decision**：LIF 的领域特殊性会污染通用复杂测试，因此不得继续使用 LIF 内部任务作为深度测试。
 - **agent-inferred design**：`general-science` profile 的分层、四类复杂任务和新增语义缺口。
+- **user decision**：外部文献、帖子或网页检索必须固定回报全文抓取/浏览状态；未读完整全文时必须显式
+  标注缺漏，避免摘要、介绍或片段被误用为全文证据。
 - **unchecked**：这些任务类型的实际难度、reviewer 一致性、模型成本、跨学科代表性和最终通过阈值。
 
 本轮没有提出新的 LIF 科学 claim，因此无需在 LIF claim registry 中做 prior-existence 登记。
