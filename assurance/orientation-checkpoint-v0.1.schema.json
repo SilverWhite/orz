@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/orientation-checkpoint-v0.1.schema.json",
+  "title": "Orientation checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "checkpoint_kind",
+    "checkpoint_id",
+    "task_id",
+    "trigger",
+    "message_block",
+    "allowed_response_fields",
+    "forbidden_response_fields",
+    "claim_policy",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "checkpoint_kind": { "const": "orientation_checkpoint" },
+    "checkpoint_id": { "type": "string", "pattern": "^ORIENT-[A-Z0-9._-]+-[0-9]{4}$" },
+    "task_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]*$" },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger_type", "step_index", "task_contract_sha256"],
+      "properties": {
+        "trigger_type": { "enum": ["fixed_step_interval", "pre_handoff"] },
+        "step_index": { "type": "integer", "minimum": 0 },
+        "task_contract_sha256": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "message_block": {
+      "type": "string",
+      "pattern": "^\\[ORIENTATION_CHECKPOINT v0\\.1\\]"
+    },
+    "allowed_response_fields": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "orientation_summary",
+          "current_task_position",
+          "next_output_target"
+        ]
+      },
+      "minItems": 3,
+      "uniqueItems": true
+    },
+    "forbidden_response_fields": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "counterexample_candidate",
+          "claim_disposition",
+          "claim_promotion",
+          "negative_fixture_candidate"
+        ]
+      },
+      "minItems": 4,
+      "uniqueItems": true
+    },
+    "claim_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "may_generate_counterexample_candidate",
+        "may_set_claim_disposition",
+        "claim_strength_effect"
+      ],
+      "properties": {
+        "may_generate_counterexample_candidate": { "const": false },
+        "may_set_claim_disposition": { "const": false },
+        "claim_strength_effect": { "const": "none" }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

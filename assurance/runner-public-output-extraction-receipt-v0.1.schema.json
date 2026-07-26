@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/runner-public-output-extraction-receipt-v0.1.schema.json",
+  "title": "Runner public output extraction receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "valid",
+    "stream_id",
+    "stream_sha256",
+    "public_outputs",
+    "included_record_ids",
+    "excluded_record_ids",
+    "counts",
+    "restart_packet_source_policy",
+    "checks",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "runner_public_output_extraction_receipt" },
+    "valid": { "const": true },
+    "stream_id": { "type": "string", "pattern": "^STREAM-[A-Z0-9._-]+$" },
+    "stream_sha256": { "$ref": "#/$defs/sha256" },
+    "public_outputs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "included_record_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^REC-[A-Z0-9._-]+$" },
+      "uniqueItems": true
+    },
+    "excluded_record_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^REC-[A-Z0-9._-]+$" },
+      "uniqueItems": true
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_count",
+        "public_output_count",
+        "private_hidden_excluded_count",
+        "nonassistant_excluded_count"
+      ],
+      "properties": {
+        "record_count": { "type": "integer", "minimum": 0 },
+        "public_output_count": { "type": "integer", "minimum": 0 },
+        "private_hidden_excluded_count": { "type": "integer", "minimum": 0 },
+        "nonassistant_excluded_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "restart_packet_source_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included_state",
+        "runaway_suffix_allowed",
+        "hidden_reasoning_allowed"
+      ],
+      "properties": {
+        "included_state": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "task_contract",
+              "verified_artifact_ledger",
+              "unresolved_questions",
+              "last_valid_checkpoint_digest"
+            ]
+          },
+          "minItems": 4,
+          "uniqueItems": true
+        },
+        "runaway_suffix_allowed": { "const": false },
+        "hidden_reasoning_allowed": { "const": false }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordered_sequence",
+        "public_assistant_only",
+        "private_channels_excluded",
+        "hidden_chain_of_thought_saved",
+        "runaway_suffix_excluded_from_restart",
+        "model_invoked",
+        "network_requested"
+      ],
+      "properties": {
+        "ordered_sequence": { "const": true },
+        "public_assistant_only": { "const": true },
+        "private_channels_excluded": { "const": true },
+        "hidden_chain_of_thought_saved": { "const": false },
+        "runaway_suffix_excluded_from_restart": { "const": true },
+        "model_invoked": { "const": false },
+        "network_requested": { "const": false }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

@@ -1019,6 +1019,8 @@ def check_repository() -> dict[str, Any]:
     for required_path in (
         ROOT / "gsa.py",
         assurance_root / "cli.py",
+        assurance_root / "task-contract-v0.1.schema.json",
+        assurance_root / "task_contract.py",
         assurance_root / "canonical-cli-answer-packet-v0.1.schema.json",
         assurance_root / "canonical-cli-run-receipt-v0.1.schema.json",
         assurance_root / "canonical_cli.py",
@@ -1032,6 +1034,74 @@ def check_repository() -> dict[str, Any]:
                 f"missing canonical CLI P0 file: {required_path.relative_to(ROOT)}"
             )
     counts["canonical_cli_fixtures"] = 1
+
+    for required_path in (
+        assurance_root / "orientation-checkpoint-v0.1.schema.json",
+        assurance_root / "orientation-checkpoint-verification-v0.1.schema.json",
+        assurance_root / "orientation-stagnation-integration-fixture-v0.1.schema.json",
+        assurance_root / "orientation-stagnation-integration-receipt-v0.1.schema.json",
+        assurance_root / "orientation-stagnation-journal-receipt-v0.1.schema.json",
+        assurance_root / "orientation-checkpoint-event-payload-v0.1.schema.json",
+        assurance_root / "runtime-stagnation-guard-event-payload-v0.1.schema.json",
+        assurance_root / "runner-public-output-stream-v0.1.schema.json",
+        assurance_root / "runner-public-output-extraction-receipt-v0.1.schema.json",
+        assurance_root / "deepseek-api-observation-result-v0.1.schema.json",
+        assurance_root / "deepseek-api-observation-pipeline-receipt-v0.1.schema.json",
+        assurance_root / "deepseek-stream-observation-fixture-v0.1.schema.json",
+        assurance_root / "deepseek-stream-observation-pipeline-receipt-v0.1.schema.json",
+        assurance_root / "runtime-stagnation-guard-receipt-v0.1.schema.json",
+        assurance_root / "deepseek_api_observation.py",
+        assurance_root / "deepseek_stream_observation.py",
+        assurance_root / "orientation_runtime_integration.py",
+        assurance_root / "orientation_runtime_guard.py",
+        assurance_root / "orientation_runtime_journal.py",
+        assurance_root / "runner_public_output.py",
+        assurance_root / "tests/test_deepseek_api_observation.py",
+        assurance_root / "tests/test_deepseek_stream_observation.py",
+        assurance_root / "tests/test_orientation_runtime_integration.py",
+        assurance_root / "tests/test_orientation_runtime_guard.py",
+        assurance_root / "tests/test_orientation_runtime_journal.py",
+        assurance_root / "tests/test_runner_public_output.py",
+        ROOT / "scripts/build_deepseek_public_output_observation.py",
+        ROOT / "scripts/build_deepseek_stream_observation_fixture.py",
+        ROOT / "scripts/invoke_deepseek_public_output_observation.ps1",
+        ROOT / "docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md",
+        ROOT / "runtime/run-event-v0.1.schema.json",
+    ):
+        if not required_path.is_file():
+            errors.append(
+                "missing orientation/stagnation guard file: "
+                f"{required_path.relative_to(ROOT)}"
+            )
+    counts["orientation_stagnation_guard_fixtures"] = 1
+    deepseek_observation_launcher = (
+        ROOT / "scripts/invoke_deepseek_public_output_observation.ps1"
+    ).read_text(encoding="utf-8")
+    for marker in (
+        "billable_external_request = $true",
+        "credential_value_recorded = $false",
+        "raw_response_recorded = $false",
+        "retry_budget = 0",
+        "Assert-NoCommonSecretPattern",
+        "CredRead(target, CRED_TYPE_GENERIC",
+        "LIF_DEEPSEEK_PUBLIC_OUTPUT_OBSERVATION_OK",
+    ):
+        if marker not in deepseek_observation_launcher:
+            errors.append(f"DeepSeek API observation launcher is missing marker: {marker}")
+    deepseek_stream_source = (
+        assurance_root / "deepseek_stream_observation.py"
+    ).read_text(encoding="utf-8")
+    for marker in (
+        "deepseek-chat-completions-stream",
+        "reasoning_content_sha256",
+        "private_reasoning_text_recorded",
+        "run_deepseek_stream_observation_fixture",
+        "restart_packet_source_policy",
+    ):
+        if marker not in deepseek_stream_source:
+            errors.append(f"DeepSeek stream fixture is missing marker: {marker}")
+    counts["deepseek_api_observation_fixtures"] = 1
+    counts["deepseek_stream_observation_fixtures"] = 1
 
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]

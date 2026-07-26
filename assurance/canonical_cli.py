@@ -10,6 +10,13 @@ from jsonschema import Draft202012Validator, FormatChecker
 from .contracts import ASSURANCE_ROOT, validate_contract
 from .errors import AssuranceError
 from .source_visibility import evaluate_source_visibility_gate
+from .task_contract import (
+    DEFAULT_TASK_ID,
+    build_task_contract_from_ask,
+    load_task_contract,
+    task_contract_source_ledger_path,
+    verify_task_contract_source_ledger,
+)
 from .utils import (
     atomic_write_json,
     canonical_bytes,
@@ -25,7 +32,6 @@ RUNTIME_ROOT = ROOT / "runtime"
 ANSWER_SCHEMA = "canonical-cli-answer-packet-v0.1.schema.json"
 RECEIPT_SCHEMA = "canonical-cli-run-receipt-v0.1.schema.json"
 DEFAULT_RUN_ID = "RUN-CANONICAL-CLI-FAKE-001"
-DEFAULT_TASK_ID = "TASK-CANONICAL-CLI-FAKE-001"
 TERMINAL_EVENTS = {"run_finished", "run_failed", "run_cancelled", "run_invalidated"}
 
 
@@ -217,6 +223,8 @@ def build_fake_answer_packet(
     *,
     run_id: str,
     task_id: str,
+    task_contract: dict[str, Any],
+    task_contract_sha256: str,
     source_gate_receipt: dict[str, Any],
     source_gate_receipt_sha256: str | None = None,
 ) -> dict[str, Any]:
@@ -233,6 +241,10 @@ def build_fake_answer_packet(
         "packet_kind": "canonical_guarded_cli_answer_packet",
         "run_id": run_id,
         "task_id": task_id,
+        "task_contract": {
+            "sha256": task_contract_sha256,
+            "entry_mode": task_contract["entry_mode"],
+        },
         "adapter": {
             "adapter_id": "canonical-cli-fake-deepseek-adapter",
             "provider": "fake-deepseek-shaped",
@@ -294,6 +306,7 @@ def _build_run_receipt(
     *,
     run_root: Path,
     run_manifest_path: Path,
+    task_contract_path: Path,
     source_ledger_path: Path,
     source_gate_receipt_path: Path,
     answer_packet_path: Path,
@@ -307,6 +320,7 @@ def _build_run_receipt(
         "run_id": load_json(run_manifest_path)["run_id"],
         "run_root": str(run_root),
         "run_manifest_sha256": sha256_file(run_manifest_path),
+        "task_contract_sha256": sha256_file(task_contract_path),
         "source_ledger_sha256": sha256_file(source_ledger_path),
         "source_gate_receipt_sha256": sha256_file(source_gate_receipt_path),
         "answer_packet_sha256": sha256_file(answer_packet_path),
@@ -316,10 +330,12 @@ def _build_run_receipt(
         "event_types": [event["event_type"] for event in events],
         "checks": {
             "manifest_valid": True,
+            "task_contract_valid": True,
             "source_gate_recomputed": True,
             "gate_before_model_request": True,
             "answer_packet_valid": True,
             "answer_binds_source_gate": True,
+            "answer_binds_task_contract": True,
             "journal_hash_chain_valid": True,
             "terminal_exactly_once": True,
             "fake_adapter_no_network": True,
@@ -336,16 +352,40 @@ def _build_run_receipt(
 def run_canonical_guarded_cli(
     *,
     run_root: Path,
-    source_ledger_path: Path,
+    source_ledger_path: Path | None = None,
+    ask: str | None = None,
+    task_contract_path: Path | None = None,
     run_id: str = DEFAULT_RUN_ID,
     task_id: str = DEFAULT_TASK_ID,
     created_at: str | None = None,
 ) -> dict[str, Any]:
+    if (ask is None) == (task_contract_path is None):
+        raise AssuranceError("exactly one of ask or task_contract_path is required")
+    if ask is not None and source_ledger_path is None:
+        raise AssuranceError("--ask requires a source ledger")
     if run_root.exists() and any(run_root.iterdir()):
         raise AssuranceError(f"run root must be empty or absent: {run_root}")
+
+    if task_contract_path is not None:
+        task_contract = load_task_contract(task_contract_path)
+        task_id = task_contract["task_id"]
+        source_ledger_path = task_contract_source_ledger_path(task_contract)
+        verify_task_contract_source_ledger(
+            task_contract,
+            source_ledger_path=source_ledger_path,
+        )
+    else:
+        task_contract = build_task_contract_from_ask(
+            ask=ask or "",
+            source_ledger_path=source_ledger_path,
+            task_id=task_id,
+            created_at=created_at,
+        )
+
     run_root.mkdir(parents=True, exist_ok=True)
     manifest = build_canonical_cli_run_manifest(run_id=run_id, created_at=created_at)
     run_manifest_path = run_root / "run-manifest.json"
+    task_contract_copy = run_root / "task-contract.json"
     source_ledger_copy = run_root / "source-visibility-ledger.json"
     source_gate_receipt_path = run_root / "source-visibility-gate-receipt.json"
     answer_packet_path = run_root / "answer-packet.json"
@@ -353,6 +393,8 @@ def run_canonical_guarded_cli(
     receipt_path = run_root / "canonical-cli-run-receipt.json"
 
     atomic_write_json(run_manifest_path, manifest)
+    atomic_write_json(task_contract_copy, task_contract)
+    task_contract_sha256 = sha256_file(task_contract_copy)
     shutil.copyfile(source_ledger_path, source_ledger_copy)
     source_ledger = load_json(source_ledger_copy)
     source_gate_receipt = evaluate_source_visibility_gate(source_ledger)
@@ -361,6 +403,8 @@ def run_canonical_guarded_cli(
     answer_packet = build_fake_answer_packet(
         run_id=run_id,
         task_id=task_id,
+        task_contract=task_contract,
+        task_contract_sha256=task_contract_sha256,
         source_gate_receipt=source_gate_receipt,
         source_gate_receipt_sha256=source_gate_receipt_sha256,
     )
@@ -380,13 +424,18 @@ def run_canonical_guarded_cli(
                 "model_id": manifest["adapter"]["model_id"],
                 "real_network_allowed": False,
                 "source_visibility_gate_required": True,
+                "task_contract_sha256": task_contract_sha256,
             },
             "metadata_only",
         ),
         (
             "run_started",
             "canonical-cli-run-started-v0.1",
-            {"task_id": task_id, "run_root": str(run_root)},
+            {
+                "task_id": task_id,
+                "task_contract_sha256": task_contract_sha256,
+                "run_root": str(run_root),
+            },
             "metadata_only",
         ),
         (
@@ -407,6 +456,7 @@ def run_canonical_guarded_cli(
                 "model_id": "deepseek-v4-pro",
                 "message_order": [
                     "task",
+                    "task_contract_digest",
                     "run_manifest_digest",
                     "source_visibility_gate_receipt_digest",
                     "allowed_claim_boundaries",
@@ -414,6 +464,7 @@ def run_canonical_guarded_cli(
                 ],
                 "real_network_used": False,
                 "tool_calls_allowed": False,
+                "task_contract_sha256": task_contract_sha256,
             },
             "metadata_only",
         ),
@@ -467,6 +518,7 @@ def run_canonical_guarded_cli(
     receipt = _build_run_receipt(
         run_root=run_root,
         run_manifest_path=run_manifest_path,
+        task_contract_path=task_contract_copy,
         source_ledger_path=source_ledger_copy,
         source_gate_receipt_path=source_gate_receipt_path,
         answer_packet_path=answer_packet_path,
@@ -494,6 +546,7 @@ def _read_journal(journal_path: Path) -> list[dict[str, Any]]:
 
 def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
     run_manifest_path = run_root / "run-manifest.json"
+    task_contract_path = run_root / "task-contract.json"
     source_ledger_path = run_root / "source-visibility-ledger.json"
     source_gate_receipt_path = run_root / "source-visibility-gate-receipt.json"
     answer_packet_path = run_root / "answer-packet.json"
@@ -506,6 +559,11 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
         label="canonical CLI run manifest",
     )
     source_gate_receipt = load_json(source_gate_receipt_path)
+    task_contract = load_task_contract(task_contract_path)
+    verify_task_contract_source_ledger(
+        task_contract,
+        source_ledger_path=source_ledger_path,
+    )
     recomputed_gate = evaluate_source_visibility_gate(load_json(source_ledger_path))
     if canonical_bytes(source_gate_receipt) != canonical_bytes(recomputed_gate):
         raise AssuranceError("source visibility gate receipt does not recompute")
@@ -515,6 +573,8 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
         source_gate_receipt_path
     ):
         raise AssuranceError("answer packet does not bind source gate receipt")
+    if answer_packet["task_contract"]["sha256"] != sha256_file(task_contract_path):
+        raise AssuranceError("answer packet does not bind task contract")
     if answer_packet["adapter"]["real_network_used"]:
         raise AssuranceError("canonical fake adapter unexpectedly used network")
 
@@ -555,10 +615,15 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
     request_event = events[event_types.index("model_request")]
     if request_event["payload"].get("real_network_used") is not False:
         raise AssuranceError("model_request did not prove fake no-network mode")
+    if request_event["payload"].get("task_contract_sha256") != sha256_file(
+        task_contract_path
+    ):
+        raise AssuranceError("model_request does not bind task contract")
 
     receipt = _build_run_receipt(
         run_root=run_root,
         run_manifest_path=run_manifest_path,
+        task_contract_path=task_contract_path,
         source_ledger_path=source_ledger_path,
         source_gate_receipt_path=source_gate_receipt_path,
         answer_packet_path=answer_packet_path,

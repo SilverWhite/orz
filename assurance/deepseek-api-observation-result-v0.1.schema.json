@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/deepseek-api-observation-result-v0.1.schema.json",
+  "title": "DeepSeek direct API observation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "valid",
+    "started_at",
+    "completed_at",
+    "request_count",
+    "retry_count",
+    "provider",
+    "endpoint",
+    "model",
+    "http_status_code",
+    "marker_matched",
+    "public_assistant_text",
+    "response_content_sha256",
+    "credential_source",
+    "credential_target",
+    "credential_value_recorded",
+    "raw_response_recorded",
+    "usage",
+    "controls",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "result_kind": { "const": "deepseek_api_observation" },
+    "valid": { "const": true },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "request_count": { "const": 1 },
+    "retry_count": { "const": 0 },
+    "provider": { "const": "deepseek" },
+    "endpoint": { "const": "https://api.deepseek.com/chat/completions" },
+    "model": { "type": "string", "minLength": 1 },
+    "http_status_code": { "type": "integer", "minimum": 200, "maximum": 299 },
+    "marker_matched": { "type": "boolean" },
+    "public_assistant_text": { "type": "string", "minLength": 1 },
+    "response_content_sha256": { "$ref": "#/$defs/sha256" },
+    "private_reasoning_content_sha256": { "$ref": "#/$defs/sha256" },
+    "credential_source": { "const": "windows-credential-manager-current-user" },
+    "credential_target": { "const": "FEP-Agent/DeepSeek" },
+    "credential_value_recorded": { "const": false },
+    "raw_response_recorded": { "const": false },
+    "usage": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_completion_tokens",
+        "temperature",
+        "tool_count",
+        "stream",
+        "retry_budget",
+        "web_enabled",
+        "subagents_enabled",
+        "raw_request_recorded"
+      ],
+      "properties": {
+        "max_completion_tokens": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 1 },
+        "tool_count": { "const": 0 },
+        "stream": { "const": false },
+        "retry_budget": { "const": 0 },
+        "web_enabled": { "const": false },
+        "subagents_enabled": { "const": false },
+        "raw_request_recorded": { "const": false }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

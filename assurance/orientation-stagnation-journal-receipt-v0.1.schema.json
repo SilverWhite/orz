@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/orientation-stagnation-journal-receipt-v0.1.schema.json",
+  "title": "Orientation/stagnation runtime journal receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "valid",
+    "run_id",
+    "integration_receipt_sha256",
+    "run_manifest_sha256",
+    "journal_sha256",
+    "event_count",
+    "event_types",
+    "terminal_event",
+    "checks",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "orientation_stagnation_runtime_journal_receipt" },
+    "valid": { "const": true },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "integration_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "journal_sha256": { "$ref": "#/$defs/sha256" },
+    "event_count": { "type": "integer", "minimum": 1 },
+    "event_types": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "run_preflight",
+          "run_started",
+          "orientation_checkpoint",
+          "runtime_stagnation_guard",
+          "run_finished",
+          "run_invalidated"
+        ]
+      }
+    },
+    "terminal_event": { "enum": ["run_finished", "run_invalidated"] },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journal_hash_chain_valid",
+        "orientation_before_stagnation",
+        "payload_schemas_valid",
+        "no_model_or_tool_events",
+        "metadata_only",
+        "runner_attached",
+        "counterexample_queue_invoked"
+      ],
+      "properties": {
+        "journal_hash_chain_valid": { "const": true },
+        "orientation_before_stagnation": { "const": true },
+        "payload_schemas_valid": { "const": true },
+        "no_model_or_tool_events": { "const": true },
+        "metadata_only": { "const": true },
+        "runner_attached": { "const": false },
+        "counterexample_queue_invoked": { "const": false }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

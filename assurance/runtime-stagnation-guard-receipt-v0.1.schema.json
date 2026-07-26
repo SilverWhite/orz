@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/runtime-stagnation-guard-receipt-v0.1.schema.json",
+  "title": "Runtime stagnation guard receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "valid",
+    "decision",
+    "action",
+    "reason_codes",
+    "metrics",
+    "thresholds",
+    "restart_packet",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "runtime_stagnation_guard_receipt" },
+    "valid": { "const": true },
+    "decision": { "enum": ["continue", "restart_requested", "handoff_required"] },
+    "action": { "enum": ["none", "stop_and_restart", "stop_and_handoff"] },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "STAGNATION-CONSECUTIVE-REPEAT",
+          "STAGNATION-NGRAM-REPEAT"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "public_output_count",
+        "token_count",
+        "max_consecutive_repeated_content",
+        "max_ngram_repeat",
+        "progress_marker_count"
+      ],
+      "properties": {
+        "public_output_count": { "type": "integer", "minimum": 0 },
+        "token_count": { "type": "integer", "minimum": 0 },
+        "max_consecutive_repeated_content": { "type": "integer", "minimum": 0 },
+        "max_ngram_repeat": { "type": "integer", "minimum": 0 },
+        "progress_marker_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repeated_content_threshold",
+        "ngram_repeat_threshold",
+        "retry_count",
+        "retry_budget"
+      ],
+      "properties": {
+        "repeated_content_threshold": { "type": "integer", "minimum": 1 },
+        "ngram_repeat_threshold": { "type": "integer", "minimum": 1 },
+        "retry_count": { "type": "integer", "minimum": 0 },
+        "retry_budget": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "restart_packet": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "packet_kind",
+            "included_state",
+            "runaway_suffix_retained"
+          ],
+          "properties": {
+            "packet_kind": { "const": "terminal_safe_restart_packet" },
+            "included_state": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "task_contract",
+                  "verified_artifact_ledger",
+                  "unresolved_questions",
+                  "last_valid_checkpoint_digest"
+                ]
+              },
+              "minItems": 4,
+              "uniqueItems": true
+            },
+            "runaway_suffix_retained": { "const": false }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metadata_only",
+        "hidden_chain_of_thought_saved",
+        "asks_model_if_stuck",
+        "retry_budget_bounded"
+      ],
+      "properties": {
+        "metadata_only": { "const": true },
+        "hidden_chain_of_thought_saved": { "const": false },
+        "asks_model_if_stuck": { "const": false },
+        "retry_budget_bounded": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 from assurance.cli import main as gsa_main
@@ -15,6 +15,7 @@ from assurance.cli import main as gsa_main
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_LEDGER = ROOT / "assurance/fixtures/source_visibility/mixed-visibility-ledger.json"
 CREATED_AT = "2026-07-26T12:45:00Z"
+ASK = "Check whether the source visibility gate permits this claim."
 
 
 class GsaCliDispatcherTests(unittest.TestCase):
@@ -58,6 +59,8 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 str(self.run_root),
                 "--source-ledger",
                 str(SOURCE_LEDGER),
+                "--ask",
+                ASK,
                 "--created-at",
                 CREATED_AT,
                 "--json",
@@ -71,6 +74,29 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertEqual(verify_exit, 0)
         self.assertEqual(run_receipt, verify_receipt)
         self.assertEqual(run_receipt["terminal_event"], "run_finished")
+
+    def test_run_reports_invalid_task_entry_mode_as_json_error(self) -> None:
+        error_output = StringIO()
+        with redirect_stderr(error_output):
+            exit_code = gsa_main(
+                [
+                    "run",
+                    "--run-root",
+                    str(self.run_root),
+                    "--source-ledger",
+                    str(SOURCE_LEDGER),
+                    "--created-at",
+                    CREATED_AT,
+                    "--json",
+                ]
+            )
+        error = json.loads(error_output.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(error["valid"])
+        self.assertEqual(error["error_type"], "AssuranceError")
+        self.assertIn("exactly one", error["error"])
+        self.assertFalse(self.run_root.exists())
 
     def test_root_gsa_py_doctor_entrypoint(self) -> None:
         completed = subprocess.run(

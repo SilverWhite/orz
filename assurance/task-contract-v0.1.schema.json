@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/task-contract-v0.1.schema.json",
+  "title": "Canonical CLI task contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract_kind",
+    "task_id",
+    "created_at",
+    "entry_mode",
+    "user_request",
+    "source_ledger",
+    "output_contract",
+    "permissions",
+    "claim_policy",
+    "run_policy",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "contract_kind": { "const": "canonical_cli_task_contract" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "entry_mode": { "enum": ["ask", "task_file", "fixture"] },
+    "user_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_text", "normalized_intent"],
+      "properties": {
+        "raw_text": { "$ref": "#/$defs/nonempty" },
+        "normalized_intent": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "source_ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "required"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonempty" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "required": { "const": true }
+      }
+    },
+    "output_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "must_include_source_visibility_summary",
+        "must_include_claim_boundaries",
+        "must_include_next_actions"
+      ],
+      "properties": {
+        "format": { "const": "canonical_cli_answer_packet" },
+        "must_include_source_visibility_summary": { "const": true },
+        "must_include_claim_boundaries": { "const": true },
+        "must_include_next_actions": { "const": true }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network_allowed",
+        "real_model_allowed",
+        "tool_calls_allowed",
+        "workspace_writes_allowed",
+        "incremental_retrieval_allowed"
+      ],
+      "properties": {
+        "network_allowed": { "const": false },
+        "real_model_allowed": { "const": false },
+        "tool_calls_allowed": { "const": false },
+        "workspace_writes_allowed": { "const": false },
+        "incremental_retrieval_allowed": { "type": "boolean" }
+      }
+    },
+    "claim_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_claim_strength",
+        "fulltext_required_for_mechanism",
+        "defer_on_insufficient_visibility"
+      ],
+      "properties": {
+        "max_claim_strength": {
+          "enum": [
+            "metadata_only",
+            "observed_fragment_only",
+            "full_text_grounded_but_unvalidated"
+          ]
+        },
+        "fulltext_required_for_mechanism": { "const": true },
+        "defer_on_insufficient_visibility": { "const": true }
+      }
+    },
+    "run_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_mode",
+        "verify_after_run",
+        "resume_allowed"
+      ],
+      "properties": {
+        "adapter_mode": { "const": "fake_offline" },
+        "verify_after_run": { "const": true },
+        "resume_allowed": { "const": false }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9._-]*$"
+    },
+    "nonempty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

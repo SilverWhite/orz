@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/runner-public-output-stream-v0.1.schema.json",
+  "title": "Runner public output stream fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "stream_kind",
+    "stream_id",
+    "records",
+    "extraction_policy"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "stream_kind": { "const": "runner_public_output_stream_fixture" },
+    "stream_id": { "type": "string", "pattern": "^STREAM-[A-Z0-9._-]+$" },
+    "records": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/record" }
+    },
+    "extraction_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "public_assistant_channels",
+        "private_channels_forbidden",
+        "restart_packet_source_policy"
+      ],
+      "properties": {
+        "public_assistant_channels": {
+          "type": "array",
+          "items": { "enum": ["assistant_delta", "assistant_final"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "private_channels_forbidden": { "const": true },
+        "restart_packet_source_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "included_state",
+            "runaway_suffix_allowed",
+            "hidden_reasoning_allowed"
+          ],
+          "properties": {
+            "included_state": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "task_contract",
+                  "verified_artifact_ledger",
+                  "unresolved_questions",
+                  "last_valid_checkpoint_digest"
+                ]
+              },
+              "minItems": 4,
+              "uniqueItems": true
+            },
+            "runaway_suffix_allowed": { "const": false },
+            "hidden_reasoning_allowed": { "const": false }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_id",
+        "sequence",
+        "source",
+        "channel",
+        "visibility"
+      ],
+      "properties": {
+        "record_id": { "type": "string", "pattern": "^REC-[A-Z0-9._-]+$" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "source": {
+          "enum": ["assistant", "user", "system", "tool", "runner"]
+        },
+        "channel": {
+          "enum": [
+            "assistant_delta",
+            "assistant_final",
+            "reasoning_private",
+            "tool_private",
+            "system_internal",
+            "user_input",
+            "metadata_event"
+          ]
+        },
+        "visibility": {
+          "enum": ["public", "private_hidden", "redacted_metadata"]
+        },
+        "text": { "type": "string", "minLength": 1 },
+        "content_sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "visibility": { "const": "public" } },
+            "required": ["visibility"]
+          },
+          "then": { "required": ["text"] }
+        },
+        {
+          "if": {
+            "properties": { "visibility": { "const": "private_hidden" } },
+            "required": ["visibility"]
+          },
+          "then": {
+            "required": ["content_sha256"],
+            "not": { "required": ["text"] }
+          }
+        },
+        {
+          "if": {
+            "properties": { "visibility": { "const": "redacted_metadata" } },
+            "required": ["visibility"]
+          },
+          "then": {
+            "required": ["content_sha256"],
+            "not": { "required": ["text"] }
+          }
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

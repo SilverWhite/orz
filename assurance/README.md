@@ -43,6 +43,27 @@ Windows native sandbox 或 anti-injection hard gate 已达到生产可用状态�
   冻结外部文献、帖子、网页和 thread 引用后的全文可见性登记。gate 不强制全部全文抓取，但会按
   claim 类型要求 metadata、partial 或 full-text；机制、方法、限制、作者立场和跨文献综合在未读全文时
   固定 defer/downgrade，并要求输出显式标注可见性状态。
+- `orientation-checkpoint-v0.1.schema.json`、`orientation-checkpoint-verification-v0.1.schema.json` 与
+  `runtime-stagnation-guard-receipt-v0.1.schema.json`：冻结中性 orientation checkpoint 和 runtime stagnation
+  guard 的首个只读 receipt。orientation 只允许任务定位字段，明确拒绝反例候选和 claim disposition；
+  stagnation guard 只基于公开输出重复阈值和有限 retry budget，不询问模型是否卡住。
+- `orientation-stagnation-integration-fixture-v0.1.schema.json` 与
+  `orientation-stagnation-integration-receipt-v0.1.schema.json`：冻结 no-model 接入前置夹具输入和汇总 receipt，
+  绑定 orientation/stagnation artifact digest、decisions 和“未接 runner/模型/网络/反例队列”的边界检查。
+- `orientation-checkpoint-event-payload-v0.1.schema.json`、`runtime-stagnation-guard-event-payload-v0.1.schema.json`
+  与 `orientation-stagnation-journal-receipt-v0.1.schema.json`：冻结 runtime event payload 与 JSONL journal
+  projection receipt，要求 orientation 先于 stagnation guard，且不出现 model/tool event。
+- `runner-public-output-stream-v0.1.schema.json` 与 `runner-public-output-extraction-receipt-v0.1.schema.json`：
+  冻结真实 runner 前的公开输出抽取夹具。只有 public assistant `assistant_delta`/`assistant_final` 可进入
+  `public_outputs`；private reasoning 和 redacted metadata 只能以 digest 表示，schema 禁止保存 text。
+- `deepseek-api-observation-result-v0.1.schema.json` 与
+  `deepseek-api-observation-pipeline-receipt-v0.1.schema.json`：冻结 direct DeepSeek API one-shot
+  观测的结果投影和下游 pipeline receipt。该路径要求 exactly one request、retry 计数为零、credential/raw response
+  不落盘，并只把 public assistant 文本传入公开输出抽取层。
+- `deepseek-stream-observation-fixture-v0.1.schema.json` 与
+  `deepseek-stream-observation-pipeline-receipt-v0.1.schema.json`：冻结 DeepSeek-shaped streaming/repetition
+  fixture。public `delta.content` 映射为 public assistant delta；private reasoning 只能以
+  `reasoning_content_sha256` 进入 private record；重复 public delta 可触发 downstream restart projection。
 
 `profile-registry-v0.1.json` 新增 domain-neutral `general-science`，承载 SourceRouter、
 EvidenceKernel、ClaimBoundary、ResearchLifecycle、ValidatorBridge、ScenarioExporter、LeakScanner
@@ -122,6 +143,45 @@ fake DeepSeek-shaped adapter boundary、structured answer packet、runtime JSONL
 
 `cli.py` 与根级 `gsa.py` 新增 P0.5 用户入口：`doctor`、`source gate`、`run` 与 `verify`。这些入口只是
 当前 offline/fake 主路径的稳定 dispatcher；安装包、console script 和真实 adapter 仍未接入。
+`task_contract.py` 与 `task-contract-v0.1.schema.json` 负责把自由 `--ask` 输入冻结成单次 run contract，
+或复用 `--task` 指定的既有 contract。task contract 不是限制用户思路，而是记录本次执行的来源、权限、claim
+上限和输出义务，供 run/verify/resume 后续复核。
+
+`orientation_runtime_guard.py` 新增首个 no-model/read-only orientation 与 stagnation fixture：固定格式
+`[ORIENTATION_CHECKPOINT v0.1]` 只问“当前正在做什么/任务定位是什么/下一步服务哪个用户目标”，验证 response
+不得包含 `counterexample_candidate`、`claim_disposition` 等字段；runtime stagnation guard 则在公开输出连续重复
+或 n-gram 重复超过阈值时生成 `restart_requested` 或 `handoff_required` receipt。该实现不接 runner、不截断真实会话、
+不保存隐藏 chain-of-thought，也不让 orientation 自动进入反例审查。
+
+`orientation_runtime_integration.py` 新增 no-model runner 接入前置夹具：输入 fixture 含 task、task contract digest、
+step、公开输出、retry budget 和阈值；输出 `orientation-checkpoint.json`、`runtime-stagnation-guard-receipt.json`
+和汇总 receipt。verifier 从 checked-in/落盘 fixture input 独立重建 artifact 与 receipt，证明 orientation 与 stagnation
+guard 可以被运行流程消费但仍互不调用、不接 runner、不写 journal、不触发真实重启。
+
+`orientation_runtime_journal.py` 新增 no-model runtime event/journal projection：`runtime/run-event-v0.1.schema.json`
+登记 `orientation_checkpoint` 与 `runtime_stagnation_guard` 两个事件类型；projection 固定
+`run_preflight → run_started → orientation_checkpoint → runtime_stagnation_guard → terminal` 顺序，并在
+restart/handoff 场景使用 `run_invalidated` terminal。verifier 重建 manifest、JSONL hash-chain 和 payload schema，
+并证明没有 model/tool event、没有真实 runner、没有 counterexample queue。
+
+`runner_public_output.py` 新增公开输出抽取层：从候选 runner stream fixture 中只抽取 public assistant 输出，
+排除 user/system/tool/private/redacted records，并冻结 restart packet 来源策略为 task contract、verified artifact
+ledger、unresolved questions 和 last valid checkpoint digest。该层证明 hidden/private reasoning 不进入
+stagnation guard 输入，也不复制到 receipt；抽取结果可作为后续 orientation/stagnation integration fixture 的
+`public_outputs`。
+
+`deepseek_api_observation.py` 与 `scripts/invoke_deepseek_public_output_observation.ps1` 新增 direct DeepSeek API
+one-shot 观测路径。PowerShell launcher 采用两阶段 Plan/Execute：Plan 不读取凭据、不联网；Execute 需要固定确认 token，
+从 Windows Credential Manager `FEP-Agent/DeepSeek` 读取凭据，向 `https://api.deepseek.com/chat/completions`
+发起一次 `deepseek-v4-pro` marker 请求，随后只保存 public assistant 文本、marker 是否匹配、usage 元数据和可选 private reasoning digest。
+Python 投影脚本再复用 runner public-output extraction、orientation/stagnation integration 和 runtime journal verifier。
+这仍不是真实 runner adapter，也不证明模型能力或重复停滞恢复能力。
+
+`deepseek_stream_observation.py` 与 `scripts/build_deepseek_stream_observation_fixture.py` 新增 DeepSeek-shaped
+streaming/repetition fixture。它消费已脱敏 stream chunks，而不是捕获真实 SSE；每个 public `delta.content`
+进入 runner public-output stream，private reasoning 只允许以 digest 形式进入 `reasoning_private` record，finish/usage
+只进入 redacted metadata。回归测试覆盖 11 次相同 public delta 触发 `restart_requested`/`run_invalidated`，
+以及非连续 chunk sequence fail-closed。
 
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。

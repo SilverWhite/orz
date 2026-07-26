@@ -35,6 +35,8 @@
         "permission_decision",
         "tool_started",
         "tool_completed",
+        "orientation_checkpoint",
+        "runtime_stagnation_guard",
         "gate_decision",
         "artifact_registered",
         "run_finished",

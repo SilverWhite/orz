@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/orientation-checkpoint-event-payload-v0.1.schema.json",
+  "title": "Orientation checkpoint runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkpoint_id",
+    "orientation_checkpoint_sha256",
+    "task_id",
+    "step_index",
+    "neutral_orientation_only",
+    "counterexample_queue_invoked",
+    "claim_strength_effect"
+  ],
+  "properties": {
+    "checkpoint_id": { "type": "string", "pattern": "^ORIENT-[A-Z0-9._-]+-[0-9]{4}$" },
+    "orientation_checkpoint_sha256": { "$ref": "#/$defs/sha256" },
+    "task_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]*$" },
+    "step_index": { "type": "integer", "minimum": 0 },
+    "neutral_orientation_only": { "const": true },
+    "counterexample_queue_invoked": { "const": false },
+    "claim_strength_effect": { "const": "none" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

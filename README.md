@@ -15,10 +15,15 @@ ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepS
 disposable reproduction 切片已完成 no-model manifest、固定 replay、receipt/verifier/run-proof、runtime preflight
 projection、一次性 runtime JSONL journal write/replay、development code/environment lock、no-model runner skeleton、runner
 journal sidecar lock、只读 recovery inspection、受控 repair/quarantine receipt 与 lifecycle repair policy
-和“不增加独立证据/不提升 claim 强度”边界。自我质询/反例 sentinel 已形成设计稿并暂存，尚未接入 runner。
+和“不增加独立证据/不提升 claim 强度”边界。中性 orientation checkpoint、独立 counterexample queue
+与 runtime stagnation guard 已形成分离设计稿；首个 no-model/read-only fixture、runner 接入前置夹具、
+runtime event/journal projection、公开输出抽取层、一次 direct DeepSeek API one-shot 观测投影管线，以及
+DeepSeek-shaped streaming/repetition fixture 已实现；真实 API 观测只验证公开输出抽取与 guard 管线接线，streaming
+fixture 只验证 DeepSeek 风格 chunk 的边界映射，尚未接入真实 runner。
 首个 canonical guarded CLI offline 纵向路径已开始接通：run manifest、source visibility gate、fake DeepSeek-shaped
 adapter boundary、answer packet、runtime JSONL journal 和独立 verifier，用于证明 CLI 编排不可绕过保障层，而非真实模型能力。
-P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；当前入口仍是 offline/fake，
+P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`run` 支持 `--ask` 生成冻结 task contract，
+也支持 `--task` 复用既有合同。当前入口仍是 offline/fake，
 不调用真实模型、不联网、不读取 credential。
 
 本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它从 FEP/LIF 工作流暴露的问题出发，但把
@@ -53,6 +58,7 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；�
 - [`assurance/source-visibility-ledger-v0.1.schema.json`](assurance/source-visibility-ledger-v0.1.schema.json)：外部文献、帖子和网页引用后的全文可见性 ledger；配套 gate receipt 会按 claim 类型要求 metadata/partial/full-text 状态并输出 allow/defer/block。
 - [`assurance/canonical_cli.py`](assurance/canonical_cli.py)：canonical guarded CLI 的 offline/fake P0 纵向路径；串联 run manifest、source visibility gate、fake adapter boundary、answer packet、runtime journal 和独立 verifier。
 - [`gsa.py`](gsa.py)：P0.5 顶层 CLI dispatcher；提供 `doctor`、`source gate`、`run` 和 `verify`。
+- [`assurance/task-contract-v0.1.schema.json`](assurance/task-contract-v0.1.schema.json)：冻结单次 CLI run 的任务合同；记录原始问题、source ledger、权限、claim 上限和输出要求。
 - [`docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md`](docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md)：当前 offline/fake CLI 入口的最短使用说明。
 - [`docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md`](docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md)：首个 canonical guarded CLI offline 主路径审计；确认 gate-before-model、fake no-network adapter、answer packet 与 verifier 边界。
 - [`docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md`](docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md)：首个非 LIF 通用科学多文件只读闭环、claim 强度门禁、正反回归与保留缺口。
@@ -61,7 +67,14 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；�
 - [`docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md`](docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md)：跨 artifact JSON Pointer、producer/source lineage、比较不变量和 permission-reversal 门禁。
 - [`docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md`](docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md)：首个 no-model disposable reproduction manifest、固定 replay、receipt/verifier/run-proof/runtime projection、一次性 runtime journal write/replay、execution lock、no-model runner skeleton、runner journal lock/recovery repair receipt、lifecycle repair policy 与“不增加独立证据”边界。
 - [`docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md`](docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md)：文献、帖子、网页和 thread 检索时必须回报全文可见性状态；未完整抓取并浏览全文时明确标注 partial/metadata-only/unavailable，禁止摘要或片段冒充全文证据。
-- [`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`](docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md)：自我质询、反例候选队列，以及 DeepSeek/Grok 等 runtime 高重复输出截断与重启的未启用设计草案。
+- [`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`](docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md)：中性 orientation checkpoint、独立 counterexample queue，以及 DeepSeek/Grok 等 runtime 高重复输出截断与重启的设计和首个只读 fixture。
+- [`assurance/orientation_runtime_guard.py`](assurance/orientation_runtime_guard.py)：生成中性 orientation checkpoint、验证其不产生反例/claim disposition，并用公开输出重复阈值生成 runtime stagnation guard receipt。
+- [`assurance/orientation_runtime_integration.py`](assurance/orientation_runtime_integration.py)：no-model 接入前置夹具；从 fixture input 写出 orientation/stagnation 两个 artifact 和汇总 receipt，并由 verifier 独立重建。
+- [`assurance/orientation_runtime_journal.py`](assurance/orientation_runtime_journal.py)：no-model runtime event/journal projection；生成 `orientation_checkpoint` 与 `runtime_stagnation_guard` 事件并验证 JSONL hash-chain。
+- [`assurance/runner_public_output.py`](assurance/runner_public_output.py)：真实 runner 前的公开输出抽取夹具；只把 public assistant 输出送入 `public_outputs`，私有 reasoning/redacted metadata 只能保留 digest 且不得复制文本。
+- [`assurance/deepseek_api_observation.py`](assurance/deepseek_api_observation.py)：direct DeepSeek API one-shot 观测投影；消费单次受控 API result，把公开 assistant 输出接入 extraction、orientation/stagnation 和 runtime journal，不保存 credential、raw response 或隐藏 reasoning 文本。
+- [`assurance/deepseek_stream_observation.py`](assurance/deepseek_stream_observation.py)：DeepSeek-shaped streaming fixture；把 public `delta.content`、private reasoning digest 和 terminal metadata 投影到 runner output stream，并用重复 public delta 验证 restart projection。
+- [`scripts/invoke_deepseek_public_output_observation.ps1`](scripts/invoke_deepseek_public_output_observation.ps1)：两阶段真实 DeepSeek API 观测 launcher；先生成离线 plan，执行时从 Windows Credential Manager `FEP-Agent/DeepSeek` 读取凭据并只发起一次固定 marker 请求。
 - [`docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)：P2 Docker 实测、Windows native fail-closed 状态、限制与正反例收敛策略。
 - [`docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md`](docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md)：P1 envelope、P2 selector、无模型 action、宿主/容器进程追踪、HMAC 回执与残留复核的端到端实测。
 - [`docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md`](docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md)：P3 来源不可提权、内核动作授权、能力子集委派与 digest-bound 一次性许可的测试和限制。

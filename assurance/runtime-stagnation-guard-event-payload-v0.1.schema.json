@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/runtime-stagnation-guard-event-payload-v0.1.schema.json",
+  "title": "Runtime stagnation guard event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runtime_stagnation_guard_receipt_sha256",
+    "decision",
+    "action",
+    "reason_codes",
+    "public_output_count",
+    "retry_count",
+    "retry_budget",
+    "restart_packet_sha256",
+    "public_output_only",
+    "asks_model_if_stuck",
+    "hidden_chain_of_thought_saved"
+  ],
+  "properties": {
+    "runtime_stagnation_guard_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "decision": { "enum": ["continue", "restart_requested", "handoff_required"] },
+    "action": { "enum": ["none", "stop_and_restart", "stop_and_handoff"] },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "STAGNATION-CONSECUTIVE-REPEAT",
+          "STAGNATION-NGRAM-REPEAT"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "public_output_count": { "type": "integer", "minimum": 0 },
+    "retry_count": { "type": "integer", "minimum": 0 },
+    "retry_budget": { "type": "integer", "minimum": 0 },
+    "restart_packet_sha256": {
+      "anyOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "public_output_only": { "const": true },
+    "asks_model_if_stuck": { "const": false },
+    "hidden_chain_of_thought_saved": { "const": false }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

@@ -44,6 +44,7 @@ python gsa.py source gate --ledger assurance/fixtures/source_visibility/mixed-vi
 
 ```powershell
 python gsa.py run `
+  --ask "Check whether this source can support the requested claim." `
   --source-ledger assurance/fixtures/source_visibility/mixed-visibility-ledger.json `
   --run-root .tmp/canonical-run
 ```
@@ -51,6 +52,7 @@ python gsa.py run `
 该命令会写出：
 
 - `run-manifest.json`
+- `task-contract.json`
 - `source-visibility-ledger.json`
 - `source-visibility-gate-receipt.json`
 - `answer-packet.json`
@@ -68,6 +70,7 @@ python gsa.py verify --run-root .tmp/canonical-run
 ## 边界
 
 - `run` 当前固定使用 fake/offline adapter；
+- `--ask` 会冻结为 `task-contract.json`，并记录 source ledger 绝对路径；也可以用 `--task task.json` 复用既有合同；
 - source gate 可以 `defer`，但不会自动执行下一轮检索；
 - 没有 crawler、PDF parser、ToolBroker、真实 DeepSeek/Grok 请求或 EvaluationRunner；
 - 这些命令证明 CLI 编排和机械门禁，不证明科学正确性。

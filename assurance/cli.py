@@ -76,7 +76,7 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
         "entrypoints": {
             "doctor": "python gsa.py doctor",
             "source_gate": "python gsa.py source gate --ledger <path>",
-            "run": "python gsa.py run --source-ledger <path> --run-root <path>",
+            "run": "python gsa.py run --ask <question> --source-ledger <path> --run-root <path>",
             "verify": "python gsa.py verify --run-root <path>",
         },
         "runtime_boundaries": {
@@ -148,6 +148,8 @@ def _run_canonical(args: argparse.Namespace) -> int:
     receipt = run_canonical_guarded_cli(
         run_root=args.run_root,
         source_ledger_path=args.source_ledger,
+        ask=args.ask,
+        task_contract_path=args.task,
         run_id=args.run_id,
         task_id=args.task_id,
         created_at=args.created_at,
@@ -201,7 +203,9 @@ def _parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="Run canonical guarded CLI offline path.")
     run.add_argument("--run-root", type=Path, required=True)
-    run.add_argument("--source-ledger", type=Path, required=True)
+    run.add_argument("--source-ledger", type=Path)
+    run.add_argument("--ask")
+    run.add_argument("--task", type=Path)
     run.add_argument("--run-id", default="RUN-CANONICAL-CLI-FAKE-001")
     run.add_argument("--task-id", default="TASK-CANONICAL-CLI-FAKE-001")
     run.add_argument("--created-at", default=None)

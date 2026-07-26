@@ -9,6 +9,7 @@
     "packet_kind",
     "run_id",
     "task_id",
+    "task_contract",
     "adapter",
     "source_visibility_gate",
     "answer",
@@ -21,6 +22,15 @@
     "packet_kind": { "const": "canonical_guarded_cli_answer_packet" },
     "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
     "task_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]*$" },
+    "task_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "entry_mode"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "entry_mode": { "enum": ["ask", "task_file", "fixture"] }
+      }
+    },
     "adapter": {
       "type": "object",
       "additionalProperties": false,

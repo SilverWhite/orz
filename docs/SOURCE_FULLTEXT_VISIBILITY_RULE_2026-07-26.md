@@ -48,4 +48,5 @@
 当前仍未实现 crawler、全文下载器、runtime adapter 或 EvaluationRunner 接入。在 CLI 魔改版可用前，应先让检索工具或模型 wrapper
 生成 ledger，再由 gate receipt 决定哪些引用可用、哪些必须降级或继续分批抓取。
 
-该规则不替代反例 sentinel、自我质询或后续脱敏机制；它是更靠前的来源完整性保护层。
+该规则不替代独立 counterexample queue、中性 orientation checkpoint、runtime stagnation guard 或后续脱敏机制；
+它是更靠前的来源完整性保护层。

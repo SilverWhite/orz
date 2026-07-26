@@ -22,6 +22,14 @@ from .canonical_cli import (
     verify_canonical_guarded_cli_run,
 )
 from .conversation import ConversationNamespace
+from .deepseek_api_observation import (
+    run_deepseek_api_observation_pipeline,
+    verify_deepseek_api_observation_pipeline,
+)
+from .deepseek_stream_observation import (
+    run_deepseek_stream_observation_fixture,
+    verify_deepseek_stream_observation_fixture,
+)
 from .disposable_reproduction import (
     build_disposable_reproduction_run_proof,
     run_disposable_reproduction,
@@ -42,6 +50,19 @@ from .guarded_execution import (
 )
 from .general_science_review import review_general_science_bundle
 from .keystore import MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore
+from .orientation_runtime_guard import (
+    build_orientation_checkpoint,
+    evaluate_runtime_stagnation_guard,
+    verify_orientation_response,
+)
+from .orientation_runtime_integration import (
+    run_orientation_stagnation_integration_fixture,
+    verify_orientation_stagnation_integration_fixture,
+)
+from .orientation_runtime_journal import (
+    verify_orientation_stagnation_runtime_journal,
+    write_orientation_stagnation_runtime_journal,
+)
 from .instruction_gate import (
     authorize_action_candidate,
     delegate_capabilities,
@@ -79,10 +100,19 @@ from .runtime_preflight import (
     verify_gsa_runtime_preflight_projection,
     write_gsa_runtime_preflight_journal,
 )
+from .runner_public_output import (
+    extract_public_outputs_from_runner_stream,
+    run_runner_public_output_extraction_fixture,
+    verify_runner_public_output_extraction_fixture,
+)
 from .source_visibility import (
     evaluate_source_visibility_gate,
     evaluate_source_visibility_ledger_file,
     render_visibility_summary,
+)
+from .task_contract import (
+    build_task_contract_from_ask,
+    load_task_contract,
 )
 from .runner import (
     inspect_gsa_runner_journal_recovery,
@@ -134,6 +164,8 @@ __all__ = [
     "build_disposable_reproduction_execution_lock",
     "build_canonical_cli_run_manifest",
     "build_fake_answer_packet",
+    "build_orientation_checkpoint",
+    "build_task_contract_from_ask",
     "build_gsa_runtime_preflight_projection",
     "build_workspace_first_frozen_context",
     "authorize_action_candidate",
@@ -145,6 +177,8 @@ __all__ = [
     "delegate_capabilities",
     "execute_guarded_no_model_action",
     "execute_workspace_first_integrated_run",
+    "extract_public_outputs_from_runner_stream",
+    "evaluate_runtime_stagnation_guard",
     "evaluate_source_visibility_gate",
     "evaluate_source_visibility_ledger_file",
     "initialize_workspace_marker",
@@ -161,6 +195,7 @@ __all__ = [
     "load_general_science_validator_registry",
     "load_profile_registry",
     "load_readonly_task_projection",
+    "load_task_contract",
     "load_synthetic_user_task_suite",
     "project_complex_task_readonly",
     "recovery_permit_binding",
@@ -169,8 +204,12 @@ __all__ = [
     "render_visibility_summary",
     "run_disposable_reproduction",
     "run_canonical_guarded_cli",
+    "run_deepseek_api_observation_pipeline",
+    "run_deepseek_stream_observation_fixture",
     "run_docker_sandbox_probe",
     "run_gsa_no_model_runner_skeleton",
+    "run_orientation_stagnation_integration_fixture",
+    "run_runner_public_output_extraction_fixture",
     "run_synthetic_user_task_evaluation",
     "run_general_science_validators",
     "select_execution_backend",
@@ -181,9 +220,15 @@ __all__ = [
     "verify_guarded_execution_receipt",
     "verify_capability_delegation",
     "verify_instruction_provenance",
+    "verify_orientation_response",
+    "verify_orientation_stagnation_integration_fixture",
+    "verify_orientation_stagnation_runtime_journal",
+    "verify_runner_public_output_extraction_fixture",
     "verify_complex_task_readonly_projection",
     "verify_disposable_reproduction_receipt",
     "verify_canonical_guarded_cli_run",
+    "verify_deepseek_api_observation_pipeline",
+    "verify_deepseek_stream_observation_fixture",
     "verify_disposable_reproduction_execution_lock",
     "verify_disposable_reproduction_run_proof",
     "verify_gsa_runtime_preflight_projection",
@@ -197,6 +242,7 @@ __all__ = [
     "verify_security_envelope",
     "verify_sensitive_action_permit",
     "write_gsa_runtime_preflight_journal",
+    "write_orientation_stagnation_runtime_journal",
     "validate_profile_registry_semantics",
     "validate_artifact_registry_semantics",
     "validate_validator_registry_semantics",
