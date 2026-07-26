@@ -73,6 +73,11 @@ from .runtime_preflight import (
     verify_gsa_runtime_preflight_projection,
     write_gsa_runtime_preflight_journal,
 )
+from .source_visibility import (
+    evaluate_source_visibility_gate,
+    evaluate_source_visibility_ledger_file,
+    render_visibility_summary,
+)
 from .runner import (
     inspect_gsa_runner_journal_recovery,
     replay_gsa_runner_journal,
@@ -132,6 +137,8 @@ __all__ = [
     "delegate_capabilities",
     "execute_guarded_no_model_action",
     "execute_workspace_first_integrated_run",
+    "evaluate_source_visibility_gate",
+    "evaluate_source_visibility_ledger_file",
     "initialize_workspace_marker",
     "index_artifact_schemas",
     "inspect_gsa_runner_journal_recovery",
@@ -151,6 +158,7 @@ __all__ = [
     "recovery_permit_binding",
     "resolve_effective_profile",
     "resume_archived_conversation",
+    "render_visibility_summary",
     "run_disposable_reproduction",
     "run_docker_sandbox_probe",
     "run_gsa_no_model_runner_skeleton",

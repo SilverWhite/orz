@@ -46,6 +46,7 @@ journal sidecar lock、只读 recovery inspection、受控 repair/quarantine rec
 - [`adr/ADR-0003-runtime-neutral-assurance-kernel.md`](adr/ADR-0003-runtime-neutral-assurance-kernel.md)：冻结 runtime-neutral 所有权、capability-gated 选择与 Grok `reference_only` 边界。
 - [`adr/ADR-0004-general-science-profile-layering.md`](adr/ADR-0004-general-science-profile-layering.md)：冻结 `general-science → lif-research` 的只增不减分层和通用测试不得使用 LIF 内部任务的隔离边界。
 - [`assurance/README.md`](assurance/README.md)：P0–P5 runtime-neutral 合同与 development fixture，包括会话生命周期、workspace-first/Docker backend policy、guarded execution、指令来源、能力子集、metadata audit、恢复授权和合成用户任务预检。
+- [`assurance/source-visibility-ledger-v0.1.schema.json`](assurance/source-visibility-ledger-v0.1.schema.json)：外部文献、帖子和网页引用后的全文可见性 ledger；配套 gate receipt 会按 claim 类型要求 metadata/partial/full-text 状态并输出 allow/defer/block。
 - [`docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md`](docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md)：首个非 LIF 通用科学多文件只读闭环、claim 强度门禁、正反回归与保留缺口。
 - [`docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md`](docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md)：版本化 validator registry、设计/动作 schema、artifact finite gate 与基础统计报告完整性边界。
 - [`docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md`](docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md)：artifact schema registry、结果摘要绑定、不可弱化映射与首个数值/统计基础 schema。

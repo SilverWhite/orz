@@ -547,6 +547,48 @@ def _disposable_reproduction_fixture_errors(
     return errors
 
 
+def _source_visibility_fixture_errors(ledger: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    source_ids = [source.get("source_id") for source in ledger.get("sources", [])]
+    if len(source_ids) != len(set(source_ids)):
+        errors.append("source visibility fixture has duplicate source IDs")
+    references = ledger.get("references", [])
+    reference_ids = [reference.get("ref_id") for reference in references]
+    if len(reference_ids) != len(set(reference_ids)):
+        errors.append("source visibility fixture has duplicate reference IDs")
+    source_id_set = set(source_ids)
+    for reference in references:
+        if reference.get("source_id") not in source_id_set:
+            errors.append(
+                f"source visibility reference points at unknown source: "
+                f"{reference.get('ref_id')}"
+            )
+    registered_refs = set(reference_ids)
+    for ref_id in ledger.get("gate_request", {}).get("cited_ref_ids", []):
+        if ref_id not in registered_refs:
+            errors.append(f"source visibility gate cites unknown ref: {ref_id}")
+    policy = ledger.get("retrieval_policy", {})
+    if policy.get("fulltext_required_for_high_claims") is not True:
+        errors.append("source visibility fixture must require full text for high claims")
+    if policy.get("allow_incremental_retrieval") is not True:
+        errors.append("source visibility fixture must allow incremental retrieval")
+    fulltext_count = sum(
+        1
+        for source in ledger.get("sources", [])
+        if source.get("visibility_status") == "full_text_observed"
+    )
+    if fulltext_count > policy.get("max_fulltext_sources_per_pass", -1):
+        errors.append("source visibility fixture exceeds full-text source budget")
+    token_estimate = sum(
+        attempt.get("context_tokens_estimate", 0)
+        for source in ledger.get("sources", [])
+        for attempt in source.get("retrieval_attempts", [])
+    )
+    if token_estimate > policy.get("max_context_tokens_per_pass", -1):
+        errors.append("source visibility fixture exceeds context budget")
+    return errors
+
+
 def _check_markdown_links() -> list[str]:
     errors: list[str] = []
     pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
@@ -956,6 +998,23 @@ def check_repository() -> dict[str, Any]:
         )
     )
     counts["general_science_disposable_reproduction_fixtures"] = 1
+
+    source_visibility_fixture_path = (
+        assurance_root / "fixtures/source_visibility/mixed-visibility-ledger.json"
+    )
+    source_visibility_ledger = _load_json(source_visibility_fixture_path)
+    errors.extend(
+        _validate_instance(
+            source_visibility_ledger,
+            assurance_root / "source-visibility-ledger-v0.1.schema.json",
+            str(source_visibility_fixture_path.relative_to(ROOT)),
+        )
+    )
+    errors.extend(
+        f"source visibility fixture error: {error}"
+        for error in _source_visibility_fixture_errors(source_visibility_ledger)
+    )
+    counts["source_visibility_fixtures"] = 1
 
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]

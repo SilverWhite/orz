@@ -38,7 +38,14 @@
 
 ## 当前实现状态
 
-本规则当前是使用与审查契约，尚未接入正式 source ledger schema、crawler、runtime adapter 或 EvaluationRunner。
-在 CLI 魔改版可用前，应先以人工/模型自报形式执行：每次检索相关文献或帖子时，结论前给出来源可见性摘要；如果无法确认完整全文已抓取，就明确写出“未完整抓取全文”。
+本规则已新增首个轻量机械门禁：
+
+- `assurance/source-visibility-ledger-v0.1.schema.json`：登记来源、引用、检索预算、已读范围和缺失范围；
+- `assurance/source-visibility-gate-receipt-v0.1.schema.json`：输出每条引用的 `allow/defer/block`、所需可见性、实际可见性和可降级 claim；
+- `assurance/source_visibility.py` 与 `assurance/source_visibility_cli.py`：对 ledger 执行 deterministic gate；
+- `assurance/fixtures/source_visibility/mixed-visibility-ledger.json`：覆盖 metadata-only、partial abstract 和 full thread 的正反混合 fixture。
+
+当前仍未实现 crawler、全文下载器、runtime adapter 或 EvaluationRunner 接入。在 CLI 魔改版可用前，应先让检索工具或模型 wrapper
+生成 ledger，再由 gate receipt 决定哪些引用可用、哪些必须降级或继续分批抓取。
 
 该规则不替代反例 sentinel、自我质询或后续脱敏机制；它是更靠前的来源完整性保护层。

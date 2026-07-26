@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/source-visibility-gate-receipt-v0.1.schema.json",
+  "title": "Source full-text visibility gate receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "request_id",
+    "ledger_id",
+    "decision",
+    "must_report_visibility_status",
+    "retrieval_policy",
+    "source_count",
+    "reference_count",
+    "context_tokens_estimate",
+    "reference_decisions",
+    "warnings",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "source_fulltext_visibility_gate_receipt" },
+    "request_id": { "$ref": "#/$defs/id" },
+    "ledger_id": { "$ref": "#/$defs/id" },
+    "decision": { "enum": ["allow", "defer", "block"] },
+    "must_report_visibility_status": { "const": true },
+    "retrieval_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pass_index",
+        "max_sources_per_pass",
+        "max_fulltext_sources_per_pass",
+        "max_context_tokens_per_pass",
+        "allow_incremental_retrieval"
+      ],
+      "properties": {
+        "pass_index": { "type": "integer", "minimum": 1 },
+        "max_sources_per_pass": { "type": "integer", "minimum": 1 },
+        "max_fulltext_sources_per_pass": { "type": "integer", "minimum": 0 },
+        "max_context_tokens_per_pass": { "type": "integer", "minimum": 1 },
+        "allow_incremental_retrieval": { "const": true }
+      }
+    },
+    "source_count": { "type": "integer", "minimum": 0 },
+    "reference_count": { "type": "integer", "minimum": 0 },
+    "context_tokens_estimate": { "type": "integer", "minimum": 0 },
+    "reference_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref_id",
+          "source_id",
+          "claim_type",
+          "observed_visibility",
+          "required_visibility",
+          "decision",
+          "claim_allowed",
+          "must_label_in_output",
+          "reason_codes",
+          "missing_scope"
+        ],
+        "properties": {
+          "ref_id": { "$ref": "#/$defs/ref_id" },
+          "source_id": { "$ref": "#/$defs/id" },
+          "claim_type": { "type": "string", "minLength": 1 },
+          "observed_visibility": {
+            "enum": [
+              "full_text_observed",
+              "partial_text_observed",
+              "metadata_only",
+              "unavailable",
+              "unregistered"
+            ]
+          },
+          "required_visibility": {
+            "enum": [
+              "full_text_observed",
+              "partial_text_observed",
+              "metadata_only"
+            ]
+          },
+          "decision": { "enum": ["allow", "defer", "block"] },
+          "claim_allowed": {
+            "enum": [
+              "full_text_claim",
+              "observed_fragment_only",
+              "metadata_only",
+              "locator_only",
+              "none"
+            ]
+          },
+          "must_label_in_output": { "const": true },
+          "reason_codes": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/reason_code" }
+          },
+          "missing_scope": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]*$" },
+    "ref_id": { "type": "string", "pattern": "^S[0-9]+$" },
+    "reason_code": {
+      "enum": [
+        "SOURCE-VISIBILITY-OK",
+        "SOURCE-VISIBILITY-FULLTEXT-REQUIRED",
+        "SOURCE-VISIBILITY-METADATA-ONLY",
+        "SOURCE-VISIBILITY-UNAVAILABLE",
+        "SOURCE-VISIBILITY-UNREGISTERED-REFERENCE",
+        "SOURCE-VISIBILITY-UNREGISTERED-SOURCE",
+        "SOURCE-VISIBILITY-BUDGET-EXCEEDED",
+        "SOURCE-VISIBILITY-DUPLICATE-ID",
+        "SOURCE-VISIBILITY-SECONDARY-SOURCE"
+      ]
+    }
+  }
+}

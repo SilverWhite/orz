@@ -1,0 +1,161 @@
+{
+  "gate_request": {
+    "cited_ref_ids": [
+      "S1",
+      "S2",
+      "S3"
+    ],
+    "default_on_insufficient_visibility": "defer_or_downgrade",
+    "notes": [
+      "Fixture covers metadata-only, partial abstract, and full-text references without forcing all sources to full text."
+    ],
+    "request_id": "SRCVISREQ-MIXED-001"
+  },
+  "ledger_id": "SRCVIS-MIXED-001",
+  "ledger_kind": "source_fulltext_visibility_ledger",
+  "references": [
+    {
+      "claim_text": "The paper exists and has a stable bibliographic locator.",
+      "claim_type": "bibliographic_presence",
+      "intended_use": "locator_only",
+      "ref_id": "S1",
+      "requires_full_text_if_used_as_written": false,
+      "source_id": "SRC-META-001"
+    },
+    {
+      "claim_text": "The abstract says the method is intended for causal mechanism discovery.",
+      "claim_type": "mechanism_claim",
+      "intended_use": "mechanism",
+      "ref_id": "S2",
+      "requires_full_text_if_used_as_written": true,
+      "source_id": "SRC-ABSTRACT-001"
+    },
+    {
+      "claim_text": "The full thread body reports the final correction and caveat.",
+      "claim_type": "thread_summary",
+      "intended_use": "evidence",
+      "ref_id": "S3",
+      "requires_full_text_if_used_as_written": true,
+      "source_id": "SRC-THREAD-001"
+    }
+  ],
+  "retrieval_policy": {
+    "allow_incremental_retrieval": true,
+    "fulltext_required_for_high_claims": true,
+    "max_context_tokens_per_pass": 8000,
+    "max_fulltext_sources_per_pass": 1,
+    "max_sources_per_pass": 5,
+    "pass_index": 1
+  },
+  "schema_version": "0.1.0-draft",
+  "sources": [
+    {
+      "access_time": "2026-07-26T12:00:00Z",
+      "limitations": [
+        "Only bibliographic metadata was observed."
+      ],
+      "locator": {
+        "doi": "10.0000/example.meta",
+        "label": "Metadata-only example paper"
+      },
+      "missing_scope": [
+        "abstract",
+        "methods",
+        "results",
+        "discussion",
+        "full body"
+      ],
+      "observed_scope": [
+        "title",
+        "authors",
+        "date",
+        "citation_metadata"
+      ],
+      "retrieval_attempts": [
+        {
+          "attempt_id": "ATTEMPT-META-001",
+          "attempted_at": "2026-07-26T12:00:00Z",
+          "context_tokens_estimate": 120,
+          "note": "Index metadata observed.",
+          "observed_bytes": 540,
+          "result": "observed",
+          "retrieval_mode": "metadata"
+        }
+      ],
+      "secondary_source": false,
+      "source_id": "SRC-META-001",
+      "source_type": "paper",
+      "visibility_status": "metadata_only"
+    },
+    {
+      "access_time": "2026-07-26T12:05:00Z",
+      "limitations": [
+        "Abstract was observed; methods and discussion were not observed."
+      ],
+      "locator": {
+        "label": "Abstract-only mechanism example",
+        "url": "https://example.invalid/abstract-only"
+      },
+      "missing_scope": [
+        "methods",
+        "results",
+        "discussion",
+        "limitations",
+        "full body"
+      ],
+      "observed_scope": [
+        "title",
+        "abstract"
+      ],
+      "retrieval_attempts": [
+        {
+          "attempt_id": "ATTEMPT-ABSTRACT-001",
+          "attempted_at": "2026-07-26T12:05:00Z",
+          "context_tokens_estimate": 600,
+          "note": "Abstract page observed; full text blocked.",
+          "observed_bytes": 2600,
+          "result": "partial",
+          "retrieval_mode": "abstract"
+        }
+      ],
+      "secondary_source": false,
+      "source_id": "SRC-ABSTRACT-001",
+      "source_type": "preprint",
+      "visibility_status": "partial_text_observed"
+    },
+    {
+      "access_time": "2026-07-26T12:10:00Z",
+      "limitations": [
+        "Referenced external links inside the thread were not expanded."
+      ],
+      "locator": {
+        "label": "Full thread example",
+        "url": "https://example.invalid/thread/full"
+      },
+      "missing_scope": [
+        "external links cited by comments"
+      ],
+      "observed_scope": [
+        "main_post",
+        "comments",
+        "reply_chain",
+        "full_body"
+      ],
+      "retrieval_attempts": [
+        {
+          "attempt_id": "ATTEMPT-THREAD-001",
+          "attempted_at": "2026-07-26T12:10:00Z",
+          "context_tokens_estimate": 1800,
+          "note": "Main post and complete reply chain observed.",
+          "observed_bytes": 9100,
+          "result": "observed",
+          "retrieval_mode": "thread_body"
+        }
+      ],
+      "secondary_source": false,
+      "source_id": "SRC-THREAD-001",
+      "source_type": "thread",
+      "visibility_status": "full_text_observed"
+    }
+  ]
+}

@@ -39,6 +39,10 @@ Windows native sandbox 或 anti-injection hard gate 已达到生产可用状态�
   unavailable 两项内部任务，机械通过不等于人类理解或普通用户安全。
 - `readonly-task-projection-v0.1.schema.json` 与配套 receipt：只读选取 LIF R211 的路由、讨论、
   代码和小型结果元数据，在 disposable snapshot 中复用，并证明源文件内容前后摘要不变。
+- `source-visibility-ledger-v0.1.schema.json` 与 `source-visibility-gate-receipt-v0.1.schema.json`：
+  冻结外部文献、帖子、网页和 thread 引用后的全文可见性登记。gate 不强制全部全文抓取，但会按
+  claim 类型要求 metadata、partial 或 full-text；机制、方法、限制、作者立场和跨文献综合在未读全文时
+  固定 defer/downgrade，并要求输出显式标注可见性状态。
 
 `profile-registry-v0.1.json` 新增 domain-neutral `general-science`，承载 SourceRouter、
 EvidenceKernel、ClaimBoundary、ResearchLifecycle、ValidatorBridge、ScenarioExporter、LeakScanner

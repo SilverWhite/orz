@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/source-visibility-ledger-v0.1.schema.json",
+  "title": "Source full-text visibility ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ledger_kind",
+    "ledger_id",
+    "retrieval_policy",
+    "sources",
+    "references",
+    "gate_request"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "ledger_kind": { "const": "source_fulltext_visibility_ledger" },
+    "ledger_id": { "$ref": "#/$defs/id" },
+    "retrieval_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pass_index",
+        "max_sources_per_pass",
+        "max_fulltext_sources_per_pass",
+        "max_context_tokens_per_pass",
+        "fulltext_required_for_high_claims",
+        "allow_incremental_retrieval"
+      ],
+      "properties": {
+        "pass_index": { "type": "integer", "minimum": 1 },
+        "max_sources_per_pass": { "type": "integer", "minimum": 1 },
+        "max_fulltext_sources_per_pass": { "type": "integer", "minimum": 0 },
+        "max_context_tokens_per_pass": { "type": "integer", "minimum": 1 },
+        "fulltext_required_for_high_claims": { "const": true },
+        "allow_incremental_retrieval": { "const": true }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source_record" }
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/reference_record" }
+    },
+    "gate_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "cited_ref_ids",
+        "default_on_insufficient_visibility",
+        "notes"
+      ],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/id" },
+        "cited_ref_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/ref_id" }
+        },
+        "default_on_insufficient_visibility": { "const": "defer_or_downgrade" },
+        "notes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9._-]*$"
+    },
+    "ref_id": {
+      "type": "string",
+      "pattern": "^S[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "nonempty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonempty_strings": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/nonempty" }
+    },
+    "source_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "source_type",
+        "locator",
+        "access_time",
+        "visibility_status",
+        "observed_scope",
+        "missing_scope",
+        "retrieval_attempts",
+        "secondary_source",
+        "limitations"
+      ],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/id" },
+        "source_type": {
+          "enum": [
+            "paper",
+            "preprint",
+            "book_chapter",
+            "blog",
+            "forum_post",
+            "thread",
+            "documentation",
+            "report",
+            "webpage",
+            "other"
+          ]
+        },
+        "locator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label"],
+          "properties": {
+            "label": { "$ref": "#/$defs/nonempty" },
+            "url": { "type": "string", "format": "uri" },
+            "doi": { "$ref": "#/$defs/nonempty" },
+            "local_path": { "$ref": "#/$defs/nonempty" },
+            "content_sha256": { "$ref": "#/$defs/sha256" }
+          },
+          "anyOf": [
+            { "required": ["url"] },
+            { "required": ["doi"] },
+            { "required": ["local_path"] }
+          ]
+        },
+        "access_time": { "type": "string", "format": "date-time" },
+        "visibility_status": {
+          "enum": [
+            "full_text_observed",
+            "partial_text_observed",
+            "metadata_only",
+            "unavailable"
+          ]
+        },
+        "observed_scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "title",
+              "authors",
+              "date",
+              "abstract",
+              "introduction",
+              "methods",
+              "results",
+              "discussion",
+              "limitations",
+              "supplement",
+              "main_post",
+              "comments",
+              "reply_chain",
+              "search_snippet",
+              "citation_metadata",
+              "full_body"
+            ]
+          }
+        },
+        "missing_scope": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" }
+        },
+        "retrieval_attempts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "attempt_id",
+              "attempted_at",
+              "retrieval_mode",
+              "result",
+              "observed_bytes",
+              "context_tokens_estimate",
+              "note"
+            ],
+            "properties": {
+              "attempt_id": { "$ref": "#/$defs/id" },
+              "attempted_at": { "type": "string", "format": "date-time" },
+              "retrieval_mode": {
+                "enum": [
+                  "metadata",
+                  "abstract",
+                  "search_snippet",
+                  "section",
+                  "full_text",
+                  "thread_body",
+                  "external_reference"
+                ]
+              },
+              "result": {
+                "enum": [
+                  "observed",
+                  "partial",
+                  "blocked",
+                  "failed",
+                  "skipped_budget"
+                ]
+              },
+              "observed_bytes": { "type": "integer", "minimum": 0 },
+              "context_tokens_estimate": { "type": "integer", "minimum": 0 },
+              "note": { "$ref": "#/$defs/nonempty" }
+            }
+          }
+        },
+        "secondary_source": { "type": "boolean" },
+        "limitations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "visibility_status": { "const": "full_text_observed" }
+            },
+            "required": ["visibility_status"]
+          },
+          "then": {
+            "properties": {
+              "observed_scope": { "contains": { "const": "full_body" } }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "visibility_status": { "const": "unavailable" }
+            },
+            "required": ["visibility_status"]
+          },
+          "then": {
+            "properties": {
+              "observed_scope": { "maxItems": 0 },
+              "missing_scope": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "reference_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref_id",
+        "source_id",
+        "claim_type",
+        "claim_text",
+        "intended_use",
+        "requires_full_text_if_used_as_written"
+      ],
+      "properties": {
+        "ref_id": { "$ref": "#/$defs/ref_id" },
+        "source_id": { "$ref": "#/$defs/id" },
+        "claim_type": {
+          "enum": [
+            "bibliographic_presence",
+            "metadata_fact",
+            "abstract_or_snippet_summary",
+            "section_summary",
+            "full_text_summary",
+            "mechanism_claim",
+            "methods_claim",
+            "limitations_claim",
+            "comparative_synthesis",
+            "author_position_claim",
+            "thread_summary"
+          ]
+        },
+        "claim_text": { "$ref": "#/$defs/nonempty" },
+        "intended_use": {
+          "enum": [
+            "locator_only",
+            "background",
+            "evidence",
+            "mechanism",
+            "methods",
+            "limitations",
+            "comparison",
+            "claim_support"
+          ]
+        },
+        "requires_full_text_if_used_as_written": { "type": "boolean" }
+      }
+    }
+  }
+}
