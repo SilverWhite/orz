@@ -1016,6 +1016,19 @@ def check_repository() -> dict[str, Any]:
     )
     counts["source_visibility_fixtures"] = 1
 
+    for required_path in (
+        assurance_root / "canonical-cli-answer-packet-v0.1.schema.json",
+        assurance_root / "canonical-cli-run-receipt-v0.1.schema.json",
+        assurance_root / "canonical_cli.py",
+        assurance_root / "canonical_cli_main.py",
+        assurance_root / "tests/test_canonical_cli.py",
+    ):
+        if not required_path.is_file():
+            errors.append(
+                f"missing canonical CLI P0 file: {required_path.relative_to(ROOT)}"
+            )
+    counts["canonical_cli_fixtures"] = 1
+
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]
     if len(profile_ids) != len(set(profile_ids)):

@@ -115,6 +115,11 @@ receipt；recovery inspection 能分类 missing-newline/torn-tail，受控 repai
 lifecycle repair policy 可在 resume 时显式触发可恢复修复。详见
 [`disposable reproduction audit`](../docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md)。
 
+`canonical_cli.py` 新增首个 canonical guarded CLI offline P0 路径。它把 run manifest、source visibility ledger/gate、
+fake DeepSeek-shaped adapter boundary、structured answer packet、runtime JSONL journal 和独立 verifier 串成一个可运行闭环。
+该路径固定 `real_network_used=false`、tool allowlist 为空，并要求 `gate_decision` 先于 `model_request`。
+它证明 CLI 编排形状和门禁顺序，不证明真实 DeepSeek、真实检索、工具执行、评分或科学正确性。
+
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。
 

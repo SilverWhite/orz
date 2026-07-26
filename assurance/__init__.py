@@ -15,6 +15,12 @@ from .artifact_registry import (
     validate_artifact_registry_semantics,
 )
 from .audit import AuditLedger, verify_audit_seal
+from .canonical_cli import (
+    build_canonical_cli_run_manifest,
+    build_fake_answer_packet,
+    run_canonical_guarded_cli,
+    verify_canonical_guarded_cli_run,
+)
 from .conversation import ConversationNamespace
 from .disposable_reproduction import (
     build_disposable_reproduction_run_proof,
@@ -126,6 +132,8 @@ __all__ = [
     "build_guarded_frozen_context",
     "build_disposable_reproduction_run_proof",
     "build_disposable_reproduction_execution_lock",
+    "build_canonical_cli_run_manifest",
+    "build_fake_answer_packet",
     "build_gsa_runtime_preflight_projection",
     "build_workspace_first_frozen_context",
     "authorize_action_candidate",
@@ -160,6 +168,7 @@ __all__ = [
     "resume_archived_conversation",
     "render_visibility_summary",
     "run_disposable_reproduction",
+    "run_canonical_guarded_cli",
     "run_docker_sandbox_probe",
     "run_gsa_no_model_runner_skeleton",
     "run_synthetic_user_task_evaluation",
@@ -174,6 +183,7 @@ __all__ = [
     "verify_instruction_provenance",
     "verify_complex_task_readonly_projection",
     "verify_disposable_reproduction_receipt",
+    "verify_canonical_guarded_cli_run",
     "verify_disposable_reproduction_execution_lock",
     "verify_disposable_reproduction_run_proof",
     "verify_gsa_runtime_preflight_projection",

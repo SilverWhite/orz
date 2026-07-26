@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+
+from assurance import (
+    AssuranceError,
+    run_canonical_guarded_cli,
+    verify_canonical_guarded_cli_run,
+)
+from assurance.canonical_cli_main import main as canonical_cli_main
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE_LEDGER = ROOT / "assurance/fixtures/source_visibility/mixed-visibility-ledger.json"
+CREATED_AT = "2026-07-26T12:30:00Z"
+
+
+class CanonicalCliRunTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(dir=ROOT)
+        self.run_root = Path(self.temporary.name) / "canonical-run"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_canonical_cli_run_writes_guarded_artifacts_and_verifies(self) -> None:
+        receipt = run_canonical_guarded_cli(
+            run_root=self.run_root,
+            source_ledger_path=SOURCE_LEDGER,
+            created_at=CREATED_AT,
+        )
+
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(
+            receipt["event_types"],
+            [
+                "run_preflight",
+                "run_started",
+                "gate_decision",
+                "model_request",
+                "model_output",
+                "artifact_registered",
+                "run_finished",
+            ],
+        )
+        self.assertTrue(receipt["checks"]["gate_before_model_request"])
+        self.assertTrue(receipt["checks"]["fake_adapter_no_network"])
+        answer = json.loads(
+            (self.run_root / "answer-packet.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(answer["source_visibility_gate"]["decision"], "defer")
+        self.assertEqual(
+            answer["claim_boundaries"]["scientific_claim_strength"],
+            "observed_fragment_only",
+        )
+        self.assertTrue(answer["answer"]["deferred_claims"])
+
+        verification = verify_canonical_guarded_cli_run(run_root=self.run_root)
+        self.assertEqual(verification, receipt)
+
+    def test_cli_run_and_verify_emit_receipts(self) -> None:
+        run_output = StringIO()
+        with redirect_stdout(run_output):
+            run_exit = canonical_cli_main(
+                [
+                    "run",
+                    "--run-root",
+                    str(self.run_root),
+                    "--source-ledger",
+                    str(SOURCE_LEDGER),
+                    "--created-at",
+                    CREATED_AT,
+                ]
+            )
+        run_receipt = json.loads(run_output.getvalue())
+
+        verify_output = StringIO()
+        with redirect_stdout(verify_output):
+            verify_exit = canonical_cli_main(
+                ["verify", "--run-root", str(self.run_root)]
+            )
+        verify_receipt = json.loads(verify_output.getvalue())
+
+        self.assertEqual(run_exit, 0)
+        self.assertEqual(verify_exit, 0)
+        self.assertEqual(run_receipt, verify_receipt)
+
+    def test_verifier_detects_gate_receipt_tamper(self) -> None:
+        run_canonical_guarded_cli(
+            run_root=self.run_root,
+            source_ledger_path=SOURCE_LEDGER,
+            created_at=CREATED_AT,
+        )
+        gate_path = self.run_root / "source-visibility-gate-receipt.json"
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        gate["decision"] = "allow"
+        gate_path.write_text(
+            json.dumps(gate, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(AssuranceError, "does not recompute"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_detects_model_request_before_gate(self) -> None:
+        run_canonical_guarded_cli(
+            run_root=self.run_root,
+            source_ledger_path=SOURCE_LEDGER,
+            created_at=CREATED_AT,
+        )
+        journal_path = self.run_root / "events.jsonl"
+        events = [
+            json.loads(line)
+            for line in journal_path.read_text(encoding="utf-8").splitlines()
+        ]
+        events[2], events[3] = events[3], events[2]
+        journal_path.write_text(
+            "\n".join(
+                json.dumps(event, sort_keys=True, separators=(",", ":"))
+                for event in events
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(AssuranceError):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_run_refuses_nonempty_run_root(self) -> None:
+        self.run_root.mkdir(parents=True)
+        (self.run_root / "existing.txt").write_text("occupied\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(AssuranceError, "empty or absent"):
+            run_canonical_guarded_cli(
+                run_root=self.run_root,
+                source_ledger_path=SOURCE_LEDGER,
+                created_at=CREATED_AT,
+            )

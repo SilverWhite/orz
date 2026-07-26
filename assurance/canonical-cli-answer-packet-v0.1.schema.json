@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/canonical-cli-answer-packet-v0.1.schema.json",
+  "title": "Canonical guarded CLI answer packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "packet_kind",
+    "run_id",
+    "task_id",
+    "adapter",
+    "source_visibility_gate",
+    "answer",
+    "claim_boundaries",
+    "next_actions",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "packet_kind": { "const": "canonical_guarded_cli_answer_packet" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "task_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]*$" },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_id",
+        "provider",
+        "model_id",
+        "mode",
+        "real_network_used",
+        "tool_calls_used"
+      ],
+      "properties": {
+        "adapter_id": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1 },
+        "model_id": { "type": "string", "minLength": 1 },
+        "mode": { "enum": ["fake_offline", "real_development", "evaluation"] },
+        "real_network_used": { "type": "boolean" },
+        "tool_calls_used": { "type": "boolean" }
+      }
+    },
+    "source_visibility_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_sha256",
+        "decision",
+        "must_report_visibility_status",
+        "reference_decision_count"
+      ],
+      "properties": {
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "decision": { "enum": ["allow", "defer", "block"] },
+        "must_report_visibility_status": { "const": true },
+        "reference_decision_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "answer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "source_visibility_summary",
+        "deferred_claims"
+      ],
+      "properties": {
+        "summary": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "source_visibility_summary": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref_id",
+              "observed_visibility",
+              "decision",
+              "claim_allowed"
+            ],
+            "properties": {
+              "ref_id": { "type": "string", "pattern": "^S[0-9]+$" },
+              "observed_visibility": {
+                "enum": [
+                  "full_text_observed",
+                  "partial_text_observed",
+                  "metadata_only",
+                  "unavailable",
+                  "unregistered"
+                ]
+              },
+              "decision": { "enum": ["allow", "defer", "block"] },
+              "claim_allowed": {
+                "enum": [
+                  "full_text_claim",
+                  "observed_fragment_only",
+                  "metadata_only",
+                  "locator_only",
+                  "none"
+                ]
+              }
+            }
+          }
+        },
+        "deferred_claims": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "claim_boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scientific_claim_strength",
+        "fulltext_missing_blocks_mechanism_claims",
+        "source_gate_decision_authoritative"
+      ],
+      "properties": {
+        "scientific_claim_strength": {
+          "enum": [
+            "none",
+            "metadata_only",
+            "observed_fragment_only",
+            "full_text_grounded_but_unvalidated"
+          ]
+        },
+        "fulltext_missing_blocks_mechanism_claims": { "const": true },
+        "source_gate_decision_authoritative": { "const": true }
+      }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

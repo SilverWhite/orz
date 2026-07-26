@@ -55,7 +55,7 @@ profile，不能再用 LIF 内部任务充当通用复杂测试或未见深度�
 | GSA-ARTIFACT-001 | Artifact 没有版本化 schema registration | **初始 registration 已完成，完整 artifact 体系仍开放**：artifact 必须引用登记 schema ID；registry kind/media/schema 映射和摘要写入结果，未知或不匹配项在证据比较前 block | 增加表格、单位、图像、代码/环境 schema，以及版本迁移与撤销 |
 | GSA-LINEAGE-001 | 跨 artifact lineage/comparability 只能靠叙述 | **初始数值比较与 disposable replay/run-proof 切片已完成，完整 lineage 仍开放**：left/right artifact 分别绑定 pointer；task/protocol/metric/population/unit、producer/source/transformation 和 condition 实值机械对账；replay 输出与原 artifact 只做值级复放对账，run-proof 绑定当前实现/环境/输入/输出摘要，disposable runtime journal 绑定 projection event digest，execution lock 绑定受控源码与 Python 分发版本 | 接入真实输入数据、完整 dependency/OS/container lock，增加 transformation DAG、单位换算、population harmonization、多 action/producer 和独立性核算 |
 | GSA-ADAPTER-001 | 真实 runtime/tool 入口未接保障层 | P3/P4 为 development API；P4.5 只允许固定进程内 roundtrip | 至少一个 runtime adapter 的读取、工具、授权、审计和 terminal 不可绕过同一 envelope/gate |
-| GSA-RUNNER-001 | 正式 EvaluationRunner 未实现 | **no-model runner skeleton 已完成，正式 runner 仍开放**：manifest/receipt/verifier/run-proof、runtime manifest/event projection、disposable JSONL replay、development source/env lock、sidecar locked runner journal append/replay、recovery inspection、受控 repair/quarantine receipt 与 lifecycle repair policy 只覆盖一个固定 in-process replay 与 metadata hash-chain，不接模型、外部代码、adapter、评分或结构化失败分类 | 实现 adapter preflight、结构化输出校验、失败分类与评分交接 |
+| GSA-RUNNER-001 | 正式 EvaluationRunner 未实现 | **no-model runner skeleton 与 canonical CLI offline P0 路径已完成，正式 runner 仍开放**：manifest/receipt/verifier/run-proof、runtime manifest/event projection、disposable JSONL replay、development source/env lock、sidecar locked runner journal append/replay、recovery inspection、受控 repair/quarantine receipt 与 lifecycle repair policy 只覆盖一个固定 in-process replay；canonical CLI 另接通 source visibility gate、fake DeepSeek-shaped adapter boundary、answer packet、runtime journal 和 verifier，但仍不接真实模型、外部代码、工具 broker、评分或结构化失败分类 | 实现真实 adapter preflight、结构化输出校验、失败分类与评分交接 |
 | GSA-PARTITION-001 | evaluation/holdout 为零 | 当前 40 个案例均为 development/challenge seed | 创建物理隔离的新来源 evaluation 和未见 holdout；冻结 digest、oracle、角色与污染生命周期 |
 | GSA-CAL-001 | 人类 baseline 和阈值为零 | 未招募 reviewer、未测一致性、无有效模型通过阈值 | 双人独立盲审、adjudication、可判定性与一致性检查后冻结阈值，再应用于未参与校准的 holdout |
 | GSA-CORPUS-001 | 案例仍为项目形状 | 十个错误簇来自 FEP/LIF 历史与合成 countercase | 增加跨领域、非 LIF、正反成对且来源独立的复杂科研任务 |
@@ -91,6 +91,11 @@ development fixture 的固定 replay 输出可被 receipt/verifier 复核；repl
 claim 强度，也不构成正式 EvaluationRunner。
 该切片完成后的机械结果为 123 schemas、1 个 disposable reproduction fixture、12 个定向测试、
 当前源码全量回归 242/242，0 repository errors。
+
+`GSA-RUNNER-001` 的首个 canonical guarded CLI offline P0 路径见
+[`canonical guarded CLI audit`](CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md)。它证明 run manifest、
+source visibility gate、fake DeepSeek-shaped adapter boundary、answer packet、runtime journal 和 verifier
+可以被串成一个不可绕过 gate 的主路径；不重新调用真实 DeepSeek，不证明真实模型能力、检索能力或科学正确性。
 
 ## 通用科研语义缺口
 
