@@ -1,7 +1,8 @@
 # Codex app-server lifecycle normalizer 审计（2026-07-25）
 
 状态：ordered-capture、离线 normalizer 与独立 verifier 已实现；Codex CLI 0.145.0 隔离 live
-app-server 的 no-model 握手及 loopback synthetic-turn smoke 均已通过。
+app-server 的 no-model 握手、loopback completed/failed/interrupt synthetic-turn smoke 均已通过；
+`thread/closed` 因官方 idle unload 需要 30 分钟，当前通过 fake/fixture 验证映射。
 
 ## 来源与边界
 
@@ -61,14 +62,23 @@ loopback SSE 形状直接采用 Codex 官方测试 helper 的最小序列
 - receipt 不复制 command argv 和 stderr 正文，只保存 digest 与长度；capture verifier 独立检查 retained stderr；
 - verifier 重建三条 client message、initialize/thread response、thread notification 和 thread id，并确认 no turn/no input。
 
-`probe_codex_app_server_turn_lifecycle.py` 与 `verify_codex_app_server_turn_probe.py` 补齐受控真实 turn：
+`probe_codex_app_server_turn_lifecycle.py` 与 `verify_codex_app_server_turn_probe.py` 补齐受控真实 turn
+及终端态矩阵：
 
 - no-model capture 保持原安全默认；只有专用 probe 才发送固定 synthetic `turn/start`；
 - 自动生成隔离 user-level provider config，模型 endpoint 只能是 literal `127.0.0.1` ephemeral port；
 - provider 仅保留 request body digest、长度、model/stream/marker/header 布尔投影，不复制完整模型请求；
 - probe receipt 同时绑定 config、provider exchange、stdio capture、stderr 与 thread/turn terminal identity；
-- verifier 独立重放 `turn/start response → turn/started → turn/completed(completed)` 的实际 record order，
-  并检查 synthetic input/output/SSE digest。
+- `--terminal-scenario` 覆盖 `completed`、`failed`、`interrupted` 与 `closed`；
+- `failed` 使用有效 Responses request 后的 loopback HTTP 500，要求 app-server 返回
+  `turn/completed(status=failed)` 且 error 只经 normalizer digest 化；
+- `interrupted` 在 `turn/started` 后发送 `turn/interrupt`，要求先收到空成功响应，再等待
+  `turn/completed(status=interrupted)`；实际 0.145.0 smoke 中取消发生在 provider request 之前，
+  因此 provider request count 可为 0；
+- `closed` 发送 `thread/unsubscribe` 并等待 `thread/closed`；真实 Codex 按官方 README 会在最后订阅者移除后
+  等待 30 分钟 idle unload，因此当前只由 fake/fixture 覆盖，不作为短时 live smoke；
+- verifier 独立重放各场景的实际 record order，并检查 synthetic input/output/SSE digest 或无 provider request
+  的 interrupt 边界。
 
 ## Fixture 与反例
 
@@ -89,22 +99,31 @@ fake app-server 的 no-model 测试覆盖八项 supervisor 路径：正常握手
 response/notification thread mismatch、capture tamper、stderr tamper 和拒绝覆盖。正常路径继续送入 normalizer，结果必须是
 `session_started` 一条、`active/partial`，不能因 EOF 变成 terminal。
 
-synthetic-turn probe 另有六项测试：成功 provider exchange + probe verifier + normalizer 双重回放、invalid provider
-exchange、capture tamper、provider projection tamper、config tamper 和拒绝覆盖。
+synthetic-turn probe 另有七项测试：成功 provider exchange + probe verifier + normalizer 双重回放、failed /
+interrupted / closed 终端态矩阵、invalid provider exchange、capture tamper、provider projection tamper、config tamper
+和拒绝覆盖。
 
 ## 当前实测
 
 - Codex capture + normalizer 既有定向测试：16/16（capture 8、normalizer 8）；
-- synthetic-turn probe 定向测试：6/6；
+- synthetic-turn probe 定向测试：7/7；
 - `python scripts/check_repository.py`：118 schemas、7 个 Codex lifecycle fixtures、0 errors；
 - `python -m compileall -q prototype/fep_agent_proto scripts runtime/tests/...`：通过；
 - Codex CLI 0.145.0 live capture：6 records，capture verifier 7/7；
 - live normalization：1 个 `session_started`，`active/partial`，normalization verifier 7/7；
-- Codex CLI 0.145.0 synthetic-turn live probe：18 records、唯一 loopback provider request、terminal
+- Codex CLI 0.145.0 completed synthetic-turn live probe：18 records、唯一 loopback provider request、terminal
   `completed`，probe verifier 10/10；
-- synthetic-turn live normalization：3 个 observations（session start、turn start、turn completed），
+- completed synthetic-turn live normalization：3 个 observations（session start、turn start、turn completed），
   `active/partial`，normalization verifier 7/7，raw content omission 通过；
-- 当前源码全量回归：229/229（prototype 58、Grok integration 44、runtime 79、assurance 48）。
+- Codex CLI 0.145.0 failed synthetic-turn live probe：15 records、唯一有效 loopback provider request、HTTP 500 后
+  terminal `failed`，probe verifier 10/10；normalization 为 3 个 observations，`active/partial`，
+  normalizer verifier 7/7；
+- Codex CLI 0.145.0 interrupted synthetic-turn live probe：14 records、`turn/interrupt` 空成功响应后 terminal
+  `interrupted`，probe verifier 10/10；本次 request_count=0，说明取消发生在 provider request 之前；
+  normalization 为 3 个 observations，`active/partial`，normalizer verifier 7/7；
+- fake/fixture closed path：`thread/unsubscribe → thread/closed` 归一化为第 4 条
+  `session_completed(outcome=thread_closed)`，normalization `complete/terminal`；
+- 当前源码全量回归：230/230（prototype 58、Grok integration 44、runtime 80、assurance 48）。
 - `fep-script-validation` legacy-review task-board：capture CLI 为 PASS 9 / WARN 14 / FAIL 0，
   capture verifier 为 PASS 12 / WARN 11 / FAIL 0，red-lines 均为空。WARN 主要是实验脚本专用字段不适用，
   以及静态扫描未跨模块识别共用 atomic/no-overwrite 实现；未为清空 board 添加无用参数。
@@ -114,6 +133,11 @@ exchange、capture tamper、provider projection tamper、config tamper 和拒绝
 - `fep-script-validation` legacy-review task-board：turn probe CLI 为 PASS 9 / WARN 14 / FAIL 0，
   probe module 为 PASS 11 / WARN 12 / FAIL 0，probe verifier 为 PASS 12 / WARN 11 / FAIL 0；
   三者 catastrophic red-lines 均为空。WARN 同样主要来自科研实验模板字段不适用，未做迎合式代码修改。
+- 本次 terminal matrix 扩展后的 `fep-script-validation` legacy-review task-board：probe module 为
+  PASS 11 / WARN 12 / FAIL 0，probe CLI 为 PASS 9 / WARN 14 / FAIL 0，probe verifier 为
+  PASS 12 / WARN 11 / FAIL 0，fake app-server fixture 为 PASS 7 / WARN 16 / FAIL 0；四者
+  catastrophic red-lines 均为空。fake fixture 的 strict-json/finite WARN 来自测试夹具的简化 JSON 写法，
+  不进入正式 observation/receipt artifact writer。
 
 ## 第二轮自查
 
@@ -140,8 +164,8 @@ exchange、capture tamper、provider projection tamper、config tamper 和拒绝
 - 本机 WindowsApps 内 Codex executable 仍因 ACL 不可直接运行；live smoke 使用官方 npm 0.145.0 临时 binary；
 - 早期 no-model live startup 的 stderr 显示一次 featured-plugin 远程预热尝试失败；新的 synthetic-turn
   隔离配置关闭 apps/plugins 后未再出现该请求，但 `read-only` 仍不等同于 app-server 宿主进程绝对零网络；
-- 已测试一个真实 app-server + fake provider 的 completed turn；取消、失败 turn、thread/closed 的 live
-  路径仍未测试，也未实现多 connection 排序、WebSocket、
+- 已测试真实 app-server + fake provider 的 completed、failed 与 interrupted turn；`thread/closed` 的短时 live
+  路径未测，因为官方 idle unload 在最后订阅者移除后等待 30 分钟；仍未实现多 connection 排序、WebSocket、
   Gemini/Qwen hooks；
 - receipt 和 observations 各自原子写入，但不构成跨文件原子事务；
 - mechanical PASS 不证明模型质量、任务完成质量或科学结论。

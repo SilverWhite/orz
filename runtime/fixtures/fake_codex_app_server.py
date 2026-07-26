@@ -87,7 +87,12 @@ def main() -> int:
         send(response)
         send(notification)
 
-    if mode in {"turn-success", "turn-provider-invalid"}:
+    if mode in {
+        "turn-success",
+        "turn-provider-invalid",
+        "turn-interrupted",
+        "turn-closed",
+    }:
         turn_request = receive()
         if turn_request.get("method") != "turn/start":
             return 9
@@ -114,6 +119,30 @@ def main() -> int:
         }
         send({"id": turn_request.get("id"), "result": {"turn": turn}})
         send({"method": "turn/started", "params": {"turn": turn}})
+
+        if mode == "turn-interrupted":
+            interrupt = receive()
+            if interrupt.get("method") != "turn/interrupt":
+                return 11
+            interrupt_params = interrupt.get("params", {})
+            if (
+                interrupt_params.get("threadId") != "thr_fake_capture"
+                or interrupt_params.get("turnId") != "turn_fake_probe"
+            ):
+                return 12
+            send({"id": interrupt.get("id"), "result": {}})
+            terminal = {
+                "id": "turn_fake_probe",
+                "status": "interrupted",
+                "items": [],
+                "error": None,
+            }
+            send({"method": "turn/completed", "params": {"turn": terminal}})
+            sys.stderr.write("fake app-server diagnostic\n")
+            sys.stderr.flush()
+            while sys.stdin.readline():
+                pass
+            return 0
 
         config_path = Path(os.environ["CODEX_HOME"]) / "config.toml"
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -160,6 +189,21 @@ def main() -> int:
             ),
         }
         send({"method": "turn/completed", "params": {"turn": terminal}})
+
+        if mode == "turn-closed":
+            unsubscribe = receive()
+            if unsubscribe.get("method") != "thread/unsubscribe":
+                return 13
+            unsubscribe_params = unsubscribe.get("params", {})
+            if unsubscribe_params.get("threadId") != "thr_fake_capture":
+                return 14
+            send({"id": unsubscribe.get("id"), "result": {"status": "unsubscribed"}})
+            send(
+                {
+                    "method": "thread/closed",
+                    "params": {"threadId": "thr_fake_capture"},
+                }
+            )
 
     sys.stderr.write("fake app-server diagnostic\n")
     sys.stderr.flush()

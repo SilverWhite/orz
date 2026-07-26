@@ -111,10 +111,13 @@ synthetic-turn probe 才会发送固定 marker，并把 custom Responses provide
 capture wrapper 是 normalizer 的 source record。Codex CLI 0.145.0 live smoke 已实际捕获六条 stdio JSONL message；
 `thread/started` 归一化为唯一 `session_started`，连接关闭后保持 `active/partial`。
 
-专用 live turn probe 又实际捕获 18 条同一 stdio stream records。唯一 Responses POST 命中 literal
-`127.0.0.1`，无 Authorization；capture 中的 `turn/start response` 先于 `turn/started`，随后明确收到
-`turn/completed(status=completed)`。现有 normalizer 将其投影成三个连续 observations，item/delta 仍只占
-raw record position，不进入 lifecycle sequence。
+专用 live turn probe 已覆盖 completed、failed 与 interrupted 三条真实 Codex 0.145.0 stdio 路径。completed
+路径捕获 18 条 records，唯一 Responses POST 命中 literal `127.0.0.1` 且无 Authorization；failed 路径捕获
+15 条 records，loopback provider 对有效请求返回 HTTP 500 后收到 `turn/completed(status=failed)`；interrupted
+路径捕获 14 条 records，`turn/interrupt` 空成功响应后收到 `turn/completed(status=interrupted)`，本次取消发生在
+provider request 之前。三者经 normalizer 均投影为三个连续 observations 并保持 `active/partial`，item/delta
+仍只占 raw record position，不进入 lifecycle sequence。`thread/closed` 按官方 README 在最后订阅者移除后
+等待 30 分钟 idle unload，当前由 fake/fixture 覆盖 `thread/unsubscribe → thread/closed` 映射。
 
 ### 5.2 首批映射
 
@@ -141,8 +144,8 @@ raw record position，不进入 lifecycle sequence。
 5. 重复、乱序、跨 thread identity 和 truncated JSON 全部 fail closed；
 6. raw source digest、observation digest、canonical journal event 和 verifier receipt 可独立重放；
 7. fixture 通过后才进行受限 live smoke；live smoke 仍不使用 LIF 内部研究任务。
-8. no-model smoke 通过后才进行真实 app-server + loopback fake provider 的 fixed synthetic turn；
-   provider request、SSE 和 stdio lifecycle 分别 digest-bind，并由两个 verifier 独立回放。
+8. no-model smoke 通过后才进行真实 app-server + loopback fake provider 的 fixed synthetic terminal matrix；
+   provider request、SSE 或早取消边界、stdio lifecycle 分别 digest-bind，并由两个 verifier 独立回放。
 
 实现入口：
 

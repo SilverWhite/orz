@@ -41,6 +41,15 @@ def main() -> int:
     parser.add_argument("--max-records", type=int, default=256)
     parser.add_argument("--max-stderr-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--source-stream-id")
+    parser.add_argument(
+        "--terminal-scenario",
+        choices=["completed", "failed", "interrupted", "closed"],
+        default="completed",
+        help=(
+            "Expected lifecycle terminal path to exercise. 'closed' sends "
+            "thread/unsubscribe and waits for thread/closed."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -58,6 +67,7 @@ def main() -> int:
             max_records=args.max_records,
             max_stderr_bytes=args.max_stderr_bytes,
             source_stream_id=args.source_stream_id,
+            terminal_scenario=args.terminal_scenario,
         )
     except (OSError, PrototypeError, ValueError) as exc:
         print(f"turn probe failed before receipt: {exc}", file=sys.stderr)

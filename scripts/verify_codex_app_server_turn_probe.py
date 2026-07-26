@@ -27,6 +27,8 @@ from prototype.fep_agent_proto.codex_app_server_turn_probe import (
     SYNTHETIC_MODEL,
     SYNTHETIC_OUTPUT,
     THREAD_START_REQUEST_ID,
+    THREAD_UNSUBSCRIBE_REQUEST_ID,
+    TURN_INTERRUPT_REQUEST_ID,
     TURN_START_REQUEST_ID,
     _synthetic_sse,
 )
@@ -109,6 +111,20 @@ def _message_at(
     if index is None:
         return None
     return records[index]["message"]
+
+
+def _provider_request_is_valid(request: Any) -> bool:
+    return (
+        isinstance(request, dict)
+        and request.get("method") == "POST"
+        and request.get("path") == "/v1/responses"
+        and request.get("client_host") == "127.0.0.1"
+        and request.get("model") == SYNTHETIC_MODEL
+        and request.get("stream") is True
+        and request.get("input_marker_present") is True
+        and request.get("accepts_event_stream") is True
+        and request.get("authorization_present") is False
+    )
 
 
 def verify(
@@ -214,22 +230,37 @@ def verify(
 
         provider = receipt.get("provider")
         request = provider.get("request") if isinstance(provider, dict) else None
+        lifecycle = receipt.get("lifecycle")
+        terminal_scenario = (
+            lifecycle.get("terminal_scenario")
+            if isinstance(lifecycle, dict)
+            else None
+        )
+        expected_provider_mode = {
+            "completed": "success",
+            "closed": "success",
+            "failed": "http_error",
+            "interrupted": "stall",
+        }.get(terminal_scenario)
+        expected_request_count = (
+            {0, 1} if terminal_scenario == "interrupted" else {1}
+        )
         checks["provider_request_valid"] = (
             isinstance(provider, dict)
-            and provider.get("request_count") == 1
+            and provider.get("request_count") in expected_request_count
             and provider.get("provider_id") == PROVIDER_ID
             and provider.get("model") == SYNTHETIC_MODEL
+            and provider.get("response_mode") == expected_provider_mode
             and provider.get("base_url")
             == "http://127.0.0.1:<ephemeral>/v1"
-            and isinstance(request, dict)
-            and request.get("method") == "POST"
-            and request.get("path") == "/v1/responses"
-            and request.get("client_host") == "127.0.0.1"
-            and request.get("model") == SYNTHETIC_MODEL
-            and request.get("stream") is True
-            and request.get("input_marker_present") is True
-            and request.get("accepts_event_stream") is True
-            and request.get("authorization_present") is False
+            and (
+                (
+                    provider.get("request_count") == 0
+                    and terminal_scenario == "interrupted"
+                    and request is None
+                )
+                or _provider_request_is_valid(request)
+            )
         )
         if not checks["provider_request_valid"]:
             errors.append("loopback provider request mismatch")
@@ -298,6 +329,33 @@ def verify(
             direction="server_to_client",
             method="turn/completed",
         )
+        turn_interrupt_index = _message_index(
+            records,
+            direction="client_to_server",
+            request_id=TURN_INTERRUPT_REQUEST_ID,
+            method="turn/interrupt",
+        )
+        turn_interrupt_response_index = _message_index(
+            records,
+            direction="server_to_client",
+            request_id=TURN_INTERRUPT_REQUEST_ID,
+        )
+        thread_unsubscribe_index = _message_index(
+            records,
+            direction="client_to_server",
+            request_id=THREAD_UNSUBSCRIBE_REQUEST_ID,
+            method="thread/unsubscribe",
+        )
+        thread_unsubscribe_response_index = _message_index(
+            records,
+            direction="server_to_client",
+            request_id=THREAD_UNSUBSCRIBE_REQUEST_ID,
+        )
+        thread_closed_index = _message_index(
+            records,
+            direction="server_to_client",
+            method="thread/closed",
+        )
 
         thread_response = _message_at(records, thread_response_index)
         thread_notification = _message_at(records, thread_started_index)
@@ -305,6 +363,15 @@ def verify(
         turn_response = _message_at(records, turn_response_index)
         turn_started = _message_at(records, turn_started_index)
         turn_completed = _message_at(records, turn_completed_index)
+        turn_interrupt = _message_at(records, turn_interrupt_index)
+        turn_interrupt_response = _message_at(
+            records, turn_interrupt_response_index
+        )
+        thread_unsubscribe = _message_at(records, thread_unsubscribe_index)
+        thread_unsubscribe_response = _message_at(
+            records, thread_unsubscribe_response_index
+        )
+        thread_closed = _message_at(records, thread_closed_index)
         response_thread = (
             thread_response.get("result", {}).get("thread")
             if isinstance(thread_response, dict)
@@ -330,11 +397,41 @@ def verify(
             if isinstance(turn_completed, dict)
             else None
         )
+        expected_terminal_status = {
+            "completed": "completed",
+            "closed": "completed",
+            "failed": "failed",
+            "interrupted": "interrupted",
+        }.get(terminal_scenario)
         client_methods = [
             record["message"].get("method")
             for record in records
             if record["direction"] == "client_to_server"
         ]
+        expected_client_methods = {
+            "completed": ["initialize", "initialized", "thread/start", "turn/start"],
+            "failed": ["initialize", "initialized", "thread/start", "turn/start"],
+            "interrupted": [
+                "initialize",
+                "initialized",
+                "thread/start",
+                "turn/start",
+                "turn/interrupt",
+            ],
+            "closed": [
+                "initialize",
+                "initialized",
+                "thread/start",
+                "turn/start",
+                "thread/unsubscribe",
+            ],
+        }.get(terminal_scenario)
+        response_thread_id = (
+            response_thread.get("id") if isinstance(response_thread, dict) else None
+        )
+        response_turn_id = (
+            response_turn.get("id") if isinstance(response_turn, dict) else None
+        )
         indices = [
             initialize_request_index,
             initialize_response_index,
@@ -345,10 +442,82 @@ def verify(
             turn_started_index,
             turn_completed_index,
         ]
-        lifecycle = receipt.get("lifecycle")
+        interrupt_ok = True
+        if terminal_scenario == "interrupted":
+            interrupt_ok = (
+                isinstance(turn_interrupt_index, int)
+                and isinstance(turn_interrupt_response_index, int)
+                and turn_started_index < turn_interrupt_index
+                < turn_interrupt_response_index
+                < turn_completed_index
+                and isinstance(turn_interrupt, dict)
+                and turn_interrupt.get("params", {}).get("threadId")
+                == response_thread_id
+                and turn_interrupt.get("params", {}).get("turnId")
+                == response_turn_id
+                and isinstance(turn_interrupt_response, dict)
+                and turn_interrupt_response.get("result") == {}
+            )
+        else:
+            interrupt_ok = (
+                turn_interrupt_index is None
+                and turn_interrupt_response_index is None
+            )
+
+        close_ok = True
+        if terminal_scenario == "closed":
+            close_ok = (
+                isinstance(thread_unsubscribe_index, int)
+                and isinstance(thread_unsubscribe_response_index, int)
+                and isinstance(thread_closed_index, int)
+                and turn_completed_index < thread_unsubscribe_index
+                < thread_unsubscribe_response_index
+                < thread_closed_index
+                and isinstance(thread_unsubscribe, dict)
+                and thread_unsubscribe.get("params", {}).get("threadId")
+                == response_thread_id
+                and isinstance(thread_unsubscribe_response, dict)
+                and thread_unsubscribe_response.get("result", {}).get("status")
+                == "unsubscribed"
+                and isinstance(thread_closed, dict)
+                and thread_closed.get("params", {}).get("threadId")
+                == response_thread_id
+            )
+        else:
+            close_ok = (
+                thread_unsubscribe_index is None
+                and thread_unsubscribe_response_index is None
+                and thread_closed_index is None
+            )
+
+        completed_error_ok = False
+        if isinstance(completed_turn, dict):
+            if expected_terminal_status == "failed":
+                completed_error_ok = isinstance(completed_turn.get("error"), dict)
+            else:
+                completed_error_ok = completed_turn.get("error") is None
+
+        expected_lifecycle = {
+            "terminal_scenario": terminal_scenario,
+            "initialize_response_received": True,
+            "initialized_sent": True,
+            "thread_start_response_received": True,
+            "thread_started_received": True,
+            "thread_id": response_thread_id,
+            "turn_start_response_received": True,
+            "turn_started_received": True,
+            "interrupt_request_sent": terminal_scenario == "interrupted",
+            "interrupt_response_received": terminal_scenario == "interrupted",
+            "turn_completed_received": True,
+            "turn_id": response_turn_id,
+            "terminal_status": expected_terminal_status,
+            "thread_unsubscribe_request_sent": terminal_scenario == "closed",
+            "thread_unsubscribe_response_received": terminal_scenario == "closed",
+            "thread_closed_received": terminal_scenario == "closed",
+        }
         checks["ordered_lifecycle_replayed"] = (
-            client_methods
-            == ["initialize", "initialized", "thread/start", "turn/start"]
+            expected_client_methods is not None
+            and client_methods == expected_client_methods
             and all(isinstance(index, int) for index in indices)
             and indices == sorted(indices)
             and isinstance(thread_started_index, int)
@@ -370,22 +539,12 @@ def verify(
             and response_turn.get("id") == started_turn.get("id")
             == completed_turn.get("id")
             and started_turn.get("status") == "inProgress"
-            and completed_turn.get("status") == "completed"
-            and completed_turn.get("error") is None
+            and completed_turn.get("status") == expected_terminal_status
+            and completed_error_ok
+            and interrupt_ok
+            and close_ok
             and isinstance(lifecycle, dict)
-            and lifecycle
-            == {
-                "initialize_response_received": True,
-                "initialized_sent": True,
-                "thread_start_response_received": True,
-                "thread_started_received": True,
-                "thread_id": response_thread.get("id"),
-                "turn_start_response_received": True,
-                "turn_started_received": True,
-                "turn_completed_received": True,
-                "turn_id": response_turn.get("id"),
-                "terminal_status": "completed",
-            }
+            and lifecycle == expected_lifecycle
         )
         if not checks["ordered_lifecycle_replayed"]:
             errors.append("ordered lifecycle replay mismatch")

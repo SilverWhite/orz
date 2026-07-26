@@ -27,6 +27,7 @@ class CodexAppServerTurnProbeTests(unittest.TestCase):
         mode: str = "turn-success",
         *,
         expected: int = 0,
+        terminal_scenario: str = "completed",
     ) -> tuple[Path, Path, Path, subprocess.CompletedProcess[str], dict]:
         capture = root / "capture.jsonl"
         stderr = root / "app-server.stderr"
@@ -57,6 +58,8 @@ class CodexAppServerTurnProbeTests(unittest.TestCase):
                 "5",
                 "--shutdown-grace-seconds",
                 "0.5",
+                "--terminal-scenario",
+                terminal_scenario,
             ],
             cwd=ROOT,
             stdin=subprocess.DEVNULL,
@@ -73,6 +76,45 @@ class CodexAppServerTurnProbeTests(unittest.TestCase):
             receipt,
             completed,
             json.loads(receipt.read_text(encoding="utf-8")),
+        )
+
+    def _normalize(
+        self,
+        root: Path,
+        capture: Path,
+    ) -> tuple[Path, Path, dict]:
+        observations = root / "observations.jsonl"
+        normalization = root / "normalization.json"
+        normalized = subprocess.run(
+            [
+                sys.executable,
+                str(NORMALIZER),
+                "--capture",
+                str(capture),
+                "--runtime-version",
+                "0.0.0-fake",
+                "--run-id",
+                "RUN-CODEX-TURN-PROBE-FAKE",
+                "--run-manifest-sha256",
+                "a" * 64,
+                "--observations",
+                str(observations),
+                "--receipt",
+                str(normalization),
+            ],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(normalized.returncode, 0, normalized.stderr)
+        return (
+            observations,
+            normalization,
+            json.loads(normalization.read_text(encoding="utf-8")),
         )
 
     def _verify(
@@ -128,35 +170,7 @@ class CodexAppServerTurnProbeTests(unittest.TestCase):
             self.assertTrue(verification["valid"])
             self.assertTrue(all(verification["checks"].values()))
 
-            observations = root / "observations.jsonl"
-            normalization = root / "normalization.json"
-            normalized = subprocess.run(
-                [
-                    sys.executable,
-                    str(NORMALIZER),
-                    "--capture",
-                    str(capture),
-                    "--runtime-version",
-                    "0.0.0-fake",
-                    "--run-id",
-                    "RUN-CODEX-TURN-PROBE-FAKE",
-                    "--run-manifest-sha256",
-                    "a" * 64,
-                    "--observations",
-                    str(observations),
-                    "--receipt",
-                    str(normalization),
-                ],
-                cwd=ROOT,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            self.assertEqual(normalized.returncode, 0, normalized.stderr)
-            result = json.loads(normalization.read_text(encoding="utf-8"))
+            observations, normalization, result = self._normalize(root, capture)
             self.assertTrue(result["valid"])
             self.assertEqual(result["normalization_status"], "partial")
             self.assertEqual(result["lifecycle_state"], "active")
@@ -198,6 +212,74 @@ class CodexAppServerTurnProbeTests(unittest.TestCase):
             )
             self.assertTrue(replay_report["valid"])
             self.assertTrue(all(replay_report["checks"].values()))
+
+    def test_failed_interrupted_and_closed_scenarios_are_verified(self) -> None:
+        cases = [
+            ("failed", "turn-success", "failed", "partial", "active", 3),
+            (
+                "interrupted",
+                "turn-interrupted",
+                "interrupted",
+                "partial",
+                "active",
+                3,
+            ),
+            ("closed", "turn-closed", "completed", "complete", "terminal", 4),
+        ]
+        for (
+            scenario,
+            fake_mode,
+            expected_terminal,
+            expected_normalization_status,
+            expected_lifecycle_state,
+            expected_observations,
+        ) in cases:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                capture, stderr, receipt_path, _, receipt = self._run_probe(
+                    root,
+                    mode=fake_mode,
+                    terminal_scenario=scenario,
+                )
+                self.assertTrue(receipt["valid"])
+                self.assertEqual(
+                    receipt["lifecycle"]["terminal_scenario"], scenario
+                )
+                self.assertEqual(
+                    receipt["lifecycle"]["terminal_status"],
+                    expected_terminal,
+                )
+
+                verification = self._verify(root, capture, stderr, receipt_path)
+                self.assertTrue(verification["valid"])
+                self.assertTrue(all(verification["checks"].values()))
+
+                observations, _, normalization = self._normalize(root, capture)
+                self.assertTrue(normalization["valid"])
+                self.assertEqual(
+                    normalization["normalization_status"],
+                    expected_normalization_status,
+                )
+                self.assertEqual(
+                    normalization["lifecycle_state"],
+                    expected_lifecycle_state,
+                )
+                self.assertEqual(
+                    normalization["observation_count"],
+                    expected_observations,
+                )
+                values = [
+                    json.loads(line)
+                    for line in observations.read_text(encoding="utf-8").splitlines()
+                ]
+                turn_terminals = [
+                    item["turn_status"]
+                    for item in values
+                    if item["event_kind"] == "turn_completed"
+                ]
+                self.assertEqual(turn_terminals, [expected_terminal])
+                if scenario == "closed":
+                    self.assertEqual(values[-1]["event_kind"], "session_completed")
 
     def test_invalid_provider_exchange_is_receipted_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

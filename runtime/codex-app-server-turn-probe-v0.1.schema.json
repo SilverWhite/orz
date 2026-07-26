@@ -53,12 +53,16 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "provider_id", "model", "base_url", "request_count", "request",
-        "synthetic_input_sha256", "synthetic_output_sha256", "sse_sha256"
+        "provider_id", "model", "response_mode", "base_url",
+        "request_count", "request", "synthetic_input_sha256",
+        "synthetic_output_sha256", "sse_sha256"
       ],
       "properties": {
         "provider_id": { "const": "lif_lifecycle_loopback" },
         "model": { "const": "gpt-5.4" },
+        "response_mode": {
+          "enum": ["success", "http_error", "stall"]
+        },
         "base_url": {
           "type": ["string", "null"],
           "pattern": "^http://127\\.0\\.0\\.1:<ephemeral>/v1$"
@@ -79,13 +83,18 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "initialize_response_received", "initialized_sent",
+        "terminal_scenario", "initialize_response_received", "initialized_sent",
         "thread_start_response_received", "thread_started_received",
         "thread_id", "turn_start_response_received",
-        "turn_started_received", "turn_completed_received", "turn_id",
-        "terminal_status"
+        "turn_started_received", "interrupt_request_sent",
+        "interrupt_response_received", "turn_completed_received", "turn_id",
+        "terminal_status", "thread_unsubscribe_request_sent",
+        "thread_unsubscribe_response_received", "thread_closed_received"
       ],
       "properties": {
+        "terminal_scenario": {
+          "enum": ["completed", "failed", "interrupted", "closed"]
+        },
         "initialize_response_received": { "type": "boolean" },
         "initialized_sent": { "type": "boolean" },
         "thread_start_response_received": { "type": "boolean" },
@@ -93,12 +102,17 @@
         "thread_id": { "type": ["string", "null"], "minLength": 1 },
         "turn_start_response_received": { "type": "boolean" },
         "turn_started_received": { "type": "boolean" },
+        "interrupt_request_sent": { "type": "boolean" },
+        "interrupt_response_received": { "type": "boolean" },
         "turn_completed_received": { "type": "boolean" },
         "turn_id": { "type": ["string", "null"], "minLength": 1 },
         "terminal_status": {
           "type": ["string", "null"],
           "enum": ["completed", "interrupted", "failed", null]
-        }
+        },
+        "thread_unsubscribe_request_sent": { "type": "boolean" },
+        "thread_unsubscribe_response_received": { "type": "boolean" },
+        "thread_closed_received": { "type": "boolean" }
       }
     },
     "capture_artifact": { "$ref": "#/$defs/artifact" },

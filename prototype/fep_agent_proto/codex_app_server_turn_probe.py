@@ -49,10 +49,13 @@ SYNTHETIC_OUTPUT = "LIFECYCLE_PROBE_OK_7A4F90D1"
 INITIALIZE_REQUEST_ID = 0
 THREAD_START_REQUEST_ID = 1
 TURN_START_REQUEST_ID = 2
+TURN_INTERRUPT_REQUEST_ID = 3
+THREAD_UNSUBSCRIBE_REQUEST_ID = 4
 MAX_PROVIDER_BODY_BYTES = 8 * 1024 * 1024
+TERMINAL_SCENARIOS = {"completed", "failed", "interrupted", "closed"}
 
 LIMITATIONS = [
-    "The probe validates one synthetic completed turn, not model quality or task correctness.",
+    "The probe validates one selected synthetic lifecycle scenario, not model quality or task correctness.",
     "The loopback provider proves the configured model request reached 127.0.0.1; it is not an operating-system network sandbox for every app-server subsystem.",
     "The capture proves one supervisor-observed stdio order, not hidden server-internal causality.",
     "The fixed synthetic prompt and response are present in the raw capture; normalized lifecycle observations omit raw content.",
@@ -127,11 +130,12 @@ class _ResponsesServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self) -> None:
+    def __init__(self, response_mode: str) -> None:
         super().__init__(("127.0.0.1", 0), _ResponsesHandler)
         self._requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self.request_recorded = threading.Event()
+        self.response_mode = response_mode
 
     def record_request(self, request: dict[str, Any]) -> None:
         with self._lock:
@@ -216,15 +220,36 @@ class _ResponsesHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
+        if self.responses_server.response_mode == "http_error":
+            response = json.dumps(
+                {"error": {"type": "synthetic_provider_failure"}},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(response)
+            self.wfile.flush()
+            self.close_connection = True
+            return
+
         response = _synthetic_sse()
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Content-Length", str(len(response)))
+            if self.responses_server.response_mode != "stall":
+                self.send_header("Content-Length", str(len(response)))
             self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(response)
+            if self.responses_server.response_mode == "stall":
+                self.wfile.write(response.split(b"\n\n", 1)[0] + b"\n\n")
+                self.wfile.flush()
+                time.sleep(10)
+            else:
+                self.wfile.write(response)
             self.wfile.flush()
             self.close_connection = True
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -235,8 +260,8 @@ class _ResponsesHandler(BaseHTTPRequestHandler):
 
 
 class LoopbackResponsesProvider:
-    def __init__(self) -> None:
-        self._server = _ResponsesServer()
+    def __init__(self, response_mode: str = "success") -> None:
+        self._server = _ResponsesServer(response_mode)
         self._thread = threading.Thread(
             target=self._server.serve_forever,
             kwargs={"poll_interval": 0.05},
@@ -308,6 +333,7 @@ def probe_synthetic_turn(
     max_records: int = 256,
     max_stderr_bytes: int = 1024 * 1024,
     source_stream_id: str | None = None,
+    terminal_scenario: str = "completed",
 ) -> dict[str, Any]:
     command_list, resolved_cwd = _validate_launch(
         command,
@@ -320,6 +346,8 @@ def probe_synthetic_turn(
     )
     if not runtime_version:
         raise PrototypeError("runtime version is required")
+    if terminal_scenario not in TERMINAL_SCENARIOS:
+        raise PrototypeError("terminal scenario is invalid")
     paths = [capture_path.resolve(), stderr_path.resolve(), receipt_path.resolve()]
     if len(set(paths)) != 3:
         raise PrototypeError("capture, stderr, and receipt paths must be distinct")
@@ -359,12 +387,29 @@ def probe_synthetic_turn(
     turn_start_response_received = False
     turn_started_received = False
     turn_completed_received = False
+    interrupt_request_sent = False
+    interrupt_response_received = False
+    thread_unsubscribe_request_sent = False
+    thread_unsubscribe_response_received = False
+    thread_closed_received = False
     response_thread_id: str | None = None
     notification_thread_id: str | None = None
     response_turn_id: str | None = None
     started_turn_id: str | None = None
     completed_turn_id: str | None = None
     terminal_status: str | None = None
+    provider_response_mode = {
+        "completed": "success",
+        "closed": "success",
+        "failed": "http_error",
+        "interrupted": "stall",
+    }[terminal_scenario]
+    expected_terminal_status = {
+        "completed": "completed",
+        "closed": "completed",
+        "failed": "failed",
+        "interrupted": "interrupted",
+    }[terminal_scenario]
     config_data = b""
     provider_base_url: str | None = None
     provider_requests: list[dict[str, Any]] = []
@@ -451,7 +496,7 @@ def probe_synthetic_turn(
         return payload
 
     try:
-        with LoopbackResponsesProvider() as provider:
+        with LoopbackResponsesProvider(provider_response_mode) as provider:
             provider_base_url = provider.base_url
             config_data = _config_bytes(provider_base_url)
             atomic_write_bytes(config_path, config_data)
@@ -645,6 +690,31 @@ def probe_synthetic_turn(
                             "protocol_error", "turn/started is invalid"
                         )
                     turn_started_received = True
+                    if terminal_scenario == "interrupted":
+                        send(
+                            {
+                                "method": "turn/interrupt",
+                                "id": TURN_INTERRUPT_REQUEST_ID,
+                                "params": {
+                                    "threadId": response_thread_id,
+                                    "turnId": response_turn_id,
+                                },
+                            }
+                        )
+                        interrupt_request_sent = True
+                elif message.get("id") == TURN_INTERRUPT_REQUEST_ID:
+                    if terminal_scenario != "interrupted" or "error" in message:
+                        raise CodexAppServerCaptureError(
+                            "protocol_error",
+                            "turn/interrupt returned an unexpected response",
+                        )
+                    result = message.get("result")
+                    if not isinstance(result, dict) or result:
+                        raise CodexAppServerCaptureError(
+                            "protocol_error",
+                            "turn/interrupt response is invalid",
+                        )
+                    interrupt_response_received = True
                 elif message.get("method") == "turn/completed":
                     if not turn_started_received:
                         raise CodexAppServerCaptureError(
@@ -665,22 +735,77 @@ def probe_synthetic_turn(
                     )
                     if (
                         completed_turn_id != response_turn_id
-                        or terminal_status != "completed"
-                        or turn.get("error") is not None
+                        or terminal_status != expected_terminal_status
                     ):
                         raise CodexAppServerCaptureError(
                             "protocol_error", "turn/completed is invalid"
                         )
+                    if terminal_status == "failed":
+                        if not isinstance(turn.get("error"), dict):
+                            raise CodexAppServerCaptureError(
+                                "protocol_error", "failed turn lacks error"
+                            )
+                    elif turn.get("error") is not None:
+                        raise CodexAppServerCaptureError(
+                            "protocol_error",
+                            "non-failed turn unexpectedly carries error",
+                        )
                     turn_completed_received = True
 
-            remaining = max(0.0, deadline - time.monotonic())
-            provider.wait_for_request(remaining)
+            if terminal_scenario != "interrupted":
+                remaining = max(0.0, deadline - time.monotonic())
+                provider.wait_for_request(remaining)
             provider_requests = provider.requests
-            if len(provider_requests) != 1:
+            if terminal_scenario == "interrupted" and len(provider_requests) > 1:
+                raise CodexAppServerCaptureError(
+                    "provider_error",
+                    "expected at most one loopback Responses request",
+                )
+            if terminal_scenario != "interrupted" and len(provider_requests) != 1:
                 raise CodexAppServerCaptureError(
                     "provider_error",
                     "expected exactly one loopback Responses request",
                 )
+
+            if terminal_scenario == "closed":
+                send(
+                    {
+                        "method": "thread/unsubscribe",
+                        "id": THREAD_UNSUBSCRIBE_REQUEST_ID,
+                        "params": {"threadId": response_thread_id},
+                    }
+                )
+                thread_unsubscribe_request_sent = True
+                while not (
+                    thread_unsubscribe_response_received and thread_closed_received
+                ):
+                    message = receive()
+                    if message.get("id") == THREAD_UNSUBSCRIBE_REQUEST_ID:
+                        if "error" in message:
+                            raise CodexAppServerCaptureError(
+                                "protocol_error",
+                                "thread/unsubscribe returned a JSON-RPC error",
+                            )
+                        result = message.get("result")
+                        if (
+                            not isinstance(result, dict)
+                            or result.get("status") != "unsubscribed"
+                        ):
+                            raise CodexAppServerCaptureError(
+                                "protocol_error",
+                                "thread/unsubscribe response is invalid",
+                            )
+                        thread_unsubscribe_response_received = True
+                    elif message.get("method") == "thread/closed":
+                        params = message.get("params")
+                        if (
+                            not isinstance(params, dict)
+                            or params.get("threadId") != response_thread_id
+                        ):
+                            raise CodexAppServerCaptureError(
+                                "protocol_error", "thread/closed is invalid"
+                            )
+                        thread_closed_received = True
     except CodexAppServerCaptureError as exc:
         error_kind = exc.kind
         error_message = str(exc)
@@ -727,15 +852,22 @@ def probe_synthetic_turn(
         provider_requests[0] if len(provider_requests) == 1 else None
     )
     provider_request_valid = (
-        isinstance(provider_request, dict)
-        and provider_request.get("method") == "POST"
-        and provider_request.get("path") == "/v1/responses"
-        and provider_request.get("client_host") == "127.0.0.1"
-        and provider_request.get("model") == SYNTHETIC_MODEL
-        and provider_request.get("stream") is True
-        and provider_request.get("input_marker_present") is True
-        and provider_request.get("accepts_event_stream") is True
-        and provider_request.get("authorization_present") is False
+        (
+            terminal_scenario == "interrupted"
+            and provider_request is None
+            and len(provider_requests) == 0
+        )
+        or (
+            isinstance(provider_request, dict)
+            and provider_request.get("method") == "POST"
+            and provider_request.get("path") == "/v1/responses"
+            and provider_request.get("client_host") == "127.0.0.1"
+            and provider_request.get("model") == SYNTHETIC_MODEL
+            and provider_request.get("stream") is True
+            and provider_request.get("input_marker_present") is True
+            and provider_request.get("accepts_event_stream") is True
+            and provider_request.get("authorization_present") is False
+        )
     )
     success = (
         error_kind is None
@@ -748,7 +880,19 @@ def probe_synthetic_turn(
         and turn_completed_received
         and response_thread_id == notification_thread_id
         and response_turn_id == started_turn_id == completed_turn_id
-        and terminal_status == "completed"
+        and terminal_status == expected_terminal_status
+        and (
+            terminal_scenario != "interrupted"
+            or (interrupt_request_sent and interrupt_response_received)
+        )
+        and (
+            terminal_scenario != "closed"
+            or (
+                thread_unsubscribe_request_sent
+                and thread_unsubscribe_response_received
+                and thread_closed_received
+            )
+        )
         and provider_request_valid
     )
     receipt = {
@@ -775,6 +919,7 @@ def probe_synthetic_turn(
         "provider": {
             "provider_id": PROVIDER_ID,
             "model": SYNTHETIC_MODEL,
+            "response_mode": provider_response_mode,
             "base_url": (
                 re.sub(r":\d+/v1$", ":<ephemeral>/v1", provider_base_url)
                 if provider_base_url is not None
@@ -791,6 +936,7 @@ def probe_synthetic_turn(
             "sse_sha256": sha256_bytes(_synthetic_sse()),
         },
         "lifecycle": {
+            "terminal_scenario": terminal_scenario,
             "initialize_response_received": initialize_response_received,
             "initialized_sent": initialized_sent,
             "thread_start_response_received": thread_start_response_received,
@@ -802,6 +948,8 @@ def probe_synthetic_turn(
             ),
             "turn_start_response_received": turn_start_response_received,
             "turn_started_received": turn_started_received,
+            "interrupt_request_sent": interrupt_request_sent,
+            "interrupt_response_received": interrupt_response_received,
             "turn_completed_received": turn_completed_received,
             "turn_id": (
                 response_turn_id
@@ -809,6 +957,11 @@ def probe_synthetic_turn(
                 else None
             ),
             "terminal_status": terminal_status,
+            "thread_unsubscribe_request_sent": thread_unsubscribe_request_sent,
+            "thread_unsubscribe_response_received": (
+                thread_unsubscribe_response_received
+            ),
+            "thread_closed_received": thread_closed_received,
         },
         "capture_artifact": _artifact(capture_path, capture_data),
         "record_count": len(records),
