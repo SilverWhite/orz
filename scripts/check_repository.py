@@ -431,6 +431,122 @@ def _cross_artifact_fixture_errors(
     return errors
 
 
+def _disposable_reproduction_fixture_errors(
+    manifest: dict[str, Any],
+    bundle: dict[str, Any],
+    fixture_root: Path,
+) -> list[str]:
+    errors: list[str] = []
+    records = {
+        item["record_id"]: item
+        for item in [*bundle.get("sources", []), *bundle.get("artifacts", [])]
+        if isinstance(item, dict)
+    }
+    bundle_record = manifest.get("source_bundle", {})
+    if bundle_record.get("path") != "review-bundle.json":
+        errors.append("disposable reproduction must bind review-bundle.json")
+    bundle_path = fixture_root / "review-bundle.json"
+    if bundle_path.is_file() and bundle_record.get("sha256") != _sha256(bundle_path):
+        errors.append("disposable reproduction source bundle digest mismatch")
+
+    for record in manifest.get("input_snapshot", []):
+        record_id = record.get("record_id")
+        source_record = records.get(record_id)
+        if source_record is None:
+            errors.append(f"disposable reproduction input is unknown: {record_id}")
+            continue
+        if record.get("path") != source_record.get("path"):
+            errors.append(
+                f"disposable reproduction input path mismatch: {record_id}"
+            )
+        try:
+            file_path = fixture_root / Path(*_safe_fixture_path(record["path"]).parts)
+        except Exception as exc:
+            errors.append(f"invalid disposable reproduction input path: {exc}")
+            continue
+        if not file_path.is_file():
+            errors.append(f"disposable reproduction input missing: {record_id}")
+        elif record.get("sha256") != _sha256(file_path):
+            errors.append(
+                f"disposable reproduction input digest mismatch: {record_id}"
+            )
+
+    action = manifest.get("allowed_action", {})
+    if action.get("implementation") != "explicit_euler_decay_replay_v0.1":
+        errors.append("disposable reproduction implementation changed")
+    action_source_id = bundle.get("action_source_id")
+    action_record = records.get(action_source_id)
+    if not action_record:
+        errors.append("disposable reproduction cannot resolve source action")
+    else:
+        source_action = _load_json(fixture_root / action_record["path"])
+        if source_action.get("action_id") != action.get("source_action_id"):
+            errors.append("disposable reproduction source action mismatch")
+        if source_action.get("state") != "completed":
+            errors.append("disposable reproduction source action is not completed")
+
+    output_ids = [item.get("output_id") for item in manifest.get("outputs", [])]
+    if len(output_ids) != len(set(output_ids)):
+        errors.append("disposable reproduction output IDs are not unique")
+    output_paths = [item.get("path") for item in manifest.get("outputs", [])]
+    if len(output_paths) != len(set(output_paths)):
+        errors.append("disposable reproduction output paths are not unique")
+    expected_pointers = [
+        "/run/step_size",
+        "/run/step_count",
+        "/run/final_value",
+        "/run/final_absolute_error",
+    ]
+    for output in manifest.get("outputs", []):
+        if output.get("value_pointers") != expected_pointers:
+            errors.append(
+                f"disposable reproduction output pointer set changed: "
+                f"{output.get('output_id')}"
+            )
+        artifact = records.get(output.get("original_artifact_id"))
+        if not artifact:
+            errors.append(
+                f"disposable reproduction output references unknown artifact: "
+                f"{output.get('output_id')}"
+            )
+            continue
+        if artifact.get("artifact_schema_id") != output.get("artifact_schema_id"):
+            errors.append(
+                f"disposable reproduction output schema mismatch: "
+                f"{output.get('output_id')}"
+            )
+        artifact_document = _load_json(fixture_root / artifact["path"])
+        try:
+            observed_step = _json_pointer_value(artifact_document, "/run/step_size")
+        except Exception:
+            errors.append(
+                f"disposable reproduction cannot read step size: "
+                f"{output.get('output_id')}"
+            )
+        else:
+            if observed_step != output.get("step_size"):
+                errors.append(
+                    f"disposable reproduction step size mismatch: "
+                    f"{output.get('output_id')}"
+                )
+    safety = manifest.get("safety", {})
+    for field in (
+        "source_write_allowed",
+        "model_invocation_allowed",
+        "network_allowed",
+        "child_process_allowed",
+        "external_code_execution_allowed",
+    ):
+        if safety.get(field) is not False:
+            errors.append(f"disposable reproduction safety field changed: {field}")
+    boundary = manifest.get("evidence_boundary", {})
+    if boundary.get("independence_effect") != "no_new_independent_evidence":
+        errors.append("disposable reproduction independence boundary changed")
+    if boundary.get("claim_strength_effect") != "no_claim_promotion":
+        errors.append("disposable reproduction claim boundary changed")
+    return errors
+
+
 def _check_markdown_links() -> list[str]:
     errors: list[str] = []
     pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
@@ -819,6 +935,27 @@ def check_repository() -> dict[str, Any]:
         )
     )
     counts["general_science_cross_artifact_comparisons"] = 1
+
+    reproduction_manifest_path = (
+        general_science_fixture_root / "disposable-reproduction-manifest.json"
+    )
+    reproduction_manifest = _load_json(reproduction_manifest_path)
+    errors.extend(
+        _validate_instance(
+            reproduction_manifest,
+            assurance_root / "disposable-reproduction-manifest-v0.1.schema.json",
+            str(reproduction_manifest_path.relative_to(ROOT)),
+        )
+    )
+    errors.extend(
+        f"general-science disposable reproduction fixture error: {error}"
+        for error in _disposable_reproduction_fixture_errors(
+            reproduction_manifest,
+            general_science_bundle,
+            general_science_fixture_root,
+        )
+    )
+    counts["general_science_disposable_reproduction_fixtures"] = 1
 
     profiles = profile_registry.get("profiles", [])
     profile_ids = [profile.get("profile_id") for profile in profiles]

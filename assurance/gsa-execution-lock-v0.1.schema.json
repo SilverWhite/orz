@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/gsa-execution-lock-v0.1.schema.json",
+  "title": "GSA disposable reproduction execution lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lock_kind",
+    "reproduction_id",
+    "proof_sha256",
+    "projection_sha256",
+    "journal_receipt_sha256",
+    "selected_source_tree_sha256",
+    "selected_source_files",
+    "git",
+    "environment",
+    "checks",
+    "evidence_boundary",
+    "valid"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "lock_kind": {
+      "const": "gsa_disposable_reproduction_execution_lock"
+    },
+    "reproduction_id": {
+      "$ref": "#/$defs/id"
+    },
+    "proof_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "projection_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "journal_receipt_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "selected_source_tree_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "selected_source_files": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/file_digest"
+      }
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_detected",
+        "head_ref",
+        "head_sha256",
+        "status_scope"
+      ],
+      "properties": {
+        "repository_detected": {
+          "type": "boolean"
+        },
+        "head_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 512
+        },
+        "head_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/git_sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status_scope": {
+          "const": "selected_files_hashed_only"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_version",
+        "python_implementation",
+        "platform_system",
+        "platform_release",
+        "filesystem_encoding",
+        "dependency_lock_status",
+        "python_distributions"
+      ],
+      "properties": {
+        "python_version": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "python_implementation": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "platform_system": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "platform_release": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "filesystem_encoding": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "dependency_lock_status": {
+          "const": "python_distribution_snapshot_only"
+        },
+        "python_distributions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "version"
+            ],
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/nonempty"
+              },
+              "version": {
+                "$ref": "#/$defs/nonempty"
+              }
+            }
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proof_schema_valid",
+        "projection_schema_valid",
+        "journal_receipt_schema_valid",
+        "journal_replayed",
+        "selected_files_exist",
+        "selected_source_tree_hashed",
+        "dependency_versions_recorded",
+        "no_dependency_lock_claimed",
+        "no_claim_promotion"
+      ],
+      "properties": {
+        "proof_schema_valid": {
+          "const": true
+        },
+        "projection_schema_valid": {
+          "const": true
+        },
+        "journal_receipt_schema_valid": {
+          "const": true
+        },
+        "journal_replayed": {
+          "const": true
+        },
+        "selected_files_exist": {
+          "const": true
+        },
+        "selected_source_tree_hashed": {
+          "const": true
+        },
+        "dependency_versions_recorded": {
+          "const": true
+        },
+        "no_dependency_lock_claimed": {
+          "const": true
+        },
+        "no_claim_promotion": {
+          "const": true
+        }
+      }
+    },
+    "evidence_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner_status",
+        "independence_effect",
+        "claim_strength_effect"
+      ],
+      "properties": {
+        "runner_status": {
+          "const": "development_code_environment_lock_only"
+        },
+        "independence_effect": {
+          "const": "no_new_independent_evidence"
+        },
+        "claim_strength_effect": {
+          "const": "no_claim_promotion"
+        }
+      }
+    },
+    "valid": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "file_digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "nonempty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "not": {
+        "pattern": "(^/|^[A-Za-z]:|\\\\|\\.\\.)"
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/gsa-runner-journal-recovery-inspection-v0.1.schema.json",
+  "title": "GSA runner journal read-only recovery inspection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "inspection_kind",
+    "status",
+    "classification",
+    "run_id",
+    "run_manifest_sha256",
+    "original_journal_sha256",
+    "original_size_bytes",
+    "retained_size_bytes",
+    "discarded_offset_bytes",
+    "discarded_size_bytes",
+    "discarded_sha256",
+    "prefix_event_count",
+    "prefix_last_event_sha256",
+    "prefix_terminal_event",
+    "errors",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "inspection_kind": {
+      "const": "gsa_runner_journal_recovery_inspection"
+    },
+    "status": {
+      "enum": [
+        "valid",
+        "recoverable",
+        "unrecoverable"
+      ]
+    },
+    "classification": {
+      "enum": [
+        "valid_journal",
+        "missing_newline_normalized",
+        "torn_tail_removed",
+        "empty_journal",
+        "no_valid_prefix",
+        "history_corruption"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Z0-9._-]+$"
+    },
+    "run_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "original_journal_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "original_size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "retained_size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "discarded_offset_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "discarded_size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "discarded_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "prefix_event_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prefix_last_event_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "prefix_terminal_event": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

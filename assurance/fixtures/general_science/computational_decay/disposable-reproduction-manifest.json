@@ -1,0 +1,88 @@
+{
+  "schema_version": "0.1.0-draft",
+  "reproduction_kind": "general_science_disposable_reproduction",
+  "reproduction_id": "REPRO_DECAY_EXPLICIT_EULER_DISPOSABLE",
+  "source_bundle": {
+    "record_id": "BUNDLE_DECAY_TWO_GRID",
+    "path": "review-bundle.json",
+    "sha256": "220acbe649997f95af9542057e4db40a8b72c15fc3dacbca526e06b06835ce98",
+    "media_type": "application/json"
+  },
+  "input_snapshot": [
+    {
+      "record_id": "SRC_DECAY_NOTES",
+      "path": "source-notes.md",
+      "sha256": "57b850214beab9f9ac1461b5979a5faa978d6583365831874ec7307b4fbcda6d",
+      "media_type": "text/markdown"
+    },
+    {
+      "record_id": "SRC_DECAY_DESIGN",
+      "path": "design.json",
+      "sha256": "10579f771b53b558ef221e2fbee50270aa3417eb7f8c43f5a0da526b767c3a92",
+      "media_type": "application/json"
+    },
+    {
+      "record_id": "SRC_DECAY_RUN",
+      "path": "run-manifest.json",
+      "sha256": "3885a6517495837734fca73bf8b5331d355c77d72b07ccc6b643d7948379cb99",
+      "media_type": "application/json"
+    }
+  ],
+  "allowed_action": {
+    "action_id": "ACT_DECAY_DISPOSABLE_REPLAY",
+    "source_action_id": "ACT_DECAY_PRECOMPUTED",
+    "implementation": "explicit_euler_decay_replay_v0.1",
+    "parameters": {
+      "method": "explicit_euler",
+      "equation": "dy/dt=-y",
+      "initial_value": 1.0,
+      "final_time": 1.0,
+      "exact_final_value": 0.36787944117144233
+    }
+  },
+  "outputs": [
+    {
+      "output_id": "OUT_DECAY_DT_0_1_REPLAY",
+      "path": "replayed/result-dt-0.1.json",
+      "original_artifact_id": "ART_DECAY_DT_0_1",
+      "artifact_kind": "numerical_result",
+      "artifact_schema_id": "GSAS_NUMERICAL_SINGLE_RUN_0_1",
+      "step_size": 0.1,
+      "value_pointers": [
+        "/run/step_size",
+        "/run/step_count",
+        "/run/final_value",
+        "/run/final_absolute_error"
+      ]
+    },
+    {
+      "output_id": "OUT_DECAY_DT_0_05_REPLAY",
+      "path": "replayed/result-dt-0.05.json",
+      "original_artifact_id": "ART_DECAY_DT_0_05",
+      "artifact_kind": "numerical_result",
+      "artifact_schema_id": "GSAS_NUMERICAL_SINGLE_RUN_0_1",
+      "step_size": 0.05,
+      "value_pointers": [
+        "/run/step_size",
+        "/run/step_count",
+        "/run/final_value",
+        "/run/final_absolute_error"
+      ]
+    }
+  ],
+  "safety": {
+    "source_write_allowed": false,
+    "model_invocation_allowed": false,
+    "network_allowed": false,
+    "child_process_allowed": false,
+    "external_code_execution_allowed": false
+  },
+  "evidence_boundary": {
+    "independence_effect": "no_new_independent_evidence",
+    "claim_strength_effect": "no_claim_promotion",
+    "limitations": [
+      "Replay is a fixed deterministic action over this development fixture only.",
+      "Matching outputs do not add an independent run, reviewer, model, or holdout result."
+    ]
+  }
+}

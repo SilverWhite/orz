@@ -11,7 +11,11 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 已完成 no-model 离线实现、独立重放与隔离 live app-server smoke；live 路径只执行 initialize 和
 ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
 真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
-误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。
+误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。首个 GSA
+disposable reproduction 切片已完成 no-model manifest、固定 replay、receipt/verifier/run-proof、runtime preflight
+projection、一次性 runtime JSONL journal write/replay、development code/environment lock、no-model runner skeleton、runner
+journal sidecar lock、只读 recovery inspection、受控 repair/quarantine receipt 与 lifecycle repair policy
+和“不增加独立证据/不提升 claim 强度”边界。自我质询/反例 sentinel 已形成设计稿并暂存，尚未接入 runner。
 
 本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它从 FEP/LIF 工作流暴露的问题出发，但把
 来源先行、证据分层、独立性、反例搜索、机械验证和 claim 边界抽为通用科学保障能力，目标是让接入的模型
@@ -46,6 +50,8 @@ ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepS
 - [`docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md`](docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md)：版本化 validator registry、设计/动作 schema、artifact finite gate 与基础统计报告完整性边界。
 - [`docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md`](docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md)：artifact schema registry、结果摘要绑定、不可弱化映射与首个数值/统计基础 schema。
 - [`docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md`](docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md)：跨 artifact JSON Pointer、producer/source lineage、比较不变量和 permission-reversal 门禁。
+- [`docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md`](docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md)：首个 no-model disposable reproduction manifest、固定 replay、receipt/verifier/run-proof/runtime projection、一次性 runtime journal write/replay、execution lock、no-model runner skeleton、runner journal lock/recovery repair receipt、lifecycle repair policy 与“不增加独立证据”边界。
+- [`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`](docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md)：自我质询、反例候选队列，以及 DeepSeek/Grok 等 runtime 高重复输出截断与重启的未启用设计草案。
 - [`docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)：P2 Docker 实测、Windows native fail-closed 状态、限制与正反例收敛策略。
 - [`docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md`](docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md)：P1 envelope、P2 selector、无模型 action、宿主/容器进程追踪、HMAC 回执与残留复核的端到端实测。
 - [`docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md`](docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md)：P3 来源不可提权、内核动作授权、能力子集委派与 digest-bound 一次性许可的测试和限制。

@@ -49,12 +49,13 @@ profile，不能再用 LIF 内部任务充当通用复杂测试或未见深度�
 |---|---|---|---|
 | GSA-BASE-001 | 可复现基线未冻结 | **已关闭（development baseline）**：commit `6ddca3d`，tag `p0-p5-development-baseline-2026-07-25` | 后续正式评测仍需单独冻结 runner、任务包、oracle、模型和阈值 |
 | GSA-PROFILE-001 | 缺少通用科学 profile | **合同层已关闭**：`general-science` 为 domain-neutral root，`lif-research` 以 `additive_no_weakening` 只添加领域 delta | 核心实现继续由 GSA-CORE/RUNNER 等条目跟踪 |
-| GSA-CORE-001 | 科学保障核心没有可执行纵向切片 | **初始只读切片已完成，完整核心仍开放**：已接通非 LIF 多文件来源→任务契约→设计→既有动作/产物→JSON Pointer 比较→证据→claim→确定性报告 | 下一步增加可扩展 validator、统计/推断审查、跨制品语义与 disposable reproduction；不得把本机械切片视为完整科学审查 |
+| GSA-CORE-001 | 科学保障核心没有可执行纵向切片 | **初始只读与 disposable reproduction 切片已完成，完整核心仍开放**：已接通非 LIF 多文件来源→任务契约→设计→既有动作/产物→JSON Pointer 比较→证据→claim→确定性报告，并新增固定 no-model replay receipt/verifier、code/env/input/output/journal run-proof、runtime preflight projection、一次性 disposable runtime journal write/replay、development code/environment lock、no-model runner skeleton、sidecar journal lock、recovery inspection、受控 repair/quarantine receipt 与 lifecycle repair policy | 下一步增加真实输入数据、完整 dependency/OS/container lock、adapter preflight、可扩展 validator、统计/推断审查与跨制品语义；不得把本机械切片视为完整科学审查 |
 | GSA-VALIDATOR-001 | ValidatorBridge 只有扩展名称 | **初始桥接已完成，完整 validator 体系仍开放**：6 个版本化 validator 覆盖设计/动作/registered-artifact schema、JSON finite、统计报告完整性和跨 artifact comparability，registry 与结果均摘要绑定 | 增加版本迁移和隔离的第三方 validator；统计/comparability PASS 不得解释为科学正确 |
+| GSA-COUNTEREXAMPLE-001 | 自我质询和反例补全未接入 | **设计稿已完成，未启用**：已定义 self-question checkpoint、counterexample candidate queue，以及高重复词/短语/无新增 digest 的 runtime stagnation sentinel 和 DeepSeek/Grok 重启边界 | 先实现只读 detector 和正反例 fixture；不得保存隐藏 chain-of-thought；不得让自我质询直接提升 claim 强度 |
 | GSA-ARTIFACT-001 | Artifact 没有版本化 schema registration | **初始 registration 已完成，完整 artifact 体系仍开放**：artifact 必须引用登记 schema ID；registry kind/media/schema 映射和摘要写入结果，未知或不匹配项在证据比较前 block | 增加表格、单位、图像、代码/环境 schema，以及版本迁移与撤销 |
-| GSA-LINEAGE-001 | 跨 artifact lineage/comparability 只能靠叙述 | **初始数值比较切片已完成，完整 lineage 仍开放**：left/right artifact 分别绑定 pointer；task/protocol/metric/population/unit、producer/source/transformation 和 condition 实值机械对账 | 接入输入数据/代码/环境/journal digest，增加 transformation DAG、单位换算、population harmonization、多 action/producer 和独立性核算 |
+| GSA-LINEAGE-001 | 跨 artifact lineage/comparability 只能靠叙述 | **初始数值比较与 disposable replay/run-proof 切片已完成，完整 lineage 仍开放**：left/right artifact 分别绑定 pointer；task/protocol/metric/population/unit、producer/source/transformation 和 condition 实值机械对账；replay 输出与原 artifact 只做值级复放对账，run-proof 绑定当前实现/环境/输入/输出摘要，disposable runtime journal 绑定 projection event digest，execution lock 绑定受控源码与 Python 分发版本 | 接入真实输入数据、完整 dependency/OS/container lock，增加 transformation DAG、单位换算、population harmonization、多 action/producer 和独立性核算 |
 | GSA-ADAPTER-001 | 真实 runtime/tool 入口未接保障层 | P3/P4 为 development API；P4.5 只允许固定进程内 roundtrip | 至少一个 runtime adapter 的读取、工具、授权、审计和 terminal 不可绕过同一 envelope/gate |
-| GSA-RUNNER-001 | 正式 EvaluationRunner 未实现 | 现有 exporter/scanner/journal 只是 contract probe | 实现 immutable RunManifest、adapter preflight、journal、结构化输出校验、失败分类与评分交接 |
+| GSA-RUNNER-001 | 正式 EvaluationRunner 未实现 | **no-model runner skeleton 已完成，正式 runner 仍开放**：manifest/receipt/verifier/run-proof、runtime manifest/event projection、disposable JSONL replay、development source/env lock、sidecar locked runner journal append/replay、recovery inspection、受控 repair/quarantine receipt 与 lifecycle repair policy 只覆盖一个固定 in-process replay 与 metadata hash-chain，不接模型、外部代码、adapter、评分或结构化失败分类 | 实现 adapter preflight、结构化输出校验、失败分类与评分交接 |
 | GSA-PARTITION-001 | evaluation/holdout 为零 | 当前 40 个案例均为 development/challenge seed | 创建物理隔离的新来源 evaluation 和未见 holdout；冻结 digest、oracle、角色与污染生命周期 |
 | GSA-CAL-001 | 人类 baseline 和阈值为零 | 未招募 reviewer、未测一致性、无有效模型通过阈值 | 双人独立盲审、adjudication、可判定性与一致性检查后冻结阈值，再应用于未参与校准的 holdout |
 | GSA-CORPUS-001 | 案例仍为项目形状 | 十个错误簇来自 FEP/LIF 历史与合成 countercase | 增加跨领域、非 LIF、正反成对且来源独立的复杂科研任务 |
@@ -83,6 +84,13 @@ inheritance-cycle 负例、137 tests、0 errors。该计数不提升 GSA-CORE �
 增加独立 N；comparability PASS 只允许窄比较，不支持机制或普遍性升级。
 该切片完成后的机械结果为 88 schemas、6 validators、3 artifact schemas、148 tests、
 0 repository errors。
+
+`GSA-RUNNER-001` 的首个 disposable reproduction 切片见
+[`disposable reproduction audit`](GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md)。它只证明同一
+development fixture 的固定 replay 输出可被 receipt/verifier 复核；replay 明确不增加独立证据、不提升
+claim 强度，也不构成正式 EvaluationRunner。
+该切片完成后的机械结果为 123 schemas、1 个 disposable reproduction fixture、12 个定向测试、
+当前源码全量回归 242/242，0 repository errors。
 
 ## 通用科研语义缺口
 

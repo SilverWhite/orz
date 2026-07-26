@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/gsa-no-model-runner-receipt-v0.1.schema.json",
+  "title": "GSA no-model runner skeleton receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "reproduction_id",
+    "run_id",
+    "proof_sha256",
+    "projection_sha256",
+    "execution_lock_sha256",
+    "run_manifest_path",
+    "run_manifest_sha256",
+    "journal_path",
+    "journal_sha256",
+    "event_count",
+    "terminal_event",
+    "last_event_sha256",
+    "checks",
+    "evidence_boundary",
+    "valid"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "receipt_kind": {
+      "const": "gsa_no_model_runner_skeleton_receipt"
+    },
+    "reproduction_id": {
+      "$ref": "#/$defs/id"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Z0-9._-]+$"
+    },
+    "proof_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "projection_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "execution_lock_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "run_manifest_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "journal_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "journal_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "event_count": {
+      "const": 3
+    },
+    "terminal_event": {
+      "const": "run_finished"
+    },
+    "last_event_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projection_schema_valid",
+        "execution_lock_schema_valid",
+        "execution_lock_matches_inputs",
+        "manifest_written_canonical",
+        "journal_appended_incrementally",
+        "journal_replayed",
+        "terminal_event_valid",
+        "no_model_or_tool_events",
+        "no_claim_promotion"
+      ],
+      "properties": {
+        "projection_schema_valid": {
+          "const": true
+        },
+        "execution_lock_schema_valid": {
+          "const": true
+        },
+        "execution_lock_matches_inputs": {
+          "const": true
+        },
+        "manifest_written_canonical": {
+          "const": true
+        },
+        "journal_appended_incrementally": {
+          "const": true
+        },
+        "journal_replayed": {
+          "const": true
+        },
+        "terminal_event_valid": {
+          "const": true
+        },
+        "no_model_or_tool_events": {
+          "const": true
+        },
+        "no_claim_promotion": {
+          "const": true
+        }
+      }
+    },
+    "evidence_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner_status",
+        "independence_effect",
+        "claim_strength_effect"
+      ],
+      "properties": {
+        "runner_status": {
+          "const": "no_model_runner_skeleton_only"
+        },
+        "independence_effect": {
+          "const": "no_new_independent_evidence"
+        },
+        "claim_strength_effect": {
+          "const": "no_claim_promotion"
+        }
+      }
+    },
+    "valid": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

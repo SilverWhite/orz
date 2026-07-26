@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/gsa-runner-lifecycle-repair-policy-v0.1.schema.json",
+  "title": "GSA runner lifecycle repair policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_kind",
+    "mode",
+    "receipt_path",
+    "quarantine_path",
+    "allow_missing_newline_normalization",
+    "allow_torn_tail_quarantine",
+    "valid"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "policy_kind": {
+      "const": "gsa_runner_lifecycle_repair_policy"
+    },
+    "mode": {
+      "enum": [
+        "inspect_only",
+        "repair_recoverable"
+      ]
+    },
+    "receipt_path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "quarantine_path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "allow_missing_newline_normalization": {
+      "type": "boolean"
+    },
+    "allow_torn_tail_quarantine": {
+      "type": "boolean"
+    },
+    "valid": {
+      "const": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "repair_recoverable"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "receipt_path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

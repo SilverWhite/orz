@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/disposable-reproduction-verification-v0.1.schema.json",
+  "title": "General science disposable reproduction verification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verification_kind",
+    "reproduction_id",
+    "valid",
+    "manifest_sha256",
+    "receipt_sha256",
+    "verified_outputs",
+    "source_snapshot_unchanged",
+    "evidence_boundary"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "verification_kind": {
+      "const": "general_science_disposable_reproduction_verification"
+    },
+    "reproduction_id": {
+      "$ref": "#/$defs/id"
+    },
+    "valid": {
+      "const": true
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "receipt_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "verified_outputs": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_snapshot_unchanged": {
+      "const": true
+    },
+    "evidence_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "independence_effect",
+        "claim_strength_effect"
+      ],
+      "properties": {
+        "independence_effect": {
+          "const": "no_new_independent_evidence"
+        },
+        "claim_strength_effect": {
+          "const": "no_claim_promotion"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

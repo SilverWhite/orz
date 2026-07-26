@@ -100,6 +100,17 @@ Draft 2020-12 schema。未知 ID、映射不一致或 schema validation failure 
 不一致使用 `EVD-COMPARABILITY-001` defer。详见
 [`cross-artifact audit`](../docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md)。
 
+`disposable_reproduction.py` 新增首个 no-model disposable reproduction 切片。manifest 绑定 source bundle、
+输入快照、唯一内置 replay action 和输出 artifact；runner 只在 source root 之外写 disposable 输出，receipt
+与 verifier 都固定 `no_new_independent_evidence` 和 `no_claim_promotion`。run-proof 另绑定当前实现文件摘要、
+Python/平台环境、输入/输出 digest 和三事件 metadata-only hash chain。runtime-preflight projection 再把 proof
+投影为 development-mode runtime manifest 和三条 runtime event；journal writer 将该 projection 一次性写为
+JSONL 并重放校验 digest/hash-chain；execution lock 再绑定受控源码文件、git HEAD 观测和 Python 分发版本快照，
+no-model runner skeleton 则写出 canonical manifest，并在 sidecar lock 内逐条 append/replay 生成 runner journal 和
+receipt；recovery inspection 能分类 missing-newline/torn-tail，受控 repair 会在锁内规范化或 quarantine torn tail 并生成 receipt；
+lifecycle repair policy 可在 resume 时显式触发可恢复修复。详见
+[`disposable reproduction audit`](../docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md)。
+
 `evidence_status` 用于 workspace/runtime/sandbox 等外部观测或派生安全事实。schema 常量、ID、
 状态转换和 terminal count 属于签名 receipt 自身的规范字段，不把它们再包装成“对自身的观测”。
 

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/gsa-runtime-preflight-projection-v0.1.schema.json",
+  "title": "GSA disposable reproduction runtime preflight projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "projection_kind",
+    "reproduction_id",
+    "proof_sha256",
+    "run_manifest_sha256",
+    "runtime_manifest",
+    "runtime_events",
+    "checks",
+    "evidence_boundary",
+    "valid"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "projection_kind": {
+      "const": "gsa_disposable_reproduction_runtime_preflight_projection"
+    },
+    "reproduction_id": {
+      "$ref": "#/$defs/id"
+    },
+    "proof_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "run_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "runtime_manifest": {
+      "type": "object"
+    },
+    "runtime_events": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object"
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proof_verified",
+        "runtime_manifest_schema_valid",
+        "runtime_events_schema_valid",
+        "hash_chain_valid",
+        "metadata_only",
+        "no_model_or_tool_events",
+        "formal_runner_not_claimed"
+      ],
+      "properties": {
+        "proof_verified": {
+          "const": true
+        },
+        "runtime_manifest_schema_valid": {
+          "const": true
+        },
+        "runtime_events_schema_valid": {
+          "const": true
+        },
+        "hash_chain_valid": {
+          "const": true
+        },
+        "metadata_only": {
+          "const": true
+        },
+        "no_model_or_tool_events": {
+          "const": true
+        },
+        "formal_runner_not_claimed": {
+          "const": true
+        }
+      }
+    },
+    "evidence_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner_status",
+        "independence_effect",
+        "claim_strength_effect"
+      ],
+      "properties": {
+        "runner_status": {
+          "const": "runtime_preflight_projection_only"
+        },
+        "independence_effect": {
+          "const": "no_new_independent_evidence"
+        },
+        "claim_strength_effect": {
+          "const": "no_claim_promotion"
+        }
+      }
+    },
+    "valid": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

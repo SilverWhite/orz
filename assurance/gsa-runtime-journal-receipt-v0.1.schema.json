@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/gsa-runtime-journal-receipt-v0.1.schema.json",
+  "title": "GSA disposable runtime preflight journal receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "reproduction_id",
+    "projection_sha256",
+    "run_id",
+    "run_manifest_sha256",
+    "journal_path",
+    "journal_sha256",
+    "event_count",
+    "first_event_sha256",
+    "last_event_sha256",
+    "terminal_event",
+    "checks",
+    "evidence_boundary",
+    "valid"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "receipt_kind": {
+      "const": "gsa_runtime_preflight_journal_receipt"
+    },
+    "reproduction_id": {
+      "$ref": "#/$defs/id"
+    },
+    "projection_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Z0-9._-]+$"
+    },
+    "run_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "journal_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "journal_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "event_count": {
+      "const": 3
+    },
+    "first_event_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "last_event_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "terminal_event": {
+      "const": "run_finished"
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projection_schema_valid",
+        "runtime_events_schema_valid",
+        "hash_chain_valid",
+        "journal_written_once",
+        "journal_events_match_projection",
+        "metadata_only",
+        "no_model_or_tool_events",
+        "formal_runner_not_claimed"
+      ],
+      "properties": {
+        "projection_schema_valid": {
+          "const": true
+        },
+        "runtime_events_schema_valid": {
+          "const": true
+        },
+        "hash_chain_valid": {
+          "const": true
+        },
+        "journal_written_once": {
+          "const": true
+        },
+        "journal_events_match_projection": {
+          "const": true
+        },
+        "metadata_only": {
+          "const": true
+        },
+        "no_model_or_tool_events": {
+          "const": true
+        },
+        "formal_runner_not_claimed": {
+          "const": true
+        }
+      }
+    },
+    "evidence_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner_status",
+        "independence_effect",
+        "claim_strength_effect"
+      ],
+      "properties": {
+        "runner_status": {
+          "const": "runtime_journal_disposable_write_replay_only"
+        },
+        "independence_effect": {
+          "const": "no_new_independent_evidence"
+        },
+        "claim_strength_effect": {
+          "const": "no_claim_promotion"
+        }
+      }
+    },
+    "valid": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{2,95}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -16,6 +16,16 @@ from .artifact_registry import (
 )
 from .audit import AuditLedger, verify_audit_seal
 from .conversation import ConversationNamespace
+from .disposable_reproduction import (
+    build_disposable_reproduction_run_proof,
+    run_disposable_reproduction,
+    verify_disposable_reproduction_receipt,
+    verify_disposable_reproduction_run_proof,
+)
+from .execution_lock import (
+    build_disposable_reproduction_execution_lock,
+    verify_disposable_reproduction_execution_lock,
+)
 from .envelope import create_security_envelope, verify_security_envelope
 from .errors import AssuranceError
 from .guarded_execution import (
@@ -57,6 +67,20 @@ from .readonly_projection import (
     project_complex_task_readonly,
     verify_complex_task_readonly_projection,
 )
+from .runtime_preflight import (
+    build_gsa_runtime_preflight_projection,
+    verify_gsa_runtime_preflight_journal,
+    verify_gsa_runtime_preflight_projection,
+    write_gsa_runtime_preflight_journal,
+)
+from .runner import (
+    inspect_gsa_runner_journal_recovery,
+    replay_gsa_runner_journal,
+    repair_gsa_runner_journal,
+    resume_gsa_no_model_runner_skeleton,
+    run_gsa_no_model_runner_skeleton,
+    verify_gsa_no_model_runner_skeleton,
+)
 from .recovery import (
     authorize_recovery_candidate,
     create_recovery_candidate,
@@ -95,6 +119,9 @@ __all__ = [
     "WindowsDpapiInstallationKeyStore",
     "build_sandbox_selection_receipt",
     "build_guarded_frozen_context",
+    "build_disposable_reproduction_run_proof",
+    "build_disposable_reproduction_execution_lock",
+    "build_gsa_runtime_preflight_projection",
     "build_workspace_first_frozen_context",
     "authorize_action_candidate",
     "authorize_recovery_candidate",
@@ -107,8 +134,12 @@ __all__ = [
     "execute_workspace_first_integrated_run",
     "initialize_workspace_marker",
     "index_artifact_schemas",
+    "inspect_gsa_runner_journal_recovery",
     "issue_sensitive_action_permit",
     "record_instruction_provenance",
+    "replay_gsa_runner_journal",
+    "repair_gsa_runner_journal",
+    "resume_gsa_no_model_runner_skeleton",
     "review_general_science_bundle",
     "load_execution_backend_policy",
     "load_general_science_artifact_registry",
@@ -120,7 +151,9 @@ __all__ = [
     "recovery_permit_binding",
     "resolve_effective_profile",
     "resume_archived_conversation",
+    "run_disposable_reproduction",
     "run_docker_sandbox_probe",
+    "run_gsa_no_model_runner_skeleton",
     "run_synthetic_user_task_evaluation",
     "run_general_science_validators",
     "select_execution_backend",
@@ -132,6 +165,12 @@ __all__ = [
     "verify_capability_delegation",
     "verify_instruction_provenance",
     "verify_complex_task_readonly_projection",
+    "verify_disposable_reproduction_receipt",
+    "verify_disposable_reproduction_execution_lock",
+    "verify_disposable_reproduction_run_proof",
+    "verify_gsa_runtime_preflight_projection",
+    "verify_gsa_runtime_preflight_journal",
+    "verify_gsa_no_model_runner_skeleton",
     "verify_synthetic_user_task_evaluation",
     "verify_workspace_first_integrated_run",
     "verify_recovery_authorization",
@@ -139,6 +178,7 @@ __all__ = [
     "verify_sandbox_selection_receipt",
     "verify_security_envelope",
     "verify_sensitive_action_permit",
+    "write_gsa_runtime_preflight_journal",
     "validate_profile_registry_semantics",
     "validate_artifact_registry_semantics",
     "validate_validator_registry_semantics",
