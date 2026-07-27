@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/runner-scoring-input-v0.1.schema.json",
+  "title": "Runner Scoring Input v0.1",
+  "description": "Structured input produced by the scoring handoff from a completed runner output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "input_kind",
+    "run_id",
+    "conversation_id",
+    "created_at",
+    "answer_packet",
+    "gate_results",
+    "journal_summary",
+    "integrity_checks"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "input_kind": { "const": "runner_scoring_input" },
+    "run_id": { "type": "string" },
+    "conversation_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "answer_packet": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["run_id", "task_id", "answer", "claim_boundaries"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "answer": { "type": "object", "additionalProperties": true },
+        "claim_boundaries": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "gate_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ipg_decision",
+        "tool_availability_decision",
+        "source_visibility_decision"
+      ],
+      "properties": {
+        "ipg_decision": { "enum": ["allow", "defer", "block"] },
+        "tool_availability_decision": { "enum": ["allow", "defer", "block"] },
+        "source_visibility_decision": { "enum": ["allow", "defer", "block"] },
+        "ipg_source_summary": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "source_visibility_summary": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "journal_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_count", "terminal_event", "gate_before_model"],
+      "properties": {
+        "event_count": { "type": "integer", "minimum": 0 },
+        "terminal_event": { "type": "string" },
+        "gate_before_model": { "type": "boolean" },
+        "event_types": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "integrity_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_chain_complete",
+        "all_gates_evaluated_before_model",
+        "adapter_call_gated",
+        "output_schema_valid",
+        "no_credential_leak",
+        "source_visibility_annotated"
+      ],
+      "properties": {
+        "gate_chain_complete": { "type": "boolean" },
+        "all_gates_evaluated_before_model": { "type": "boolean" },
+        "adapter_call_gated": { "type": "boolean" },
+        "output_schema_valid": { "type": "boolean" },
+        "no_credential_leak": { "type": "boolean" },
+        "source_visibility_annotated": { "type": "boolean" }
+      }
+    },
+    "scoring_hints": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "proposed_gates": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "claim_type": { "type": "string" },
+        "claim_scope": { "type": "string" },
+        "claim_strength": { "type": "string" },
+        "supporting_source_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "deferred_claims": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

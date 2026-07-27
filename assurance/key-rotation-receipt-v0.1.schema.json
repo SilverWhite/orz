@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/key-rotation-receipt-v0.1.schema.json",
+  "title": "Key Rotation Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "receipt_kind", "receipt_id", "created_at",
+    "operation", "previous_key_id", "new_key_id",
+    "rotation_valid", "key_history_chain", "envelopes_migrated",
+    "checks", "errors", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "key_rotation_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^KRO-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "operation": { "enum": ["rotate", "revoke", "migrate"] },
+    "previous_key_id": { "type": "string", "pattern": "^KEY-[A-Z0-9]+$" },
+    "new_key_id": { "type": "string" },
+    "rotation_valid": { "type": "boolean" },
+    "key_history_chain": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key_id", "operation", "timestamp", "receipt_sha256"],
+        "properties": {
+          "key_id": { "type": "string" },
+          "operation": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "receipt_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "envelopes_migrated": { "type": "integer", "minimum": 0 },
+    "checks": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}

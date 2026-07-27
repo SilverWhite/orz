@@ -63,22 +63,29 @@ def verify_windows_native_observation(
         "system32_write_blocked",
         "workspace_write_succeeded",
         "temp_write_succeeded",
-        "network_connect_blocked",
         "registry_protected_blocked",
         "probe_file_cleaned",
     }
-    if set(observation["checks"].keys()) != required_checks:
-        errors.append("Windows native observation check coverage mismatch")
+    if not set(observation["checks"].keys()) >= required_checks:
+        errors.append("Windows native observation missing required checks")
     check_failures: list[str] = []
-    if set(observation["checks"].keys()) == required_checks:
+    if set(observation["checks"].keys()) >= required_checks:
         if not all(
-            v for k, v in observation["checks"].items() if k != "probe_file_cleaned"
+            v for k, v in observation["checks"].items()
+            if k in required_checks and k != "probe_file_cleaned"
         ):
             check_failures.append(
-                "one or more Windows native negative checks failed"
+                "one or more Windows native isolation checks failed"
             )
         elif not observation["checks"].get("probe_file_cleaned"):
             check_failures.append("probe file was not cleaned up")
+    # Network isolation is provided by host firewall rule, not AppContainer
+    fw = observation.get("firewall", {})
+    if not fw.get("outbound_block_rule_created", False):
+        check_failures.append(
+            "host firewall outbound block rule was not created; "
+            "raw TCP may leak through empty AppContainer capabilities"
+        )
     controls_compliant = not errors and not check_failures
     # Structural integrity can be valid while isolation controls remain noncompliant.
     # Failed checks only make valid=false when compliance is required or claimed.

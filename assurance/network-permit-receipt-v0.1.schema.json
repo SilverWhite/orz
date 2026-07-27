@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/network-permit-receipt-v0.1.schema.json",
+  "title": "Network Permit Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "receipt_kind", "permit_id", "conversation_id",
+    "created_at", "request", "decision", "permit_granted",
+    "one_shot", "checks", "errors", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "network_permit_receipt" },
+    "permit_id": { "type": "string", "pattern": "^NET-[A-Z0-9._-]+$" },
+    "conversation_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "canonical_endpoint", "category", "turn", "attempt"],
+      "properties": {
+        "endpoint": { "type": "string" },
+        "canonical_endpoint": { "type": "string" },
+        "category": { "type": "string", "minLength": 1 },
+        "turn": { "type": "integer", "minimum": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "previous_http_status": { "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 100, "maximum": 599}] },
+        "request_body_sha256": { "type": "string" }
+      }
+    },
+    "decision": { "enum": ["allow", "block"] },
+    "permit_granted": { "type": "boolean" },
+    "one_shot": { "const": true },
+    "checks": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}

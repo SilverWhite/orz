@@ -7,7 +7,26 @@ GSA-CORE adds a narrow domain-neutral multi-file read-only review. They remain
 development/conformance mechanisms rather than a production security boundary.
 """
 
+from .adapter_gate import (
+    AdapterGateBlockedError,
+    AdapterGateContext,
+    enforce_adapter_call,
+    run_adapter_gate_bypass_fixture,
+    verify_adapter_gate_enforcement,
+)
+from .adapter_failure_classifier import (
+    build_failure_recovery_plan,
+    classify_adapter_error,
+)
+from .adapter_output_validator import validate_adapter_output
+from .adapter_preflight import run_adapter_preflight, verify_adapter_preflight
 from .archive import ArchiveController, resume_archived_conversation
+from .archive_journal import (
+    ArchiveJournalWriter,
+    inspect_archive_journal,
+    recover_archive_journal,
+    replay_archive_journal,
+)
 from .archive_verifier import verify_archive
 from .artifact_registry import (
     index_artifact_schemas,
@@ -22,11 +41,22 @@ from .canonical_cli import (
     run_canonical_guarded_cli_real,
     verify_canonical_guarded_cli_run,
 )
+from .child_capability_enforcer import (
+    ChildCapabilityEscalationError,
+    enforce_child_capabilities,
+    verify_child_capability_enforcement,
+)
 from .conversation import ConversationNamespace
 from .deepseek_adapter import (
     build_real_deepseek_answer_packet,
     build_real_deepseek_context,
     call_deepseek_api,
+)
+from .endpoint_canonicalizer import (
+    canonicalize_filesystem_path,
+    canonicalize_network_endpoint,
+    validate_endpoint_list,
+    validate_filesystem_targets,
 )
 from .deepseek_api_observation import (
     run_deepseek_api_observation_pipeline,
@@ -55,6 +85,7 @@ from .guarded_execution import (
     verify_guarded_execution_receipt,
 )
 from .general_science_review import review_general_science_bundle
+from .key_lifecycle import KeyLifecycleController, verify_key_history
 from .keystore import MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore
 from .orientation_runtime_guard import (
     build_orientation_checkpoint,
@@ -86,6 +117,12 @@ from .instruction_provenance_gate import (
     run_instruction_provenance_gate_fixture,
     verify_instruction_provenance_gate_fixture,
     verify_instruction_provenance_gate_receipt,
+)
+from .network_permit_gateway import (
+    NetworkPermitBlockedError,
+    build_network_permit_policy,
+    evaluate_network_permit,
+    verify_network_permit_receipt,
 )
 from .integrated_run import (
     build_workspace_first_frozen_context,
@@ -153,6 +190,15 @@ from .runner import (
     run_gsa_no_model_runner_skeleton,
     verify_gsa_no_model_runner_skeleton,
 )
+from .runner_scoring_handoff import (
+    build_runner_action_manifest,
+    build_scoring_input,
+    compute_claim_boundary_score,
+    compute_deterministic_scores,
+    compute_gate_scores,
+    compute_integrity_score,
+    validate_action_dag,
+)
 from .recovery import (
     authorize_recovery_candidate,
     create_recovery_candidate,
@@ -171,9 +217,15 @@ from .sandbox_verifier import (
     verify_sandbox_selection_receipt,
     verify_windows_native_observation,
 )
+from .storage_adapter import LocalStorageAdapter, StorageAdapter
 from .windows_sandbox import (
     run_windows_native_sandbox_probe,
     windows_native_candidate_from_observation,
+)
+from .workspace_trust import (
+    establish_workspace_trust,
+    verify_workspace_trust,
+    workspace_trust_for_adapter,
 )
 from .user_task_evaluation import (
     load_synthetic_user_task_suite,
@@ -187,7 +239,10 @@ from .validator_bridge import (
 )
 
 __all__ = [
+    "AdapterGateBlockedError",
+    "AdapterGateContext",
     "ArchiveController",
+    "ArchiveJournalWriter",
     "AuditLedger",
     "AssuranceError",
     "ConversationNamespace",
@@ -200,6 +255,14 @@ __all__ = [
     "build_disposable_reproduction_run_proof",
     "build_disposable_reproduction_execution_lock",
     "build_canonical_cli_run_manifest",
+    "build_failure_recovery_plan",
+    "canonicalize_filesystem_path",
+    "canonicalize_network_endpoint",
+    "classify_adapter_error",
+    "compute_claim_boundary_score",
+    "compute_deterministic_scores",
+    "compute_gate_scores",
+    "compute_integrity_score",
     "build_fake_answer_packet",
     "build_fake_retrieval_result",
     "build_orientation_checkpoint",
@@ -222,6 +285,7 @@ __all__ = [
     "execute_guarded_no_model_action",
     "execute_workspace_first_integrated_run",
     "extract_public_outputs_from_runner_stream",
+    "enforce_adapter_call",
     "evaluate_instruction_provenance_gate",
     "evaluate_runtime_stagnation_guard",
     "evaluate_source_visibility_gate",
@@ -230,6 +294,7 @@ __all__ = [
     "evaluate_tool_belief_stagnation",
     "initialize_workspace_marker",
     "index_artifact_schemas",
+    "inspect_archive_journal",
     "inspect_gsa_runner_journal_recovery",
     "issue_sensitive_action_permit",
     "record_instruction_provenance",
@@ -244,17 +309,24 @@ __all__ = [
     "load_readonly_task_projection",
     "load_task_contract",
     "load_synthetic_user_task_suite",
+    "LocalStorageAdapter",
     "project_complex_task_readonly",
     "probe_tool_availability",
+    "recover_archive_journal",
     "recovery_permit_binding",
+    "replay_archive_journal",
     "resolve_effective_profile",
     "resume_archived_conversation",
     "render_visibility_summary",
     "run_disposable_reproduction",
+    "run_adapter_gate_bypass_fixture",
+    "run_adapter_preflight",
     "run_canonical_guarded_cli",
     "run_canonical_guarded_cli_real",
     "build_real_deepseek_answer_packet",
     "build_real_deepseek_context",
+    "build_runner_action_manifest",
+    "build_scoring_input",
     "call_deepseek_api",
     "run_deepseek_api_observation_pipeline",
     "run_deepseek_stream_observation_fixture",
@@ -268,6 +340,7 @@ __all__ = [
     "run_windows_native_sandbox_probe",
     "run_general_science_validators",
     "select_execution_backend",
+    "StorageAdapter",
     "verify_archive",
     "verify_audit_seal",
     "verify_action_authorization",
@@ -305,8 +378,14 @@ __all__ = [
     "write_orientation_stagnation_runtime_journal",
     "validate_profile_registry_semantics",
     "validate_artifact_registry_semantics",
+    "validate_endpoint_list",
+    "validate_filesystem_targets",
     "validate_retrieval_result",
     "validate_validator_registry_semantics",
+    "validate_action_dag",
+    "validate_adapter_output",
+    "verify_adapter_gate_enforcement",
+    "verify_adapter_preflight",
     "windows_native_candidate_from_observation",
     "windows_native_strict_candidate",
 ]

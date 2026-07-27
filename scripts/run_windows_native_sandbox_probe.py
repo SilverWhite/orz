@@ -72,6 +72,7 @@ def main() -> int:
             "observation_path": str(output),
             "outcome": observation["outcome"],
             "checks": observation["checks"],
+            "firewall": observation.get("firewall", {}),
             "candidate_compliance": candidate["compliance_status"],
             "rejection_reasons": candidate.get("rejection_reasons", []),
         }
