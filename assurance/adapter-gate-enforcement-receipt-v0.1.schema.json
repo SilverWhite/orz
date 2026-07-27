@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/adapter-gate-enforcement-receipt-v0.1.schema.json",
+  "title": "Adapter Gate Enforcement Receipt v0.1",
+  "description": "Proof that a model/tool adapter call was gated through instruction provenance before execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "conversation_id",
+    "run_id",
+    "created_at",
+    "gate_valid",
+    "gate_decision",
+    "ipg_receipt_sha256",
+    "ipg_context_sha256",
+    "adapter_id",
+    "adapter_call_allowed",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "adapter_gate_enforcement_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^AGE-[A-Z0-9._-]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "run_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "gate_valid": { "type": "boolean" },
+    "gate_decision": { "enum": ["allow", "defer", "block"] },
+    "ipg_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "ipg_context_sha256": { "$ref": "#/$defs/sha256" },
+    "adapter_id": { "type": "string", "minLength": 1 },
+    "adapter_call_allowed": { "type": "boolean" },
+    "bypass_attempted": { "type": "boolean" },
+    "bypass_details": { "type": "string" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ipg_evaluated_before_adapter",
+        "ipg_receipt_present",
+        "ipg_receipt_valid",
+        "gate_decision_respected",
+        "no_direct_adapter_call",
+        "no_replay_attack"
+      ],
+      "properties": {
+        "ipg_evaluated_before_adapter": { "type": "boolean" },
+        "ipg_receipt_present": { "type": "boolean" },
+        "ipg_receipt_valid": { "type": "boolean" },
+        "gate_decision_respected": { "type": "boolean" },
+        "no_direct_adapter_call": { "type": "boolean" },
+        "no_replay_attack": { "type": "boolean" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

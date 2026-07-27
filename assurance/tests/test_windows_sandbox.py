@@ -80,8 +80,14 @@ class WindowsNativeObservationSchemaTests(unittest.TestCase):
                 "memory_limit_bytes": 268435456,
             },
             "process": {
+                "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+            },
+            "firewall": {
+                "outbound_block_rule_created": True,
+                "rule_name": "GSA-P2-Native-Sandbox-test",
+                "diagnostic": "test fixture",
             },
             "checks": {
                 "non_admin": True,
@@ -123,8 +129,14 @@ class WindowsNativeObservationSchemaTests(unittest.TestCase):
                 "memory_limit_bytes": 268435456,
             },
             "process": {
+                "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+            },
+            "firewall": {
+                "outbound_block_rule_created": False,
+                "rule_name": "",
+                "diagnostic": "test fixture",
             },
             "checks": {
                 "non_admin": True,
@@ -168,8 +180,14 @@ class WindowsNativeObservationVerifierTests(unittest.TestCase):
                 "memory_limit_bytes": 268435456,
             },
             "process": {
+                "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+            },
+            "firewall": {
+                "outbound_block_rule_created": True,
+                "rule_name": "GSA-P2-Native-Sandbox-test-fixture",
+                "diagnostic": "test fixture",
             },
             "checks": {
                 "non_admin": True,
@@ -235,7 +253,7 @@ class WindowsNativeObservationVerifierTests(unittest.TestCase):
             ASSURANCE / "windows-native-sandbox-profile-v0.1.json"
         )
         obs = self._valid_observation()
-        obs["checks"]["network_connect_blocked"] = False
+        obs["checks"]["system32_write_blocked"] = False
         result = verify_windows_native_observation(
             obs, profile=profile, profile_path=None, require_compliant=True
         )
@@ -299,8 +317,14 @@ class WindowsNativeCandidateTests(unittest.TestCase):
                 "memory_limit_bytes": 268435456,
             },
             "process": {
+                "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+            },
+            "firewall": {
+                "outbound_block_rule_created": True,
+                "rule_name": "GSA-P2-Native-Sandbox-test",
+                "diagnostic": "test fixture",
             },
             "checks": {
                 "non_admin": True,
@@ -343,8 +367,14 @@ class WindowsNativeCandidateTests(unittest.TestCase):
                 "memory_limit_bytes": 268435456,
             },
             "process": {
+                "pid": 0,
                 "exit_code": 7,
                 "shell_used": False,
+            },
+            "firewall": {
+                "outbound_block_rule_created": False,
+                "rule_name": "",
+                "diagnostic": "test fixture",
             },
             "checks": {
                 "non_admin": True,
@@ -399,7 +429,12 @@ class WindowsNativeCandidateTests(unittest.TestCase):
                 "kill_on_close": True,
                 "memory_limit_bytes": 268435456,
             },
-            "process": {"exit_code": 0, "shell_used": False},
+            "process": {"pid": 0, "exit_code": 0, "shell_used": False},
+            "firewall": {
+                "outbound_block_rule_created": False,
+                "rule_name": "",
+                "diagnostic": "test fixture",
+            },
             "checks": {
                 "non_admin": True,
                 "system32_write_blocked": True,

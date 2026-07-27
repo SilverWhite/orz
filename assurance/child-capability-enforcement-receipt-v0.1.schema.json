@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/child-capability-enforcement-receipt-v0.1.schema.json",
+  "title": "Child Capability Enforcement Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "receipt_kind", "receipt_id", "created_at",
+    "child", "parent_envelope_id", "requested_capabilities",
+    "parent_allowed", "parent_denied", "escalation_detected",
+    "outcome", "capability_enforced", "checks", "errors", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "child_capability_enforcement_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^CCE-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "child": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "child_id"],
+      "properties": {
+        "kind": { "enum": ["child_process", "child_agent", "remote_mcp"] },
+        "child_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "parent_envelope_id": { "type": "string" },
+    "requested_capabilities": { "type": "array", "items": { "type": "string" } },
+    "parent_allowed": { "type": "array", "items": { "type": "string" } },
+    "parent_denied": { "type": "array", "items": { "type": "string" } },
+    "escalation_detected": { "type": "array", "items": { "type": "string" } },
+    "outcome": { "enum": ["enforced", "blocked"] },
+    "capability_enforced": { "type": "boolean" },
+    "checks": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}

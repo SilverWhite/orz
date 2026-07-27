@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/adapter-preflight-receipt-v0.1.schema.json",
+  "title": "Adapter Preflight Receipt v0.1",
+  "description": "Proof that an adapter was preflight-checked before a model call.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "conversation_id",
+    "run_id",
+    "created_at",
+    "adapter_id",
+    "preflight_passed",
+    "checks",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "adapter_preflight_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^APF-[A-Z0-9._-]+$" },
+    "conversation_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "adapter_id": { "type": "string", "minLength": 1 },
+    "preflight_passed": { "type": "boolean" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_canonicalized",
+        "credential_readable",
+        "credential_not_persisted",
+        "gate_chain_complete",
+        "ipg_receipt_valid",
+        "adapter_capabilities_match_manifest",
+        "output_schema_known"
+      ],
+      "properties": {
+        "endpoint_canonicalized": { "type": "boolean" },
+        "credential_readable": { "type": "boolean" },
+        "credential_not_persisted": { "type": "boolean" },
+        "gate_chain_complete": { "type": "boolean" },
+        "ipg_receipt_valid": { "type": "boolean" },
+        "adapter_capabilities_match_manifest": { "type": "boolean" },
+        "output_schema_known": { "type": "boolean" }
+      }
+    },
+    "manifest_checks": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "provider": { "type": "string" },
+        "model_id": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "structured_output": { "type": "boolean" },
+        "streaming": { "type": "boolean" }
+      }
+    },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

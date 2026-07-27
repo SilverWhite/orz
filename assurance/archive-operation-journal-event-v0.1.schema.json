@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/archive-operation-journal-event-v0.1.schema.json",
+  "title": "Archive Operation Journal Event v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "archive_id",
+    "sequence",
+    "timestamp",
+    "conversation_id",
+    "event_type",
+    "previous_event_sha256",
+    "payload",
+    "payload_sha256",
+    "event_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "archive_id": { "type": "string", "pattern": "^ARC-[A-Z0-9._-]+$" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "event_type": {
+      "enum": [
+        "archive_started",
+        "category_started",
+        "file_deleted",
+        "file_failed",
+        "category_completed",
+        "archive_completed",
+        "archive_failed",
+        "archive_recovered"
+      ]
+    },
+    "previous_event_sha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "payload": { "type": "object" },
+    "payload_sha256": { "$ref": "#/$defs/sha256" },
+    "event_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "sequence": { "const": 0 } },
+        "required": ["sequence"]
+      },
+      "then": {
+        "properties": { "previous_event_sha256": { "type": "null" } }
+      },
+      "else": {
+        "properties": { "previous_event_sha256": { "$ref": "#/$defs/sha256" } }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
