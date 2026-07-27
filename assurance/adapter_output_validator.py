@@ -71,7 +71,10 @@ def validate_adapter_output(
                 checks["source_gate_respected"] = False
             else:
                 checks["source_gate_respected"] = True
-        except Exception:
+        except Exception as exc:
+            errors.append(
+                f"source gate check failed with unexpected error: {exc}"
+            )
             checks["source_gate_respected"] = False
     else:
         checks["source_gate_respected"] = True  # nothing to check

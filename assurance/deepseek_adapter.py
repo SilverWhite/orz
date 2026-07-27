@@ -119,11 +119,23 @@ def _read_windows_credential(target: str) -> str:
 
         result = secret
 
-        # Best-effort zero the credential blob via ctypes.memset
+        # Best-effort zero the credential blob via ctypes.memset.
+        # A failure here is non-fatal but must be traceable.
         try:
             ctypes.memset(blob_ptr, 0, blob_size)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Credential zeroing failure: the blob may persist in memory.
+            # Record via the only available path — attach the diagnostic
+            # context to the returned result so the caller can surface it.
+            result = secret
+            # We cannot raise (credential is already read), so we note the
+            # zeroing failure via the AssuranceError path on the credential
+            # read function.  At minimum log to stderr so it is never silent.
+            import sys
+            print(
+                f"[GSA] credential zeroing failed: {exc}",
+                file=sys.stderr,
+            )
 
         return result
     finally:

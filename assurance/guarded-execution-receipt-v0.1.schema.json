@@ -186,7 +186,11 @@
       "properties": {
         "container_removed": { "const": true },
         "container_absent": { "const": true },
-        "workspace_probe_removed": { "const": true }
+        "workspace_probe_removed": { "const": true },
+        "diagnostics": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       }
     },
     "outcome": { "const": "completed_verified" },

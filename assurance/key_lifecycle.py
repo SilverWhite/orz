@@ -138,6 +138,7 @@ class KeyLifecycleController:
 
         # Migrate envelopes (re-sign with new key)
         envelopes_migrated = 0
+        envelope_migration_errors: list[str] = []
         if envelopes_to_migrate:
             for env_path in envelopes_to_migrate:
                 try:
@@ -145,9 +146,15 @@ class KeyLifecycleController:
                         env = load_json(env_path)
                         checks["envelope_migration_attempted"] = True
                         envelopes_migrated += 1
-                except Exception:
-                    pass
-        checks["envelopes_migrated"] = envelopes_migrated > 0 if envelopes_to_migrate else True
+                except Exception as exc:
+                    envelope_migration_errors.append(
+                        f"failed to migrate envelope {env_path}: {exc}"
+                    )
+        checks["envelopes_migrated"] = (
+            envelopes_migrated > 0 if envelopes_to_migrate else True
+        )
+        if envelope_migration_errors:
+            errors.extend(envelope_migration_errors)
 
         rotation_valid = not errors
 
@@ -288,8 +295,11 @@ def verify_key_history(
                             if sha256_file(child) == receipt_sha:
                                 found = True
                                 break
-                        except OSError:
-                            pass
+                        except OSError as exc:
+                            errors.append(
+                                f"entry {idx}: cannot read receipt candidate "
+                                f"{child.name}: {exc}"
+                            )
             if not found:
                 errors.append(f"entry {idx}: receipt not found (sha256={receipt_sha[:16]}...)")
 

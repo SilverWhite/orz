@@ -214,7 +214,9 @@ def _validate_disposable_workspace(workspace: Path) -> Path:
     return resolved
 
 
-def _derive_appcontainer_sid(app_name: str) -> ctypes.c_void_p | None:
+def _derive_appcontainer_sid(
+    app_name: str, *, diagnostics: list[str] | None = None
+) -> ctypes.c_void_p | None:
     if os.name != "nt":
         return None
     try:
@@ -231,11 +233,17 @@ def _derive_appcontainer_sid(app_name: str) -> ctypes.c_void_p | None:
         if hr != 0 or not sid_ptr:
             return None
         return sid_ptr
-    except OSError:
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"DeriveAppContainerSidFromAppContainerName({app_name}) failed: {exc}"
+            )
         return None
 
 
-def _create_appcontainer_profile(app_name: str) -> ctypes.c_void_p | None:
+def _create_appcontainer_profile(
+    app_name: str, *, diagnostics: list[str] | None = None
+) -> ctypes.c_void_p | None:
     if os.name != "nt":
         return None
     try:
@@ -256,11 +264,17 @@ def _create_appcontainer_profile(app_name: str) -> ctypes.c_void_p | None:
         if status != 0 or not sid_ptr:
             return None
         return sid_ptr
-    except OSError:
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"CreateAppContainerProfile({app_name}) failed: {exc}"
+            )
         return None
 
 
-def _delete_appcontainer_profile(app_name: str) -> bool:
+def _delete_appcontainer_profile(
+    app_name: str, *, diagnostics: list[str] | None = None
+) -> bool:
     if os.name != "nt":
         return False
     try:
@@ -269,11 +283,17 @@ def _delete_appcontainer_profile(app_name: str) -> bool:
         userenv.DeleteAppContainerProfile.restype = wintypes.LONG
         status = userenv.DeleteAppContainerProfile(app_name)
         return status == 0
-    except OSError:
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"DeleteAppContainerProfile({app_name}) failed: {exc}"
+            )
         return False
 
 
-def _free_sid(sid: ctypes.c_void_p) -> None:
+def _free_sid(
+    sid: ctypes.c_void_p, *, diagnostics: list[str] | None = None
+) -> None:
     if not sid:
         return
     try:
@@ -281,14 +301,15 @@ def _free_sid(sid: ctypes.c_void_p) -> None:
         advapi32.FreeSid.argtypes = [ctypes.c_void_p]
         advapi32.FreeSid.restype = ctypes.c_void_p
         advapi32.FreeSid(sid)
-    except OSError:
-        pass
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"FreeSid failed: {exc}")
 
 
 _FIREWALL_RULE_PREFIX = "GSA-P2-Native-Sandbox"
 
 
-def _is_elevated() -> bool:
+def _is_elevated(*, diagnostics: list[str] | None = None) -> bool:
     """Check whether the current process is running with administrator privileges."""
     if os.name != "nt":
         return False
@@ -317,7 +338,9 @@ def _is_elevated() -> bool:
             return bool(is_member.value)
         finally:
             advapi32.FreeSid(admin_sid)
-    except Exception:
+    except Exception as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"_is_elevated check failed: {exc}")
         return False
 
 
@@ -414,8 +437,8 @@ def _create_firewall_outbound_block_rule(
                     shell=False,
                     timeout=10,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                diag_parts.append(f"wfp_settings_exc={exc}")
             return rule_name, True, "; ".join(diag_parts)
         return None, False, "; ".join(diag_parts)
     except Exception as exc:
@@ -423,7 +446,9 @@ def _create_firewall_outbound_block_rule(
         return None, False, "; ".join(diag_parts)
 
 
-def _delete_firewall_rule(rule_name: str) -> bool:
+def _delete_firewall_rule(
+    rule_name: str, *, diagnostics: list[str] | None = None
+) -> bool:
     """Delete a Windows Firewall rule by display name. Best-effort."""
     if os.name != "nt" or not rule_name:
         return False
@@ -438,12 +463,19 @@ def _delete_firewall_rule(rule_name: str) -> bool:
             timeout=10,
         )
         return True
-    except Exception:
+    except Exception as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"delete firewall rule '{rule_name}' failed: {exc}"
+            )
         return False
 
 
 def _grant_appcontainer_workspace_access(
-    workspace: Path, appcontainer_sid: ctypes.c_void_p
+    workspace: Path,
+    appcontainer_sid: ctypes.c_void_p,
+    *,
+    diagnostics: list[str] | None = None,
 ) -> bool:
     if os.name != "nt":
         return False
@@ -465,11 +497,17 @@ def _grant_appcontainer_workspace_access(
             timeout=15,
         )
         return result.returncode == 0
-    except Exception:
+    except Exception as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"icacls grant for {workspace} failed: {exc}"
+            )
         return False
 
 
-def _process_token_is_appcontainer(process_handle: wintypes.HANDLE) -> bool:
+def _process_token_is_appcontainer(
+    process_handle: wintypes.HANDLE, *, diagnostics: list[str] | None = None
+) -> bool:
     if os.name != "nt" or not process_handle:
         return False
     try:
@@ -507,15 +545,25 @@ def _process_token_is_appcontainer(process_handle: wintypes.HANDLE) -> bool:
             return bool(ok and is_ac.value)
         finally:
             kernel32.CloseHandle(token)
-    except OSError:
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"process token AppContainer check failed: {exc}"
+            )
         return False
 
 
-def _load_probe_result_checks(result_file: Path) -> dict[str, bool]:
+def _load_probe_result_checks(
+    result_file: Path, *, diagnostics: list[str] | None = None
+) -> dict[str, bool]:
     """Load probe JSON, tolerating UTF-8 BOM from older writers."""
     try:
         raw = result_file.read_bytes()
-    except OSError:
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"cannot read probe result {result_file}: {exc}"
+            )
         return {}
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
@@ -615,6 +663,7 @@ def run_windows_native_sandbox_probe(
 
     observation_id = f"WNO-{uuid.uuid4().hex.upper()}"
     probe_path = resolved_workspace / PROBE_FILE
+    probe_diags: list[str] = []
 
     ps_exe = os.path.join(
         os.environ.get("SystemRoot", r"C:\Windows"),
@@ -661,11 +710,15 @@ def run_windows_native_sandbox_probe(
 
     try:
         if os.name == "nt":
-            appcontainer_sid = _derive_appcontainer_sid(app_name)
+            appcontainer_sid = _derive_appcontainer_sid(
+                app_name, diagnostics=probe_diags
+            )
             if appcontainer_sid:
                 sid_derived = True
 
-            admin_sid = _create_appcontainer_profile(app_name)
+            admin_sid = _create_appcontainer_profile(
+                app_name, diagnostics=probe_diags
+            )
             if admin_sid:
                 _free_sid(appcontainer_sid)
                 appcontainer_sid = admin_sid
@@ -681,7 +734,7 @@ def run_windows_native_sandbox_probe(
             job_created = True
 
         grant_ok = _grant_appcontainer_workspace_access(
-            resolved_workspace, appcontainer_sid
+            resolved_workspace, appcontainer_sid, diagnostics=probe_diags
         )
 
         if not grant_ok:
@@ -806,7 +859,9 @@ def run_windows_native_sandbox_probe(
         process_pid = proc_info.dwProcessId
         thread_handle = proc_info.hThread
 
-        if not _process_token_is_appcontainer(process_handle):
+        if not _process_token_is_appcontainer(
+            process_handle, diagnostics=probe_diags
+        ):
             _terminate_suspended_process(process_handle, thread_handle)
             process_handle = None
             raise AssuranceError(
@@ -861,11 +916,13 @@ def run_windows_native_sandbox_probe(
 
         result_file = resolved_workspace / "_p2_probe_result.json"
         if result_file.is_file():
-            checks = _load_probe_result_checks(result_file)
+            checks = _load_probe_result_checks(result_file, diagnostics=probe_diags)
             try:
                 result_file.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                probe_diags.append(
+                    f"cannot unlink probe result file {result_file}: {exc}"
+                )
         elif exit_code == 0:
             checks = {
                 "non_admin": False,
@@ -879,22 +936,25 @@ def run_windows_native_sandbox_probe(
 
     finally:
         if firewall_rule_created and firewall_rule_name:
-            _delete_firewall_rule(firewall_rule_name)
+            _delete_firewall_rule(firewall_rule_name, diagnostics=probe_diags)
         if job:
             _close_handle(job)
         if process_handle:
             _close_handle(process_handle)
         if appcontainer_sid and not profile_created:
-            _free_sid(appcontainer_sid)
+            _free_sid(appcontainer_sid, diagnostics=probe_diags)
 
         if profile_created:
-            _delete_appcontainer_profile(app_name)
+            _delete_appcontainer_profile(app_name, diagnostics=probe_diags)
 
         if probe_path.exists() or probe_path.is_symlink():
             try:
                 probe_path.unlink()
                 probe_file_cleaned = not probe_path.exists()
-            except OSError:
+            except OSError as exc:
+                probe_diags.append(
+                    f"probe file cleanup failed for {probe_path}: {exc}"
+                )
                 probe_file_cleaned = False
 
     checks["probe_file_cleaned"] = probe_file_cleaned
@@ -904,6 +964,7 @@ def run_windows_native_sandbox_probe(
         "observation_kind": "windows_native_strict_sandbox_observation",
         "observation_id": observation_id,
         "created_at": utc_now(),
+        "diagnostics": probe_diags,
         "profile_sha256": sha256_file(
             profile_path or ASSURANCE_ROOT / "windows-native-sandbox-profile-v0.1.json"
         ),

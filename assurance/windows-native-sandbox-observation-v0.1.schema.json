@@ -18,6 +18,7 @@
     "checks",
     "outcome",
     "evidence_status",
+    "diagnostics",
     "limitations"
   ],
   "properties": {
@@ -106,6 +107,10 @@
     },
     "outcome": { "enum": ["compliant", "noncompliant"] },
     "evidence_status": { "const": "observed" },
+    "diagnostics": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "limitations": {
       "type": "array",
       "minItems": 1,
