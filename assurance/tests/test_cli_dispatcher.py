@@ -40,7 +40,8 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertEqual(report["report_kind"], "gsa_cli_doctor_report")
         self.assertIsNone(report["repository_check"])
         self.assertEqual(report["runtime_boundaries"]["default_network"], "disabled")
-        self.assertIn("run", report["entrypoints"])
+        self.assertIn("run_fake", report["entrypoints"])
+        self.assertIn("run_real", report["entrypoints"])
 
     def test_source_gate_json_uses_visibility_receipt(self) -> None:
         exit_code, receipt = self._capture_json(

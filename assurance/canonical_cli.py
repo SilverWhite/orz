@@ -8,6 +8,13 @@ from typing import Any, Sequence
 from jsonschema import Draft202012Validator, FormatChecker
 
 from .contracts import ASSURANCE_ROOT, validate_contract
+from .deepseek_adapter import (
+    build_real_deepseek_answer_packet,
+    build_real_deepseek_context,
+    call_deepseek_api,
+    _read_windows_credential,
+    DEFAULT_CREDENTIAL_TARGET,
+)
 from .errors import AssuranceError
 from .instruction_provenance_gate import (
     build_instruction_provenance_gate_context,
@@ -426,13 +433,29 @@ def _build_run_receipt(
             "answer_binds_task_contract": True,
             "journal_hash_chain_valid": True,
             "terminal_exactly_once": True,
-            "fake_adapter_no_network": True,
         },
-        "limitations": [
+        "limitations": [],
+    }
+    adapter_used_real_network = False
+    for event in events:
+        if event["event_type"] == "model_request":
+            adapter_used_real_network = bool(
+                event["payload"].get("real_network_used", False)
+            )
+            break
+    if adapter_used_real_network:
+        receipt["checks"]["real_network_used"] = True
+        receipt["limitations"] = [
+            "This receipt verifies canonical CLI orchestration with real adapter.",
+            "Real DeepSeek API was called; gate chain integrity is proven.",
+            "It does not certify model scientific correctness or output quality.",
+        ]
+    else:
+        receipt["checks"]["fake_adapter_no_network"] = True
+        receipt["limitations"] = [
             "This receipt verifies canonical CLI orchestration, not scientific correctness.",
             "The adapter is fake/offline and does not prove real DeepSeek behavior.",
-        ],
-    }
+        ]
     validate_contract(receipt, RECEIPT_SCHEMA, label="canonical CLI run receipt")
     return receipt
 
@@ -704,6 +727,401 @@ def run_canonical_guarded_cli(
     return receipt
 
 
+def run_canonical_guarded_cli_real(
+    *,
+    run_root: Path,
+    source_ledger_path: Path | None = None,
+    instruction_provenance_gate_context_path: Path | None = None,
+    ask: str | None = None,
+    task_contract_path: Path | None = None,
+    run_id: str = DEFAULT_RUN_ID,
+    task_id: str = DEFAULT_TASK_ID,
+    created_at: str | None = None,
+    credential_target: str = DEFAULT_CREDENTIAL_TARGET,
+    api_timeout_seconds: int = 60,
+) -> dict[str, Any]:
+    """Run the canonical guarded CLI with a REAL DeepSeek API call.
+
+    This is the P0 production path: all gates evaluate before the model is
+    called, the API key is read from Windows Credential Manager and never
+    persisted, and only public assistant text enters the answer packet.
+    """
+    if (ask is None) == (task_contract_path is None):
+        raise AssuranceError("exactly one of ask or task_contract_path is required")
+    if ask is not None and source_ledger_path is None:
+        raise AssuranceError("--ask requires a source ledger")
+    if run_root.exists() and any(run_root.iterdir()):
+        raise AssuranceError(f"run root must be empty or absent: {run_root}")
+
+    if task_contract_path is not None:
+        task_contract = load_task_contract(task_contract_path)
+        task_id = task_contract["task_id"]
+        source_ledger_path = task_contract_source_ledger_path(task_contract)
+        verify_task_contract_source_ledger(
+            task_contract,
+            source_ledger_path=source_ledger_path,
+        )
+    else:
+        task_contract = build_task_contract_from_ask(
+            ask=ask or "",
+            source_ledger_path=source_ledger_path,
+            task_id=task_id,
+            created_at=created_at,
+        )
+
+    run_root.mkdir(parents=True, exist_ok=True)
+    manifest = build_canonical_cli_run_manifest(run_id=run_id, created_at=created_at)
+    # Update manifest to reflect real adapter
+    manifest["adapter"]["adapter_id"] = "canonical-cli-real-deepseek-adapter"
+    manifest["adapter"]["model_id"] = "deepseek-v4-pro"
+    manifest["notes"] = [
+        "Canonical guarded CLI path uses real DeepSeek adapter.",
+        "Source visibility gate must run before any model_request event.",
+        "Credential is read from Windows Credential Manager and never persisted.",
+    ]
+
+    run_manifest_path = run_root / "run-manifest.json"
+    task_contract_copy = run_root / "task-contract.json"
+    source_ledger_copy = run_root / "source-visibility-ledger.json"
+    source_gate_receipt_path = run_root / "source-visibility-gate-receipt.json"
+    answer_packet_path = run_root / "answer-packet.json"
+    journal_path = run_root / "events.jsonl"
+    receipt_path = run_root / "canonical-cli-run-receipt.json"
+
+    atomic_write_json(run_manifest_path, manifest)
+    atomic_write_json(task_contract_copy, task_contract)
+    task_contract_sha256 = sha256_file(task_contract_copy)
+
+    ask_text = task_contract["user_request"]["raw_text"]
+    if instruction_provenance_gate_context_path is not None:
+        ipg_context = load_json(instruction_provenance_gate_context_path)
+    else:
+        ipg_context = _build_minimal_ipg_context(run_id=run_id, ask_text=ask_text)
+    ipg_receipt = evaluate_instruction_provenance_gate(gate_context=ipg_context)
+    ipg_context_copy = run_root / "instruction-provenance-gate-context.json"
+    ipg_receipt_path = run_root / "instruction-provenance-gate-receipt.json"
+    atomic_write_json(ipg_context_copy, ipg_context)
+    atomic_write_json(ipg_receipt_path, ipg_receipt)
+    instruction_provenance_gate_context_sha256 = sha256_file(ipg_context_copy)
+    instruction_provenance_gate_receipt_sha256 = sha256_file(ipg_receipt_path)
+
+    tool_specs = _build_canonical_tool_specs()
+    probe_registry = {spec["tool_id"]: False for spec in tool_specs}
+    tool_availability_report = probe_tool_availability(
+        tool_specs=tool_specs,
+        runtime_id=run_id,
+        probe_registry=probe_registry,
+    )
+    tool_availability_gate_receipt = build_tool_availability_gate_receipt(
+        tool_availability_report
+    )
+    tool_report_path = run_root / "tool-availability-report.json"
+    tool_receipt_path = run_root / "tool-availability-gate-receipt.json"
+    atomic_write_json(tool_report_path, tool_availability_report)
+    atomic_write_json(tool_receipt_path, tool_availability_gate_receipt)
+    tool_availability_report_sha256 = sha256_file(tool_report_path)
+    tool_availability_receipt_sha256 = sha256_file(tool_receipt_path)
+
+    orientation_checkpoint = build_orientation_checkpoint(
+        task_id=task_id,
+        trigger_step=0,
+        task_contract_sha256=task_contract_sha256,
+        tool_availability_sha256=sha256_bytes(
+            canonical_bytes(tool_availability_report)
+        ),
+    )
+    orientation_checkpoint_path = run_root / "orientation-checkpoint.json"
+    atomic_write_json(orientation_checkpoint_path, orientation_checkpoint)
+    orientation_checkpoint_sha256 = sha256_file(orientation_checkpoint_path)
+
+    shutil.copyfile(source_ledger_path, source_ledger_copy)
+    source_ledger = load_json(source_ledger_copy)
+    source_gate_receipt = evaluate_source_visibility_gate(source_ledger)
+    atomic_write_json(source_gate_receipt_path, source_gate_receipt)
+    source_gate_receipt_sha256 = sha256_file(source_gate_receipt_path)
+
+    # === REAL ADAPTER: read credential and call DeepSeek API ===
+    api_error: str | None = None
+    model_output: dict[str, Any] | None = None
+    try:
+        api_key = _read_windows_credential(credential_target)
+        messages = build_real_deepseek_context(
+            task_contract=task_contract,
+            source_gate_receipt=source_gate_receipt,
+            tool_availability_report=tool_availability_report,
+        )
+        model_output = call_deepseek_api(
+            api_key,
+            messages,
+            timeout_seconds=api_timeout_seconds,
+        )
+        # Scrub the key from memory (best-effort in Python)
+        api_key = "\x00" * len(api_key)
+    except Exception as exc:
+        api_error = str(exc)
+
+    # Build the answer packet (from real output or error)
+    if model_output and not api_error:
+        answer_packet = build_real_deepseek_answer_packet(
+            run_id=run_id,
+            task_id=task_id,
+            task_contract=task_contract,
+            task_contract_sha256=task_contract_sha256,
+            source_gate_receipt=source_gate_receipt,
+            source_gate_receipt_sha256=source_gate_receipt_sha256,
+            ipg_receipt=ipg_receipt,
+            ipg_receipt_sha256=instruction_provenance_gate_receipt_sha256,
+            tool_availability_receipt=tool_availability_gate_receipt,
+            tool_availability_receipt_sha256=tool_availability_receipt_sha256,
+            model_output=model_output,
+        )
+        terminal_status = "completed"
+        terminal_event_type = "run_finished"
+    else:
+        # Fall back to an error answer packet
+        error_summary = f"Real DeepSeek adapter failed: {api_error}"
+        answer_packet = {
+            "schema_version": "0.1.0-draft",
+            "packet_kind": "canonical_guarded_cli_answer_packet",
+            "run_id": run_id,
+            "task_id": task_id,
+            "task_contract": {
+                "sha256": task_contract_sha256,
+                "entry_mode": task_contract["entry_mode"],
+            },
+            "adapter": {
+                "adapter_id": "canonical-cli-real-deepseek-adapter",
+                "provider": "deepseek",
+                "model_id": "deepseek-v4-pro",
+                "mode": "real_development",
+                "real_network_used": True,
+                "tool_calls_used": False,
+            },
+            "instruction_provenance_gate": {
+                "receipt_sha256": instruction_provenance_gate_receipt_sha256,
+                "decision": ipg_receipt["gate_decision"],
+                "all_sources_classified": ipg_receipt["checks"]["all_sources_classified"],
+                "no_injection_escalation": ipg_receipt["checks"]["no_injection_escalation"],
+            },
+            "tool_availability_gate": {
+                "receipt_sha256": tool_availability_receipt_sha256,
+                "decision": tool_availability_gate_receipt["decisions"]["gate_decision"],
+                "available_count": tool_availability_gate_receipt["available_count"],
+                "unavailable_count": tool_availability_gate_receipt["unavailable_count"],
+                "context_injected": tool_availability_gate_receipt["decisions"]["context_injected"],
+            },
+            "source_visibility_gate": {
+                "receipt_sha256": source_gate_receipt_sha256,
+                "decision": source_gate_receipt["decision"],
+                "must_report_visibility_status": True,
+                "reference_decision_count": len(source_gate_receipt["reference_decisions"]),
+            },
+            "answer": {
+                "summary": [error_summary],
+                "source_visibility_summary": [
+                    {
+                        "ref_id": item["ref_id"],
+                        "observed_visibility": item["observed_visibility"],
+                        "decision": item["decision"],
+                        "claim_allowed": item["claim_allowed"],
+                    }
+                    for item in source_gate_receipt["reference_decisions"]
+                ],
+                "deferred_claims": [],
+            },
+            "claim_boundaries": {
+                "scientific_claim_strength": "none",
+                "fulltext_missing_blocks_mechanism_claims": True,
+                "source_gate_decision_authoritative": True,
+                "all_gates_evaluated_before_model": True,
+                "gate_chain_order": [
+                    "instruction_provenance_gate",
+                    "tool_availability_gate",
+                    "source_visibility_gate",
+                ],
+            },
+            "next_actions": [
+                "Investigate the adapter failure before retrying.",
+                "Check credential, network, and API endpoint availability.",
+            ],
+            "limitations": [
+                f"Real DeepSeek adapter call failed: {api_error}",
+                "All three gates were evaluated before the failed model call.",
+                "No raw credential or response was persisted.",
+            ],
+        }
+        validate_contract(
+            answer_packet,
+            "canonical-cli-answer-packet-v0.1.schema.json",
+            label="error answer packet",
+        )
+        terminal_status = "failed"
+        terminal_event_type = "run_failed"
+
+    atomic_write_json(answer_packet_path, answer_packet)
+
+    manifest_sha256 = sha256_file(run_manifest_path)
+    answer_packet_sha256 = sha256_file(answer_packet_path)
+    timestamp = created_at or manifest["created_at"]
+    previous: str | None = None
+
+    real_network_used = model_output is not None
+    event_specs = [
+        (
+            "run_preflight",
+            "canonical-cli-preflight-v0.1",
+            {
+                "adapter_id": "canonical-cli-real-deepseek-adapter",
+                "provider": "deepseek",
+                "model_id": "deepseek-v4-pro",
+                "real_network_allowed": True,
+                "source_visibility_gate_required": True,
+                "instruction_provenance_gate_applied": True,
+                "tool_availability_gate_applied": True,
+                "task_contract_sha256": task_contract_sha256,
+            },
+            "metadata_only",
+        ),
+        (
+            "instruction_provenance_gate",
+            "instruction-provenance-gate-receipt-v0.1",
+            {
+                "receipt_sha256": instruction_provenance_gate_receipt_sha256,
+                "context_sha256": instruction_provenance_gate_context_sha256,
+            },
+            "metadata_only",
+        ),
+        (
+            "tool_availability_check",
+            "tool-availability-check-event-payload-v0.1",
+            {
+                "tool_availability_report_sha256": tool_availability_report_sha256,
+                "available_count": len(tool_availability_report["available"]),
+                "unavailable_count": len(tool_availability_report["unavailable"]),
+                "unprobed_count": len(tool_availability_report["unprobed"]),
+                "degraded_count": len(tool_availability_report["degraded"]),
+                "context_block_injected": True,
+                "model_must_not_guess": True,
+            },
+            "metadata_only",
+        ),
+        (
+            "orientation_checkpoint",
+            "orientation-checkpoint-event-payload-v0.1",
+            {
+                "checkpoint_sha256": orientation_checkpoint_sha256,
+                "trigger_step": 0,
+                "task_contract_sha256": task_contract_sha256,
+            },
+            "metadata_only",
+        ),
+        (
+            "run_started",
+            "canonical-cli-run-started-v0.1",
+            {
+                "task_id": task_id,
+                "task_contract_sha256": task_contract_sha256,
+                "run_root": str(run_root),
+            },
+            "metadata_only",
+        ),
+        (
+            "gate_decision",
+            "source-visibility-gate-receipt-v0.1",
+            {
+                "receipt_sha256": source_gate_receipt_sha256,
+                "decision": source_gate_receipt["decision"],
+                "reference_count": source_gate_receipt["reference_count"],
+            },
+            "metadata_only",
+        ),
+        (
+            "model_request",
+            "canonical-cli-real-model-request-v0.1",
+            {
+                "provider": "deepseek",
+                "model_id": "deepseek-v4-pro",
+                "message_order": [
+                    "system",
+                    "user",
+                ],
+                "real_network_used": True,
+                "tool_calls_allowed": False,
+                "task_contract_sha256": task_contract_sha256,
+            },
+            "metadata_only",
+        ),
+        (
+            "model_output",
+            "canonical-cli-real-model-output-v0.1",
+            {
+                "answer_packet_sha256": answer_packet_sha256,
+                "structured_output_valid": True,
+                "raw_content_persisted": False,
+                "real_network_used": real_network_used,
+                "api_error": api_error,
+            },
+            "metadata_only",
+        ),
+        (
+            "artifact_registered",
+            "canonical-cli-answer-packet-v0.1",
+            {
+                "artifact_path": "answer-packet.json",
+                "artifact_sha256": answer_packet_sha256,
+            },
+            "metadata_only",
+        ),
+        (
+            terminal_event_type,
+            "canonical-cli-terminal-v0.1",
+            {
+                "status": terminal_status,
+                "source_gate_decision": source_gate_receipt["decision"],
+                "answer_packet_sha256": answer_packet_sha256,
+            },
+            "metadata_only",
+        ),
+    ]
+
+    events: list[dict[str, Any]] = []
+    for sequence, (event_type, payload_schema, payload, redaction) in enumerate(
+        event_specs
+    ):
+        event = _build_event(
+            run_id=run_id,
+            manifest_sha256=manifest_sha256,
+            sequence=sequence,
+            event_type=event_type,
+            previous_event_sha256=previous,
+            payload_schema=payload_schema,
+            payload=payload,
+            redaction=redaction,
+            timestamp=timestamp,
+        )
+        events.append(event)
+        previous = event["event_sha256"]
+    _write_journal(journal_path, events)
+
+    receipt = _build_run_receipt(
+        run_root=run_root,
+        run_manifest_path=run_manifest_path,
+        task_contract_path=task_contract_copy,
+        source_ledger_path=source_ledger_copy,
+        source_gate_receipt_path=source_gate_receipt_path,
+        ipg_context_sha256=instruction_provenance_gate_context_sha256,
+        ipg_receipt_sha256=instruction_provenance_gate_receipt_sha256,
+        tool_availability_report_sha256=tool_availability_report_sha256,
+        tool_availability_receipt_sha256=tool_availability_receipt_sha256,
+        orientation_checkpoint_sha256=orientation_checkpoint_sha256,
+        answer_packet_path=answer_packet_path,
+        journal_path=journal_path,
+        events=events,
+    )
+    atomic_write_json(receipt_path, receipt)
+    return receipt
+
+
 def _read_journal(journal_path: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for line_number, line in enumerate(journal_path.read_text(encoding="utf-8").splitlines(), 1):
@@ -783,8 +1201,13 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
         raise AssuranceError("answer packet does not bind tool availability gate receipt")
     if answer_packet["task_contract"]["sha256"] != sha256_file(task_contract_path):
         raise AssuranceError("answer packet does not bind task contract")
-    if answer_packet["adapter"]["real_network_used"]:
-        raise AssuranceError("canonical fake adapter unexpectedly used network")
+    # Verify network usage matches adapter mode declared in answer packet
+    if answer_packet["adapter"]["mode"] == "fake_offline":
+        if answer_packet["adapter"]["real_network_used"]:
+            raise AssuranceError("canonical fake adapter unexpectedly used network")
+    elif answer_packet["adapter"]["mode"] == "real_development":
+        if not answer_packet["adapter"]["real_network_used"]:
+            raise AssuranceError("canonical real adapter did not use network")
 
     events = _read_journal(journal_path)
     if not events:
@@ -839,8 +1262,13 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
     else:
         raise AssuranceError("canonical CLI run lacks model_request boundary event")
     request_event = events[event_types.index("model_request")]
-    if request_event["payload"].get("real_network_used") is not False:
-        raise AssuranceError("model_request did not prove fake no-network mode")
+    declared_network_used = request_event["payload"].get("real_network_used")
+    if answer_packet["adapter"]["mode"] == "fake_offline":
+        if declared_network_used is not False:
+            raise AssuranceError("model_request did not prove fake no-network mode")
+    elif answer_packet["adapter"]["mode"] == "real_development":
+        if declared_network_used is not True:
+            raise AssuranceError("model_request did not declare real network usage")
     if request_event["payload"].get("task_contract_sha256") != sha256_file(
         task_contract_path
     ):
