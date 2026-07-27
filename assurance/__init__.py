@@ -52,7 +52,10 @@ from .general_science_review import review_general_science_bundle
 from .keystore import MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore
 from .orientation_runtime_guard import (
     build_orientation_checkpoint,
+    build_tool_availability_infused_orientation_block,
+    build_tool_availability_infused_orientation_checkpoint,
     evaluate_runtime_stagnation_guard,
+    evaluate_tool_belief_stagnation,
     verify_orientation_response,
 )
 from .orientation_runtime_integration import (
@@ -70,6 +73,13 @@ from .instruction_gate import (
     verify_action_authorization,
     verify_capability_delegation,
     verify_instruction_provenance,
+)
+from .instruction_provenance_gate import (
+    build_instruction_provenance_gate_context,
+    evaluate_instruction_provenance_gate,
+    run_instruction_provenance_gate_fixture,
+    verify_instruction_provenance_gate_fixture,
+    verify_instruction_provenance_gate_receipt,
 )
 from .integrated_run import (
     build_workspace_first_frozen_context,
@@ -94,6 +104,15 @@ from .readonly_projection import (
     project_complex_task_readonly,
     verify_complex_task_readonly_projection,
 )
+from .retrieval_subagent import (
+    build_fake_retrieval_result,
+    build_retrieval_session_close_receipt,
+    build_retrieval_task_contract,
+    run_retrieval_subagent_fixture,
+    validate_retrieval_result,
+    verify_retrieval_result_sources,
+    verify_retrieval_subagent_fixture,
+)
 from .runtime_preflight import (
     build_gsa_runtime_preflight_projection,
     verify_gsa_runtime_preflight_journal,
@@ -113,6 +132,12 @@ from .source_visibility import (
 from .task_contract import (
     build_task_contract_from_ask,
     load_task_contract,
+)
+from .tool_availability_gate import (
+    build_tool_availability_context_block,
+    build_tool_availability_gate_receipt,
+    evaluate_tool_belief_mismatch,
+    probe_tool_availability,
 )
 from .runner import (
     inspect_gsa_runner_journal_recovery,
@@ -138,6 +163,11 @@ from .sandbox import (
 from .sandbox_verifier import (
     verify_docker_observation,
     verify_sandbox_selection_receipt,
+    verify_windows_native_observation,
+)
+from .windows_sandbox import (
+    run_windows_native_sandbox_probe,
+    windows_native_candidate_from_observation,
 )
 from .user_task_evaluation import (
     load_synthetic_user_task_suite,
@@ -160,14 +190,22 @@ __all__ = [
     "WindowsDpapiInstallationKeyStore",
     "build_sandbox_selection_receipt",
     "build_guarded_frozen_context",
+    "build_instruction_provenance_gate_context",
     "build_disposable_reproduction_run_proof",
     "build_disposable_reproduction_execution_lock",
     "build_canonical_cli_run_manifest",
     "build_fake_answer_packet",
+    "build_fake_retrieval_result",
     "build_orientation_checkpoint",
+    "build_tool_availability_infused_orientation_block",
+    "build_tool_availability_infused_orientation_checkpoint",
+    "build_retrieval_session_close_receipt",
+    "build_retrieval_task_contract",
     "build_task_contract_from_ask",
     "build_gsa_runtime_preflight_projection",
     "build_workspace_first_frozen_context",
+    "build_tool_availability_context_block",
+    "build_tool_availability_gate_receipt",
     "authorize_action_candidate",
     "authorize_recovery_candidate",
     "create_security_envelope",
@@ -178,9 +216,12 @@ __all__ = [
     "execute_guarded_no_model_action",
     "execute_workspace_first_integrated_run",
     "extract_public_outputs_from_runner_stream",
+    "evaluate_instruction_provenance_gate",
     "evaluate_runtime_stagnation_guard",
     "evaluate_source_visibility_gate",
     "evaluate_source_visibility_ledger_file",
+    "evaluate_tool_belief_mismatch",
+    "evaluate_tool_belief_stagnation",
     "initialize_workspace_marker",
     "index_artifact_schemas",
     "inspect_gsa_runner_journal_recovery",
@@ -198,6 +239,7 @@ __all__ = [
     "load_task_contract",
     "load_synthetic_user_task_suite",
     "project_complex_task_readonly",
+    "probe_tool_availability",
     "recovery_permit_binding",
     "resolve_effective_profile",
     "resume_archived_conversation",
@@ -208,21 +250,29 @@ __all__ = [
     "run_deepseek_stream_observation_fixture",
     "run_docker_sandbox_probe",
     "run_gsa_no_model_runner_skeleton",
+    "run_instruction_provenance_gate_fixture",
     "run_orientation_stagnation_integration_fixture",
+    "run_retrieval_subagent_fixture",
     "run_runner_public_output_extraction_fixture",
     "run_synthetic_user_task_evaluation",
+    "run_windows_native_sandbox_probe",
     "run_general_science_validators",
     "select_execution_backend",
     "verify_archive",
     "verify_audit_seal",
     "verify_action_authorization",
     "verify_docker_observation",
+    "verify_windows_native_observation",
     "verify_guarded_execution_receipt",
+    "verify_instruction_provenance_gate_fixture",
+    "verify_instruction_provenance_gate_receipt",
     "verify_capability_delegation",
     "verify_instruction_provenance",
     "verify_orientation_response",
     "verify_orientation_stagnation_integration_fixture",
     "verify_orientation_stagnation_runtime_journal",
+    "verify_retrieval_result_sources",
+    "verify_retrieval_subagent_fixture",
     "verify_runner_public_output_extraction_fixture",
     "verify_complex_task_readonly_projection",
     "verify_disposable_reproduction_receipt",
@@ -245,6 +295,8 @@ __all__ = [
     "write_orientation_stagnation_runtime_journal",
     "validate_profile_registry_semantics",
     "validate_artifact_registry_semantics",
+    "validate_retrieval_result",
     "validate_validator_registry_semantics",
+    "windows_native_candidate_from_observation",
     "windows_native_strict_candidate",
 ]

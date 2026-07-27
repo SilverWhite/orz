@@ -1,0 +1,39 @@
+{
+  "schema_version": "0.1.0-draft",
+  "profile_kind": "windows_native_strict_sandbox_profile",
+  "profile_id": "WNSP-APPCONTAINER-JOBOBJECT-001",
+  "identity": {
+    "user": "appcontainer_disposable",
+    "elevation": "never"
+  },
+  "filesystem": {
+    "policy": "workspace_only_writable",
+    "workspace_policy": "explicit_canonical_path",
+    "temp_allowed": true,
+    "forbidden_paths": [
+      "system32",
+      "program_files",
+      "windows",
+      "host_home",
+      "credential_store"
+    ]
+  },
+  "network": {
+    "mode": "none",
+    "appcontainer_capabilities": []
+  },
+  "process": {
+    "no_shell": true,
+    "job_object_kill_on_close": true,
+    "creation_method": "proc_thread_attribute_security_capabilities"
+  },
+  "resources": {
+    "memory_bytes": 268435456,
+    "wall_time_seconds": 30,
+    "pids_limit": 64
+  },
+  "lifecycle": {
+    "cleanup_required": true,
+    "disposable_profile": true
+  }
+}

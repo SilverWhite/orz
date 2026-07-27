@@ -44,6 +44,24 @@
       "type": "array",
       "items": { "$ref": "#/$defs/nonempty" },
       "uniqueItems": true
+    },
+    "tool_specs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool_spec" }
+    },
+    "probe_registry": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "available_tool_names": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" },
+      "uniqueItems": true
+    },
+    "unavailable_tool_names": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" },
+      "uniqueItems": true
     }
   },
   "$defs": {
@@ -51,6 +69,19 @@
     "sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
+    },
+    "tool_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_id", "tool_name", "capability", "probe_method"],
+      "properties": {
+        "tool_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "tool_name": { "$ref": "#/$defs/nonempty" },
+        "capability": {
+          "enum": ["search", "file_read", "file_write", "file_edit", "bash_exec", "web_fetch", "subagent", "tool_registry", "network_io"]
+        },
+        "probe_method": { "$ref": "#/$defs/nonempty" }
+      }
     }
   }
 }

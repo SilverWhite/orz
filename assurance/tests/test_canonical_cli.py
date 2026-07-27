@@ -44,6 +44,9 @@ class CanonicalCliRunTests(unittest.TestCase):
             receipt["event_types"],
             [
                 "run_preflight",
+                "instruction_provenance_gate",
+                "tool_availability_check",
+                "orientation_checkpoint",
                 "run_started",
                 "gate_decision",
                 "model_request",
@@ -53,9 +56,12 @@ class CanonicalCliRunTests(unittest.TestCase):
             ],
         )
         self.assertTrue(receipt["checks"]["gate_before_model_request"])
+        self.assertTrue(receipt["checks"]["instruction_gate_before_model"])
         self.assertTrue(receipt["checks"]["fake_adapter_no_network"])
         self.assertTrue(receipt["checks"]["task_contract_valid"])
         self.assertTrue(receipt["checks"]["answer_binds_task_contract"])
+        self.assertIsNotNone(receipt["instruction_provenance_gate_context_sha256"])
+        self.assertIsNotNone(receipt["instruction_provenance_gate_receipt_sha256"])
         answer = json.loads(
             (self.run_root / "answer-packet.json").read_text(encoding="utf-8")
         )
@@ -133,7 +139,7 @@ class CanonicalCliRunTests(unittest.TestCase):
             json.loads(line)
             for line in journal_path.read_text(encoding="utf-8").splitlines()
         ]
-        events[2], events[3] = events[3], events[2]
+        events[5], events[6] = events[6], events[5]
         journal_path.write_text(
             "\n".join(
                 json.dumps(event, sort_keys=True, separators=(",", ":"))
@@ -244,3 +250,82 @@ class CanonicalCliRunTests(unittest.TestCase):
 
         with self.assertRaisesRegex(AssuranceError, "answer packet does not bind task contract"):
             verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+
+class CanonicalCliWithInstructionGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(dir=ROOT)
+        self.run_root = Path(self.temporary.name) / "canonical-run"
+        self.addCleanup(self.temporary.cleanup)
+
+    def test_run_with_instruction_provenance_gate(self) -> None:
+        from assurance.instruction_provenance_gate import build_instruction_provenance_gate_context
+
+        ipg_dir = Path(self.temporary.name) / "ipg-input"
+        ipg_dir.mkdir()
+        ipg_context = build_instruction_provenance_gate_context(
+            run_id="RUN-IPG-TEST-001",
+            conversation_id="CONV-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            instructions=[
+                {
+                    "entry_id": "INS-USER-001",
+                    "declared_source_type": "user",
+                    "source_id": "user-prompt-main",
+                    "content_sha256": "a" * 64,
+                    "content_bytes": 256,
+                    "instruction_kind": "user_prompt",
+                },
+            ],
+        )
+        ipg_context_path = ipg_dir / "instruction-provenance-gate-context.json"
+        atomic_write_json(ipg_context_path, ipg_context)
+
+        receipt = run_canonical_guarded_cli(
+            run_root=self.run_root,
+            ask=ASK,
+            source_ledger_path=SOURCE_LEDGER,
+            instruction_provenance_gate_context_path=ipg_context_path,
+            run_id="RUN-IPG-TEST-001",
+            created_at=CREATED_AT,
+        )
+        self.assertTrue(receipt["valid"])
+        self.assertTrue(receipt["checks"]["instruction_gate_before_model"])
+        self.assertTrue(receipt["checks"]["tool_availability_gate_before_model"])
+        self.assertIsNotNone(receipt["instruction_provenance_gate_receipt_sha256"])
+        self.assertIsNotNone(receipt["instruction_provenance_gate_context_sha256"])
+        self.assertIsNotNone(receipt["tool_availability_report_sha256"])
+        self.assertIsNotNone(receipt["tool_availability_gate_receipt_sha256"])
+
+        event_types = receipt["event_types"]
+        self.assertIn("instruction_provenance_gate", event_types)
+        self.assertIn("tool_availability_check", event_types)
+        pg_idx = event_types.index("instruction_provenance_gate")
+        gd_idx = event_types.index("gate_decision")
+        self.assertLess(pg_idx, gd_idx,
+                        "instruction provenance gate must precede source visibility gate")
+
+        verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_auto_built_ipg_context_passes_with_user_ask(self) -> None:
+        receipt = run_canonical_guarded_cli(
+            run_root=self.run_root,
+            ask=ASK,
+            source_ledger_path=SOURCE_LEDGER,
+            run_id="RUN-AUTO-IPG-001",
+            created_at=CREATED_AT,
+        )
+        self.assertTrue(receipt["valid"])
+        self.assertIsNotNone(receipt["instruction_provenance_gate_context_sha256"])
+        self.assertIsNotNone(receipt["instruction_provenance_gate_receipt_sha256"])
+        self.assertTrue(receipt["checks"]["instruction_gate_before_model"])
+        self.assertTrue(receipt["checks"]["tool_availability_gate_before_model"])
+
+        event_types = receipt["event_types"]
+        self.assertIn("instruction_provenance_gate", event_types)
+        self.assertIn("tool_availability_check", event_types)
+        ipg_idx = event_types.index("instruction_provenance_gate")
+        gd_idx = event_types.index("gate_decision")
+        self.assertLess(ipg_idx, gd_idx,
+                        "instruction provenance gate must precede source visibility gate")
+
+        verify_canonical_guarded_cli_run(run_root=self.run_root)

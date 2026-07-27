@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-task-contract-v0.1.schema.json",
+  "title": "Retrieval task contract",
+  "description": "Frozen delegation contract from main agent to retrieval sub-agent, defining what to search, source boundaries, return format, and scope limits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract_kind",
+    "contract_id",
+    "parent_session_id",
+    "retrieval_question",
+    "allowed_source_categories",
+    "required_visibility",
+    "return_format",
+    "scope_boundary",
+    "max_sources",
+    "context_budget_tokens",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "contract_kind": { "const": "retrieval_task_contract" },
+    "contract_id": { "type": "string", "pattern": "^RET-CTR-[A-Z0-9._-]+$" },
+    "parent_session_id": { "type": "string", "pattern": "^CONV-[A-F0-9]{32}$" },
+    "retrieval_question": { "$ref": "#/$defs/nonempty" },
+    "allowed_source_categories": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "academic_paper",
+          "web_page",
+          "documentation",
+          "code_repository",
+          "thread_conversation",
+          "structured_data",
+          "internal_knowledge_base"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "required_visibility": {
+      "enum": ["full_text_observed", "partial_text_observed", "metadata_only"]
+    },
+    "return_format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sections", "source_ledger_required", "filtering_log_required"],
+      "properties": {
+        "sections": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "source_ledger_required": { "const": true },
+        "filtering_log_required": { "const": true }
+      }
+    },
+    "scope_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forbidden_topics", "forbidden_source_types", "delegation_constraint"],
+      "properties": {
+        "forbidden_topics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "uniqueItems": true
+        },
+        "forbidden_source_types": {
+          "type": "array",
+          "items": { "enum": ["personal_data", "credential", "internal_config", "redacted"] },
+          "uniqueItems": true
+        },
+        "delegation_constraint": {
+          "type": "string",
+          "pattern": "^subagent_must_not"
+        }
+      }
+    },
+    "max_sources": { "type": "integer", "minimum": 1, "maximum": 50 },
+    "context_budget_tokens": { "type": "integer", "minimum": 100, "maximum": 65536 },
+    "notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 }
+  }
+}

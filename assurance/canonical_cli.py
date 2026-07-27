@@ -9,6 +9,12 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from .contracts import ASSURANCE_ROOT, validate_contract
 from .errors import AssuranceError
+from .instruction_provenance_gate import (
+    build_instruction_provenance_gate_context,
+    evaluate_instruction_provenance_gate,
+    verify_instruction_provenance_gate_receipt,
+)
+from .orientation_runtime_guard import build_orientation_checkpoint
 from .source_visibility import evaluate_source_visibility_gate
 from .task_contract import (
     DEFAULT_TASK_ID,
@@ -16,6 +22,10 @@ from .task_contract import (
     load_task_contract,
     task_contract_source_ledger_path,
     verify_task_contract_source_ledger,
+)
+from .tool_availability_gate import (
+    build_tool_availability_gate_receipt,
+    probe_tool_availability,
 )
 from .utils import (
     atomic_write_json,
@@ -74,6 +84,39 @@ def _digest_path(relative: str) -> str:
 
 def _zero_digest(label: str) -> str:
     return sha256_bytes(label.encode("utf-8"))
+
+
+def _build_minimal_ipg_context(
+    *,
+    run_id: str,
+    ask_text: str,
+) -> dict[str, Any]:
+    content_bytes = ask_text.encode("utf-8")
+    return build_instruction_provenance_gate_context(
+        run_id=run_id,
+        conversation_id=f"CONV-CANONICAL-CLI-{run_id}",
+        instructions=[
+            {
+                "entry_id": f"INS-USER-{run_id}",
+                "declared_source_type": "user",
+                "source_id": "user-prompt-main",
+                "content_sha256": sha256_bytes(content_bytes),
+                "content_bytes": len(content_bytes),
+                "instruction_kind": "user_prompt",
+            },
+        ],
+    )
+
+
+def _build_canonical_tool_specs() -> list[dict[str, Any]]:
+    return [
+        {"tool_id": "search", "tool_name": "Search", "capability": "search", "probe_method": "manifest_allowlist_check"},
+        {"tool_id": "file_read", "tool_name": "File Read", "capability": "file_read", "probe_method": "manifest_allowlist_check"},
+        {"tool_id": "file_write", "tool_name": "File Write", "capability": "file_write", "probe_method": "manifest_allowlist_check"},
+        {"tool_id": "bash_exec", "tool_name": "Bash Execute", "capability": "bash_exec", "probe_method": "manifest_allowlist_check"},
+        {"tool_id": "web_fetch", "tool_name": "Web Fetch", "capability": "web_fetch", "probe_method": "manifest_allowlist_check"},
+        {"tool_id": "subagent", "tool_name": "Sub-Agent", "capability": "subagent", "probe_method": "manifest_allowlist_check"},
+    ]
 
 
 def build_canonical_cli_run_manifest(
@@ -227,9 +270,19 @@ def build_fake_answer_packet(
     task_contract_sha256: str,
     source_gate_receipt: dict[str, Any],
     source_gate_receipt_sha256: str | None = None,
+    ipg_receipt: dict[str, Any] | None = None,
+    ipg_receipt_sha256: str | None = None,
+    tool_availability_receipt: dict[str, Any] | None = None,
+    tool_availability_receipt_sha256: str | None = None,
 ) -> dict[str, Any]:
     gate_digest = source_gate_receipt_sha256 or sha256_bytes(
         canonical_bytes(source_gate_receipt)
+    )
+    ipg_digest = ipg_receipt_sha256 or sha256_bytes(
+        canonical_bytes(ipg_receipt)
+    )
+    tool_digest = tool_availability_receipt_sha256 or sha256_bytes(
+        canonical_bytes(tool_availability_receipt)
     )
     deferred = [
         f"{item['ref_id']} requires {item['required_visibility']} before stronger use"
@@ -253,6 +306,19 @@ def build_fake_answer_packet(
             "real_network_used": False,
             "tool_calls_used": False,
         },
+        "instruction_provenance_gate": {
+            "receipt_sha256": ipg_digest,
+            "decision": ipg_receipt["gate_decision"],
+            "all_sources_classified": ipg_receipt["checks"]["all_sources_classified"],
+            "no_injection_escalation": ipg_receipt["checks"]["no_injection_escalation"],
+        },
+        "tool_availability_gate": {
+            "receipt_sha256": tool_digest,
+            "decision": tool_availability_receipt["decisions"]["gate_decision"],
+            "available_count": tool_availability_receipt["available_count"],
+            "unavailable_count": tool_availability_receipt["unavailable_count"],
+            "context_injected": tool_availability_receipt["decisions"]["context_injected"],
+        },
         "source_visibility_gate": {
             "receipt_sha256": gate_digest,
             "decision": source_gate_receipt["decision"],
@@ -261,7 +327,8 @@ def build_fake_answer_packet(
         },
         "answer": {
             "summary": [
-                "Offline fake adapter produced a guarded answer packet only after source visibility gate evaluation.",
+                "Offline fake adapter produced a guarded answer packet only after all three gates evaluated.",
+                "Instruction provenance gate, tool availability gate, and source visibility gate all ran before model request.",
                 "The packet reports visibility status and does not upgrade deferred source claims.",
             ],
             "source_visibility_summary": [
@@ -279,14 +346,22 @@ def build_fake_answer_packet(
             "scientific_claim_strength": _answer_strength(source_gate_receipt),
             "fulltext_missing_blocks_mechanism_claims": True,
             "source_gate_decision_authoritative": True,
+            "all_gates_evaluated_before_model": True,
+            "gate_chain_order": [
+                "instruction_provenance_gate",
+                "tool_availability_gate",
+                "source_visibility_gate",
+            ],
         },
         "next_actions": [
             "If a deferred mechanism/methods/comparison claim is needed, run another retrieval pass for full text.",
             "Do not treat this fake adapter packet as evidence of model scientific ability.",
+            "Verify that three-gate chain receipts are preserved with the answer packet for independent audit.",
         ],
         "limitations": [
             "No real DeepSeek request was made.",
             "No crawler, PDF parser, tool broker, scoring, or holdout evaluation was used.",
+            "All three gates are offline/mechanical; they prove orchestration shape, not scientific correctness.",
         ],
     }
     validate_contract(packet, ANSWER_SCHEMA, label="canonical CLI answer packet")
@@ -309,6 +384,11 @@ def _build_run_receipt(
     task_contract_path: Path,
     source_ledger_path: Path,
     source_gate_receipt_path: Path,
+    ipg_context_sha256: str,
+    ipg_receipt_sha256: str,
+    tool_availability_report_sha256: str,
+    tool_availability_receipt_sha256: str,
+    orientation_checkpoint_sha256: str,
     answer_packet_path: Path,
     journal_path: Path,
     events: Sequence[dict[str, Any]],
@@ -323,6 +403,11 @@ def _build_run_receipt(
         "task_contract_sha256": sha256_file(task_contract_path),
         "source_ledger_sha256": sha256_file(source_ledger_path),
         "source_gate_receipt_sha256": sha256_file(source_gate_receipt_path),
+        "instruction_provenance_gate_context_sha256": ipg_context_sha256,
+        "instruction_provenance_gate_receipt_sha256": ipg_receipt_sha256,
+        "tool_availability_report_sha256": tool_availability_report_sha256,
+        "tool_availability_gate_receipt_sha256": tool_availability_receipt_sha256,
+        "orientation_checkpoint_sha256": orientation_checkpoint_sha256,
         "answer_packet_sha256": sha256_file(answer_packet_path),
         "journal_sha256": sha256_file(journal_path),
         "event_count": len(events),
@@ -333,6 +418,9 @@ def _build_run_receipt(
             "task_contract_valid": True,
             "source_gate_recomputed": True,
             "gate_before_model_request": True,
+            "instruction_gate_before_model": True,
+            "tool_availability_gate_before_model": True,
+            "orientation_checkpoint_before_model": True,
             "answer_packet_valid": True,
             "answer_binds_source_gate": True,
             "answer_binds_task_contract": True,
@@ -353,6 +441,7 @@ def run_canonical_guarded_cli(
     *,
     run_root: Path,
     source_ledger_path: Path | None = None,
+    instruction_provenance_gate_context_path: Path | None = None,
     ask: str | None = None,
     task_contract_path: Path | None = None,
     run_id: str = DEFAULT_RUN_ID,
@@ -395,6 +484,45 @@ def run_canonical_guarded_cli(
     atomic_write_json(run_manifest_path, manifest)
     atomic_write_json(task_contract_copy, task_contract)
     task_contract_sha256 = sha256_file(task_contract_copy)
+
+    ask_text = task_contract["user_request"]["raw_text"]
+    if instruction_provenance_gate_context_path is not None:
+        ipg_context = load_json(instruction_provenance_gate_context_path)
+    else:
+        ipg_context = _build_minimal_ipg_context(run_id=run_id, ask_text=ask_text)
+    ipg_receipt = evaluate_instruction_provenance_gate(gate_context=ipg_context)
+    ipg_context_copy = run_root / "instruction-provenance-gate-context.json"
+    ipg_receipt_path = run_root / "instruction-provenance-gate-receipt.json"
+    atomic_write_json(ipg_context_copy, ipg_context)
+    atomic_write_json(ipg_receipt_path, ipg_receipt)
+    instruction_provenance_gate_context_sha256 = sha256_file(ipg_context_copy)
+    instruction_provenance_gate_receipt_sha256 = sha256_file(ipg_receipt_path)
+
+    tool_specs = _build_canonical_tool_specs()
+    probe_registry = {spec["tool_id"]: False for spec in tool_specs}
+    tool_availability_report = probe_tool_availability(
+        tool_specs=tool_specs,
+        runtime_id=run_id,
+        probe_registry=probe_registry,
+    )
+    tool_availability_gate_receipt = build_tool_availability_gate_receipt(tool_availability_report)
+    tool_report_path = run_root / "tool-availability-report.json"
+    tool_receipt_path = run_root / "tool-availability-gate-receipt.json"
+    atomic_write_json(tool_report_path, tool_availability_report)
+    atomic_write_json(tool_receipt_path, tool_availability_gate_receipt)
+    tool_availability_report_sha256 = sha256_file(tool_report_path)
+    tool_availability_receipt_sha256 = sha256_file(tool_receipt_path)
+
+    orientation_checkpoint = build_orientation_checkpoint(
+        task_id=task_id,
+        trigger_step=0,
+        task_contract_sha256=task_contract_sha256,
+        tool_availability_sha256=sha256_bytes(canonical_bytes(tool_availability_report)),
+    )
+    orientation_checkpoint_path = run_root / "orientation-checkpoint.json"
+    atomic_write_json(orientation_checkpoint_path, orientation_checkpoint)
+    orientation_checkpoint_sha256 = sha256_file(orientation_checkpoint_path)
+
     shutil.copyfile(source_ledger_path, source_ledger_copy)
     source_ledger = load_json(source_ledger_copy)
     source_gate_receipt = evaluate_source_visibility_gate(source_ledger)
@@ -407,6 +535,10 @@ def run_canonical_guarded_cli(
         task_contract_sha256=task_contract_sha256,
         source_gate_receipt=source_gate_receipt,
         source_gate_receipt_sha256=source_gate_receipt_sha256,
+        ipg_receipt=ipg_receipt,
+        ipg_receipt_sha256=instruction_provenance_gate_receipt_sha256,
+        tool_availability_receipt=tool_availability_gate_receipt,
+        tool_availability_receipt_sha256=tool_availability_receipt_sha256,
     )
     atomic_write_json(answer_packet_path, answer_packet)
 
@@ -424,10 +556,47 @@ def run_canonical_guarded_cli(
                 "model_id": manifest["adapter"]["model_id"],
                 "real_network_allowed": False,
                 "source_visibility_gate_required": True,
+                "instruction_provenance_gate_applied": True,
+                "tool_availability_gate_applied": True,
                 "task_contract_sha256": task_contract_sha256,
             },
             "metadata_only",
         ),
+        (
+            "instruction_provenance_gate",
+            "instruction-provenance-gate-receipt-v0.1",
+            {
+                "receipt_sha256": instruction_provenance_gate_receipt_sha256,
+                "context_sha256": instruction_provenance_gate_context_sha256,
+            },
+            "metadata_only",
+        ),
+        (
+            "tool_availability_check",
+            "tool-availability-check-event-payload-v0.1",
+            {
+                "tool_availability_report_sha256": tool_availability_report_sha256,
+                "available_count": len(tool_availability_report["available"]),
+                "unavailable_count": len(tool_availability_report["unavailable"]),
+                "unprobed_count": len(tool_availability_report["unprobed"]),
+                "degraded_count": len(tool_availability_report["degraded"]),
+                "context_block_injected": True,
+                "model_must_not_guess": True,
+            },
+            "metadata_only",
+        ),
+        (
+            "orientation_checkpoint",
+            "orientation-checkpoint-event-payload-v0.1",
+            {
+                "checkpoint_sha256": orientation_checkpoint_sha256,
+                "trigger_step": 0,
+                "task_contract_sha256": task_contract_sha256,
+            },
+            "metadata_only",
+        ),
+    ]
+    event_specs.extend([
         (
             "run_started",
             "canonical-cli-run-started-v0.1",
@@ -499,6 +668,7 @@ def run_canonical_guarded_cli(
             "metadata_only",
         ),
     ]
+    )
     events: list[dict[str, Any]] = []
     for sequence, (event_type, payload_schema, payload, redaction) in enumerate(event_specs):
         event = _build_event(
@@ -521,6 +691,11 @@ def run_canonical_guarded_cli(
         task_contract_path=task_contract_copy,
         source_ledger_path=source_ledger_copy,
         source_gate_receipt_path=source_gate_receipt_path,
+        ipg_context_sha256=instruction_provenance_gate_context_sha256,
+        ipg_receipt_sha256=instruction_provenance_gate_receipt_sha256,
+        tool_availability_report_sha256=tool_availability_report_sha256,
+        tool_availability_receipt_sha256=tool_availability_receipt_sha256,
+        orientation_checkpoint_sha256=orientation_checkpoint_sha256,
         answer_packet_path=answer_packet_path,
         journal_path=journal_path,
         events=events,
@@ -549,6 +724,11 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
     task_contract_path = run_root / "task-contract.json"
     source_ledger_path = run_root / "source-visibility-ledger.json"
     source_gate_receipt_path = run_root / "source-visibility-gate-receipt.json"
+    ipg_context_path = run_root / "instruction-provenance-gate-context.json"
+    ipg_receipt_path = run_root / "instruction-provenance-gate-receipt.json"
+    tool_report_path = run_root / "tool-availability-report.json"
+    tool_receipt_path = run_root / "tool-availability-gate-receipt.json"
+    orientation_checkpoint_path = run_root / "orientation-checkpoint.json"
     answer_packet_path = run_root / "answer-packet.json"
     journal_path = run_root / "events.jsonl"
 
@@ -567,12 +747,40 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
     recomputed_gate = evaluate_source_visibility_gate(load_json(source_ledger_path))
     if canonical_bytes(source_gate_receipt) != canonical_bytes(recomputed_gate):
         raise AssuranceError("source visibility gate receipt does not recompute")
+
+    ipg_context = load_json(ipg_context_path)
+    ipg_receipt = load_json(ipg_receipt_path)
+    verify_instruction_provenance_gate_receipt(
+        gate_context=ipg_context, receipt=ipg_receipt
+    )
+    ipg_context_sha256 = sha256_file(ipg_context_path)
+    ipg_receipt_sha256 = sha256_file(ipg_receipt_path)
+
+    tool_report = load_json(tool_report_path)
+    tool_receipt = load_json(tool_receipt_path)
+    recomputed_tool_receipt = build_tool_availability_gate_receipt(tool_report)
+    if canonical_bytes(tool_receipt) != canonical_bytes(recomputed_tool_receipt):
+        raise AssuranceError("tool availability gate receipt does not recompute")
+    tool_availability_report_sha256 = sha256_file(tool_report_path)
+    tool_availability_receipt_sha256 = sha256_file(tool_receipt_path)
+
+    orientation_checkpoint = load_json(orientation_checkpoint_path)
+    orientation_checkpoint_sha256 = sha256_file(orientation_checkpoint_path)
+
     answer_packet = load_json(answer_packet_path)
     validate_contract(answer_packet, ANSWER_SCHEMA, label="canonical CLI answer packet")
     if answer_packet["source_visibility_gate"]["receipt_sha256"] != sha256_file(
         source_gate_receipt_path
     ):
         raise AssuranceError("answer packet does not bind source gate receipt")
+    if answer_packet["instruction_provenance_gate"]["receipt_sha256"] != sha256_file(
+        ipg_receipt_path
+    ):
+        raise AssuranceError("answer packet does not bind instruction provenance gate receipt")
+    if answer_packet["tool_availability_gate"]["receipt_sha256"] != sha256_file(
+        tool_receipt_path
+    ):
+        raise AssuranceError("answer packet does not bind tool availability gate receipt")
     if answer_packet["task_contract"]["sha256"] != sha256_file(task_contract_path):
         raise AssuranceError("answer packet does not bind task contract")
     if answer_packet["adapter"]["real_network_used"]:
@@ -605,6 +813,24 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
     if terminal_count != 1:
         raise AssuranceError("journal must contain exactly one terminal event")
     event_types = [event["event_type"] for event in events]
+    if "instruction_provenance_gate" not in event_types:
+        raise AssuranceError("canonical CLI run lacks instruction provenance gate event")
+    if event_types.index("instruction_provenance_gate") >= event_types.index("run_started"):
+        raise AssuranceError("instruction provenance gate must precede run_started")
+    if "tool_availability_check" not in event_types:
+        raise AssuranceError("canonical CLI run lacks tool availability check event")
+    tac_idx = event_types.index("tool_availability_check")
+    if tac_idx <= event_types.index("instruction_provenance_gate"):
+        raise AssuranceError("tool availability check must follow instruction provenance gate")
+    if tac_idx >= event_types.index("run_started"):
+        raise AssuranceError("tool availability check must precede run_started")
+    if "orientation_checkpoint" not in event_types:
+        raise AssuranceError("canonical CLI run lacks orientation checkpoint event")
+    oc_idx = event_types.index("orientation_checkpoint")
+    if oc_idx <= event_types.index("tool_availability_check"):
+        raise AssuranceError("orientation checkpoint must follow tool availability check")
+    if oc_idx >= event_types.index("run_started"):
+        raise AssuranceError("orientation checkpoint must precede run_started")
     if "model_request" in event_types:
         if "gate_decision" not in event_types:
             raise AssuranceError("model_request occurred without gate_decision")
@@ -626,6 +852,11 @@ def verify_canonical_guarded_cli_run(*, run_root: Path) -> dict[str, Any]:
         task_contract_path=task_contract_path,
         source_ledger_path=source_ledger_path,
         source_gate_receipt_path=source_gate_receipt_path,
+        ipg_context_sha256=ipg_context_sha256,
+        ipg_receipt_sha256=ipg_receipt_sha256,
+        tool_availability_report_sha256=tool_availability_report_sha256,
+        tool_availability_receipt_sha256=tool_availability_receipt_sha256,
+        orientation_checkpoint_sha256=orientation_checkpoint_sha256,
         answer_packet_path=answer_packet_path,
         journal_path=journal_path,
         events=events,

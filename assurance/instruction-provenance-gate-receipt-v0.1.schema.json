@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/instruction-provenance-gate-receipt-v0.1.schema.json",
+  "title": "Instruction provenance gate receipt",
+  "description": "Receipt from the instruction provenance gate after screening all instruction entry points.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "valid",
+    "context_id",
+    "run_id",
+    "gate_decision",
+    "source_summary",
+    "per_entry_decisions",
+    "injection_alerts",
+    "checks",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "instruction_provenance_gate_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^IPG-REC-[A-Z0-9._-]+$" },
+    "valid": { "type": "boolean" },
+    "context_id": { "type": "string", "pattern": "^IPG-CTX-[A-Z0-9._-]+$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "gate_decision": { "enum": ["allow", "defer", "block"] },
+    "source_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routing_source_count",
+        "data_only_source_count",
+        "blocked_count",
+        "injection_alert_count"
+      ],
+      "properties": {
+        "routing_source_count": { "type": "integer", "minimum": 0 },
+        "data_only_source_count": { "type": "integer", "minimum": 0 },
+        "blocked_count": { "type": "integer", "minimum": 0 },
+        "injection_alert_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "per_entry_decisions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry_decision" }
+    },
+    "injection_alerts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/injection_alert" }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all_sources_classified",
+        "data_only_sources_cannot_escalate",
+        "no_injection_escalation",
+        "no_untrusted_to_routing",
+        "user_source_present",
+        "no_model_invoked",
+        "mechanical_gate_only"
+      ],
+      "properties": {
+        "all_sources_classified": { "type": "boolean" },
+        "data_only_sources_cannot_escalate": { "type": "boolean" },
+        "no_injection_escalation": { "type": "boolean" },
+        "no_untrusted_to_routing": { "type": "boolean" },
+        "user_source_present": { "type": "boolean" },
+        "no_model_invoked": { "const": true },
+        "mechanical_gate_only": { "const": true }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "source_type": {
+      "enum": [
+        "platform",
+        "user",
+        "trusted_project",
+        "untrusted_project",
+        "external_content",
+        "tool_output",
+        "recalled_memory",
+        "derived_summary"
+      ]
+    },
+    "entry_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry_id",
+        "declared_source_type",
+        "effective_source_type",
+        "decision",
+        "routing_permitted"
+      ],
+      "properties": {
+        "entry_id": { "type": "string", "pattern": "^INS-[A-Z0-9._-]+$" },
+        "declared_source_type": { "$ref": "#/$defs/source_type" },
+        "effective_source_type": { "$ref": "#/$defs/source_type" },
+        "decision": { "enum": ["route", "record_only", "block"] },
+        "routing_permitted": { "type": "boolean" },
+        "reason": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "injection_alert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry_id",
+        "alert_type",
+        "indicator",
+        "severity"
+      ],
+      "properties": {
+        "entry_id": { "type": "string", "pattern": "^INS-[A-Z0-9._-]+$" },
+        "alert_type": {
+          "enum": [
+            "source_type_mismatch",
+            "data_only_source_escalation",
+            "workspace_trust_unverified",
+            "memory_without_origin",
+            "known_injection_pattern",
+            "source_id_spoofing"
+          ]
+        },
+        "indicator": { "$ref": "#/$defs/nonempty" },
+        "severity": { "enum": ["block", "defer", "record"] }
+      }
+    }
+  }
+}

@@ -7,6 +7,86 @@ from .contracts import ASSURANCE_ROOT, validate_contract
 from .utils import sha256_file
 
 
+def verify_windows_native_observation(
+    observation: dict[str, Any],
+    *,
+    profile: dict[str, Any],
+    profile_path: Path | None = None,
+    require_compliant: bool,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    try:
+        validate_contract(
+            profile,
+            "windows-native-sandbox-profile-v0.1.schema.json",
+            label="Windows native sandbox profile",
+        )
+        validate_contract(
+            observation,
+            "windows-native-sandbox-observation-v0.1.schema.json",
+            label="Windows native sandbox observation",
+        )
+    except Exception as exc:
+        return {
+            "valid": False,
+            "controls_compliant": False,
+            "errors": [str(exc)],
+        }
+    expected_profile_sha = sha256_file(
+        profile_path
+        or ASSURANCE_ROOT / "windows-native-sandbox-profile-v0.1.json"
+    )
+    if observation["profile_sha256"] != expected_profile_sha:
+        errors.append("Windows native profile digest mismatch")
+    ac = observation["appcontainer"]
+    if not ac["sid_derived"] and not ac["profile_created"]:
+        errors.append("Windows native sandbox must derive or create AppContainer SID")
+    if ac["profile_created"] and not ac["profile_deleted"]:
+        errors.append("AppContainer profile was created but not deleted")
+    if ac["capabilities"]:
+        errors.append("AppContainer capabilities must be empty for network isolation")
+    jo = observation["job_object"]
+    if not jo["created"]:
+        errors.append("Windows native sandbox requires Job Object creation")
+    if jo["assigned"]:
+        if jo["memory_limit_bytes"] != profile["resources"]["memory_bytes"]:
+            errors.append("Job Object memory limit mismatch")
+    else:
+        errors.append("Job Object must be assigned to process for strict sandbox")
+    if not jo["kill_on_close"]:
+        errors.append("Job Object must be kill-on-close")
+    proc = observation["process"]
+    if proc["shell_used"]:
+        errors.append("Windows native sandbox must not use shell")
+    required_checks = {
+        "non_admin",
+        "system32_write_blocked",
+        "workspace_write_succeeded",
+        "temp_write_succeeded",
+        "network_connect_blocked",
+        "registry_protected_blocked",
+        "probe_file_cleaned",
+    }
+    if set(observation["checks"].keys()) != required_checks:
+        errors.append("Windows native observation check coverage mismatch")
+    elif not all(
+        v for k, v in observation["checks"].items() if k != "probe_file_cleaned"
+    ):
+        errors.append("one or more Windows native negative checks failed")
+    elif not observation["checks"].get("probe_file_cleaned"):
+        errors.append("probe file was not cleaned up")
+    controls_compliant = not errors
+    if require_compliant and observation["outcome"] != "compliant":
+        errors.append("Windows native observation did not reach compliant outcome")
+    if observation["outcome"] == "compliant" and not controls_compliant:
+        errors.append("Windows native observation overstates compliance")
+    return {
+        "valid": not errors,
+        "controls_compliant": controls_compliant,
+        "errors": errors,
+    }
+
+
 def verify_docker_observation(
     observation: dict[str, Any],
     *,

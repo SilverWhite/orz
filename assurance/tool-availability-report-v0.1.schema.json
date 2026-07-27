@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-availability-report-v0.1.schema.json",
+  "title": "Tool availability report",
+  "description": "Mechanical probe result listing which tools/components are available, unavailable, unprobed or degraded in the current runtime environment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_kind",
+    "report_id",
+    "runtime_id",
+    "probe_timestamp",
+    "available",
+    "unavailable",
+    "unprobed",
+    "degraded",
+    "context_block",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "report_kind": { "const": "tool_availability_report" },
+    "report_id": { "type": "string", "pattern": "^TOOL-AVAIL-[A-Z0-9._-]+$" },
+    "runtime_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]*$" },
+    "probe_timestamp": { "type": "string", "format": "date-time" },
+    "available": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool_status_entry" }
+    },
+    "unavailable": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool_status_entry" }
+    },
+    "unprobed": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool_status_entry" }
+    },
+    "degraded": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool_status_entry" }
+    },
+    "context_block": {
+      "type": "string",
+      "pattern": "^\\[TOOL_AVAILABILITY v0\\.1\\]"
+    },
+    "notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "tool_status_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_id", "tool_name", "capability", "probe_method", "status"],
+      "properties": {
+        "tool_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "tool_name": { "$ref": "#/$defs/nonempty" },
+        "capability": { "type": "string", "enum": ["search", "file_read", "file_write", "file_edit", "bash_exec", "web_fetch", "subagent", "tool_registry", "network_io"] },
+        "probe_method": { "$ref": "#/$defs/nonempty" },
+        "status": { "type": "string", "enum": ["available", "unavailable", "unprobed", "degraded"] },
+        "probe_detail": { "$ref": "#/$defs/nonempty" },
+        "runtime_constraint": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "nonempty": { "type": "string", "minLength": 1 }
+  }
+}

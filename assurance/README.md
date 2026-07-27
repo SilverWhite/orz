@@ -4,8 +4,10 @@
 P2 Docker strict sandbox、P2.5 guarded execution、P3 指令权限/能力继承、P4
 metadata-only audit/恢复授权、P4.5 workspace-first 集成链和 P5 synthetic-user-task
 mechanical preflight 的
-development/conformance 实现。不实现 model/tool/session runtime，也不表示 identity、retention、
-Windows native sandbox 或 anti-injection hard gate 已达到生产可用状态。
+development/conformance 实现。2026-07-27 起还包含 instruction provenance batch gate、
+tool availability gate、retrieval sub-agent no-model fixture，以及 Windows native sandbox
+合同/verifier（live probe 未关闭）。不实现 model/tool/session runtime，也不表示 identity、
+retention、Windows native sandbox 或 anti-injection hard gate 已达到生产可用状态。
 
 权威所有权裁决见
 [`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md) 与
@@ -24,6 +26,17 @@ Windows native sandbox 或 anti-injection hard gate 已达到生产可用状态�
 - `retention-policy-v0.1.schema.json`：冻结归档后最小保留、强制删除、永不持久化与跨会话召回边界。
 - `instruction-provenance-receipt-v0.1.schema.json`：记录来源类型、内容摘要、显式结构化动作与
   data-only/candidate/rejected 路由；内容本身永远不产生授权。
+- `instruction-provenance-gate-context-v0.1.schema.json` 与
+  `instruction-provenance-gate-receipt-v0.1.schema.json`：入口级 batch 指令来源/反注入门禁；
+  data-only 来源不得发出 system/user prompt，注入命中可 defer/block。
+- `tool-availability-report-v0.1.schema.json` 与
+  `tool-availability-gate-receipt-v0.1.schema.json`：模型调用前机械探测工具可用状态，并生成
+  必须注入上下文的 AVAILABLE/UNAVAILABLE 列表；配套 belief mismatch/stagnation 事件 payload。
+- `retrieval-task-contract-v0.1.schema.json`、`retrieval-result-v0.1.schema.json` 与
+  `retrieval-session-close-receipt-v0.1.schema.json`：检索子代理委托合同、结构化结果与关闭不清零协议。
+- `windows-native-sandbox-profile-v0.1.schema.json` 与
+  `windows-native-sandbox-observation-v0.1.schema.json`：AppContainer + Job Object strict 合同；
+  live probe 通过前 selection 不得 allow。
 - `capability-delegation-receipt-v0.1.schema.json`：证明 child process/agent/remote MCP 的能力
   不超过父 envelope，并拒绝 remote MCP 获得宿主本地能力。
 - `sensitive-action-permit-v0.1.schema.json`：把本地交互确认绑定到 action/target/impact/attempt/TTL，

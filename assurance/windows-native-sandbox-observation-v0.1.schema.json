@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/windows-native-sandbox-observation-v0.1.schema.json",
+  "title": "Observed Windows Native Strict Sandbox Result v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_kind",
+    "observation_id",
+    "created_at",
+    "profile_sha256",
+    "workspace_path_sha256",
+    "appcontainer",
+    "job_object",
+    "process",
+    "checks",
+    "outcome",
+    "evidence_status",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "observation_kind": { "const": "windows_native_strict_sandbox_observation" },
+    "observation_id": { "type": "string", "pattern": "^WNO-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "profile_sha256": { "$ref": "#/$defs/sha256" },
+    "workspace_path_sha256": { "$ref": "#/$defs/sha256" },
+    "appcontainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sid_derived",
+        "profile_created",
+        "profile_deleted",
+        "capabilities"
+      ],
+      "properties": {
+        "sid_derived": { "type": "boolean" },
+        "profile_created": { "type": "boolean" },
+        "profile_deleted": { "type": "boolean" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "job_object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "created",
+        "assigned",
+        "kill_on_close",
+        "memory_limit_bytes"
+      ],
+      "properties": {
+        "created": { "type": "boolean" },
+        "assigned": { "type": "boolean" },
+        "kill_on_close": { "type": "boolean" },
+        "memory_limit_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exit_code", "shell_used"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 0 },
+        "exit_code": { "type": "integer" },
+        "shell_used": { "const": false }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "non_admin",
+        "system32_write_blocked",
+        "workspace_write_succeeded",
+        "temp_write_succeeded",
+        "network_connect_blocked",
+        "registry_protected_blocked",
+        "probe_file_cleaned"
+      ],
+      "properties": {
+        "non_admin": { "type": "boolean" },
+        "system32_write_blocked": { "type": "boolean" },
+        "workspace_write_succeeded": { "type": "boolean" },
+        "temp_write_succeeded": { "type": "boolean" },
+        "network_connect_blocked": { "type": "boolean" },
+        "registry_protected_blocked": { "type": "boolean" },
+        "probe_file_cleaned": { "type": "boolean" }
+      }
+    },
+    "outcome": { "enum": ["compliant", "noncompliant"] },
+    "evidence_status": { "const": "observed" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "outcome": { "const": "compliant" } },
+        "required": ["outcome"]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "properties": {
+              "non_admin": { "const": true },
+              "system32_write_blocked": { "const": true },
+              "workspace_write_succeeded": { "const": true },
+              "temp_write_succeeded": { "const": true },
+              "network_connect_blocked": { "const": true },
+              "registry_protected_blocked": { "const": true },
+              "probe_file_cleaned": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

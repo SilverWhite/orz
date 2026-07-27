@@ -34,7 +34,10 @@
       ],
       "properties": {
         "orientation_checkpoint": { "$ref": "#/$defs/artifact" },
-        "runtime_stagnation_guard_receipt": { "$ref": "#/$defs/artifact" }
+        "runtime_stagnation_guard_receipt": { "$ref": "#/$defs/artifact" },
+        "tool_availability_report": { "$ref": "#/$defs/artifact" },
+        "tool_availability_gate_receipt": { "$ref": "#/$defs/artifact" },
+        "tool_belief_stagnation_receipt": { "$ref": "#/$defs/artifact" }
       }
     },
     "decisions": {
@@ -57,7 +60,9 @@
           "items": {
             "enum": [
               "STAGNATION-CONSECUTIVE-REPEAT",
-              "STAGNATION-NGRAM-REPEAT"
+              "STAGNATION-NGRAM-REPEAT",
+              "TOOL-BELIEF-UNAVAILABLE-TOOL-MENTIONED",
+              "TOOL-BELIEF-CAPABILITY-GUESSING"
             ]
           },
           "uniqueItems": true
@@ -79,7 +84,9 @@
         "model_invoked",
         "network_requested",
         "counterexample_queue_invoked",
-        "retry_budget_bounded"
+        "retry_budget_bounded",
+        "tool_availability_gate_completed",
+        "tool_belief_stagnation_completed"
       ],
       "properties": {
         "orientation_neutral_checkpoint": { "const": true },
@@ -93,7 +100,9 @@
         "model_invoked": { "const": false },
         "network_requested": { "const": false },
         "counterexample_queue_invoked": { "const": false },
-        "retry_budget_bounded": { "type": "boolean" }
+        "retry_budget_bounded": { "type": "boolean" },
+        "tool_availability_gate_completed": { "type": "boolean" },
+        "tool_belief_stagnation_completed": { "type": "boolean" }
       }
     },
     "limitations": {

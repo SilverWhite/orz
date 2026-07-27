@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-result-v0.1.schema.json",
+  "title": "Retrieval result",
+  "description": "Structured result returned by the retrieval sub-agent to the main agent, including query log, source ledger, filtering log, and organized response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "result_id",
+    "contract_id",
+    "subagent_session_id",
+    "query_summary",
+    "source_ledger",
+    "filtering_log",
+    "organized_response",
+    "raw_source_refs",
+    "opacity_notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "result_kind": { "const": "retrieval_subagent_result" },
+    "result_id": { "type": "string", "pattern": "^RET-RES-[A-Z0-9._-]+$" },
+    "contract_id": { "type": "string", "pattern": "^RET-CTR-[A-Z0-9._-]+$" },
+    "subagent_session_id": { "type": "string", "pattern": "^CONV-[A-F0-9]{32}$" },
+    "query_summary": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/query_entry" },
+      "minItems": 1
+    },
+    "source_ledger": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source_entry" }
+    },
+    "filtering_log": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/filter_entry" }
+    },
+    "organized_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sections", "claims"],
+      "properties": {
+        "sections": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/section_entry" },
+          "minItems": 1
+        },
+        "claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/claim_entry" }
+        }
+      }
+    },
+    "raw_source_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ref_entry" },
+      "uniqueItems": true
+    },
+    "opacity_notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "query_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query_id", "query_text", "source_category", "result_count", "action_taken"],
+      "properties": {
+        "query_id": { "type": "string", "pattern": "^QRY-[A-Z0-9._-]+$" },
+        "query_text": { "$ref": "#/$defs/nonempty" },
+        "source_category": { "$ref": "#/$defs/nonempty" },
+        "result_count": { "type": "integer", "minimum": 0 },
+        "action_taken": { "enum": ["searched", "refined", "aborted_scope_violation", "aborted_no_results"] },
+        "tool_used": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "source_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_title", "source_url_or_ref", "visibility", "relevance", "used_in_sections"],
+      "properties": {
+        "source_id": { "type": "string", "pattern": "^SRC-[A-Z0-9._-]+$" },
+        "source_title": { "$ref": "#/$defs/nonempty" },
+        "source_url_or_ref": { "$ref": "#/$defs/nonempty" },
+        "visibility": { "enum": ["full_text_observed", "partial_text_observed", "metadata_only", "unavailable"] },
+        "relevance": { "enum": ["direct", "partial", "tangential", "excluded"] },
+        "used_in_sections": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" }
+        },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "full_text_retrieved": { "type": "boolean" },
+        "notes": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "filter_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "reason", "action", "filtered_at"],
+      "properties": {
+        "source_id": { "type": "string", "pattern": "^SRC-[A-Z0-9._-]+$" },
+        "reason": { "enum": ["scope_violation", "visibility_insufficient", "duplicate", "low_relevance", "source_type_forbidden", "budget_exceeded"] },
+        "action": { "enum": ["excluded", "deferred_for_main_agent_review"] },
+        "filtered_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "section_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["section_title", "content", "source_ids", "claim_strength"],
+      "properties": {
+        "section_title": { "$ref": "#/$defs/nonempty" },
+        "content": { "$ref": "#/$defs/nonempty" },
+        "source_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^SRC-[A-Z0-9._-]+$" }
+        },
+        "claim_strength": { "enum": ["observed", "derived", "synthesized", "none"] }
+      }
+    },
+    "claim_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_id", "claim_text", "source_ids", "claim_strength"],
+      "properties": {
+        "claim_id": { "type": "string", "pattern": "^CLM-[A-Z0-9._-]+$" },
+        "claim_text": { "$ref": "#/$defs/nonempty" },
+        "source_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^SRC-[A-Z0-9._-]+$" },
+          "minItems": 1
+        },
+        "claim_strength": { "enum": ["observed", "derived", "synthesized"] }
+      }
+    },
+    "ref_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_title", "source_url_or_ref", "visibility", "content_sha256"],
+      "properties": {
+        "source_id": { "type": "string", "pattern": "^SRC-[A-Z0-9._-]+$" },
+        "source_title": { "$ref": "#/$defs/nonempty" },
+        "source_url_or_ref": { "$ref": "#/$defs/nonempty" },
+        "visibility": { "enum": ["full_text_observed", "partial_text_observed", "metadata_only", "unavailable"] },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "retrieval_note": { "$ref": "#/$defs/nonempty" }
+      }
+    }
+  }
+}

@@ -38,7 +38,7 @@
     },
     "message_block": {
       "type": "string",
-      "pattern": "^\\[ORIENTATION_CHECKPOINT v0\\.1\\]"
+      "pattern": "^(\\[TOOL_AVAILABILITY v0\\.1\\]|\\[ORIENTATION_CHECKPOINT v0\\.1\\])"
     },
     "allowed_response_fields": {
       "type": "array",
@@ -46,7 +46,8 @@
         "enum": [
           "orientation_summary",
           "current_task_position",
-          "next_output_target"
+          "next_output_target",
+          "available_tools_acknowledged"
         ]
       },
       "minItems": 3,
@@ -59,10 +60,11 @@
           "counterexample_candidate",
           "claim_disposition",
           "claim_promotion",
-          "negative_fixture_candidate"
+          "negative_fixture_candidate",
+          "tool_belief_mismatch_statement"
         ]
       },
-      "minItems": 4,
+      "minItems": 5,
       "uniqueItems": true
     },
     "claim_policy": {
@@ -78,6 +80,12 @@
         "may_set_claim_disposition": { "const": false },
         "claim_strength_effect": { "const": "none" }
       }
+    },
+    "tool_availability_sha256": {
+      "anyOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
     },
     "notes": {
       "type": "array",

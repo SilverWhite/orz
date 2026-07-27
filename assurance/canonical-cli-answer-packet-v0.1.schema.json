@@ -11,6 +11,8 @@
     "task_id",
     "task_contract",
     "adapter",
+    "instruction_provenance_gate",
+    "tool_availability_gate",
     "source_visibility_gate",
     "answer",
     "claim_boundaries",
@@ -65,6 +67,40 @@
         "decision": { "enum": ["allow", "defer", "block"] },
         "must_report_visibility_status": { "const": true },
         "reference_decision_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "instruction_provenance_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_sha256",
+        "decision",
+        "all_sources_classified",
+        "no_injection_escalation"
+      ],
+      "properties": {
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "decision": { "enum": ["allow", "defer", "block"] },
+        "all_sources_classified": { "type": "boolean" },
+        "no_injection_escalation": { "type": "boolean" }
+      }
+    },
+    "tool_availability_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_sha256",
+        "decision",
+        "available_count",
+        "unavailable_count",
+        "context_injected"
+      ],
+      "properties": {
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "decision": { "enum": ["allow", "defer", "block"] },
+        "available_count": { "type": "integer", "minimum": 0 },
+        "unavailable_count": { "type": "integer", "minimum": 0 },
+        "context_injected": { "type": "boolean" }
       }
     },
     "answer": {
@@ -129,7 +165,9 @@
       "required": [
         "scientific_claim_strength",
         "fulltext_missing_blocks_mechanism_claims",
-        "source_gate_decision_authoritative"
+        "source_gate_decision_authoritative",
+        "all_gates_evaluated_before_model",
+        "gate_chain_order"
       ],
       "properties": {
         "scientific_claim_strength": {
@@ -141,7 +179,14 @@
           ]
         },
         "fulltext_missing_blocks_mechanism_claims": { "const": true },
-        "source_gate_decision_authoritative": { "const": true }
+        "source_gate_decision_authoritative": { "const": true },
+        "all_gates_evaluated_before_model": { "const": true },
+        "gate_chain_order": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "next_actions": {

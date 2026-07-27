@@ -29,7 +29,8 @@
         "enum": [
           "orientation_summary",
           "current_task_position",
-          "next_output_target"
+          "next_output_target",
+          "available_tools_acknowledged"
         ]
       },
       "uniqueItems": true
@@ -41,7 +42,8 @@
           "counterexample_candidate",
           "claim_disposition",
           "claim_promotion",
-          "negative_fixture_candidate"
+          "negative_fixture_candidate",
+          "tool_belief_mismatch_statement"
         ]
       },
       "uniqueItems": true

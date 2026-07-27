@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/instruction-provenance-gate-context-v0.1.schema.json",
+  "title": "Instruction provenance gate context",
+  "description": "Preflight input to the instruction provenance gate: a list of instruction entries from all entry points before model invocation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "context_kind",
+    "context_id",
+    "run_id",
+    "conversation_id",
+    "instructions",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "context_kind": { "const": "instruction_provenance_gate_context" },
+    "context_id": { "type": "string", "pattern": "^IPG-CTX-[A-Z0-9._-]+$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
+    "conversation_id": { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+    "instructions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/instruction_entry" },
+      "minItems": 1
+    },
+    "notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "source_type": {
+      "enum": [
+        "platform",
+        "user",
+        "trusted_project",
+        "untrusted_project",
+        "external_content",
+        "tool_output",
+        "recalled_memory",
+        "derived_summary"
+      ]
+    },
+    "instruction_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry_id",
+        "declared_source_type",
+        "source_id",
+        "content_sha256",
+        "content_bytes",
+        "instruction_kind"
+      ],
+      "properties": {
+        "entry_id": { "type": "string", "pattern": "^INS-[A-Z0-9._-]+$" },
+        "declared_source_type": { "$ref": "#/$defs/source_type" },
+        "source_id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]+$" },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "content_bytes": { "type": "integer", "minimum": 0 },
+        "instruction_kind": {
+          "enum": [
+            "user_prompt",
+            "system_prompt",
+            "project_rule",
+            "project_hook",
+            "tool_result",
+            "web_content",
+            "retrieved_memory",
+            "derived_summary",
+            "subagent_result"
+          ]
+        },
+        "workspace_trust": {
+          "anyOf": [
+            { "enum": ["observed_trusted", "not_observed"] },
+            { "type": "null" }
+          ]
+        },
+        "origin_conversation_id": {
+          "anyOf": [
+            { "type": "string", "pattern": "^CONV-[A-Z0-9._-]+$" },
+            { "type": "null" }
+          ]
+        },
+        "injection_indicators": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "description": "Known injection patterns detected in content"
+        }
+      }
+    }
+  }
+}

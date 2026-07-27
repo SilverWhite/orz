@@ -5,3 +5,6 @@ prototype/*.egg-info/
 **/*.py[cod]
 .tools/
 .observed-runs/
+
+tmp*/
+*.tmp/

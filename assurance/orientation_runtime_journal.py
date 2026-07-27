@@ -12,6 +12,9 @@ from .orientation_runtime_integration import (
     ORIENTATION_NAME,
     RECEIPT_NAME as INTEGRATION_RECEIPT_NAME,
     STAGNATION_NAME,
+    TOOL_AVAIL_REPORT_NAME,
+    TOOL_AVAIL_GATE_NAME,
+    TOOL_BELIEF_STAGNATION_NAME,
     verify_orientation_stagnation_integration_fixture,
 )
 from .utils import (
@@ -29,6 +32,8 @@ RUNTIME_ROOT = ROOT / "runtime"
 JOURNAL_RECEIPT_SCHEMA = "orientation-stagnation-journal-receipt-v0.1.schema.json"
 ORIENTATION_PAYLOAD_SCHEMA = "orientation-checkpoint-event-payload-v0.1.schema.json"
 STAGNATION_PAYLOAD_SCHEMA = "runtime-stagnation-guard-event-payload-v0.1.schema.json"
+TOOL_AVAIL_PAYLOAD_SCHEMA = "tool-availability-check-event-payload-v0.1.schema.json"
+TOOL_BELIEF_PAYLOAD_SCHEMA = "tool-belief-stagnation-event-payload-v0.1.schema.json"
 RUN_ID = "RUN-ORIENTATION-STAGNATION-JOURNAL"
 CREATED_AT = "2026-07-26T00:00:00Z"
 RUN_MANIFEST_NAME = "run-manifest.json"
@@ -205,6 +210,9 @@ def _build_events(
 ) -> list[dict[str, Any]]:
     orientation_path = integration_root / ORIENTATION_NAME
     stagnation_path = integration_root / STAGNATION_NAME
+    tool_avail_report_path = integration_root / TOOL_AVAIL_REPORT_NAME
+    tool_avail_gate_path = integration_root / TOOL_AVAIL_GATE_NAME
+    tool_belief_stagnation_path = integration_root / TOOL_BELIEF_STAGNATION_NAME
     orientation = load_json(orientation_path)
     stagnation = load_json(stagnation_path)
     orientation_payload = {
@@ -244,16 +252,25 @@ def _build_events(
         STAGNATION_PAYLOAD_SCHEMA,
         label="runtime stagnation guard event payload",
     )
+
+    tool_avail_exists = tool_avail_report_path.exists()
+    tool_belief_exists = tool_belief_stagnation_path.exists()
+
     terminal_type = (
         "run_finished" if stagnation["decision"] == "continue" else "run_invalidated"
     )
+    if tool_belief_exists:
+        tool_belief = load_json(tool_belief_stagnation_path)
+        if tool_belief.get("decision") != "continue":
+            terminal_type = "run_invalidated"
+
     terminal_payload = {
         "status": "completed" if terminal_type == "run_finished" else "invalidated",
         "stagnation_decision": stagnation["decision"],
         "formal_runner_claimed": False,
         "restart_packet_retains_runaway_suffix": False,
     }
-    specs = [
+    specs: list[tuple[str, str, dict[str, Any]]] = [
         (
             "run_preflight",
             "orientation-stagnation-preflight-v0.1",
@@ -264,8 +281,26 @@ def _build_events(
                 "runner_attached": False,
                 "model_invoked": False,
                 "network_requested": False,
+                "tool_availability_gate_invoked": tool_avail_exists,
             },
         ),
+    ]
+    if tool_avail_exists:
+        tool_avail_report = load_json(tool_avail_report_path)
+        toll_avail_payload = {
+            "tool_availability_report_sha256": sha256_file(tool_avail_report_path),
+            "available_count": len(tool_avail_report["available"]),
+            "unavailable_count": len(tool_avail_report["unavailable"]),
+            "unprobed_count": len(tool_avail_report["unprobed"]),
+            "degraded_count": len(tool_avail_report["degraded"]),
+            "context_block_injected": True,
+            "model_must_not_guess": True,
+        }
+        specs.append(
+            ("tool_availability_check", TOOL_AVAIL_PAYLOAD_SCHEMA, toll_avail_payload)
+        )
+
+    specs.append(
         (
             "run_started",
             "orientation-stagnation-run-started-v0.1",
@@ -273,19 +308,38 @@ def _build_events(
                 "task_id": integration_receipt["task_id"],
                 "step_index": integration_receipt["step_index"],
             },
-        ),
+        )
+    )
+    specs.append(
         (
             "orientation_checkpoint",
             ORIENTATION_PAYLOAD_SCHEMA,
             orientation_payload,
-        ),
+        )
+    )
+    specs.append(
         (
             "runtime_stagnation_guard",
             STAGNATION_PAYLOAD_SCHEMA,
             stagnation_payload,
-        ),
-        (terminal_type, "orientation-stagnation-terminal-v0.1", terminal_payload),
-    ]
+        )
+    )
+    if tool_belief_exists:
+        tool_belief = load_json(tool_belief_stagnation_path)
+        tool_belief_payload = {
+            "tool_belief_stagnation_receipt_sha256": sha256_file(tool_belief_stagnation_path),
+            "decision": tool_belief["decision"],
+            "reason_codes": tool_belief["reason_codes"],
+            "mismatch_count": tool_belief["metrics"]["tool_belief_mismatch_count"],
+            "public_output_only": True,
+            "asks_model_if_stuck": False,
+            "hidden_chain_of_thought_saved": False,
+        }
+        specs.append(
+            ("tool_belief_stagnation", TOOL_BELIEF_PAYLOAD_SCHEMA, tool_belief_payload)
+        )
+
+    specs.append((terminal_type, "orientation-stagnation-terminal-v0.1", terminal_payload))
     events: list[dict[str, Any]] = []
     previous: str | None = None
     for sequence, (event_type, payload_schema, payload) in enumerate(specs):
@@ -317,19 +371,38 @@ def _load_events(journal_path: Path) -> list[dict[str, Any]]:
 
 
 def _verify_events(events: list[dict[str, Any]], *, run_manifest_sha256: str) -> None:
-    expected = [
-        "run_preflight",
-        "run_started",
-        "orientation_checkpoint",
-        "runtime_stagnation_guard",
-    ]
-    if len(events) != 5:
-        raise AssuranceError("orientation runtime journal event count mismatch")
     event_types = [event["event_type"] for event in events]
-    if event_types[:4] != expected:
-        raise AssuranceError("orientation runtime journal event order mismatch")
-    if event_types[-1] not in {"run_finished", "run_invalidated"}:
+    if len(events) < 5 or len(events) > 8:
+        raise AssuranceError("orientation runtime journal event count mismatch")
+    if event_types[0] != "run_preflight":
+        raise AssuranceError("orientation runtime journal first event must be run_preflight")
+
+    has_tool_avail = "tool_availability_check" in event_types
+    has_tool_belief = "tool_belief_stagnation" in event_types
+
+    required_core = ["run_started", "orientation_checkpoint", "runtime_stagnation_guard"]
+    for event_type in required_core:
+        if event_type not in event_types:
+            raise AssuranceError(f"orientation runtime journal missing required event: {event_type}")
+
+    if has_tool_avail:
+        avidx = event_types.index("tool_availability_check")
+        sidx = event_types.index("run_started")
+        if avidx >= sidx:
+            raise AssuranceError("tool_availability_check must precede run_started")
+    oidx = event_types.index("orientation_checkpoint")
+    sidx = event_types.index("runtime_stagnation_guard")
+    if oidx >= sidx:
+        raise AssuranceError("orientation checkpoint must precede stagnation guard")
+    if has_tool_belief:
+        bidx = event_types.index("tool_belief_stagnation")
+        if bidx <= sidx:
+            raise AssuranceError("tool_belief_stagnation must follow runtime_stagnation_guard")
+
+    terminal = event_types[-1]
+    if terminal not in {"run_finished", "run_invalidated"}:
         raise AssuranceError("orientation runtime journal terminal event mismatch")
+
     previous: str | None = None
     for sequence, event in enumerate(events):
         if event["sequence"] != sequence:
@@ -349,15 +422,13 @@ def _verify_events(events: list[dict[str, Any]], *, run_manifest_sha256: str) ->
         if event["event_type"] in MODEL_OR_TOOL_EVENTS:
             raise AssuranceError("orientation runtime journal model/tool event forbidden")
         previous = event["event_sha256"]
-    if event_types.index("orientation_checkpoint") > event_types.index("runtime_stagnation_guard"):
-        raise AssuranceError("orientation checkpoint must precede stagnation guard")
     validate_contract(
-        events[event_types.index("orientation_checkpoint")]["payload"],
+        events[oidx]["payload"],
         ORIENTATION_PAYLOAD_SCHEMA,
         label="orientation checkpoint event payload",
     )
     validate_contract(
-        events[event_types.index("runtime_stagnation_guard")]["payload"],
+        events[sidx]["payload"],
         STAGNATION_PAYLOAD_SCHEMA,
         label="runtime stagnation guard event payload",
     )

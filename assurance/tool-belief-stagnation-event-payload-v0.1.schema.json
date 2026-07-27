@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-belief-stagnation-event-payload-v0.1.schema.json",
+  "title": "Tool belief stagnation event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool_belief_stagnation_receipt_sha256",
+    "decision",
+    "reason_codes",
+    "mismatch_count",
+    "public_output_only",
+    "asks_model_if_stuck",
+    "hidden_chain_of_thought_saved"
+  ],
+  "properties": {
+    "tool_belief_stagnation_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "decision": { "enum": ["continue", "restart_requested"] },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "mismatch_count": { "type": "integer", "minimum": 0 },
+    "public_output_only": { "const": true },
+    "asks_model_if_stuck": { "const": false },
+    "hidden_chain_of_thought_saved": { "const": false }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

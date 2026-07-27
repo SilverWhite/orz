@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/windows-native-sandbox-profile-v0.1.schema.json",
+  "title": "Windows Native Strict Sandbox Profile v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile_kind",
+    "profile_id",
+    "identity",
+    "filesystem",
+    "network",
+    "process",
+    "resources",
+    "lifecycle"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "profile_kind": { "const": "windows_native_strict_sandbox_profile" },
+    "profile_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user", "elevation"],
+      "properties": {
+        "user": { "const": "appcontainer_disposable" },
+        "elevation": { "const": "never" }
+      }
+    },
+    "filesystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "workspace_policy",
+        "temp_allowed",
+        "forbidden_paths"
+      ],
+      "properties": {
+        "policy": { "const": "workspace_only_writable" },
+        "workspace_policy": { "const": "explicit_canonical_path" },
+        "temp_allowed": { "const": true },
+        "forbidden_paths": {
+          "type": "array",
+          "minItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,63}$"
+          },
+          "allOf": [
+            { "contains": { "const": "system32" } },
+            { "contains": { "const": "program_files" } },
+            { "contains": { "const": "windows" } },
+            { "contains": { "const": "host_home" } },
+            { "contains": { "const": "credential_store" } }
+          ]
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "appcontainer_capabilities"],
+      "properties": {
+        "mode": { "const": "none" },
+        "appcontainer_capabilities": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "no_shell",
+        "job_object_kill_on_close",
+        "creation_method"
+      ],
+      "properties": {
+        "no_shell": { "const": true },
+        "job_object_kill_on_close": { "const": true },
+        "creation_method": {
+          "const": "proc_thread_attribute_security_capabilities"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memory_bytes",
+        "wall_time_seconds",
+        "pids_limit"
+      ],
+      "properties": {
+        "memory_bytes": { "type": "integer", "minimum": 1 },
+        "wall_time_seconds": { "type": "integer", "minimum": 1 },
+        "pids_limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cleanup_required", "disposable_profile"],
+      "properties": {
+        "cleanup_required": { "const": true },
+        "disposable_profile": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -148,6 +148,7 @@ def _run_canonical(args: argparse.Namespace) -> int:
     receipt = run_canonical_guarded_cli(
         run_root=args.run_root,
         source_ledger_path=args.source_ledger,
+        instruction_provenance_gate_context_path=args.instruction_context,
         ask=args.ask,
         task_contract_path=args.task,
         run_id=args.run_id,
@@ -204,6 +205,7 @@ def _parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="Run canonical guarded CLI offline path.")
     run.add_argument("--run-root", type=Path, required=True)
     run.add_argument("--source-ledger", type=Path)
+    run.add_argument("--instruction-context", type=Path)
     run.add_argument("--ask")
     run.add_argument("--task", type=Path)
     run.add_argument("--run-id", default="RUN-CANONICAL-CLI-FAKE-001")

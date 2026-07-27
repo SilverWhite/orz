@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-availability-check-event-payload-v0.1.schema.json",
+  "title": "Tool availability check event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool_availability_report_sha256",
+    "available_count",
+    "unavailable_count",
+    "unprobed_count",
+    "degraded_count",
+    "context_block_injected",
+    "model_must_not_guess"
+  ],
+  "properties": {
+    "tool_availability_report_sha256": { "$ref": "#/$defs/sha256" },
+    "available_count": { "type": "integer", "minimum": 0 },
+    "unavailable_count": { "type": "integer", "minimum": 0 },
+    "unprobed_count": { "type": "integer", "minimum": 0 },
+    "degraded_count": { "type": "integer", "minimum": 0 },
+    "context_block_injected": { "type": "boolean" },
+    "model_must_not_guess": { "const": true }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

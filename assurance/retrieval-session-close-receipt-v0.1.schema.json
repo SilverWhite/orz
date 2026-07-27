@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-session-close-receipt-v0.1.schema.json",
+  "title": "Retrieval session close receipt",
+  "description": "Receipt confirming that the main agent has closed the current retrieval round; sub-agent conversation is archived but not zeroed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "valid",
+    "parent_session_id",
+    "subagent_session_id",
+    "contract_id",
+    "result_id",
+    "close_trigger",
+    "archive_policy",
+    "next_availability"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "retrieval_session_close_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^RET-CLS-[A-Z0-9._-]+$" },
+    "valid": { "const": true },
+    "parent_session_id": { "type": "string", "pattern": "^CONV-[A-F0-9]{32}$" },
+    "subagent_session_id": { "type": "string", "pattern": "^CONV-[A-F0-9]{32}$" },
+    "contract_id": { "type": "string", "pattern": "^RET-CTR-[A-Z0-9._-]+$" },
+    "result_id": { "type": "string", "pattern": "^RET-RES-[A-Z0-9._-]+$" },
+    "close_trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["triggered_by", "reason"],
+      "properties": {
+        "triggered_by": { "enum": ["main_agent", "budget_exhausted", "scope_completed", "main_agent_abort"] },
+        "reason": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "archive_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation_zeroed", "journal_preserved", "can_resume"],
+      "properties": {
+        "conversation_zeroed": { "const": false },
+        "journal_preserved": { "const": true },
+        "can_resume": { "const": true },
+        "resume_condition": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "next_availability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subagent_resumable", "requirements"],
+      "properties": {
+        "subagent_resumable": { "const": true },
+        "requirements": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["parent_session_id_match", "new_task_contract_required", "source_ledger_preserved"] },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 }
+  }
+}

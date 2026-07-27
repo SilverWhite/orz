@@ -68,6 +68,14 @@ task/run intent
 - source visibility gate 可以 defer/downgrade claim，但不会自动决定下一轮抓取策略。
 - task contract 当前只覆盖 offline/fake 主路径；真实 adapter、resume、跨机器路径迁移和增量检索策略仍需单独合同。
 
+## 2026-07-27 主路径扩展（同仓库后续切片）
+
+offline `run` 已在 source visibility 之前串入 instruction provenance gate、tool availability gate 与
+orientation checkpoint，并写入对应 artifact 与 journal 事件。扩展细节见
+[`GAK_INJ_001_AUDIT_2026-07-27.md`](GAK_INJ_001_AUDIT_2026-07-27.md) 与
+[`TOOL_AVAILABILITY_GATE_AUDIT_2026-07-27.md`](TOOL_AVAILABILITY_GATE_AUDIT_2026-07-27.md)。
+上述扩展仍不改变“无真实模型/网络/credential”边界。
+
 ## 机械结果
 
 - `assurance/tests/test_canonical_cli.py`：10/10；

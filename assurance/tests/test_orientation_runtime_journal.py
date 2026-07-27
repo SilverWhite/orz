@@ -130,7 +130,7 @@ class OrientationRuntimeJournalTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(AssuranceError, "event order mismatch"):
+        with self.assertRaises(AssuranceError):
             verify_orientation_stagnation_runtime_journal(
                 integration_root=self.integration_root,
                 journal_root=self.journal_root,

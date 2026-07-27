@@ -383,11 +383,11 @@ def docker_candidate_from_observation(
 
 def windows_native_strict_candidate() -> dict[str, Any]:
     availability = "available" if os.name == "nt" else "unavailable"
-    reasons = [
-        "restricted_token_or_appcontainer_not_implemented",
-        "filesystem_and_registry_boundary_not_observed",
-        "job_object_is_process_containment_only",
-    ]
+    reasons = (
+        ["platform_not_windows"]
+        if os.name != "nt"
+        else ["appcontainer_probe_not_yet_run"]
+    )
     projection = {
         "backend_kind": "windows_native_strict",
         "availability": availability,

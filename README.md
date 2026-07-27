@@ -5,8 +5,9 @@ P2 Docker strict sandbox、P2.5 无模型 guarded execution、P3 指令来源/�
 P4 metadata-only 审计/compaction/恢复授权，以及 P4.5 workspace-first 集成链
 development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只读投影 mechanical preflight
 已启动并通过；GSA-CORE 已新增首个非 LIF、多文件、确定性只读审查切片。标准模式默认使用受限工作区内的固定动作；Docker 只保留为显式、
-按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend
-仍为 fail-closed/noncompliant。Grok Build 是当前证据最完整的参考框架，
+按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend 已具备 AppContainer
+profile/observation/verifier 合同与 selection 集成，但 live AppContainer probe 尚未通过，因此仍为
+fail-closed/noncompliant（`appcontainer_probe_not_yet_run`）。Grok Build 是当前证据最完整的参考框架，
 其官方 Windows binary 已完成锁定与离线核验。首个 Codex app-server 双向 ordered-capture lifecycle normalizer
 已完成 no-model 离线实现、独立重放与隔离 live app-server smoke；live 路径只执行 initialize 和
 ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
@@ -20,11 +21,12 @@ journal sidecar lock、只读 recovery inspection、受控 repair/quarantine rec
 runtime event/journal projection、公开输出抽取层、一次 direct DeepSeek API one-shot 观测投影管线，以及
 DeepSeek-shaped streaming/repetition fixture 已实现；真实 API 观测只验证公开输出抽取与 guard 管线接线，streaming
 fixture 只验证 DeepSeek 风格 chunk 的边界映射，尚未接入真实 runner。
-首个 canonical guarded CLI offline 纵向路径已开始接通：run manifest、source visibility gate、fake DeepSeek-shaped
-adapter boundary、answer packet、runtime JSONL journal 和独立 verifier，用于证明 CLI 编排不可绕过保障层，而非真实模型能力。
+2026-07-27 起，canonical guarded CLI offline 主路径已扩展为：instruction provenance gate → tool availability
+gate → orientation checkpoint → source visibility gate → fake DeepSeek-shaped adapter boundary → answer packet →
+runtime JSONL journal → independent verifier。配套新增工具可用性探测/信念停滞 guard、检索子代理 no-model
+fixture，以及 Windows native sandbox 合同层；这些均不调用真实模型、不联网、不读取 credential。
 P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`run` 支持 `--ask` 生成冻结 task contract，
-也支持 `--task` 复用既有合同。当前入口仍是 offline/fake，
-不调用真实模型、不联网、不读取 credential。
+也支持 `--task` 复用既有合同。当前入口仍是 offline/fake。
 
 本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它从 FEP/LIF 工作流暴露的问题出发，但把
 来源先行、证据分层、独立性、反例搜索、机械验证和 claim 边界抽为通用科学保障能力，目标是让接入的模型
@@ -56,11 +58,19 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`r
 - [`adr/ADR-0004-general-science-profile-layering.md`](adr/ADR-0004-general-science-profile-layering.md)：冻结 `general-science → lif-research` 的只增不减分层和通用测试不得使用 LIF 内部任务的隔离边界。
 - [`assurance/README.md`](assurance/README.md)：P0–P5 runtime-neutral 合同与 development fixture，包括会话生命周期、workspace-first/Docker backend policy、guarded execution、指令来源、能力子集、metadata audit、恢复授权和合成用户任务预检。
 - [`assurance/source-visibility-ledger-v0.1.schema.json`](assurance/source-visibility-ledger-v0.1.schema.json)：外部文献、帖子和网页引用后的全文可见性 ledger；配套 gate receipt 会按 claim 类型要求 metadata/partial/full-text 状态并输出 allow/defer/block。
-- [`assurance/canonical_cli.py`](assurance/canonical_cli.py)：canonical guarded CLI 的 offline/fake P0 纵向路径；串联 run manifest、source visibility gate、fake adapter boundary、answer packet、runtime journal 和独立 verifier。
+- [`assurance/canonical_cli.py`](assurance/canonical_cli.py)：canonical guarded CLI 的 offline/fake 纵向路径；串联 run manifest、instruction provenance gate、tool availability gate、orientation checkpoint、source visibility gate、fake adapter boundary、answer packet、runtime journal 和独立 verifier。
 - [`gsa.py`](gsa.py)：P0.5 顶层 CLI dispatcher；提供 `doctor`、`source gate`、`run` 和 `verify`。
 - [`assurance/task-contract-v0.1.schema.json`](assurance/task-contract-v0.1.schema.json)：冻结单次 CLI run 的任务合同；记录原始问题、source ledger、权限、claim 上限和输出要求。
+- [`assurance/instruction_provenance_gate.py`](assurance/instruction_provenance_gate.py)：入口级指令来源/反注入门禁（GAK-INJ-001 offline）；在模型调用前对多来源指令做 batch 分类与 block/defer/allow。
+- [`assurance/tool_availability_gate.py`](assurance/tool_availability_gate.py)：工具可用性机械探测与 gate receipt；生成必须注入模型上下文的 AVAILABLE/UNAVAILABLE 列表，并检测工具信念错配/停滞。
+- [`assurance/retrieval_subagent.py`](assurance/retrieval_subagent.py)：检索子代理 no-model fixture；冻结委托合同、结构化结果、来源可见性校验与关闭不清零协议。
+- [`assurance/windows_sandbox.py`](assurance/windows_sandbox.py)：Windows native AppContainer + Job Object 探针与 candidate builder；live probe 通过前 selection 保持 noncompliant。
 - [`docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md`](docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md)：当前 offline/fake CLI 入口的最短使用说明。
 - [`docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md`](docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md)：首个 canonical guarded CLI offline 主路径审计；确认 gate-before-model、fake no-network adapter、answer packet 与 verifier 边界。
+- [`docs/GAK_INJ_001_AUDIT_2026-07-27.md`](docs/GAK_INJ_001_AUDIT_2026-07-27.md)：instruction provenance gate offline 切片与 canonical CLI 接入状态。
+- [`docs/TOOL_AVAILABILITY_GATE_AUDIT_2026-07-27.md`](docs/TOOL_AVAILABILITY_GATE_AUDIT_2026-07-27.md)：工具可用性门禁、belief mismatch/stagnation 与 orientation 注入审计。
+- [`docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md`](docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md)：检索子代理合同/结果/关闭协议 no-model 审计。
+- [`docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`](docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md)：Windows native sandbox 合同与 verifier；live probe 仍为关闭条件。
 - [`docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md`](docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md)：首个非 LIF 通用科学多文件只读闭环、claim 强度门禁、正反回归与保留缺口。
 - [`docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md`](docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md)：版本化 validator registry、设计/动作 schema、artifact finite gate 与基础统计报告完整性边界。
 - [`docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md`](docs/GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT_2026-07-25.md)：artifact schema registry、结果摘要绑定、不可弱化映射与首个数值/统计基础 schema。

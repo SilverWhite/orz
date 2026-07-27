@@ -3,8 +3,11 @@
 状态：2026-07-25 P0 合同已冻结，P1 已完成 development/conformance fixture，P2 Docker
 strict sandbox 与 P2.5 无模型 guarded execution 纵向切片已实测通过；P3 指令权限与 capability
 继承、P4 metadata audit/compaction/恢复授权，以及 P4.5 workspace-first 集成链 development
-纵向切片已通过；P5 internal mechanical preflight 已通过，但真实参与者测试尚未开始。Windows
-native strict backend、P3/P4 真实 adapter 与恢复执行接入，以及 P5 人类可用性仍未关闭。
+纵向切片已通过；P5 internal mechanical preflight 已通过，但真实参与者测试尚未开始。
+2026-07-27 起：instruction provenance gate 与 tool availability gate 已接入 canonical CLI offline
+主路径；Windows native sandbox 已具备 profile/observation/verifier 合同，但 live AppContainer
+probe 未通过；retrieval sub-agent 仅 no-model fixture。Windows native strict backend、P3/P4
+真实 adapter 与恢复执行接入，以及 P5 人类可用性仍未关闭。
 本文记录已接受的迁移方向，但**不表示普通用户安全能力已经就绪**。
 General Assurance Kernel 保持 runtime-neutral；Grok Build 是当前证据最完整的 reference runtime，
 不是强制或唯一底座。项目不建设第二套 model/tool/session runtime。
@@ -284,13 +287,13 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 | ID | 缺口 | 当前证据/状态 | 严重度 | 下一产物与通过条件 |
 |---|---|---|---|---|
 | GAK-ARCH-001 | 通用内核、general-science 与 LIF profile 的 P0 schema/ADR | 2026-07-25 已新增 Effective Security Envelope、additive profile registry、sandbox/session/retention schema、正反 fixture 与 ADR-0003/0004 | P0 已关闭 | 后续实现必须消费这些合同；不得绑定单一 runtime、复制通用 runtime 或把 LIF 路由回灌 general-science |
-| GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；Windows native 仍只有 Job Object/防火墙部分证据 | 阻断 | 实现 restricted token/AppContainer 或等价 native boundary；无 Docker 路径才可关闭 |
+| GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；2026-07-27 已新增 Windows native AppContainer profile/observation/verifier 与 selection 集成，live probe 未跑，candidate 固定 `noncompliant`/`appcontainer_probe_not_yet_run` | 阻断 | 本机 live probe 产生 compliant observation；`windows_native_strict` selection 返回 allow；无 Docker 路径才可关闭 |
 | GAK-DOCKER-001 | Docker 一键启动与 digest/mount receipt | P2 已固定镜像摘要、唯一 workspace mount、无 socket/home、network-off、resource limits；P2.5 已接入固定 no-model action、conversation lifecycle、进程追踪与 HMAC receipt | P2/P2.5 development 已关闭 | 接入通用 runtime/tool broker、磁盘 quota、并发/crash recovery 后再评估 production closure |
 | GAK-TRUST-001 | trust receipt 尚未统一到所有入口 | Grok launcher 已有双 trust receipt；其他 future adapters 未统一 | 高 | discovery 前统一 receipt；文件变化使 grant 失效 |
 | GAK-ID-001 | 安装密钥/会话 envelope 尚未产品化 | P1 已 observed Windows DPAPI 随机 key、HMAC envelope、tamper fail；无 rotation/revocation/key history | 高 | 补 rotation/revocation、并发锁、crash recovery 与迁移 fixture 后才能关闭 |
 | GAK-SESSION-001 | conversation namespace 尚未接入实际 runtime | P1 fixture 已默认拒绝 cross-session read，显式 import 标 `imported_untrusted`，resume 创建新 namespace/envelope | 高 | adapter 接入后证明所有 tool/snapshot/query 路径受同一 controller 约束 |
 | GAK-RET-001 | retention/deletion controller 尚未产品化 | P1 fixture 已完成 16 类显式删除、成功/失败 terminal receipt、HMAC 与独立 verifier；仅覆盖临时本地 namespace | 阻断 | 补 crash/retry/并发、真实 storage adapter 与失败恢复；不得扩大删除边界 |
-| GAK-INJ-001 | instruction provenance/anti-injection gate 尚未接入所有真实入口 | P3 development gate 已将 project/web/tool/memory 作为 data-only 并以签名 receipt 重建路由；尚无 production parser/adapter enforcement | 阻断 | 所有 runtime/tool 入口消费同一 gate；path/endpoint canonicalizer 和 adapter bypass 测试通过 |
+| GAK-INJ-001 | instruction provenance/anti-injection gate 尚未接入所有真实入口 | P3 development gate 已将 project/web/tool/memory 作为 data-only 并以签名 receipt 重建路由；2026-07-27 入口级 batch gate 已实现并接入 canonical CLI offline run（instruction provenance → tool availability → source visibility → fake model）；尚无 production parser/真实 adapter enforcement | 阻断 | 所有 runtime/tool 入口消费同一 gate；path/endpoint canonicalizer 和 adapter bypass 测试通过 |
 | GAK-CHILD-001 | 子 Agent/子进程 capability 传递尚未统一到实际 runtime | P3 已生成父 envelope 子集的签名 child envelope；越权与 remote MCP 本地能力 fixture 拒绝 | 高 | 实际 spawn/MCP adapter 强制使用 child envelope，并证明无旁路 |
 | GAK-NET-001 | network permit 尚未覆盖所有 tool/runtime 路径 | DeepSeek one-shot 与 broker 已有窄证明 | 高 | endpoint/body/attempt/retry-bound permit 覆盖 web、MCP、Git、provider；redirect/proxy 负例 |
 | GAK-CRED-001 | 凭据仍存在不可控内存/内核副本 | Credential Manager 短租约和 WER NOHEAP 已实现；文档明确非绝对零化 | 高 | 保持“不绝对”声明；扩展 child env、dump、artifact、container mount 负例 |
@@ -330,14 +333,15 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 
 ### P2：本机严格 sandbox 与 Docker 快捷入口
 
-状态：**Docker development/conformance 纵向切片已完成；Windows native strict backend 未关闭。**
+状态：**Docker development/conformance 纵向切片已完成；Windows native strict backend 合同层已建，live probe 未关闭。**
 
 1. backend probe/selection receipt 已实现，不执行真实模型；
 2. Docker 固定镜像与最小 mount/network/resource profile 已实测通过；
-3. Windows native candidate 明确标为 observed-noncompliant，Job Object 仍只是一层；
+3. Windows native 已有 AppContainer profile/observation/verifier 与 candidate builder；未 live 通过前 candidate 固定 noncompliant；
 4. requested backend 不可用或不合规时已验证 fail closed，不做静默 fallback；
 5. 详细证据见
-   [`../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)。
+   [`../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md) 与
+   [`../docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`](../docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md)。
 
 ### P2.5：无模型 guarded execution 收口
 
@@ -353,20 +357,22 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 
 ### P3：反注入与 capability 继承
 
-状态：**2026-07-25 已完成 development/conformance 纵向切片；production parser 与 adapter
-enforcement 未关闭。**
+状态：**2026-07-25 已完成 development/conformance 纵向切片；2026-07-27 入口级 batch gate 已接入
+canonical CLI offline 路径；production parser 与真实 adapter enforcement 未关闭。**
 
 1. 已冻结八类 instruction provenance；未建立 trust 的 project、web/external、tool、memory、
    derived summary 均不得提权，内容 receipt 只保留摘要；
 2. 已以 7 个组合测试覆盖 project/web/tool/memory data-only、恶意措辞不提权、篡改 fail closed，
    不扩张为正反例笛卡尔积；
-3. child process、child agent、remote MCP 已有 capability subset verifier 和签名 child envelope；
+3. 2026-07-27 `instruction_provenance_gate` 对多来源指令做 batch 分类与静态注入检测，并写入
+   canonical CLI journal（gate 先于 model）；仍为 offline/fake，不解析真实 content bytes；
+4. child process、child agent、remote MCP 已有 capability subset verifier 和签名 child envelope；
    escalation 与 remote MCP 本地能力均拒绝；
-4. sensitive/external side effect 已使用 action/target/impact/attempt/TTL 精确绑定 permit，并以排他
+5. sensitive/external side effect 已使用 action/target/impact/attempt/TTL 精确绑定 permit，并以排他
    consumption claim 拒绝错绑、过期和重放；
-5. `action-authorization-receipt` 明确只有 kernel envelope/consumed permit 可以授权，模型或内容声称
+6. `action-authorization-receipt` 明确只有 kernel envelope/consumed permit 可以授权，模型或内容声称
    “approved”始终忽略；
-6. 当前只接受已规范化结构化动作，不解析 shell string；实际 path/endpoint canonicalizer、所有
+7. 当前只接受已规范化结构化动作，不解析 shell string；实际 path/endpoint canonicalizer、所有
    runtime/tool adapter 接入、crash recovery 和 key lifecycle 留在 GAK-INJ/CHILD/ID。
 
 ### P4：审计、compaction、恢复
