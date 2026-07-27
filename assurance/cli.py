@@ -89,7 +89,9 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
         },
         "limitations": [
             "doctor verifies repository mechanics and CLI wiring, not scientific correctness.",
-            "canonical run remains fake/offline until a separate real adapter path is added.",
+            "canonical run supports fake (offline) and real (DeepSeek API) adapter modes.",
+            "real adapter reads credentials from Windows Credential Manager and never persists them.",
+            "GSA-CORE review and evaluation bridges exist but have not been connected to a live runtime.",
         ],
     }
     return report
@@ -118,7 +120,7 @@ def _run_doctor(args: argparse.Namespace) -> int:
         f"workspace: {report['workspace_root']}",
         f"python: {report['python']['version']}",
         repo_line,
-        "canonical run: fake/offline, network disabled, credentials disabled",
+        f"canonical run: fake (offline) and real (DeepSeek API, {report['runtime_boundaries']['canonical_run_real']})",
     ]
     _print_or_json(report, json_output=args.json, human_lines=human_lines)
     return 0 if report["valid"] else 1
