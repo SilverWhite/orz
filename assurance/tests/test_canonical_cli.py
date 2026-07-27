@@ -14,7 +14,7 @@ from assurance import (
 )
 from assurance.canonical_cli_main import main as canonical_cli_main
 from assurance.task_contract import build_task_contract_from_ask
-from assurance.utils import atomic_write_json
+from assurance.utils import atomic_write_json, canonical_bytes, sha256_bytes
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -305,6 +305,228 @@ class CanonicalCliWithInstructionGateTests(unittest.TestCase):
                         "instruction provenance gate must precede source visibility gate")
 
         verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    # -- Journal integrity negative tests -----------------------------------
+
+    def _run_and_get_journal(self) -> list[dict]:
+        run_canonical_guarded_cli(
+            run_root=self.run_root,
+            source_ledger_path=SOURCE_LEDGER,
+            ask=ASK,
+            created_at=CREATED_AT,
+        )
+        journal_path = self.run_root / "events.jsonl"
+        return [
+            json.loads(line)
+            for line in journal_path.read_text(encoding="utf-8").splitlines()
+        ]
+
+    def _write_journal(self, events: list[dict]) -> None:
+        journal_path = self.run_root / "events.jsonl"
+        journal_path.write_text(
+            "\n".join(
+                json.dumps(e, sort_keys=True, separators=(",", ":"))
+                for e in events
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _renumber(events: list[dict]) -> list[dict]:
+        """Re-number event sequences AND recompute all event_sha256 values
+        so the hash chain stays valid."""
+        previous_hash: str | None = None
+        for i, event in enumerate(events):
+            event["sequence"] = i
+            event["previous_event_sha256"] = previous_hash
+            projection = dict(event)
+            projection.pop("event_sha256", None)
+            event["event_sha256"] = sha256_bytes(canonical_bytes(projection))
+            previous_hash = event["event_sha256"]
+        return events
+
+    def test_verifier_detects_hash_chain_break(self) -> None:
+        events = self._run_and_get_journal()
+        # Break the chain by modifying previous_event_sha256
+        events[3]["previous_event_sha256"] = "0" * 64
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError, "previous hash mismatch"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_detects_sequence_mismatch(self) -> None:
+        events = self._run_and_get_journal()
+        events[2]["sequence"] = 99
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError, "sequence mismatch"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_detects_manifest_digest_mismatch(self) -> None:
+        events = self._run_and_get_journal()
+        events[0]["run_manifest_sha256"] = "0" * 64
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError, "manifest digest mismatch"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_detects_run_id_mismatch(self) -> None:
+        events = self._run_and_get_journal()
+        events[1]["run_id"] = "RUN-WRONG-001"
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError, "run_id mismatch"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_detects_payload_digest_mismatch(self) -> None:
+        events = self._run_and_get_journal()
+        events[2]["payload_sha256"] = "0" * 64
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError, "payload digest mismatch"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_detects_tampered_event_digest(self) -> None:
+        events = self._run_and_get_journal()
+        # Change the event_sha256 directly to break the event digest check
+        events[2]["event_sha256"] = "f" * 64
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError, "event digest mismatch"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_non_terminal_after_terminal(self) -> None:
+        events = self._run_and_get_journal()
+        # Move a non-terminal event after the terminal one
+        extra = dict(events[2])
+        extra["event_id"] = extra["event_id"].replace("-002-", "-099-")
+        events.append(extra)
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError, "terminal event is not last"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_multiple_terminal_events(self) -> None:
+        events = self._run_and_get_journal()
+        # Duplicate the terminal event
+        extra = dict(events[-1])
+        extra["event_id"] = extra["event_id"].replace("-009-", "-099-")
+        events.append(extra)
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "terminal event is not last"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_missing_terminal_event(self) -> None:
+        events = self._run_and_get_journal()
+        # Remove the terminal event (run_finished)
+        events.pop()
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "exactly one terminal event"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_empty_journal(self) -> None:
+        self._run_and_get_journal()
+        journal_path = self.run_root / "events.jsonl"
+        journal_path.write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(AssuranceError, "journal is empty"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_blank_journal_line(self) -> None:
+        self._run_and_get_journal()
+        journal_path = self.run_root / "events.jsonl"
+        journal_path.write_text("\n\n", encoding="utf-8")
+        with self.assertRaisesRegex(AssuranceError, "blank journal line"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    # -- Gate ordering negative tests ---------------------------------------
+
+    def test_verifier_rejects_missing_ipg_event(self) -> None:
+        events = self._run_and_get_journal()
+        events = [e for e in events if e["event_type"] != "instruction_provenance_gate"]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "lacks instruction provenance gate event"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_missing_tool_check_event(self) -> None:
+        events = self._run_and_get_journal()
+        events = [e for e in events if e["event_type"] != "tool_availability_check"]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "lacks tool availability check event"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_missing_orientation_checkpoint(self) -> None:
+        events = self._run_and_get_journal()
+        events = [e for e in events if e["event_type"] != "orientation_checkpoint"]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "lacks orientation checkpoint event"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_ipg_after_run_started(self) -> None:
+        events = self._run_and_get_journal()
+        ipg = [e for e in events if e["event_type"] == "instruction_provenance_gate"][0]
+        rs = [e for e in events if e["event_type"] == "run_started"][0]
+        ipg["sequence"], rs["sequence"] = rs["sequence"], ipg["sequence"]
+        # Re-order in the list so event_types reflect the swapped positions
+        ipg_idx = events.index(ipg)
+        rs_idx = events.index(rs)
+        events[ipg_idx], events[rs_idx] = events[rs_idx], events[ipg_idx]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "must precede run_started"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_tool_check_before_ipg(self) -> None:
+        events = self._run_and_get_journal()
+        tac = [e for e in events if e["event_type"] == "tool_availability_check"][0]
+        ipg = [e for e in events if e["event_type"] == "instruction_provenance_gate"][0]
+        tac_idx = events.index(tac)
+        ipg_idx = events.index(ipg)
+        events[tac_idx], events[ipg_idx] = events[ipg_idx], events[tac_idx]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "must follow instruction provenance gate"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_orientation_before_tool_check(self) -> None:
+        events = self._run_and_get_journal()
+        oc = [e for e in events if e["event_type"] == "orientation_checkpoint"][0]
+        tac = [e for e in events if e["event_type"] == "tool_availability_check"][0]
+        oc_idx = events.index(oc)
+        tac_idx = events.index(tac)
+        events[oc_idx], events[tac_idx] = events[tac_idx], events[oc_idx]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "must follow tool availability check"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_missing_model_request(self) -> None:
+        events = self._run_and_get_journal()
+        events = [e for e in events if e["event_type"] != "model_request"]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "lacks model_request boundary event"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
+
+    def test_verifier_rejects_model_request_before_gate_decision(self) -> None:
+        events = self._run_and_get_journal()
+        mr = [e for e in events if e["event_type"] == "model_request"][0]
+        gd = [e for e in events if e["event_type"] == "gate_decision"][0]
+        mr_idx = events.index(mr)
+        gd_idx = events.index(gd)
+        events[mr_idx], events[gd_idx] = events[gd_idx], events[mr_idx]
+        self._renumber(events)
+        self._write_journal(events)
+        with self.assertRaisesRegex(AssuranceError,
+                                    "before gate_decision"):
+            verify_canonical_guarded_cli_run(run_root=self.run_root)
 
     def test_auto_built_ipg_context_passes_with_user_ask(self) -> None:
         receipt = run_canonical_guarded_cli(
