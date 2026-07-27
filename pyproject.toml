@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gsa-assurance"
+version = "0.1.0"
+description = "General Scientific Assurance kernel — runtime-neutral agent assurance engineering"
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema>=4.20,<5",
+  "rfc8785==0.1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "PyYAML>=6,<7",
+  "pytest>=8",
+  "pytest-asyncio",
+]
+scripts = [
+  "PyYAML>=6,<7",
+]
+
+[project.scripts]
+gsa = "assurance.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["assurance*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"

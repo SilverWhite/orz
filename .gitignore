@@ -1,6 +1,8 @@
 _prototype_smoke/
 prototype/.pytest_cache/
-prototype/*.egg-info/
+*.egg-info/
+.build/
+
 **/__pycache__/
 **/*.py[cod]
 .tools/
