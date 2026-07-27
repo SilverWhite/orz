@@ -24,12 +24,45 @@ DEFAULT_CREDENTIAL_TARGET = "FEP-Agent/DeepSeek"
 DEFAULT_MODEL = "deepseek-v4-pro"
 
 
+class _FILETIME(ctypes.Structure):
+    """Windows FILETIME — 64-bit timestamp as low/high DWORD pair."""
+    _fields_ = [
+        ("dwLowDateTime", wintypes.DWORD),
+        ("dwHighDateTime", wintypes.DWORD),
+    ]
+
+
+class _CREDENTIALW(ctypes.Structure):
+    """Windows CREDENTIALW struct — used to read CredReadW results safely.
+
+    Field offsets are computed by ctypes at runtime, so this works across
+    32-bit, 64-bit, and ARM64 Windows without manual pointer arithmetic.
+    """
+    _fields_ = [
+        ("Flags",             wintypes.DWORD),
+        ("Type",              wintypes.DWORD),
+        ("TargetName",        wintypes.LPWSTR),
+        ("Comment",           wintypes.LPWSTR),
+        ("LastWritten",       _FILETIME),
+        ("CredentialBlobSize", wintypes.DWORD),
+        ("CredentialBlob",    ctypes.POINTER(ctypes.c_ubyte)),
+        ("Persist",           wintypes.DWORD),
+        ("AttributeCount",    wintypes.DWORD),
+        ("Attributes",        ctypes.c_void_p),
+        ("TargetAlias",       wintypes.LPWSTR),
+        ("UserName",          wintypes.LPWSTR),
+    ]
+
+
 def _read_windows_credential(target: str) -> str:
     """Read a generic credential from Windows Credential Manager.
 
-    Returns the credential as a UTF-16-LE decoded string.  The credential
-    buffer is zeroed after use (best-effort in Python).  Raises OSError or
-    AssuranceError on failure.
+    Uses the documented CREDENTIALW structure (no pointer arithmetic) so
+    the code is cross-architecture safe.  The credential blob is zeroed
+    via :func:`ctypes.memset` before ``CredFree`` releases the buffer.
+
+    Returns the credential as a UTF-16-LE decoded string.  Raises
+    :exc:`AssuranceError` on failure.
     """
     if os.name != "nt":
         raise AssuranceError(
@@ -58,17 +91,18 @@ def _read_windows_credential(target: str) -> str:
         )
 
     try:
-        cred_blob_size = ctypes.c_uint32.from_address(cred_ptr.value + 28)
-        cred_blob_ptr = ctypes.c_void_p.from_address(cred_ptr.value + 32)
+        cred = ctypes.cast(cred_ptr, ctypes.POINTER(_CREDENTIALW)).contents
+        blob_size = cred.CredentialBlobSize
+        blob_ptr = cred.CredentialBlob
 
-        if cred_blob_size.value == 0 or cred_blob_size.value % 2 != 0:
+        if blob_size == 0 or blob_size % 2 != 0:
             raise AssuranceError(
                 "Pinned credential blob is not valid UTF-16LE"
             )
 
-        char_count = cred_blob_size.value // 2
+        char_count = blob_size // 2
         secret_buf = ctypes.c_wchar * char_count
-        secret_ptr = ctypes.cast(cred_blob_ptr.value, ctypes.POINTER(secret_buf))
+        secret_ptr = ctypes.cast(blob_ptr, ctypes.POINTER(secret_buf))
         secret = secret_ptr.contents.value.rstrip("\x00")
 
         if len(secret) < 8 or len(secret) > 512:
@@ -85,13 +119,9 @@ def _read_windows_credential(target: str) -> str:
 
         result = secret
 
-        # Best-effort zero the credential blob
+        # Best-effort zero the credential blob via ctypes.memset
         try:
-            zero_buf = (ctypes.c_char * cred_blob_size.value).from_address(
-                cred_blob_ptr.value
-            )
-            for i in range(cred_blob_size.value):
-                zero_buf[i] = b"\x00"
+            ctypes.memset(blob_ptr, 0, blob_size)
         except Exception:
             pass
 
