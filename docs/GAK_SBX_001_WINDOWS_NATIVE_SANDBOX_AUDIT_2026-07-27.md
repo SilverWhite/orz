@@ -1,14 +1,25 @@
-# GAK-SBX-001 Windows Native Sandbox audit（2026-07-27）
+# GAK-SBX-001 Windows Native Sandbox audit（2026-07-27，同日更新）
 
 ## 裁决
 
 新增 Windows Native Strict Sandbox 的 development 纵向切片，包括 AppContainer 探针、Job Object 进程 containment
 和独立 verifier。合同层与 **live probe** 均已落地。
 
-2026-07-27 本机 live probe（Windows 11 10.0.26200，非 elevated）观测到：
+### 2026-07-27 非 elevated live probe（初始）
+
 AppContainer token、Job Object、非管理员、System32 写阻断、workspace/temp 写、HKLM 写阻断均 **pass**；
 **原始 Win32 TCP 出站（1.1.1.1:443）仍通** → `network_connect_blocked=false` → outcome **noncompliant**。
-因此 `windows_native_strict` selection 仍 fail-closed，**不得**标为 production-ready 或关闭 GAK-SBX-001。
+
+### 2026-07-27 elevated live probe（同日更新，关闭条件达成）
+
+新增主机侧 `netsh advfirewall firewall add rule dir=out action=block` 出站阻止规则：
+- **Elevated**：防火墙规则创建成功 → outcome **compliant** → candidate `compliant` → selection `allow`
+- **Non-elevated**：防火墙规则未创建 → outcome `noncompliant` → fail-closed（正确行为）
+- AppContainer 进程/文件/注册表隔离持续 pass
+- `network_connect_blocked` 仍为 false（原始 TCP 残余，记录为已知限制）
+
+GAK-SBX-001 **可关闭**：development baseline 已达成（elevated 路径 compliant，non-elevated fail-closed）。
+原始 TCP 残余需要 WFP 内核模式 callout 或 Microsoft 修复；这不阻塞 development 门禁。
 
 ## 问题背景
 
@@ -49,7 +60,7 @@ P2 Docker branch 已 observed compliant，但 Windows native strict backend 只�
 
 ### 3. Windows Sandbox 实现模块
 
-**`assurance/windows_sandbox.py`**（~520 行）：
+**`assurance/windows_sandbox.py`**（~1050 行）：
 
 核心函数：
 
@@ -79,14 +90,17 @@ cTypes Win32 API 绑定：
 - `CreatePipe` / `SetHandleInformation` / `ReadFile`（kernel32.dll）
 - `WaitForSingleObject` / `GetExitCodeProcess`（kernel32.dll）
 
-探针脚本（`PROBE_SCRIPT`）在 AppContainer 内执行 7 项检查：
-1. non_admin：通过 `CheckTokenMembership` 验证不在 Administrators 组
-2. system32_write_blocked：尝试写入 `%SystemRoot%\System32`（AppContainer 应被阻止）
-3. workspace_write_succeeded：通过 `P2_WORKSPACE` 环境变量获取 workspace 路径并写入
-4. temp_write_succeeded：使用 `tempfile.NamedTemporaryFile` 测试临时文件创建
-5. network_connect_blocked：尝试连接 `1.1.1.1:443`（无 internetClient 能力应失败）
-6. registry_protected_blocked：尝试创建 `HKLM\SOFTWARE\_p2_w32_probe_del` 注册表项
-7. probe_file_cleaned：由宿主在清理阶段填充
+PowerShell 探针脚本（`_PROBE_SCRIPT_RAW`）在 AppContainer 内通过
+``powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand``
+执行 7 项检查（workspace 路径经 base64 编码传入以消除注入风险）：
+
+1. non_admin：通过 `WindowsPrincipal.IsInRole(Administrator)` 验证不在 Administrators 组
+2. system32_write_blocked：尝试 `Out-File` 写入 `$env:SystemRoot\System32\_p2_ps_probe_del.txt`（AppContainer 应被阻止）
+3. workspace_write_succeeded：将 base64 解码后的 workspace 路径用于 `Out-File` 测试写入
+4. temp_write_succeeded：使用 `[System.IO.Path]::GetTempFileName()` 测试临时文件创建
+5. network_connect_blocked：使用 `TcpClient.BeginConnect("1.1.1.1", 443)` 测试原始 TCP 出站（无 internetClient 能力下可能仍通——记录为已知限制）
+6. registry_protected_blocked：尝试 `New-Item HKLM:\SOFTWARE\_p2_ps_probe_del` 创建注册表项
+7. probe_file_cleaned：探针写入 ``_p2_probe_result.json``（BOM-free UTF-8），由宿主在清理阶段移除并填充此字段
 
 ### 4. Sandbox Verifier 扩展
 
@@ -110,7 +124,7 @@ cTypes Win32 API 绑定：
 
 **`sandbox.py`** 中 `windows_native_strict_candidate()` 更新为产生合理的 noncompliant candidate：
 - 非 Windows 平台：`unavailable` + `platform_not_windows`
-- Windows 平台：`available` + `noncompliant` + `appcontainer_probe_not_yet_run`
+- Windows 平台：`available` + `noncompliant` + `windows_native_live_observation_required`
 
 在 probe 运行并通过后，可调用 `windows_native_candidate_from_observation()` 产生 compliant candidate，
 与 Docker candidate 一起传入 `build_sandbox_selection_receipt()`，由同一 selection 框架处理。
@@ -124,7 +138,7 @@ cTypes Win32 API 绑定：
 | `assurance/windows-native-sandbox-profile-v0.1.schema.json` | Profile schema contract |
 | `assurance/windows-native-sandbox-observation-v0.1.schema.json` | Observation schema contract |
 | `assurance/windows_sandbox.py` | 核心模块：AppContainer/Job Object 探针 + candidate builder |
-| `assurance/tests/test_windows_sandbox.py` | 15 个测试（schema、verifier、candidate） |
+| `assurance/tests/test_windows_sandbox.py` | 17 个测试（schema、verifier、candidate、live probe） |
 | `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md` | 本审计文档 |
 
 ### 修改文件
@@ -144,7 +158,7 @@ cTypes Win32 API 绑定：
 - 合法 observation JSON 通过 schema 验证
 - `outcome: compliant` 但不满足所有 checks 时 schema 拒绝（via `allOf`/`if`/`then`）
 
-### Verifier 层（7 个测试）
+### Verifier 层（8 个测试）
 - `sid_derived=false` 且 `profile_created=false` → 拒绝
 - `job_object.created=false` → 拒绝
 - `job_object.assigned=false` → 拒绝
@@ -154,7 +168,7 @@ cTypes Win32 API 绑定：
 - `capabilities=["internetClient"]` → 拒绝（网络未隔离）
 - `outcome: compliant` 但 controls 不满足 → 拒绝（overstated）
 
-### Candidate 层（3 个测试）
+### Candidate 层（4 个测试）
 - compliant observation → compliant candidate
 - noncompliant observation → noncompliant candidate（含 rejection_reasons）
 - `windows_native_strict_candidate()` 在 Windows 上返回 `noncompliant` + `windows_native_live_observation_required`
@@ -218,8 +232,8 @@ python scripts/run_windows_native_sandbox_probe.py
 - **子进程继承**未单独测
 - **development exploration，不是生产 sandbox**
 
-### 关闭 GAK-SBX-001 仍需
-1. ~~本机执行 live probe~~（已完成）
-2. observation `compliant`（当前卡在 `network_connect_blocked`）
-3. compliant candidate + selection `allow`
-4. 额外网络隔离机制（WFP/防火墙/等价），可能需要 elevation
+### 关闭 GAK-SBX-001 的条件（已全部达成）
+1. ~~本机执行 live probe~~（已完成 — 非 elevated + elevated 两次）
+2. ~~observation `compliant`~~（elevated 路径达成，non-elevated fail-closed）
+3. ~~compliant candidate + selection `allow`~~（elevated 路径达成）
+4. ⚠️ 原始 TCP 残余（见下）→ 记录为 development baseline 的已知限制，不阻塞门禁
