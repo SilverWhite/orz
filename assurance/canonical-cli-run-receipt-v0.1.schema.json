@@ -66,8 +66,7 @@
         "answer_binds_source_gate",
         "answer_binds_task_contract",
         "journal_hash_chain_valid",
-        "terminal_exactly_once",
-        "fake_adapter_no_network"
+        "terminal_exactly_once"
       ],
       "properties": {
         "manifest_valid": { "type": "boolean" },
@@ -82,7 +81,8 @@
         "answer_binds_task_contract": { "type": "boolean" },
         "journal_hash_chain_valid": { "type": "boolean" },
         "terminal_exactly_once": { "type": "boolean" },
-        "fake_adapter_no_network": { "type": "boolean" }
+        "fake_adapter_no_network": { "type": "boolean" },
+        "real_network_used": { "type": "boolean" }
       }
     },
     "limitations": {

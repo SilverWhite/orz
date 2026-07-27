@@ -9,6 +9,7 @@ from typing import Any, Sequence
 
 from .canonical_cli import (
     run_canonical_guarded_cli,
+    run_canonical_guarded_cli_real,
     verify_canonical_guarded_cli_run,
 )
 from .errors import AssuranceError
@@ -76,14 +77,15 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
         "entrypoints": {
             "doctor": "python gsa.py doctor",
             "source_gate": "python gsa.py source gate --ledger <path>",
-            "run": "python gsa.py run --ask <question> --source-ledger <path> --run-root <path>",
+            "run_fake": "python gsa.py run --ask <q> --source-ledger <path> --run-root <path>",
+            "run_real": "python gsa.py run --mode real --ask <q> --source-ledger <path> --run-root <path>",
             "verify": "python gsa.py verify --run-root <path>",
         },
         "runtime_boundaries": {
             "default_network": "disabled",
             "default_credential_use": "disabled",
-            "canonical_run_adapter": "fake_offline",
-            "real_model_invocation": "not_performed_by_p0_5_cli",
+            "canonical_run_fake": "offline_no_network",
+            "canonical_run_real": "deepseek_api_exactly_one_request",
         },
         "limitations": [
             "doctor verifies repository mechanics and CLI wiring, not scientific correctness.",
@@ -145,18 +147,33 @@ def _run_source_gate(args: argparse.Namespace) -> int:
 
 
 def _run_canonical(args: argparse.Namespace) -> int:
-    receipt = run_canonical_guarded_cli(
-        run_root=args.run_root,
-        source_ledger_path=args.source_ledger,
-        instruction_provenance_gate_context_path=args.instruction_context,
-        ask=args.ask,
-        task_contract_path=args.task,
-        run_id=args.run_id,
-        task_id=args.task_id,
-        created_at=args.created_at,
-    )
+    if args.mode == "real":
+        receipt = run_canonical_guarded_cli_real(
+            run_root=args.run_root,
+            source_ledger_path=args.source_ledger,
+            instruction_provenance_gate_context_path=args.instruction_context,
+            ask=args.ask,
+            task_contract_path=args.task,
+            run_id=args.run_id,
+            task_id=args.task_id,
+            created_at=args.created_at,
+            credential_target=args.credential_target,
+            api_timeout_seconds=args.api_timeout,
+        )
+    else:
+        receipt = run_canonical_guarded_cli(
+            run_root=args.run_root,
+            source_ledger_path=args.source_ledger,
+            instruction_provenance_gate_context_path=args.instruction_context,
+            ask=args.ask,
+            task_contract_path=args.task,
+            run_id=args.run_id,
+            task_id=args.task_id,
+            created_at=args.created_at,
+        )
+    mode_label = "real" if args.mode == "real" else "fake"
     human_lines = [
-        f"canonical run: {'valid' if receipt['valid'] else 'invalid'}",
+        f"canonical run [{mode_label}]: {'valid' if receipt['valid'] else 'invalid'}",
         f"run_id: {receipt['run_id']}",
         f"run_root: {receipt['run_root']}",
         f"events: {receipt['event_count']} ({', '.join(receipt['event_types'])})",
@@ -202,7 +219,7 @@ def _parser() -> argparse.ArgumentParser:
     gate.add_argument("--summary", action="store_true")
     gate.set_defaults(handler=_run_source_gate)
 
-    run = subparsers.add_parser("run", help="Run canonical guarded CLI offline path.")
+    run = subparsers.add_parser("run", help="Run canonical guarded CLI path.")
     run.add_argument("--run-root", type=Path, required=True)
     run.add_argument("--source-ledger", type=Path)
     run.add_argument("--instruction-context", type=Path)
@@ -212,6 +229,23 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--task-id", default="TASK-CANONICAL-CLI-FAKE-001")
     run.add_argument("--created-at", default=None)
     run.add_argument("--json", action="store_true")
+    run.add_argument(
+        "--mode",
+        choices=["fake", "real"],
+        default="fake",
+        help="Adapter mode: fake (offline, no network) or real (calls DeepSeek API).",
+    )
+    run.add_argument(
+        "--credential-target",
+        default="FEP-Agent/DeepSeek",
+        help="Windows Credential Manager target name for the DeepSeek API key.",
+    )
+    run.add_argument(
+        "--api-timeout",
+        type=int,
+        default=60,
+        help="Timeout in seconds for the DeepSeek API call.",
+    )
     run.set_defaults(handler=_run_canonical)
 
     verify = subparsers.add_parser("verify", help="Verify canonical guarded CLI run root.")

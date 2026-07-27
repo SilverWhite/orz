@@ -19,9 +19,15 @@ from .canonical_cli import (
     build_canonical_cli_run_manifest,
     build_fake_answer_packet,
     run_canonical_guarded_cli,
+    run_canonical_guarded_cli_real,
     verify_canonical_guarded_cli_run,
 )
 from .conversation import ConversationNamespace
+from .deepseek_adapter import (
+    build_real_deepseek_answer_packet,
+    build_real_deepseek_context,
+    call_deepseek_api,
+)
 from .deepseek_api_observation import (
     run_deepseek_api_observation_pipeline,
     verify_deepseek_api_observation_pipeline,
@@ -246,6 +252,10 @@ __all__ = [
     "render_visibility_summary",
     "run_disposable_reproduction",
     "run_canonical_guarded_cli",
+    "run_canonical_guarded_cli_real",
+    "build_real_deepseek_answer_packet",
+    "build_real_deepseek_context",
+    "call_deepseek_api",
     "run_deepseek_api_observation_pipeline",
     "run_deepseek_stream_observation_fixture",
     "run_docker_sandbox_probe",
