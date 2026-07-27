@@ -60,9 +60,18 @@ def _scan_category(
     return sorted(files), unsafe_entries
 
 
-def _remove_empty_directories(category_root: Path, conversation_root: Path) -> None:
+def _remove_empty_directories(
+    category_root: Path, conversation_root: Path
+) -> list[str]:
+    """Remove empty directories under *category_root*, then the root itself.
+
+    Returns a (possibly empty) list of diagnostic strings for any directory
+    that could not be removed, so callers can surface the failures rather
+    than silently discarding them.
+    """
+    diagnostics: list[str] = []
     if not category_root.exists() or is_link_or_reparse(category_root):
-        return
+        return diagnostics
     directories: list[Path] = []
     for current_root, dirs, _ in os.walk(category_root, followlinks=False):
         base = Path(current_root)
@@ -74,12 +83,17 @@ def _remove_empty_directories(category_root: Path, conversation_root: Path) -> N
         require_within(directory, conversation_root, must_exist=True)
         try:
             directory.rmdir()
-        except OSError:
-            pass
+        except OSError as exc:
+            diagnostics.append(
+                f"could not remove directory {directory}: {exc}"
+            )
     try:
         category_root.rmdir()
-    except OSError:
-        pass
+    except OSError as exc:
+        diagnostics.append(
+            f"could not remove category root {category_root}: {exc}"
+        )
+    return diagnostics
 
 
 def _signed_receipt(
@@ -341,7 +355,18 @@ class ArchiveController:
                             error_pairs.add((category, "delete_failed"))
                             category_failed += 1
 
-                    _remove_empty_directories(category_root, namespace.root)
+                    cleanup_diags = _remove_empty_directories(category_root, namespace.root)
+                    if cleanup_diags:
+                        for diag in cleanup_diags:
+                            writer.append_event(
+                                "file_deleted",
+                                {
+                                    "category": category,
+                                    "relative_path": "",
+                                    "error": diag,
+                                    "attempt": 0,
+                                },
+                            )
                     remaining_files, remaining_unsafe = _scan_category(
                         category_root, namespace.root
                     )

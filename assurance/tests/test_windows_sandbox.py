@@ -100,6 +100,7 @@ class WindowsNativeObservationSchemaTests(unittest.TestCase):
             },
             "outcome": "compliant",
             "evidence_status": "observed",
+            "diagnostics": [],
             "limitations": ["test"],
         }
         errors = _schema_errors(
@@ -149,6 +150,7 @@ class WindowsNativeObservationSchemaTests(unittest.TestCase):
             },
             "outcome": "compliant",
             "evidence_status": "observed",
+            "diagnostics": [],
             "limitations": ["test"],
         }
         errors = _schema_errors(
@@ -200,6 +202,7 @@ class WindowsNativeObservationVerifierTests(unittest.TestCase):
             },
             "outcome": "compliant",
             "evidence_status": "observed",
+            "diagnostics": [],
             "limitations": ["test"],
         }
 
@@ -337,6 +340,7 @@ class WindowsNativeCandidateTests(unittest.TestCase):
             },
             "outcome": "compliant",
             "evidence_status": "observed",
+            "diagnostics": [],
             "limitations": ["test"],
         }
         candidate = windows_native_candidate_from_observation(obs)
@@ -387,6 +391,7 @@ class WindowsNativeCandidateTests(unittest.TestCase):
             },
             "outcome": "noncompliant",
             "evidence_status": "observed",
+            "diagnostics": [],
             "limitations": ["test"],
         }
         candidate = windows_native_candidate_from_observation(obs)
@@ -446,6 +451,7 @@ class WindowsNativeCandidateTests(unittest.TestCase):
             },
             "outcome": "noncompliant",
             "evidence_status": "observed",
+            "diagnostics": [],
             "limitations": ["network residual"],
         }
         # Bypass profile digest match for this structural unit test.

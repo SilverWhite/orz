@@ -281,11 +281,13 @@ class WindowsDpapiInstallationKeyStore:
                 label="new installation key metadata",
             )
             atomic_write_json(metadata_path, metadata)
-        except Exception:
+        except Exception as orig_exc:
             try:
                 blob_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as cleanup_exc:
+                orig_exc.add_note(
+                    f"blob cleanup also failed during key generation rollback: {cleanup_exc}"
+                )
             raise
         finally:
             for index in range(len(secret)):

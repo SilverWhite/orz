@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .contracts import validate_contract
 from .utils import utc_now
+
+CLASSIFICATION_SCHEMA = "adapter-failure-classification-v0.1.schema.json"
 
 
 FAILURE_CATEGORIES = {
@@ -112,7 +115,7 @@ def classify_adapter_error(
 
     info = FAILURE_CATEGORIES.get(category, FAILURE_CATEGORIES["unknown"])
 
-    return {
+    classification = {
         "schema_version": "0.1.0-draft",
         "classification_kind": "adapter_failure_classification",
         "classified_at": utc_now(),
@@ -134,6 +137,12 @@ def classify_adapter_error(
             "Not all failure modes are distinguishable from available diagnostics.",
         ],
     }
+    validate_contract(
+        classification,
+        CLASSIFICATION_SCHEMA,
+        label="adapter failure classification",
+    )
+    return classification
 
 
 def build_failure_recovery_plan(

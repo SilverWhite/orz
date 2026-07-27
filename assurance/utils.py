@@ -63,12 +63,14 @@ def atomic_write_bytes(path: Path, value: bytes, *, overwrite: bool = False) -> 
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-    except Exception:
+    except Exception as orig_exc:
         if temporary is not None:
             try:
                 Path(temporary).unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as cleanup_exc:
+                orig_exc.add_note(
+                    f"temp file cleanup also failed in atomic_write: {cleanup_exc}"
+                )
         raise
 
 
@@ -91,14 +93,16 @@ def exclusive_create_bytes(path: Path, value: bytes) -> None:
             os.fsync(handle.fileno())
     except FileExistsError as exc:
         raise AssuranceError(f"exclusive artifact already exists: {path}") from exc
-    except Exception:
+    except Exception as orig_exc:
         if descriptor is not None:
             os.close(descriptor)
         if created:
             try:
                 path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as cleanup_exc:
+                orig_exc.add_note(
+                    f"cleanup unlink also failed in exclusive_create_bytes: {cleanup_exc}"
+                )
         raise
 
 

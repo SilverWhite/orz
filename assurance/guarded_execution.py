@@ -737,6 +737,7 @@ def execute_guarded_no_model_action(
         if not container_absent:
             raise AssuranceError("guarded container remains after removal")
     finally:
+        cleanup_diagnostics: list[str] = []
         if container_created and not container_absent:
             try:
                 selected_tracker.run(
@@ -745,13 +746,17 @@ def execute_guarded_no_model_action(
                     profile["resources"]["wall_time_seconds"],
                     allow_nonzero=True,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                cleanup_diagnostics.append(
+                    f"docker rm --force {container_name} failed: {exc}"
+                )
         if probe_path.exists() or probe_path.is_symlink():
             try:
                 probe_path.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                cleanup_diagnostics.append(
+                    f"probe file unlink {probe_path} failed: {exc}"
+                )
         probe_removed = not probe_path.exists() and not probe_path.is_symlink()
 
     completed_at = utc_now()
@@ -813,6 +818,7 @@ def execute_guarded_no_model_action(
             "container_removed": container_absent,
             "container_absent": container_absent,
             "workspace_probe_removed": probe_removed,
+            "diagnostics": cleanup_diagnostics,
         },
         "outcome": "completed_verified",
         "evidence_status": "observed",
