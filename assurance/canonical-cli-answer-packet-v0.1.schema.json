@@ -50,7 +50,19 @@
         "model_id": { "type": "string", "minLength": 1 },
         "mode": { "enum": ["fake_offline", "real_development", "evaluation"] },
         "real_network_used": { "type": "boolean" },
-        "tool_calls_used": { "type": "boolean" }
+        "tool_calls_used": { "type": "boolean" },
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+          "properties": {
+            "prompt_tokens": { "type": "integer", "minimum": 0 },
+            "completion_tokens": { "type": "integer", "minimum": 0 },
+            "total_tokens": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "http_status_code": { "type": "integer" },
+        "finish_reason": { "type": "string" }
       }
     },
     "source_visibility_gate": {
