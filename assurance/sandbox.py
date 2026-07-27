@@ -382,11 +382,17 @@ def docker_candidate_from_observation(
 
 
 def windows_native_strict_candidate() -> dict[str, Any]:
+    """Static candidate without a live observation.
+
+    Always noncompliant: operators must run
+    ``run_windows_native_sandbox_probe`` and build a candidate from the
+    observation. A static PASS would overstate isolation.
+    """
     availability = "available" if os.name == "nt" else "unavailable"
     reasons = (
         ["platform_not_windows"]
         if os.name != "nt"
-        else ["appcontainer_probe_not_yet_run"]
+        else ["windows_native_live_observation_required"]
     )
     projection = {
         "backend_kind": "windows_native_strict",

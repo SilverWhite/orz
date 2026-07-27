@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from assurance.sandbox import windows_native_strict_candidate
 from assurance.windows_sandbox import (
+    run_windows_native_sandbox_probe,
     windows_native_candidate_from_observation,
 )
 from assurance.sandbox_verifier import verify_windows_native_observation
@@ -368,10 +369,107 @@ class WindowsNativeCandidateTests(unittest.TestCase):
             self.assertEqual(candidate["compliance_status"], "noncompliant")
             self.assertEqual(
                 candidate["rejection_reasons"],
-                ["appcontainer_probe_not_yet_run"],
+                ["windows_native_live_observation_required"],
             )
         else:
             self.assertEqual(candidate["availability"], "unavailable")
+
+    def test_verifier_allows_structural_noncompliant_when_not_required(
+        self,
+    ) -> None:
+        profile = _load(
+            ASSURANCE / "windows-native-sandbox-profile-v0.1.json"
+        )
+        obs = {
+            "schema_version": "0.1.0-draft",
+            "observation_kind": "windows_native_strict_sandbox_observation",
+            "observation_id": "WNO-STRUCT-OK",
+            "created_at": "2026-01-01T00:00:00Z",
+            "profile_sha256": "d" * 64,
+            "workspace_path_sha256": "e" * 64,
+            "appcontainer": {
+                "sid_derived": True,
+                "profile_created": True,
+                "profile_deleted": True,
+                "capabilities": [],
+            },
+            "job_object": {
+                "created": True,
+                "assigned": True,
+                "kill_on_close": True,
+                "memory_limit_bytes": 268435456,
+            },
+            "process": {"exit_code": 0, "shell_used": False},
+            "checks": {
+                "non_admin": True,
+                "system32_write_blocked": True,
+                "workspace_write_succeeded": True,
+                "temp_write_succeeded": True,
+                "network_connect_blocked": False,
+                "registry_protected_blocked": True,
+                "probe_file_cleaned": True,
+            },
+            "outcome": "noncompliant",
+            "evidence_status": "observed",
+            "limitations": ["network residual"],
+        }
+        # Bypass profile digest match for this structural unit test.
+        from assurance.utils import sha256_file
+
+        obs["profile_sha256"] = sha256_file(
+            ASSURANCE / "windows-native-sandbox-profile-v0.1.json"
+        )
+        result = verify_windows_native_observation(
+            obs, profile=profile, profile_path=None, require_compliant=False
+        )
+        self.assertTrue(result["valid"])
+        self.assertFalse(result["controls_compliant"])
+
+
+@unittest.skipUnless(os.name == "nt", "Windows native live probe requires Windows")
+class WindowsNativeLiveProbeTests(unittest.TestCase):
+    """Live AppContainer probe. May take several seconds; no network mocks."""
+
+    def test_live_probe_process_fs_registry_isolation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="w32-native-live-") as tmp:
+            workspace = Path(tmp)
+            marker = {
+                "schema_version": "0.1.0-draft",
+                "purpose": "windows-native-sandbox-probe",
+                "allow_container_write_probe": True,
+            }
+            (workspace / ".assurance-p2-disposable.json").write_text(
+                json.dumps(marker),
+                encoding="utf-8",
+            )
+            observation = run_windows_native_sandbox_probe(workspace)
+            checks = observation["checks"]
+            # Proven on Windows 11: AppContainer token + Job + FS/registry isolation.
+            self.assertTrue(observation["appcontainer"]["sid_derived"] or observation["appcontainer"]["profile_created"])
+            self.assertTrue(observation["job_object"]["created"])
+            self.assertTrue(observation["job_object"]["assigned"])
+            self.assertTrue(checks["non_admin"])
+            self.assertTrue(checks["system32_write_blocked"])
+            self.assertTrue(checks["workspace_write_succeeded"])
+            self.assertTrue(checks["temp_write_succeeded"])
+            self.assertTrue(checks["registry_protected_blocked"])
+            self.assertTrue(checks["probe_file_cleaned"])
+            self.assertEqual(observation["process"]["shell_used"], False)
+            self.assertEqual(observation["evidence_status"], "observed")
+            # Raw Win32 TCP may still succeed under empty-capability AppContainer.
+            # Do not claim full strict compliance until network is observed blocked.
+            if checks["network_connect_blocked"]:
+                self.assertEqual(observation["outcome"], "compliant")
+            else:
+                self.assertEqual(observation["outcome"], "noncompliant")
+                self.assertTrue(
+                    any("raw TCP" in item or "1.1.1.1" in item for item in observation["limitations"])
+                )
+            candidate = windows_native_candidate_from_observation(observation)
+            if observation["outcome"] == "compliant":
+                self.assertEqual(candidate["compliance_status"], "compliant")
+            else:
+                self.assertEqual(candidate["compliance_status"], "noncompliant")
 
 
 if __name__ == "__main__":

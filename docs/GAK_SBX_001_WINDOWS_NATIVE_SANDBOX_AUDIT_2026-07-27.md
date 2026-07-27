@@ -3,10 +3,12 @@
 ## 裁决
 
 新增 Windows Native Strict Sandbox 的 development 纵向切片，包括 AppContainer 探针、Job Object 进程 containment
-和独立 verifier。本轮实现已建立 schema/contract/fixture 层的完整 no-model 验收链：profile、observation、verifier 和 candidate selection。
-但**尚未完成实际 AppContainer 进程 live probe**——当前只验证了 schema 合同质量和 verifier 的 fail-closed 行为。
+和独立 verifier。合同层与 **live probe** 均已落地。
 
-在实际 live probe 通过前，Windows native strict backend 保持 `noncompliant`，reason 为 `appcontainer_probe_not_yet_run`。
+2026-07-27 本机 live probe（Windows 11 10.0.26200，非 elevated）观测到：
+AppContainer token、Job Object、非管理员、System32 写阻断、workspace/temp 写、HKLM 写阻断均 **pass**；
+**原始 Win32 TCP 出站（1.1.1.1:443）仍通** → `network_connect_blocked=false` → outcome **noncompliant**。
+因此 `windows_native_strict` selection 仍 fail-closed，**不得**标为 production-ready 或关闭 GAK-SBX-001。
 
 ## 问题背景
 
@@ -155,7 +157,45 @@ cTypes Win32 API 绑定：
 ### Candidate 层（3 个测试）
 - compliant observation → compliant candidate
 - noncompliant observation → noncompliant candidate（含 rejection_reasons）
-- `windows_native_strict_candidate()` 在 Windows 上返回 `noncompliant` + `appcontainer_probe_not_yet_run`
+- `windows_native_strict_candidate()` 在 Windows 上返回 `noncompliant` + `windows_native_live_observation_required`
+- Live probe 测试：`WindowsNativeLiveProbeTests`（仅 Windows）
+
+## Live probe 实测（2026-07-27，Windows 11 10.0.26200，非 elevated）
+
+### 运行方式
+
+```text
+python scripts/run_windows_native_sandbox_probe.py
+# 或：python -m pytest assurance/tests/test_windows_sandbox.py -k LiveProbe
+```
+
+### 观测摘要
+
+| 控制项 | 结果 |
+|---|---|
+| `CreateAppContainerProfile` | 成功（无需 elevation） |
+| `TokenIsAppContainer`（挂起创建后、Resume 前） | true（fail-closed 若为 false） |
+| Job Object create/assign/kill-on-close | true |
+| `non_admin` | true |
+| `system32_write_blocked` | true |
+| `workspace_write_succeeded` | true（icacls `(OI)(CI)(M)`） |
+| `temp_write_succeeded` | true |
+| `registry_protected_blocked` | true |
+| `probe_file_cleaned` | true |
+| `network_connect_blocked`（Win32 TcpClient → 1.1.1.1:443） | **false** |
+| `outcome` | **noncompliant** |
+| selection `windows_native_strict` | 不 allow |
+
+### 同日探针修复
+
+1. **UTF-8 BOM**：`Out-File -Encoding utf8` 导致主机 JSON 解析失败并默认为全 false；改为无 BOM 写入并容忍 BOM 读取。
+2. **ACL**：`(RX,W)` 不足；改为 `(OI)(CI)(M)`。
+3. **GAK-WIN-001**：`CREATE_SUSPENDED` → TokenIsAppContainer → Job assign → ResumeThread。
+4. **Verifier**：noncompliant + `require_compliant=false` 时结构 valid，仅 `controls_compliant=false`。
+
+### 网络残留
+
+空 capability AppContainer 下 raw TCP 仍可能出站；HTTP 高层 API 往往超时。探针使用 TcpClient 作为诚实下界，不把 HTTP 超时写成“已隔离”。与 Docker `network=none` 不等价。
 
 ## 与现有架构的关系
 
@@ -164,32 +204,22 @@ cTypes Win32 API 绑定：
 | Docker sandbox（sandbox.py） | 共享 profile → observation → candidate → selection 四层模式 |
 | sandbox_verifier.py | 共用 `verify_sandbox_selection_receipt()`，各自独立 observation verifier |
 | assurance/__init__.py | 与 Docker 探针并列导出，由 selection receipt 统一路由 |
-| gap register（GAK-SBX-001） | 本轮只关闭 schema/contract/fixture 层；live probe 尚未通过 |
+| gap register（GAK-SBX-001） | live 已跑；因网络残留保持阻断 |
 
 ## 评估与限制
 
 ### 优点
-- 建立了完整的 schema → implementation → verifier → test 闭环
-- AppContainer + Job Object 的组合在理论上可达 filesystem/registry/process/network 四层隔离
-- `DeriveAppContainerSidFromAppContainerName` 无需管理员即可获得 SID
-- 与 Docker 后端使用同一 selection 框架，不增加 selection 层的复杂度
-- 未通过 live probe 时保持 fail-closed（不出 compliant candidate）
+- schema → implementation → verifier → **live probe** 闭环
+- AppContainer + Job 的进程/文件/注册表隔离已在本机 observed
+- 静态 candidate 与 noncompliant live observation 均 fail-closed
 
 ### 已知限制
-- **Live probe 未执行**：当前只验证了合同层和 verifier 的 fail-closed 行为。实际 AppContainer 进程创建尚需：
-  - 验证 Python 解释器在空能力 AppContainer 内能正常初始化
-  - 确认 AppContainer 的 filesystem/registry virtualization 与本探针的预期一致
-  - 实测网络阻断（空 capabilities → 无法出站连接）
-  - 验证 process start→Job Object assignment race 在本实现中的具体窗口
-- **管理员依赖**：`CreateAppContainerProfile` 需要 Administrator 权限。无 elevation 时，probe 使用 derived SID（无持久化 profile）——可能需要额外的 set-up 使 AppContainer 正确隔离
-- **Python 兼容性**：AppContainer 的空能力列表可能导致 Python 无法加载某些 DLL 或访问必要的 registry keys。探针脚本已刻意最小化，但主 Python 进程的初始化可能因 AppContainer 限制而失败
-- **网络隔离粒度**：无 capabilities 的 AppContainer 应阻止所有出站连接，但回环（localhost）可能仍可用。docker-sandbox 使用 `network=none` 完全断网，AppContainer 的零能力列表尚未实测是否完全等价
-- **子进程继承**：Job Object 的 kill-on-close 覆盖进程树，但 AppContainer 的子进程是否会继承 AppContainer 限制仍需实测
-- **这是 development exploration，不是生产 sandbox**：与 Docker 探针一样，本探针只证明一次 disposable 运行的快照，不证明所有路径安全
+- **网络未闭环**：见上表；strict selection 不得 allow
+- **子进程继承**未单独测
+- **development exploration，不是生产 sandbox**
 
-### 下一步关闭 GAK-SBX-001 的条件
-1. 在本机 Windows 上实际执行 `run_windows_native_sandbox_probe()`
-2. 至少一个 observation 达到 `compliant` 并写入文档
-3. `windows_native_candidate_from_observation()` 产生 compliant candidate
-4. `build_sandbox_selection_receipt(requested_backend="windows_native_strict")` 返回 `allow`
-5. 补写实际 observed run 的局限性（例如：哪个 checks 通过/失败、AppContainer 创建工作与否、是否需 elevation、Python 兼容问题）
+### 关闭 GAK-SBX-001 仍需
+1. ~~本机执行 live probe~~（已完成）
+2. observation `compliant`（当前卡在 `network_connect_blocked`）
+3. compliant candidate + selection `allow`
+4. 额外网络隔离机制（WFP/防火墙/等价），可能需要 elevation

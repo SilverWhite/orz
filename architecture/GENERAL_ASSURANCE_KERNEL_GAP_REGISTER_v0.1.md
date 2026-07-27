@@ -287,7 +287,7 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 | ID | 缺口 | 当前证据/状态 | 严重度 | 下一产物与通过条件 |
 |---|---|---|---|---|
 | GAK-ARCH-001 | 通用内核、general-science 与 LIF profile 的 P0 schema/ADR | 2026-07-25 已新增 Effective Security Envelope、additive profile registry、sandbox/session/retention schema、正反 fixture 与 ADR-0003/0004 | P0 已关闭 | 后续实现必须消费这些合同；不得绑定单一 runtime、复制通用 runtime 或把 LIF 路由回灌 general-science |
-| GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；2026-07-27 已新增 Windows native AppContainer profile/observation/verifier 与 selection 集成，live probe 未跑，candidate 固定 `noncompliant`/`appcontainer_probe_not_yet_run` | 阻断 | 本机 live probe 产生 compliant observation；`windows_native_strict` selection 返回 allow；无 Docker 路径才可关闭 |
+| GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；2026-07-27 Windows native live probe 已跑：AppContainer+Job+FS/registry/non-admin **observed pass**；**raw TCP 出站仍通** → outcome noncompliant，selection 不 allow。详见 `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md` | 阻断 | 额外网络隔离（WFP/防火墙/等价）使 `network_connect_blocked=true` 并得到 compliant observation；`windows_native_strict` selection 返回 allow；无 Docker 路径才可关闭 |
 | GAK-DOCKER-001 | Docker 一键启动与 digest/mount receipt | P2 已固定镜像摘要、唯一 workspace mount、无 socket/home、network-off、resource limits；P2.5 已接入固定 no-model action、conversation lifecycle、进程追踪与 HMAC receipt | P2/P2.5 development 已关闭 | 接入通用 runtime/tool broker、磁盘 quota、并发/crash recovery 后再评估 production closure |
 | GAK-TRUST-001 | trust receipt 尚未统一到所有入口 | Grok launcher 已有双 trust receipt；其他 future adapters 未统一 | 高 | discovery 前统一 receipt；文件变化使 grant 失效 |
 | GAK-ID-001 | 安装密钥/会话 envelope 尚未产品化 | P1 已 observed Windows DPAPI 随机 key、HMAC envelope、tamper fail；无 rotation/revocation/key history | 高 | 补 rotation/revocation、并发锁、crash recovery 与迁移 fixture 后才能关闭 |
@@ -333,11 +333,11 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 
 ### P2：本机严格 sandbox 与 Docker 快捷入口
 
-状态：**Docker development/conformance 纵向切片已完成；Windows native strict backend 合同层已建，live probe 未关闭。**
+状态：**Docker development/conformance 纵向切片已完成；Windows native live probe 已跑，因网络残留保持 noncompliant。**
 
 1. backend probe/selection receipt 已实现，不执行真实模型；
 2. Docker 固定镜像与最小 mount/network/resource profile 已实测通过；
-3. Windows native 已有 AppContainer profile/observation/verifier 与 candidate builder；未 live 通过前 candidate 固定 noncompliant；
+3. Windows native live：TokenIsAppContainer、Job、FS/registry 隔离 observed；raw TCP 未阻断 → noncompliant；静态 candidate 要求 live observation；
 4. requested backend 不可用或不合规时已验证 fail closed，不做静默 fallback；
 5. 详细证据见
    [`../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md) 与

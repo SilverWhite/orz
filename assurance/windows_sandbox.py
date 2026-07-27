@@ -132,35 +132,49 @@ try {
 } catch { $checks["non_admin"] = $true }
 try {
     $path = Join-Path $env:SystemRoot "System32/_p2_ps_probe_del.txt"
-    "t" | Out-File -FilePath $path -Force
-    Remove-Item $path -Force
+    "t" | Out-File -FilePath $path -Force -ErrorAction Stop
+    Remove-Item $path -Force -ErrorAction Stop
     $checks["system32_write_blocked"] = $false
 } catch { $checks["system32_write_blocked"] = $true }
-if ($ws -and (Test-Path $ws -PathType Container)) {
+if ($ws -and (Test-Path -LiteralPath $ws -PathType Container)) {
     $wp = Join-Path $ws ".p2-windows-write-probe"
-    try { "workspace-ok" | Out-File -FilePath $wp -Force; $checks["workspace_write_succeeded"] = $true } catch { $checks["workspace_write_succeeded"] = $false }
+    try {
+        "workspace-ok" | Out-File -FilePath $wp -Force -ErrorAction Stop
+        $checks["workspace_write_succeeded"] = $true
+    } catch { $checks["workspace_write_succeeded"] = $false }
 } else { $checks["workspace_write_succeeded"] = $false }
 try {
     $tf = [System.IO.Path]::GetTempFileName()
-    "ok" | Out-File -FilePath $tf -Force
-    Remove-Item $tf -Force
+    "ok" | Out-File -FilePath $tf -Force -ErrorAction Stop
+    Remove-Item $tf -Force -ErrorAction Stop
     $checks["temp_write_succeeded"] = $true
 } catch { $checks["temp_write_succeeded"] = $false }
+# Honest Win32 socket probe: empty-capability AppContainer may still allow raw TCP.
 try {
     $tcp = [System.Net.Sockets.TcpClient]::new()
-    $tcp.ConnectAsync("1.1.1.1", 443).Wait(1500) | Out-Null
-    $checks["network_connect_blocked"] = -not $tcp.Connected
-    $tcp.Dispose()
+    $connected = $false
+    try {
+        $ar = $tcp.BeginConnect("1.1.1.1", 443, $null, $null)
+        $connected = $ar.AsyncWaitHandle.WaitOne(1500, $false) -and $tcp.Connected
+        if (-not $tcp.Connected) { try { $tcp.EndConnect($ar) } catch {} }
+    } finally { $tcp.Close() }
+    $checks["network_connect_blocked"] = -not $connected
 } catch { $checks["network_connect_blocked"] = $true }
 try {
-    $key = "HKLM:\\SOFTWARE\\_p2_ps_probe_del"
+    $key = "HKLM:\SOFTWARE\_p2_ps_probe_del"
     New-Item -Path $key -Force -ErrorAction Stop | Out-Null
     Remove-Item -Path $key -Force -ErrorAction Stop
     $checks["registry_protected_blocked"] = $false
 } catch { $checks["registry_protected_blocked"] = $true }
 $result_path = Join-Path $ws "_p2_probe_result.json"
-$checks | ConvertTo-Json -Compress | Out-File -FilePath $result_path -Force -Encoding utf8
+# BOM-free JSON so host-side utf-8 load_json cannot fail closed into all-false checks.
+[System.IO.File]::WriteAllText($result_path, ($checks | ConvertTo-Json -Compress))
 """.strip()
+
+CREATE_SUSPENDED_FLAG = 0x00000004
+CREATE_NO_WINDOW_FLAG = 0x08000000
+TOKEN_QUERY = 0x0008
+TokenIsAppContainer = 29
 
 
 def _load_windows_native_profile(path: Path | None = None) -> dict[str, Any]:
@@ -297,12 +311,14 @@ def _grant_appcontainer_workspace_access(
         kernel32.LocalFree.restype = ctypes.c_void_p
 
         try:
+            # Object inherit + container inherit + modify so AppContainer child can
+            # create/read/write the disposable workspace probe file.
             result = subprocess.run(
                 [
                     "icacls",
                     str(workspace),
                     "/grant",
-                    f"*{sid_string}:(RX,W)",
+                    f"*{sid_string}:(OI)(CI)(M)",
                 ],
                 capture_output=True,
                 shell=False,
@@ -313,6 +329,69 @@ def _grant_appcontainer_workspace_access(
             kernel32.LocalFree(sid_str_ptr)
     except Exception:
         return False
+
+
+def _process_token_is_appcontainer(process_handle: wintypes.HANDLE) -> bool:
+    if os.name != "nt" or not process_handle:
+        return False
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        token = wintypes.HANDLE()
+        kernel32.OpenProcessToken.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        kernel32.OpenProcessToken.restype = wintypes.BOOL
+        if not kernel32.OpenProcessToken(
+            process_handle, TOKEN_QUERY, ctypes.byref(token)
+        ):
+            return False
+        try:
+            is_ac = wintypes.DWORD()
+            ret_len = wintypes.DWORD()
+            advapi32.GetTokenInformation.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            advapi32.GetTokenInformation.restype = wintypes.BOOL
+            ok = advapi32.GetTokenInformation(
+                token,
+                TokenIsAppContainer,
+                ctypes.byref(is_ac),
+                ctypes.sizeof(is_ac),
+                ctypes.byref(ret_len),
+            )
+            return bool(ok and is_ac.value)
+        finally:
+            kernel32.CloseHandle(token)
+    except OSError:
+        return False
+
+
+def _load_probe_result_checks(result_file: Path) -> dict[str, bool]:
+    """Load probe JSON, tolerating UTF-8 BOM from older writers."""
+    try:
+        raw = result_file.read_bytes()
+    except OSError:
+        return {}
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, bool] = {}
+    for key, value in data.items():
+        if isinstance(key, str):
+            out[key] = bool(value)
+    return out
 
 
 def _create_kill_on_close_job(memory_limit_bytes: int) -> wintypes.HANDLE | None:
@@ -575,7 +654,10 @@ def run_windows_native_sandbox_probe(
         probe_script.encode("utf-16-le")
     ).decode("ascii")
 
-    command_line = f'"{ps_exe}" -NoProfile -EncodedCommand {probe_b64}'
+    command_line = (
+        f'"{ps_exe}" -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+        f"-EncodedCommand {probe_b64}"
+    )
 
     app_name = f"p2_native_sandbox_{uuid.uuid4().hex[:16]}"
     appcontainer_sid: ctypes.c_void_p | None = None
@@ -676,8 +758,12 @@ def run_windows_native_sandbox_probe(
         ):
             kernel32.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
             kernel32.DeleteProcThreadAttributeList.restype = None
-            kernel32.DeleteProcThreadAttributeList(ctypes.cast(attr_list, ctypes.c_void_p))
-            raise AssuranceError("cannot set PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES")
+            kernel32.DeleteProcThreadAttributeList(
+                ctypes.cast(attr_list, ctypes.c_void_p)
+            )
+            raise AssuranceError(
+                "cannot set PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES"
+            )
 
         si_ex = STARTUPINFOEX()
         si_ex.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEX)
@@ -700,16 +786,21 @@ def run_windows_native_sandbox_probe(
         kernel32.CreateProcessW.restype = wintypes.BOOL
 
         cmd_line = ctypes.create_unicode_buffer(command_line)
-        env_ptr = None  # File-based output, no env needed
-
+        # CREATE_SUSPENDED: assign Job Object and verify AppContainer token
+        # before the probe script runs (narrows GAK-WIN-001 race window).
+        creation_flags = (
+            EXTENDED_STARTUPINFO_PRESENT_FLAG
+            | CREATE_SUSPENDED_FLAG
+            | CREATE_NO_WINDOW_FLAG
+        )
         success = kernel32.CreateProcessW(
             None,
             cmd_line,
             None,
             None,
             False,
-            EXTENDED_STARTUPINFO_PRESENT_FLAG,
-            env_ptr,
+            creation_flags,
+            None,
             str(resolved_workspace),
             ctypes.cast(ctypes.byref(si_ex), ctypes.c_void_p),
             ctypes.byref(proc_info),
@@ -721,16 +812,54 @@ def run_windows_native_sandbox_probe(
 
         if not success:
             raise AssuranceError(
-                f"Windows native sandbox process creation failed: "
+                "Windows native sandbox process creation failed: "
                 f"{ctypes.WinError(ctypes.get_last_error())}"
             )
 
         process_handle = proc_info.hProcess
         process_pid = proc_info.dwProcessId
-        kernel32.CloseHandle(proc_info.hThread)
+        thread_handle = proc_info.hThread
+
+        if not _process_token_is_appcontainer(process_handle):
+            kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel32.TerminateProcess.restype = wintypes.BOOL
+            kernel32.TerminateProcess(process_handle, 1)
+            kernel32.CloseHandle(thread_handle)
+            _close_handle(process_handle)
+            process_handle = None
+            raise AssuranceError(
+                "Windows native sandbox child token is not AppContainer "
+                "(TokenIsAppContainer=0); refusing to continue"
+            )
 
         if job:
             job_assigned = _assign_process_to_job(job, process_handle)
+            if not job_assigned:
+                kernel32.TerminateProcess.argtypes = [
+                    wintypes.HANDLE,
+                    wintypes.UINT,
+                ]
+                kernel32.TerminateProcess.restype = wintypes.BOOL
+                kernel32.TerminateProcess(process_handle, 1)
+                kernel32.CloseHandle(thread_handle)
+                _close_handle(process_handle)
+                process_handle = None
+                raise AssuranceError(
+                    "Windows native sandbox failed to assign process to Job Object"
+                )
+
+        kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+        kernel32.ResumeThread.restype = wintypes.DWORD
+        if kernel32.ResumeThread(thread_handle) == 0xFFFFFFFF:
+            err = ctypes.WinError(ctypes.get_last_error())
+            kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel32.TerminateProcess.restype = wintypes.BOOL
+            kernel32.TerminateProcess(process_handle, 1)
+            kernel32.CloseHandle(thread_handle)
+            _close_handle(process_handle)
+            process_handle = None
+            raise AssuranceError(f"Windows native sandbox ResumeThread failed: {err}")
+        kernel32.CloseHandle(thread_handle)
 
         kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
@@ -743,7 +872,10 @@ def run_windows_native_sandbox_probe(
                 _close_handle(job)
                 job = None
             else:
-                kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+                kernel32.TerminateProcess.argtypes = [
+                    wintypes.HANDLE,
+                    wintypes.UINT,
+                ]
                 kernel32.TerminateProcess.restype = wintypes.BOOL
                 kernel32.TerminateProcess(process_handle, 1)
             kernel32.WaitForSingleObject(process_handle, wintypes.DWORD(5000))
@@ -758,23 +890,18 @@ def run_windows_native_sandbox_probe(
 
         result_file = resolved_workspace / "_p2_probe_result.json"
         if result_file.is_file():
-            try:
-                checks = load_json(result_file)
-                if not isinstance(checks, dict):
-                    checks = {}
-            except Exception:
-                checks = {}
+            checks = _load_probe_result_checks(result_file)
             try:
                 result_file.unlink()
             except OSError:
                 pass
         elif exit_code == 0:
             checks = {
-                "non_admin": True,
-                "system32_write_blocked": True,
+                "non_admin": False,
+                "system32_write_blocked": False,
                 "workspace_write_succeeded": False,
                 "temp_write_succeeded": False,
-                "network_connect_blocked": True,
+                "network_connect_blocked": False,
                 "registry_protected_blocked": False,
                 "probe_file_cleaned": False,
             }
@@ -851,19 +978,19 @@ def run_windows_native_sandbox_probe(
             "Windows native AppContainer sandbox is a development exploration. "
             "This probe tests one disposable process and does not prove every "
             "filesystem, registry, process tree, or network escape impossible.",
-            "Process start-to-Job Object assignment retains a small race window "
-            "before full containment is established.",
-            "AppContainer profile creation requires Administrator privileges. "
-            "Without elevation, the probe uses a derived SID which may provide "
-            "partial isolation but without the full persistent profile features.",
-            "Python interpreter initialization inside AppContainer may behave "
-            "differently from native execution due to filesystem/registry "
-            "virtualization. The probe script is minimal to reduce dependency "
-            "surface.",
+            "Child process is created suspended, Job Object is assigned, and "
+            "TokenIsAppContainer is verified before ResumeThread; a residual "
+            "race remains between resume and first untrusted instruction.",
+            "AppContainer profile creation may succeed without elevation on "
+            "current Windows builds; when profile creation fails the probe "
+            "falls back to a derived SID only.",
+            "Network isolation uses empty AppContainer capabilities (no "
+            "internetClient/internetServer). Observed Win11 hosts may still "
+            "allow raw Win32 TcpClient outbound while higher-level HTTP APIs "
+            "time out; the probe records honest TcpClient results and does "
+            "not claim firewall/WFP equivalence to Docker network=none.",
             "This is NOT equivalent to Docker/Linux namespace security and "
-            "does not claim to be a production sandbox. Network isolation "
-            "relies on AppContainer capabilities (no internetClient "
-            "or internetServer granted), not on firewall rules or WFP.",
+            "is not a production sandbox certification.",
         ],
     }
 
@@ -885,6 +1012,12 @@ def run_windows_native_sandbox_probe(
         if all_checks_passed:
             observation["outcome"] = "compliant"
 
+    if not observation["checks"].get("network_connect_blocked", False):
+        observation["limitations"].append(
+            "Observed residual: raw TCP connect to 1.1.1.1:443 from the "
+            "AppContainer probe process was not blocked on this host."
+        )
+
     validate_contract(
         observation,
         "windows-native-sandbox-observation-v0.1.schema.json",
@@ -892,6 +1025,7 @@ def run_windows_native_sandbox_probe(
     )
 
     from .sandbox_verifier import verify_windows_native_observation
+
     verification = verify_windows_native_observation(
         observation,
         profile=profile,
@@ -899,10 +1033,11 @@ def run_windows_native_sandbox_probe(
         require_compliant=(observation["outcome"] == "compliant"),
     )
     if not verification["valid"]:
-        import json as _json
-        _tmp_file = str(resolved_workspace / "_p2_last_obs.json")
-        with open(_tmp_file, "w", encoding="utf-8") as _of:
-            _json.dump(observation, _of, indent=2, sort_keys=True)
+        _tmp_file = resolved_workspace / "_p2_last_obs.json"
+        _tmp_file.write_text(
+            json.dumps(observation, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
         raise AssuranceError(
             "Windows native sandbox observation failed independent verification: "
             + "; ".join(verification["errors"])

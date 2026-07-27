@@ -6,8 +6,8 @@ P4 metadata-only 审计/compaction/恢复授权，以及 P4.5 workspace-first �
 development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只读投影 mechanical preflight
 已启动并通过；GSA-CORE 已新增首个非 LIF、多文件、确定性只读审查切片。标准模式默认使用受限工作区内的固定动作；Docker 只保留为显式、
 按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend 已具备 AppContainer
-profile/observation/verifier 合同与 selection 集成，但 live AppContainer probe 尚未通过，因此仍为
-fail-closed/noncompliant（`appcontainer_probe_not_yet_run`）。Grok Build 是当前证据最完整的参考框架，
+profile/observation/verifier 与 live probe：本机已 observed 进程/文件/注册表隔离，但 raw TCP
+出站在空 capability AppContainer 下仍可能成功，因此 outcome 保持 noncompliant，selection 不 allow。Grok Build 是当前证据最完整的参考框架，
 其官方 Windows binary 已完成锁定与离线核验。首个 Codex app-server 双向 ordered-capture lifecycle normalizer
 已完成 no-model 离线实现、独立重放与隔离 live app-server smoke；live 路径只执行 initialize 和
 ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek

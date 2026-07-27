@@ -69,21 +69,40 @@ def verify_windows_native_observation(
     }
     if set(observation["checks"].keys()) != required_checks:
         errors.append("Windows native observation check coverage mismatch")
-    elif not all(
-        v for k, v in observation["checks"].items() if k != "probe_file_cleaned"
-    ):
-        errors.append("one or more Windows native negative checks failed")
-    elif not observation["checks"].get("probe_file_cleaned"):
-        errors.append("probe file was not cleaned up")
-    controls_compliant = not errors
+    check_failures: list[str] = []
+    if set(observation["checks"].keys()) == required_checks:
+        if not all(
+            v for k, v in observation["checks"].items() if k != "probe_file_cleaned"
+        ):
+            check_failures.append(
+                "one or more Windows native negative checks failed"
+            )
+        elif not observation["checks"].get("probe_file_cleaned"):
+            check_failures.append("probe file was not cleaned up")
+    controls_compliant = not errors and not check_failures
+    # Structural integrity can be valid while isolation controls remain noncompliant.
+    # Failed checks only make valid=false when compliance is required or claimed.
+    report_errors = list(errors)
+    if require_compliant or observation["outcome"] == "compliant":
+        report_errors.extend(check_failures)
     if require_compliant and observation["outcome"] != "compliant":
-        errors.append("Windows native observation did not reach compliant outcome")
+        report_errors.append(
+            "Windows native observation did not reach compliant outcome"
+        )
     if observation["outcome"] == "compliant" and not controls_compliant:
-        errors.append("Windows native observation overstates compliance")
+        report_errors.append("Windows native observation overstates compliance")
+    if not (require_compliant or observation["outcome"] == "compliant"):
+        # Surface isolation failures for operators without failing structural validity.
+        report_errors.extend(check_failures)
+        return {
+            "valid": not errors,
+            "controls_compliant": controls_compliant,
+            "errors": report_errors,
+        }
     return {
-        "valid": not errors,
+        "valid": not report_errors,
         "controls_compliant": controls_compliant,
-        "errors": errors,
+        "errors": report_errors,
     }
 
 
