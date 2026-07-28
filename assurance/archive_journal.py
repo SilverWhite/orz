@@ -622,3 +622,119 @@ class ArchiveJournalWriter:
         self._prev_hash = event["event_sha256"]
         self._sequence += 1
         return event
+
+
+# ── stale lock detection ──
+
+
+def detect_stale_archive_lock(
+    journal_path: Path,
+    *,
+    max_age_seconds: float = 300.0,
+) -> dict[str, Any]:
+    """Detect orphaned archive lock files left behind after a crash.
+
+    Checks whether a ``.lock`` file exists without an active lock holder.
+    On Windows, attempts a non-blocking lock acquisition — if it succeeds
+    immediately, the lock was stale.
+
+    Returns a dict with keys:
+      - stale: bool — whether the lock is stale
+      - lock_path: str — path to the lock file
+      - lock_exists: bool — whether a lock file exists
+      - action: str — "cleanup", "wait", or "none"
+      - age_seconds: float | None — file age in seconds (None if not found)
+      - details: str — human-readable diagnostic
+    """
+    lock_path = _archive_lock_path(journal_path)
+
+    if not lock_path.exists():
+        return {
+            "stale": False,
+            "lock_path": str(lock_path),
+            "lock_exists": False,
+            "action": "none",
+            "age_seconds": None,
+            "details": "No lock file exists.",
+        }
+
+    # Check file age
+    try:
+        age_seconds = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        age_seconds = 0.0
+
+    # Try to acquire the lock — if it succeeds immediately, the lock is stale
+    try:
+        with lock_path.open("a+b") as handle:
+            _ensure_lock_byte(handle)
+            acquired = _try_lock(handle)
+            if acquired:
+                _unlock(handle)
+                action = "cleanup"
+                details = (
+                    f"Lock file exists but was not held by any process. "
+                    f"Age: {age_seconds:.1f}s. Safe to remove."
+                )
+                stale = True
+            else:
+                action = "wait"
+                details = (
+                    f"Lock file is actively held by another process. "
+                    f"Age: {age_seconds:.1f}s. "
+                    f"{'Consider manual intervention if age exceeds expected archive duration.' if age_seconds > max_age_seconds else 'Wait for the active archive to complete.'}"
+                )
+                stale = False
+    except OSError as exc:
+        stale = False
+        action = "none"
+        details = f"Could not probe lock file: {exc}"
+
+    return {
+        "stale": stale,
+        "lock_path": str(lock_path),
+        "lock_exists": True,
+        "action": action,
+        "age_seconds": age_seconds,
+        "details": details,
+    }
+
+
+def cleanup_stale_archive_lock(journal_path: Path) -> dict[str, Any]:
+    """Remove a stale archive lock file.
+
+    Only removes the lock if it can be confirmed as stale (not held by
+    another process). Uses :func:`detect_stale_archive_lock` first.
+
+    Returns a dict with keys:
+      - removed: bool
+      - lock_path: str
+      - error: str | None
+    """
+    detection = detect_stale_archive_lock(journal_path)
+
+    if not detection["stale"]:
+        return {
+            "removed": False,
+            "lock_path": detection["lock_path"],
+            "error": (
+                None
+                if detection["lock_exists"]
+                else "no lock file to remove"
+            ),
+        }
+
+    lock_path = _archive_lock_path(journal_path)
+    try:
+        lock_path.unlink()
+        return {
+            "removed": True,
+            "lock_path": str(lock_path),
+            "error": None,
+        }
+    except OSError as exc:
+        return {
+            "removed": False,
+            "lock_path": str(lock_path),
+            "error": str(exc),
+        }

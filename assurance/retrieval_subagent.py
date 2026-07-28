@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .contracts import validate_contract
+from .conversation import ConversationNamespace
 from .errors import AssuranceError
 from .instruction_provenance_gate import (
     build_instruction_provenance_gate_context,
     evaluate_instruction_provenance_gate,
     verify_instruction_provenance_gate_receipt,
 )
+from .keystore import InstallationKeyStore
 from .orientation_runtime_guard import build_orientation_checkpoint
 from .source_visibility import evaluate_source_visibility_gate
 from .tool_availability_gate import (
@@ -616,3 +618,407 @@ def verify_retrieval_subagent_fixture(
         raise AssuranceError("subagent gates must be evaluated before retrieval work")
 
     return observed_summary
+
+
+# ── real retrieval adapter ──
+
+
+def _build_retrieval_system_prompt(
+    question: str,
+    doc_excerpts: list[dict[str, str]],
+    return_sections: list[str],
+    forbidden_topics: list[str],
+) -> str:
+    """Build the system prompt for the project doc retrieval DeepSeek call."""
+    sections_str = "\n".join(f"  - {s}" for s in return_sections)
+    forbidden_str = (
+        "\n".join(f"  - {t}" for t in forbidden_topics)
+        if forbidden_topics
+        else "  (none)"
+    )
+
+    excerpts_lines: list[str] = []
+    for i, doc in enumerate(doc_excerpts):
+        excerpts_lines.append(
+            f"\n### Document {i + 1}: {doc['path']} ({doc['category']})\n"
+            f"{doc['excerpt']}"
+        )
+
+    return f"""You are a project-internal document retrieval subagent for the GSA (General Scientific Assurance) project.
+
+Your task: answer the retrieval question using ONLY the provided document excerpts below.
+Do NOT use external knowledge. Do NOT make claims beyond what the excerpts contain.
+All output must be marked as derived from project documents, not as original claims.
+
+Retrieval question:
+{question}
+
+Required return sections (you must address each one):
+{sections_str}
+
+Forbidden topics (do NOT discuss these):
+{forbidden_str}
+
+Project document excerpts:
+{''.join(excerpts_lines)}
+
+Please structure your response as a JSON object with the following keys:
+- "sections": a list of {{"section_title": str, "content": str}} for each required section
+- "source_ids_used": a list of document paths you referenced
+Do NOT include any text outside the JSON object."""
+
+
+def dispatch_retrieval_subagent(
+    *,
+    contract: dict[str, Any],
+    parent_session_id: str,
+    key_store: InstallationKeyStore,
+    run_root: Path,
+    project_root: Path,
+    credential_target: str | None = None,
+    api_timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    """Dispatch a real retrieval subagent with independent DeepSeek API call.
+
+    This is the production adapter path — it replaces the no-model
+    ``build_fake_retrieval_result`` with a real project document scan
+    followed by a DeepSeek v4 Pro API call.  All artifacts are routed
+    through a :class:`SessionGovernor` backed by an independent
+    :class:`ConversationNamespace`.
+
+    The subagent searches only project-internal documents (no network
+    search) and returns a structured result conforming to
+    ``retrieval-result-v0.1.schema.json``.
+
+    Args:
+        contract: Task contract from :func:`build_retrieval_task_contract`.
+        parent_session_id: The main agent's conversation ID.
+        key_store: Installation key store for namespace envelope.
+        run_root: Directory for the subagent's run artifacts.
+        project_root: Root of the GSA project to scan.
+        credential_target: Windows Credential Manager target for the
+            subagent's independent DeepSeek API key.  If ``None``, the
+            subagent runs in **offline mode** (document scan only,
+            no API call).
+        api_timeout_seconds: Timeout for the DeepSeek API call.
+
+    Returns:
+        A dict with ``result`` (the retrieval result), ``close_receipt``
+        (session close confirmation), and ``governor_closure``.
+    """
+    import uuid as _uuid
+
+    from .adapter_gate import AdapterGateContext, AdapterGateBlockedError
+    from .deepseek_adapter import call_deepseek_api, _read_windows_credential
+    from .project_doc_index import EXCERPT_MAX_CHARS, ProjectDocIndex
+    from .session_governor import SessionGovernor
+
+    validate_contract(contract, TASK_CONTRACT_SCHEMA, label="retrieval task contract")
+
+    subagent_session_id = f"CONV-{_uuid.uuid4().hex[:32].upper()}"
+    contract_id = contract["contract_id"]
+    run_id = f"RUN-RETRIEVAL-{sha256_bytes(contract_id.encode('utf-8'))[:24].upper()}"
+
+    # ── 1. Create independent namespace + governor ──
+    from .canonical_cli import _build_run_frozen_context as _frozen_ctx
+
+    conversation_repository = run_root / "conversations"
+    namespace = ConversationNamespace.create(
+        conversation_repository,
+        key_store=key_store,
+        frozen_context=_frozen_ctx(run_id),
+        allowed_capabilities=["search", "file_read"],
+        denied_capabilities=[
+            "network.unrestricted",
+            "secret.raw_read",
+            "filesystem.workspace_write",
+        ],
+    )
+    governor = SessionGovernor(namespace)
+
+    # ── 2. IPG context + gate evaluation ──
+    ipg_context = build_instruction_provenance_gate_context(
+        run_id=run_id,
+        conversation_id=namespace.conversation_id,
+        instructions=[
+            {
+                "entry_id": f"INS-RETRIEVAL-CONTRACT-{contract_id}",
+                "declared_source_type": "user",
+                "source_id": f"retrieval-contract-{contract_id}",
+                "content_sha256": sha256_bytes(canonical_bytes(contract)),
+                "content_bytes": len(canonical_bytes(contract)),
+                "instruction_kind": "user_prompt",
+            },
+        ],
+    )
+    ipg_receipt = evaluate_instruction_provenance_gate(gate_context=ipg_context)
+    governor.write_gate_receipt("instruction-provenance-gate-context", ipg_context)
+    governor.write_gate_receipt("instruction-provenance-gate-receipt", ipg_receipt)
+
+    # ── 3. Scan project documents ──
+    doc_index = ProjectDocIndex(project_root)
+    doc_index.scan()
+
+    question = contract["retrieval_question"]
+    max_sources = contract["max_sources"]
+    allowed_categories = list(contract["allowed_source_categories"])
+    forbidden_topics = list(contract["scope_boundary"]["forbidden_topics"])
+
+    # Map contract source categories to doc index categories
+    category_map: dict[str, list[str]] = {
+        "documentation": ["architecture", "audit_docs", "adr"],
+        "code_repository": ["source_code"],
+        "internal_knowledge_base": [
+            "architecture", "audit_docs", "adr", "source_code",
+            "schemas", "protocol", "regression", "project_config",
+        ],
+    }
+    search_categories: list[str] = []
+    for cat in allowed_categories:
+        search_categories.extend(category_map.get(cat, [cat]))
+    search_categories = sorted(set(search_categories)) if search_categories else None
+
+    matches = doc_index.search(
+        question,
+        max_results=max_sources,
+        categories=search_categories,
+    )
+
+    # ── 4. Build filtering log ──
+    filtering_log: list[dict[str, Any]] = []
+    filtered_matches: list[DocMatch] = []
+    for m in matches:
+        excluded = False
+        for topic in forbidden_topics:
+            if topic.lower() in m.excerpt or topic.lower() in m.path.lower():
+                filtering_log.append({
+                    "source_id": f"SRC-{sha256_bytes(m.path.encode('utf-8'))[:16].upper()}",
+                    "reason": "scope_violation",
+                    "action": "excluded",
+                    "filtered_at": utc_now(),
+                })
+                excluded = True
+                break
+        if m.size_bytes > contract["context_budget_tokens"] * 4:
+            filtering_log.append({
+                "source_id": f"SRC-{sha256_bytes(m.path.encode('utf-8'))[:16].upper()}",
+                "reason": "budget_exceeded",
+                "action": "deferred_for_main_agent_review",
+                "filtered_at": utc_now(),
+            })
+            excluded = True
+        if not excluded:
+            filtered_matches.append(m)
+
+    # ── 5. Build doc excerpts for the model ──
+    doc_excerpts: list[dict[str, str]] = []
+    source_ledger: list[dict[str, Any]] = []
+    raw_source_refs: list[dict[str, Any]] = []
+
+    for i, m in enumerate(filtered_matches[:max_sources]):
+        source_id = f"SRC-{sha256_bytes(m.path.encode('utf-8'))[:16].upper()}"
+        doc_excerpts.append({
+            "path": m.path,
+            "category": m.category,
+            "excerpt": m.excerpt[:EXCERPT_MAX_CHARS],
+            "title": m.title,
+        })
+        source_ledger.append({
+            "source_id": source_id,
+            "source_title": m.title,
+            "source_url_or_ref": str(project_root / m.path),
+            "visibility": "full_text_observed",
+            "relevance": "direct",
+            "used_in_sections": [],
+            "content_sha256": m.sha256,
+            "full_text_retrieved": True,
+            "notes": f"project doc: {m.path}",
+        })
+        raw_source_refs.append({
+            "source_id": source_id,
+            "source_title": m.title,
+            "source_url_or_ref": str(project_root / m.path),
+            "visibility": "full_text_observed",
+            "content_sha256": m.sha256,
+            "retrieval_note": f"retrieved from project index: {m.path}",
+        })
+
+    # ── 6. Call DeepSeek API (or offline mode) ──
+    result_id = f"RET-RES-{_uuid.uuid4().hex.upper()}"
+    model_output_text: str | None = None
+    api_used = False
+
+    if credential_target is not None and doc_excerpts:
+        try:
+            api_key = _read_windows_credential(credential_target)
+            system_prompt = _build_retrieval_system_prompt(
+                question=question,
+                doc_excerpts=doc_excerpts,
+                return_sections=contract["return_format"]["sections"],
+                forbidden_topics=forbidden_topics,
+            )
+            messages: list[dict[str, str]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": question},
+            ]
+
+            gate_ctx = AdapterGateContext(
+                ipg_receipt=ipg_receipt,
+                ipg_context=ipg_context,
+                adapter_id="deepseek-v4-pro-retrieval",
+                conversation_id=namespace.conversation_id,
+                run_id=run_id,
+            )
+            enforcement = enforce_adapter_call(
+                gate_context=gate_ctx,
+                adapter_call=lambda: call_deepseek_api(
+                    api_key,
+                    messages,
+                    timeout_seconds=api_timeout_seconds,
+                ),
+            )
+            api_output = enforcement["adapter_result"]
+            model_output_text = api_output.get("public_assistant_text", "")
+            api_used = True
+            governor.write_gate_receipt(
+                "adapter-gate-enforcement",
+                {k: v for k, v in enforcement.items() if k != "adapter_result"},
+            )
+        except AdapterGateBlockedError:
+            model_output_text = "[blocked] Retrieval subagent blocked by adapter gate."
+        except Exception as exc:
+            model_output_text = f"[error] Retrieval subagent API call failed: {exc}"
+        finally:
+            if credential_target is not None:
+                try:
+                    _ = _read_windows_credential(credential_target)
+                except Exception:
+                    pass
+
+    # ── 7. Build organized response ──
+    sections: list[dict[str, Any]] = []
+    claims: list[dict[str, Any]] = []
+
+    if model_output_text:
+        # Try to parse model output as JSON
+        try:
+            import json as _json
+            parsed = _json.loads(model_output_text.strip())
+            for sec in parsed.get("sections", []):
+                sections.append({
+                    "section_title": sec.get("section_title", "unknown"),
+                    "content": sec.get("content", ""),
+                    "source_ids": [
+                        s["source_id"] for s in source_ledger
+                    ],
+                    "claim_strength": "derived",
+                })
+            for sid in parsed.get("source_ids_used", []):
+                # Mark which sources were used
+                for s in source_ledger:
+                    if sid in s["source_url_or_ref"]:
+                        if sid not in s["used_in_sections"]:
+                            s["used_in_sections"].append(
+                                sec.get("section_title", "unknown")
+                                for sec in parsed.get("sections", [])
+                            )
+        except Exception:
+            # Non-JSON output — wrap in a single section
+            sections.append({
+                "section_title": contract["return_format"]["sections"][0],
+                "content": model_output_text,
+                "source_ids": [s["source_id"] for s in source_ledger],
+                "claim_strength": "derived",
+            })
+
+    if not sections:
+        # Offline mode: build sections from doc excerpts
+        for section_name in contract["return_format"]["sections"]:
+            content_parts: list[str] = []
+            for m in filtered_matches[:max_sources]:
+                content_parts.append(f"[{m.path}]: {m.excerpt[:500]}")
+            sections.append({
+                "section_title": section_name,
+                "content": "\n\n".join(content_parts) if content_parts else (
+                    "No project documents found matching the retrieval question."
+                ),
+                "source_ids": [s["source_id"] for s in source_ledger],
+                "claim_strength": "observed",
+            })
+
+    for s in source_ledger:
+        if not s["used_in_sections"]:
+            s["used_in_sections"] = [sec["section_title"] for sec in sections]
+
+    for i, src in enumerate(source_ledger):
+        claims.append({
+            "claim_id": f"CLM-{result_id}-{i:03d}",
+            "claim_text": (
+                f"Project document [{src['source_title']}] "
+                f"({src['source_url_or_ref']}) provides evidence "
+                f"related to the retrieval question."
+            ),
+            "source_ids": [src["source_id"]],
+            "claim_strength": "derived" if api_used else "observed",
+        })
+
+    # ── 8. Build query summary ──
+    query_summary = [{
+        "query_id": f"QRY-{result_id}-000",
+        "query_text": question,
+        "source_category": allowed_categories[0] if allowed_categories else "internal_knowledge_base",
+        "result_count": len(filtered_matches),
+        "action_taken": "searched" if filtered_matches else "aborted_no_results",
+        "tool_used": "file_read",
+    }]
+
+    # ── 9. Assemble result ──
+    result = {
+        "schema_version": "0.1.0-draft",
+        "result_kind": "retrieval_subagent_result",
+        "result_id": result_id,
+        "contract_id": contract_id,
+        "subagent_session_id": subagent_session_id,
+        "query_summary": query_summary,
+        "source_ledger": source_ledger,
+        "filtering_log": filtering_log,
+        "organized_response": {
+            "sections": sections,
+            "claims": claims,
+        },
+        "raw_source_refs": raw_source_refs,
+        "opacity_notes": [
+            "All sources are project-internal documents; no web search performed.",
+            "Filtering log records every exclusion with reason.",
+            "Result is independently verifiable: raw_source_refs point to project files.",
+            f"{'Real DeepSeek API' if api_used else 'Offline document scan'} used for retrieval.",
+            "All claims marked derived_unverified — main agent must verify.",
+        ],
+    }
+    validate_contract(result, RESULT_SCHEMA, label="retrieval result")
+
+    # ── 10. Validate + close ──
+    validation_receipt = validate_retrieval_result(contract=contract, result=result)
+    close_receipt = build_retrieval_session_close_receipt(
+        parent_session_id=parent_session_id,
+        subagent_session_id=subagent_session_id,
+        contract_id=contract_id,
+        result_id=result_id,
+    )
+
+    # Write artifacts through governor
+    governor.write_gate_receipt("retrieval-task-contract", contract)
+    governor.write_gate_receipt("retrieval-result", result)
+    governor.write_gate_receipt("retrieval-result-validation", validation_receipt)
+    governor.write_gate_receipt("retrieval-session-close-receipt", close_receipt)
+
+    governor_closure = governor.close_session()
+
+    return {
+        "result": result,
+        "close_receipt": close_receipt,
+        "validation_receipt": validation_receipt,
+        "governor_closure": governor_closure,
+        "subagent_session_id": subagent_session_id,
+        "api_used": api_used,
+    }

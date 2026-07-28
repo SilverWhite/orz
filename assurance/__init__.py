@@ -23,10 +23,13 @@ from .adapter_preflight import run_adapter_preflight, verify_adapter_preflight
 from .archive import ArchiveController, resume_archived_conversation
 from .archive_journal import (
     ArchiveJournalWriter,
+    cleanup_stale_archive_lock,
+    detect_stale_archive_lock,
     inspect_archive_journal,
     recover_archive_journal,
     replay_archive_journal,
 )
+from .archive_recovery import classify_archive_failure, recover_archive
 from .archive_verifier import verify_archive
 from .artifact_registry import (
     index_artifact_schemas,
@@ -113,8 +116,12 @@ from .instruction_gate import (
 )
 from .instruction_provenance_gate import (
     build_instruction_provenance_gate_context,
+    detect_obfuscated_injection,
     evaluate_instruction_provenance_gate,
+    evaluate_instruction_provenance_gate_with_canonicalizer,
+    parse_instruction_content,
     run_instruction_provenance_gate_fixture,
+    validate_all_entry_points_consume_same_gate,
     verify_instruction_provenance_gate_fixture,
     verify_instruction_provenance_gate_receipt,
 )
@@ -141,16 +148,19 @@ from .profile_registry import (
     load_profile_registry,
     resolve_effective_profile,
     validate_profile_registry_semantics,
+    verify_profile_registry_completeness,
 )
 from .readonly_projection import (
     load_readonly_task_projection,
     project_complex_task_readonly,
     verify_complex_task_readonly_projection,
 )
+from .project_doc_index import ProjectDocIndex
 from .retrieval_subagent import (
     build_fake_retrieval_result,
     build_retrieval_session_close_receipt,
     build_retrieval_task_contract,
+    dispatch_retrieval_subagent,
     run_retrieval_subagent_fixture,
     validate_retrieval_result,
     verify_retrieval_result_sources,
@@ -206,6 +216,7 @@ from .recovery import (
     verify_recovery_authorization,
     verify_recovery_candidate,
 )
+from .session_governor import SessionGovernor
 from .sandbox import (
     build_sandbox_selection_receipt,
     docker_candidate_from_observation,
@@ -287,6 +298,7 @@ __all__ = [
     "extract_public_outputs_from_runner_stream",
     "enforce_adapter_call",
     "evaluate_instruction_provenance_gate",
+    "evaluate_instruction_provenance_gate_with_canonicalizer",
     "evaluate_runtime_stagnation_guard",
     "evaluate_source_visibility_gate",
     "evaluate_source_visibility_ledger_file",
@@ -310,8 +322,16 @@ __all__ = [
     "load_task_contract",
     "load_synthetic_user_task_suite",
     "LocalStorageAdapter",
+    "parse_instruction_content",
     "project_complex_task_readonly",
+    "ProjectDocIndex",
     "probe_tool_availability",
+    "classify_archive_failure",
+    "cleanup_stale_archive_lock",
+    "detect_obfuscated_injection",
+    "detect_stale_archive_lock",
+    "dispatch_retrieval_subagent",
+    "recover_archive",
     "recover_archive_journal",
     "recovery_permit_binding",
     "replay_archive_journal",
@@ -340,6 +360,7 @@ __all__ = [
     "run_windows_native_sandbox_probe",
     "run_general_science_validators",
     "select_execution_backend",
+    "SessionGovernor",
     "StorageAdapter",
     "verify_archive",
     "verify_audit_seal",
@@ -377,6 +398,7 @@ __all__ = [
     "write_gsa_runtime_preflight_journal",
     "write_orientation_stagnation_runtime_journal",
     "validate_profile_registry_semantics",
+    "verify_profile_registry_completeness",
     "validate_artifact_registry_semantics",
     "validate_endpoint_list",
     "validate_filesystem_targets",
@@ -384,6 +406,7 @@ __all__ = [
     "validate_validator_registry_semantics",
     "validate_action_dag",
     "validate_adapter_output",
+    "validate_all_entry_points_consume_same_gate",
     "verify_adapter_gate_enforcement",
     "verify_adapter_preflight",
     "windows_native_candidate_from_observation",

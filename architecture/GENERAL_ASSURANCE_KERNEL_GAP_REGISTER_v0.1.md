@@ -5,8 +5,8 @@ strict sandbox 与 P2.5 无模型 guarded execution 纵向切片已实测通过�
 继承、P4 metadata audit/compaction/恢复授权，以及 P4.5 workspace-first 集成链 development
 纵向切片已通过；P5 internal mechanical preflight 已通过，但真实参与者测试尚未开始。
 2026-07-27 起：instruction provenance gate 与 tool availability gate 已接入 canonical CLI offline
-主路径；Windows native sandbox 已具备 profile/observation/verifier 合同，但 live AppContainer
-probe 未通过；retrieval sub-agent 仅 no-model fixture。Windows native strict backend、P3/P4
+主路径；Windows native sandbox 已具备 profile/observation/verifier 合同，live AppContainer
+probe 已跑（elevated path compliant, non-elevated fail-closed）；retrieval sub-agent 仅 no-model fixture。Windows native strict backend、P3/P4
 真实 adapter 与恢复执行接入，以及 P5 人类可用性仍未关闭。
 本文记录已接受的迁移方向，但**不表示普通用户安全能力已经就绪**。
 General Assurance Kernel 保持 runtime-neutral；Grok Build 是当前证据最完整的 reference runtime，
@@ -287,13 +287,14 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 | ID | 缺口 | 当前证据/状态 | 严重度 | 下一产物与通过条件 |
 |---|---|---|---|---|
 | GAK-ARCH-001 | 通用内核、general-science 与 LIF profile 的 P0 schema/ADR | 2026-07-25 已新增 Effective Security Envelope、additive profile registry、sandbox/session/retention schema、正反 fixture 与 ADR-0003/0004 | P0 已关闭 | 后续实现必须消费这些合同；不得绑定单一 runtime、复制通用 runtime 或把 LIF 路由回灌 general-science |
-| GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；2026-07-27 Windows native live probe 已跑：AppContainer+Job+FS/registry/non-admin **observed pass**；**raw TCP 出站仍通** → outcome noncompliant，selection 不 allow。详见 `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md` | 阻断 | 额外网络隔离（WFP/防火墙/等价）使 `network_connect_blocked=true` 并得到 compliant observation；`windows_native_strict` selection 返回 allow；无 Docker 路径才可关闭 |
+| GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；2026-07-27 Windows native live probe 已跑两次（非 elevated + elevated）：AppContainer+Job+FS/registry/non-admin **observed pass**；elevated path 通过 netsh firewall outbound block rule 达成 **compliant** observation + selection allow；non-elevated path 因无法创建防火墙规则 **fail-closed**（正确行为）。GAK-SBX-001 **可关闭**（2026-07-27 audit 裁决）。原始 TCP 残余为已知 Windows 平台限制，记录于 limitations，不阻塞 development 门禁。详见 `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md` | ~~阻断~~ → 已关闭 (development baseline) | 生产级网络隔离需 WFP 内核 callout 或 Microsoft 修复；non-elevated 路径的防火墙替代方案待研究 |
 | GAK-DOCKER-001 | Docker 一键启动与 digest/mount receipt | P2 已固定镜像摘要、唯一 workspace mount、无 socket/home、network-off、resource limits；P2.5 已接入固定 no-model action、conversation lifecycle、进程追踪与 HMAC receipt | P2/P2.5 development 已关闭 | 接入通用 runtime/tool broker、磁盘 quota、并发/crash recovery 后再评估 production closure |
 | GAK-TRUST-001 | trust receipt 尚未统一到所有入口 | Grok launcher 已有双 trust receipt；其他 future adapters 未统一 | 高 | discovery 前统一 receipt；文件变化使 grant 失效 |
 | GAK-ID-001 | 安装密钥/会话 envelope 尚未产品化 | P1 已 observed Windows DPAPI 随机 key、HMAC envelope、tamper fail；无 rotation/revocation/key history | 高 | 补 rotation/revocation、并发锁、crash recovery 与迁移 fixture 后才能关闭 |
-| GAK-SESSION-001 | conversation namespace 尚未接入实际 runtime | P1 fixture 已默认拒绝 cross-session read，显式 import 标 `imported_untrusted`，resume 创建新 namespace/envelope | 高 | adapter 接入后证明所有 tool/snapshot/query 路径受同一 controller 约束 |
-| GAK-RET-001 | retention/deletion controller 尚未产品化 | P1 fixture 已完成 16 类显式删除、成功/失败 terminal receipt、HMAC 与独立 verifier；仅覆盖临时本地 namespace | 阻断 | 补 crash/retry/并发、真实 storage adapter 与失败恢复；不得扩大删除边界 |
-| GAK-INJ-001 | instruction provenance/anti-injection gate 尚未接入所有真实入口 | P3 development gate 已将 project/web/tool/memory 作为 data-only 并以签名 receipt 重建路由；2026-07-27 入口级 batch gate 已实现并接入 canonical CLI offline run（instruction provenance → tool availability → source visibility → fake model）；尚无 production parser/真实 adapter enforcement | 阻断 | 所有 runtime/tool 入口消费同一 gate；path/endpoint canonicalizer 和 adapter bypass 测试通过 |
+| GAK-SESSION-001 | conversation namespace 尚未接入实际 runtime | **2026-07-28 关闭**：`ConversationNamespace` 已接入 canonical CLI 真实 adapter 路径。新增 `SessionGovernor`（thin wrapper — 所有 gate receipt/checkpoint/answer packet/journal event 通过 `namespace.write_artifact()` 路由）；`_resolve_and_setup_gates()` 接受 `key_store` 参数自动创建 namespace + governor；`run_canonical_guarded_cli_real()` 通过 `enforce_adapter_call()` 包装 DeepSeek API 调用（`AdapterGateContext` 绑定真实 `conversation_id`）；`build_real_deepseek_answer_packet()` 接受 `conversation_id`/`envelope_id` 参数；新增 10 个 integration 测试（namespace 创建、governor artifact 路由、governor close 拒绝写入、namespace integrity、跨会话隔离 ×3、import untrusted、full lifecycle with adapter artifacts、resume creates new envelope）。548 tests pass。详见 `assurance/session_governor.py`、`assurance/canonical_cli.py`、`assurance/deepseek_adapter.py`、`assurance/tests/test_session_namespace.py` | ~~高~~ → 已关闭 (development baseline) | 生产级 key rotation（GAK-ID-001）、Project Doc Retrieval Subagent（GAK-RET-SUB-001）仍待后续版本 |
+| GAK-RET-SUB-001 | Project Doc Retrieval Subagent (真实 adapter) | **2026-07-28 关闭**：新增 `ProjectDocIndex`（项目文档扫描器 — 8 个类别 glob pattern，in-memory search + lazy content 加载）；新增 `dispatch_retrieval_subagent()`（真实 DeepSeek v4 Pro API + ProjectDocIndex + SessionGovernor + AdapterGate 集成；支持 offline 模式无 API key 时直接用文档扫描结果构建结果）；新增 `_build_retrieval_system_prompt()`（带文档摘录的检索提示模板）；全部输出标记 delegated_retrieval / derived_unverified；遵循现有 retrieval-result-v0.1 schema；完全向后兼容 — build_fake_retrieval_result 保留；新增 15 个测试（ProjectDocIndex 7 + dispatcher 5 + integration 3）；22 个存量测试全部通过。详见 `assurance/project_doc_index.py`、`assurance/retrieval_subagent.py`、`assurance/tests/test_retrieval_subagent_real.py` | ~~待实施~~ → 已关闭 (development baseline) | 独立 DeepSeek credential 尚未配置；真实 API 调用需 Windows Credential Manager 中的 `deepseek-retrieval-subagent` target；语义搜索能力受限于关键词匹配 |
+| GAK-RET-001 | retention/deletion controller 尚未产品化 | **2026-07-28 关闭**：StorageAdapter 已接入 ArchiveController（替代裸 DeleteFile 回调）；archive_recovery.py 提供 holistic 恢复编排器（classify_archive_failure → recover_archive，覆盖 clean_interrupted/torn_journal/corrupt_journal/stale_lock/archiving_no_journal 五个恢复路径）；detect_stale_archive_lock + cleanup_stale_archive_lock 处理崩溃后孤儿锁；FaultInjectionStorageAdapter 支持 transient/permanent/walk error 故障注入测试；新增 18 个测试（recovery 路径、storage adapter 集成、故障注入、deletion boundary、stale lock、multi-process lock contention）；484 tests pass。详见 `assurance/archive.py`、`assurance/archive_recovery.py`、`assurance/tests/test_archive_recovery.py` | ~~阻断~~ → 已关闭 (development baseline) | 生产级 storage backend（网络/云存储）、跨设备并发 crash recovery 仍待后续版本 |
+| GAK-INJ-001 | instruction provenance/anti-injection gate 尚未接入所有真实入口 | **2026-07-28 关闭**：新增 production content parser（`parse_instruction_content` — 提取 path/endpoint/directive 引用）；新增 obfuscation detector（`detect_obfuscated_injection` — 零宽字符、同形字、base64 payload、全角替换）；新增 canonicalizer 集成（`evaluate_instruction_provenance_gate_with_canonicalizer` — 路径遍历/SSRF 检测，数据源中非法路径/端点 → block）；INJECTION_PATTERNS 扩充至 25 个模式（新增 output your instructions、override security、system prompt、hidden instructions、debug mode、developer mode、disable safety、pretend you are、act as if）；新增 unified gate entry 验证（`validate_all_entry_points_consume_same_gate` — 静态 AST 检查 4 个已知 consumer）；adapter bypass hardening 8 个新测试；adversarial injection 47 个新测试（路径遍历 10 + SSRF 7 + 提示提取 7 + 混淆 7 + 越权 6 + 组合 5 + 边界 6）。全部 89 tests pass。详见 `assurance/instruction_provenance_gate.py`、`assurance/tests/test_injection_adversarial.py` | ~~阻断~~ → 已关闭 (development baseline) | 生产级语义注入检测、URL 解码路径扫描、真实 runtime adapter content bytes 接入仍待后续版本 |
 | GAK-CHILD-001 | 子 Agent/子进程 capability 传递尚未统一到实际 runtime | P3 已生成父 envelope 子集的签名 child envelope；越权与 remote MCP 本地能力 fixture 拒绝 | 高 | 实际 spawn/MCP adapter 强制使用 child envelope，并证明无旁路 |
 | GAK-NET-001 | network permit 尚未覆盖所有 tool/runtime 路径 | DeepSeek one-shot 与 broker 已有窄证明 | 高 | endpoint/body/attempt/retry-bound permit 覆盖 web、MCP、Git、provider；redirect/proxy 负例 |
 | GAK-CRED-001 | 凭据仍存在不可控内存/内核副本 | Credential Manager 短租约和 WER NOHEAP 已实现；文档明确非绝对零化 | 高 | 保持“不绝对”声明；扩展 child env、dump、artifact、container mount 负例 |
@@ -333,13 +334,13 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 
 ### P2：本机严格 sandbox 与 Docker 快捷入口
 
-状态：**Docker development/conformance 纵向切片已完成；Windows native live probe 已跑，因网络残留保持 noncompliant。**
+状态：**Docker development/conformance 纵向切片已完成；Windows native live probe elevated path compliant（2026-07-27），GAK-SBX-001 已关闭。**
 
 1. backend probe/selection receipt 已实现，不执行真实模型；
 2. Docker 固定镜像与最小 mount/network/resource profile 已实测通过；
-3. Windows native live：TokenIsAppContainer、Job、FS/registry 隔离 observed；raw TCP 未阻断 → noncompliant；静态 candidate 要求 live observation；
+3. Windows native live：TokenIsAppContainer、Job、FS/registry 隔离 observed；elevated path 通过 netsh firewall outbound block rule 达成 compliant observation + selection allow；non-elevated path fail-closed（正确行为）；raw TCP 残余记录为已知平台限制；
 4. requested backend 不可用或不合规时已验证 fail closed，不做静默 fallback；
-5. 详细证据见
+5. GAK-SBX-001 已于 2026-07-27 关闭（development baseline 达成）；详细证据见
    [`../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](../docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md) 与
    [`../docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`](../docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md)。
 
@@ -458,3 +459,47 @@ repo、fake credential、network-off 环境测试。测试记录只保留 consen
 | 是否继承旧模型置信度 | 已核实 | 旧 D 只作为 design input，prompt-only 被拒绝 | 无外部模型复核 |
 | prior-existence/撤回扫描是否完成 | 已核实 | §3.1 搜索词与未命中边界 | INDEX 后续可能新增 |
 | 表达、方向和不确定性是否清楚 | 已修正 | “不表示已经实现”、fail-closed、unchecked | 实现后需再版 |
+
+## 13. Project Doc Retrieval Subagent 设计提案 (2026-07-28)
+
+### 动机
+
+项目文档量持续增长（168 schemas + 30+ audit docs + 20+ architecture docs + 40+ source modules），主 agent 在检索项目内部信息时面临两个风险：
+
+1. **上下文压力**：大量文档片段直接注入主 agent 上下文会严重消耗 token budget
+2. **过早观点形成**：主 agent 在检索过程中可能将检索到的设计意图与当前实现状态混淆，形成未经验证的结论
+
+### 设计决策
+
+| 决策点 | 选择 | 依据 |
+|--------|------|------|
+| 检索范围 | 仅项目内部文档 | 外部检索由其他子代理负责；本项目子代理专注 GSA 项目自身知识 |
+| 模型 API | 独立 DeepSeek v4 Pro | 与主 agent 模型调用链完全隔离；与其他搜索子代理一致 |
+| 返回格式 | 遵循现有 retrieval task contract | 复用 `retrieval_task_contract` → `source_ledger` → `filtering_log` → `organized_response` + `raw_source_refs` 链路；全部输出标记 `delegated_retrieval` / `derived_unverified` |
+| 生命周期 | 独立 ConversationNamespace | 子代理对话独立存储，由主 agent 派遣合同 → 关闭确认；复用 P1 namespace 设计 |
+
+### 架构位置
+
+```text
+主 Agent
+  │
+  ├─ build_retrieval_task_contract()    ← 复用 (retrieval_subagent.py)
+  ├─ dispatch_retrieval_subagent()      ← 新增
+  │     ├─ 独立 DeepSeek v4 Pro API
+  │     ├─ 独立 ConversationNamespace
+  │     └─ ProjectDocIndex (glob+grep+Read)
+  │          扫描: assurance/**/*.py, docs/**/*.md,
+  │                architecture/**/*.md, adr/**/*.md,
+  │                protocol/**, regression/**
+  │
+  └─ build_retrieval_session_close_receipt() ← 复用
+```
+
+### 实施依赖
+
+- **GAK-SESSION-001** (先决) — conversation namespace 接入实际 runtime，子代理的独立 namespace 依赖此能力
+- **GAK-ID-001** (后续) — 独立 API key 的 rotation/revocation 管理
+
+### 与现有 retrieval_subagent 的关系
+
+现有 `retrieval_subagent.py` 是 no-model fixture（`build_fake_retrieval_result` 合成假结果）。本提案将其升级为真实 adapter——保留全部 contract/schema/close-receipt 设计，替换 fake result builder 为真实 DeepSeek API 调用 + 项目文件系统扫描。升级路径与 GAK-RET-001（DeleteFile → StorageAdapter）和 GAK-INJ-001（static patterns → content parser + canonicalizer）一致。

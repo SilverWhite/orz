@@ -8,6 +8,7 @@ from typing import Any, Sequence
 from jsonschema import Draft202012Validator, FormatChecker
 
 from .contracts import ASSURANCE_ROOT, validate_contract
+from .conversation import ConversationNamespace
 from .deepseek_adapter import (
     build_real_deepseek_answer_packet,
     build_real_deepseek_context,
@@ -21,7 +22,9 @@ from .instruction_provenance_gate import (
     evaluate_instruction_provenance_gate,
     verify_instruction_provenance_gate_receipt,
 )
+from .keystore import InstallationKeyStore, MemoryInstallationKeyStore
 from .orientation_runtime_guard import build_orientation_checkpoint
+from .session_governor import SessionGovernor
 from .source_visibility import evaluate_source_visibility_gate
 from .task_contract import (
     DEFAULT_TASK_ID,
@@ -97,11 +100,12 @@ def _build_minimal_ipg_context(
     *,
     run_id: str,
     ask_text: str,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     content_bytes = ask_text.encode("utf-8")
     return build_instruction_provenance_gate_context(
         run_id=run_id,
-        conversation_id=f"CONV-CANONICAL-CLI-{run_id}",
+        conversation_id=conversation_id or f"CONV-CANONICAL-CLI-{run_id}",
         instructions=[
             {
                 "entry_id": f"INS-USER-{run_id}",
@@ -460,6 +464,67 @@ def _build_run_receipt(
     return receipt
 
 
+def _build_run_frozen_context(
+    run_id: str,
+    workspace: str | None = None,
+) -> dict[str, Any]:
+    """Build a minimal frozen context for a canonical CLI run namespace."""
+    return {
+        "workspace_canonical_path_digest": {
+            "value": sha256_bytes(run_id.encode("utf-8")),
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "workspace_content_digest": {
+            "value": sha256_bytes(
+                (workspace or "canonical-cli").encode("utf-8")
+            ),
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "workspace_policy_digest": {
+            "value": sha256_bytes(b"canonical-cli-default"),
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "runtime_family": {
+            "value": "canonical-cli",
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "runtime_adapter_id": {
+            "value": "deepseek-v4-pro",
+            "evidence_status": "derived",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "runtime_binary_digest": {
+            "value": sha256_bytes(b"canonical-cli-python"),
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "runtime_capabilities_digest": {
+            "value": sha256_bytes(b"gate-chain-only"),
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "assurance_config_digest": {
+            "value": sha256_bytes(b"canonical-cli"),
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "sandbox_backend": {
+            "value": "none-gate-chain-only",
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+        "sandbox_backend_digest": {
+            "value": sha256_bytes(b"none"),
+            "evidence_status": "observed",
+            "source_refs": [f"canonical-cli-run:{run_id}"],
+        },
+    }
+
+
 def _resolve_and_setup_gates(
     *,
     run_root: Path,
@@ -472,6 +537,7 @@ def _resolve_and_setup_gates(
     created_at: str | None,
     adapter_id: str | None = None,
     adapter_notes: list[str] | None = None,
+    key_store: InstallationKeyStore | None = None,
 ) -> dict[str, Any]:
     """Shared gate setup: validate inputs, load task contract, run all gates.
 
@@ -506,12 +572,37 @@ def _resolve_and_setup_gates(
         )
 
     run_root.mkdir(parents=True, exist_ok=True)
+
+    # ── create namespace (when key_store provided) ──
+    namespace: ConversationNamespace | None = None
+    governor: SessionGovernor | None = None
+    if key_store is not None:
+        conversation_repository = run_root / "conversations"
+        namespace = ConversationNamespace.create(
+            conversation_repository,
+            key_store=key_store,
+            frozen_context=_build_run_frozen_context(run_id),
+            allowed_capabilities=[
+                "filesystem.workspace_read",
+                "filesystem.workspace_write",
+            ],
+            denied_capabilities=["network.unrestricted", "secret.raw_read"],
+        )
+        governor = SessionGovernor(namespace)
+
     manifest = build_canonical_cli_run_manifest(run_id=run_id, created_at=created_at)
     if adapter_id is not None:
         manifest["adapter"]["adapter_id"] = adapter_id
     if adapter_notes is not None:
         manifest["notes"] = list(adapter_notes)
-    run_manifest_path = run_root / "run-manifest.json"
+
+    # Paths — prefer governor routing when namespace is active
+    if governor is not None:
+        run_manifest_path = governor.write_run_manifest(manifest)
+    else:
+        run_manifest_path = run_root / "run-manifest.json"
+        atomic_write_json(run_manifest_path, manifest)
+
     task_contract_copy = run_root / "task-contract.json"
     source_ledger_copy = run_root / "source-visibility-ledger.json"
     source_gate_receipt_path = run_root / "source-visibility-gate-receipt.json"
@@ -519,7 +610,6 @@ def _resolve_and_setup_gates(
     journal_path = run_root / "events.jsonl"
     receipt_path = run_root / "canonical-cli-run-receipt.json"
 
-    atomic_write_json(run_manifest_path, manifest)
     atomic_write_json(task_contract_copy, task_contract)
     task_contract_sha256 = sha256_file(task_contract_copy)
 
@@ -527,7 +617,15 @@ def _resolve_and_setup_gates(
     if instruction_provenance_gate_context_path is not None:
         ipg_context = load_json(instruction_provenance_gate_context_path)
     else:
-        ipg_context = _build_minimal_ipg_context(run_id=run_id, ask_text=ask_text)
+        ipg_context = _build_minimal_ipg_context(
+            run_id=run_id,
+            ask_text=ask_text,
+            conversation_id=(
+                namespace.conversation_id
+                if namespace is not None
+                else f"CONV-CANONICAL-CLI-{run_id}"
+            ),
+        )
     ipg_receipt = evaluate_instruction_provenance_gate(gate_context=ipg_context)
     ipg_context_copy = run_root / "instruction-provenance-gate-context.json"
     ipg_receipt_path = run_root / "instruction-provenance-gate-receipt.json"
@@ -598,6 +696,8 @@ def _resolve_and_setup_gates(
         "tool_report_path": tool_report_path,
         "tool_receipt_path": tool_receipt_path,
         "orientation_checkpoint_path": orientation_checkpoint_path,
+        "namespace": namespace,
+        "governor": governor,
     }
 
 
@@ -845,41 +945,76 @@ def run_canonical_guarded_cli_real(
     called, the API key is read from Windows Credential Manager and never
     persisted, and only public assistant text enters the answer packet.
     """
-    gates = _resolve_and_setup_gates(
-        run_root=run_root,
-        source_ledger_path=source_ledger_path,
-        instruction_provenance_gate_context_path=instruction_provenance_gate_context_path,
-        ask=ask,
-        task_contract_path=task_contract_path,
-        run_id=run_id,
-        task_id=task_id,
-        created_at=created_at,
-        adapter_id="canonical-cli-real-deepseek-adapter",
-        adapter_notes=[
-            "Canonical guarded CLI path uses real DeepSeek adapter.",
-            "Source visibility gate must run before any model_request event.",
-            "Credential is read from Windows Credential Manager and never persisted.",
-        ],
-    )
-
-    # === REAL ADAPTER: read credential and call DeepSeek API ===
-    api_error: str | None = None
-    model_output: dict[str, Any] | None = None
+    # Create a runtime key store for the namespace envelope
+    key_store = MemoryInstallationKeyStore()
     try:
-        api_key = _read_windows_credential(credential_target)
-        messages = build_real_deepseek_context(
-            task_contract=gates["task_contract"],
-            source_gate_receipt=gates["source_gate_receipt"],
-            tool_availability_report=gates["tool_availability_report"],
+        gates = _resolve_and_setup_gates(
+            run_root=run_root,
+            source_ledger_path=source_ledger_path,
+            instruction_provenance_gate_context_path=instruction_provenance_gate_context_path,
+            ask=ask,
+            task_contract_path=task_contract_path,
+            run_id=run_id,
+            task_id=task_id,
+            created_at=created_at,
+            adapter_id="canonical-cli-real-deepseek-adapter",
+            adapter_notes=[
+                "Canonical guarded CLI path uses real DeepSeek adapter.",
+                "Source visibility gate must run before any model_request event.",
+                "Credential is read from Windows Credential Manager and never persisted.",
+            ],
+            key_store=key_store,
         )
-        model_output = call_deepseek_api(
-            api_key,
-            messages,
-            timeout_seconds=api_timeout_seconds,
-        )
-        api_key = "\x00" * len(api_key)  # best-effort scrub
-    except Exception as exc:
-        api_error = str(exc)
+        namespace = gates["namespace"]
+        governor = gates["governor"]
+
+        # === REAL ADAPTER: enforce adapter gate, then call DeepSeek API ===
+        from .adapter_gate import AdapterGateContext, enforce_adapter_call
+
+        api_error: str | None = None
+        model_output: dict[str, Any] | None = None
+        adapter_enforcement: dict[str, Any] | None = None
+        api_key = ""
+
+        try:
+            api_key = _read_windows_credential(credential_target)
+            messages = build_real_deepseek_context(
+                task_contract=gates["task_contract"],
+                source_gate_receipt=gates["source_gate_receipt"],
+                tool_availability_report=gates["tool_availability_report"],
+            )
+
+            gate_ctx = AdapterGateContext(
+                ipg_receipt=gates["ipg_receipt"],
+                ipg_context=load_json(gates["ipg_context_copy"]),
+                adapter_id="deepseek-v4-pro",
+                conversation_id=namespace.conversation_id,
+                run_id=run_id,
+            )
+            enforcement = enforce_adapter_call(
+                gate_context=gate_ctx,
+                adapter_call=lambda: call_deepseek_api(
+                    api_key,
+                    messages,
+                    timeout_seconds=api_timeout_seconds,
+                ),
+            )
+            model_output = enforcement["adapter_result"]
+            adapter_enforcement = {
+                k: v for k, v in enforcement.items() if k != "adapter_result"
+            }
+            # Store enforcement receipt in namespace
+            if governor is not None:
+                governor.write_gate_receipt(
+                    "adapter-gate-enforcement",
+                    adapter_enforcement,
+                )
+        except Exception as exc:
+            api_error = str(exc)
+        finally:
+            api_key = "\x00" * len(api_key)  # best-effort scrub
+    finally:
+        key_store.close()
 
     # Build the answer packet (from real output or error fallback)
     if model_output and not api_error:
@@ -895,6 +1030,8 @@ def run_canonical_guarded_cli_real(
             tool_availability_receipt=gates["tool_availability_gate_receipt"],
             tool_availability_receipt_sha256=gates["tool_receipt_sha256"],
             model_output=model_output,
+            conversation_id=namespace.conversation_id,
+            envelope_id=namespace.state()["envelope_id"],
         )
         terminal_status = "completed"
         terminal_event_type = "run_finished"
