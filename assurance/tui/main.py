@@ -38,19 +38,45 @@ def main(argv: list[str] | None = None) -> int:
         "--with-properties", action="store_true",
         help="Show the properties sheet overlay in static render",
     )
+    parser.add_argument(
+        "--demo-events", type=str, default=None, metavar="SCENARIO",
+        choices=["gate_chain", "gate_defer", "run_failed"],
+        help="Run interactive demo with a live event scenario",
+    )
 
     args = parser.parse_args(argv)
 
     from .app import TuiPrototype
 
-    app = TuiPrototype.with_sample_data()
+    # Choose construction path
+    if args.demo_events:
+        from .event_source import (
+            FakeEventSource,
+            build_gate_chain_demo,
+            build_gate_defer_demo,
+            build_run_failed_demo,
+        )
+        scenarios = {
+            "gate_chain": build_gate_chain_demo,
+            "gate_defer": build_gate_defer_demo,
+            "run_failed": build_run_failed_demo,
+        }
+        events = scenarios[args.demo_events]()
+        source = FakeEventSource(preload=events)
+        app = TuiPrototype.with_event_source(source)
+        # Also open dialog/properties if requested
+        if args.with_dialog:
+            app.dialog.visible = True
+        if args.with_properties:
+            app.properties.visible = True
+    else:
+        app = TuiPrototype.with_sample_data()
+        if args.with_dialog:
+            app.dialog.visible = True
+        if args.with_properties:
+            app.properties.visible = True
 
-    if args.with_dialog:
-        app.dialog.visible = True
-    if args.with_properties:
-        app.properties.visible = True
-
-    if args.demo:
+    if args.demo or args.demo_events:
         return _run_demo(app, args.width, args.height)
 
     output = app.render(args.width, args.height)

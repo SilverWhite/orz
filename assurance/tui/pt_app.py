@@ -26,6 +26,7 @@ enough for terminals to deliver the second byte of an Alt sequence.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from prompt_toolkit import Application
@@ -276,6 +277,37 @@ def run_tui_demo(
 
     This is the primary interactive entry point for the first prototype.
     Press ``q`` or ``Ctrl+C`` to exit.
+
+    When *tui_app* has an :attr:`event_source`, a background drain
+    coroutine polls for events and projects them into the widget state,
+    calling :meth:`app.invalidate` after each batch.
     """
     app = create_pt_application(tui_app, width=width, height=height)
-    app.run()
+
+    async def _run() -> None:
+        drain_task = None
+        if tui_app.event_source is not None:
+            async def _drain() -> None:
+                while True:
+                    if (
+                        tui_app.event_source is not None
+                        and tui_app.event_source.is_active()
+                    ):
+                        messages = tui_app.poll_events()
+                        if messages:
+                            app.invalidate()
+                    await asyncio.sleep(0.05)
+
+            drain_task = asyncio.create_task(_drain())
+
+        try:
+            await app.run_async()
+        finally:
+            if drain_task is not None:
+                drain_task.cancel()
+                try:
+                    await drain_task
+                except asyncio.CancelledError:
+                    pass
+
+    asyncio.run(_run())

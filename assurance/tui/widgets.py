@@ -630,6 +630,34 @@ class ExplorerPane(Widget):
                     result.append(pad_to_width("    " + entry[: width - 6], width))
         return result
 
+    # ── mutation helpers (event-driven updates) ───────────────────────────
+
+    def add_event_entry(self, group_label: str, entry_text: str) -> None:
+        """Append *entry_text* to the event group named *group_label*.
+
+        Creates the group if it does not already exist.
+        """
+        for g in self.event_groups:
+            if g.label == group_label:
+                g.entries.append(entry_text)
+                g.count = len(g.entries)
+                return
+        from .view_models import EventGroup
+        self.event_groups.append(EventGroup(
+            label=group_label, count=1, expanded=True,
+            entries=[entry_text],
+        ))
+
+    def add_event_group(self, group_label: str) -> None:
+        """Ensure an event group named *group_label* exists (no-op if present)."""
+        for g in self.event_groups:
+            if g.label == group_label:
+                return
+        from .view_models import EventGroup
+        self.event_groups.append(EventGroup(
+            label=group_label, count=0, expanded=False, entries=[],
+        ))
+
 
 # ── ContentPane ─────────────────────────────────────────────────────────────
 
@@ -693,6 +721,36 @@ class ContentPane(Widget):
             lines += [""] * (height - len(lines))
         return box_vertical(lines[:height], width, focused=self.focused)
 
+    # ── mutation helpers (event-driven updates) ───────────────────────────
+
+    def add_or_update_source_row(
+        self, ref_id: str, observed: str, required: str,
+        decision: str, claim: str,
+    ) -> None:
+        """Insert or update a source-visibility row identified by *ref_id*."""
+        for row in self.source_table:
+            if row.ref_id == ref_id:
+                row.observed = observed
+                row.required = required
+                row.decision = decision
+                row.claim = claim
+                return
+        from .view_models import SourceVisibilityRow
+        self.source_table.append(SourceVisibilityRow(
+            ref_id=ref_id, observed=observed, required=required,
+            decision=decision, claim=claim,
+        ))
+
+    def set_disposition(self, disposition: str, reason: str = "") -> None:
+        """Set the claim disposition and optional reason text."""
+        self.claim_disposition = disposition
+        if reason:
+            self.disposition_reason = reason
+
+    def set_next_actions(self, actions: list[str]) -> None:
+        """Replace the next-actions list."""
+        self.next_actions = list(actions)
+
 
 # ── StatusBar ───────────────────────────────────────────────────────────────
 
@@ -711,6 +769,20 @@ class StatusBar(Widget):
             chunks.append(label)
         line = " | ".join(chunks)
         return [pad_to_width(line, width)]
+
+    # ── mutation helpers (event-driven updates) ───────────────────────────
+
+    def update_item(self, label: str, ok: bool) -> None:
+        """Update or append a status item.
+
+        Items are matched by their label text (exact match).  If no item
+        with *label* exists, the pair ``(label, ok)`` is appended.
+        """
+        for i, (existing_label, _) in enumerate(self.items):
+            if existing_label == label:
+                self.items[i] = (label, ok)
+                return
+        self.items.append((label, ok))
 
 
 # ── ContentMarker (right-side column) ──────────────────────────────────────
@@ -745,6 +817,14 @@ class ContentMarker(Widget):
         if len(lines) < height:
             lines += [" " * inner_w] * (height - len(lines))
         return box_vertical(lines[:height], width)
+
+    # ── mutation helpers (event-driven updates) ───────────────────────────
+
+    def add_marker(self, kind: str, line: int, label: str = "") -> None:
+        """Append a marker entry to the right-side marker column."""
+        # Import locally to avoid circular dependency at module level
+        from .view_models import MarkerEntry
+        self.markers.append(MarkerEntry(kind=kind, line=line, label=label))
 
 
 # ── Dialog (modal overlay) ──────────────────────────────────────────────────
