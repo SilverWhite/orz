@@ -1,6 +1,6 @@
 # CLI_PROJECT_INDEX
 
-**更新**: 2026-07-28 (R1：初版创建后经交叉验证修正——修复不存在的 journal_lock.py、校正 Schema 数量、补全遗漏文档/测试/夹具目录、标注无独立审计文档的 Gate、修正 VS Code 集成源码状态)
+**更新**: 2026-07-28 (R2：补全 Orientation Runtime Guard 与 Adapter Gate 的独立审计文档，消除 Gate 链路全部审计文档缺口；附A 新增 2026-07-28 条目)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -50,7 +50,7 @@
 ### A. P 级合约总览 (P-Level Contract Hierarchy)
 
 - **P0** (2026-07-26, 事实/合约层): 数据语义层——基础 Schema 定义、信封、合约基类。这是所有上层合约的语义基础。入口: `assurance/contracts.py` / `assurance/envelope.py` / `docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md`
-- **P1** (2026-07-25, 事实/合约层): 会话身份与归档删除生命周期——conversation namespace + permit + archive journal 的基础链路。入口: `assurance/conversation.py` / `assurance/permit.py` / `assurance/archive.py` / `assurance/archive_journal.py`
+- **P1** (2026-07-25, 事实/合约层): 会话身份与归档删除生命周期——conversation namespace + permit + archive journal 的基础链路。2026-07-28: StorageAdapter 已接入 ArchiveController；archive_recovery.py（holistic 恢复编排器）；SessionGovernor（thin wrapper 确保所有 adapter artifact 通过 namespace 路由）；canonical CLI 真实 adapter 路径已接入 ConversationNamespace + enforce_adapter_call()。入口: `docs/P1_CONVERSATION_ARCHIVE_LIFECYCLE_AUDIT_2026-07-28.md` / `assurance/conversation.py` / `assurance/permit.py` / `assurance/archive.py` / `assurance/archive_journal.py` / `assurance/archive_recovery.py` / `assurance/archive_verifier.py` / `assurance/session_governor.py`
 - **P2** (2026-07-24, 事实/合约层): Docker 严格沙箱——进程隔离、状态可观测性。Windows Native Sandbox (AppContainer + Job Object) 作为辅助沙箱选项。入口: `docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md` / `assurance/sandbox.py` / `assurance/windows_sandbox.py` / `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`
 - **P2.5** (2026-07-24, 事实/合约层): 守卫执行 (Guarded Execution)——无模型动作、进程追踪、输出拦截。入口: `docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md` / `assurance/guarded_execution.py`
 - **P3** (2026-07-25, 事实/合约层): 指令授权——instruction provenance、capability delegation、action authorization、child capability enforcement。入口: `docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md` / `assurance/instruction_gate.py` / `assurance/instruction_provenance_gate.py` / `assurance/child_capability_enforcer.py`
@@ -63,12 +63,12 @@
 
 > 规范守卫 CLI 的离线主路径 Gate 序列。Gate 之间为串行链：前一个通过后才进入下一个。
 
-- **GAK-INJ-001 指令来源 Gate** (2026-07-27, 事实): 入口级多源指令分类/反注入 Gate——batch gate 对多源指令进行 provenance 分类，拦截注入。别名: instruction provenance gate。入口: `docs/GAK_INJ_001_AUDIT_2026-07-27.md` / `assurance/instruction_provenance_gate.py`
+- **GAK-INJ-001 指令来源 Gate** (2026-07-27, 事实/2026-07-28 关闭): 入口级多源指令分类/反注入 Gate——batch gate 对多源指令进行 provenance 分类，拦截注入。2026-07-28: 新增 production content parser（parse_instruction_content + detect_obfuscated_injection）、canonicalizer 集成（路径遍历/SSRF 检测）、25 个注入模式、unified gate entry 验证；89 tests pass。别名: instruction provenance gate。入口: `docs/GAK_INJ_001_AUDIT_2026-07-27.md` / `assurance/instruction_provenance_gate.py` / `assurance/tests/test_injection_adversarial.py`
 - **Tool Availability Gate** (2026-07-27, 事实): 机械式工具可用性探测——在模型调用前验证工具声明与运行时实际可用性一致性，检测 belief mismatch/stagnation。入口: `docs/TOOL_AVAILABILITY_GATE_AUDIT_2026-07-27.md` / `assurance/tool_availability_gate.py`
-- **Retrieval Subagent** (2026-07-27, 事实): 无模型检索子代理——结构化检索结果的 fixture，不依赖模型调用。入口: `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md` / `assurance/retrieval_subagent.py`
-- **Orientation Runtime Guard** (2026-07-27, 事实/无独立审计文档): 中性方向检查点 + 运行时停滞守卫——检测 agent 是否陷入循环/停滞。无独立审计文档，实现由 schema 与源码直接约束。入口: `assurance/orientation_runtime_guard.py` / `assurance/orientation_runtime_integration.py` / `assurance/orientation_runtime_journal.py` / `assurance/orientation-checkpoint-v0.1.schema.json` / `assurance/runtime-stagnation-guard-receipt-v0.1.schema.json`
+- **Retrieval Subagent** (2026-07-27, 事实/2026-07-28 关闭): 无模型检索子代理——结构化检索结果的 fixture。2026-07-28: 升级为真实 DeepSeek v4 Pro 驱动的 Project Doc Retrieval Subagent（`dispatch_retrieval_subagent` + `ProjectDocIndex` + `SessionGovernor`）；offline 模式支持；37 tests pass。入口: `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md` / `assurance/retrieval_subagent.py` / `assurance/project_doc_index.py` / `assurance/tests/test_retrieval_subagent_real.py`
+- **Orientation Runtime Guard** (2026-07-27, 事实): 中性方向检查点 + 运行时停滞守卫——检测 agent 是否陷入循环/停滞。别名: orientation checkpoint, stagnation guard。入口: `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md` / `assurance/orientation_runtime_guard.py` / `assurance/orientation_runtime_integration.py` / `assurance/orientation_runtime_journal.py` / `assurance/orientation-checkpoint-v0.1.schema.json` / `assurance/runtime-stagnation-guard-receipt-v0.1.schema.json`
 - **Source Visibility Gate** (2026-07-26, 事实): 全文可见性检查 Gate——验证引用源的完整文本可见性。入口: `docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md` / `assurance/source_visibility.py` / `assurance/source_visibility_cli.py`
-- **Adapter Gate** (2026-07-27, 事实/无独立审计文档): 适配器调用旁路执行 Gate——防止运行时绕过适配器直接调用模型。无独立审计文档，实现由 schema 与源码直接约束。入口: `assurance/adapter_gate.py` / `assurance/adapter_preflight.py` / `assurance/adapter_output_validator.py` / `assurance/adapter_failure_classifier.py` / `assurance/adapter-gate-enforcement-receipt-v0.1.schema.json`
+- **Adapter Gate** (2026-07-27, 事实): 适配器调用旁路执行 Gate——防止运行时绕过适配器直接调用模型。别名: adapter gate enforcement, adapter preflight。入口: `docs/ADAPTER_GATE_AUDIT_2026-07-28.md` / `assurance/adapter_gate.py` / `assurance/adapter_preflight.py` / `assurance/adapter_output_validator.py` / `assurance/adapter_failure_classifier.py` / `assurance/adapter-gate-enforcement-receipt-v0.1.schema.json`
 - **Canonical Guarded CLI Gate 序列** (2026-07-26, 设计约束): 离线主路径 Gate 序列定义: instruction provenance gate → tool availability gate → orientation checkpoint → source visibility gate → fake DeepSeek adapter boundary → answer packet → runtime JSONL journal → independent verifier。入口: `docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md` / `assurance/canonical_cli.py`
 
 ### C. 运行时集成 (Runtime Integration)
@@ -107,7 +107,7 @@
 ### F. 安全与沙箱 (Security & Sandbox)
 
 - **Docker Sandbox** (2026-07-24, 事实): P2 Docker 严格沙箱——进程隔离、网络限制、状态可观测。入口: `docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md` / `assurance/sandbox.py` / `assurance/sandbox_verifier.py`
-- **Windows Native Sandbox** (2026-07-27, 事实/待完善): AppContainer + Job Object 的 Windows 原生沙箱探测。当前选择尚未允许（noncompliant）。别名: GAK-SBX-001。入口: `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md` / `assurance/windows_sandbox.py`
+- **Windows Native Sandbox** (2026-07-27, 事实): AppContainer + Job Object + netsh firewall 的 Windows 原生沙箱。Elevated 路径 compliant（firewall rule 创建成功 → selection allow），non-elevated 路径 fail-closed（正确行为）。别名: GAK-SBX-001。入口: `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md` / `assurance/windows_sandbox.py`
 - **Network Permit Gateway** (2026-07-25, 事实): 网络许可评估——控制 agent 对外网络访问权限。入口: `assurance/network_permit_gateway.py` / `architecture/NETWORK_PERMIT_BROKER_CONTRACT_v0.1.md`
 - **Workspace Trust** (2026-07-21, 事实): 工作区信任建立与验证——防止 agent 在不受信任的目录中执行。入口: `docs/GROK_WORKSPACE_TRUST_AUDIT_2026-07-21.md` / `assurance/workspace_trust.py`
 - **Keystore / Key Lifecycle** (2026-07, 事实): 安装级密钥存储（内存 + Windows DPAPI）+ 密钥生命周期控制。入口: `assurance/keystore.py` / `assurance/key_lifecycle.py`
@@ -237,10 +237,15 @@
 - **FEP Agent Proto** (废弃): 旧原型包 `prototype/fep_agent_proto/` 不作为生产 runner。仅保留用于设计参考。入口: `architecture/D_SALVAGE_MATRIX_v0.1.md`
 - **旧 P2 CLI 入口** (废弃): 部分旧 CLI 入口点已被 canonical CLI 替代。所有新开发应使用 `assurance/canonical_cli.py` 的 Gate 序列。入口: `assurance/p2_cli.py` / `assurance/p45_cli.py` / `assurance/p5_cli.py`（仅作向后兼容保留）
 
-### 待实施 (Pending)
+### 已关闭 (Closed)
 
-- **Windows Native Sandbox 全合规** (待实施): 当前 AppContainer + Job Object 沙箱尚未通过选择允许。需继续完善合规性。入口: `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`
-- **Profile Registry 全量注册** (待实施): profile 注册表的完整填充与验证。入口: `assurance/profile_registry.py`
+- **GAK-SBX-001 Windows Native Sandbox** (2026-07-27 关闭): Development baseline 已达成——elevated 路径 compliant（netsh firewall + AppContainer + Job Object），non-elevated 路径 fail-closed。原始 TCP 残余记录为已知 Windows 平台限制，不阻塞 development 门禁。入口: `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`
+- **GSA-PROFILE-001 Profile Registry 全量注册** (2026-07-28 关闭): 5 个 profile (general-code, restricted-review, headless-ci, general-science, lif-research) 已完成全量注册——全部 profile 包含 reference runtimes 与 evidence refs；新增 `verify_profile_registry_completeness()` 完整性校验（cross-reference extensions/capabilities 与实际 assurance 模块）；6 个新增测试。入口: `assurance/profile-registry-v0.1.json` / `assurance/profile_registry.py`
+- **GAK-INJ-001 Instruction Provenance Gate 产品化** (2026-07-28 关闭): 新增 production content parser + obfuscation detector + canonicalizer 集成；25 个注入模式；adversarial injection 47 测试 + bypass hardening 8 测试。89 tests pass。入口: `assurance/instruction_provenance_gate.py` / `assurance/tests/test_injection_adversarial.py`
+- **GAK-RET-001 Retention/Deletion Controller 产品化** (2026-07-28 关闭)
+- **GAK-SESSION-001 Conversation Namespace → Real Runtime** (2026-07-28 关闭): `ConversationNamespace` 已接入 canonical CLI 真实 adapter 路径。新增 `SessionGovernor`；`run_canonical_guarded_cli_real()` 通过 `enforce_adapter_call()` 包装 DeepSeek API 调用；10 个 integration 测试。548 tests pass。入口: `assurance/session_governor.py` / `assurance/tests/test_session_namespace.py`: StorageAdapter 已接入 ArchiveController（替代裸 DeleteFile 回调）；archive_recovery.py 提供 holistic 恢复编排器（classify_archive_failure → recover_archive，覆盖 clean_interrupted/torn_journal/corrupt_journal/stale_lock/archiving_no_journal 五个恢复路径）；detect_stale_archive_lock + cleanup_stale_archive_lock 处理崩溃后孤儿锁；FaultInjectionStorageAdapter 支持故障注入测试；新增 18 个测试。484 tests pass。入口: `assurance/archive.py` / `assurance/archive_recovery.py` / `assurance/archive_journal.py` / `assurance/tests/test_archive_recovery.py` / `assurance/tests/storage_faults.py`
+
+### 待实施 (Pending)
 
 ---
 
@@ -276,6 +281,7 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
+- 2026-07-28: `ADAPTER_GATE_AUDIT`, `ORIENTATION_RUNTIME_GUARD_AUDIT`, `P1_CONVERSATION_ARCHIVE_LIFECYCLE_AUDIT`
 - 2026-07-27: `GAK_INJ_001_AUDIT`, `TOOL_AVAILABILITY_GATE_AUDIT`, `RETRIEVAL_SUBAGENT_AUDIT`, `GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT`
 - 2026-07-26: `CANONICAL_GUARDED_CLI_P0_AUDIT`, `CANONICAL_CLI_QUICKSTART`, `GSA_DISPOSABLE_REPRODUCTION_AUDIT`, `GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN`, `SOURCE_FULLTEXT_VISIBILITY_RULE`
 - 2026-07-25: `P3_INSTRUCTION_AUTHORITY_AUDIT`, `P4_AUDIT_COMPACTION_RECOVERY_AUDIT`, `P4_5_WORKSPACE_FIRST_INTEGRATION_AUDIT`, `P5_SYNTHETIC_USER_TASK_PREFLIGHT`, `GSA_CORE_READONLY_SLICE_AUDIT`, `GSA_ARTIFACT_SCHEMA_REGISTRATION_AUDIT`, `GSA_VALIDATOR_BRIDGE_AUDIT`, `GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT`, `GENERAL_SCIENTIFIC_ASSURANCE_GAP_REVIEW`, GPS 系列 (7 篇), CLI/Codex 系列 (3 篇)

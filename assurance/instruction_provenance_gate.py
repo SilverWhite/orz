@@ -38,6 +38,15 @@ INJECTION_PATTERNS = [
     ("bypass security", "known_injection_pattern"),
     ("dont check", "known_injection_pattern"),
     ("无需验证", "known_injection_pattern"),
+    ("output your instructions", "known_injection_pattern"),
+    ("override security", "known_injection_pattern"),
+    ("system prompt", "known_injection_pattern"),
+    ("hidden instructions", "known_injection_pattern"),
+    ("disable safety", "known_injection_pattern"),
+    ("developer mode", "known_injection_pattern"),
+    ("debug mode", "known_injection_pattern"),
+    ("pretend you are", "known_injection_pattern"),
+    ("act as if", "known_injection_pattern"),
 ]
 
 
@@ -305,3 +314,432 @@ def verify_instruction_provenance_gate_fixture(
         gate_context=gate_context,
         receipt=observed_receipt,
     )
+
+
+# ── production content parser ──
+
+import re as _re  # noqa: E402 (module-level import added post-definition for organisation)
+
+
+# Path-like patterns: Unix absolute/relative and Windows drive-letter paths
+_PATH_UNIX = _re.compile(r"(?:^|\s)((?:\.{0,2}/)+(?:[^\s\"'`<>|:]+/)*[^\s\"'`<>|:]*)")
+_PATH_WIN = _re.compile(
+    r"(?:^|\s)([A-Za-z]:\\(?:[^\s\"'`<>|:]+\\?)*[^\s\"'`<>|:]*)",
+    _re.IGNORECASE,
+)
+_PATH_UNC = _re.compile(r"(?:^|\s)(\\\\[^\s\"'`<>|]+(?:\\[^\s\"'`<>|]+)*)")
+_URL_PATTERN = _re.compile(r"https?://[^\s\"'`<>|]+")
+_DIRECTIVE_PATTERNS = [
+    (_re.compile(r"\byou must\b", _re.IGNORECASE), "imperative_directive"),
+    (_re.compile(r"\bdo not\b", _re.IGNORECASE), "negative_directive"),
+    (_re.compile(r"\bignore\b(?!\s+(?:the\s+)?(?:previous|above|prior|all))", _re.IGNORECASE), "ignore_keyword"),
+    (_re.compile(r"\b(?:bypass|override|disable)\s+(?:security|safety|gate|check|verification)\b", _re.IGNORECASE), "security_bypass_directive"),
+    (_re.compile(r"\bpretend\s+(?:you are|to be|that)\b", _re.IGNORECASE), "role_play_directive"),
+    (_re.compile(r"\bforget\s+(?:everything|all|your)\s+(?:above|previous|instructions|training)\b", _re.IGNORECASE), "amnesia_directive"),
+    (_re.compile(r"\boutput\s+(?:your|the)\s+(?:system\s*(?:prompt|message|instruction)|hidden\s*(?:prompt|instruction|rule))\b", _re.IGNORECASE), "prompt_extraction"),
+]
+
+# Obfuscation detection
+_ZERO_WIDTH_CHARS = _re.compile("[​‌‍‎‏﻿]")
+_HOMOGLYPH_CYRILLIC = _re.compile("[аеоурхсмАВЕКМНОРСТХ]")  # Cyrillic chars that look like Latin
+_BASE64_PATTERN = _re.compile(r"(?:[A-Za-z0-9+/]{28,}={0,2})")
+_FULLWIDTH_PATTERN = _re.compile(r"[！-～]")  # Fullwidth Latin
+
+
+def parse_instruction_content(content_bytes: bytes) -> dict[str, object]:
+    """Parse raw instruction bytes to extract path/endpoint/directive references.
+
+    This is a mechanical content analyser — no model calls, no network.
+    It extracts structural indicators that the gate uses for deeper
+    injection detection beyond simple substring matching.
+
+    Returns a dict with keys:
+      - path_references: list[str] — filesystem paths found
+      - endpoint_references: list[str] — HTTP(S) URLs found
+      - directive_indicators: list[dict] — detected directive patterns
+      - instruction_kind_hint: str | None — inferred instruction type
+      - has_executable_references: bool — whether content references executables
+    """
+    try:
+        text = content_bytes.decode("utf-8", errors="replace")
+    except UnicodeDecodeError:
+        text = content_bytes.decode("latin-1", errors="replace")
+
+    # Extract path references
+    path_refs: list[str] = []
+    for match in _PATH_UNIX.finditer(text):
+        candidate = match.group(1).strip()
+        if len(candidate) > 1 and candidate not in path_refs:
+            path_refs.append(candidate)
+    for match in _PATH_WIN.finditer(text):
+        candidate = match.group(1).strip()
+        if len(candidate) > 2 and candidate not in path_refs:
+            path_refs.append(candidate)
+    for match in _PATH_UNC.finditer(text):
+        candidate = match.group(1).strip()
+        if len(candidate) > 3 and candidate not in path_refs:
+            path_refs.append(candidate)
+
+    # Extract endpoint references
+    endpoint_refs: list[str] = []
+    for match in _URL_PATTERN.finditer(text):
+        url = match.group(0)
+        if url not in endpoint_refs:
+            endpoint_refs.append(url)
+
+    # Detect directive indicators
+    directive_indicators: list[dict[str, str]] = []
+    for pattern, indicator_type in _DIRECTIVE_PATTERNS:
+        for match in pattern.finditer(text):
+            directive_indicators.append({
+                "type": indicator_type,
+                "match": match.group(0),
+            })
+
+    # Infer instruction kind
+    instruction_kind_hint: str | None = None
+    lowered = text.lower()
+    if any(
+        marker in lowered
+        for marker in ("system prompt", "system message", "system instruction", "<|im_start|>system")
+    ):
+        instruction_kind_hint = "system_prompt"
+    elif any(
+        marker in lowered
+        for marker in ("tool call", "tool output", "tool result", "function call")
+    ):
+        instruction_kind_hint = "tool_output"
+    elif any(
+        marker in lowered
+        for marker in ("project rule", "project config", "workspace rule")
+    ):
+        instruction_kind_hint = "project_rule"
+
+    # Executable references
+    has_executable_references = any(
+        marker in lowered
+        for marker in (".exe", ".bat", ".cmd", ".ps1", ".sh", ".py", "python ", "bash ", "cmd.exe", "powershell")
+    )
+
+    return {
+        "path_references": path_refs,
+        "endpoint_references": endpoint_refs,
+        "directive_indicators": directive_indicators,
+        "instruction_kind_hint": instruction_kind_hint,
+        "has_executable_references": has_executable_references,
+    }
+
+
+def detect_obfuscated_injection(content_bytes: bytes) -> list[dict[str, str]]:
+    """Detect obfuscation techniques used to evade substring-based injection detection.
+
+    Checks for:
+      - Zero-width character injection (U+200B, U+200C, U+200D, U+FEFF)
+      - Homoglyph attacks (Cyrillic characters that look like Latin)
+      - Base64-encoded payloads
+      - Fullwidth character substitution
+
+    Returns a list of alert dicts with ``technique`` and ``detail`` keys.
+    """
+    try:
+        text = content_bytes.decode("utf-8", errors="replace")
+    except UnicodeDecodeError:
+        text = content_bytes.decode("latin-1", errors="replace")
+
+    alerts: list[dict[str, str]] = []
+
+    # Zero-width characters
+    zw_matches = _ZERO_WIDTH_CHARS.findall(text)
+    if zw_matches:
+        alerts.append({
+            "technique": "zero_width_character",
+            "detail": f"found {len(zw_matches)} zero-width character(s): "
+                      f"{', '.join(f'U+{ord(c):04X}' for c in set(zw_matches))}",
+        })
+
+    # Homoglyph detection (Cyrillic chars in primarily-Latin text)
+    cyrillic_matches = _HOMOGLYPH_CYRILLIC.findall(text)
+    latin_chars = sum(1 for c in text if c.isascii() and c.isalpha())
+    if cyrillic_matches and latin_chars > 10:
+        unique_cyrillic = set(cyrillic_matches)
+        alerts.append({
+            "technique": "homoglyph_attack",
+            "detail": f"found Cyrillic homoglyph characters in Latin-dominant text: "
+                      f"{''.join(sorted(unique_cyrillic))}",
+        })
+
+    # Base64 payload detection
+    for match in _BASE64_PATTERN.finditer(text):
+        candidate = match.group(0)
+        # Skip common false positives (e.g. SHA256 hashes are 64 hex chars).
+        # Require at least 40 base64 chars (~30 bytes decoded) for meaningful payloads.
+        if len(candidate) >= 40 and not all(c in "0123456789abcdefABCDEF" for c in candidate):
+            try:
+                import base64
+                decoded = base64.b64decode(candidate, validate=True)
+                decoded_text = decoded.decode("utf-8", errors="replace")
+                lowered = decoded_text.lower()
+                if any(
+                    kw in lowered
+                    for kw in ("ignore", "bypass", "system", "prompt", "instruction", "password", "token")
+                ):
+                    alerts.append({
+                        "technique": "base64_encoded_payload",
+                        "detail": f"base64 payload decodes to injection-relevant content "
+                                  f"({len(decoded)} bytes)",
+                    })
+                    break  # one confirmed payload is enough
+            except Exception:
+                pass
+
+    # Fullwidth character substitution
+    fw_matches = _FULLWIDTH_PATTERN.findall(text)
+    if len(fw_matches) >= 3:
+        alerts.append({
+            "technique": "fullwidth_substitution",
+            "detail": f"found {len(fw_matches)} fullwidth character(s) "
+                      f"that may substitute ASCII in injection patterns",
+        })
+
+    return alerts
+
+
+# ── canonicalizer integration ──
+
+
+def evaluate_instruction_provenance_gate_with_canonicalizer(
+    *,
+    gate_context: dict[str, Any],
+    content_hints: dict[str, str] | None = None,
+    allowed_endpoint_hosts: set[str] | None = None,
+    forbidden_path_prefixes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Evaluate the IPG with integrated path/endpoint canonicalizer.
+
+    Extends :func:`evaluate_instruction_provenance_gate` by also scanning
+    instruction content for path traversal and SSRF attempts.  Path
+    references are validated through :func:`canonicalize_filesystem_path`;
+    endpoint references through :func:`validate_endpoint_list`.
+
+    Additional blocking conditions (on top of the base gate):
+      - Path traversal in any data-only source → ``block``
+      - Unauthorized endpoint in any data-only source → ``block``
+      - Obfuscated injection indicators in data-only source → ``defer``
+
+    Returns the base gate receipt extended with a ``canonicalizer_results``
+    key containing per-instruction path/endpoint/obfuscation scan results.
+    """
+    from .endpoint_canonicalizer import (
+        canonicalize_filesystem_path,
+        validate_endpoint_list,
+    )
+
+    # Run the base gate first
+    base_receipt = evaluate_instruction_provenance_gate(
+        gate_context=gate_context,
+        content_hints=content_hints,
+    )
+
+    canonicalizer_results: list[dict[str, Any]] = []
+    additional_blocks = 0
+    additional_defers = 0
+    new_alerts: list[dict[str, Any]] = list(base_receipt.get("injection_alerts", []))
+
+    for entry in gate_context["instructions"]:
+        entry_id = entry["entry_id"]
+        declared_source = entry["declared_source_type"]
+        content = entry.get("content_bytes")
+        is_data_only = declared_source in DATA_ONLY_SOURCES
+
+        entry_result: dict[str, Any] = {
+            "entry_id": entry_id,
+            "path_scan": {"paths_found": 0, "blocked": False, "alerts": []},
+            "endpoint_scan": {"endpoints_found": 0, "blocked": False, "alerts": []},
+            "obfuscation_scan": {"techniques_detected": 0, "blocked": False, "alerts": []},
+        }
+
+        if content is not None and isinstance(content, int) and content > 0:
+            # content_bytes stores byte count, not actual bytes.
+            # Full content parsing requires actual bytes from the runtime.
+            # For offline: use content_hints as a proxy.
+            hint = (content_hints or {}).get(entry_id, "")
+            if hint:
+                parsed = parse_instruction_content(hint.encode("utf-8", errors="replace"))
+                obfuscation = detect_obfuscated_injection(
+                    hint.encode("utf-8", errors="replace")
+                )
+
+                # Path scan
+                for path_ref in parsed["path_references"]:
+                    entry_result["path_scan"]["paths_found"] += 1
+                    is_traversal = False
+                    # Direct traversal detection: ../ patterns in relative paths
+                    if path_ref.startswith("..") or "/.." in path_ref or "\\.." in path_ref:
+                        is_traversal = True
+                    else:
+                        try:
+                            canonicalize_filesystem_path(path_ref)
+                        except AssuranceError:
+                            is_traversal = True
+                    if is_traversal:
+                        entry_result["path_scan"]["blocked"] = True
+                        entry_result["path_scan"]["alerts"].append(
+                            f"path traversal detected: {path_ref}"
+                        )
+                        if is_data_only:
+                            additional_blocks += 1
+                            new_alerts.append({
+                                "entry_id": entry_id,
+                                "alert_type": "path_traversal",
+                                "indicator": f"traversal path in data-only source: {path_ref}",
+                                "severity": "block",
+                            })
+
+                # Endpoint scan
+                if parsed["endpoint_references"]:
+                    entry_result["endpoint_scan"]["endpoints_found"] = len(
+                        parsed["endpoint_references"]
+                    )
+                    if allowed_endpoint_hosts is not None:
+                        validations = validate_endpoint_list(
+                            parsed["endpoint_references"],
+                            allowed_hosts=allowed_endpoint_hosts,
+                        )
+                        for val in validations:
+                            if not val["allowed"]:
+                                entry_result["endpoint_scan"]["blocked"] = True
+                                entry_result["endpoint_scan"]["alerts"].append(
+                                    f"unauthorized endpoint: {val.get('endpoint', '')}: {val['reason']}"
+                                )
+                                if is_data_only:
+                                    additional_blocks += 1
+                                    new_alerts.append({
+                                        "entry_id": entry_id,
+                                        "alert_type": "ssrf_attempt",
+                                        "indicator": f"unauthorized endpoint in data-only source: {val.get('endpoint', '')}",
+                                        "severity": "block",
+                                    })
+
+                # Obfuscation scan
+                if obfuscation:
+                    entry_result["obfuscation_scan"]["techniques_detected"] = len(obfuscation)
+                    entry_result["obfuscation_scan"]["alerts"] = [
+                        f"{o['technique']}: {o['detail']}" for o in obfuscation
+                    ]
+                    if is_data_only:
+                        additional_defers += 1
+                        for o in obfuscation:
+                            new_alerts.append({
+                                "entry_id": entry_id,
+                                "alert_type": f"obfuscation_{o['technique']}",
+                                "indicator": o["detail"],
+                                "severity": "defer",
+                            })
+
+        canonicalizer_results.append(entry_result)
+
+    # Recompute gate decision
+    base_blocked = base_receipt["gate_decision"] == "block"
+    base_deferred = base_receipt["gate_decision"] == "defer"
+
+    if base_blocked or additional_blocks > 0:
+        gate_decision = "block"
+    elif base_deferred or additional_defers > 0:
+        gate_decision = "defer"
+    else:
+        gate_decision = "allow"
+
+    return {
+        **base_receipt,
+        "gate_decision": gate_decision,
+        "valid": gate_decision == "allow",
+        "injection_alerts": new_alerts,
+        "source_summary": {
+            **base_receipt["source_summary"],
+            "injection_alert_count": len(new_alerts),
+        },
+        "checks": {
+            **base_receipt["checks"],
+            "canonicalizer_applied": True,
+            "no_path_traversal": additional_blocks == 0 or not any(
+                a["alert_type"] == "path_traversal" for a in new_alerts
+            ),
+            "no_ssrf": additional_blocks == 0 or not any(
+                a["alert_type"] == "ssrf_attempt" for a in new_alerts
+            ),
+            "no_obfuscation_bypass": additional_defers == 0,
+        },
+        "canonicalizer_results": canonicalizer_results,
+        "limitations": base_receipt.get("limitations", []) + [
+            "Canonicalizer operates on content_hints (text proxy), not raw bytes.",
+            "Path extraction uses regex heuristics; complex obfuscation may evade.",
+            "Full content-byte canonicalization requires runtime adapter integration.",
+        ],
+    }
+
+
+# ── unified gate entry verification ──
+
+
+_EXPECTED_GATE_CONSUMERS = [
+    "assurance/canonical_cli.py",
+    "assurance/adapter_gate.py",
+    "assurance/retrieval_subagent.py",
+    "assurance/deepseek_adapter.py",
+]
+
+
+def validate_all_entry_points_consume_same_gate() -> dict[str, Any]:
+    """Verify that all known runtime/tool entry points consume the same IPG.
+
+    This is a static mechanical check — it reads the source of each known
+    consumer module and verifies that ``evaluate_instruction_provenance_gate``
+    is imported and called.  It does not execute any code.
+
+    Returns a dict with ``valid``, ``consumers``, and ``errors`` keys.
+    """
+    import ast as _ast
+    from pathlib import Path as _Path
+
+    assurance_root = _Path(__file__).resolve().parent
+    errors: list[str] = []
+    consumers: dict[str, dict[str, bool]] = {}
+
+    for rel_path in _EXPECTED_GATE_CONSUMERS:
+        abs_path = assurance_root.parent / rel_path
+        consumer_result = {"imports_gate": False, "calls_gate": False}
+        try:
+            source = abs_path.read_text(encoding="utf-8")
+            tree = _ast.parse(source)
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.ImportFrom):
+                    if node.module == "assurance.instruction_provenance_gate" or \
+                       node.module == ".instruction_provenance_gate":
+                        for alias in node.names:
+                            if alias.name == "evaluate_instruction_provenance_gate":
+                                consumer_result["imports_gate"] = True
+                elif isinstance(node, _ast.Call):
+                    if isinstance(node.func, _ast.Name) and \
+                       node.func.id == "evaluate_instruction_provenance_gate":
+                        consumer_result["calls_gate"] = True
+                    elif isinstance(node.func, _ast.Attribute) and \
+                            node.func.attr == "evaluate_instruction_provenance_gate":
+                        consumer_result["calls_gate"] = True
+            consumers[rel_path] = consumer_result
+            if not consumer_result["imports_gate"]:
+                errors.append(f"{rel_path}: does not import evaluate_instruction_provenance_gate")
+            if not consumer_result["calls_gate"]:
+                errors.append(f"{rel_path}: imports but does not call evaluate_instruction_provenance_gate")
+        except Exception as exc:
+            errors.append(f"{rel_path}: cannot verify: {exc}")
+            consumers[rel_path] = {"imports_gate": False, "calls_gate": False}
+
+    return {
+        "valid": not errors,
+        "consumers": consumers,
+        "errors": errors,
+        "limitations": [
+            "Static AST analysis only — cannot verify runtime dispatch.",
+            "New entry points must be manually added to _EXPECTED_GATE_CONSUMERS.",
+        ],
+    }

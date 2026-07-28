@@ -188,5 +188,97 @@ class P0ContractTests(unittest.TestCase):
             validate_profile_registry_semantics(redeclared)
 
 
+class ProfileRegistryCompletenessTests(unittest.TestCase):
+    """Tests for verify_profile_registry_completeness."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from assurance.profile_registry import load_profile_registry
+
+        cls.registry = load_profile_registry()
+
+    def test_completeness_report_is_valid(self) -> None:
+        from assurance.profile_registry import verify_profile_registry_completeness
+
+        report = verify_profile_registry_completeness(self.registry)
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["error_count"], 0)
+        self.assertEqual(report["profile_count"], 5)
+
+    def test_all_profiles_have_completeness_report(self) -> None:
+        from assurance.profile_registry import verify_profile_registry_completeness
+
+        report = verify_profile_registry_completeness(self.registry)
+        reported_ids = {pr["profile_id"] for pr in report["profile_reports"]}
+        self.assertEqual(
+            reported_ids,
+            {"general-code", "restricted-review", "headless-ci", "general-science", "lif-research"},
+        )
+
+    def test_general_code_has_no_contract_only_items(self) -> None:
+        from assurance.profile_registry import verify_profile_registry_completeness
+
+        report = verify_profile_registry_completeness(self.registry)
+        gc = next(
+            pr for pr in report["profile_reports"] if pr["profile_id"] == "general-code"
+        )
+        self.assertTrue(gc["valid"])
+        self.assertEqual(gc["extension_warnings"], [])
+        self.assertEqual(gc["capability_warnings"], [])
+
+    def test_general_science_warns_contract_only_extensions(self) -> None:
+        from assurance.profile_registry import verify_profile_registry_completeness
+
+        report = verify_profile_registry_completeness(self.registry)
+        gs = next(
+            pr for pr in report["profile_reports"] if pr["profile_id"] == "general-science"
+        )
+        self.assertTrue(gs["valid"])
+        contract_only_exts = {
+            "LeakScanner",
+            "ResearchLifecycle",
+            "ScenarioExporter",
+        }
+        warned_exts = {
+            w.split("'")[1]
+            for w in gs["extension_warnings"]
+            if "contract_only" in w
+        }
+        self.assertEqual(warned_exts, contract_only_exts)
+
+    def test_reference_evidence_refs_exist(self) -> None:
+        from assurance.profile_registry import verify_profile_registry_completeness
+
+        report = verify_profile_registry_completeness(self.registry)
+        for pr in report["profile_reports"]:
+            self.assertEqual(
+                pr["reference_evidence_errors"], [],
+                f"profile {pr['profile_id']} has broken evidence refs: "
+                f"{pr['reference_evidence_errors']}",
+            )
+
+    def test_cross_profile_extension_uniqueness(self) -> None:
+        """Extensions declared in a child must not redeclare parent extensions."""
+        from assurance.profile_registry import (
+            _inheritance_chain,
+            _profile_index,
+        )
+
+        profiles = _profile_index(self.registry)
+        for profile in self.registry["profiles"]:
+            if profile["extends_profile_id"] is None:
+                continue
+            chain = _inheritance_chain(profiles, profile["profile_id"])
+            inherited = set()
+            for ancestor in chain[:-1]:
+                inherited.update(ancestor["assurance_extensions"])
+            own = set(profile["assurance_extensions"])
+            self.assertTrue(
+                inherited.isdisjoint(own),
+                f"profile {profile['profile_id']} redeclares inherited extensions: "
+                f"{sorted(inherited & own)}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

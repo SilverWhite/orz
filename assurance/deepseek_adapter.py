@@ -237,8 +237,15 @@ def build_real_deepseek_answer_packet(
     tool_availability_receipt_sha256: str | None = None,
     model_output: dict[str, Any] | None = None,
     messages_sent: list[dict[str, str]] | None = None,
+    conversation_id: str | None = None,
+    envelope_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a real answer packet from actual DeepSeek model output."""
+    """Build a real answer packet from actual DeepSeek model output.
+
+    When *conversation_id* and *envelope_id* are provided (from a
+    :class:`ConversationNamespace`), they are embedded in the packet
+    for session traceability and cross-session isolation verification.
+    """
     gate_digest = source_gate_receipt_sha256 or sha256_bytes(
         canonical_bytes(source_gate_receipt)
     )
@@ -264,7 +271,7 @@ def build_real_deepseek_answer_packet(
     answer_mode: str = "real_development"
     network_used: bool = True
 
-    packet = {
+    packet: dict[str, Any] = {
         "schema_version": "0.1.0-draft",
         "packet_kind": "canonical_guarded_cli_answer_packet",
         "run_id": run_id,

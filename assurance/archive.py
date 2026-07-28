@@ -11,12 +11,11 @@ from .conversation import ConversationNamespace, retention_delete_categories
 from .envelope import verify_security_envelope
 from .errors import AssuranceError
 from .keystore import InstallationKeyStore
+from .storage_adapter import LocalStorageAdapter, StorageAdapter
 from .utils import (
     atomic_write_json,
     canonical_bytes,
-    is_link_or_reparse,
     load_json,
-    require_within,
     sha256_bytes,
     sha256_file,
     utc_now,
@@ -30,30 +29,45 @@ def _default_delete_file(path: Path) -> None:
     path.unlink()
 
 
+_default_storage_instance: LocalStorageAdapter | None = None
+
+
+def _default_storage() -> LocalStorageAdapter:
+    """Return a shared LocalStorageAdapter singleton for archive operations."""
+    global _default_storage_instance
+    if _default_storage_instance is None:
+        _default_storage_instance = LocalStorageAdapter()
+    return _default_storage_instance
+
+
 def _scan_category(
-    category_root: Path, conversation_root: Path
+    category_root: Path,
+    conversation_root: Path,
+    *,
+    storage: StorageAdapter | None = None,
 ) -> tuple[list[Path], int]:
-    if not category_root.exists():
+    adapter = storage or _default_storage()
+    if not adapter.directory_exists(category_root) and not adapter.file_exists(category_root):
         return [], 0
-    require_within(category_root, conversation_root, must_exist=True)
-    if is_link_or_reparse(category_root):
+    adapter.require_within(category_root, conversation_root, must_exist=True)
+    if adapter.is_link_or_reparse(category_root):
         return [], 1
     files: list[Path] = []
     unsafe_entries = 0
-    for current_root, dirs, names in os.walk(category_root, followlinks=False):
+    for current_root, dirs, names in adapter.walk_directory(category_root):
         base = Path(current_root)
         safe_dirs: list[str] = []
         for name in sorted(dirs):
             candidate = base / name
-            if is_link_or_reparse(candidate):
+            if adapter.is_link_or_reparse(candidate):
                 unsafe_entries += 1
             else:
                 safe_dirs.append(name)
         dirs[:] = safe_dirs
         for name in sorted(names):
             candidate = base / name
-            require_within(candidate, conversation_root, must_exist=True)
-            if is_link_or_reparse(candidate) or not candidate.is_file():
+            adapter.require_within(candidate, conversation_root, must_exist=True)
+            if adapter.is_link_or_reparse(candidate) or not adapter.file_exists(candidate):
                 unsafe_entries += 1
             else:
                 files.append(candidate)
@@ -61,7 +75,10 @@ def _scan_category(
 
 
 def _remove_empty_directories(
-    category_root: Path, conversation_root: Path
+    category_root: Path,
+    conversation_root: Path,
+    *,
+    storage: StorageAdapter | None = None,
 ) -> list[str]:
     """Remove empty directories under *category_root*, then the root itself.
 
@@ -69,26 +86,27 @@ def _remove_empty_directories(
     that could not be removed, so callers can surface the failures rather
     than silently discarding them.
     """
+    adapter = storage or _default_storage()
     diagnostics: list[str] = []
-    if not category_root.exists() or is_link_or_reparse(category_root):
+    if not adapter.directory_exists(category_root) or adapter.is_link_or_reparse(category_root):
         return diagnostics
     directories: list[Path] = []
-    for current_root, dirs, _ in os.walk(category_root, followlinks=False):
+    for current_root, dirs, _ in adapter.walk_directory(category_root):
         base = Path(current_root)
         for name in dirs:
             candidate = base / name
-            if not is_link_or_reparse(candidate):
+            if not adapter.is_link_or_reparse(candidate):
                 directories.append(candidate)
     for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
-        require_within(directory, conversation_root, must_exist=True)
+        adapter.require_within(directory, conversation_root, must_exist=True)
         try:
-            directory.rmdir()
+            adapter.delete_directory(directory)
         except OSError as exc:
             diagnostics.append(
                 f"could not remove directory {directory}: {exc}"
             )
     try:
-        category_root.rmdir()
+        adapter.delete_directory(category_root)
     except OSError as exc:
         diagnostics.append(
             f"could not remove category root {category_root}: {exc}"
@@ -160,6 +178,7 @@ class ArchiveController:
         self,
         *,
         key_store: InstallationKeyStore,
+        storage: StorageAdapter | None = None,
         delete_file: DeleteFile | None = None,
         max_retries: int = 3,
         retry_base_delay_seconds: float = 0.1,
@@ -169,7 +188,16 @@ class ArchiveController:
         self.max_retries = max_retries
         self.retry_base_delay_seconds = retry_base_delay_seconds
         self.lock_timeout_seconds = lock_timeout_seconds
-        self._delete_file = delete_file or _default_delete_file
+
+        # Backward compat: delete_file wraps into LocalStorageAdapter
+        if delete_file is not None:
+            self._storage: StorageAdapter = LocalStorageAdapter(
+                delete_file=delete_file
+            )
+        elif storage is not None:
+            self._storage = storage
+        else:
+            self._storage = _default_storage()
 
     def _journal_path(self, namespace: ConversationNamespace) -> Path:
         return namespace.root / ".archive-journal.jsonl"
@@ -181,14 +209,14 @@ class ArchiveController:
         """
         for attempt in range(1, self.max_retries + 2):  # +2 because range is [1, N+1]
             try:
-                self._delete_file(path)
+                self._storage.delete_file(path)
             except OSError as exc:
                 if attempt <= self.max_retries:
                     delay = self.retry_base_delay_seconds * (2 ** (attempt - 1))
                     time.sleep(delay)
                     continue
                 return False, attempt - 1, str(exc)
-            if path.exists():
+            if self._storage.file_exists(path):
                 if attempt <= self.max_retries:
                     delay = self.retry_base_delay_seconds * (2 ** (attempt - 1))
                     time.sleep(delay)
@@ -305,7 +333,7 @@ class ArchiveController:
                     writer.append_event("category_started", {"category": category})
                     category_root = namespace.artifacts_root / category
                     files, unsafe_entries = _scan_category(
-                        category_root, namespace.root
+                        category_root, namespace.root, storage=self._storage
                     )
                     discovered_count = len(files) + unsafe_entries
                     deleted_records: list[dict[str, Any]] = []
@@ -325,7 +353,7 @@ class ArchiveController:
                             deleted_records.append(record)
                             continue
 
-                        size_before = path.stat().st_size
+                        size_before = self._storage.file_size(path)
                         sha_before = sha256_file(path)
                         success, retries, err_msg = self._delete_with_retry(path)
                         if success:
@@ -355,7 +383,9 @@ class ArchiveController:
                             error_pairs.add((category, "delete_failed"))
                             category_failed += 1
 
-                    cleanup_diags = _remove_empty_directories(category_root, namespace.root)
+                    cleanup_diags = _remove_empty_directories(
+                        category_root, namespace.root, storage=self._storage
+                    )
                     if cleanup_diags:
                         for diag in cleanup_diags:
                             writer.append_event(
@@ -368,10 +398,13 @@ class ArchiveController:
                                 },
                             )
                     remaining_files, remaining_unsafe = _scan_category(
-                        category_root, namespace.root
+                        category_root, namespace.root, storage=self._storage
                     )
                     remaining_count = len(remaining_files) + remaining_unsafe
-                    if category_root.exists() and remaining_count == 0:
+                    if (
+                        self._storage.directory_exists(category_root)
+                        or self._storage.file_exists(category_root)
+                    ) and remaining_count == 0:
                         error_pairs.add((category, "delete_failed"))
                     deleted_count = len(deleted_records)
                     if discovered_count != deleted_count + remaining_count:

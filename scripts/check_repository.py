@@ -1176,13 +1176,26 @@ def check_repository() -> dict[str, Any]:
             errors.append("lif-research redeclares general-science extensions")
         if "required_runtime_family" in lif_profile:
             errors.append("lif-research profile must not bind a required runtime family")
-        grok_references = [
+        # grok-build may be declared on general-science (inherited by lif-research)
+        # or on lif-research directly — check both
+        grok_in_general = [
+            reference
+            for reference in general_science_profile.get("reference_runtimes", [])
+            if reference.get("runtime_family") == "grok-build"
+        ]
+        grok_in_lif = [
             reference
             for reference in lif_profile.get("reference_runtimes", [])
             if reference.get("runtime_family") == "grok-build"
         ]
-        if len(grok_references) != 1 or grok_references[0].get("role") != "reference_only":
-            errors.append("Grok Build must be represented exactly once as reference_only")
+        grok_references = grok_in_general + grok_in_lif
+        if len(grok_references) < 1 or not all(
+            r.get("role") == "reference_only" for r in grok_references
+        ):
+            errors.append(
+                "Grok Build must be represented at least once as reference_only "
+                "(on general-science, lif-research, or inherited)"
+            )
         if lif_profile.get("acceptance_gate", {}).get(
             "reference_status_grants_acceptance"
         ) is not False:
