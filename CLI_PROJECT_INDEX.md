@@ -1,6 +1,6 @@
-# CLI_PROJECT_INDEX
+﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-28 (R4：关闭 GAK-ID-001 — key rotation/revocation 产品化，含文件锁、crash-safe journal、envelope 迁移；附A 新增 2026-07-28-R4 条目)
+**更新**: 2026-07-29 (R5：GAK-UI-001 斜杠命令系统 — 15 个中文命令 + CommandRegistry + CommandPalette 覆盖层 + 地址栏历史/多行/自动补全 + Ctrl+Z 取消运行；附A 新增 2026-07-29-R5 条目)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -69,6 +69,7 @@
 - **Orientation Runtime Guard** (2026-07-27, 事实): 中性方向检查点 + 运行时停滞守卫——检测 agent 是否陷入循环/停滞。别名: orientation checkpoint, stagnation guard。入口: `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md` / `assurance/orientation_runtime_guard.py` / `assurance/orientation_runtime_integration.py` / `assurance/orientation_runtime_journal.py` / `assurance/orientation-checkpoint-v0.1.schema.json` / `assurance/runtime-stagnation-guard-receipt-v0.1.schema.json`
 - **Workspace Trust Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-TRUST-001): 统一工作区信任——全部 Python 入口点（canonical CLI + 检索子代理 ×2）在 IPG 评估前建立 workspace trust receipt。`AdapterGateContext` 携带 trust_receipt + trust_status。别名: GAK-TRUST-001。入口: `assurance/workspace_trust.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py` / `assurance/retrieval_subagent.py`
 - **Source Visibility Gate** (2026-07-26, 事实): 全文可见性检查 Gate——验证引用源的完整文本可见性。入口: `docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md` / `assurance/source_visibility.py` / `assurance/source_visibility_cli.py`
+- **Local Browser Retrieval and PDF Evidence** (2026-07-28, 设计约束/待实施): 本地浏览器外部检索与论文 PDF 确定性证据链；网页证据仅保留 URL/accessed_at/content_hash/usage_trace，不默认保存全文快照；论文证据下载为本地 SHA-256 PDF 并按页索引；OCR 明确不使用。别名/关键词: browser retrieval, local browser, PDF evidence, usage_trace, no OCR。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
 - **Child Capability Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-CHILD-001): 子代理/子进程 capability 传递——`spawn_child_context()` 统一入口；检索子代理接受 parent_envelope；`execute_guarded_no_model_action()` 在 Docker create 前调用 `enforce_child_capabilities()`。别名: GAK-CHILD-001。入口: `assurance/child_capability_enforcer.py` / `assurance/instruction_gate.py` / `assurance/retrieval_subagent.py` / `assurance/guarded_execution.py`
 - **Network Permit Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-NET-001): 网络许可统一覆盖——`call_deepseek_api()` 在 HTTP 请求前调用 `evaluate_network_permit()`；`AdapterGateContext` 携带 network_policy；`_resolve_and_setup_gates()` 构建 guarded 模式默认 policy。别名: GAK-NET-001。入口: `assurance/network_permit_gateway.py` / `assurance/deepseek_adapter.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
 - **Adapter Gate** (2026-07-27, 事实): 适配器调用旁路执行 Gate——防止运行时绕过适配器直接调用模型。别名: adapter gate enforcement, adapter preflight。入口: `docs/ADAPTER_GATE_AUDIT_2026-07-28.md` / `assurance/adapter_gate.py` / `assurance/adapter_preflight.py` / `assurance/adapter_output_validator.py` / `assurance/adapter_failure_classifier.py` / `assurance/adapter-gate-enforcement-receipt-v0.1.schema.json`
@@ -124,7 +125,7 @@
 > 设计意图、合约边界与战略决策。每篇文档承担一个独立的设计主题。
 
 - **产品定位与参考策略** (v0.1, 设计约束): 核心定位——运行时中立的通用科学保证内核，不绑定单一 LLM 运行时。入口: `architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`
-- **CLI UI Interaction Model** (v0.1, 待实施): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型——以对象导航、地址栏、属性页、状态栏和阻断对话框组织 agent 工作流。注意: 设计约束已写入架构文档；代码实现未开始（计划基于 prompt_toolkit + 自定义 retro widget 层）；第一原型范围已定义（静态框架、菜单/工具栏/地址栏/资源管理器/内容/状态栏、属性对话框 mock、键盘焦点导航）。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；未来代码入口: `assurance/tui/`；Gap Register: GAK-UI-001
+- **CLI UI Interaction Model** (v0.1, 事实/2026-07-29 斜杠命令系统完成): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型——以对象导航、地址栏、属性页、状态栏和阻断对话框组织 agent 工作流。第一原型已完成（6 个模块 ~3200 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、15 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。137 tests pass。实现约束全部满足：UI 不导入 assurance core、中文字符宽度计算、ASCII + box-drawing 优先。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py`）；Gap Register: GAK-UI-001
 - **Grok Build 适配** (v0.1, 设计约束): 以 Grok Build 为参考运行时的适配策略。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md`
 - **Upstream First 集成** (v0.1, 设计约束): 上游优先集成策略——先锁定上游版本再进行适配。入口: `architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`
 - **Upstream 版本策略** (v0.1, 设计约束): 上游版本锁定、候选评估与升级流程。入口: `architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`
@@ -243,11 +244,13 @@
 
 ### 已关闭 (Closed)
 
+- **GAK-UI-001 CLI UI Interaction Model** (2026-07-28 第一原型完成, 2026-07-29 斜杠命令系统关闭): 6 个模块 ~3200 行，10 个 widget 类，15 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层，地址栏命令历史/多行输入/自动补全，Ctrl+Z 取消运行，prompt_toolkit 集成，137 tests pass。UI 不导入 assurance core。下一步：接入 canonical CLI 结构化事件流 → view model 投影 → retro 渲染。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `assurance/tui/`
 - **GAK-TRUST-001 Workspace Trust 统一入口** (2026-07-28 关闭): `establish_workspace_trust()` 已接入 canonical CLI 和检索子代理全部入口点。`AdapterGateContext` 携带 trust receipt；`_resolve_and_setup_gates()` 在 IPG 前建立 trust；`validate_all_entry_points_establish_trust()` AST 审计覆盖全部入口点。入口: `assurance/workspace_trust.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
 - **GAK-CHILD-001 Child Capability 统一传递** (2026-07-28 关闭): 新增 `spawn_child_context()` 统一入口（组合 predicate check + 签名 child envelope 创建）；检索子代理接受可选 `parent_envelope`，通过 `spawn_child_context()` 创建签名 child envelope 并传入 `ConversationNamespace.create(parent_envelope_id=...)`。入口: `assurance/child_capability_enforcer.py` / `assurance/retrieval_subagent.py`
 - **GAK-NET-001 Network Permit 统一覆盖** (2026-07-28 关闭): `call_deepseek_api()` 在 HTTP 请求前调用 `evaluate_network_permit()`；`AdapterGateContext` 携带 network_policy/endpoint/category；`_resolve_and_setup_gates()` 构建 `guarded` 模式默认 policy。入口: `assurance/deepseek_adapter.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
 - **GAK-ID-001 Key Rotation/Revocation 产品化** (2026-07-28 关闭): `_FileLock` 文件锁保护所有 key mutation；crash-safe journal（pending → receipt → history → clear）；`recover_pending_rotations()` 恢复；`migrate_envelope()` 真实 envelope 重签名；`rotate()` 支持 `envelopes_to_migrate`。入口: `assurance/key_lifecycle.py` / `assurance/envelope.py`
 - **GAK-SBX-001 Windows Native Sandbox** (2026-07-27 关闭): Development baseline 已达成——elevated 路径 compliant（netsh firewall + AppContainer + Job Object），non-elevated 路径 fail-closed。原始 TCP 残余记录为已知 Windows 平台限制，不阻塞 development 门禁。入口: `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`
+- **GAK-WIN-001 Windows Job Object Race** (2026-07-28 关闭): `PROC_THREAD_ATTRIBUTE_JOB_LIST` 内核级 Job Object 原子绑定——进程创建时在内核中分配 Job，消除 `CreateProcess`→`AssignProcessToJobObject` 用户态竞态窗口。`CREATE_SUSPENDED` + `TokenIsAppContainer` + `IsProcessInJob` 在 `ResumeThread` 前全部验证。`PROC_THREAD_ATTRIBUTE_JOB_LIST` 不可用时优雅降级至 post-creation 分配。11 tests pass, 1 skipped（旧 OS 自动跳过）。入口: `assurance/windows_sandbox.py:856-983` / `assurance/tests/test_windows_race_escape.py:383-970`
 - **GSA-PROFILE-001 Profile Registry 全量注册** (2026-07-28 关闭): 5 个 profile (general-code, restricted-review, headless-ci, general-science, lif-research) 已完成全量注册——全部 profile 包含 reference runtimes 与 evidence refs；新增 `verify_profile_registry_completeness()` 完整性校验（cross-reference extensions/capabilities 与实际 assurance 模块）；6 个新增测试。入口: `assurance/profile-registry-v0.1.json` / `assurance/profile_registry.py`
 - **GAK-INJ-001 Instruction Provenance Gate 产品化** (2026-07-28 关闭): 新增 production content parser + obfuscation detector + canonicalizer 集成；25 个注入模式；adversarial injection 47 测试 + bypass hardening 8 测试。89 tests pass。入口: `assurance/instruction_provenance_gate.py` / `assurance/tests/test_injection_adversarial.py`
 - **GAK-RET-001 Retention/Deletion Controller 产品化** (2026-07-28 关闭)
@@ -255,7 +258,7 @@
 
 ### 待实施 (Pending)
 
-- **GAK-UI-001 CLI UI Interaction Model** (2026-07-28, 第一原型完成): Windows 终端 TUI 第一原型已完成——静态框架 + prompt_toolkit + 自定义 retro widget 层。`assurance/tui/` 包 5 个模块 ~2700 行，81 tests pass。架构文档已冻结。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`
+- **Local Browser Retrieval and PDF Evidence** (2026-07-28, 设计约束/待实施): 本地浏览器外部检索与论文 PDF 确定性证据链；网页证据仅保留 URL/accessed_at/content_hash/usage_trace，不默认保存全文快照；论文证据下载为本地 SHA-256 PDF 并按页索引。架构文档已冻结，代码实现未开始。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
 
 ---
 
@@ -292,7 +295,8 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
-- 2026-07-28-R3: 关闭 GAK-TRUST-001 (workspace trust 统一入口)、GAK-CHILD-001 (child capability 统一传递)、GAK-NET-001 (network permit 统一覆盖)；580 tests pass
+- 2026-07-29-R5: GAK-UI-001 斜杠命令系统 — 15 个中文命令 + CommandRegistry + CommandPalette 覆盖层 + 地址栏历史/多行/自动补全 + Ctrl+Z 取消运行；137 TUI tests pass；989 total tests pass
+- 2026-07-28-R5: 关闭 GAK-UI-001 (TUI 第一原型完成)、GAK-CRED-001 (凭据生命周期守卫)、GAK-WIN-001 (Job Object 竞态修复)；751 tests pass
 - 2026-07-28: `ADAPTER_GATE_AUDIT`, `ORIENTATION_RUNTIME_GUARD_AUDIT`, `P1_CONVERSATION_ARCHIVE_LIFECYCLE_AUDIT`
 - 2026-07-27: `GAK_INJ_001_AUDIT`, `TOOL_AVAILABILITY_GATE_AUDIT`, `RETRIEVAL_SUBAGENT_AUDIT`, `GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT`
 - 2026-07-26: `CANONICAL_GUARDED_CLI_P0_AUDIT`, `CANONICAL_CLI_QUICKSTART`, `GSA_DISPOSABLE_REPRODUCTION_AUDIT`, `GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN`, `SOURCE_FULLTEXT_VISIBILITY_RULE`
@@ -320,6 +324,7 @@
 | GSA-CORE | `artifact_registry.py`, `validator_bridge.py`, `general_science_review.py`, `general_science_cli.py` |
 | DeepSeek 适配 | `deepseek_adapter.py`, `deepseek_api_observation.py`, `deepseek_stream_observation.py` |
 | 数据/存储 | `storage_adapter.py`, `conversation.py`, `profile_registry.py` |
+| TUI (GAK-UI-001) | `tui/commands.py`, `tui/widgets.py`, `tui/app.py`, `tui/pt_app.py`, `tui/view_models.py`, `tui/main.py` |
 | 公共 | `__init__.py` (392 行公共 API 导出), `contracts.py`, `errors.py`, `utils.py`, `runner_public_output.py`, `runner_scoring_handoff.py` |
 
 ---
