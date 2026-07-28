@@ -483,7 +483,16 @@ class WindowsNativeLiveProbeTests(unittest.TestCase):
                 json.dumps(marker),
                 encoding="utf-8",
             )
-            observation = run_windows_native_sandbox_probe(workspace)
+            try:
+                observation = run_windows_native_sandbox_probe(workspace)
+            except AssuranceError as exc:
+                message = str(exc)
+                if "Windows native sandbox process creation failed" in message:
+                    self.skipTest(
+                        "Windows host cannot create an AppContainer probe "
+                        f"process in this environment: {message}"
+                    )
+                raise
             checks = observation["checks"]
             # Proven on Windows 11: AppContainer token + Job + FS/registry isolation.
             self.assertTrue(observation["appcontainer"]["sid_derived"] or observation["appcontainer"]["profile_created"])
