@@ -77,6 +77,18 @@ def create_pt_application(
 
     kb = KeyBindings()
 
+    # -- run toggle (F5, demo only) ----------------------------------------
+    @kb.add("f5")
+    def _f5(event: Any) -> None:
+        result = tui_app.handle_key("f5")
+        event.app.invalidate()
+
+    # -- cancel run (Ctrl+Z, universal undo/retract) ------------------------
+    @kb.add("c-z")
+    def _cancel(event: Any) -> None:
+        result = tui_app.handle_key("c-z")
+        event.app.invalidate()
+
     # -- focus cycling (F6) -------------------------------------------------
     @kb.add("f6")
     def _f6(event: Any) -> None:
@@ -106,18 +118,29 @@ def create_pt_application(
         tui_app.handle_key("enter")
         event.app.invalidate()
 
-    # -- dialog toggle (d) --------------------------------------------------
-    @kb.add("d")
-    def _dialog(event: Any) -> None:
-        if not _modal_active(tui_app):
-            tui_app.dialog.visible = not tui_app.dialog.visible
+    @kb.add("s-enter")
+    def _s_enter(event: Any) -> None:
+        tui_app.handle_key("s-enter")
         event.app.invalidate()
 
-    # -- properties toggle (p) ----------------------------------------------
+    # -- dialog toggle (d) — only when address bar is NOT focused ---------
+    @kb.add("d")
+    def _dialog(event: Any) -> None:
+        if tui_app.active_pane != "address":
+            if not _modal_active(tui_app):
+                tui_app.dialog.visible = not tui_app.dialog.visible
+        else:
+            tui_app.handle_key("d")
+        event.app.invalidate()
+
+    # -- properties toggle (p) — only when address bar is NOT focused ------
     @kb.add("p")
     def _props(event: Any) -> None:
-        if not _modal_active(tui_app):
-            tui_app.properties.visible = not tui_app.properties.visible
+        if tui_app.active_pane != "address":
+            if not _modal_active(tui_app):
+                tui_app.properties.visible = not tui_app.properties.visible
+        else:
+            tui_app.handle_key("p")
         event.app.invalidate()
 
     # -- arrow keys (delegate to active pane) -------------------------------
@@ -146,6 +169,41 @@ def create_pt_application(
     @kb.add("c-c")
     def _quit(event: Any) -> None:
         event.app.exit()
+
+    # -- backspace ---------------------------------------------------------
+    @kb.add("backspace")
+    def _backspace(event: Any) -> None:
+        tui_app.handle_key("backspace")
+        event.app.invalidate()
+
+    # -- space (for search queries etc.) -----------------------------------
+    @kb.add(" ")
+    def _space(event: Any) -> None:
+        tui_app.handle_key("space")
+        event.app.invalidate()
+
+    # -- slash → open command palette ---------------------------------------
+    @kb.add("/")
+    def _slash(event: Any) -> None:
+        tui_app.handle_key("/")
+        event.app.invalidate()
+
+    # -- printable letters + digits (common typing keys) --------------------
+    _TYPING_KEYS: str = (
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "._-:="
+    )
+
+    def _bind_typing(char: str) -> None:
+        @kb.add(char)
+        def _handler(event: Any) -> None:
+            tui_app.handle_key(char)
+            event.app.invalidate()
+
+    for _ch in _TYPING_KEYS:
+        _bind_typing(_ch)
 
     # -- Alt+letter → menu activation ---------------------------------------
     # Terminal: Alt+<letter> is sent as ESC then <letter>.

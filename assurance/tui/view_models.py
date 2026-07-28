@@ -108,6 +108,18 @@ SAMPLE_NEXT_ACTIONS = [
 SAMPLE_ADDRESS_URI = "workspace://LIF/current-index"
 SAMPLE_COMMAND_URI = "command://run/current-task"
 
+# ── Built-in slash commands (seven) ──────────────────────────────────────────
+
+# Import the shared registry so the TUI palette and tests share the same
+# command definitions.
+try:
+    from .commands import get_builtin_registry
+
+    _registry = get_builtin_registry()
+    SAMPLE_COMMANDS = _registry.all()
+except ImportError:
+    SAMPLE_COMMANDS = []
+
 # ── Find bar ────────────────────────────────────────────────────────────────
 
 SAMPLE_FIND_QUERY = "source visibility"
@@ -272,6 +284,29 @@ SAMPLE_PROPERTIES: dict[str, Any] = {
         },
     ],
 }
+
+# ── Keyboard shortcuts reference ─────────────────────────────────────────────
+
+# Displayed when the user invokes /help.
+# Format: (shortcut, description_zh)
+SAMPLE_SHORTCUTS: list[tuple[str, str]] = [
+    ("/", "指令面板 — 显示 6 个最常用指令"),
+    ("Alt+字母", "菜单激活 — Alt+F 文件, Alt+E 编辑, Alt+S 来源, …"),
+    ("F5", "切换运行状态（原型演示用）"),
+    ("F6", "焦点循环 — 在资源管理器/内容/标记/地址栏/查找栏之间切换"),
+    ("Tab", "焦点内移动 / 指令面板中切换选项"),
+    ("Shift+Tab", "焦点内反向移动"),
+    ("Ctrl+Z", "撤回已发送输入 — 取消当前 agent 运行并回填指令到输入框"),
+    ("Ctrl+L", "聚焦地址栏 — 直接输入指令或 URI"),
+    ("Ctrl+C", "退出 GSA CLI"),
+    ("Esc", "关闭 — 清空输入缓冲 / 关闭菜单 / 关闭对话框"),
+    ("Enter", "激活选中项 / 发送指令"),
+    ("↑↓←→", "方向键 — 在面板内移动选择 / 指令面板中上下切换"),
+    ("Backspace", "输入框删除上一个字符"),
+    ("d", "切换对话框覆盖层（演示用）"),
+    ("p", "切换属性页覆盖层（演示用）"),
+    ("q", "退出（交互演示模式）"),
+]
 
 # ── Menu definitions ────────────────────────────────────────────────────────
 

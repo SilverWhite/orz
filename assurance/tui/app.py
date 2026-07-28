@@ -14,6 +14,7 @@ from .view_models import (
     SAMPLE_ADDRESS_URI,
     SAMPLE_CLAIM_DISPOSITION,
     SAMPLE_COMMAND_URI,
+    SAMPLE_COMMANDS,
     SAMPLE_CONTENT_MARKER,
     SAMPLE_DIALOG,
     SAMPLE_DISPOSITION_REASON,
@@ -30,6 +31,7 @@ from .view_models import (
 )
 from .widgets import (
     AddressBar,
+    CommandPalette,
     ContentMarker,
     ContentPane,
     Dialog,
@@ -62,8 +64,9 @@ class TuiPrototype:
     Keyboard dispatch:
       - ``f6`` — cycle focus through major panes
       - ``tab`` / ``s-tab`` — forward/back in current pane
-      - ``esc`` — dismiss active dialog/properties
+      - ``esc`` — running→cancel run → clear buffer → close menu → dismiss dialog
       - ``enter`` — activate focused item
+      - ``f5`` — toggle run start/stop (demo simulation only)
       - ``alt+<letter>`` — activate menu
     """
 
@@ -78,6 +81,11 @@ class TuiPrototype:
     status_bar: StatusBar = field(default_factory=StatusBar)
     dialog: Dialog = field(default_factory=Dialog)
     properties: PropertiesSheet = field(default_factory=PropertiesSheet)
+    command_palette: CommandPalette = field(default_factory=CommandPalette)
+
+    # ── runtime state ──
+    running: bool = False       # True while agent is executing a run
+    _last_sent: str = ""        # preserved when run is cancelled (refill bar)
 
     # ── focus ──
     _focusable_panes: tuple[str, ...] = (
@@ -108,9 +116,12 @@ class TuiPrototype:
         lines.append("│" + tool[0] + "│")
         lines.append(box_t_junction(width))
 
-        # ── Row 2: AddressBar ──
-        addr = self.address_bar.render(inner_w, 1)
-        lines.append("│" + addr[0] + "│")
+        # ── Row 2: AddressBar (variable height for multi-line input) ──
+        addr_lines_count = self.address_bar._line_count
+        addr = self.address_bar.render(inner_w, addr_lines_count)
+        for i, addr_line in enumerate(addr):
+            lines.append("│" + addr_line + "│")
+        # Separator below the last address bar row
         lines.append(box_t_junction(width))
 
         # ── Row 3: FindBar ──
@@ -127,7 +138,9 @@ class TuiPrototype:
         lines.append(sep_line)
 
         # ── Body: ExplorerPane | ContentPane | ContentMarker ──
-        body_height = height - TOTAL_FIXED_ROWS - 5  # top/bottom + 4 separators + body sep
+        # Account for extra address bar rows beyond the first
+        extra_addr_rows = addr_lines_count - 1
+        body_height = height - TOTAL_FIXED_ROWS - 5 - extra_addr_rows
         if body_height < 3:
             body_height = 3
 
@@ -158,7 +171,12 @@ class TuiPrototype:
         )
         lines.append(bot_sep)
 
-        # ── StatusBar ──
+        # ── StatusBar (dynamic: IDLE ↔ RUNNING) ──
+        # Update the last status item to reflect current run state
+        if self.status_bar.items and self.status_bar.items[-1][0] in ("IDLE", "RUNNING"):
+            fixed = list(self.status_bar.items)
+            fixed[-1] = ("RUNNING", True) if self.running else ("IDLE", True)
+            self.status_bar.items = fixed
         status = self.status_bar.render(inner_w, 1)
         lines.append("│" + status[0] + "│")
 
@@ -167,12 +185,25 @@ class TuiPrototype:
 
         result = "\n".join(lines)
 
-        # Overlays
-        if self.dialog.visible:
+        # Overlays (command palette → dialog → properties, lowest priority first)
+        if (
+            self.address_bar.focused
+            and self.address_bar._show_autocomplete
+        ):
+            self.command_palette.candidates = self.address_bar.autocomplete_candidates
+            self.command_palette.selected_index = self.address_bar._selected_index
+            self.command_palette.visible = True
+            overlay = self.command_palette.render_overlay(width, height)
+            if overlay:
+                result = self._blend_overlay(result, overlay, height)
+        else:
+            self.command_palette.visible = False
+
+        if self.dialog.visible and not self.command_palette.visible:
             overlay = self.dialog.render_overlay(width, height)
             if overlay:
                 result = self._blend_overlay(result, overlay, height)
-        elif self.properties.visible:
+        elif self.properties.visible and not self.command_palette.visible:
             overlay = self.properties.render_overlay(width, height)
             if overlay:
                 result = self._blend_overlay(result, overlay, height)
@@ -218,18 +249,52 @@ class TuiPrototype:
             return None
 
         if key == "esc":
+            # 1. If address bar has auto-complete or buffer, clear it
+            if self.address_bar.focused and (
+                self.address_bar._show_autocomplete or self.address_bar._buffer
+            ):
+                self.address_bar.handle_key("esc")
+                return None
+            # 2. If menu is open, close it
             if self.menu_bar.active_menu:
                 self.menu_bar.handle_key("esc")
                 return None
             return None
 
+        if key == "backspace":
+            # If address bar has buffer, delete last character
+            if self.active_pane == "address" and self.address_bar._buffer:
+                self.address_bar.handle_key("backspace")
+                return None
+            return None
+
+        if key == "c-z":
+            # If agent is running, cancel the current run (retract sent input).
+            # Ctrl+Z = universal undo/retract, works on all keyboard form factors.
+            if self.running:
+                self._cancel_run()
+                return "已取消当前运行"
+            return None
+
+        if key == "f5":
+            return self._toggle_run()
+
         if key == "f6":
             return self._cycle_focus()
 
-        if key == "enter":
-            if self.active_pane == "address":
-                return "Activated: Go to address"
-            return None
+        # Printable characters + editing keys → route to focused address bar.
+        if self.active_pane == "address":
+            # Save buffer BEFORE routing (widget may clear it on Enter)
+            if key == "enter" and self.address_bar._buffer:
+                self._last_sent = self.address_bar._buffer
+            if self.address_bar.handle_key(key):
+                if key == "enter":
+                    # Push history AFTER widget clears its buffer
+                    self.address_bar._push_history(self._last_sent)
+                    if self._last_sent.startswith("/"):
+                        return f"Activated: {self._last_sent}"
+                    return "Activated: Go to address"
+                return None
 
         # Delegate to active pane
         pane = self._get_active_pane()
@@ -253,6 +318,25 @@ class TuiPrototype:
             "find": self.find_bar,
         }
         return mapping.get(self.active_pane)
+
+    def _cancel_run(self) -> None:
+        """Cancel the current agent run, restore the last sent input to the
+        address bar, and focus it so the user can edit and resend."""
+        self.running = False
+        self.address_bar._buffer = self._last_sent
+        self.address_bar._show_autocomplete = self._last_sent.startswith("/")
+        self.address_bar._selected_index = 0
+        # Focus the address bar so the user can immediately edit
+        while self.active_pane != "address":
+            self._active_pane_index = (
+                (self._active_pane_index + 1) % len(self._focusable_panes)
+            )
+        self.address_bar.focused = True
+
+    def _toggle_run(self) -> str:
+        """Demo-only: toggle agent run state for testing Esc-cancel."""
+        self.running = not self.running
+        return "模拟运行已启动" if self.running else "模拟运行已停止"
 
     def _cycle_focus(self) -> str:
         # Unfocus current
@@ -342,6 +426,11 @@ class TuiPrototype:
             properties=PropertiesSheet(
                 title=SAMPLE_PROPERTIES["title"],
                 tabs=list(SAMPLE_PROPERTIES["tabs"]),
+                visible=False,
+            ),
+            command_palette=CommandPalette(
+                candidates=list(SAMPLE_COMMANDS),
+                selected_index=0,
                 visible=False,
             ),
         )
