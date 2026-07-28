@@ -158,3 +158,64 @@ def workspace_trust_for_adapter(
     if not receipt.get("trust_established", False):
         return "not_observed"
     return "observed_trusted"
+
+
+# ── Entry-point audit: ensure all known entry points establish trust ──
+
+_EXPECTED_TRUST_ESTABLISHERS = [
+    "assurance/canonical_cli.py",
+    "assurance/retrieval_subagent.py",
+]
+
+
+def validate_all_entry_points_establish_trust() -> dict[str, Any]:
+    """Static AST check: verify all known entry points call
+    :func:`establish_workspace_trust`.
+
+    Returns a dict with ``valid`` (bool), ``consumers`` (dict mapping
+    file path to check results), and ``errors`` (list of strings).
+    """
+    import ast as _ast
+    from pathlib import Path as _Path
+
+    assurance_root = _Path(__file__).resolve().parent
+    errors: list[str] = []
+    consumers: dict[str, dict[str, bool]] = {}
+
+    for rel_path in _EXPECTED_TRUST_ESTABLISHERS:
+        abs_path = assurance_root.parent / rel_path
+        result: dict[str, bool] = {"imports_trust": False, "calls_trust": False}
+        try:
+            source = abs_path.read_text(encoding="utf-8")
+            tree = _ast.parse(source)
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.ImportFrom):
+                    if node.module in (
+                        "workspace_trust",
+                        ".workspace_trust",
+                        "assurance.workspace_trust",
+                    ):
+                        for alias in node.names:
+                            if alias.name == "establish_workspace_trust":
+                                result["imports_trust"] = True
+                elif isinstance(node, _ast.Call):
+                    if (
+                        isinstance(node.func, _ast.Name)
+                        and node.func.id == "establish_workspace_trust"
+                    ):
+                        result["calls_trust"] = True
+            consumers[rel_path] = result
+            if not result["imports_trust"]:
+                errors.append(
+                    f"{rel_path}: does not import establish_workspace_trust"
+                )
+            if not result["calls_trust"]:
+                errors.append(
+                    f"{rel_path}: imports but does not call "
+                    "establish_workspace_trust"
+                )
+        except Exception as exc:
+            errors.append(f"{rel_path}: cannot verify: {exc}")
+            consumers[rel_path] = {"imports_trust": False, "calls_trust": False}
+
+    return {"valid": not errors, "consumers": consumers, "errors": errors}

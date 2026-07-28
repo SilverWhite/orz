@@ -150,6 +150,11 @@ def call_deepseek_api(
     max_tokens: int = 2048,
     temperature: float = 0.0,
     timeout_seconds: int = 60,
+    conversation_id: str = "",
+    attempt: int = 0,
+    turn: int = 0,
+    allowed_categories: set[str] | None = None,
+    allowed_endpoints: set[str] | None = None,
 ) -> dict[str, Any]:
     """Call the DeepSeek chat completions API exactly once.
 
@@ -160,8 +165,31 @@ def call_deepseek_api(
       - model: str
       - private_reasoning_content_sha256: str | None
       - http_status_code: int
-      - marker_matched: bool (always None here — no marker)
+      - network_permit_id: str (empty if no permit evaluation)
     """
+    # ── network permit gate ──
+    network_permit_id = ""
+    if conversation_id:
+        from .network_permit_gateway import (
+            evaluate_network_permit,
+            NetworkPermitBlockedError,
+        )
+        try:
+            permit_receipt = evaluate_network_permit(
+                endpoint=DEEPSEEK_ENDPOINT,
+                category="llm_provider",
+                conversation_id=conversation_id,
+                attempt=attempt,
+                turn=turn,
+                allowed_categories=allowed_categories or {"llm_provider"},
+                allowed_endpoints=allowed_endpoints or {"api.deepseek.com"},
+            )
+            network_permit_id = permit_receipt.get("permit_id", "")
+        except NetworkPermitBlockedError as exc:
+            raise AssuranceError(
+                f"DeepSeek API network permit denied: {exc}"
+            )
+
     body_obj = {
         "model": model,
         "messages": messages,
@@ -220,6 +248,7 @@ def call_deepseek_api(
         "model": document.get("model", model),
         "private_reasoning_content_sha256": private_reasoning_sha256,
         "http_status_code": http_status,
+        "network_permit_id": network_permit_id,
     }
 
 

@@ -59,6 +59,10 @@
       "properties": {
         "created": { "type": "boolean" },
         "assigned": { "type": "boolean" },
+        "creation_time_assignment": {
+          "type": "boolean",
+          "description": "GAK-WIN-001: PROC_THREAD_ATTRIBUTE_JOB_LIST was used for kernel-level atomic job assignment at process creation time."
+        },
         "kill_on_close": { "type": "boolean" },
         "memory_limit_bytes": { "type": "integer", "minimum": 1 }
       }

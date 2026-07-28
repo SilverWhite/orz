@@ -47,9 +47,21 @@ from .canonical_cli import (
 from .child_capability_enforcer import (
     ChildCapabilityEscalationError,
     enforce_child_capabilities,
+    spawn_child_context,
     verify_child_capability_enforcement,
 )
 from .conversation import ConversationNamespace
+from .credential_scrub import (
+    CredentialGuard,
+    assert_no_credential_in_dict,
+    assert_safe_container_mount,
+    audit_child_environment,
+    audit_container_mount,
+    audit_credential_scrub_sites,
+    get_scrub_audit,
+    sanitize_child_environment,
+    scan_dict_for_credentials,
+)
 from .deepseek_adapter import (
     build_real_deepseek_answer_packet,
     build_real_deepseek_context,
@@ -79,7 +91,7 @@ from .execution_lock import (
     build_disposable_reproduction_execution_lock,
     verify_disposable_reproduction_execution_lock,
 )
-from .envelope import create_security_envelope, verify_security_envelope
+from .envelope import create_security_envelope, migrate_envelope, verify_security_envelope
 from .errors import AssuranceError
 from .guarded_execution import (
     DockerProcessTracker,
@@ -160,6 +172,8 @@ from .retrieval_subagent import (
     build_fake_retrieval_result,
     build_retrieval_session_close_receipt,
     build_retrieval_task_contract,
+    DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET,
+    dispatch_external_retrieval_subagent,
     dispatch_retrieval_subagent,
     run_retrieval_subagent_fixture,
     validate_retrieval_result,
@@ -235,6 +249,7 @@ from .windows_sandbox import (
 )
 from .workspace_trust import (
     establish_workspace_trust,
+    validate_all_entry_points_establish_trust,
     verify_workspace_trust,
     workspace_trust_for_adapter,
 )
@@ -257,6 +272,7 @@ __all__ = [
     "AuditLedger",
     "AssuranceError",
     "ConversationNamespace",
+    "CredentialGuard",
     "DockerProcessTracker",
     "MemoryInstallationKeyStore",
     "WindowsDpapiInstallationKeyStore",
@@ -286,6 +302,11 @@ __all__ = [
     "build_workspace_first_frozen_context",
     "build_tool_availability_context_block",
     "build_tool_availability_gate_receipt",
+    "assert_no_credential_in_dict",
+    "assert_safe_container_mount",
+    "audit_child_environment",
+    "audit_container_mount",
+    "audit_credential_scrub_sites",
     "authorize_action_candidate",
     "authorize_recovery_candidate",
     "create_security_envelope",
@@ -330,7 +351,10 @@ __all__ = [
     "cleanup_stale_archive_lock",
     "detect_obfuscated_injection",
     "detect_stale_archive_lock",
+    "DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET",
+    "dispatch_external_retrieval_subagent",
     "dispatch_retrieval_subagent",
+    "get_scrub_audit",
     "recover_archive",
     "recover_archive_journal",
     "recovery_permit_binding",
@@ -359,6 +383,8 @@ __all__ = [
     "run_synthetic_user_task_evaluation",
     "run_windows_native_sandbox_probe",
     "run_general_science_validators",
+    "sanitize_child_environment",
+    "scan_dict_for_credentials",
     "select_execution_backend",
     "SessionGovernor",
     "StorageAdapter",

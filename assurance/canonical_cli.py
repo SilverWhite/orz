@@ -26,6 +26,11 @@ from .keystore import InstallationKeyStore, MemoryInstallationKeyStore
 from .orientation_runtime_guard import build_orientation_checkpoint
 from .session_governor import SessionGovernor
 from .source_visibility import evaluate_source_visibility_gate
+from .network_permit_gateway import build_network_permit_policy
+from .workspace_trust import (
+    establish_workspace_trust,
+    workspace_trust_for_adapter,
+)
 from .task_contract import (
     DEFAULT_TASK_ID,
     build_task_contract_from_ask,
@@ -590,6 +595,35 @@ def _resolve_and_setup_gates(
         )
         governor = SessionGovernor(namespace)
 
+    # ── establish workspace trust before IPG evaluation ──
+    _adapter_id = adapter_id or "canonical-cli"
+    _conv_id = (
+        namespace.conversation_id
+        if namespace is not None
+        else f"CONV-CANONICAL-CLI-{run_id}"
+    )
+    trust_receipt = establish_workspace_trust(
+        workspace_root=ROOT,
+        adapter_id=_adapter_id,
+        conversation_id=_conv_id,
+    )
+    trust_receipt_path = run_root / "workspace-trust-receipt.json"
+    atomic_write_json(trust_receipt_path, trust_receipt)
+    trust_receipt_sha256_val = sha256_file(trust_receipt_path)
+    trust_status = workspace_trust_for_adapter(
+        trust_receipt, adapter_id=_adapter_id,
+    )
+    if governor is not None:
+        governor.write_gate_receipt("workspace-trust-receipt", trust_receipt)
+
+    # ── build network permit policy ──
+    network_policy = build_network_permit_policy(
+        policy_name="canonical-cli",
+        mode="guarded",
+    )
+    network_policy_path = run_root / "network-permit-policy.json"
+    atomic_write_json(network_policy_path, network_policy)
+
     manifest = build_canonical_cli_run_manifest(run_id=run_id, created_at=created_at)
     if adapter_id is not None:
         manifest["adapter"]["adapter_id"] = adapter_id
@@ -674,6 +708,12 @@ def _resolve_and_setup_gates(
         "task_contract": task_contract,
         "task_contract_sha256": task_contract_sha256,
         "manifest": manifest,
+        "trust_receipt": trust_receipt,
+        "trust_receipt_sha256": trust_receipt_sha256_val,
+        "trust_receipt_path": trust_receipt_path,
+        "workspace_trust_status": trust_status,
+        "network_policy": network_policy,
+        "network_policy_path": network_policy_path,
         "ipg_receipt": ipg_receipt,
         "ipg_context_sha256": ipg_context_sha256,
         "ipg_receipt_sha256": ipg_receipt_sha256,
@@ -990,6 +1030,12 @@ def run_canonical_guarded_cli_real(
                 adapter_id="deepseek-v4-pro",
                 conversation_id=namespace.conversation_id,
                 run_id=run_id,
+                trust_receipt=gates["trust_receipt"],
+                network_policy=gates["network_policy"],
+                network_endpoint="https://api.deepseek.com/chat/completions",
+                network_endpoint_category="llm_provider",
+                allowed_categories={"llm_provider"},
+                allowed_endpoints={"api.deepseek.com"},
             )
             enforcement = enforce_adapter_call(
                 gate_context=gate_ctx,
@@ -997,6 +1043,9 @@ def run_canonical_guarded_cli_real(
                     api_key,
                     messages,
                     timeout_seconds=api_timeout_seconds,
+                    conversation_id=namespace.conversation_id,
+                    allowed_categories={"llm_provider"},
+                    allowed_endpoints={"api.deepseek.com"},
                 ),
             )
             model_output = enforcement["adapter_result"]
@@ -1012,7 +1061,9 @@ def run_canonical_guarded_cli_real(
         except Exception as exc:
             api_error = str(exc)
         finally:
-            api_key = "\x00" * len(api_key)  # best-effort scrub
+            if api_key:
+                api_key = "\x00" * len(api_key)  # GAK-CRED-001: best-effort scrub
+                del api_key
     finally:
         key_store.close()
 

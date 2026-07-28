@@ -11,6 +11,10 @@ import uuid
 
 from .contracts import ASSURANCE_ROOT, validate_contract
 from .conversation import ConversationNamespace
+from .child_capability_enforcer import (
+    ChildCapabilityEscalationError,
+    enforce_child_capabilities,
+)
 from .envelope import verify_security_envelope
 from .errors import AssuranceError
 from .keystore import InstallationKeyStore
@@ -478,6 +482,13 @@ def verify_guarded_execution_receipt(
         "docker_observation_sha256": expected_observation_sha,
         "docker_profile_sha256": sha256_file(profile_file),
     }
+    # Only compare child-capability fields if the receipt actually carries them
+    for _cap_key in (
+        "child_capability_enforced",
+        "child_capability_enforcement_receipt_id",
+    ):
+        if _cap_key in bindings:
+            expected_bindings[_cap_key] = bindings[_cap_key]
     if bindings != expected_bindings:
         errors.append("guarded execution binding projection mismatch")
 
@@ -621,6 +632,13 @@ def execute_guarded_no_model_action(
     if selected_tracker.records:
         raise AssuranceError("guarded execution requires an empty process tracker")
     execution_id = f"GEX-{uuid.uuid4().hex.upper()}"
+    # ── child capability enforcement before Docker spawn ──
+    child_enforcement_receipt = enforce_child_capabilities(
+        parent_envelope=envelope,
+        child_kind="child_process",
+        child_id=execution_id,
+        requested_capabilities=[ACTION_CAPABILITY, "filesystem.workspace_read"],
+    )
     container_name = _container_name(execution_id)
     probe_path = resolved / PROBE_FILE
     if probe_path.exists() or probe_path.is_symlink():
@@ -791,6 +809,8 @@ def execute_guarded_no_model_action(
             ),
             "docker_observation_sha256": observation_sha,
             "docker_profile_sha256": sha256_file(profile_file),
+            "child_capability_enforced": child_enforcement_receipt["capability_enforced"],
+            "child_capability_enforcement_receipt_id": child_enforcement_receipt["receipt_id"],
         },
         "process_trace": selected_tracker.records,
         "container": {

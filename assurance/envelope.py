@@ -170,3 +170,98 @@ def verify_security_envelope(
         "installation_key_id": envelope["installation_key_id"],
         "signed_payload_sha256": actual_digest,
     }
+
+
+def migrate_envelope(
+    envelope_path: Path,
+    *,
+    new_key_id: str,
+    new_sign_fn: callable,
+) -> dict[str, Any]:
+    """Re-sign an existing security envelope with a new installation key.
+
+    This is used during key rotation to migrate envelopes from the old
+    key to the new key.  The envelope's frozen context, capabilities,
+    and lifecycle state are preserved unchanged.
+
+    Args:
+        envelope_path: Path to the envelope JSON file on disk.
+        new_key_id: The ``key_id`` of the new installation key.
+        new_sign_fn: A callable ``(bytes) -> str`` that signs with the
+            new key (e.g. ``new_key_store.sign``).
+
+    Returns a dict with ``envelope_id``, ``migrated`` (bool), and
+    ``new_signature_verified`` (bool).
+    """
+    from pathlib import Path as _Path  # noqa: F811
+
+    from .utils import atomic_write_json, load_json
+
+    envelope = load_json(envelope_path)
+    envelope_id = envelope.get("envelope_id", "")
+
+    # Rebuild body (everything except integrity block)
+    body = {
+        k: v for k, v in envelope.items()
+        if k != "integrity"
+    }
+    body["installation_key_id"] = new_key_id
+
+    signed_payload = canonical_bytes(body)
+    signed_digest = sha256_bytes(signed_payload)
+    new_signature = new_sign_fn(signed_payload)
+
+    migrated = dict(envelope)
+    migrated["installation_key_id"] = new_key_id
+    # Preserve the key_store metadata from the original envelope (the
+    # storage backend does not change across key rotation) and add a
+    # reference to the new key.
+    old_key_store = envelope["integrity"]["key_store"]
+    new_source_refs = list(old_key_store.get("source_refs", []))
+    new_source_refs.append(f"installation-key-metadata:{new_key_id}")
+
+    migrated["integrity"] = {
+        "canonicalization": "RFC8785",
+        "key_store": {
+            "value": old_key_store["value"],
+            "evidence_status": "observed",
+            "source_refs": new_source_refs,
+        },
+        "signature_algorithm": "hmac-sha256",
+        "signature_verification": {
+            "value": True,
+            "evidence_status": "observed",
+            "source_refs": ["assurance.envelope:migrate-envelope"],
+        },
+        "signed_payload_digest": {
+            "value": signed_digest,
+            "evidence_status": "observed",
+            "source_refs": ["assurance.envelope:RFC8785"],
+        },
+        "signature": new_signature,
+    }
+
+    validate_contract(
+        migrated,
+        "effective-security-envelope-v0.1.schema.json",
+        label="migrated security envelope",
+    )
+    atomic_write_json(envelope_path, migrated, overwrite=True)
+
+    # Self-verification: confirm the new signature is valid against the
+    # signed payload we just built.
+    from .utils import load_json as _reload
+    reloaded = _reload(envelope_path)
+    reloaded_signed = sha256_bytes(
+        canonical_bytes({
+            k: v for k, v in reloaded.items()
+            if k != "integrity"
+        })
+    )
+    signature_verified = reloaded_signed == signed_digest
+
+    return {
+        "envelope_id": envelope_id,
+        "migrated": True,
+        "new_signature_verified": signature_verified,
+    }

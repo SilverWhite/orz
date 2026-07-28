@@ -347,5 +347,106 @@ class EndToEndTrustAndPermitTests(unittest.TestCase):
             self.assertTrue(trust_check["trust_still_valid"])
 
 
+class AdapterGateContextTrustTests(unittest.TestCase):
+    """AdapterGateContext carries trust receipt and reports trust status."""
+
+    def test_gate_context_carries_trust_receipt(self) -> None:
+        from assurance.adapter_gate import AdapterGateContext
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            trust = establish_workspace_trust(
+                workspace_root=root,
+                adapter_id="test-adapter",
+                conversation_id=CONV_ID,
+            )
+        ctx = AdapterGateContext(
+            ipg_receipt={"gate_decision": "allow", "valid": True},
+            ipg_context={"conversation_id": CONV_ID},
+            adapter_id="test-adapter",
+            conversation_id=CONV_ID,
+            run_id="RUN-TEST",
+            trust_receipt=trust,
+        )
+        self.assertEqual(ctx.trust_status, "observed_trusted")
+        self.assertTrue(len(ctx.trust_receipt_id) > 0)
+        self.assertTrue(len(ctx.trust_receipt_sha256) > 0)
+
+    def test_gate_context_without_trust_receipt_reports_not_observed(self) -> None:
+        from assurance.adapter_gate import AdapterGateContext
+        ctx = AdapterGateContext(
+            ipg_receipt={"gate_decision": "allow", "valid": True},
+            ipg_context={"conversation_id": CONV_ID},
+            adapter_id="test-adapter",
+            conversation_id=CONV_ID,
+            run_id="RUN-TEST",
+        )
+        self.assertEqual(ctx.trust_status, "not_observed")
+        self.assertEqual(ctx.trust_receipt_id, "")
+        self.assertEqual(ctx.trust_receipt_sha256, "")
+
+    def test_gate_context_carries_network_policy_fields(self) -> None:
+        from assurance.adapter_gate import AdapterGateContext
+        policy = build_network_permit_policy(mode="guarded")
+        ctx = AdapterGateContext(
+            ipg_receipt={"gate_decision": "allow", "valid": True},
+            ipg_context={"conversation_id": CONV_ID},
+            adapter_id="test-adapter",
+            conversation_id=CONV_ID,
+            run_id="RUN-TEST",
+            network_policy=policy,
+            network_endpoint="https://api.deepseek.com/v1",
+            network_endpoint_category="llm_provider",
+            allowed_categories={"llm_provider"},
+            allowed_endpoints={"api.deepseek.com"},
+        )
+        self.assertIsNotNone(ctx.network_policy)
+        self.assertEqual(ctx.network_endpoint, "https://api.deepseek.com/v1")
+        self.assertEqual(ctx.network_endpoint_category, "llm_provider")
+
+
+class EntryPointAuditorTests(unittest.TestCase):
+    """Entry point auditor validates all known entry points establish trust."""
+
+    def test_validate_all_entry_points_establish_trust(self) -> None:
+        from assurance.workspace_trust import validate_all_entry_points_establish_trust
+        result = validate_all_entry_points_establish_trust()
+        self.assertTrue(result["valid"], f"auditor errors: {result['errors']}")
+        consumers = result["consumers"]
+        self.assertIn("assurance/canonical_cli.py", consumers)
+        self.assertIn("assurance/retrieval_subagent.py", consumers)
+        for path, checks in consumers.items():
+            self.assertTrue(checks["imports_trust"], f"{path}: missing import")
+            self.assertTrue(checks["calls_trust"], f"{path}: missing call")
+
+
+class DeepSeekNetworkPermitTests(unittest.TestCase):
+    """Network permit evaluation in call_deepseek_api."""
+
+    def test_call_deepseek_api_accepts_network_params(self) -> None:
+        """call_deepseek_api accepts optional network permit params without error."""
+        from assurance.deepseek_adapter import call_deepseek_api
+        # Verify signature is importable
+        import inspect
+        sig = inspect.signature(call_deepseek_api)
+        params = list(sig.parameters.keys())
+        for p in ("conversation_id", "attempt", "turn", "allowed_categories",
+                  "allowed_endpoints"):
+            self.assertIn(p, params, f"missing parameter: {p}")
+
+    def test_network_permit_blocked_with_disallowed_category(self) -> None:
+        """evaluate_network_permit blocks a category not in allowlist."""
+        with self.assertRaises(NetworkPermitBlockedError):
+            evaluate_network_permit(
+                endpoint="https://example.com/api",
+                category="web_fetch",
+                conversation_id=CONV_ID,
+                attempt=1,
+                turn=1,
+                allowed_categories={"llm_provider"},
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
