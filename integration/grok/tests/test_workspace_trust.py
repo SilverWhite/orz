@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,13 +14,19 @@ from jsonschema import Draft202012Validator, FormatChecker
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "new_grok_workspace_trust_receipt.ps1"
 SCHEMA = ROOT / "integration" / "grok" / "grok-workspace-trust-receipt-v0.1.schema.json"
+POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
+RUNS_WINDOWS_POWERSHELL_FIXTURE = os.name == "nt" and POWERSHELL
 
 
+@unittest.skipUnless(
+    RUNS_WINDOWS_POWERSHELL_FIXTURE,
+    "Windows PowerShell fixture is required",
+)
 class WorkspaceTrustReceiptTests(unittest.TestCase):
     def _run(self, workspace: Path, output: Path, *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
-                "powershell",
+                POWERSHELL,
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
@@ -29,6 +36,8 @@ class WorkspaceTrustReceiptTests(unittest.TestCase):
                 str(workspace),
                 "-OutputPath",
                 str(output),
+                "-ProjectRootPath",
+                str(workspace),
                 *extra,
             ],
             stdin=subprocess.DEVNULL,

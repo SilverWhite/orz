@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,8 @@ LAUNCHER = ROOT / "scripts" / "invoke_grok_real_deepseek_conformance.ps1"
 PLAN_SCHEMA = ROOT / "integration" / "grok" / "grok-real-deepseek-plan-v0.1.schema.json"
 RESULT_SCHEMA = ROOT / "integration" / "grok" / "grok-real-deepseek-result-v0.1.schema.json"
 FAILURE_SCHEMA = ROOT / "integration" / "grok" / "grok-real-deepseek-failure-v0.1.schema.json"
+POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
+RUNS_WINDOWS_POWERSHELL_FIXTURE = os.name == "nt" and POWERSHELL
 
 
 class RealDeepSeekLauncherTests(unittest.TestCase):
@@ -53,7 +56,7 @@ try {
 }
 """
         return subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
+            [POWERSHELL, "-NoProfile", "-Command", command],
             check=False,
             capture_output=True,
             text=True,
@@ -116,6 +119,10 @@ try {
             source.index("bearerMatch.Groups['token'].Value"),
         )
 
+    @unittest.skipUnless(
+        RUNS_WINDOWS_POWERSHELL_FIXTURE,
+        "Windows PowerShell fixture is required",
+    )
     def test_leak_scanner_behavior_in_powershell(self) -> None:
         placeholders = "\n".join(
             (

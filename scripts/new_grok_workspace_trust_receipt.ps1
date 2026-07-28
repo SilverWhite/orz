@@ -9,6 +9,8 @@ param(
     [ValidateSet('restricted', 'trusted', 'denied')]
     [string]$Decision = 'restricted',
 
+    [string]$ProjectRootPath,
+
     [string]$DecisionActor = 'sidecar-default',
 
     [string]$ExpectedAggregateSha256,
@@ -68,15 +70,44 @@ function Get-RelativeControlPath {
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$FullPath
     )
-    $normalizedRoot = $Root.TrimEnd('\')
-    if ($FullPath.Equals($normalizedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $normalizedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('\', '/'))
+    $normalizedFullPath = [System.IO.Path]::GetFullPath($FullPath)
+    if ($normalizedFullPath.Equals($normalizedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         return '.'
     }
-    $prefix = $normalizedRoot + '\'
-    if (-not $FullPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $rootForUri = $normalizedRoot + [System.IO.Path]::DirectorySeparatorChar
+    $relativeUri = ([uri]$rootForUri).MakeRelativeUri([uri]$normalizedFullPath)
+    $relative = [System.Uri]::UnescapeDataString($relativeUri.ToString())
+    if (
+        $relativeUri.IsAbsoluteUri -or
+        $relative -eq '..' -or
+        $relative.StartsWith('../', [System.StringComparison]::Ordinal) -or
+        $relative.StartsWith('..\', [System.StringComparison]::Ordinal)
+    ) {
         throw "Control path escaped project root: $FullPath"
     }
-    return $FullPath.Substring($prefix.Length).Replace('\', '/')
+    return $relative.Replace('\', '/')
+}
+
+function Test-PathContainedOrEqual {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Child
+    )
+    $normalizedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('\', '/'))
+    $normalizedChild = [System.IO.Path]::GetFullPath($Child)
+    if ($normalizedChild.Equals($normalizedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    $rootForUri = $normalizedRoot + [System.IO.Path]::DirectorySeparatorChar
+    $relativeUri = ([uri]$rootForUri).MakeRelativeUri([uri]$normalizedChild)
+    $relative = [System.Uri]::UnescapeDataString($relativeUri.ToString())
+    return (
+        -not $relativeUri.IsAbsoluteUri -and
+        $relative -ne '..' -and
+        -not $relative.StartsWith('../', [System.StringComparison]::Ordinal) -and
+        -not $relative.StartsWith('..\', [System.StringComparison]::Ordinal)
+    )
 }
 
 $workspace = (Resolve-Path -LiteralPath $WorkspacePath -ErrorAction Stop).Path
@@ -93,12 +124,16 @@ if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
     throw "Output parent directory must already exist: $outputParent"
 }
 
-$projectRoot = [System.IO.Path]::GetFullPath((Find-ProjectRoot -StartPath $workspace))
-$projectPrefix = $projectRoot.TrimEnd('\') + '\'
-if (
-    -not $workspace.Equals($projectRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
-    -not $workspace.StartsWith($projectPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-) {
+if ([string]::IsNullOrWhiteSpace($ProjectRootPath)) {
+    $projectRoot = [System.IO.Path]::GetFullPath((Find-ProjectRoot -StartPath $workspace))
+} else {
+    $projectRoot = (Resolve-Path -LiteralPath $ProjectRootPath -ErrorAction Stop).Path
+    $projectRootItem = Get-Item -LiteralPath $projectRoot -Force -ErrorAction Stop
+    if (-not $projectRootItem.PSIsContainer) {
+        throw "Project root must be a directory: $projectRoot"
+    }
+}
+if (-not (Test-PathContainedOrEqual -Root $projectRoot -Child $workspace)) {
     throw 'Workspace is not contained by the discovered project root.'
 }
 
