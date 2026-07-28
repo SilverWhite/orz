@@ -110,6 +110,11 @@ function Test-PathContainedOrEqual {
     )
 }
 
+function ConvertTo-NormalizedPathForComparison {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/'))
+}
+
 $workspace = (Resolve-Path -LiteralPath $WorkspacePath -ErrorAction Stop).Path
 $workspaceItem = Get-Item -LiteralPath $workspace -Force -ErrorAction Stop
 if (-not $workspaceItem.PSIsContainer) {
@@ -146,7 +151,9 @@ while ($null -ne $scopeCursor) {
     }
     $scopeCursor = $scopeCursor.Parent
 }
-if ($scopeDirectories[$scopeDirectories.Count - 1] -ne $projectRoot) {
+$lastScopeDirectory = ConvertTo-NormalizedPathForComparison $scopeDirectories[$scopeDirectories.Count - 1]
+$normalizedProjectRoot = ConvertTo-NormalizedPathForComparison $projectRoot
+if (-not $lastScopeDirectory.Equals($normalizedProjectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Could not build project-root-to-workspace discovery scope.'
 }
 $scopeDirectories = @($scopeDirectories.ToArray())

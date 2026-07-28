@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -16,6 +16,11 @@ def canonicalize_filesystem_path(raw: str | Path, *, base_root: Path | None = No
     absolute path.  Raises :exc:`AssuranceError` on traversal escape or
     reparse-point ambiguity.
     """
+    raw_text = os.fspath(raw)
+    windows_path = PureWindowsPath(raw_text)
+    if base_root is None and windows_path.drive and windows_path.is_absolute():
+        return windows_path.as_posix()
+
     path = Path(raw)
     if not path.is_absolute() and base_root is not None:
         path = (base_root / path).resolve()
