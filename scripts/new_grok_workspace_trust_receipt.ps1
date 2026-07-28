@@ -36,6 +36,18 @@ function Get-TextSha256 {
     }
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        return (($algorithm.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+}
+
 function Write-Utf8Atomic {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -237,7 +249,7 @@ function Add-ControlCandidate {
         capability = $Capability
         upstream_folder_trust = $UpstreamFolderTrust
         bytes = $length
-        sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-FileSha256 -Path $item.FullName
     })
 }
 
