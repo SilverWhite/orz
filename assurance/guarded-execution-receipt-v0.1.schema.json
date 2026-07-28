@@ -68,7 +68,9 @@
         "workspace_policy_sha256": { "$ref": "#/$defs/sha256" },
         "sandbox_selection_receipt_sha256": { "$ref": "#/$defs/sha256" },
         "docker_observation_sha256": { "$ref": "#/$defs/sha256" },
-        "docker_profile_sha256": { "$ref": "#/$defs/sha256" }
+        "docker_profile_sha256": { "$ref": "#/$defs/sha256" },
+        "child_capability_enforced": { "type": "boolean" },
+        "child_capability_enforcement_receipt_id": { "type": "string" }
       }
     },
     "process_trace": {

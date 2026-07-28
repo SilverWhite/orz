@@ -35,6 +35,16 @@
     "adapter_call_allowed": { "type": "boolean" },
     "bypass_attempted": { "type": "boolean" },
     "bypass_details": { "type": "string" },
+    "trust_status": { "enum": ["observed_trusted", "not_observed", "not_applicable"] },
+    "trust_receipt_id": { "type": "string" },
+    "trust_receipt_sha256": { "type": "string" },
+    "network_permit_required": { "type": "boolean" },
+    "network_permit_granted": { "type": "boolean" },
+    "network_allowed_categories": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "network_endpoint": { "type": "string" },
     "checks": {
       "type": "object",
       "additionalProperties": false,
@@ -52,7 +62,8 @@
         "ipg_receipt_valid": { "type": "boolean" },
         "gate_decision_respected": { "type": "boolean" },
         "no_direct_adapter_call": { "type": "boolean" },
-        "no_replay_attack": { "type": "boolean" }
+        "no_replay_attack": { "type": "boolean" },
+        "network_permit_policy_present": { "type": "boolean" }
       }
     },
     "errors": {

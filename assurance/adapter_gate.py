@@ -31,12 +31,28 @@ class AdapterGateContext:
         adapter_id: str,
         conversation_id: str,
         run_id: str,
+        trust_receipt: dict[str, Any] | None = None,
+        network_policy: dict[str, Any] | None = None,
+        network_endpoint: str | None = None,
+        network_endpoint_category: str | None = None,
+        network_attempt: int = 1,
+        network_turn: int = 1,
+        allowed_categories: set[str] | None = None,
+        allowed_endpoints: set[str] | None = None,
     ) -> None:
         self.ipg_receipt = ipg_receipt
         self.ipg_context = ipg_context
         self.adapter_id = adapter_id
         self.conversation_id = conversation_id
         self.run_id = run_id
+        self.trust_receipt = trust_receipt
+        self.network_policy = network_policy
+        self.network_endpoint = network_endpoint
+        self.network_endpoint_category = network_endpoint_category
+        self.network_attempt = network_attempt
+        self.network_turn = network_turn
+        self.allowed_categories = allowed_categories
+        self.allowed_endpoints = allowed_endpoints
         self._enforcement_id = f"AGE-{uuid.uuid4().hex.upper()}"
         self._created_at = utc_now()
 
@@ -59,6 +75,29 @@ class AdapterGateContext:
         from .utils import canonical_bytes
 
         return sha256_bytes(canonical_bytes(self.ipg_context))
+
+    @property
+    def trust_status(self) -> str:
+        """Effective workspace trust status for this adapter."""
+        if self.trust_receipt is None:
+            return "not_observed"
+        from .workspace_trust import workspace_trust_for_adapter
+        return workspace_trust_for_adapter(
+            self.trust_receipt, adapter_id=self.adapter_id,
+        )
+
+    @property
+    def trust_receipt_id(self) -> str:
+        if self.trust_receipt is None:
+            return ""
+        return self.trust_receipt.get("receipt_id", "")
+
+    @property
+    def trust_receipt_sha256(self) -> str:
+        if self.trust_receipt is None:
+            return ""
+        from .utils import canonical_bytes
+        return sha256_bytes(canonical_bytes(self.trust_receipt))
 
 
 def enforce_adapter_call(
@@ -119,6 +158,13 @@ def enforce_adapter_call(
 
     adapter_call_allowed = ipg_receipt_valid and gate_context.gate_decision == "allow"
 
+    # Network permit policy check
+    network_permit_required = (
+        gate_context.network_policy is not None
+        and gate_context.network_policy.get("require_permit_for_all", False)
+    )
+    network_permit_granted = not network_permit_required  # defaults True if not required
+
     enforcement_receipt = {
         "schema_version": "0.1.0-draft",
         "receipt_kind": "adapter_gate_enforcement_receipt",
@@ -134,6 +180,16 @@ def enforce_adapter_call(
         "adapter_call_allowed": adapter_call_allowed,
         "bypass_attempted": bypass_attempted,
         "bypass_details": bypass_details if bypass_attempted else "",
+        "trust_status": gate_context.trust_status,
+        "trust_receipt_id": gate_context.trust_receipt_id,
+        "trust_receipt_sha256": gate_context.trust_receipt_sha256,
+        "network_permit_required": network_permit_required,
+        "network_permit_granted": network_permit_granted,
+        "network_allowed_categories": (
+            sorted(gate_context.allowed_categories)
+            if gate_context.allowed_categories else []
+        ),
+        "network_endpoint": gate_context.network_endpoint or "",
         "checks": {
             "ipg_evaluated_before_adapter": ipg_evaluated_before_adapter,
             "ipg_receipt_present": ipg_receipt_present,
@@ -141,6 +197,7 @@ def enforce_adapter_call(
             "gate_decision_respected": gate_decision_respected,
             "no_direct_adapter_call": no_direct_adapter_call,
             "no_replay_attack": no_replay_attack,
+            "network_permit_policy_present": gate_context.network_policy is not None,
         },
         "errors": errors,
         "limitations": [
@@ -294,6 +351,13 @@ def run_adapter_gate_bypass_fixture(
             "adapter_call_allowed": False,
             "bypass_attempted": True,
             "bypass_details": "direct adapter call without gate context",
+            "trust_status": "not_observed",
+            "trust_receipt_id": "",
+            "trust_receipt_sha256": "",
+            "network_permit_required": False,
+            "network_permit_granted": True,
+            "network_allowed_categories": [],
+            "network_endpoint": "",
             "checks": {
                 "ipg_evaluated_before_adapter": False,
                 "ipg_receipt_present": False,
@@ -301,6 +365,7 @@ def run_adapter_gate_bypass_fixture(
                 "gate_decision_respected": False,
                 "no_direct_adapter_call": False,
                 "no_replay_attack": True,
+                "network_permit_policy_present": False,
             },
             "errors": ["direct adapter call without IPG gate context"],
             "limitations": [],
@@ -333,6 +398,13 @@ def run_adapter_gate_bypass_fixture(
                 "adapter_call_allowed": False,
                 "bypass_attempted": True,
                 "bypass_details": str(exc),
+                "trust_status": gate_ctx.trust_status,
+                "trust_receipt_id": gate_ctx.trust_receipt_id,
+                "trust_receipt_sha256": gate_ctx.trust_receipt_sha256,
+                "network_permit_required": False,
+                "network_permit_granted": True,
+                "network_allowed_categories": [],
+                "network_endpoint": "",
                 "checks": {
                     "ipg_evaluated_before_adapter": True,
                     "ipg_receipt_present": True,
@@ -340,6 +412,7 @@ def run_adapter_gate_bypass_fixture(
                     "gate_decision_respected": True,
                     "no_direct_adapter_call": True,
                     "no_replay_attack": not replay_old_receipt,
+                    "network_permit_policy_present": False,
                 },
                 "errors": [str(exc)],
                 "limitations": [],

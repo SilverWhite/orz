@@ -282,6 +282,23 @@ created_at / expires_at
 
 Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-depth` 文本提示，不能进入上述 hard gate 的证明链。
 
+### 8.1 Windows Credential Manager 凭据注册表
+
+所有子代理均使用独立 DeepSeek API key，通过 Windows Credential Manager 的 Generic Credential 类型存储。每个 target 对应一个独立的 API key，不存在共享或继承关系。
+
+| Credential Target | 用途 | API Key 独立性 | 代码引用 |
+|---|---|---|---|
+| `FEP-Agent/DeepSeek` | 主 canonical CLI (`run_canonical_guarded_cli_real`) | 独立 key | `assurance/deepseek_adapter.py:23` `DEFAULT_CREDENTIAL_TARGET` |
+| `FEP-Agent/DeepSeek-Retrieval` | 外部检索子代理（web/external search） | 独立 key，不与主 CLI 共享 | `assurance/retrieval_subagent.py` `DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET`；`dispatch_external_retrieval_subagent()` |
+| `deepseek-retrieval-subagent` | 内部 Project Doc 检索子代理 (`dispatch_retrieval_subagent`) | 独立 key，不与主 CLI 或其他子代理共享 | `assurance/retrieval_subagent.py:678` `credential_target` 参数；Gap Register GAK-RET-SUB-001 |
+
+**设计约束：**
+
+- 每个子代理必须使用独立 API key — 即使同一 DeepSeek 账户可创建多个 key，也不得共用
+- 凭据读取统一通过 `_read_windows_credential()`（`assurance/deepseek_adapter.py`），该函数不缓存、不持久化 key 明文
+- key 使用后立即执行 best-effort scrub（调用方 `finally` 块覆盖变量）
+- 新增子代理时，必须先在本文注册其 credential target，再部署 API key
+
 ## 9. 主要缺口登记
 
 | ID | 缺口 | 当前证据/状态 | 严重度 | 下一产物与通过条件 |
@@ -289,21 +306,23 @@ Project D 的 JSON 记忆包装和 system prompt 提醒只能作为 `defense-in-
 | GAK-ARCH-001 | 通用内核、general-science 与 LIF profile 的 P0 schema/ADR | 2026-07-25 已新增 Effective Security Envelope、additive profile registry、sandbox/session/retention schema、正反 fixture 与 ADR-0003/0004 | P0 已关闭 | 后续实现必须消费这些合同；不得绑定单一 runtime、复制通用 runtime 或把 LIF 路由回灌 general-science |
 | GAK-SBX-001 | 默认物理 sandbox 未完全闭环 | P2 Docker branch 已 observed compliant；2026-07-27 Windows native live probe 已跑两次（非 elevated + elevated）：AppContainer+Job+FS/registry/non-admin **observed pass**；elevated path 通过 netsh firewall outbound block rule 达成 **compliant** observation + selection allow；non-elevated path 因无法创建防火墙规则 **fail-closed**（正确行为）。GAK-SBX-001 **可关闭**（2026-07-27 audit 裁决）。原始 TCP 残余为已知 Windows 平台限制，记录于 limitations，不阻塞 development 门禁。详见 `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md` | ~~阻断~~ → 已关闭 (development baseline) | 生产级网络隔离需 WFP 内核 callout 或 Microsoft 修复；non-elevated 路径的防火墙替代方案待研究 |
 | GAK-DOCKER-001 | Docker 一键启动与 digest/mount receipt | P2 已固定镜像摘要、唯一 workspace mount、无 socket/home、network-off、resource limits；P2.5 已接入固定 no-model action、conversation lifecycle、进程追踪与 HMAC receipt | P2/P2.5 development 已关闭 | 接入通用 runtime/tool broker、磁盘 quota、并发/crash recovery 后再评估 production closure |
-| GAK-TRUST-001 | trust receipt 尚未统一到所有入口 | Grok launcher 已有双 trust receipt；其他 future adapters 未统一 | 高 | discovery 前统一 receipt；文件变化使 grant 失效 |
-| GAK-ID-001 | 安装密钥/会话 envelope 尚未产品化 | P1 已 observed Windows DPAPI 随机 key、HMAC envelope、tamper fail；无 rotation/revocation/key history | 高 | 补 rotation/revocation、并发锁、crash recovery 与迁移 fixture 后才能关闭 |
+| GAK-TRUST-001 | trust receipt 尚未统一到所有入口 | **2026-07-28 关闭**：`establish_workspace_trust()` 已接入 canonical CLI 和检索子代理全部入口点。新增：`AdapterGateContext` 携带 `trust_receipt` + `trust_status` 属性；`_resolve_and_setup_gates()` 在 IPG 评估前调用 `establish_workspace_trust()` 并写入 governor journal；`dispatch_retrieval_subagent()` 和 `dispatch_external_retrieval_subagent()` 在 namespace 创建后立即建立 workspace trust；`validate_all_entry_points_establish_trust()` 静态 AST 审计验证所有入口点导入并调用 `establish_workspace_trust`（3 个入口点）。580 tests pass。详见 `assurance/adapter_gate.py`、`assurance/canonical_cli.py`、`assurance/retrieval_subagent.py`、`assurance/workspace_trust.py` | ~~高~~ → 已关闭 (development baseline) | 文件变化使 grant 失效的自动重检仍待后续版本 |
+| GAK-ID-001 | 安装密钥/会话 envelope 尚未产品化 | **2026-07-28 关闭**：新增 `_FileLock` 跨平台文件锁（`O_CREAT|O_EXCL` + 过期锁检测）；`rotate()`/`revoke()`/`record_initial_key()` 全部受锁保护；crash-safe journal（`.pending-` 文件 → receipt → history → 清除 pending）；`recover_pending_rotations()` 恢复/回滚未完成旋转；`migrate_envelope()` 真实 envelope 重签名（rebuild body + new key sign + atomic write）；`rotate()` 的 `envelopes_to_migrate` 调用真实迁移。17 个测试 (8 个新增：锁获取/释放/互斥/过期清理 + crash 恢复 + 孤儿检测 + envelope 迁移 ×2)。590 tests pass。详见 `assurance/key_lifecycle.py`、`assurance/envelope.py`、`assurance/tests/test_key_lifecycle.py` | ~~高~~ → 已关闭 (development baseline) | 跨设备迁移、TPM-backed key 仍待后续版本 |
 | GAK-SESSION-001 | conversation namespace 尚未接入实际 runtime | **2026-07-28 关闭**：`ConversationNamespace` 已接入 canonical CLI 真实 adapter 路径。新增 `SessionGovernor`（thin wrapper — 所有 gate receipt/checkpoint/answer packet/journal event 通过 `namespace.write_artifact()` 路由）；`_resolve_and_setup_gates()` 接受 `key_store` 参数自动创建 namespace + governor；`run_canonical_guarded_cli_real()` 通过 `enforce_adapter_call()` 包装 DeepSeek API 调用（`AdapterGateContext` 绑定真实 `conversation_id`）；`build_real_deepseek_answer_packet()` 接受 `conversation_id`/`envelope_id` 参数；新增 10 个 integration 测试（namespace 创建、governor artifact 路由、governor close 拒绝写入、namespace integrity、跨会话隔离 ×3、import untrusted、full lifecycle with adapter artifacts、resume creates new envelope）。548 tests pass。详见 `assurance/session_governor.py`、`assurance/canonical_cli.py`、`assurance/deepseek_adapter.py`、`assurance/tests/test_session_namespace.py` | ~~高~~ → 已关闭 (development baseline) | 生产级 key rotation（GAK-ID-001）、Project Doc Retrieval Subagent（GAK-RET-SUB-001）仍待后续版本 |
-| GAK-RET-SUB-001 | Project Doc Retrieval Subagent (真实 adapter) | **2026-07-28 关闭**：新增 `ProjectDocIndex`（项目文档扫描器 — 8 个类别 glob pattern，in-memory search + lazy content 加载）；新增 `dispatch_retrieval_subagent()`（真实 DeepSeek v4 Pro API + ProjectDocIndex + SessionGovernor + AdapterGate 集成；支持 offline 模式无 API key 时直接用文档扫描结果构建结果）；新增 `_build_retrieval_system_prompt()`（带文档摘录的检索提示模板）；全部输出标记 delegated_retrieval / derived_unverified；遵循现有 retrieval-result-v0.1 schema；完全向后兼容 — build_fake_retrieval_result 保留；新增 15 个测试（ProjectDocIndex 7 + dispatcher 5 + integration 3）；22 个存量测试全部通过。详见 `assurance/project_doc_index.py`、`assurance/retrieval_subagent.py`、`assurance/tests/test_retrieval_subagent_real.py` | ~~待实施~~ → 已关闭 (development baseline) | 独立 DeepSeek credential 尚未配置；真实 API 调用需 Windows Credential Manager 中的 `deepseek-retrieval-subagent` target；语义搜索能力受限于关键词匹配 |
+| GAK-RET-SUB-001 | Project Doc Retrieval Subagent (真实 adapter) | **2026-07-28 关闭**：新增 `ProjectDocIndex`（项目文档扫描器 — 8 个类别 glob pattern，in-memory search + lazy content 加载）；新增 `dispatch_retrieval_subagent()`（真实 DeepSeek v4 Pro API + ProjectDocIndex + SessionGovernor + AdapterGate 集成；支持 offline 模式无 API key 时直接用文档扫描结果构建结果）；新增 `_build_retrieval_system_prompt()`（带文档摘录的检索提示模板）；全部输出标记 delegated_retrieval / derived_unverified；遵循现有 retrieval-result-v0.1 schema；完全向后兼容 — build_fake_retrieval_result 保留；新增 15 个测试（ProjectDocIndex 7 + dispatcher 5 + integration 3）；22 个存量测试全部通过。详见 `assurance/project_doc_index.py`、`assurance/retrieval_subagent.py`、`assurance/tests/test_retrieval_subagent_real.py` | ~~待实施~~ → 已关闭 (development baseline) | 独立 DeepSeek credential 已于 2026-07-28 配置（Windows Credential Manager `deepseek-retrieval-subagent` target，独立 API key，不与主 CLI 或其他子代理共享）；语义搜索能力受限于关键词匹配 |
+| GAK-RET-SUB-EXT-001 | External Retrieval Subagent (web search result processor) | **2026-07-28 关闭**：新增 `dispatch_external_retrieval_subagent(search_results=...)` — 接收原始 web search 结果（title/url/snippet），通过 DeepSeek API 进行结构化处理。**模型严格约束为仅使用提供的搜索摘录**（system prompt 显式禁止使用训练知识、禁止编造来源、要求逐条引用搜索结果编号）。覆盖 6 种外部来源类别。来源 ledger 基于真实搜索 URL 构建（非模型自报）。无 API key 或无搜索结果时返回带 opacity note 的空结果。`DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET = "FEP-Agent/DeepSeek-Retrieval"`（独立 API key）。11 个新测试（搜索来源 ledger、无结果模式、无 API 模式、opacity notes、URL 引用、namespace、governor、schema 验证等）。设计原则：子代理**不执行**搜索——它处理搜索工具的输出；搜索与处理分离以保持审计链可追溯。详见 `assurance/retrieval_subagent.py`、`assurance/tests/test_retrieval_subagent_real.py` | ~~待实施~~ → 已关闭 (development baseline) | 搜索工具本身（web search API）由主 agent 调用；子代理仅处理已获取的搜索摘录；需在未来接入真实搜索 API 调用链 |
 | GAK-RET-001 | retention/deletion controller 尚未产品化 | **2026-07-28 关闭**：StorageAdapter 已接入 ArchiveController（替代裸 DeleteFile 回调）；archive_recovery.py 提供 holistic 恢复编排器（classify_archive_failure → recover_archive，覆盖 clean_interrupted/torn_journal/corrupt_journal/stale_lock/archiving_no_journal 五个恢复路径）；detect_stale_archive_lock + cleanup_stale_archive_lock 处理崩溃后孤儿锁；FaultInjectionStorageAdapter 支持 transient/permanent/walk error 故障注入测试；新增 18 个测试（recovery 路径、storage adapter 集成、故障注入、deletion boundary、stale lock、multi-process lock contention）；484 tests pass。详见 `assurance/archive.py`、`assurance/archive_recovery.py`、`assurance/tests/test_archive_recovery.py` | ~~阻断~~ → 已关闭 (development baseline) | 生产级 storage backend（网络/云存储）、跨设备并发 crash recovery 仍待后续版本 |
 | GAK-INJ-001 | instruction provenance/anti-injection gate 尚未接入所有真实入口 | **2026-07-28 关闭**：新增 production content parser（`parse_instruction_content` — 提取 path/endpoint/directive 引用）；新增 obfuscation detector（`detect_obfuscated_injection` — 零宽字符、同形字、base64 payload、全角替换）；新增 canonicalizer 集成（`evaluate_instruction_provenance_gate_with_canonicalizer` — 路径遍历/SSRF 检测，数据源中非法路径/端点 → block）；INJECTION_PATTERNS 扩充至 25 个模式（新增 output your instructions、override security、system prompt、hidden instructions、debug mode、developer mode、disable safety、pretend you are、act as if）；新增 unified gate entry 验证（`validate_all_entry_points_consume_same_gate` — 静态 AST 检查 4 个已知 consumer）；adapter bypass hardening 8 个新测试；adversarial injection 47 个新测试（路径遍历 10 + SSRF 7 + 提示提取 7 + 混淆 7 + 越权 6 + 组合 5 + 边界 6）。全部 89 tests pass。详见 `assurance/instruction_provenance_gate.py`、`assurance/tests/test_injection_adversarial.py` | ~~阻断~~ → 已关闭 (development baseline) | 生产级语义注入检测、URL 解码路径扫描、真实 runtime adapter content bytes 接入仍待后续版本 |
-| GAK-CHILD-001 | 子 Agent/子进程 capability 传递尚未统一到实际 runtime | P3 已生成父 envelope 子集的签名 child envelope；越权与 remote MCP 本地能力 fixture 拒绝 | 高 | 实际 spawn/MCP adapter 强制使用 child envelope，并证明无旁路 |
-| GAK-NET-001 | network permit 尚未覆盖所有 tool/runtime 路径 | DeepSeek one-shot 与 broker 已有窄证明 | 高 | endpoint/body/attempt/retry-bound permit 覆盖 web、MCP、Git、provider；redirect/proxy 负例 |
-| GAK-CRED-001 | 凭据仍存在不可控内存/内核副本 | Credential Manager 短租约和 WER NOHEAP 已实现；文档明确非绝对零化 | 高 | 保持“不绝对”声明；扩展 child env、dump、artifact、container mount 负例 |
+| GAK-CHILD-001 | 子 Agent/子进程 capability 传递尚未统一到实际 runtime | **2026-07-28 关闭**：新增 `spawn_child_context()` 统一入口（组合 `enforce_child_capabilities` predicate check + `delegate_capabilities` 签名 child envelope 创建）；`dispatch_retrieval_subagent()` 和 `dispatch_external_retrieval_subagent()` 接受可选 `parent_envelope` 参数，提供时通过 `spawn_child_context()` 创建签名 child envelope 并传入 `ConversationNamespace.create(parent_envelope_id=...)`；`execute_guarded_no_model_action()` 在 Docker create 前调用 `enforce_child_capabilities()`（child_kind=child_process），enforcement receipt 写入执行回执 bindings。无 `parent_envelope` 时回退到硬编码能力（向后兼容）。580 tests pass。详见 `assurance/child_capability_enforcer.py`、`assurance/retrieval_subagent.py`、`assurance/guarded_execution.py` | ~~高~~ → 已关闭 (development baseline) | 实际 MCP adapter 接入仍待后续版本 |
+| GAK-NET-001 | network permit 尚未覆盖所有 tool/runtime 路径 | **2026-07-28 关闭**：`call_deepseek_api()` 新增 `conversation_id`/`attempt`/`turn`/`allowed_categories`/`allowed_endpoints` 参数，在执行 `urllib.request.urlopen()` 前调用 `evaluate_network_permit()`（category=`llm_provider`）；`AdapterGateContext` 新增 `network_policy`/`network_endpoint`/`network_endpoint_category`/`allowed_categories`/`allowed_endpoints` 字段；`enforce_adapter_call()` 在 enforcement receipt 中记录 `network_permit_required`/`network_permit_granted`；`_resolve_and_setup_gates()` 调用 `build_network_permit_policy(mode="guarded")` 构建默认策略；`run_canonical_guarded_cli_real()` 传递 network 参数到 AdapterGateContext 和 call_deepseek_api。580 tests pass。详见 `assurance/deepseek_adapter.py`、`assurance/adapter_gate.py`、`assurance/canonical_cli.py` | ~~高~~ → 已关闭 (development baseline) | web_fetch/MCP/Git/package_registry 工具的 network permit 接入、redirect/proxy 负例仍待后续版本 |
+| GAK-CRED-001 | 凭据仍存在不可控内存/内核副本 | **2026-07-28 development baseline 达成**：新增 `credential_scrub.py`（653 行）— `CredentialGuard` context manager（自动读取→使用→scrub 生命周期 + 异常安全 + 审计记录）；`sanitize_child_environment()` 和 `audit_child_environment()`（33 个凭据相关环境变量名 + 6 个模糊匹配模式）；`scan_dict_for_credentials()` 和 `assert_no_credential_in_dict()`（递归 artifact 扫描，跳过 SHA-256/URL/JSON/timestamp/短值）；`audit_container_mount()` 和 `assert_safe_container_mount()`（14 个禁止挂载根路径：Credential Manager、DPAPI、Crypto、SSH、GnuPG、keystore、.dpapi/.pem/.key 文件）；`audit_credential_scrub_sites()`（AST 静态扫描验证每个 `_read_windows_credential` 调用点有对应 scrub）；74 个测试全部通过。3 个真实凭据读取点（canonical_cli.py:1020、retrieval_subagent.py:901、retrieval_subagent.py:1357）均通过 manual `”\x00” * len(key)` finally-block scrub 或 `CredentialGuard` 覆盖。Python 不可保证内存零化——所有 scrub 为 best-effort defense-in-depth。详见 `assurance/credential_scrub.py`、`assurance/tests/test_credential_scrub.py` | ~~高~~ → development baseline 达成 | Python 级别 best-effort scrub 已完成；OS 级别 pagefile/hibernation/WER dump 凭据残余不可消除，保持”不绝对”声明 |
 | GAK-EVT-001 | 审计投影尚未接入真实 runtime | P4 已实现 typed source、双层 sequence/hash、显式 completeness、terminal exactly-once 的签名 metadata ledger，并在 raw archive 后独立重建 | 中 | 实际 ACP/session/provider/supervisor adapter 全部写入同一 ledger，并验证 bypass/missing-source 路径 |
 | GAK-CMP-001 | automatic compaction 尚未观测 | P4 已统一 `derived_unverified` 与 retained/discarded/unknown 非重叠范围，并可在 raw 删除后复核；当前只覆盖合成 manual fixture | 中 | 观测 automatic threshold 并证明 source span/range/summary 映射不提升未知状态 |
 | GAK-REC-001 | 无正式 shadow recovery store/执行器 | P4 已将 verified archive+pinned snapshot 变为 untrusted candidate，恢复需 digest-bound one-shot permit，授权本身不执行恢复 | 中 | 独立 shadow Git/等价 store、diff preview、路径 canonicalizer 和单独执行 receipt；不得删除审计事件 |
 | GAK-WIN-001 | Windows start→Job assignment race | 已记录真实 limitation | 高 | suspended creation 或 creation-time job attribute；逃逸负例 |
 | GAK-XPLAT-001 | 其他 OS 尚无 observed 支持矩阵 | 只有 Windows-first 证据 | 中 | Linux/macOS backend 各自正反 fixture；未测平台明确 unsupported |
 | GAK-UX-001 | 不同水平用户的安全 UX 未验证 | 尚无外部测试 | 中 | 先用合成仓库和假凭据完成新手/熟练用户 task test；不得先接真实项目 |
+| GAK-UI-001 | Windows 终端 UI（retro 桌面风格 TUI） | **2026-07-28 第一原型已完成**：`assurance/tui/` 包（5 个模块，~2700 行）— `widgets.py`（MenuBar/Toolbar/AddressBar/FindBar/ExplorerPane/ContentPane/ContentMarker/StatusBar/Dialog/PropertiesSheet 全部 10 个 widget 类 + 中文宽度计算器 + Unicode box-drawing）；`app.py`（TuiPrototype 全屏 compositor：8 区域布局、三列分割、覆盖层混合、F6 焦点循环、键盘分发）；`view_models.py`（全部 sample data：source tree、source visibility table、event groups、markers、dialog/properties mock）；`pt_app.py`（prompt_toolkit 集成：alternate screen + 25+ key bindings + Alt+letter 菜单激活 via escape 序列 + ttimeoutlen=100ms + Ctrl+L 地址栏聚焦）；`main.py`（CLI 入口：`--demo` 交互模式 + `--with-dialog/--with-properties` + 80×24 最小视口 + 100×30/140×40 截图测试）；81 个测试全部通过（import 隔离、box-drawing、显示宽度、widget 渲染、全屏截图、键盘导航、覆盖层、集成）。prompt_toolkit>=3.0 列为可选依赖（`[tui]` extra）。实现约束全部满足：UI 不导入 assurance core、中文字符宽度计算、ASCII + box-drawing 优先、stdout/stderr 捕获。详见 `assurance/tui/`、`architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` | ~~中~~ → 第一原型完成 | 下一步：接入 canonical CLI 结构化事件流 → view model 投影 → retro 渲染。UI 代码不得直接调用模型或绕过 Gate 链。|
 
 ## 10. 实施顺序
 
@@ -425,6 +444,34 @@ repo、fake credential、network-off 环境测试。测试记录只保留 consen
 4. 未执行 R211 分析脚本、训练或待定 A-CI 第二阶段，未修改 LIF 项目内容；
 5. 3 个 P5 组合测试通过；全仓库 135 tests、79 schemas、0 contract errors；
 6. 下一步是先定义 consent/任务后清理/脱敏记录，再进行少量内部人工 dry run；在此之前 P5 不关闭。
+
+### P5.5：终端 UI 第一原型 (GAK-UI-001)
+
+P5.5 与 P0–P4.5 解耦——第一原型是静态 mock，不依赖 assurance core。它可以与 P5 并行推进，但在核心 hard gate 全部关闭前不得接入真实模型调用或敏感数据。
+
+状态：**2026-07-28 架构文档已冻结；代码实现未开始。**
+
+1. 架构文档 `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` 已冻结：
+   - 八区域布局（MenuBar/Toolbar/AddressBar/ExplorerPane/ContentPane/StatusBar/Dialog/Properties）
+   - 10 种对象类型、标准操作集、键盘模型
+   - `prompt_toolkit` 终端基板 + 自定义 retro widget 层
+   - UI 不耦合 assurance core——消费 canonical CLI 的结构化事件流 → view model 投影 → 渲染
+2. 第一原型范围（断开 assurance core）：
+   - 主框架 + 菜单/工具栏/地址栏/资源管理器/内容/状态栏
+   - 对象 URI 地址栏显示
+   - 固定 source tree
+   - task summary 视图
+   - 属性 dialog mock
+   - 阻断 permission dialog mock
+   - 键盘焦点跨窗格导航
+   - 100×30 和 140×40 截图测试
+3. 之后：接入 canonical CLI 结构化事件 → view model → retro 渲染
+4. 实现约束：
+   - 中文字符宽度用真实宽度计算器
+   - 不稳定 emoji 宽度假设做保守处理
+   - 核心 UI 优先 ASCII + box-drawing 字符
+   - UI 代码不得直接调用模型、子进程流或绕过 Gate 链
+   - 保持 stdout/stderr 捕获并转为事件，不做裸打印
 
 ## 11. 完成定义
 

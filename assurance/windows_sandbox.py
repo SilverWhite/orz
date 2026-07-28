@@ -32,6 +32,12 @@ JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
 EXTENDED_STARTUPINFO_PRESENT_FLAG = 0x00080000
 
+# GAK-WIN-001: assign Job Object at process creation time so the kernel
+# attaches the process to the job BEFORE the initial thread is created.
+# This eliminates the user-mode race between CreateProcess and
+# AssignProcessToJobObject entirely.
+PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D
+
 APPCONTAINER_SID_PREFIX = "S-1-15-2-"
 
 
@@ -620,6 +626,38 @@ def _assign_process_to_job(job: wintypes.HANDLE, process_handle: wintypes.HANDLE
     return bool(kernel32.AssignProcessToJobObject(job, process_handle))
 
 
+def _is_process_in_job(
+    process_handle: wintypes.HANDLE,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool:
+    """Check whether *process_handle* is assigned to any Job Object.
+
+    Passing ``None`` as the second argument queries whether the process is
+    associated with *any* job (not a specific one).
+    """
+    if os.name != "nt" or not process_handle:
+        return False
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.IsProcessInJob.argtypes = [
+            wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL),
+        ]
+        kernel32.IsProcessInJob.restype = wintypes.BOOL
+        result = wintypes.BOOL()
+        if not kernel32.IsProcessInJob(process_handle, None, ctypes.byref(result)):
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"IsProcessInJob failed: {ctypes.get_last_error()}"
+                )
+            return False
+        return bool(result.value)
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"IsProcessInJob exception: {exc}")
+        return False
+
+
 def _close_handle(handle: wintypes.HANDLE) -> None:
     if not handle:
         return
@@ -757,6 +795,12 @@ def run_windows_native_sandbox_probe(
         sec_cap.CapabilityCount = 0
         sec_cap.Reserved = 0
 
+        # GAK-WIN-001: if we have a Job Object, set it as a creation-time
+        # attribute so the kernel assigns the process to the job before
+        # the initial thread is created.  This eliminates the user-mode
+        # race between CreateProcess and AssignProcessToJobObject.
+        attr_count = 1 + (1 if job else 0)
+
         attr_size = ctypes.c_size_t()
         kernel32.InitializeProcThreadAttributeList.argtypes = [
             ctypes.c_void_p,
@@ -765,14 +809,19 @@ def run_windows_native_sandbox_probe(
             ctypes.POINTER(ctypes.c_size_t),
         ]
         kernel32.InitializeProcThreadAttributeList.restype = wintypes.BOOL
-        kernel32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(attr_size))
+        kernel32.InitializeProcThreadAttributeList(
+            None, wintypes.DWORD(attr_count), 0, ctypes.byref(attr_size)
+        )
 
         if attr_size.value == 0:
             raise AssuranceError("cannot query ProcThreadAttributeList size")
 
         attr_list = ctypes.create_string_buffer(attr_size.value)
         if not kernel32.InitializeProcThreadAttributeList(
-            ctypes.cast(attr_list, ctypes.c_void_p), 1, 0, ctypes.byref(attr_size)
+            ctypes.cast(attr_list, ctypes.c_void_p),
+            wintypes.DWORD(attr_count),
+            0,
+            ctypes.byref(attr_size),
         ):
             raise AssuranceError("cannot initialize ProcThreadAttributeList")
 
@@ -803,6 +852,34 @@ def run_windows_native_sandbox_probe(
             raise AssuranceError(
                 "cannot set PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES"
             )
+
+        # GAK-WIN-001: creation-time Job Object assignment via
+        # PROC_THREAD_ATTRIBUTE_JOB_LIST.  The kernel attaches the
+        # process to the job before the initial thread is created,
+        # so no untrusted code can ever run outside the job.
+        creation_time_job_assigned = False
+        if job:
+            # PROC_THREAD_ATTRIBUTE_JOB_LIST expects a pointer to a HANDLE.
+            # job is already wintypes.HANDLE (= ctypes.c_void_p subclass) so
+            # byref(job) is correct — it yields &job, the address of the
+            # HANDLE-typed storage, and sizeof(HANDLE) = pointer size.
+            if not kernel32.UpdateProcThreadAttribute(
+                ctypes.cast(attr_list, ctypes.c_void_p),
+                0,
+                ctypes.c_size_t(PROC_THREAD_ATTRIBUTE_JOB_LIST),
+                ctypes.byref(job),
+                ctypes.sizeof(wintypes.HANDLE),
+                None,
+                None,
+            ):
+                # Non-fatal: fall back to post-creation assignment.
+                # Record in diagnostics so this path is never silent.
+                probe_diags.append(
+                    "PROC_THREAD_ATTRIBUTE_JOB_LIST not supported; "
+                    "falling back to post-creation AssignProcessToJobObject"
+                )
+            else:
+                creation_time_job_assigned = True
 
         si_ex = STARTUPINFOEX()
         si_ex.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEX)
@@ -870,7 +947,30 @@ def run_windows_native_sandbox_probe(
             )
 
         if job:
-            job_assigned = _assign_process_to_job(job, process_handle)
+            # GAK-WIN-001: if creation-time assignment was used, verify it.
+            # Otherwise fall back to post-creation AssignProcessToJobObject.
+            if creation_time_job_assigned:
+                job_already_in = _is_process_in_job(
+                    process_handle, diagnostics=probe_diags
+                )
+                if job_already_in:
+                    job_assigned = True
+                    probe_diags.append(
+                        "creation-time Job assignment verified: "
+                        "IsProcessInJob=TRUE before ResumeThread"
+                    )
+                else:
+                    # Creation-time attribute was set but the process is not
+                    # in the job.  This is unexpected — the kernel should have
+                    # assigned it.  Attempt post-creation assignment as fallback.
+                    probe_diags.append(
+                        "GAK-WIN-001: creation-time job attribute did not take "
+                        "effect; attempting post-creation assignment"
+                    )
+                    job_assigned = _assign_process_to_job(job, process_handle)
+            else:
+                job_assigned = _assign_process_to_job(job, process_handle)
+
             if not job_assigned:
                 _terminate_suspended_process(process_handle, thread_handle)
                 process_handle = None
@@ -985,6 +1085,7 @@ def run_windows_native_sandbox_probe(
         "job_object": {
             "created": job_created,
             "assigned": job_assigned,
+            "creation_time_assignment": creation_time_job_assigned,
             "kill_on_close": job_created,
             "memory_limit_bytes": memory_limit,
         },
@@ -1014,9 +1115,12 @@ def run_windows_native_sandbox_probe(
             "Windows native AppContainer sandbox is a development exploration. "
             "This probe tests one disposable process and does not prove every "
             "filesystem, registry, process tree, or network escape impossible.",
-            "Child process is created suspended, Job Object is assigned, and "
-            "TokenIsAppContainer is verified before ResumeThread; a residual "
-            "race remains between resume and first untrusted instruction.",
+            "Child process is created suspended with PROC_THREAD_ATTRIBUTE_JOB_LIST "
+            "(creation-time Job Object assignment) where the OS supports it, "
+            "and TokenIsAppContainer is verified before ResumeThread.  When "
+            "creation-time assignment succeeds the kernel attaches the process "
+            "to the job before the initial thread exists, eliminating the "
+            "start→Job assignment race.",
             "AppContainer profile creation may succeed without elevation on "
             "current Windows builds; when profile creation fails the probe "
             "falls back to a derived SID only.",

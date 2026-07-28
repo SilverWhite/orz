@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .contracts import validate_contract
 from .errors import AssuranceError
 from .utils import canonical_bytes, sha256_bytes, utc_now
+
+if TYPE_CHECKING:
+    from .keystore import InstallationKeyStore
 
 
 class ChildCapabilityEscalationError(AssuranceError):
@@ -161,4 +164,65 @@ def verify_child_capability_enforcement(
         "valid": not errors,
         "capability_enforced": receipt.get("capability_enforced", False),
         "errors": errors,
+    }
+
+
+def spawn_child_context(
+    *,
+    parent_envelope: dict[str, Any],
+    child_kind: str,
+    child_id: str,
+    requested_capabilities: list[str],
+    key_store: InstallationKeyStore,
+    ttl_seconds: int = 3600,
+    frozen_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Unified child spawn gate: enforce + delegate child capabilities.
+
+    Composes :func:`enforce_child_capabilities` (predicate check) with
+    :func:`delegate_capabilities` (signed child envelope creation) into a
+    single call site.
+
+    Returns a dict with:
+      - ``enforcement_receipt``: from :func:`enforce_child_capabilities`
+      - ``child_envelope``: signed child security envelope (or None if denied)
+      - ``delegation_receipt``: from :func:`delegate_capabilities`
+      - ``escalation_detected``: bool
+      - ``capability_enforced``: bool
+    """
+    # Step 1: Mechanical predicate check
+    enforcement_receipt = enforce_child_capabilities(
+        parent_envelope=parent_envelope,
+        child_kind=child_kind,
+        child_id=child_id,
+        requested_capabilities=requested_capabilities,
+    )
+
+    # Step 2: Create signed child envelope via delegation
+    from .instruction_gate import delegate_capabilities as _delegate
+
+    child_envelope, delegation_receipt = _delegate(
+        key_store=key_store,
+        parent_envelope=parent_envelope,
+        subject_kind=child_kind,
+        subject_id=child_id,
+        requested_allowed=list(requested_capabilities),
+        ttl_seconds=ttl_seconds,
+    )
+
+    escalation = bool(enforcement_receipt.get("escalation_detected"))
+    capability_enforced = (
+        enforcement_receipt.get("capability_enforced", False)
+        and child_envelope is not None
+    )
+
+    return {
+        "enforcement_receipt": enforcement_receipt,
+        "child_envelope": child_envelope,
+        "delegation_receipt": delegation_receipt,
+        "escalation_detected": escalation,
+        "capability_enforced": capability_enforced,
+        "child_envelope_id": (
+            child_envelope.get("envelope_id", "") if child_envelope else ""
+        ),
     }
