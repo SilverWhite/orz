@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/evidence-store",
+  "title": "PDF Evidence Store — Document Metadata & Source Record Schemas",
+  "description": "Schemas for document metadata (metadata.json) and source records (source_record.json) in the content-addressed PDF evidence store.",
+  "$defs": {
+    "nonempty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "document_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "document_id",
+        "sha256",
+        "pages",
+        "has_text_layer",
+        "parser",
+        "extraction_status"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "0.1.0-draft"
+        },
+        "document_id": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "work_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "year": {
+          "type": "integer",
+          "minimum": 1900,
+          "maximum": 2100
+        },
+        "version": {
+          "type": "string",
+          "enum": [
+            "publisher",
+            "preprint",
+            "accepted_manuscript",
+            "supplement",
+            "correction",
+            "unknown"
+          ]
+        },
+        "version_confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "source_url": {
+          "type": "string"
+        },
+        "downloaded_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "pages": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_text_layer": {
+          "type": "boolean"
+        },
+        "parser": {
+          "type": "string"
+        },
+        "parser_version": {
+          "type": "string"
+        },
+        "extraction_status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "invalid_pdf",
+            "no_text_layer"
+          ]
+        }
+      }
+    },
+    "source_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "record_kind",
+        "source_id",
+        "source_type",
+        "evidence_level",
+        "title",
+        "accessed_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "0.1.0-draft"
+        },
+        "record_kind": {
+          "const": "pdf_evidence_source_record"
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "paper_pdf",
+            "web_page",
+            "documentation",
+            "preprint",
+            "technical_report",
+            "standard"
+          ]
+        },
+        "evidence_level": {
+          "type": "string",
+          "enum": ["A", "B", "C"]
+        },
+        "query": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "final_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "redirect_chain": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "accessed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "doi": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "work_id": {
+          "type": "string"
+        },
+        "version_guess": {
+          "type": "string"
+        },
+        "version_confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "citation_locations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "page": { "type": "integer", "minimum": 1 },
+              "section": { "type": "string" },
+              "evidence_role": { "type": "string" },
+              "quote_hash": { "type": "string" }
+            }
+          }
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "usage_trace": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
