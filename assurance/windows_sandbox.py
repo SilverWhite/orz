@@ -220,6 +220,20 @@ def _validate_disposable_workspace(workspace: Path) -> Path:
     return resolved
 
 
+def _resolve_windows_powershell_exe() -> str:
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    candidates = [
+        system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+        system_root / "Sysnative" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    raise AssuranceError(
+        "Windows native sandbox probe could not locate Windows PowerShell"
+    )
+
+
 def _derive_appcontainer_sid(
     app_name: str, *, diagnostics: list[str] | None = None
 ) -> ctypes.c_void_p | None:
@@ -703,13 +717,7 @@ def run_windows_native_sandbox_probe(
     probe_path = resolved_workspace / PROBE_FILE
     probe_diags: list[str] = []
 
-    ps_exe = os.path.join(
-        os.environ.get("SystemRoot", r"C:\Windows"),
-        "System32",
-        "WindowsPowerShell",
-        "v1.0",
-        "powershell.exe",
-    )
+    ps_exe = _resolve_windows_powershell_exe()
 
     ws_b64 = base64.b64encode(
         str(resolved_workspace).encode("utf-8")
@@ -910,7 +918,7 @@ def run_windows_native_sandbox_probe(
             | CREATE_NO_WINDOW_FLAG
         )
         success = kernel32.CreateProcessW(
-            None,
+            ps_exe,
             cmd_line,
             None,
             None,

@@ -417,9 +417,13 @@ def audit_container_mount(
 
     for forbidden in _FORBIDDEN_HOST_MOUNT_ROOTS:
         fnorm = forbidden.replace("/", "\\")
+        fnorm_without_glob_tail = fnorm.removesuffix("\\**")
         # fnmatch for glob-style matching
-        if fnmatch.fnmatch(normalized, fnorm) or fnmatch.fnmatch(
-            normalized + "\\*", fnorm
+        if (
+            fnmatch.fnmatch(normalized, fnorm)
+            or fnmatch.fnmatch(normalized, fnorm + "\\*")
+            or fnmatch.fnmatch(normalized, fnorm_without_glob_tail)
+            or fnmatch.fnmatch(normalized, fnorm_without_glob_tail + "\\*")
         ):
             warnings.append(
                 f"host path '{host_path}' matches credential-sensitive "

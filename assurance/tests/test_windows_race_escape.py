@@ -12,6 +12,10 @@ from pathlib import Path
 from assurance import KeyLifecycleController, MemoryInstallationKeyStore
 
 
+if os.name != "nt":
+    raise unittest.SkipTest("Windows Job Object tests require Windows")
+
+
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
