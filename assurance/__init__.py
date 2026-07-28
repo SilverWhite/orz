@@ -87,6 +87,11 @@ from .browser_retrieval import (
     PageLink,
     TabInfo,
 )
+from .retrieval_workflow import (
+    RetrievalProgress,
+    RetrievalResult,
+    run_retrieval,
+)
 from .evidence_store import (
     EVIDENCE_ROOT,
     document_exists,
