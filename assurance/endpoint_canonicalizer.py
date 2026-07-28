@@ -32,6 +32,12 @@ def canonicalize_filesystem_path(raw: str | Path, *, base_root: Path | None = No
 
     if base_root is not None:
         try:
+            base_root = Path(base_root).resolve()
+        except OSError as exc:
+            raise AssuranceError(
+                f"cannot resolve base root: {base_root}: {exc}"
+            ) from exc
+        try:
             path.relative_to(base_root)
         except ValueError:
             raise AssuranceError(
