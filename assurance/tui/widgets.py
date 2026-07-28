@@ -226,8 +226,53 @@ class Toolbar(Widget):
 
 @dataclass
 class AddressBar(Widget):
+    """Address bar with text input, slash-command auto-complete, command
+    history, and multi-line support.
+
+    - Printable characters accumulate in an internal buffer.
+    - ``/`` opens the command palette; prefix filtering as the user types.
+    - ``↑`` / ``↓`` navigate command history when the buffer is empty and
+      auto-complete is not active.
+    - ``Shift+Enter`` inserts a newline into the buffer; the bar grows
+      vertically to show all lines.  ``Enter`` sends the full content.
+    """
+
     uri: str = ""
     focusable: bool = True
+    _buffer: str = ""
+    _show_autocomplete: bool = False
+    _selected_index: int = 0
+
+    # ── command history ──────────────────────────────────────────────────
+    _history: list[str] = field(default_factory=list)
+    _history_index: int = -1        # -1 = not navigating history
+    _history_draft: str = ""        # saved draft while browsing history
+    _browsing_history: bool = False  # True while ↑↓ has loaded a history entry
+
+    def _push_history(self, text: str) -> None:
+        """Record *text* in the command history (called externally on send)."""
+        if text and (not self._history or self._history[-1] != text):
+            self._history.append(text)
+        self._history_index = -1
+        self._history_draft = ""
+
+    # ── line count helper ────────────────────────────────────────────────
+
+    @property
+    def _line_count(self) -> int:
+        """Number of display rows: capped at 3, minimum 1 when not focused."""
+        if not self.focused or not self._buffer:
+            return 1
+        total = self._buffer.count("\n") + 1
+        return min(total, 3)
+
+    def _current_line(self) -> str:
+        """Return the text after the last newline (the line being edited)."""
+        if "\n" not in self._buffer:
+            return self._buffer
+        return self._buffer.rsplit("\n", 1)[-1]
+
+    # ── render ───────────────────────────────────────────────────────────
 
     def render(self, width: int, height: int) -> list[str]:
         if height < 1:
@@ -237,18 +282,244 @@ class AddressBar(Widget):
         available = width - display_width(addr_label) - display_width(go_button) - 2
         if available < 10:
             available = 10
-        uri_display = self.uri
-        if display_width(uri_display) > available:
-            uri_display = uri_display[:available - 3] + "..."
-        filler = " " * (available - display_width(uri_display))
-        if self.focused:
-            uri_display = "▶" + uri_display[1:] if uri_display else "▶"
-        return [pad_to_width(addr_label + uri_display + filler + go_button, width)]
+
+        if not self.focused or not self._buffer:
+            # Static URI display
+            uri_display = self.uri if not self.focused else (
+                self._buffer or self.uri
+            )
+            if self.focused:
+                uri_display = (self._buffer or self.uri) + "█"
+                if display_width(uri_display) > available:
+                    uri_display = "…" + uri_display[-(available - 4):]
+            else:
+                if display_width(uri_display) > available:
+                    uri_display = uri_display[:available - 3] + "..."
+            filler = " " * max(0, available - display_width(uri_display))
+            return [pad_to_width(addr_label + uri_display + filler + go_button, width)]
+
+        # Multi-line buffer: show last N lines (capped at 3 visible rows).
+        # Older lines scroll off the top and are only in the buffer.
+        all_lines = self._buffer.split("\n")
+        shown = all_lines[-3:]  # last 3 lines
+        result: list[str] = []
+        for i, line in enumerate(shown):
+            is_last = (i == len(shown) - 1)
+            if is_last and self.focused:
+                line = line + "█"
+            if display_width(line) > available:
+                if is_last:
+                    line = "…" + line[-(available - 4):]
+                else:
+                    line = line[:available - 3] + "..."
+            filler = " " * max(0, available - display_width(line))
+            result.append(pad_to_width(addr_label + line + filler + go_button, width))
+        return result
+
+    # ── input handling ───────────────────────────────────────────────────
 
     def handle_key(self, key: str) -> bool:
-        if key == "enter" and self.focused:
-            return True  # would activate Go
+        if not self.focused:
+            return False
+
+        # -- history navigation (empty buffer, or already browsing) ------
+        if key == "up" and not self._show_autocomplete:
+            if not self._buffer or self._browsing_history:
+                return self._history_up()
+        if key == "down" and not self._show_autocomplete:
+            if not self._buffer or self._browsing_history:
+                return self._history_down()
+
+        # -- auto-complete navigation (only when palette is active) -----
+        if key == "up" and self._show_autocomplete and self._buffer:
+            self._selected_index -= 1
+            return True
+        if key == "down" and self._show_autocomplete and self._buffer:
+            self._selected_index += 1
+            return True
+
+        # -- printable characters -----------------------------------------
+        if len(key) == 1 and key.isprintable() and key not in ("\x1b", "\t", "\r", "\n"):
+            self._buffer += key
+            self._browsing_history = False
+            self._show_autocomplete = self._buffer.startswith("/") and "\n" not in self._buffer
+            self._selected_index = 0
+            return True
+        if key == "space":
+            self._buffer += " "
+            self._show_autocomplete = False
+            return True
+
+        # -- editing -------------------------------------------------------
+        if key == "backspace":
+            if self._buffer:
+                self._buffer = self._buffer[:-1]
+            self._show_autocomplete = self._buffer.startswith("/") and "\n" not in self._buffer
+            self._selected_index = 0
+            return True
+
+        # -- newline (Shift+Enter) -----------------------------------------
+        if key == "s-enter" or key == "\n":
+            self._buffer += "\n"
+            self._show_autocomplete = False
+            return True
+
+        # -- send (Enter) --------------------------------------------------
+        if key == "enter":
+            if self._show_autocomplete:
+                self._buffer = ""
+                self._show_autocomplete = False
+                self._selected_index = 0
+                return True
+            return True  # caller reads _buffer and sends
+
+        # -- dismiss (Esc) ------------------------------------------------
+        if key == "esc":
+            self._buffer = ""
+            self._show_autocomplete = False
+            self._selected_index = 0
+            return True
+
+        # -- tab-complete (palette) ----------------------------------------
+        if key == "tab" and self._show_autocomplete:
+            from .commands import get_builtin_registry
+            registry = get_builtin_registry()
+            matches = registry.search(self._buffer)
+            if matches:
+                idx = max(0, min(self._selected_index, len(matches) - 1))
+                self._buffer = matches[idx].slash
+                self._selected_index = 0
+            return True
+
         return False
+
+    # ── history internals ────────────────────────────────────────────────
+
+    def _history_up(self) -> bool:
+        if not self._history:
+            return False
+        if self._history_index == -1:
+            self._history_draft = self._buffer  # save draft before browsing
+            self._history_index = len(self._history) - 1
+        elif self._history_index > 0:
+            self._history_index -= 1
+        else:
+            return True  # at oldest entry
+        self._buffer = self._history[self._history_index]
+        self._show_autocomplete = False
+        self._browsing_history = True
+        return True
+
+    def _history_down(self) -> bool:
+        if self._history_index == -1:
+            return False
+        if self._history_index < len(self._history) - 1:
+            self._history_index += 1
+            self._buffer = self._history[self._history_index]
+        else:
+            self._buffer = self._history_draft
+            self._history_index = -1
+            self._history_draft = ""
+            self._browsing_history = False
+        self._show_autocomplete = False
+        return True
+
+    # ── autocomplete query ───────────────────────────────────────────────
+
+    @property
+    def autocomplete_candidates(self) -> list:
+        """Return the current set of autocomplete matches (for the palette)."""
+        if not self._show_autocomplete:
+            return []
+        from .commands import get_builtin_registry
+        registry = get_builtin_registry()
+        return registry.search(self._buffer)
+
+
+# ── CommandPalette (slash-command auto-complete dropdown) ───────────────────
+
+
+@dataclass
+class CommandPalette(Widget):
+    """Auto-complete dropdown for slash-commands.
+
+    Renders as a bordered overlay listing matching commands with their
+    Chinese name and description.  Call :meth:`render_overlay` to produce
+    a rectangle that the compositor blends on top of the main screen.
+    """
+
+    candidates: list = field(default_factory=list)
+    selected_index: int = 0
+    visible: bool = False
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _cmd_width(cmd) -> int:
+        """Display width of one palette row: ``▸ /new  新对话  创建新的...``"""
+        return display_width(cmd.slash) + display_width(cmd.name_zh) + 4
+
+    # ── overlay render ─────────────────────────────────────────────────────
+
+    def render_overlay(self, screen_w: int, screen_h: int) -> list[str] | None:
+        """Return overlay lines for the command palette, positioned just
+        below the address bar (roughly row 5 in the standard layout).
+
+        Returns ``None`` when ``visible`` is ``False`` or there are no
+        candidates.
+        """
+        if not self.visible or not self.candidates:
+            return None
+
+        # Clamp selected index
+        idx = max(0, min(self.selected_index, len(self.candidates) - 1))
+
+        # Calculate palette dimensions
+        max_cmd_w = max(self._cmd_width(c) for c in self.candidates)
+        # Add room for description — cap at a reasonable width
+        palette_w = max_cmd_w + 18  # padding + borders + description preview
+        palette_w = max(palette_w, 24)
+        palette_w = min(palette_w, screen_w - 4)
+
+        inner_w = palette_w - 2
+        title = " 指令 "
+
+        result: list[str] = []
+        # Top border
+        result.append(box_horizontal(title, palette_w, focused=True))
+        # Candidate rows
+        for i, cmd in enumerate(self.candidates):
+            is_selected = bool(i == idx)
+            marker = "▸ " if is_selected else "  "
+            desc = cmd.description_zh
+            # Truncate description to fit
+            row_content = f"{marker}{cmd.slash}  {cmd.name_zh}"
+            row_w = display_width(row_content)
+            desc_avail = inner_w - row_w - 1
+            if desc_avail > 8:
+                if display_width(desc) > desc_avail:
+                    desc = desc[:desc_avail - 1] + "…"
+                row_content = row_content + "  " + desc
+            if is_selected:
+                row_content = "\033[7m" + row_content + "\033[0m"
+            result.append(edge() + pad_to_width(row_content, inner_w) + edge())
+        # Bottom
+        result.append(box_bottom(palette_w, focused=True))
+
+        # Position: row 5 (right below the AddressBar row in the TUI layout)
+        top_offset = 4
+        left_offset = 4  # align under "Address: " prefix
+
+        # Build overlay as screen-sized transparent lines
+        overlay: list[str] = []
+        for i in range(screen_h):
+            if i >= top_offset and i < top_offset + len(result):
+                line = result[i - top_offset]
+                # left-pad
+                overlay.append(" " * left_offset + pad_to_width(line, palette_w) + " " * (screen_w - left_offset - palette_w))
+            else:
+                overlay.append(" " * screen_w)
+        return overlay[:screen_h]
 
 
 # ── FindBar ─────────────────────────────────────────────────────────────────

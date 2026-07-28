@@ -239,7 +239,8 @@ class AddressBarRenderTests(unittest.TestCase):
     def test_focused_shows_cursor(self) -> None:
         bar = AddressBar(uri="workspace://test", focused=True)
         result = bar.render(100, 1)
-        self.assertIn("▶", result[0])
+        # Focused bar shows cursor "█" at the end of the displayed content
+        self.assertIn("█", result[0])
 
     def test_has_go_button(self) -> None:
         bar = AddressBar(uri="workspace://test")
@@ -740,3 +741,560 @@ class PrototypeIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GAK-UI-001 / Slash-command system tests
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class CommandRegistryTests(unittest.TestCase):
+    """GAK-UI-001: slash-command registry search and defaults."""
+
+    def setUp(self) -> None:
+        from assurance.tui.commands import CommandRegistry
+        self.registry = CommandRegistry.with_builtins()
+
+    def test_fifteen_commands_registered(self) -> None:
+        self.assertEqual(len(self.registry), 15)
+
+    def test_defaults_are_six(self) -> None:
+        defaults = self.registry.get_defaults()
+        self.assertEqual(len(defaults), 6)
+
+    def test_defaults_exclude_help_and_non_default_commands(self) -> None:
+        defaults = self.registry.get_defaults()
+        slashes = [c.slash for c in defaults]
+        non_default = [
+            "/help", "/diff", "/verify", "/sources", "/plan",
+            "/rewind", "/model", "/status", "/export",
+        ]
+        for s in non_default:
+            self.assertNotIn(s, slashes, f"{s} should not be in defaults")
+        self.assertIn("/new", slashes)
+        self.assertIn("/run", slashes)
+        self.assertIn("/kill", slashes)
+
+    def test_search_slash_alone_returns_defaults(self) -> None:
+        matches = self.registry.search("/")
+        self.assertEqual(len(matches), 6)
+
+    def test_search_slash_new_exact(self) -> None:
+        matches = self.registry.search("/new")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].slash, "/new")
+
+    def test_search_slash_con_prefix(self) -> None:
+        matches = self.registry.search("/con")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].slash, "/context")
+
+    def test_search_no_prefix_returns_empty(self) -> None:
+        self.assertEqual(self.registry.search("new"), [])
+        self.assertEqual(self.registry.search(""), [])
+
+    def test_search_slash_d_returns_diff(self) -> None:
+        matches = self.registry.search("/d")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].slash, "/diff")
+
+    def test_search_slash_v_returns_verify(self) -> None:
+        matches = self.registry.search("/v")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].slash, "/verify")
+
+    def test_search_slash_s_returns_sources(self) -> None:
+        matches = self.registry.search("/s")
+        self.assertTrue(any(c.slash == "/sources" for c in matches))
+
+    def test_search_slash_p_returns_plan(self) -> None:
+        matches = self.registry.search("/p")
+        self.assertTrue(any(c.slash == "/plan" for c in matches))
+
+    def test_new_commands_have_correct_categories(self) -> None:
+        self.assertEqual(self.registry.get("/diff").category, "变更")
+        self.assertEqual(self.registry.get("/verify").category, "保证")
+        self.assertEqual(self.registry.get("/sources").category, "保证")
+        self.assertEqual(self.registry.get("/plan").category, "工作流")
+        self.assertEqual(self.registry.get("/rewind").category, "恢复")
+        self.assertEqual(self.registry.get("/model").category, "系统")
+        self.assertEqual(self.registry.get("/status").category, "系统")
+
+    def test_search_second_priority_commands(self) -> None:
+        self.assertEqual(len(self.registry.search("/r")), 2)  # /run + /rewind
+        self.assertTrue(any(c.slash == "/rewind" for c in self.registry.search("/re")))
+        self.assertEqual(len(self.registry.search("/m")), 1)   # /model
+        self.assertEqual(len(self.registry.search("/st")), 1)  # /status
+
+    def test_every_command_has_chinese_name_and_description(self) -> None:
+        for cmd in self.registry.all():
+            self.assertTrue(cmd.name_zh, f"{cmd.slash} missing name_zh")
+            self.assertTrue(cmd.description_zh, f"{cmd.slash} missing description_zh")
+            self.assertTrue(cmd.slash.startswith("/"), f"{cmd.slash} bad prefix")
+            self.assertTrue(cmd.uri.startswith("command://"), f"{cmd.slash} bad uri")
+
+    def test_all_annotations_are_chinese_not_english(self) -> None:
+        """Every name_zh and description_zh must contain CJK characters."""
+        for cmd in self.registry.all():
+            has_cjk = any(
+                (0x4E00 <= ord(ch) <= 0x9FFF) or (0x3400 <= ord(ch) <= 0x4DBF)
+                for ch in cmd.name_zh + cmd.description_zh
+            )
+            self.assertTrue(
+                has_cjk,
+                f"{cmd.slash}: name_zh='{cmd.name_zh}' "
+                f"desc='{cmd.description_zh}' has no CJK chars",
+            )
+
+    def test_get_returns_none_for_unknown(self) -> None:
+        self.assertIsNone(self.registry.get("/nonexistent"))
+
+
+class AddressBarTextInputTests(unittest.TestCase):
+    """GAK-UI-001: AddressBar text input buffer and auto-complete triggers."""
+
+    def test_buffer_starts_empty(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status")
+        self.assertEqual(bar._buffer, "")
+        self.assertFalse(bar._show_autocomplete)
+
+    def test_typing_slash_opens_autocomplete(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        self.assertEqual(bar._buffer, "/")
+        self.assertTrue(bar._show_autocomplete)
+
+    def test_typing_slash_new_shows_one_match(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        bar.handle_key("n")
+        bar.handle_key("e")
+        bar.handle_key("w")
+        self.assertEqual(bar._buffer, "/new")
+        self.assertTrue(bar._show_autocomplete)
+        self.assertEqual(len(bar.autocomplete_candidates), 1)
+
+    def test_escape_clears_buffer(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        bar.handle_key("c")
+        self.assertTrue(bar._show_autocomplete)
+        bar.handle_key("esc")
+        self.assertEqual(bar._buffer, "")
+        self.assertFalse(bar._show_autocomplete)
+
+    def test_backspace_removes_last_char(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        bar.handle_key("c")
+        self.assertEqual(bar._buffer, "/c")
+        bar.handle_key("backspace")
+        self.assertEqual(bar._buffer, "/")
+        bar.handle_key("backspace")
+        self.assertEqual(bar._buffer, "")
+
+    def test_up_down_select_autocomplete_index(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        self.assertEqual(bar._selected_index, 0)
+        bar.handle_key("down")
+        self.assertEqual(bar._selected_index, 1)
+        bar.handle_key("down")
+        self.assertEqual(bar._selected_index, 2)
+        bar.handle_key("up")
+        self.assertEqual(bar._selected_index, 1)
+        # Wrap-around not enforced by AddressBar; CommandPalette clamps
+
+    def test_tab_completes_first_match(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        bar.handle_key("c")
+        bar.handle_key("o")
+        self.assertEqual(bar._buffer, "/co")
+        bar.handle_key("tab")
+        self.assertEqual(bar._buffer, "/context")
+
+    def test_enter_with_buffer_returns_activated(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        bar.handle_key("n")
+        bar.handle_key("e")
+        bar.handle_key("w")
+        result = bar.handle_key("enter")
+        self.assertTrue(result)
+        # Buffer is cleared after command activation
+        self.assertEqual(bar._buffer, "")
+
+    def test_ignores_keys_when_not_focused(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=False)
+        result = bar.handle_key("/")
+        self.assertFalse(result)
+        self.assertEqual(bar._buffer, "")
+
+    def test_render_shows_buffer_when_focused(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=True)
+        bar.handle_key("/")
+        output = bar.render(100, 1)
+        self.assertIn("/", output[0])
+        self.assertIn("█", output[0])  # cursor present
+
+    def test_render_shows_uri_when_not_focused(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        bar = AddressBar(uri="command://run/status", focused=False)
+        output = bar.render(100, 1)
+        self.assertIn("command://run/status", output[0])
+        self.assertNotIn("█", output[0])  # no cursor
+
+
+class CommandHistoryTests(unittest.TestCase):
+    """GAK-UI-001: ↑↓ command history navigation."""
+
+    def setUp(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        self.bar = AddressBar(uri="command://run/status", focused=True)
+
+    def _send(self, text: str) -> None:
+        for ch in text:
+            self.bar.handle_key(ch)
+        self.bar._push_history(self.bar._buffer)
+        self.bar._buffer = ""
+        self.bar._show_autocomplete = False
+
+    def test_empty_history_up_does_nothing(self) -> None:
+        self.assertFalse(self.bar.handle_key("up"))
+
+    def test_push_and_recall_one_entry(self) -> None:
+        self._send("/run")
+        # Buffer is empty; ↑ shows /run
+        self.assertTrue(self.bar.handle_key("up"))
+        self.assertEqual(self.bar._buffer, "/run")
+
+    def test_up_then_down_restores_draft(self) -> None:
+        self._send("/new")
+        self._send("/run")
+        self.bar.handle_key("up")  # → /run
+        self.assertEqual(self.bar._buffer, "/run")
+        self.bar.handle_key("up")  # → /new
+        self.assertEqual(self.bar._buffer, "/new")
+        self.bar.handle_key("down")  # → /run
+        self.assertEqual(self.bar._buffer, "/run")
+        self.bar.handle_key("down")  # → draft (empty)
+        self.assertEqual(self.bar._buffer, "")
+
+    def test_history_does_not_trigger_when_buffer_has_content(self) -> None:
+        self._send("/run")
+        self.bar.handle_key("x")  # type something
+        self.assertEqual(self.bar._buffer, "x")
+        self.bar.handle_key("up")  # should navigate palette, not history
+        self.assertEqual(self.bar._buffer, "x")
+
+    def test_dup_entry_not_pushed(self) -> None:
+        self._send("/run")
+        self._send("/run")  # duplicate — should not re-push
+        self.assertEqual(len(self.bar._history), 1)
+
+
+class MultiLineInputTests(unittest.TestCase):
+    """GAK-UI-001: Shift+Enter multi-line input."""
+
+    def setUp(self) -> None:
+        from assurance.tui.widgets import AddressBar
+        self.bar = AddressBar(uri="command://run/status", focused=True)
+
+    def test_shift_enter_inserts_newline(self) -> None:
+        self.bar.handle_key("h")
+        self.bar.handle_key("i")
+        self.bar.handle_key("s-enter")
+        self.assertEqual(self.bar._buffer, "hi\n")
+
+    def test_multi_line_line_count(self) -> None:
+        self.bar.handle_key("a")
+        self.bar.handle_key("s-enter")
+        self.bar.handle_key("b")
+        self.bar.handle_key("s-enter")
+        self.bar.handle_key("c")
+        self.assertEqual(self.bar._line_count, 3)
+
+    def test_multi_line_render_shows_last_three(self) -> None:
+        def _type(text: str) -> None:
+            for ch in text:
+                self.bar.handle_key(ch)
+        _type("line1")
+        self.bar.handle_key("s-enter")
+        _type("line2")
+        result = self.bar.render(100, 3)
+        self.assertEqual(len(result), 2)  # 2 lines shown
+        text = "\n".join(result)
+        self.assertIn("line1", text)
+        self.assertIn("line2", text)
+
+    def test_multi_line_over_three_shows_only_last_three(self) -> None:
+        def _type(text: str) -> None:
+            for ch in text:
+                self.bar.handle_key(ch)
+        # Build 5 lines — only last 3 should be visible
+        _type("第1行")
+        self.bar.handle_key("s-enter")
+        _type("第2行")
+        self.bar.handle_key("s-enter")
+        _type("第3行")
+        self.bar.handle_key("s-enter")
+        _type("第4行")
+        self.bar.handle_key("s-enter")
+        _type("第5行")
+        self.assertEqual(self.bar._buffer.count("\n"), 4)  # 5 total lines
+        self.assertEqual(self.bar._line_count, 3)  # capped at 3
+        result = self.bar.render(100, 3)
+        self.assertEqual(len(result), 3)
+        text = "\n".join(result)
+        # 第1,2行 scrolled off; 第3,4,5 visible
+        self.assertNotIn("第1行", text)
+        self.assertNotIn("第2行", text)
+        self.assertIn("第3行", text)
+        self.assertIn("第4行", text)
+        self.assertIn("第5行", text)
+
+    def test_autocomplete_disabled_in_multi_line(self) -> None:
+        """Slash at start of a non-first line should not open palette."""
+        self.bar.handle_key("/")
+        self.assertTrue(self.bar._show_autocomplete)
+        self.bar.handle_key("s-enter")
+        self.assertFalse(self.bar._show_autocomplete)
+
+
+class CommandPaletteRenderTests(unittest.TestCase):
+    """GAK-UI-001: CommandPalette overlay rendering."""
+
+    def test_hidden_returns_none(self) -> None:
+        from assurance.tui.widgets import CommandPalette
+        cp = CommandPalette(candidates=[], visible=False)
+        self.assertIsNone(cp.render_overlay(80, 24))
+
+    def test_no_candidates_returns_none(self) -> None:
+        from assurance.tui.widgets import CommandPalette
+        cp = CommandPalette(candidates=[], visible=True)
+        self.assertIsNone(cp.render_overlay(80, 24))
+
+    def test_renders_chinese_annotations(self) -> None:
+        from assurance.tui.widgets import CommandPalette
+        from assurance.tui.commands import get_builtin_registry
+        cmds = get_builtin_registry().search("/")
+        cp = CommandPalette(candidates=cmds, selected_index=0, visible=True)
+        overlay = cp.render_overlay(120, 30)
+        self.assertIsNotNone(overlay)
+        text = "\n".join(overlay or [])
+        self.assertIn("新对话", text)
+        self.assertIn("上下文可视", text)
+        self.assertIn("强制终止", text)
+        self.assertIn("/new", text)
+        self.assertIn("/context", text)
+        self.assertIn("/kill", text)
+
+    def test_renders_command_uris(self) -> None:
+        from assurance.tui.widgets import CommandPalette
+        from assurance.tui.commands import get_builtin_registry
+        cmds = get_builtin_registry().search("/")
+        cp = CommandPalette(candidates=cmds, selected_index=0, visible=True)
+        overlay = cp.render_overlay(120, 30)
+        self.assertIsNotNone(overlay)
+        text = "\n".join(overlay or [])
+        self.assertIn("指令", text)  # title
+
+    def test_selected_index_clamped(self) -> None:
+        from assurance.tui.widgets import CommandPalette
+        from assurance.tui.commands import get_builtin_registry
+        cmds = get_builtin_registry().search("/")
+        # Index -1 → clamped to 0
+        cp = CommandPalette(candidates=cmds, selected_index=-1, visible=True)
+        overlay = cp.render_overlay(120, 30)
+        self.assertIsNotNone(overlay)
+        # Index 999 → clamped to last
+        cp2 = CommandPalette(candidates=cmds, selected_index=999, visible=True)
+        overlay2 = cp2.render_overlay(120, 30)
+        self.assertIsNotNone(overlay2)
+
+
+class SlashCommandIntegrationTests(unittest.TestCase):
+    """GAK-UI-001: end-to-end slash-command integration in TuiPrototype."""
+
+    def setUp(self) -> None:
+        from assurance.tui.app import TuiPrototype
+        self.app = TuiPrototype.with_sample_data()
+
+    def test_address_bar_f6_then_type_slash(self) -> None:
+        """Focus the address bar, type '/', verify auto-complete opens."""
+        # Cycle to address pane
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.assertEqual(self.app.active_pane, "address")
+        # Type '/'
+        self.app.handle_key("/")
+        self.assertTrue(self.app.address_bar._show_autocomplete)
+        # Palette visibility is updated only at render() time;
+        # verify it becomes visible after a render cycle.
+        self.app.render(100, 30)
+        self.assertTrue(self.app.command_palette.visible)
+
+    def test_render_includes_palette_when_typing_slash(self) -> None:
+        """After typing '/', palette overlay appears in the rendered output."""
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        output = self.app.render(100, 30)
+        self.assertIn("指令", output)
+        self.assertIn("/new", output)
+        self.assertIn("新对话", output)
+
+    def test_escape_clears_buffer_and_hides_palette(self) -> None:
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        self.app.handle_key("esc")
+        self.assertFalse(self.app.address_bar._show_autocomplete)
+        self.assertFalse(self.app.command_palette.visible)
+
+    def test_dialog_and_palette_dont_overlap(self) -> None:
+        """When palette is open, dialog should not render on top."""
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        # Try to open dialog — should be blocked while palette is visible
+        self.app.dialog.visible = True
+        output = self.app.render(100, 30)
+        self.assertIn("指令", output)  # palette present
+        self.assertNotIn("Permission Required", output)  # dialog suppressed
+
+
+class EscCancelRunTests(unittest.TestCase):
+    """GAK-UI-001: Esc during active run cancels the run (retract sent input)."""
+
+    def setUp(self) -> None:
+        from assurance.tui.app import TuiPrototype
+        self.app = TuiPrototype.with_sample_data()
+
+    def test_f5_toggles_running_state(self) -> None:
+        self.assertFalse(self.app.running)
+        result = self.app.handle_key("f5")
+        self.assertTrue(self.app.running)
+        self.assertIn("模拟运行已启动", result)
+        result = self.app.handle_key("f5")
+        self.assertFalse(self.app.running)
+        self.assertIn("模拟运行已停止", result)
+
+    def test_ctrl_z_cancels_running_returns_idle(self) -> None:
+        self.app.handle_key("f5")  # start run
+        self.assertTrue(self.app.running)
+        result = self.app.handle_key("c-z")
+        self.assertFalse(self.app.running)
+        self.assertIn("已取消当前运行", result)
+
+    def test_ctrl_z_when_not_running_does_nothing(self) -> None:
+        self.assertFalse(self.app.running)
+        result = self.app.handle_key("c-z")
+        self.assertIsNone(result)
+
+    def test_status_bar_shows_running_when_active(self) -> None:
+        self.app.handle_key("f5")  # start run
+        output = self.app.render(100, 30)
+        self.assertIn("RUNNING", output)
+        self.assertNotIn("IDLE", output)
+
+    def test_status_bar_shows_idle_after_ctrl_z_cancel(self) -> None:
+        self.app.handle_key("f5")
+        self.app.handle_key("c-z")
+        output = self.app.render(100, 30)
+        self.assertIn("IDLE", output)
+        self.assertNotIn("RUNNING", output)
+
+    def test_ctrl_z_with_buffer_and_running_restores_last_sent(self) -> None:
+        """Running takes priority — Ctrl+Z cancels run, restores last sent."""
+        # First send a command (this sets _last_sent)
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        self.app.handle_key("r")
+        self.app.handle_key("u")
+        self.app.handle_key("n")
+        self.app.handle_key("enter")  # sends /run, sets _last_sent="/run"
+        # Now type something new in the buffer while running
+        self.app.handle_key("f5")  # start run
+        self.app.handle_key("/")
+        self.app.handle_key("h")
+        self.assertEqual(self.app.address_bar._buffer, "/h")
+        # Ctrl+Z should cancel the run and restore _last_sent="/run"
+        self.app.handle_key("c-z")
+        self.assertFalse(self.app.running)
+        self.assertEqual(self.app.address_bar._buffer, "/run")
+
+    def test_cancel_run_refills_last_sent_into_bar(self) -> None:
+        """After Ctrl+Z cancels, the last sent command reappears in the bar."""
+        # Type and send a command
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        self.app.handle_key("n")
+        self.app.handle_key("e")
+        self.app.handle_key("w")
+        self.assertEqual(self.app.address_bar._buffer, "/new")
+        # Send it
+        self.app.handle_key("enter")
+        # Simulate a run starting
+        self.app.handle_key("f5")
+        self.assertTrue(self.app.running)
+        # Cancel — buffer should refill with /new
+        self.app.handle_key("c-z")
+        self.assertFalse(self.app.running)
+        self.assertEqual(self.app.address_bar._buffer, "/new")
+
+    def test_cancel_run_focuses_address_bar(self) -> None:
+        """After cancel, the address bar is focused for immediate editing."""
+        # Navigate away from address bar
+        while self.app.active_pane != "explorer":
+            self.app.handle_key("f6")
+        self.assertEqual(self.app.active_pane, "explorer")
+        # Send something
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        self.app.handle_key("r")
+        self.app.handle_key("enter")
+        # Navigate away again
+        self.app.handle_key("f6")
+        self.app.handle_key("f5")  # start run
+        self.assertTrue(self.app.running)
+        # Ctrl+Z — address bar should be focused
+        self.app.handle_key("c-z")
+        self.assertEqual(self.app.active_pane, "address")
+        self.assertTrue(self.app.address_bar.focused)
+
+    def test_refilled_slash_command_shows_autocomplete(self) -> None:
+        """If the restored input starts with /, auto-complete reopens."""
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        self.app.handle_key("v")
+        self.app.handle_key("enter")
+        self.app.handle_key("f5")
+        self.app.handle_key("c-z")
+        self.assertEqual(self.app.address_bar._buffer, "/v")
+        self.assertTrue(self.app.address_bar._show_autocomplete)
+
+    def test_backspace_deletes_char_when_not_running(self) -> None:
+        """When not running, backspace deletes last character in address bar."""
+        while self.app.active_pane != "address":
+            self.app.handle_key("f6")
+        self.app.handle_key("/")
+        self.app.handle_key("h")
+        self.assertEqual(self.app.address_bar._buffer, "/h")
+        self.app.handle_key("backspace")
+        self.assertEqual(self.app.address_bar._buffer, "/")

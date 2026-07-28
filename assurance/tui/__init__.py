@@ -17,24 +17,30 @@ Exports
 """
 
 from .app import TuiPrototype, render_screen
+from .commands import CommandDef, CommandRegistry, get_builtin_registry
 from .pt_app import create_pt_application, run_tui_demo
 from .view_models import (
     SAMPLE_ADDRESS_URI,
     SAMPLE_CLAIM_DISPOSITION,
+    SAMPLE_COMMANDS,
     SAMPLE_DIALOG,
     SAMPLE_DISPOSITION_REASON,
     SAMPLE_MENUS,
     SAMPLE_NEXT_ACTIONS,
     SAMPLE_PROPERTIES,
+    SAMPLE_SHORTCUTS,
     SAMPLE_SOURCE_TABLE,
     SAMPLE_SOURCE_TREE,
     SAMPLE_STATUS_ITEMS,
 )
 from .widgets import (
     AddressBar,
+    CommandPalette,
+    ContentMarker,
     ContentPane,
     Dialog,
     ExplorerPane,
+    FindBar,
     MenuBar,
     PropertiesSheet,
     StatusBar,
@@ -48,9 +54,14 @@ from .widgets import (
 
 __all__ = [
     "AddressBar",
+    "CommandDef",
+    "CommandPalette",
+    "CommandRegistry",
+    "ContentMarker",
     "ContentPane",
     "Dialog",
     "ExplorerPane",
+    "FindBar",
     "MenuBar",
     "PropertiesSheet",
     "StatusBar",
@@ -62,9 +73,19 @@ __all__ = [
     "box_t_junction",
     "box_vertical",
     "create_pt_application",
+    "get_builtin_registry",
     "render_screen",
     "run_tui_demo",
     "SAMPLE_ADDRESS_URI",
+    "SAMPLE_CLAIM_DISPOSITION",
+    "SAMPLE_COMMANDS",
+    "SAMPLE_DIALOG",
+    "SAMPLE_DISPOSITION_REASON",
+    "SAMPLE_MENUS",
+    "SAMPLE_NEXT_ACTIONS",
+    "SAMPLE_PROPERTIES",
+    "SAMPLE_SHORTCUTS",
+    "SAMPLE_SOURCE_TABLE",
     "SAMPLE_SOURCE_TREE",
     "SAMPLE_STATUS_ITEMS",
 ]
