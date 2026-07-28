@@ -124,6 +124,7 @@ class BrowserCDPClient:
         self._host = host
         self._port = port
         self._base = f"http://{host}:{port}"
+        self._browser_ws_url: str = ""
         self._ws_connections: dict[str, Any] = {}  # target_id → websocket
         self._owned_tabs: dict[str, TabInfo] = {}
         self._msg_id: int = 0
@@ -149,6 +150,10 @@ class BrowserCDPClient:
                 data.get("Browser-Version", ""),
                 self._host, self._port,
             )
+            # Store the browser-level WS URL for Target.* commands
+            self._browser_ws_url = data.get("webSocketDebuggerUrl", "")
+            if self._browser_ws_url:
+                self._connect_ws("__browser__", self._browser_ws_url)
             self._connected = True
             return True
         except (URLError, OSError, json.JSONDecodeError) as exc:
@@ -264,15 +269,18 @@ class BrowserCDPClient:
             The CDP ``targetId`` for the new tab.
         """
         self._require_connected()
-        new_url = f"{self._base}{_CDP_NEW_ENDPOINT}/{url}"
-        try:
-            resp = urlopen(new_url, timeout=10)
-            data = json.loads(resp.read().decode())
-        except (URLError, OSError) as exc:
-            raise AssuranceError(f"Failed to create tab: {exc}") from exc
 
-        target_id = data.get("id", "")
-        ws_url = data.get("webSocketDebuggerUrl", "")
+        # Use CDP Target.createTarget (works across all Chrome versions)
+        result = self._send_browser(
+            "Target.createTarget",
+            {"url": url, "background": background},
+        )
+        target_id = result.get("targetId", "")
+
+        # Connect WebSocket to this target
+        ws_url = self._get_ws_url_for_target(target_id)
+        if ws_url:
+            self._connect_ws(target_id, ws_url)
 
         tab = TabInfo(
             target_id=target_id,
@@ -281,14 +289,6 @@ class BrowserCDPClient:
             websocket_url=ws_url,
         )
         self._owned_tabs[target_id] = tab
-
-        # Connect WebSocket to this target
-        if ws_url:
-            self._connect_ws(target_id, ws_url)
-
-        # If background, move focus back to the original tab
-        if background and target_id:
-            self._activate_target(target_id, in_background=True)
 
         logger.info("New tab %s → %s", target_id[:20], url)
         return target_id
@@ -311,8 +311,11 @@ class BrowserCDPClient:
     def close_tab(self, target_id: str) -> None:
         """Close an AI-owned tab."""
         self._require_connected()
-        self._send(target_id, "Page.disable")
-        self._send(None, "Target.closeTarget", {"targetId": target_id})
+        try:
+            self._send(target_id, "Page.disable")
+        except AssuranceError:
+            pass
+        self._send_browser("Target.closeTarget", {"targetId": target_id})
         if target_id in self._ws_connections:
             try:
                 self._ws_connections[target_id].close()
@@ -426,6 +429,43 @@ class BrowserCDPClient:
         if not self._connected:
             raise AssuranceError("Not connected to browser. Call connect() first.")
 
+    def _send_browser(self, method: str, params: dict | None = None) -> dict:
+        """Send a CDP command to the browser-level endpoint.
+
+        Used for ``Target.createTarget``, ``Target.closeTarget``, etc.
+        """
+        ws = self._ws_connections.get("__browser__")
+        if ws is None:
+            raise AssuranceError("No browser-level WebSocket connection")
+        self._msg_id += 1
+        msg: dict[str, Any] = {"id": self._msg_id, "method": method}
+        if params:
+            msg["params"] = params
+        ws.send(json.dumps(msg))
+        while True:
+            try:
+                raw = ws.recv()
+            except Exception as exc:
+                raise AssuranceError(f"WebSocket recv error: {exc}") from exc
+            response = json.loads(raw)
+            if response.get("id") == self._msg_id:
+                if "error" in response:
+                    err = response["error"]
+                    raise AssuranceError(f"CDP error: {err.get('message', str(err))}")
+                return response.get("result", {})
+
+    def _get_ws_url_for_target(self, target_id: str) -> str:
+        """Get the WebSocket debugger URL for a target via HTTP list."""
+        try:
+            resp = urlopen(f"{self._base}{_CDP_LIST_ENDPOINT}", timeout=5)
+            targets = json.loads(resp.read().decode())
+            for t in targets:
+                if t.get("id") == target_id:
+                    return t.get("webSocketDebuggerUrl", "")
+        except Exception:
+            pass
+        return ""
+
     def _connect_ws(self, target_id: str, ws_url: str) -> None:
         import websocket
         try:
@@ -437,19 +477,10 @@ class BrowserCDPClient:
             ) from exc
 
     def _send(
-        self, target_id: str | None, method: str, params: dict | None = None,
+        self, target_id: str, method: str, params: dict | None = None,
     ) -> dict:
-        """Send a CDP command and return the result.
-
-        If *target_id* is ``None``, use the browser-level connection
-        (Target domain methods like ``closeTarget``).
-        """
-        if target_id is None:
-            # Browser-level commands use the first available WS connection
-            ws = next(iter(self._ws_connections.values()), None)
-        else:
-            ws = self._ws_connections.get(target_id)
-
+        """Send a CDP command to a specific target and return the result."""
+        ws = self._ws_connections.get(target_id)
         if ws is None:
             raise AssuranceError(f"No WebSocket connection for target {target_id}")
 
@@ -555,18 +586,11 @@ class BrowserCDPClient:
         return candidates
 
     def _activate_target(self, target_id: str, in_background: bool = True) -> None:
-        """Bring a target into focus or send it to background.
-
-        When *in_background* is ``True``, the browser's active tab is not
-        changed (the new target stays in the background).
-        """
-        # CDP: Target.activateTarget brings the tab to the front.
-        # We deliberately do NOT call this for background tabs.
-        # Instead we just send Page.enable to start receiving events.
+        """Bring a target into focus or send it to background."""
         self._send(target_id, "Page.enable")
         if not in_background:
             try:
-                self._send(None, "Target.activateTarget", {"targetId": target_id})
+                self._send_browser("Target.activateTarget", {"targetId": target_id})
             except AssuranceError:
                 pass  # best-effort
 
