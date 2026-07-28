@@ -81,6 +81,28 @@ from .deepseek_stream_observation import (
     run_deepseek_stream_observation_fixture,
     verify_deepseek_stream_observation_fixture,
 )
+from .evidence_store import (
+    EVIDENCE_ROOT,
+    document_exists,
+    get_document_path,
+    get_original_pdf_path,
+    list_documents,
+    read_metadata,
+    read_pages_jsonl,
+    store_pdf,
+    store_source_record,
+)
+from .pdf_evidence import (
+    PageEntry,
+    PageIndex,
+    PdfValidation,
+    build_page_index,
+    extract_text,
+    find_in_pages,
+    guess_version,
+    read_pages,
+    validate_pdf,
+)
 from .disposable_reproduction import (
     build_disposable_reproduction_run_proof,
     run_disposable_reproduction,

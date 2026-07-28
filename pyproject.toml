@@ -9,6 +9,7 @@ description = "General Scientific Assurance kernel — runtime-neutral agent ass
 requires-python = ">=3.11"
 dependencies = [
   "jsonschema>=4.20,<5",
+  "pypdf>=6,<7",
   "rfc8785==0.1.4",
 ]
 
