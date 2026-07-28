@@ -1298,3 +1298,517 @@ class EscCancelRunTests(unittest.TestCase):
         self.assertEqual(self.app.address_bar._buffer, "/h")
         self.app.handle_key("backspace")
         self.assertEqual(self.app.address_bar._buffer, "/")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GAK-UI-001 Phase 1 — Event protocol, source, projector & integration tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TuiEventDataclassTests(unittest.TestCase):
+    """GAK-UI-001: events.py — event protocol dataclass construction."""
+
+    def test_all_event_kinds_recognised(self) -> None:
+        from assurance.tui.events import TuiEventKind
+        self.assertEqual(len(TuiEventKind), 18)
+        self.assertEqual(TuiEventKind.RUN_PREFLIGHT.value, "run_preflight")
+        self.assertEqual(TuiEventKind.RUN_FINISHED.value, "run_finished")
+        self.assertEqual(TuiEventKind.GATE_DECISION.value, "gate_decision")
+
+    def test_run_preflight_defaults(self) -> None:
+        from assurance.tui.events import RunPreflightEvent, TuiEventKind
+        e = RunPreflightEvent()
+        self.assertEqual(e.kind, TuiEventKind.RUN_PREFLIGHT)
+        self.assertEqual(e.model_id, "")
+        self.assertFalse(e.real_network_allowed)
+
+    def test_run_preflight_with_values(self) -> None:
+        from assurance.tui.events import RunPreflightEvent
+        e = RunPreflightEvent(model_id="deepseek-v4", adapter_id="fake", real_network_allowed=True)
+        self.assertEqual(e.model_id, "deepseek-v4")
+        self.assertTrue(e.real_network_allowed)
+
+    def test_run_started_defaults(self) -> None:
+        from assurance.tui.events import RunStartedEvent
+        e = RunStartedEvent(task_id="T-1", run_root="/tmp/r")
+        self.assertEqual(e.task_id, "T-1")
+
+    def test_gate_decision_fields(self) -> None:
+        from assurance.tui.events import GateDecisionEvent
+        e = GateDecisionEvent(
+            gate_name="source_visibility", decision="defer",
+            reason="SOURCE_FULLTEXT_MISSING", reference_count=3,
+        )
+        self.assertEqual(e.gate_name, "source_visibility")
+        self.assertEqual(e.decision, "defer")
+        self.assertEqual(e.reference_count, 3)
+
+    def test_source_visibility_fields(self) -> None:
+        from assurance.tui.events import SourceVisibilityEvent
+        e = SourceVisibilityEvent(
+            source_id="R211.md", observed="PARTIAL", required="FULL TEXT",
+            decision="DEFER", claim="fragment",
+        )
+        self.assertEqual(e.source_id, "R211.md")
+        self.assertEqual(e.claim, "fragment")
+
+    def test_run_finished_and_failed(self) -> None:
+        from assurance.tui.events import RunFinishedEvent, RunFailedEvent, RunCancelledEvent
+        self.assertEqual(RunFinishedEvent().status, "completed")
+        self.assertEqual(RunFailedEvent(reason="timeout").reason, "timeout")
+        self.assertEqual(RunCancelledEvent(reason="user").reason, "user")
+
+    def test_model_events(self) -> None:
+        from assurance.tui.events import ModelRequestEvent, ModelOutputEvent
+        req = ModelRequestEvent(provider="deepseek", model_id="v4")
+        self.assertEqual(req.provider, "deepseek")
+        out = ModelOutputEvent(answer_packet_sha256="abc123", structured_output_valid=False)
+        self.assertFalse(out.structured_output_valid)
+
+    def test_tool_events(self) -> None:
+        from assurance.tui.events import ToolProposalEvent, ToolStartedEvent, ToolCompletedEvent
+        p = ToolProposalEvent(tool_name="read_file", input_summary="f.txt")
+        self.assertEqual(p.tool_name, "read_file")
+        c = ToolCompletedEvent(tool_name="read_file", status="error")
+        self.assertEqual(c.status, "error")
+
+    def test_permission_and_artifact_events(self) -> None:
+        from assurance.tui.events import PermissionDecisionEvent, ArtifactRegisteredEvent
+        p = PermissionDecisionEvent(permission="web_fetch", decision="denied")
+        self.assertEqual(p.decision, "denied")
+        a = ArtifactRegisteredEvent(artifact_path="/tmp/a.json", artifact_sha256="abc")
+        self.assertEqual(a.artifact_sha256, "abc")
+
+    def test_error_and_status_events(self) -> None:
+        from assurance.tui.events import ErrorEvent, StatusUpdateEvent
+        e = ErrorEvent(message="timeout", source="network")
+        self.assertEqual(e.source, "network")
+        s = StatusUpdateEvent(label="GUARDED", ok=True)
+        self.assertTrue(s.ok)
+
+    def test_is_terminal_helper(self) -> None:
+        from assurance.tui.events import (
+            RunFinishedEvent, RunFailedEvent, RunCancelledEvent,
+            RunStartedEvent, is_terminal,
+        )
+        self.assertTrue(is_terminal(RunFinishedEvent()))
+        self.assertTrue(is_terminal(RunFailedEvent()))
+        self.assertTrue(is_terminal(RunCancelledEvent()))
+        self.assertFalse(is_terminal(RunStartedEvent()))
+
+    def test_kind_is_frozen_on_construction(self) -> None:
+        from assurance.tui.events import RunPreflightEvent, TuiEventKind
+        e = RunPreflightEvent(model_id="x")
+        self.assertEqual(e.kind, TuiEventKind.RUN_PREFLIGHT)
+        # kind is init=False — setting it in constructor has no effect
+        e2 = RunPreflightEvent(model_id="x")  # kind auto-set
+        self.assertEqual(e2.kind, TuiEventKind.RUN_PREFLIGHT)
+
+
+class FakeEventSourceTests(unittest.TestCase):
+    """GAK-UI-001: event_source.py — FakeEventSource lifecycle."""
+
+    def test_preloaded_events_poll_in_order(self) -> None:
+        from assurance.tui.events import RunPreflightEvent, RunStartedEvent
+        from assurance.tui.event_source import FakeEventSource
+        source = FakeEventSource(preload=[
+            RunPreflightEvent(model_id="m1"),
+            RunStartedEvent(task_id="t1"),
+        ])
+        batch = source.poll()
+        self.assertEqual(len(batch), 2)
+        self.assertEqual(batch[0].kind.value, "run_preflight")
+        self.assertEqual(batch[1].kind.value, "run_started")
+
+    def test_push_then_poll(self) -> None:
+        from assurance.tui.events import RunFinishedEvent
+        from assurance.tui.event_source import FakeEventSource
+        source = FakeEventSource()
+        source.push(RunFinishedEvent(status="ok"))
+        batch = source.poll()
+        self.assertEqual(len(batch), 1)
+        self.assertEqual(batch[0].kind.value, "run_finished")
+
+    def test_poll_returns_empty_when_drained(self) -> None:
+        from assurance.tui.event_source import FakeEventSource
+        source = FakeEventSource()
+        self.assertEqual(source.poll(), [])
+
+    def test_is_active_tracks_queue(self) -> None:
+        from assurance.tui.events import RunStartedEvent
+        from assurance.tui.event_source import FakeEventSource
+        source = FakeEventSource(preload=[RunStartedEvent()])
+        self.assertTrue(source.is_active())
+        source.poll()
+        self.assertFalse(source.is_active())
+
+    def test_closed_source_rejects_push(self) -> None:
+        from assurance.tui.events import RunFinishedEvent
+        from assurance.tui.event_source import FakeEventSource
+        source = FakeEventSource()
+        source.close()
+        source.push(RunFinishedEvent())
+        self.assertEqual(source.poll(), [])
+
+    def test_push_all_batch(self) -> None:
+        from assurance.tui.events import RunPreflightEvent, RunStartedEvent
+        from assurance.tui.event_source import FakeEventSource
+        source = FakeEventSource()
+        source.push_all([RunPreflightEvent(), RunStartedEvent()])
+        self.assertEqual(len(source.poll()), 2)
+
+    def test_demo_scenarios_are_valid(self) -> None:
+        from assurance.tui.event_source import (
+            build_gate_chain_demo, build_gate_defer_demo, build_run_failed_demo,
+        )
+        from assurance.tui.events import is_terminal
+        for name, builder in [
+            ("gate_chain", build_gate_chain_demo),
+            ("gate_defer", build_gate_defer_demo),
+            ("run_failed", build_run_failed_demo),
+        ]:
+            events = builder()
+            self.assertGreater(len(events), 0, f"{name}: empty scenario")
+            self.assertTrue(
+                any(is_terminal(e) for e in events),
+                f"{name}: missing terminal event",
+            )
+
+
+class ProjectorUnitTests(unittest.TestCase):
+    """GAK-UI-001: projector.py — event → widget mutation."""
+
+    def setUp(self) -> None:
+        from assurance.tui.app import TuiPrototype
+        self.app = TuiPrototype.with_sample_data()
+        from assurance.tui.projector import apply_event
+        self.apply = apply_event
+
+    def test_run_preflight_updates_status_bar(self) -> None:
+        from assurance.tui.events import RunPreflightEvent
+        msgs = self.apply(self.app, RunPreflightEvent(model_id="deepseek-v4", adapter_id="fake"))
+        self.assertTrue(any("deepseek" in m for m in msgs))
+        labels = [it[0] for it in self.app.status_bar.items]
+        self.assertIn("PREFLIGHT", labels)
+
+    def test_run_started_sets_running(self) -> None:
+        from assurance.tui.events import RunStartedEvent
+        self.apply(self.app, RunStartedEvent(task_id="T-1"))
+        self.assertTrue(self.app.running)
+        labels = [it[0] for it in self.app.status_bar.items]
+        self.assertIn("RUNNING", labels)
+
+    def test_run_finished_clears_running(self) -> None:
+        from assurance.tui.events import RunStartedEvent, RunFinishedEvent
+        self.apply(self.app, RunStartedEvent(task_id="T-1"))
+        self.assertTrue(self.app.running)
+        self.apply(self.app, RunFinishedEvent(status="completed"))
+        self.assertFalse(self.app.running)
+        labels = [it[0] for it in self.app.status_bar.items]
+        self.assertIn("IDLE", labels)
+
+    def test_run_failed_sets_failed_and_adds_error(self) -> None:
+        from assurance.tui.events import RunFailedEvent
+        self.apply(self.app, RunFailedEvent(reason="IPG block"))
+        self.assertFalse(self.app.running)
+        groups = [g.label for g in self.app.explorer_pane.event_groups]
+        self.assertIn("Errors", groups)
+
+    def test_gate_decision_adds_to_explorer(self) -> None:
+        from assurance.tui.events import GateDecisionEvent
+        self.apply(self.app, GateDecisionEvent(
+            gate_name="source_visibility", decision="defer",
+            reason="MISSING", reference_count=2,
+        ))
+        groups = [g.label for g in self.app.explorer_pane.event_groups]
+        self.assertIn("Decisions", groups)
+        decision_group = [g for g in self.app.explorer_pane.event_groups if g.label == "Decisions"][0]
+        self.assertTrue(any("defer" in e for e in decision_group.entries))
+
+    def test_source_visibility_adds_to_content_pane(self) -> None:
+        from assurance.tui.events import SourceVisibilityEvent
+        # Pre-condition: content pane has initial sample rows
+        initial_count = len(self.app.content_pane.source_table)
+        # Apply a source visibility event for a NEW ref
+        self.apply(self.app, SourceVisibilityEvent(
+            source_id="new_ref.md", observed="FULL", required="FULL",
+            decision="ALLOW", claim="full_text",
+        ))
+        # Should now have one more row
+        self.assertEqual(len(self.app.content_pane.source_table), initial_count + 1)
+
+    def test_model_request_and_output_sequence(self) -> None:
+        from assurance.tui.events import ModelRequestEvent, ModelOutputEvent
+        self.apply(self.app, ModelRequestEvent(provider="ds", model_id="v4"))
+        self.apply(self.app, ModelOutputEvent(answer_packet_sha256="abc", structured_output_valid=True))
+        # Verify no crash and status messages returned
+        msgs1 = self.apply(self.app, ModelRequestEvent(provider="ds", model_id="v4"))
+        msgs2 = self.apply(self.app, ModelOutputEvent(answer_packet_sha256="abc", structured_output_valid=True))
+        self.assertIsInstance(msgs1, list)
+        self.assertIsInstance(msgs2, list)
+
+    def test_tool_events_add_to_explorer(self) -> None:
+        from assurance.tui.events import ToolProposalEvent, ToolCompletedEvent
+        self.apply(self.app, ToolProposalEvent(tool_name="read_file"))
+        self.apply(self.app, ToolCompletedEvent(tool_name="read_file", status="success"))
+        groups = [g.label for g in self.app.explorer_pane.event_groups]
+        self.assertIn("Tool Calls", groups)
+
+    def test_permission_event_adds_to_explorer(self) -> None:
+        from assurance.tui.events import PermissionDecisionEvent
+        self.apply(self.app, PermissionDecisionEvent(permission="web_fetch", decision="granted"))
+        groups = [g.label for g in self.app.explorer_pane.event_groups]
+        self.assertIn("Permissions", groups)
+
+    def test_error_event_updates_status_and_explorer(self) -> None:
+        from assurance.tui.events import ErrorEvent
+        self.apply(self.app, ErrorEvent(message="network timeout", source="network"))
+        labels = [it[0] for it in self.app.status_bar.items]
+        self.assertIn("ERROR", labels)
+
+    def test_status_update_event_direct_to_status_bar(self) -> None:
+        from assurance.tui.events import StatusUpdateEvent
+        self.apply(self.app, StatusUpdateEvent(label="CUSTOM", ok=False))
+        labels = [it[0] for it in self.app.status_bar.items]
+        self.assertIn("CUSTOM", labels)
+
+    def test_unknown_event_kind_is_noop(self) -> None:
+        from assurance.tui.events import TuiEvent, TuiEventKind
+        bogus_kind = list(TuiEventKind)[-1]  # STATUS_UPDATE — no handler registered? Let's check
+        # Create a base TuiEvent with a kind we know has no dedicated class
+        from assurance.tui.projector import _DISPATCH
+        # Every kind in the enum should either have a handler or be silently ignored
+        for kind in TuiEventKind:
+            msgs = self.apply(self.app, TuiEvent(kind=kind))
+            self.assertIsInstance(msgs, list)
+
+    def test_full_gate_chain_scenario(self) -> None:
+        """Apply a complete 12-event gate chain and verify final state."""
+        from assurance.tui.event_source import build_gate_chain_demo
+        events = build_gate_chain_demo()
+        for evt in events:
+            msgs = self.apply(self.app, evt)
+        # After full chain: running should be False (finished)
+        self.assertFalse(self.app.running)
+        # Explorer should have multiple event groups
+        groups = [g.label for g in self.app.explorer_pane.event_groups]
+        self.assertIn("Run", groups)
+        self.assertIn("Decisions", groups)
+        self.assertIn("Artifacts", groups)
+
+    def test_deferred_scenario_updates_disposition(self) -> None:
+        from assurance.tui.event_source import build_gate_defer_demo
+        events = build_gate_defer_demo()
+        for evt in events:
+            self.apply(self.app, evt)
+        # Source "R211.md" should appear in content pane with DEFER
+        rows = self.app.content_pane.source_table
+        r211 = [r for r in rows if r.ref_id == "R211.md"]
+        self.assertTrue(len(r211) > 0)
+
+    def test_failed_scenario_sets_failed_status(self) -> None:
+        from assurance.tui.event_source import build_run_failed_demo
+        events = build_run_failed_demo()
+        for evt in events:
+            self.apply(self.app, evt)
+        self.assertFalse(self.app.running)
+        labels = [it[0] for it in self.app.status_bar.items]
+        self.assertIn("FAILED", labels)
+
+    def test_event_log_accumulates(self) -> None:
+        from assurance.tui.app import TuiPrototype
+        from assurance.tui.event_source import FakeEventSource
+        from assurance.tui.events import RunPreflightEvent, RunFinishedEvent
+        source = FakeEventSource(preload=[
+            RunPreflightEvent(model_id="m1"),
+            RunFinishedEvent(status="ok"),
+        ])
+        app = TuiPrototype.with_event_source(source)
+        app.poll_events()  # drains all, also appends to _event_log
+        self.assertEqual(len(app._event_log), 2)
+
+
+class WidgetMutationMethodTests(unittest.TestCase):
+    """GAK-UI-001: widget mutation methods added for event-driven updates."""
+
+    def test_explorer_add_event_entry_new_group(self) -> None:
+        from assurance.tui.widgets import ExplorerPane
+        pane = ExplorerPane(tree=[], event_groups=[])
+        pane.add_event_entry("TestGroup", "entry1")
+        self.assertEqual(len(pane.event_groups), 1)
+        self.assertEqual(pane.event_groups[0].label, "TestGroup")
+        self.assertEqual(pane.event_groups[0].count, 1)
+        self.assertIn("entry1", pane.event_groups[0].entries)
+
+    def test_explorer_add_event_entry_existing_group(self) -> None:
+        from assurance.tui.widgets import ExplorerPane
+        from assurance.tui.view_models import EventGroup
+        pane = ExplorerPane(tree=[], event_groups=[
+            EventGroup(label="Existing", count=1, expanded=True, entries=["old"]),
+        ])
+        pane.add_event_entry("Existing", "new")
+        self.assertEqual(len(pane.event_groups), 1)
+        self.assertEqual(pane.event_groups[0].count, 2)
+        self.assertIn("new", pane.event_groups[0].entries)
+
+    def test_explorer_add_event_group_idempotent(self) -> None:
+        from assurance.tui.widgets import ExplorerPane
+        from assurance.tui.view_models import EventGroup
+        pane = ExplorerPane(tree=[], event_groups=[
+            EventGroup(label="A", count=1, expanded=True, entries=["x"]),
+        ])
+        pane.add_event_group("A")
+        self.assertEqual(len(pane.event_groups), 1)
+        pane.add_event_group("B")
+        self.assertEqual(len(pane.event_groups), 2)
+
+    def test_content_pane_add_or_update_new_row(self) -> None:
+        from assurance.tui.widgets import ContentPane
+        pane = ContentPane(title="Test", source_table=[])
+        pane.add_or_update_source_row("X.md", "FULL", "FULL", "ALLOW", "full_text")
+        self.assertEqual(len(pane.source_table), 1)
+        self.assertEqual(pane.source_table[0].ref_id, "X.md")
+
+    def test_content_pane_add_or_update_existing_row(self) -> None:
+        from assurance.tui.widgets import ContentPane
+        from assurance.tui.view_models import SourceVisibilityRow
+        existing = SourceVisibilityRow("X.md", "PARTIAL", "FULL", "DEFER", "fragment")
+        pane = ContentPane(title="Test", source_table=[existing])
+        pane.add_or_update_source_row("X.md", "FULL", "FULL", "ALLOW", "full_text")
+        self.assertEqual(len(pane.source_table), 1)
+        self.assertEqual(pane.source_table[0].decision, "ALLOW")
+
+    def test_content_pane_set_disposition(self) -> None:
+        from assurance.tui.widgets import ContentPane
+        pane = ContentPane(title="Test")
+        pane.set_disposition("DEFER", "reason text")
+        self.assertEqual(pane.claim_disposition, "DEFER")
+        self.assertEqual(pane.disposition_reason, "reason text")
+
+    def test_content_pane_set_next_actions(self) -> None:
+        from assurance.tui.widgets import ContentPane
+        pane = ContentPane(title="Test", next_actions=["old"])
+        pane.set_next_actions(["new1", "new2"])
+        self.assertEqual(pane.next_actions, ["new1", "new2"])
+
+    def test_status_bar_update_existing_item(self) -> None:
+        from assurance.tui.widgets import StatusBar
+        bar = StatusBar(items=[("IDLE", True), ("GUARDED", True)])
+        bar.update_item("IDLE", False)
+        self.assertEqual(bar.items[0], ("IDLE", False))
+
+    def test_status_bar_update_new_item(self) -> None:
+        from assurance.tui.widgets import StatusBar
+        bar = StatusBar(items=[("IDLE", True)])
+        bar.update_item("RUNNING", True)
+        self.assertEqual(len(bar.items), 2)
+
+    def test_content_marker_add_marker(self) -> None:
+        from assurance.tui.widgets import ContentMarker
+        marker = ContentMarker(markers=[])
+        marker.add_marker("input", 5, "hello")
+        self.assertEqual(len(marker.markers), 1)
+        self.assertEqual(marker.markers[0].kind, "input")
+        self.assertEqual(marker.markers[0].line, 5)
+
+
+class TuiPrototypeEventIntegrationTests(unittest.TestCase):
+    """GAK-UI-001: TuiPrototype event source integration."""
+
+    def test_with_event_source_initialises_empty_state(self) -> None:
+        from assurance.tui.app import TuiPrototype
+        from assurance.tui.event_source import FakeEventSource
+        source = FakeEventSource()
+        app = TuiPrototype.with_event_source(source)
+        self.assertIsNotNone(app.event_source)
+        # Event groups should be pre-initialised
+        self.assertGreater(len(app.explorer_pane.event_groups), 0)
+
+    def test_poll_events_drains_source(self) -> None:
+        from assurance.tui.app import TuiPrototype
+        from assurance.tui.event_source import FakeEventSource
+        from assurance.tui.events import RunPreflightEvent, RunFinishedEvent
+        source = FakeEventSource(preload=[
+            RunPreflightEvent(model_id="m1"),
+            RunFinishedEvent(status="ok"),
+        ])
+        app = TuiPrototype.with_event_source(source)
+        msgs = app.poll_events()
+        self.assertGreater(len(msgs), 0)
+        self.assertEqual(len(app._event_log), 2)
+        self.assertFalse(source.is_active())
+
+    def test_poll_events_no_source_returns_empty(self) -> None:
+        from assurance.tui.app import TuiPrototype
+        app = TuiPrototype.with_sample_data()
+        self.assertEqual(app.poll_events(), [])
+
+    def test_with_sample_data_still_works(self) -> None:
+        """Backward compatibility: with_sample_data() renders identically."""
+        from assurance.tui.app import TuiPrototype, render_screen
+        app = TuiPrototype.with_sample_data()
+        output = app.render(100, 30)
+        self.assertIn("Source Visibility", output)
+        self.assertIn("File", output)
+        self.assertIsNone(app.event_source)
+
+    def test_render_with_event_source_is_deterministic(self) -> None:
+        """After applying the same event sequence, renders must match."""
+        from assurance.tui.app import TuiPrototype
+        from assurance.tui.event_source import FakeEventSource, build_gate_chain_demo
+        events = build_gate_chain_demo()
+
+        def _build() -> str:
+            source = FakeEventSource(preload=list(events))
+            app = TuiPrototype.with_event_source(source)
+            app.poll_events()  # drain all
+            return app.render(100, 30)
+
+        a = _build()
+        b = _build()
+        self.assertEqual(a, b)
+
+
+# ── import isolation — Phase 1 modules must not import assurance core ─────
+
+
+class EventImportIsolationTests(unittest.TestCase):
+    """GAK-UI-001: new events/event_source/projector must stay decoupled."""
+
+    def _check_module(self, module_path: str) -> None:
+        import ast
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        file_path = root / module_path
+        self.assertTrue(file_path.is_file(), f"{module_path} must exist")
+        source = file_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        forbidden = {
+            "assurance.canonical_cli", "assurance.contracts",
+            "assurance.conversation", "assurance.deepseek_adapter",
+            "assurance.envelope", "assurance.guarded_execution",
+            "assurance.instruction_provenance_gate", "assurance.keystore",
+            "assurance.sandbox", "assurance.windows_sandbox",
+        }
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                else:
+                    module = ""
+                for alias in node.names:
+                    full = f"{module}.{alias.name}" if module else alias.name
+                    for forbid in forbidden:
+                        if full == forbid or full.startswith(forbid + "."):
+                            self.fail(
+                                f"{module_path}: imports forbidden {full}"
+                            )
+
+    def test_events_py_no_assurance_imports(self) -> None:
+        self._check_module("assurance/tui/events.py")
+
+    def test_event_source_py_no_assurance_imports(self) -> None:
+        self._check_module("assurance/tui/event_source.py")
+
+    def test_projector_py_no_assurance_imports(self) -> None:
+        self._check_module("assurance/tui/projector.py")

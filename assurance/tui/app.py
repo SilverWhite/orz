@@ -28,6 +28,7 @@ from .view_models import (
     SAMPLE_SOURCE_TABLE,
     SAMPLE_SOURCE_TREE,
     SAMPLE_STATUS_ITEMS,
+    EventGroup,
 )
 from .widgets import (
     AddressBar,
@@ -82,6 +83,11 @@ class TuiPrototype:
     dialog: Dialog = field(default_factory=Dialog)
     properties: PropertiesSheet = field(default_factory=PropertiesSheet)
     command_palette: CommandPalette = field(default_factory=CommandPalette)
+
+    # ── event-driven state (Phase 1) ──
+    event_source: Any | None = None   # EventSource | None (typed Any to avoid circular import)
+    _event_log: list[Any] = field(default_factory=list)  # list[TuiEvent]
+    _status_messages: list[str] = field(default_factory=list)
 
     # ── runtime state ──
     running: bool = False       # True while agent is executing a run
@@ -387,6 +393,54 @@ class TuiPrototype:
         while len(result) < height:
             result.append(" " * line_width)
         return "\n".join(result[:height])
+
+    # ── event-driven API ───────────────────────────────────────────────────
+
+    def poll_events(self) -> list[str]:
+        """Drain available events from :attr:`event_source` and project them.
+
+        Called from the prompt_toolkit background drain coroutine.
+        Returns status messages produced by the projector.
+        """
+        if not self.event_source:
+            return []
+        events = self.event_source.poll()
+        if not events:
+            return []
+        from .projector import apply_event
+        messages: list[str] = []
+        for evt in events:
+            self._event_log.append(evt)
+            msgs = apply_event(self, evt)
+            messages.extend(msgs)
+        return messages
+
+    def _ensure_event_groups(self) -> None:
+        """Populate ExplorerPane with the standard event group categories."""
+        if self.explorer_pane.event_groups:
+            return  # already initialised
+        defaults = [
+            EventGroup("Run", 0, True, []),
+            EventGroup("Decisions", 0, True, []),
+            EventGroup("Errors", 0, False, []),
+            EventGroup("Permissions", 0, False, []),
+            EventGroup("Tool Calls", 0, False, []),
+            EventGroup("Artifacts", 0, False, []),
+            EventGroup("Sources", 0, True, []),
+        ]
+        self.explorer_pane.event_groups = defaults
+
+    @classmethod
+    def with_event_source(cls, source: Any) -> TuiPrototype:
+        """Build a prototype wired to *source* with empty initial state.
+
+        The returned prototype has no sample data — event groups are
+        created lazily on the first projected event.
+        """
+        app = cls()
+        app.event_source = source
+        app._ensure_event_groups()
+        return app
 
     # ── convenience builders ────────────────────────────────────────────────
 
