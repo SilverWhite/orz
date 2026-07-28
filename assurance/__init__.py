@@ -81,6 +81,12 @@ from .deepseek_stream_observation import (
     run_deepseek_stream_observation_fixture,
     verify_deepseek_stream_observation_fixture,
 )
+from .browser_retrieval import (
+    BrowserCDPClient,
+    PageContent,
+    PageLink,
+    TabInfo,
+)
 from .evidence_store import (
     EVIDENCE_ROOT,
     document_exists,
