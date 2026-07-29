@@ -7,6 +7,7 @@ require a live Chrome instance are skipped when Chrome is unavailable.
 
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 
@@ -229,6 +230,11 @@ class BrowserCDPClientConstructionTests(unittest.TestCase):
 _LIVE_PORT = 19223  # off the default 9222 to avoid conflicts
 
 
+def _live_browser_tests_enabled() -> bool:
+    """Live CDP tests are opt-in because CI runners vary by browser support."""
+    return os.environ.get("GSA_RUN_LIVE_BROWSER_TESTS") == "1"
+
+
 def _chrome_installed() -> bool:
     """Return True if Chrome or Edge is installed on this system."""
     from assurance.browser_retrieval import _find_chrome, _find_edge
@@ -238,7 +244,10 @@ def _chrome_installed() -> bool:
     return False
 
 
-@unittest.skipUnless(_chrome_installed(), "Chrome/Edge not installed")
+@unittest.skipUnless(
+    _live_browser_tests_enabled() and _chrome_installed(),
+    "live browser tests require GSA_RUN_LIVE_BROWSER_TESTS=1 and Chrome/Edge",
+)
 class LiveBrowserTests(unittest.TestCase):
     """LBR-001: live Chrome CDP integration tests.
 

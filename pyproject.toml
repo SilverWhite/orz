@@ -11,6 +11,7 @@ license = { text = "Apache-2.0" }
 dependencies = [
   "jsonschema>=4.20,<5",
   "pypdf>=6,<7",
+  "psutil>=5.9,<8",
   "rfc8785==0.1.4",
 ]
 

@@ -426,21 +426,25 @@ def build_real_deepseek_context(
     unprobed_tools = tool_availability_report.get("unprobed", [])
     degraded_tools = tool_availability_report.get("degraded", [])
 
-    def _tool_names(entries: list[dict[str, Any]]) -> str:
-        names = [t.get("tool_name", t.get("tool_id", "?")) for t in entries]
+    def _tool_names(entries: list[Any]) -> str:
+        names: list[str] = []
+        for entry in entries:
+            if isinstance(entry, str):
+                names.append(entry)
+            elif isinstance(entry, dict):
+                names.append(str(entry.get("tool_name", entry.get("tool_id", "?"))))
+            else:
+                names.append(str(entry))
         return ", ".join(names) if names else "none"
 
     tool_lines = []
-    if available_tools:
-        tool_lines.append(f"AVAILABLE: {_tool_names(available_tools)}")
+    tool_lines.append(f"AVAILABLE tools: {_tool_names(available_tools)}")
     if unavailable_tools:
-        tool_lines.append(f"UNAVAILABLE: {_tool_names(unavailable_tools)}")
+        tool_lines.append(f"UNAVAILABLE tools: {_tool_names(unavailable_tools)}")
     if degraded_tools:
-        tool_lines.append(f"DEGRADED: {_tool_names(degraded_tools)}")
+        tool_lines.append(f"DEGRADED tools: {_tool_names(degraded_tools)}")
     if unprobed_tools:
-        tool_lines.append(f"UNPROBED: {_tool_names(unprobed_tools)}")
-    if not tool_lines:
-        tool_lines.append("No tool availability data available.")
+        tool_lines.append(f"UNPROBED tools: {_tool_names(unprobed_tools)}")
 
     tool_block = (
         "\n".join(tool_lines) + "\n"

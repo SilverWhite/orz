@@ -366,11 +366,18 @@ class RecoveryExecutorTests(unittest.TestCase):
         # Read the persisted receipt
         exec_dirs = list(SHADOW_EXECUTIONS.iterdir())
         self.assertGreater(len(exec_dirs), 0)
-        receipt_path = exec_dirs[-1] / "execution_receipt.json"
-        self.assertTrue(receipt_path.exists())
 
         import json
-        persisted = json.loads(receipt_path.read_text(encoding="utf-8"))
+        persisted = None
+        for exec_dir in exec_dirs:
+            receipt_path = exec_dir / "execution_receipt.json"
+            if not receipt_path.exists():
+                continue
+            candidate = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if candidate.get("receipt_id") == receipt.receipt_id:
+                persisted = candidate
+                break
+        self.assertIsNotNone(persisted, f"receipt not found: {receipt.receipt_id}")
         result = verify_execution_receipt(persisted, self.key_store)
         self.assertTrue(result["valid"], result["errors"])
         self.assertEqual(result["outcome"], "restored")
@@ -525,30 +532,36 @@ class EndToEndRecoveryTests(unittest.TestCase):
 
     def test_multi_entry_store_and_selective_restore(self) -> None:
         """Store multiple entries, restore only one."""
-        snap_a = b"checkpoint A"
-        snap_b = b"checkpoint B"
-        snap_c = b"checkpoint C"
+        suffix = self.root.name.replace("\\", "-").replace(":", "")
+        id_a = f"RCV-MULTI-A-{suffix}"
+        id_b = f"RCV-MULTI-B-{suffix}"
+        id_c = f"RCV-MULTI-C-{suffix}"
+        snap_a = f"checkpoint A {suffix}".encode("utf-8")
+        snap_b = f"checkpoint B {suffix}".encode("utf-8")
+        snap_c = f"checkpoint C {suffix}".encode("utf-8")
 
         before = len(self.store.list_entries())
 
         entry_a = self.store.store(
-            _make_candidate("RCV-MULTI-A"), _make_authorization("RCV-MULTI-A"), snap_a,
+            _make_candidate(id_a), _make_authorization(id_a), snap_a,
         )
         entry_b = self.store.store(
-            _make_candidate("RCV-MULTI-B"), _make_authorization("RCV-MULTI-B"), snap_b,
+            _make_candidate(id_b), _make_authorization(id_b), snap_b,
         )
         entry_c = self.store.store(
-            _make_candidate("RCV-MULTI-C"), _make_authorization("RCV-MULTI-C"), snap_c,
+            _make_candidate(id_c), _make_authorization(id_c), snap_c,
         )
 
         entries = self.store.list_entries()
         self.assertEqual(len(entries), before + 3)
+        self.assertTrue(entry_a.entry_sha256)
+        self.assertTrue(entry_c.entry_sha256)
 
         # Restore only B
         target = self.root / "restore_b.txt"
         receipt = self.executor.execute(
-            _make_candidate("RCV-MULTI-B"),
-            _make_authorization("RCV-MULTI-B"),
+            _make_candidate(id_b),
+            _make_authorization(id_b),
             snap_b, str(target), self.key_store,
         )
         self.assertEqual(receipt.outcome, "restored")

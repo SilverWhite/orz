@@ -11,6 +11,7 @@ or Edge is not installed.
 
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 
@@ -19,6 +20,11 @@ from assurance.errors import AssuranceError
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 _E2E_PORT = 19224  # dedicated port for E2E tests (not shared with unit tests)
+
+
+def _live_browser_tests_enabled() -> bool:
+    """Live browser E2E tests are opt-in because they need CDP and network."""
+    return os.environ.get("GSA_RUN_LIVE_BROWSER_TESTS") == "1"
 
 
 def _chrome_installed() -> bool:
@@ -35,7 +41,10 @@ def _chrome_installed() -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-@unittest.skipUnless(_chrome_installed(), "Chrome/Edge not installed")
+@unittest.skipUnless(
+    _live_browser_tests_enabled() and _chrome_installed(),
+    "live browser E2E tests require GSA_RUN_LIVE_BROWSER_TESTS=1 and Chrome/Edge",
+)
 class WebRetrievalE2ETests(unittest.TestCase):
     """LBR-001: end-to-end ``retrieve_urls()`` through auto-launched Chrome.
 
@@ -193,7 +202,10 @@ class WebRetrievalE2ETests(unittest.TestCase):
 _ARXIV_PAPER = "https://arxiv.org/abs/1706.03762"  # "Attention Is All You Need"
 
 
-@unittest.skipUnless(_chrome_installed(), "Chrome/Edge not installed")
+@unittest.skipUnless(
+    _live_browser_tests_enabled() and _chrome_installed(),
+    "live browser E2E tests require GSA_RUN_LIVE_BROWSER_TESTS=1 and Chrome/Edge",
+)
 class PaperRetrievalE2ETests(unittest.TestCase):
     """LBR-001: end-to-end ``run_retrieval()`` (paper PDF → evidence store).
 
