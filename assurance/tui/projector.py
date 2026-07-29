@@ -35,6 +35,7 @@ from .events import (
     RunStartedEvent,
     SourceVisibilityEvent,
     StatusUpdateEvent,
+    TaskChecklistEvent,
     ToolAvailabilityEvent,
     ToolCompletedEvent,
     ToolProposalEvent,
@@ -126,6 +127,7 @@ def _on_run_finished(app: Any, event: RunFinishedEvent) -> list[str]:
     app.status_bar.update_item("空闲", True)
     app.explorer_pane.add_event_entry("Run", f"finished ({event.status})")
     app.content_pane.set_disposition("COMPLETED", "")
+    app.content_pane.collapse_non_warnings()
     return [f"Run finished: {event.status}"]
 
 
@@ -137,6 +139,7 @@ def _on_run_failed(app: Any, event: RunFailedEvent) -> list[str]:
     app.explorer_pane.add_event_entry("Run", f"FAILED: {event.reason}")
     app.explorer_pane.add_event_entry("Errors", event.reason)
     app.content_pane.set_disposition("FAILED", event.reason)
+    app.content_pane.collapse_non_warnings()
     return [f"Run failed: {event.reason}"]
 
 
@@ -249,6 +252,10 @@ def _on_model_output(app: Any, event: ModelOutputEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Run", f"model output ({valid_str})"
     )
+    app.content_pane.add_message(
+        "模型输出", f"sha256: {event.answer_packet_sha256[:20]}...",
+        warning=not event.structured_output_valid,
+    )
     return [f"Model output received ({valid_str})"]
 
 
@@ -278,6 +285,11 @@ def _on_tool_completed(app: Any, event: ToolCompletedEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Tool Calls", f"completed: {event.tool_name} ({event.status})"
     )
+    app.content_pane.add_message(
+        "工具调用", f"{event.tool_name}: {event.status}",
+        collapsible=True,
+        warning=event.status != "success",
+    )
     return [f"Tool {event.tool_name}: {event.status}"]
 
 
@@ -288,6 +300,10 @@ def _on_tool_completed(app: Any, event: ToolCompletedEvent) -> list[str]:
 def _on_permission(app: Any, event: PermissionDecisionEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Permissions", f"{event.permission}: {event.decision}"
+    )
+    app.content_pane.add_message(
+        "权限", f"{event.permission}: {event.decision}",
+        warning=event.decision not in ("granted", "approved"),
     )
     return [f"Permission {event.permission}: {event.decision}"]
 
@@ -312,6 +328,10 @@ def _on_error(app: Any, event: ErrorEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Errors", f"[{event.source}] {event.message}"
     )
+    app.content_pane.add_message(
+        "错误", f"[{event.source}] {event.message}",
+        warning=True,   # errors are never collapsed
+    )
     return [f"Error [{event.source}]: {event.message}"]
 
 
@@ -328,12 +348,16 @@ def _on_status_update(app: Any, event: StatusUpdateEvent) -> list[str]:
 def _on_plan_phase_entered(app: Any, event: PlanPhaseEnteredEvent) -> list[str]:
     app.status_bar.update_item("计划", True)
     app.status_bar.update_item("空闲", False)
+    app.content_pane.add_message("计划阶段", f"policy={event.planning_policy}")
     return [f"计划阶段: policy={event.planning_policy}"]
 
 
 @_register(TuiEventKind.PLAN_PHASE_SUBMITTED)
 def _on_plan_phase_submitted(app: Any, event: PlanPhaseSubmittedEvent) -> list[str]:
     app.status_bar.update_item("等待", True)
+    app.content_pane.add_message(
+        "计划提交", f"{event.plan_id} v{event.version} ({event.section_count} sections)",
+    )
     return [f"计划已提交: {event.plan_id} v{event.version}"]
 
 
@@ -344,7 +368,21 @@ def _on_plan_approval_decision(app: Any, event: PlanApprovalDecisionEvent) -> li
     decision = event.decision
     if decision == "approve":
         app.status_bar.update_item("执行", True)
+    app.content_pane.add_message(
+        "计划审批", f"Plan {event.plan_id}: {decision}",
+        warning=decision not in ("approve",),
+    )
     return [f"计划{decision}: {event.plan_id}"]
+
+
+@_register(TuiEventKind.CHECKLIST_DERIVED)
+def _on_checklist_derived(app: Any, event: TaskChecklistEvent) -> list[str]:
+    app.announcement_strip.load_checklist(
+        plan_id=event.plan_id,
+        task_id=event.task_id,
+        items=event.items,
+    )
+    return [f"Checklist ready: {len(event.items)} items"]
 
 
 # ── process usage monitor handler ────────────────────────────────────────────

@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-29 (R15：Task Checklist Announcement Supplement 冻结 — 顶部公告式 checklist、plan annotations、软约束/运行记录、中性 Orientation Runtime Guard 接入边界)
+**更新**: 2026-07-29 (R15：Plan Mode + TUI Simplification 实施完成 + Task Checklist 设计冻结；R15 后索引状态修正 — 3 处过时标记更新)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -125,10 +125,10 @@
 > 设计意图、合约边界与战略决策。每篇文档承担一个独立的设计主题。
 
 - **产品定位与参考策略** (v0.1, 设计约束): 核心定位——运行时中立的通用科学保证内核，不绑定单一 LLM 运行时。入口: `architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`
-- **CLI UI Interaction Model** (v0.1, 事实/2026-07-29 Phase 2 事件流桥接完成): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型。第一原型已完成（9 个模块 ~3900 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、17 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。Phase 2 已完成：canonical CLI 事件流桥接——`bridge.py`（映射层，导入 assurance.* 的唯一 TUI 模块）、`LiveRunEventSource`（后台线程实时消费 CLI 事件）、`JsonlFileSource`（journal 重放，payload 解析为 typed event 子类）、3 个 typed gate event（IPG/Tool Avail/Orientation）、`--run`/`--replay` CLI 参数。217 tests pass。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`bridge.py` / `commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py` / `events.py` / `event_source.py` / `projector.py`）；Gap Register: GAK-UI-001
-- **CLI UI Simplification Supplement** (v0.1, 设计约束/待实施): 下一轮 TUI 精简与中文化方向——默认中文、Help modal overlay、大主窗模式、顶部两层压缩、Address 弹窗化、Find 多行适配、`Agent`→`模型`、`Edit`→`编辑模式`、聊天室式可折叠任务流。别名: UI 精简, 中文 TUI, Help 弹窗, 大主窗。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`
-- **Task Checklist Announcement Supplement** (v0.1, 设计约束/待实施): 主对话顶部公告式 checklist 与展开式工作清单页——Plan mode 批准后生成稳定 step ID 与 plan annotations；常态只显示步骤，展开显示软约束、运行记录和验收引用；Orientation Runtime Guard 只读取中性定位上下文，不询问是否偏移/正确/卡住。别名: checklist 公告, 工作清单, plan annotations, soft workboard, orientation checkpoint context。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
-- **Plan Mode and Process Usage Monitor** (v0.1, 设计约束/待实施): 稳定 Plan mode 与运行进程占用监控契约——计划固定四部分（前期调查/具体计划/具体设计/实施方案）、plan approval 与 action approval 分离、root PID 进程树 CPU/MEM/time 采样、系统终端即时显示、VS Code terminal title 2 秒刷新。别名: plan mode, process usage monitor, CPU/MEM, VS Code terminal title。入口: `architecture/PLAN_MODE_AND_PROCESS_USAGE_MONITOR_v0.1.md`
+- **CLI UI Interaction Model** (v0.1, 事实/2026-07-29 Phase 4 中文化完成): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型。第一原型已完成（9 个模块 ~3900 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、17 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。Phase 2：canonical CLI 事件流桥接（`bridge.py`、`LiveRunEventSource`、`JsonlFileSource`、3 个 typed gate event、`--run`/`--replay`）。Phase 3：真实 DeepSeek adapter 接入（`--real`、`build_live_run_fn(real_adapter=True)` 全链路贯通）。Phase 4 (R15)：默认中文 UI + HelpOverlay modal (6 tabs) + FindDialog modal + 大主窗模式（侧栏 toggle）+ `Agent`→`模型` + `Edit`→`编辑模式`。221 tests pass。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`bridge.py` / `commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py` / `events.py` / `event_source.py` / `projector.py`）；Gap Register: GAK-UI-001
+- **CLI UI Simplification Supplement** (v0.1, 设计约束/2026-07-29 R15 大部分已实施): 下一轮 TUI 精简与中文化方向——R15 已完成默认中文 UI（菜单/工具栏/状态栏/对话框全中文化）、HelpOverlay modal（6 tabs, Esc 关闭, ←/→ 导航）、FindDialog modal（Ctrl+F 多行/高级搜索）、大主窗模式（侧栏 toggle）、顶部两层布局保留、`Agent`→`模型`、`Edit`→`编辑模式`。待完成：Address 完整输入弹窗化、聊天室式可折叠任务流（依赖 Task Checklist 实现）。别名: UI 精简, 中文 TUI, Help 弹窗, 大主窗。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`
+- **Task Checklist Announcement Supplement** (v0.1, 设计约束/设计冻结, 待实施): 主对话顶部公告式 checklist 与展开式工作清单页——Plan mode 批准后生成稳定 step ID 与 plan annotations；常态只显示步骤，展开显示软约束、运行记录和验收引用；Orientation Runtime Guard 只读取中性定位上下文，不询问是否偏移/正确/卡住。2026-07-29 R15 已冻结架构文档（268 行）；7 个实施切片（checklist view model → plan mode bridge → announcement strip projection → expanded checklist page → orientation context bridge → journal/artifact registration → GPS mapping）均待实施。别名: checklist 公告, 工作清单, plan annotations, soft workboard, orientation checkpoint context。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
+- **Plan Mode and Process Usage Monitor** (v0.1, 设计约束/2026-07-29 R15 已实施): 稳定 Plan mode 与运行进程占用监控契约——计划固定四部分（前期调查/具体计划/具体设计/实施方案）、plan approval 与 action approval 分离、root PID 进程树 CPU/MEM/time 采样、系统终端即时显示、VS Code terminal title 2 秒刷新。R15 已交付：`plan_mode.py` (~700 行) — PlanArtifact（4-section structured plan）、PlanVerifier（7 check categories）、PlanStateMachine（8-state lifecycle）、ProcessUsageSampler（psutil 后台采样 + adaptive backoff）、VSCodeTitleUpdater、terminal status line；`plan-mode-result-v0.1.schema.json`；4 个新 TUI event 类型（plan_phase_entered/submitted/approval_decision/usage_sample）；80 tests pass。别名: plan mode, process usage monitor, CPU/MEM, VS Code terminal title。入口: `architecture/PLAN_MODE_AND_PROCESS_USAGE_MONITOR_v0.1.md` / `assurance/plan_mode.py` / `assurance/plan-mode-result-v0.1.schema.json` / `assurance/tests/test_plan_mode.py`
 - **Grok Build 适配** (v0.1, 设计约束): 以 Grok Build 为参考运行时的适配策略。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md`
 - **Upstream First 集成** (v0.1, 设计约束): 上游优先集成策略——先锁定上游版本再进行适配。入口: `architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`
 - **Upstream 版本策略** (v0.1, 设计约束): 上游版本锁定、候选评估与升级流程。入口: `architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`
@@ -247,7 +247,7 @@
 
 ### 已关闭 (Closed)
 
-- **GAK-UI-001 CLI UI Interaction Model** (2026-07-28 第一原型完成, 2026-07-29 Phase 2 事件流桥接完成, 2026-07-29 Phase 3 真实 adapter 接入完成): 9 个模块 ~3900 行。Phase 2 已完成 canonical CLI 事件流桥接——`bridge.py`（唯一允许导入 assurance.* 的 TUI 模块）、`LiveRunEventSource`（后台线程实时消费 CLI 事件）、`JsonlFileSource` payload 解析 → typed event 子类、3 个 typed gate event、projector 更新、--run/--replay CLI 参数。Phase 3 已完成真实 DeepSeek adapter 接入——`main.py` 新增 `--real` 和 `--credential-target` 标志、`build_live_run_fn(real_adapter=True)` 接线到 `run_canonical_guarded_cli_real`、真实 Gate 决策流通过 bridge → event_source → projector → retro 渲染全链路贯通。221 TUI tests pass。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `assurance/tui/`
+- **GAK-UI-001 CLI UI Interaction Model** (2026-07-28 第一原型完成, 2026-07-29 Phase 2-4 全部完成): 9 个模块 ~3900 行。Phase 2：canonical CLI 事件流桥接（`bridge.py`、`LiveRunEventSource`、`JsonlFileSource`、3 个 typed gate event、`--run`/`--replay`）。Phase 3：真实 DeepSeek adapter 接入（`--real`、`build_live_run_fn(real_adapter=True)` 全链路贯通）。Phase 4 (R15)：默认中文 UI（菜单/工具栏/状态栏/对话框全中文化）+ HelpOverlay modal (6 tabs, Esc 关闭, ←/→ 导航) + FindDialog modal (Ctrl+F 多行/高级搜索) + 大主窗模式（侧栏 toggle）+ `Agent`→`模型` + `Edit`→`编辑模式`。221 TUI tests pass。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `assurance/tui/`
 - **LBR-001 Local Browser Retrieval and PDF Evidence** (2026-07-29 关闭): Phase 1-4 全链路完成 + R9 闭合。Evidence Store (42 tests)、CDP 客户端 (27 tests)、检索工作流 (34 tests)、TUI 集成 (217 tests)。R9 新增: ① LiveBrowserTests 自启动 headless Chrome——不再需手动启动 Chrome，`setUpClass` 通过 `_ensure_browser()` 自动启停；skip 条件从 "Chrome 未运行" 改为 "Chrome 未安装"（4 tests pass, 0 skip）。② E2E 集成测试 `test_browser_retrieval_e2e.py` (6 tests)：Web 检索 5 (retrieve_urls 单页/多页/空列表/错误处理/progress callback) + 论文 PDF 检索 1 (run_retrieval arXiv → 下载 → 验证 → 证据库，验证 SHA-256、PDF header、metadata.json、pages.jsonl)。③ 修复 `classify_page` login 检测——"log in"/"login" 从关键词列表移除（arXiv 等网站导航栏中的 login 链接不再误触发 LOGIN_REQUIRED），改为仅匹配强信号 ("please log in to", "log in to continue", "authentication required" 等)。④ 测试可靠性加固——httpbin.org 替换为 example.com/example.org 消除间歇性 WebSocket 超时。全量 71 tests pass (0 skip)。已知限制: Chrome 主 profile 受企业安全策略拦截 CDP 连接，workaround 使用项目隔离 profile (`.gsa_chrome_profile/`)。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` / `assurance/browser_retrieval.py` / `assurance/retrieval_workflow.py` / `assurance/tests/test_browser_retrieval.py` / `assurance/tests/test_retrieval_workflow.py` / `assurance/tests/test_browser_retrieval_e2e.py`
 - **GAK-TRUST-001 Workspace Trust 统一入口** (2026-07-28 关闭): `establish_workspace_trust()` 已接入 canonical CLI 和检索子代理全部入口点。`AdapterGateContext` 携带 trust receipt；`_resolve_and_setup_gates()` 在 IPG 前建立 trust；`validate_all_entry_points_establish_trust()` AST 审计覆盖全部入口点。入口: `assurance/workspace_trust.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
 - **GAK-CHILD-001 Child Capability 统一传递** (2026-07-28 关闭): 新增 `spawn_child_context()` 统一入口（组合 predicate check + 签名 child envelope 创建）；检索子代理接受可选 `parent_envelope`，通过 `spawn_child_context()` 创建签名 child envelope 并传入 `ConversationNamespace.create(parent_envelope_id=...)`。入口: `assurance/child_capability_enforcer.py` / `assurance/retrieval_subagent.py`
@@ -265,7 +265,34 @@
 
 ### 待实施 / 进行中 (Pending / In Progress)
 
-（当前无进行中条目。所有已注册 Gap — 包括全部 8 个中等严重度 Gap — 均已关闭或达到 development baseline。剩余开放项：GAK-XPLAT-001 显式推迟 ≥1 年；GAK-EVT-001 / GAK-UI-001 / GAK-CRED-001 为 development baseline。）
+剩余待实施内容分为两个 Part：Part A 是 Task Checklist 核心链路 + 聊天室任务流（用户可见的最小可用闭环），Part B 是系统集成 + UI 收尾（跨子系统桥接与 Address 弹窗化）。
+
+#### Part A：Task Checklist 核心链路 + 聊天室任务流（用户可见闭环）
+
+依赖：已完成 `plan_mode.py` + TUI 框架。独立于 GPS、journal、orientation guard 改动。
+
+- **A1 — Checklist view model**：`TaskChecklist` 数据结构（item/status/annotation/step_id）。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md` §4/§5/§6
+- **A2 — Plan mode bridge**：`PlanArtifact` → `TaskChecklist` 派生逻辑。Plan mode 审批后自动生成 checklist items + plan annotations。入口: §6
+- **A3 — Announcement strip（L1 公告条）**：TUI 主窗顶部常驻紧凑公告条，默认仅显示**最近 3 条**——上一条（计划顺序中的前一条，非最近完成条）+ 当前进行条 + 后一条。刚开始时显示第 1/2/3 条（无前一条），最后一步时显示 N-2/N-1/N（无后一条）。仅单行，不换行。入口: §3/§12
+- **A4 — Expanded checklist（L2 全条目列表 + L3 单条详情）**：三层渐进式展开——**L2**：用户点击公告条时，在主窗内 **inline 展开**全部条目标题 + 状态，不显示详情；最高为主窗口高度的 2/3，超出时支持 ↑/↓ 方向键滚动浏览；滚动高亮移动不触发 L3。**L3**：仅当用户对具体条目按 Enter 或点击时，才展开该条（不全部展开，不自动展开），显示 plan annotations、soft constraints、runtime records、acceptance refs。**关闭**：`Esc` on L3 → 关闭该条详情，回到 L2（全条目列表）；`Esc` on L2 → 关闭列表，回到 L1（仅公告条 3 条）。L2/L3 常态折叠。入口: §3/§7/§12
+- **A5 — 聊天室式可折叠任务流**：主窗以 AI 任务输出流为中心（用户输入→模型公开输出→Plan mode 四部分→工具调用摘要→权限请求/结果→来源检查→运行资源摘要→验证结果）。运行中显示关键状态，当前进程结束后工具调用/事件/来源检查默认折叠；折叠不能隐藏阻塞错误、未审批动作或 verifier failure。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md` §11
+
+**Part A 交付标准**：Plan mode 审批 → L1 公告条常驻显示最近 3 条 → 点击 → L2 inline 展开全条目列表（2/3 高度，可滚动）→ 点击具体条目 → L3 展开该条详情 → 任务完成后可折叠。
+
+#### Part B：系统集成 + UI 收尾（跨系统桥接）
+
+依赖 Part A 稳定。涉及修改现有子系统（orientation guard / journal / GPS / TUI address bar）。
+
+- **B1 — Orientation context bridge**：checklist 当前 step ID/title/position → orientation checkpoint 中性上下文。Orientation Runtime Guard 只读取上下文，不询问是否偏移/正确/卡住。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md` §8
+- **B2 — Journal/artifact registration**：checklist 版本与状态变更持久化到 run journal。入口: §6/§13.6
+- **B3 — GPS mapping**：checklist item ID → GPS step_id、status → progress item state、acceptance refs → acceptance_coverage、plan revision → GPS plan_revision。入口: §10
+- **B4 — Address 完整输入弹窗化**：长路径/URI/命令从常驻 address row 移入 modal overlay（支持历史记录、slash command autocomplete、`Esc` 关闭、`Enter` 确认）。常驻入口仅显示短摘要（如 `命令...` / `当前: run/current-task`）。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md` §5
+
+**Part B 交付标准**：Orientation guard 可读取当前 step、checklist 状态可持久化并映射到 GPS、address 输入弹窗可正常工作。
+
+---
+
+所有已注册 Gap（含全部 8 个中等严重度 Gap）均已关闭或达到 development baseline。GAK-XPLAT-001 显式推迟 ≥1 年。
 
 ---
 
@@ -303,7 +330,7 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
-- 2026-07-29-R15: Task Checklist Announcement Supplement — 顶部公告式 checklist、稳定 step ID、plan annotations、软约束/运行记录、与中性 Orientation Runtime Guard 的接入边界；入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
+- 2026-07-29-R15: Plan Mode + TUI Simplification 实施完成 + Task Checklist 设计冻结 — `plan_mode.py` (~700 行, 80 tests)：PlanArtifact + PlanVerifier + PlanStateMachine (8-state) + ProcessUsageSampler (psutil 后台采样 + adaptive backoff) + VSCodeTitleUpdater + terminal status line；TUI Phase 4 中文化（菜单/工具栏/状态栏/对话框全中文化）+ HelpOverlay modal (6 tabs) + FindDialog modal + 大主窗模式 (221 tests)；Task Checklist 架构文档冻结 (268 行)；入口: `assurance/plan_mode.py` / `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md` / `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
 - 2026-07-29-R14: GAK-UX-001 — UXSafetyEvaluator + 10 UX 安全场景 + 8 种断言类型 + 签名 receipt；20 tests pass；全部中等严重度 Gap 全部关闭
 - 2026-07-29-R13: GAK-REC-001 — ShadowRecoveryStore + RecoveryDiffPreview + RecoveryExecutor；23 tests pass；shadow recovery store 闭合
 - 2026-07-29-R12: GAK-CMP-001 — AutomaticCompactionSimulator + ManualCompactionSimulator + 6 invariant validators；automatic threshold honest unknown 不变性证明；36 tests pass；`AUTOMATIC_THRESHOLD_NOT_OBSERVED` → `AUTOMATIC_THRESHOLD_OBSERVED`

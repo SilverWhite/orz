@@ -625,6 +625,9 @@ class KeyboardNavigationTests(unittest.TestCase):
     def test_f6_cycles_focus(self) -> None:
         self.assertEqual(self.app.active_pane, "explorer")
         result = self.app.handle_key("f6")
+        self.assertIn("checklist", result)
+        self.assertEqual(self.app.active_pane, "checklist")
+        result = self.app.handle_key("f6")
         self.assertIn("content", result)
         self.assertEqual(self.app.active_pane, "content")
         result = self.app.handle_key("f6")
@@ -1322,7 +1325,7 @@ class TuiEventDataclassTests(unittest.TestCase):
 
     def test_all_event_kinds_recognised(self) -> None:
         from assurance.tui.events import TuiEventKind
-        self.assertEqual(len(TuiEventKind), 22)
+        self.assertEqual(len(TuiEventKind), 24)
         self.assertEqual(TuiEventKind.RUN_PREFLIGHT.value, "run_preflight")
         self.assertEqual(TuiEventKind.RUN_FINISHED.value, "run_finished")
         self.assertEqual(TuiEventKind.GATE_DECISION.value, "gate_decision")

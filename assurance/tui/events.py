@@ -51,6 +51,9 @@ class TuiEventKind(str, Enum):
     PLAN_APPROVAL_DECISION = "plan_approval_decision"
     # ── process usage monitor ──
     USAGE_SAMPLE = "usage_sample"
+    # ── task checklist (GAK-PLAN-001 extension) ──
+    CHECKLIST_DERIVED = "checklist_derived"
+    CHECKLIST_ITEM_STATUS_CHANGED = "checklist_item_status_changed"
 
 
 # ── base event ───────────────────────────────────────────────────────────────
@@ -370,6 +373,32 @@ class UsageSampleEvent(TuiEvent):
     completeness: str = "complete"  # "complete" | "partial" | "unavailable"
     status_line: str = ""           # pre-formatted: "CPU 185% MEM 2.1G 14m 12p"
     anomaly_line: str = ""          # non-empty only on threshold breach
+
+
+# ── task checklist events ────────────────────────────────────────────────────
+
+
+@dataclass
+class TaskChecklistEvent(TuiEvent):
+    """Emitted when a TaskChecklist is derived from an approved plan."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.CHECKLIST_DERIVED, init=False)
+    plan_id: str = ""
+    task_id: str = ""
+    run_id: str = ""
+    items: list[dict[str, object]] = field(default_factory=list)
+    created_at: str = ""
+
+
+@dataclass
+class ChecklistItemStatusEvent(TuiEvent):
+    """Emitted when a checklist item's status changes."""
+
+    kind: TuiEventKind = field(
+        default=TuiEventKind.CHECKLIST_ITEM_STATUS_CHANGED, init=False,
+    )
+    step_id: str = ""
+    status: str = ""  # one of ChecklistStatus values
 
 
 # ── known terminal event kinds ───────────────────────────────────────────────

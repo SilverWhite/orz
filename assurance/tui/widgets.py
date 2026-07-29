@@ -691,8 +691,44 @@ class ContentPane(Widget):
     next_actions: list[str] = field(default_factory=list)
     focusable: bool = True
 
+    # ── message mode (A5 — chat-style task flow) ──
+    _messages: list[dict[str, Any]] = field(default_factory=list)
+    _message_mode: bool = False
+
+    def add_message(
+        self, kind: str, content: str,
+        collapsible: bool = False,
+        warning: bool = False,
+    ) -> None:
+        """Append a chat-style message to the task output stream.
+
+        *collapsible* messages auto-collapse when the run finishes.
+        *warning* messages are never collapsed (blocking errors, unapproved
+        actions, verifier failures).
+        """
+        self._messages.append({
+            "kind": kind,
+            "content": content,
+            "collapsible": collapsible,
+            "collapsed": False,
+            "warning": warning,
+        })
+        self._message_mode = True
+
+    def collapse_non_warnings(self) -> None:
+        """Collapse all collapsible, non-warning messages (called on run end)."""
+        for msg in self._messages:
+            if msg.get("collapsible") and not msg.get("warning"):
+                msg["collapsed"] = True
+
     def render(self, width: int, height: int) -> list[str]:
         inner_w = width - 2
+        if self._message_mode and self._messages:
+            return box_vertical(
+                self._render_messages(inner_w, height), width,
+                focused=self.focused,
+            )
+
         lines: list[str] = []
 
         # Title
@@ -740,6 +776,36 @@ class ContentPane(Widget):
         if len(lines) < height:
             lines += [""] * (height - len(lines))
         return box_vertical(lines[:height], width, focused=self.focused)
+
+    def _render_messages(self, width: int, height: int) -> list[str]:
+        """Render the chat-style message output stream."""
+        lines: list[str] = []
+        for msg in self._messages:
+            kind = str(msg.get("kind", ""))
+            content = str(msg.get("content", ""))
+            collapsible = bool(msg.get("collapsible"))
+            collapsed = bool(msg.get("collapsed"))
+            warning = bool(msg.get("warning"))
+
+            # Build header
+            parts = []
+            if collapsible:
+                parts.append("▸" if collapsed else "▾")
+            if warning:
+                parts.append("⚠")
+            parts.append(f" [{kind}]")
+            header = " ".join(parts)
+            lines.append(header)
+
+            if not collapsed or warning:
+                for cl in content.split("\n"):
+                    lines.append(f"  {cl}")
+            lines.append("")
+
+        # Pad
+        if len(lines) < height:
+            lines += [""] * (height - len(lines))
+        return lines[:height]
 
     # ── mutation helpers (event-driven updates) ───────────────────────────
 
@@ -1283,6 +1349,405 @@ class FindDialog(Widget):
         if self._focus_row == 0 and key == "space":
             self.query += " "
             return True
+        return False
+
+
+# ── checklist bar (GAK-PLAN-001 extension) ────────────────────────────────────
+
+
+@dataclass
+class AnnouncementStrip(Widget):
+    """Task checklist announcement strip with three-layer progressive disclosure.
+
+    L1 — compact bar: always visible, shows prev + current + next (3 items).
+    L2 — expanded list: inline full item list with arrow-key scrolling.
+    L3 — single-item detail: annotations, constraints, runtime records.
+    """
+
+    items: list[dict[str, object]] = field(default_factory=list)
+    focusable: bool = True
+    visible: bool = True
+
+    # expansion state
+    l2_expanded: bool = False
+    l3_expanded: bool = False
+    highlight_index: int = 0
+    scroll_offset: int = 0
+    checklist_title: str = "Task"       # prefix shown in L1
+
+    def load_checklist(
+        self,
+        plan_id: str,
+        task_id: str,
+        items: list[dict[str, object]],
+    ) -> None:
+        """Populate the strip with checklist data from a bridge event."""
+        self.items = list(items)
+        self.l2_expanded = False
+        self.l3_expanded = False
+        self.highlight_index = self._find_current_index()
+        self.scroll_offset = 0
+        self.visible = True
+
+    # ── rendering ──────────────────────────────────────────────────────────
+
+    def render(self, width: int, height: int) -> list[str]:
+        if not self.visible or not self.items:
+            return [" " * width]
+
+        if self.l3_expanded and 0 <= self.highlight_index < len(self.items):
+            return self._render_l3(width, height)
+        if self.l2_expanded:
+            return self._render_l2(width, height)
+        return self._render_l1(width)
+
+    def _render_l1(self, width: int) -> list[str]:
+        """Single-line compact bar: [Task] prev | current | next."""
+        ci = self._find_current_index()
+        shown = []
+        for offset in (-1, 0, 1):
+            idx = ci + offset
+            if 0 <= idx < len(self.items):
+                shown.append(self.items[idx])
+
+        parts = [f"[{self.checklist_title}]"]
+        for item in shown:
+            sid = str(item.get("step_id", ""))[:8]
+            st = str(item.get("status", "todo"))
+            sym = _CHECKLIST_SYMBOLS.get(st, ".")
+            title = str(item.get("title", ""))[:20]
+            parts.append(f"{sym} {sid} {title}")
+
+        line = "  ".join(parts)
+        return [pad_to_width(line, width)]
+
+    def _render_l2(self, width: int, height: int) -> list[str]:
+        """Expanded inline list: all items with title + status."""
+        inner_w = width - 2
+        lines = []
+        lines.append(pad_to_width(
+            " Checklist （↑↓ 滚动  Enter 详情  Esc 关闭）", width,
+        ))
+        lines.append("─" * width)
+
+        available = max(1, height - len(lines))
+        visible_items = min(len(self.items), available)
+
+        # clamp scroll
+        if self.scroll_offset > len(self.items) - visible_items:
+            self.scroll_offset = max(0, len(self.items) - visible_items)
+        if self.scroll_offset < 0:
+            self.scroll_offset = 0
+
+        for i in range(self.scroll_offset, min(
+            self.scroll_offset + visible_items, len(self.items),
+        )):
+            item = self.items[i]
+            sid = str(item.get("step_id", ""))
+            st = str(item.get("status", "todo"))
+            sym = _CHECKLIST_SYMBOLS.get(st, ".")
+            title = str(item.get("title", ""))[:inner_w - 14]
+            marker = "▸" if i == self.highlight_index else " "
+            line = f" {marker} {sym} {sid:<10} {title}"
+            lines.append(pad_to_width(line, width))
+
+        while len(lines) < height:
+            lines.append(" " * width)
+        return lines[:height]
+
+    def _render_l3(self, width: int, height: int) -> list[str]:
+        """Single-item detail view with annotations."""
+        item = self.items[self.highlight_index]
+        inner_w = width - 2
+        lines = []
+        lines.append(pad_to_width(
+            f" {item.get('step_id', '')}: {item.get('title', '')}", width,
+        ))
+        lines.append("─" * width)
+
+        st = str(item.get("status", "todo"))
+        lines.append(f" 状态: {st}")
+
+        ann = item.get("annotations")
+        if isinstance(ann, dict):
+            if ann.get("plan_revision"):
+                lines.append(f" 计划版本: {ann['plan_revision']}")
+            if ann.get("source_section"):
+                lines.append(f" 来源章节: {ann['source_section']}")
+            refs = ann.get("acceptance_refs")
+            if refs:
+                lines.append(f" 验收引用: {', '.join(str(r) for r in refs)}")
+            constraints = ann.get("soft_constraints")
+            if constraints:
+                lines.append(" 软约束:")
+                for c in constraints:
+                    lines.append(f"   - {c}")
+            recs = ann.get("runtime_records")
+            if recs:
+                lines.append(" 运行记录:")
+                for r in recs:
+                    lines.append(f"   - {r}")
+            trigger = ann.get("next_review_trigger")
+            if trigger:
+                lines.append(f" 下次复核: {trigger}")
+
+        lines.append("")
+        lines.append(pad_to_width(" Esc 关闭详情", width))
+
+        while len(lines) < height:
+            lines.append(" " * width)
+        return lines[:height]
+
+    @property
+    def expanded_height(self) -> int:
+        """Extra rows this bar needs beyond L1 (1 row)."""
+        if not self.visible or not self.items:
+            return 0
+        if self.l3_expanded or self.l2_expanded:
+            n = min(len(self.items) + 3, 40)
+            return n - 1  # subtract the 1 L1 row already counted
+        return 0
+
+    # ── keyboard ───────────────────────────────────────────────────────────
+
+    def handle_key(self, key: str) -> bool:
+        if not self.visible or not self.items:
+            return False
+
+        if key == "esc":
+            if self.l3_expanded:
+                self.l3_expanded = False
+                return True
+            if self.l2_expanded:
+                self.l2_expanded = False
+                return True
+            return False
+
+        if key == "enter":
+            if not self.l2_expanded:
+                self.l2_expanded = True
+                self.l3_expanded = False
+                self.highlight_index = self._find_current_index()
+                self.scroll_offset = 0
+                return True
+            if self.l2_expanded and not self.l3_expanded:
+                self.l3_expanded = True
+                return True
+            return False
+
+        if key == "up" and self.l2_expanded:
+            self.highlight_index = max(0, self.highlight_index - 1)
+            if self.highlight_index < self.scroll_offset:
+                self.scroll_offset = self.highlight_index
+            return True
+
+        if key == "down" and self.l2_expanded:
+            self.highlight_index = min(
+                len(self.items) - 1, self.highlight_index + 1,
+            )
+            visible_items = 10  # rough; precise clamp in _render_l2
+            if self.highlight_index >= self.scroll_offset + visible_items:
+                self.scroll_offset = self.highlight_index - visible_items + 1
+            return True
+
+        return False
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _find_current_index(self) -> int:
+        """Index of the 'doing' item, or first 'todo' after a 'done'."""
+        for i, item in enumerate(self.items):
+            if item.get("status") == "doing":
+                return i
+        for i, item in enumerate(self.items):
+            if item.get("status") == "todo":
+                return i
+        return max(0, len(self.items) - 1)
+
+
+# Status symbol lookup for the checklist bar.
+_CHECKLIST_SYMBOLS: dict[str, str] = {
+    "todo": ".",
+    "doing": ">",
+    "done": "done",
+    "blocked": "!",
+    "deferred": "~",
+    "replanned": "*",
+}
+
+
+# ── address dialog (B4 — modal overlay for full command/address input) ────────
+
+
+@dataclass
+class AddressDialog(Widget):
+    """Modal overlay for full address/command input.
+
+    Activated by Ctrl+L or clicking the resident address bar.  Supports
+    slash-command autocomplete, history, multi-line input, Esc close,
+    and Enter confirm.  The resident address bar shows only a short summary.
+    """
+
+    buffer: str = ""
+    history: list[str] = field(default_factory=list)
+    history_index: int = -1
+    history_draft: str = ""
+    visible: bool = False
+    _autocomplete: list[Any] = field(default_factory=list)
+    _selected_completion: int = -1
+    _focus_row: int = 0  # 0=input, 1=actions
+
+    def open_dialog(self, initial: str = "") -> None:
+        self.buffer = initial
+        self.visible = True
+        self.history_index = -1
+        self._selected_completion = -1
+        self._focus_row = 0
+        self._refresh_completions()
+
+    def close_dialog(self) -> str:
+        self.visible = False
+        return self.buffer
+
+    def _refresh_completions(self) -> None:
+        if self.buffer.startswith("/") and "\n" not in self.buffer:
+            from .commands import get_builtin_registry
+            self._autocomplete = get_builtin_registry().search(self.buffer)
+        else:
+            self._autocomplete = []
+
+    def render_overlay(self, screen_w: int, screen_h: int) -> list[str] | None:
+        if not self.visible:
+            return None
+
+        dialog_w = min(max(screen_w - 8, 40), 72)
+        inner_w = dialog_w - 2
+        result: list[str] = []
+        result.append(box_horizontal(" 命令/地址 ", dialog_w, focused=True))
+
+        # Query input row
+        cursor = "█" if self._focus_row == 0 else ""
+        q_marker = "▸" if self._focus_row == 0 else " "
+        shown = self.buffer[-(inner_w - 6):] if len(self.buffer) > inner_w - 6 else self.buffer
+        result.append(edge() + pad_to_width(f"{q_marker} {shown}{cursor}", inner_w) + edge())
+
+        # Autocomplete list
+        if self._autocomplete:
+            for i, cmd in enumerate(self._autocomplete[:6]):
+                marker = "▸" if i == self._selected_completion else " "
+                slash = getattr(cmd, "slash", str(cmd))
+                name = getattr(cmd, "name_zh", "")
+                result.append(edge() + pad_to_width(f"  {marker} {slash:<16} {name}", inner_w) + edge())
+
+        result.append(box_t_junction(dialog_w, focused=True))
+
+        # Action buttons
+        if self._focus_row == 1:
+            result.append(edge() + pad_to_width("    ▸ [ 确认 ]    [ 取消 ]", inner_w) + edge())
+        else:
+            result.append(edge() + pad_to_width("      [ 确认 ]    [ 取消 ]", inner_w) + edge())
+        result.append(box_bottom(dialog_w, focused=True))
+
+        # Center on screen
+        BG = " "
+        dialog_h = len(result)
+        top_pad = max(0, (screen_h - dialog_h) // 2)
+        left_pad = max(0, (screen_w - dialog_w) // 2)
+        padded: list[str] = []
+        for _ in range(top_pad):
+            padded.append(BG * screen_w)
+        for line in result:
+            padded.append(BG * left_pad + pad_to_width(line, dialog_w) + BG * (screen_w - left_pad - dialog_w))
+        for _ in range(screen_h - len(padded)):
+            padded.append(BG * screen_w)
+        return padded[:screen_h]
+
+    def handle_key(self, key: str) -> bool:
+        if not self.visible:
+            return False
+
+        if key == "esc":
+            self.visible = False
+            return True
+
+        if key == "tab" or key == "s-tab":
+            if self._autocomplete and self._focus_row == 0:
+                n = min(len(self._autocomplete), 6)
+                if key == "tab":
+                    self._selected_completion = (self._selected_completion + 1) % n
+                else:
+                    self._selected_completion = (self._selected_completion - 1) % n
+                return True
+            self._focus_row = 1 if self._focus_row == 0 else 0
+            return True
+
+        if key == "up":
+            if self._focus_row == 0 and self._autocomplete:
+                self._selected_completion = max(0, self._selected_completion - 1)
+                return True
+            if self.history and self.history_index < len(self.history) - 1:
+                if self.history_index == -1:
+                    self.history_draft = self.buffer
+                self.history_index += 1
+                self.buffer = self.history[self.history_index]
+                self._refresh_completions()
+                return True
+            return False
+
+        if key == "down":
+            if self._focus_row == 0 and self._autocomplete:
+                self._selected_completion = min(
+                    min(len(self._autocomplete), 6) - 1,
+                    self._selected_completion + 1,
+                )
+                return True
+            if self.history_index > 0:
+                self.history_index -= 1
+                self.buffer = self.history[self.history_index]
+                self._refresh_completions()
+                return True
+            if self.history_index == 0:
+                self.history_index = -1
+                self.buffer = self.history_draft
+                self._refresh_completions()
+                return True
+            return False
+
+        if key == "enter":
+            if self._focus_row == 0 and self._selected_completion >= 0:
+                cmd = self._autocomplete[self._selected_completion]
+                slash = getattr(cmd, "slash", str(cmd))
+                self.buffer = slash + " "
+                self._selected_completion = -1
+                self._autocomplete = []
+                return True
+            self.visible = False  # confirm
+            return True
+
+        if len(key) == 1 and key.isprintable():
+            self.buffer += key
+            self._selected_completion = -1
+            self._refresh_completions()
+            return True
+
+        if key == "space":
+            self.buffer += " "
+            self._selected_completion = -1
+            self._refresh_completions()
+            return True
+
+        if key == "backspace" and self.buffer:
+            self.buffer = self.buffer[:-1]
+            self._selected_completion = -1
+            self._refresh_completions()
+            return True
+
+        if key == "s-enter":
+            self.buffer += "\n"
+            self._selected_completion = -1
+            self._autocomplete = []
+            return True
+
         return False
 
 

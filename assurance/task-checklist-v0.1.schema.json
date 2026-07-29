@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/task-checklist-v0.1.schema.json",
+  "title": "Task Checklist v0.1",
+  "description": "A soft-workboard checklist derived from an approved PlanArtifact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "task_id",
+    "run_id",
+    "items",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0-draft"
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The plan from which this checklist was derived."
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "title", "status", "created_at", "updated_at"],
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_-]{1,31}-[0-9]{2}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": ["todo", "doing", "done", "blocked", "deferred", "replanned"]
+          },
+          "annotations": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": { "type": "string" },
+              "source_section": { "type": "string" },
+              "acceptance_refs": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "soft_constraints": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "assumptions": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "deferred_decisions": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "runtime_records": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "next_review_trigger": { "type": "string" }
+            }
+          },
+          "created_at": { "type": "string" },
+          "updated_at": { "type": "string" }
+        }
+      }
+    },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+  }
+}

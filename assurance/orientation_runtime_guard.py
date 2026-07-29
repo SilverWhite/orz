@@ -19,6 +19,14 @@ ORIENTATION_BLOCK = """[ORIENTATION_CHECKPOINT v0.1]
 下一步输出应该服务哪个用户目标？
 [/ORIENTATION_CHECKPOINT]"""
 
+CHECKLIST_CONTEXT_TEMPLATE = (
+    "[CHECKLIST_CONTEXT v0.1]\n"
+    "当前步骤: {step_id} — {title}\n"
+    "任务位置: 步骤 {position} / 共 {total} 项\n"
+    "步骤状态: {status}\n"
+    "[/CHECKLIST_CONTEXT]"
+)
+
 ALLOWED_ORIENTATION_FIELDS = [
     "orientation_summary",
     "current_task_position",
@@ -40,9 +48,23 @@ def build_orientation_checkpoint(
     trigger_step: int,
     task_contract_sha256: str | None = None,
     tool_availability_sha256: str | None = None,
+    checklist_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if trigger_step < 0:
         raise AssuranceError("orientation trigger_step must be non-negative")
+
+    # Build message block with optional checklist context injection.
+    message_block = ORIENTATION_BLOCK
+    if checklist_context:
+        ctx_block = CHECKLIST_CONTEXT_TEMPLATE.format(
+            step_id=checklist_context.get("step_id", ""),
+            title=checklist_context.get("title", ""),
+            position=checklist_context.get("position", "?"),
+            total=checklist_context.get("total", "?"),
+            status=checklist_context.get("status", "todo"),
+        )
+        message_block = ctx_block + "\n\n" + ORIENTATION_BLOCK
+
     checkpoint = {
         "schema_version": "0.1.0-draft",
         "checkpoint_kind": "orientation_checkpoint",
@@ -53,7 +75,7 @@ def build_orientation_checkpoint(
             "step_index": trigger_step,
             "task_contract_sha256": task_contract_sha256,
         },
-        "message_block": ORIENTATION_BLOCK,
+        "message_block": message_block,
         "allowed_response_fields": ALLOWED_ORIENTATION_FIELDS,
         "forbidden_response_fields": FORBIDDEN_ORIENTATION_FIELDS,
         "claim_policy": {
@@ -65,6 +87,7 @@ def build_orientation_checkpoint(
         "notes": [
             "Neutral task orientation only.",
             "This checkpoint must not ask whether the current action is correct or biased.",
+            "Checklist context (if present) is neutral positional data only.",
         ],
     }
     validate_contract(

@@ -23,6 +23,7 @@ from typing import Any, Callable
 # ── TUI-owned types (no assurance imports needed for these) ──────────────────
 from .events import (
     ArtifactRegisteredEvent,
+    ChecklistItemStatusEvent,
     ErrorEvent,
     GateDecisionEvent,
     InstructionProvenanceGateEvent,
@@ -40,6 +41,7 @@ from .events import (
     RunStartedEvent,
     SourceVisibilityEvent,
     StatusUpdateEvent,
+    TaskChecklistEvent,
     ToolAvailabilityEvent,
     TuiEvent,
     TuiEventKind,
@@ -366,6 +368,20 @@ def _make_usage_sample(payload: dict[str, Any], timestamp: str) -> UsageSampleEv
     )
 
 
+# ── checklist factories ──────────────────────────────────────────────────────
+
+
+def _make_checklist_derived(payload: dict[str, Any], timestamp: str) -> TaskChecklistEvent:
+    return TaskChecklistEvent(
+        timestamp=timestamp,
+        plan_id=payload.get("plan_id", ""),
+        task_id=payload.get("task_id", ""),
+        run_id=payload.get("run_id", ""),
+        items=payload.get("items", []),
+        created_at=payload.get("created_at", ""),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Dispatch tables
 # ══════════════════════════════════════════════════════════════════════════════
@@ -389,6 +405,7 @@ _EVENT_FACTORY: dict[str, Callable[[dict[str, Any], str], TuiEvent | list[TuiEve
     "plan_phase_submitted": _make_plan_phase_submitted,
     "plan_approval_decision": _make_plan_approval_decision,
     "usage_sample": _make_usage_sample,
+    "checklist_derived": _make_checklist_derived,
 }
 
 
@@ -411,6 +428,8 @@ _KIND_MAP: dict[str, TuiEventKind] = {
     "plan_phase_submitted": TuiEventKind.PLAN_PHASE_SUBMITTED,
     "plan_approval_decision": TuiEventKind.PLAN_APPROVAL_DECISION,
     "usage_sample": TuiEventKind.USAGE_SAMPLE,
+    "checklist_derived": TuiEventKind.CHECKLIST_DERIVED,
+    "checklist_item_status_changed": TuiEventKind.CHECKLIST_ITEM_STATUS_CHANGED,
 }
 
 

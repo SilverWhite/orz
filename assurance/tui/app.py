@@ -33,6 +33,8 @@ from .view_models import (
 )
 from .widgets import (
     AddressBar,
+    AddressDialog,
+    AnnouncementStrip,
     CommandPalette,
     ContentMarker,
     ContentPane,
@@ -55,7 +57,7 @@ from .widgets import (
 EXPLORER_WIDTH = 22   # fixed-width explorer pane (20 + 2 borders)
 MARKER_WIDTH = 16     # right-side content marker (14 + 2 borders)
 FIXED_HEIGHT = 1      # menu, toolbar, address, find, status bars
-TOTAL_FIXED_ROWS = 5  # menu + toolbar + address + find + status
+TOTAL_FIXED_ROWS = 6  # menu + toolbar + address + find + checklist + status
 
 
 @dataclass
@@ -88,6 +90,8 @@ class TuiPrototype:
     command_palette: CommandPalette = field(default_factory=CommandPalette)
     help_overlay: HelpOverlay = field(default_factory=HelpOverlay.with_defaults)
     find_dialog: FindDialog = field(default_factory=FindDialog)
+    address_dialog: AddressDialog = field(default_factory=AddressDialog)
+    announcement_strip: AnnouncementStrip = field(default_factory=AnnouncementStrip)
 
     # ── sidebar visibility (GAK-UI-001 P2) ──
     show_explorer: bool = True
@@ -110,7 +114,7 @@ class TuiPrototype:
 
     # ── focus ──
     _focusable_panes: tuple[str, ...] = (
-        "explorer", "content", "marker", "address", "find",
+        "explorer", "checklist", "content", "marker", "address", "find",
     )
     _active_pane_index: int = 0
 
@@ -149,6 +153,14 @@ class TuiPrototype:
         find = self.find_bar.render(inner_w, 1)
         lines.append("│" + find[0] + "│")
 
+        # ── Row 4: AnnouncementStrip (L1 checklist bar) ──
+        chk_extra = self.announcement_strip.expanded_height
+        chk_height = 1 + chk_extra
+        chk = self.announcement_strip.render(inner_w, chk_height)
+        for chk_line in chk:
+            lines.append("│" + chk_line + "│")
+        lines.append(box_t_junction(width))
+
         # ── explorer / content / marker 3-column split ──
         exp_w = (EXPLORER_WIDTH - 2) if se else 0
         marker_w = (MARKER_WIDTH - 2) if sm else 0
@@ -169,7 +181,7 @@ class TuiPrototype:
         lines.append(sep_line)
 
         # ── Body ──
-        body_height = height - TOTAL_FIXED_ROWS - 5
+        body_height = height - TOTAL_FIXED_ROWS - 5 - chk_extra
         if body_height < 3:
             body_height = 3
 
@@ -223,6 +235,12 @@ class TuiPrototype:
                 result = self._blend_overlay(result, overlay, height)
             return result  # help blocks everything else
 
+        if self.address_dialog.visible:
+            overlay = self.address_dialog.render_overlay(width, height)
+            if overlay:
+                result = self._blend_overlay(result, overlay, height)
+            return result
+
         if self.find_dialog.visible:
             overlay = self.find_dialog.render_overlay(width, height)
             if overlay:
@@ -275,6 +293,12 @@ class TuiPrototype:
 
     def handle_key(self, key: str) -> str | None:
         """Dispatch *key* and return an optional status message."""
+        # Checklist L2/L3 consumes nav keys (↑↓ Esc Enter) when expanded
+        if self.announcement_strip.l2_expanded or self.announcement_strip.l3_expanded:
+            if key in ("up", "down", "enter", "esc"):
+                self.announcement_strip.handle_key(key)
+                return None
+
         # HelpOverlay consumes all keys while visible
         if self.help_overlay.visible:
             self.help_overlay.handle_key(key)
@@ -283,6 +307,17 @@ class TuiPrototype:
         # FindDialog consumes all keys while visible
         if self.find_dialog.visible:
             self.find_dialog.handle_key(key)
+            return None
+
+        # AddressDialog consumes all keys while visible
+        if self.address_dialog.visible:
+            self.address_dialog.handle_key(key)
+            if not self.address_dialog.visible:
+                # Dialog just closed — dispatch the command
+                sent = self.address_dialog.buffer.strip()
+                if sent:
+                    self.address_dialog.history.insert(0, sent)
+                    return self._dispatch_command(sent)
             return None
 
         # Dialogs/properties consume all keys while visible
@@ -319,6 +354,11 @@ class TuiPrototype:
         if key == "c-f":
             self.find_dialog.visible = not self.find_dialog.visible
             return "查找" if self.find_dialog.visible else None
+
+        if key == "c-l":
+            current = self.address_bar.uri or ""
+            self.address_dialog.open_dialog(current)
+            return "命令…"
 
         if key == "esc":
             # 1. If help is visible, close it
@@ -381,6 +421,7 @@ class TuiPrototype:
     def _get_active_pane(self) -> Any:
         mapping = {
             "explorer": self.explorer_pane,
+            "checklist": self.announcement_strip,
             "content": self.content_pane,
             "marker": self.content_marker,
             "address": self.address_bar,
