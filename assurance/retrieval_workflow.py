@@ -14,6 +14,7 @@ TUI can display retrieval state without importing from this module.
 from __future__ import annotations
 
 import logging
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -766,8 +767,10 @@ def _ensure_browser(
        AI can never accidentally read the user's authenticated
        sessions.
 
-       The user must log into Google once in the project profile
-       window.  Cookies persist across sessions.
+       The profile is persistent: open a visible window once
+       (``headless=False``), log into Google, and cookies survive
+       across retrieval sessions.  Subsequent runs in headless mode
+       reuse the authenticated profile.
 
     See :file:`architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
     §25 for the full limitation and resolution plan.
@@ -787,7 +790,8 @@ def _ensure_browser(
             f"set launch_browser=True to auto-launch."
         )
 
-    # Step 2: Auto-launch with a project-isolated profile.
+    # Step 2: Kill any zombie browser on the target port, then auto-launch
+    # with a project-isolated profile.
     #
     # DESIGN NOTE (LBR-001, 2026-07-29):
     #   Chrome's main user profile CDP connection is blocked by enterprise
@@ -798,11 +802,18 @@ def _ensure_browser(
     #   window has zero access to the user's main profile cookies,
     #   passwords, bookmarks, or authenticated sessions.
     #
-    #   The profile is persistent: log into Google once, cookies survive
-    #   across retrieval sessions.  It is stored inside the project
-    #   directory so it never conflicts with the user's main Chrome.
+    #   The profile is persistent: open a visible window once
+    #   (headless=False), log into Google, and cookies survive across
+    #   retrieval sessions.  It is stored inside the project directory
+    #   so it never conflicts with the user's main Chrome.
+    #
+    #   We kill any existing process on the port first to prevent
+    #   "port already in use" errors from a previous crashed/zombie
+    #   Chrome instance.
+
     from .contracts import ASSURANCE_ROOT
     _profile = str(ASSURANCE_ROOT.parent / ".gsa_chrome_profile")
+    BrowserCDPClient.kill_browser_on_port(port, user_data_dir=_profile)
     proc = BrowserCDPClient.launch_browser(
         port=port, browser=browser, headless=headless,
         user_data_dir=_profile,
@@ -814,6 +825,40 @@ def _ensure_browser(
     raise AssuranceError(
         f"Launched {browser} but cannot connect on port {port}. "
         f"Check that no other process is using port {port}."
+    )
+
+
+def launch_visible_browser(
+    port: int = 9222,
+    browser: str = "chrome",
+) -> subprocess.Popen | None:
+    """Launch a **visible** Chrome window with the project-isolated profile.
+
+    Use this for the **one-time Google login** step: a normal Chrome
+    window opens (not headless), you log into Google Scholar / arXiv /
+    etc., and close the window.  Cookies are persisted in
+    ``.gsa_chrome_profile/`` and reused by subsequent headless retrieval
+    sessions.
+
+    Returns the subprocess handle (the caller is responsible for
+    calling ``.terminate()`` when done), or ``None`` if Chrome is not
+    installed.
+    """
+    from .browser_retrieval import BrowserCDPClient
+    from .contracts import ASSURANCE_ROOT
+
+    _profile = str(ASSURANCE_ROOT.parent / ".gsa_chrome_profile")
+    BrowserCDPClient.kill_browser_on_port(port, user_data_dir=_profile)
+    logger.info(
+        "Launching visible Chrome on port %d with profile %s. "
+        "Log into Google once; cookies persist for retrieval sessions.",
+        port, _profile,
+    )
+    return BrowserCDPClient.launch_browser(
+        port=port,
+        browser=browser,
+        headless=False,
+        user_data_dir=_profile,
     )
 
 

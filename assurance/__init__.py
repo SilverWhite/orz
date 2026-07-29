@@ -106,6 +106,7 @@ from .retrieval_workflow import (
     RetrievalResult,
     WebPageResult,
     WebRetrievalResult,
+    launch_visible_browser,
     retrieve_search,
     retrieve_urls,
     run_retrieval,

@@ -28,6 +28,11 @@ from urllib.request import urlopen
 from .errors import AssuranceError
 from .endpoint_canonicalizer import canonicalize_network_endpoint
 
+try:
+    import psutil
+except ImportError:  # pragma: no cover - psutil is a declared dependency.
+    psutil = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 # ── CDP constants ────────────────────────────────────────────────────────────
@@ -60,6 +65,72 @@ _BLOCKED_HOSTS: tuple[str, ...] = (
     "192.168.",    # private
     "metadata.google.internal",  # cloud metadata
 )
+
+_BROWSER_PROCESS_NAMES = {
+    "chrome",
+    "chrome.exe",
+    "chromium",
+    "chromium.exe",
+    "chromium-browser",
+    "msedge",
+    "msedge.exe",
+}
+
+
+def _path_key(value: str | Path) -> str:
+    """Return a stable, case-insensitive comparison key for local paths."""
+    raw = str(value).strip('"')
+    try:
+        return str(Path(raw).expanduser().resolve(strict=False)).casefold()
+    except (OSError, RuntimeError):
+        return raw.replace("/", "\\").casefold()
+
+
+def _command_line_user_data_dirs(cmdline: list[str]) -> list[str]:
+    """Extract ``--user-data-dir`` values from a browser command line."""
+    values: list[str] = []
+    for index, arg in enumerate(cmdline):
+        if arg == "--user-data-dir" and index + 1 < len(cmdline):
+            values.append(cmdline[index + 1])
+        elif arg.startswith("--user-data-dir="):
+            values.append(arg.split("=", 1)[1])
+    return values
+
+
+def _is_browser_debug_process(
+    process: Any,
+    *,
+    port: int,
+    user_data_dir: str | Path | None = None,
+) -> bool:
+    """Return True only for browser processes matching the CDP cleanup target."""
+    try:
+        name = str(process.name()).casefold()
+    except Exception:
+        name = ""
+
+    try:
+        exe_name = Path(str(process.exe())).name.casefold()
+    except Exception:
+        exe_name = ""
+
+    if name not in _BROWSER_PROCESS_NAMES and exe_name not in _BROWSER_PROCESS_NAMES:
+        return False
+
+    try:
+        cmdline = [str(arg) for arg in process.cmdline()]
+    except Exception:
+        cmdline = []
+
+    expected_port_arg = f"--remote-debugging-port={port}"
+    if expected_port_arg not in cmdline:
+        return False
+
+    if user_data_dir is None:
+        return True
+
+    expected_profile = _path_key(user_data_dir)
+    return any(_path_key(value) == expected_profile for value in _command_line_user_data_dirs(cmdline))
 
 
 # ── data types ───────────────────────────────────────────────────────────────
@@ -267,6 +338,84 @@ class BrowserCDPClient:
         # Give the browser a moment to start
         time.sleep(1.5)
         return proc
+
+    @staticmethod
+    def kill_browser_on_port(
+        port: int,
+        *,
+        user_data_dir: str | Path | None = None,
+    ) -> None:
+        """Terminate a matching Chrome/Edge process listening on *port*.
+
+        The cleanup is intentionally narrow: the process must be Chrome,
+        Edge, or Chromium, must advertise the same remote debugging port
+        in its command line, and, when *user_data_dir* is provided, must
+        use that exact project profile.  Non-browser services on the same
+        port are never terminated.
+        """
+        if psutil is None:
+            logger.warning("psutil unavailable; cannot clear browser port %d", port)
+            return
+
+        killed = False
+        try:
+            connections = psutil.net_connections(kind="inet")
+        except Exception:
+            logger.debug("Could not inspect listeners on port %d", port, exc_info=True)
+            return
+
+        seen_pids: set[int] = set()
+        for conn in connections:
+            local_addr = getattr(conn, "laddr", None)
+            local_port = getattr(local_addr, "port", None)
+            status = getattr(conn, "status", "")
+            pid = getattr(conn, "pid", None)
+            if local_port != port or pid is None:
+                continue
+            if pid in seen_pids:
+                continue
+            seen_pids.add(pid)
+            if status and status != getattr(psutil, "CONN_LISTEN", "LISTEN"):
+                continue
+
+            try:
+                process = psutil.Process(pid)
+            except Exception:
+                continue
+
+            if not _is_browser_debug_process(
+                process,
+                port=port,
+                user_data_dir=user_data_dir,
+            ):
+                logger.info(
+                    "Leaving non-owned process on port %d untouched (PID %s)",
+                    port,
+                    pid,
+                )
+                continue
+
+            logger.info("Terminating browser on port %d (PID %s)", port, pid)
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+            except Exception:
+                try:
+                    process.kill()
+                    process.wait(timeout=3)
+                except Exception:
+                    logger.debug(
+                        "Could not terminate browser process on port %d (PID %s)",
+                        port,
+                        pid,
+                        exc_info=True,
+                    )
+                    continue
+            killed = True
+
+        if killed:
+            # Give the OS time to release the port
+            time.sleep(1.0)
 
     # ── tab management ─────────────────────────────────────────────────────
 

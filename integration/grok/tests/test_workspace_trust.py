@@ -43,7 +43,8 @@ class WorkspaceTrustReceiptTests(unittest.TestCase):
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             check=False,
         )

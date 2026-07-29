@@ -1,3 +1,10 @@
+"""Deprecated P5 CLI entry point.
+
+This module is retained for backward compatibility only.
+New development should use :mod:`~.canonical_cli` and the canonical
+Gate sequence defined in :file:`CLI_PROJECT_INDEX.md` §B.
+"""
+
 from __future__ import annotations
 
 import argparse

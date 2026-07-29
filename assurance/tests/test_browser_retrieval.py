@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from assurance.errors import AssuranceError
 
@@ -222,9 +224,153 @@ class BrowserCDPClientConstructionTests(unittest.TestCase):
         client.disconnect()  # should not raise
 
 
+class BrowserPortCleanupTests(unittest.TestCase):
+    """LBR-001: stale CDP browser cleanup is narrowly scoped."""
+
+    def _process(
+        self,
+        *,
+        name: str,
+        exe: str,
+        cmdline: list[str],
+    ) -> MagicMock:
+        process = MagicMock()
+        process.name.return_value = name
+        process.exe.return_value = exe
+        process.cmdline.return_value = cmdline
+        return process
+
+    def test_browser_debug_process_requires_browser_and_debug_port(self) -> None:
+        from assurance.browser_retrieval import _is_browser_debug_process
+
+        browser = self._process(
+            name="chrome.exe",
+            exe=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            cmdline=["chrome.exe", "--remote-debugging-port=9222"],
+        )
+        self.assertTrue(_is_browser_debug_process(browser, port=9222))
+
+        no_debug_port = self._process(
+            name="chrome.exe",
+            exe=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            cmdline=["chrome.exe"],
+        )
+        self.assertFalse(_is_browser_debug_process(no_debug_port, port=9222))
+
+        non_browser = self._process(
+            name="python.exe",
+            exe=r"C:\Python312\python.exe",
+            cmdline=["python.exe", "--remote-debugging-port=9222"],
+        )
+        self.assertFalse(_is_browser_debug_process(non_browser, port=9222))
+
+    def test_browser_debug_process_requires_matching_profile_when_provided(self) -> None:
+        from assurance.browser_retrieval import _is_browser_debug_process
+
+        profile = r"D:\CLI\.gsa_chrome_profile"
+        browser = self._process(
+            name="msedge.exe",
+            exe=r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            cmdline=[
+                "msedge.exe",
+                "--remote-debugging-port=9222",
+                f"--user-data-dir={profile}",
+            ],
+        )
+        self.assertTrue(
+            _is_browser_debug_process(
+                browser,
+                port=9222,
+                user_data_dir=profile,
+            )
+        )
+
+        other_profile = self._process(
+            name="msedge.exe",
+            exe=r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            cmdline=[
+                "msedge.exe",
+                "--remote-debugging-port=9222",
+                r"--user-data-dir=D:\CLI\other_profile",
+            ],
+        )
+        self.assertFalse(
+            _is_browser_debug_process(
+                other_profile,
+                port=9222,
+                user_data_dir=profile,
+            )
+        )
+
+    def test_kill_browser_on_port_only_terminates_owned_browser(self) -> None:
+        from assurance import browser_retrieval
+        from assurance.browser_retrieval import BrowserCDPClient
+
+        profile = r"D:\CLI\.gsa_chrome_profile"
+        owned = self._process(
+            name="chrome.exe",
+            exe=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            cmdline=[
+                "chrome.exe",
+                "--remote-debugging-port=9222",
+                f"--user-data-dir={profile}",
+            ],
+        )
+        other_browser = self._process(
+            name="chrome.exe",
+            exe=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            cmdline=[
+                "chrome.exe",
+                "--remote-debugging-port=9222",
+                r"--user-data-dir=D:\CLI\other_profile",
+            ],
+        )
+        service = self._process(
+            name="python.exe",
+            exe=r"C:\Python312\python.exe",
+            cmdline=["python.exe", "-m", "http.server"],
+        )
+        processes = {
+            1001: owned,
+            1002: other_browser,
+            1003: service,
+        }
+
+        fake_psutil = MagicMock()
+        fake_psutil.CONN_LISTEN = "LISTEN"
+        fake_psutil.net_connections.return_value = [
+            SimpleNamespace(
+                laddr=SimpleNamespace(port=9222),
+                status="LISTEN",
+                pid=1001,
+            ),
+            SimpleNamespace(
+                laddr=SimpleNamespace(port=9222),
+                status="LISTEN",
+                pid=1002,
+            ),
+            SimpleNamespace(
+                laddr=SimpleNamespace(port=9222),
+                status="LISTEN",
+                pid=1003,
+            ),
+        ]
+        fake_psutil.Process.side_effect = lambda pid: processes[pid]
+
+        with (
+            patch.object(browser_retrieval, "psutil", fake_psutil),
+            patch("assurance.browser_retrieval.time.sleep"),
+        ):
+            BrowserCDPClient.kill_browser_on_port(9222, user_data_dir=profile)
+
+        owned.terminate.assert_called_once()
+        owned.kill.assert_not_called()
+        other_browser.terminate.assert_not_called()
+        service.terminate.assert_not_called()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Live browser tests (auto-launch headless Chrome when installed;
-# skipped only when no Chrome/Edge binary is found on the system)
+# Live browser tests (opt-in auto-launch of headless Chrome/Edge)
 # ══════════════════════════════════════════════════════════════════════════════
 
 _LIVE_PORT = 19223  # off the default 9222 to avoid conflicts

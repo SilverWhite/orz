@@ -326,6 +326,37 @@ class EnsureBrowserTests(unittest.TestCase):
                 _ensure_browser(None, 9222, launch=False, browser="chrome", headless=False)
             self.assertIn("not reachable", str(ctx.exception))
 
+    def test_launch_clears_only_project_profile_browser(self) -> None:
+        """Auto-launch cleanup must be scoped to the project browser profile."""
+        from assurance.retrieval_workflow import _ensure_browser
+
+        with (
+            patch("assurance.retrieval_workflow.BrowserCDPClient") as MockClient,
+            patch("assurance.retrieval_workflow.time.sleep"),
+        ):
+            mock_instance = MockClient.return_value
+            mock_instance.connect.side_effect = [False, True]
+            proc = object()
+            MockClient.launch_browser.return_value = proc
+
+            client, launched = _ensure_browser(
+                None,
+                9222,
+                launch=True,
+                browser="chrome",
+                headless=True,
+            )
+
+            self.assertIs(client, mock_instance)
+            self.assertIs(launched, proc)
+            MockClient.kill_browser_on_port.assert_called_once()
+            _, kwargs = MockClient.kill_browser_on_port.call_args
+            self.assertEqual(
+                kwargs["user_data_dir"],
+                MockClient.launch_browser.call_args.kwargs["user_data_dir"],
+            )
+            self.assertTrue(kwargs["user_data_dir"].endswith(".gsa_chrome_profile"))
+
 
 class CleanupTests(unittest.TestCase):
     """LBR-001: _cleanup handles all edge cases safely."""

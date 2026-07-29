@@ -26,7 +26,7 @@ CORRUPT_PDF = FIXTURES / "not-a-pdf.pdf"
 EMPTY_FILE = FIXTURES / "empty.dat"
 SOURCE_RECORD_VALID = FIXTURES / "source_record.valid.json"
 SOURCE_RECORD_INVALID = FIXTURES / "source_record.invalid.json"
-SCHEMA = ASSURANCE / "evidence_store.schema.json"
+SCHEMA = ASSURANCE / "evidence-store-v0.1.schema.json"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -363,7 +363,7 @@ class EvidenceStoreTests(unittest.TestCase):
 
 
 class SourceRecordSchemaTests(unittest.TestCase):
-    """GAK-LBR-001: evidence_store.schema.json — source record validation."""
+    """GAK-LBR-001: evidence-store-v0.1.schema.json — source record validation."""
 
     @classmethod
     def setUpClass(cls) -> None:
