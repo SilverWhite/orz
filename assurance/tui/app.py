@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .events import RetrievalOutcome, RetrievalProgress
 from .view_models import (
     SAMPLE_ADDRESS_URI,
     SAMPLE_CLAIM_DISPOSITION,
@@ -88,6 +89,11 @@ class TuiPrototype:
     event_source: Any | None = None   # EventSource | None (typed Any to avoid circular import)
     _event_log: list[Any] = field(default_factory=list)  # list[TuiEvent]
     _status_messages: list[str] = field(default_factory=list)
+
+    # ── retrieval handler (LBR-001) ──
+    # Callable[[str, str, Callable[[RetrievalProgress], None]], RetrievalOutcome] | None
+    # Wired at the application boundary (main.py) to avoid assurance imports in TUI.
+    retrieval_handler: Any | None = None
 
     # ── runtime state ──
     running: bool = False       # True while agent is executing a run
@@ -243,7 +249,20 @@ class TuiPrototype:
         """Dispatch *key* and return an optional status message."""
         # Dialogs/properties consume all keys while visible
         if self.dialog.visible:
-            self.dialog.handle_key(key)
+            consumed = self.dialog.handle_key(key)
+            if key == "enter" and self.dialog.visible:
+                # User confirmed via Enter on the selected action
+                action_idx = self.dialog._selected_action
+                if action_idx < len(self.dialog.actions):
+                    action_value = self.dialog.actions[action_idx][1]
+                    self.dialog.visible = False
+                    if action_value == "approve":
+                        self._execute_retrieval()
+                        return "Retrieval started"
+                    return "Cancelled"
+            if key == "esc":
+                self.dialog.visible = False
+                return "Cancelled"
             return None
         if self.properties.visible:
             self.properties.handle_key(key)
@@ -294,12 +313,9 @@ class TuiPrototype:
             if key == "enter" and self.address_bar._buffer:
                 self._last_sent = self.address_bar._buffer
             if self.address_bar.handle_key(key):
-                if key == "enter":
-                    # Push history AFTER widget clears its buffer
+                if key == "enter" and self._last_sent:
                     self.address_bar._push_history(self._last_sent)
-                    if self._last_sent.startswith("/"):
-                        return f"Activated: {self._last_sent}"
-                    return "Activated: Go to address"
+                    return self._dispatch_command(self._last_sent)
                 return None
 
         # Delegate to active pane
@@ -324,6 +340,140 @@ class TuiPrototype:
             "find": self.find_bar,
         }
         return mapping.get(self.active_pane)
+
+    def _dispatch_command(self, text: str) -> str | None:
+        """Route a slash command or URI entered in the address bar."""
+        text = text.strip()
+
+        # /search <query> — browser-based web search
+        if text.startswith("/search "):
+            query = text[len("/search "):].strip()
+            if not query:
+                return "Usage: /search <query>"
+            self._show_retrieval_dialog("search", query)
+            return f"Search: {query}"
+
+        # /retrieve <url> — browser-based paper retrieval
+        if text.startswith("/retrieve "):
+            url = text[len("/retrieve "):].strip()
+            if not url:
+                return "Usage: /retrieve <url>"
+            self._show_retrieval_dialog("retrieve", url)
+            return f"Retrieve: {url}"
+
+        # Other slash commands — just acknowledge
+        if text.startswith("/"):
+            return f"Activated: {text}"
+
+        # URI navigation
+        return f"Go to: {text}"
+
+    def _show_retrieval_dialog(self, mode: str, target: str) -> None:
+        """Show a permission dialog for browser retrieval."""
+        if mode == "search":
+            title = "Browser Search"
+            message = (
+                f"The CLI will open your browser to search for:\n"
+                f"\n"
+                f"  {target}\n"
+                f"\n"
+                f"Google search → open results → extract content.\n"
+                f"No credentials are sent to the model.\n"
+                f"\n"
+                f"Allow this search?"
+            )
+        else:
+            title = "Paper Retrieval"
+            message = (
+                f"The CLI will open your browser to retrieve:\n"
+                f"\n"
+                f"  {target}\n"
+                f"\n"
+                f"Open page → detect PDF → download → store in evidence store.\n"
+                f"No credentials are sent to the model.\n"
+                f"\n"
+                f"Allow this retrieval?"
+            )
+
+        self.dialog = Dialog(
+            title=title,
+            message=message,
+            actions=[
+                ("Approve", "approve"),
+                ("Reject", "reject"),
+            ],
+            visible=True,
+        )
+        self.dialog._selected_action = 0
+        # Store retrieval params for execution after approval
+        self._pending_retrieval: dict = {"mode": mode, "target": target}
+
+    def _execute_retrieval(self) -> None:
+        """Run the approved retrieval in a background thread.
+
+        Delegates to :attr:`retrieval_handler` which is wired at the
+        application boundary (:mod:`assurance.tui.main`) so that the TUI
+        layer never imports from ``assurance.*`` directly.
+
+        If no handler is configured (demo / static render), logs a warning.
+        """
+        params = getattr(self, "_pending_retrieval", None)
+        if not params:
+            return
+        self._pending_retrieval = {}
+
+        if self.retrieval_handler is None:
+            self._status_messages.append(
+                "WARNING: retrieval_handler not wired — retrieval is a no-op in static/demo mode"
+            )
+            self.status_bar.update_item("IDLE", True)
+            self.content_pane.set_disposition(
+                "NO HANDLER",
+                "Retrieval handler not wired. Run from main.py for live retrieval.",
+            )
+            return
+
+        import threading
+        mode = params["mode"]
+        target = params["target"]
+
+        # Build a progress callback owned by the TUI layer — uses TUI's own
+        # RetrievalProgress type, NOT the assurance type.
+        def _on_progress(evt: RetrievalProgress) -> None:
+            msg = f"[{evt.stage}] {evt.message}"
+            self._status_messages.append(msg)
+            self.explorer_pane.add_event_entry("Retrieval", msg)
+            stage_labels: dict[str, str] = {
+                "searching": "SEARCHING", "navigating": "FETCHING",
+                "reading": "READING", "downloading": "DOWNLOADING",
+                "storing": "STORING", "indexing": "INDEXING",
+                "done": "IDLE", "failed": "ERROR",
+                "launching": "LAUNCHING", "connecting": "CONNECTING",
+                "finding_pdf": "FIND PDF", "validating": "VALIDATING",
+                "retrieving": "RETRIEVING",
+            }
+            label = stage_labels.get(evt.stage, evt.stage.upper())
+            self.status_bar.update_item(label, evt.stage != "failed")
+
+        def _run() -> None:
+            try:
+                outcome: RetrievalOutcome = self.retrieval_handler(
+                    mode, target, _on_progress,
+                )
+                if outcome.ok:
+                    self.status_bar.update_item("IDLE", True)
+                    self.content_pane.set_disposition(outcome.title, outcome.detail)
+                else:
+                    self.status_bar.update_item("ERROR", False)
+                    self.content_pane.set_disposition(
+                        outcome.title or "FAILED",
+                        outcome.error or outcome.detail,
+                    )
+            except Exception as exc:
+                self._status_messages.append(f"ERROR: {exc}")
+                self.status_bar.update_item("ERROR", False)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _cancel_run(self) -> None:
         """Cancel the current agent run, restore the last sent input to the

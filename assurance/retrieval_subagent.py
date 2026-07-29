@@ -38,6 +38,12 @@ SUBAGENT_CAPABILITIES = [
     "tool_registry",
 ]
 
+# ── credential targets (GAK-RET-SUB-001, Gap Register §8.1) ──
+
+# Independent API key for internal project-document retrieval.
+# Stored in Windows Credential Manager under this target name.
+DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET = "deepseek-retrieval-subagent"
+
 SUBAGENT_TOOL_SPECS: list[dict[str, Any]] = [
     {"tool_id": "search", "tool_name": "Search", "capability": "search", "probe_method": "subagent_capability_declaration"},
     {"tool_id": "web_fetch", "tool_name": "Web Fetch", "capability": "web_fetch", "probe_method": "subagent_capability_declaration"},
@@ -679,7 +685,7 @@ def dispatch_retrieval_subagent(
     key_store: InstallationKeyStore,
     run_root: Path,
     project_root: Path,
-    credential_target: str | None = None,
+    credential_target: str | None = None,  # pass DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET for real API
     api_timeout_seconds: int = 120,
     parent_envelope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1076,6 +1082,36 @@ def dispatch_retrieval_subagent(
         "subagent_session_id": subagent_session_id,
         "api_used": api_used,
     }
+
+
+def dispatch_retrieval_subagent_online(
+    *,
+    contract: dict[str, Any],
+    parent_session_id: str,
+    key_store: InstallationKeyStore,
+    run_root: Path,
+    project_root: Path,
+    api_timeout_seconds: int = 120,
+    parent_envelope: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convenience wrapper: internal retrieval with the registered credential target.
+
+    Uses ``DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET``
+    (``deepseek-retrieval-subagent``) as the credential target, matching
+    the Gap Register §8.1 registration.  This is the production entry
+    point — it will attempt a real DeepSeek API call and fall back to
+    offline mode if the credential is not configured.
+    """
+    return dispatch_retrieval_subagent(
+        contract=contract,
+        parent_session_id=parent_session_id,
+        key_store=key_store,
+        run_root=run_root,
+        project_root=project_root,
+        credential_target=DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET,
+        api_timeout_seconds=api_timeout_seconds,
+        parent_envelope=parent_envelope,
+    )
 
 
 # ── external retrieval adapter ──

@@ -90,6 +90,10 @@ from .browser_retrieval import (
 from .retrieval_workflow import (
     RetrievalProgress,
     RetrievalResult,
+    WebPageResult,
+    WebRetrievalResult,
+    retrieve_search,
+    retrieve_urls,
     run_retrieval,
 )
 from .evidence_store import (
@@ -208,6 +212,8 @@ from .retrieval_subagent import (
     DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET,
     dispatch_external_retrieval_subagent,
     dispatch_retrieval_subagent,
+    dispatch_retrieval_subagent_online,
+    DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET,
     run_retrieval_subagent_fixture,
     validate_retrieval_result,
     verify_retrieval_result_sources,
@@ -387,6 +393,8 @@ __all__ = [
     "DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET",
     "dispatch_external_retrieval_subagent",
     "dispatch_retrieval_subagent",
+    "dispatch_retrieval_subagent_online",
+    "DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET",
     "get_scrub_audit",
     "recover_archive",
     "recover_archive_journal",

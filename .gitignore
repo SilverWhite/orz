@@ -10,3 +10,7 @@ prototype/.pytest_cache/
 
 tmp*/
 *.tmp/
+
+# GSA runtime artifacts (local only)
+.gsa_chrome_profile/
+evidence/

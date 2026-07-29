@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-29 (R6：LBR-001 Phase 1 PDF Evidence Store — PDF 验证/文本提取/页面索引/SHA-256 内容寻址存储 + source record schema；附A 新增 2026-07-29-R6 条目)
+**更新**: 2026-07-29 (R11：GAK-EVT-001 development baseline 达成 — audit_integration 桥接 canonical CLI → AuditLedger、`--run --real` 自动产出审计封印、11 audit integration tests + 263 全量回归 pass)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -69,7 +69,7 @@
 - **Orientation Runtime Guard** (2026-07-27, 事实): 中性方向检查点 + 运行时停滞守卫——检测 agent 是否陷入循环/停滞。别名: orientation checkpoint, stagnation guard。入口: `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md` / `assurance/orientation_runtime_guard.py` / `assurance/orientation_runtime_integration.py` / `assurance/orientation_runtime_journal.py` / `assurance/orientation-checkpoint-v0.1.schema.json` / `assurance/runtime-stagnation-guard-receipt-v0.1.schema.json`
 - **Workspace Trust Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-TRUST-001): 统一工作区信任——全部 Python 入口点（canonical CLI + 检索子代理 ×2）在 IPG 评估前建立 workspace trust receipt。`AdapterGateContext` 携带 trust_receipt + trust_status。别名: GAK-TRUST-001。入口: `assurance/workspace_trust.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py` / `assurance/retrieval_subagent.py`
 - **Source Visibility Gate** (2026-07-26, 事实): 全文可见性检查 Gate——验证引用源的完整文本可见性。入口: `docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md` / `assurance/source_visibility.py` / `assurance/source_visibility_cli.py`
-- **Local Browser Retrieval and PDF Evidence** (2026-07-28 设计冻结, 2026-07-29 Phase 1 完成): 本地浏览器外部检索与论文 PDF 确定性证据链。Phase 1 Evidence Store 已完成——PDF 验证/文本提取/页面索引、SHA-256 内容寻址存储、source record schema (A/B/C 证据等级)、version guessing (6 种版本类型)。42 tests pass。Phase 2: 本地 Chrome CDP 后台检索。别名/关键词: browser retrieval, local browser, PDF evidence, LBR-001, CDP。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` / `assurance/pdf_evidence.py` / `assurance/evidence_store.py` / `assurance/evidence_store.schema.json`
+- **Local Browser Retrieval and PDF Evidence** (2026-07-28 设计冻结, 2026-07-29 关闭): 本地浏览器外部检索与论文 PDF 确定性证据链。Phase 1-4 全部完成：Evidence Store (42 tests)、CDP 客户端 (27 tests)、检索工作流 (34 tests)、TUI 集成 (217 tests)。2026-07-29 R9 闭合：LiveBrowserTests 改为自启动 headless Chrome（0 skip，不再需手动启动 Chrome）、新增 E2E 集成测试 6 个（Web 检索 5 + 论文 PDF 检索 1，包含真实 arXiv PDF 下载→验证→证据库全流程）、修复 `classify_page` login 关键词误判（arXiv 导航栏 "log in" 不再误触发 LOGIN_REQUIRED）、测试 URL 从 httpbin.org 迁移至 example.com 消除间歇性超时。全量 71 browser + retrieval + E2E tests pass (0 skip)。已知限制: Chrome 主 profile 受企业安全策略拦截 CDP 连接，workaround 为项目隔离 profile (`.gsa_chrome_profile/`)。别名/关键词: browser retrieval, local browser, PDF evidence, LBR-001, CDP, GSA Chrome profile。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` / `assurance/pdf_evidence.py` / `assurance/evidence_store.py` / `assurance/browser_retrieval.py` / `assurance/retrieval_workflow.py` / `assurance/evidence_store.schema.json` / `assurance/tests/test_browser_retrieval.py` / `assurance/tests/test_retrieval_workflow.py` / `assurance/tests/test_browser_retrieval_e2e.py`
 - **Child Capability Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-CHILD-001): 子代理/子进程 capability 传递——`spawn_child_context()` 统一入口；检索子代理接受 parent_envelope；`execute_guarded_no_model_action()` 在 Docker create 前调用 `enforce_child_capabilities()`。别名: GAK-CHILD-001。入口: `assurance/child_capability_enforcer.py` / `assurance/instruction_gate.py` / `assurance/retrieval_subagent.py` / `assurance/guarded_execution.py`
 - **Network Permit Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-NET-001): 网络许可统一覆盖——`call_deepseek_api()` 在 HTTP 请求前调用 `evaluate_network_permit()`；`AdapterGateContext` 携带 network_policy；`_resolve_and_setup_gates()` 构建 guarded 模式默认 policy。别名: GAK-NET-001。入口: `assurance/network_permit_gateway.py` / `assurance/deepseek_adapter.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
 - **Adapter Gate** (2026-07-27, 事实): 适配器调用旁路执行 Gate——防止运行时绕过适配器直接调用模型。别名: adapter gate enforcement, adapter preflight。入口: `docs/ADAPTER_GATE_AUDIT_2026-07-28.md` / `assurance/adapter_gate.py` / `assurance/adapter_preflight.py` / `assurance/adapter_output_validator.py` / `assurance/adapter_failure_classifier.py` / `assurance/adapter-gate-enforcement-receipt-v0.1.schema.json`
@@ -125,7 +125,7 @@
 > 设计意图、合约边界与战略决策。每篇文档承担一个独立的设计主题。
 
 - **产品定位与参考策略** (v0.1, 设计约束): 核心定位——运行时中立的通用科学保证内核，不绑定单一 LLM 运行时。入口: `architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`
-- **CLI UI Interaction Model** (v0.1, 事实/2026-07-29 斜杠命令系统完成): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型——以对象导航、地址栏、属性页、状态栏和阻断对话框组织 agent 工作流。第一原型已完成（6 个模块 ~3200 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、15 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。137 tests pass。实现约束全部满足：UI 不导入 assurance core、中文字符宽度计算、ASCII + box-drawing 优先。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py`）；Gap Register: GAK-UI-001
+- **CLI UI Interaction Model** (v0.1, 事实/2026-07-29 Phase 2 事件流桥接完成): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型。第一原型已完成（9 个模块 ~3900 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、17 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。Phase 2 已完成：canonical CLI 事件流桥接——`bridge.py`（映射层，导入 assurance.* 的唯一 TUI 模块）、`LiveRunEventSource`（后台线程实时消费 CLI 事件）、`JsonlFileSource`（journal 重放，payload 解析为 typed event 子类）、3 个 typed gate event（IPG/Tool Avail/Orientation）、`--run`/`--replay` CLI 参数。217 tests pass。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`bridge.py` / `commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py` / `events.py` / `event_source.py` / `projector.py`）；Gap Register: GAK-UI-001
 - **Grok Build 适配** (v0.1, 设计约束): 以 Grok Build 为参考运行时的适配策略。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md`
 - **Upstream First 集成** (v0.1, 设计约束): 上游优先集成策略——先锁定上游版本再进行适配。入口: `architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`
 - **Upstream 版本策略** (v0.1, 设计约束): 上游版本锁定、候选评估与升级流程。入口: `architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`
@@ -244,7 +244,8 @@
 
 ### 已关闭 (Closed)
 
-- **GAK-UI-001 CLI UI Interaction Model** (2026-07-28 第一原型完成, 2026-07-29 斜杠命令系统关闭): 6 个模块 ~3200 行，10 个 widget 类，15 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层，地址栏命令历史/多行输入/自动补全，Ctrl+Z 取消运行，prompt_toolkit 集成，137 tests pass。UI 不导入 assurance core。下一步：接入 canonical CLI 结构化事件流 → view model 投影 → retro 渲染。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `assurance/tui/`
+- **GAK-UI-001 CLI UI Interaction Model** (2026-07-28 第一原型完成, 2026-07-29 Phase 2 事件流桥接完成, 2026-07-29 Phase 3 真实 adapter 接入完成): 9 个模块 ~3900 行。Phase 2 已完成 canonical CLI 事件流桥接——`bridge.py`（唯一允许导入 assurance.* 的 TUI 模块）、`LiveRunEventSource`（后台线程实时消费 CLI 事件）、`JsonlFileSource` payload 解析 → typed event 子类、3 个 typed gate event、projector 更新、--run/--replay CLI 参数。Phase 3 已完成真实 DeepSeek adapter 接入——`main.py` 新增 `--real` 和 `--credential-target` 标志、`build_live_run_fn(real_adapter=True)` 接线到 `run_canonical_guarded_cli_real`、真实 Gate 决策流通过 bridge → event_source → projector → retro 渲染全链路贯通。221 TUI tests pass。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `assurance/tui/`
+- **LBR-001 Local Browser Retrieval and PDF Evidence** (2026-07-29 关闭): Phase 1-4 全链路完成 + R9 闭合。Evidence Store (42 tests)、CDP 客户端 (27 tests)、检索工作流 (34 tests)、TUI 集成 (217 tests)。R9 新增: ① LiveBrowserTests 自启动 headless Chrome——不再需手动启动 Chrome，`setUpClass` 通过 `_ensure_browser()` 自动启停；skip 条件从 "Chrome 未运行" 改为 "Chrome 未安装"（4 tests pass, 0 skip）。② E2E 集成测试 `test_browser_retrieval_e2e.py` (6 tests)：Web 检索 5 (retrieve_urls 单页/多页/空列表/错误处理/progress callback) + 论文 PDF 检索 1 (run_retrieval arXiv → 下载 → 验证 → 证据库，验证 SHA-256、PDF header、metadata.json、pages.jsonl)。③ 修复 `classify_page` login 检测——"log in"/"login" 从关键词列表移除（arXiv 等网站导航栏中的 login 链接不再误触发 LOGIN_REQUIRED），改为仅匹配强信号 ("please log in to", "log in to continue", "authentication required" 等)。④ 测试可靠性加固——httpbin.org 替换为 example.com/example.org 消除间歇性 WebSocket 超时。全量 71 tests pass (0 skip)。已知限制: Chrome 主 profile 受企业安全策略拦截 CDP 连接，workaround 使用项目隔离 profile (`.gsa_chrome_profile/`)。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` / `assurance/browser_retrieval.py` / `assurance/retrieval_workflow.py` / `assurance/tests/test_browser_retrieval.py` / `assurance/tests/test_retrieval_workflow.py` / `assurance/tests/test_browser_retrieval_e2e.py`
 - **GAK-TRUST-001 Workspace Trust 统一入口** (2026-07-28 关闭): `establish_workspace_trust()` 已接入 canonical CLI 和检索子代理全部入口点。`AdapterGateContext` 携带 trust receipt；`_resolve_and_setup_gates()` 在 IPG 前建立 trust；`validate_all_entry_points_establish_trust()` AST 审计覆盖全部入口点。入口: `assurance/workspace_trust.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
 - **GAK-CHILD-001 Child Capability 统一传递** (2026-07-28 关闭): 新增 `spawn_child_context()` 统一入口（组合 predicate check + 签名 child envelope 创建）；检索子代理接受可选 `parent_envelope`，通过 `spawn_child_context()` 创建签名 child envelope 并传入 `ConversationNamespace.create(parent_envelope_id=...)`。入口: `assurance/child_capability_enforcer.py` / `assurance/retrieval_subagent.py`
 - **GAK-NET-001 Network Permit 统一覆盖** (2026-07-28 关闭): `call_deepseek_api()` 在 HTTP 请求前调用 `evaluate_network_permit()`；`AdapterGateContext` 携带 network_policy/endpoint/category；`_resolve_and_setup_gates()` 构建 `guarded` 模式默认 policy。入口: `assurance/deepseek_adapter.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
@@ -256,9 +257,9 @@
 - **GAK-RET-001 Retention/Deletion Controller 产品化** (2026-07-28 关闭)
 - **GAK-SESSION-001 Conversation Namespace → Real Runtime** (2026-07-28 关闭): `ConversationNamespace` 已接入 canonical CLI 真实 adapter 路径。新增 `SessionGovernor`；`run_canonical_guarded_cli_real()` 通过 `enforce_adapter_call()` 包装 DeepSeek API 调用；10 个 integration 测试。548 tests pass。入口: `assurance/session_governor.py` / `assurance/tests/test_session_namespace.py`: StorageAdapter 已接入 ArchiveController（替代裸 DeleteFile 回调）；archive_recovery.py 提供 holistic 恢复编排器（classify_archive_failure → recover_archive，覆盖 clean_interrupted/torn_journal/corrupt_journal/stale_lock/archiving_no_journal 五个恢复路径）；detect_stale_archive_lock + cleanup_stale_archive_lock 处理崩溃后孤儿锁；FaultInjectionStorageAdapter 支持故障注入测试；新增 18 个测试。484 tests pass。入口: `assurance/archive.py` / `assurance/archive_recovery.py` / `assurance/archive_journal.py` / `assurance/tests/test_archive_recovery.py` / `assurance/tests/storage_faults.py`
 
-### 待实施 (Pending)
+### 待实施 / 进行中 (Pending / In Progress)
 
-- **LBR-001 Phase 2: Browser Background Retrieval** (2026-07-29, 待实施): 使用 Chrome DevTools Protocol (CDP) 直接控制本地 Chrome——后台创建 AI 拥有标签页、读取渲染文本/元数据/链接、识别 PDF 候选下载。Phase 1 Evidence Store 已完成。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` §5.1-5.3, §22
+（当前无进行中条目。所有已注册 Gap 均已关闭或达到 development baseline。）
 
 ---
 
@@ -295,6 +296,11 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
+- 2026-07-29-R11: GAK-EVT-001 — audit_integration 桥接层、`--run --real` 自动产出审计封印、provider partial/kernel complete/missing unknown 完整语义、11 audit tests；263 全量回归 pass
+- 2026-07-29-R10: GAK-UI-001 Phase 3 — `--real` 标志接入真实 DeepSeek adapter、bridge wiring 测试 4 个、`build_live_run_fn(real_adapter=True)` 全链路贯通；221 TUI + 71 browser/retrieval tests pass
+- 2026-07-29-R9: LBR-001 闭合 — LiveBrowserTests 自启动 headless Chrome (0 skip)、E2E Web + PDF 检索集成测试 6 个 (含真实 arXiv PDF 下载→验证→证据库)、login 关键词误判修复、httpbin→example.com 可靠性加固；71 tests pass
+- 2026-07-29-R8: LBR-001 闭合推进 — TUI import isolation、Chrome CDP profile 限制文档化、tab cleanup 加固、retrieval_workflow 测试新增 34 个；275 TUI + browser + retrieval tests pass (4 skipped)
+- 2026-07-29-R7: LBR-001 Phase 2-4 进行中 — 浏览器 CDP 客户端 + 检索工作流（论文 PDF + 通用搜索）+ TUI /search /retrieve 斜杠命令 + 权限对话框；Chrome 主 profile CDP 连接问题未解决；尚未闭合
 - 2026-07-29-R6: LBR-001 Phase 1 PDF Evidence Store — PDF 验证/文本提取/页面索引 + SHA-256 内容寻址存储 + source record schema (A/B/C 证据等级) + version guessing；42 tests pass
 - 2026-07-29-R5: GAK-UI-001 斜杠命令系统 — 15 个中文命令 + CommandRegistry + CommandPalette 覆盖层 + 地址栏历史/多行/自动补全 + Ctrl+Z 取消运行；137 TUI tests pass；989 total tests pass
 - 2026-07-28-R5: 关闭 GAK-UI-001 (TUI 第一原型完成)、GAK-CRED-001 (凭据生命周期守卫)、GAK-WIN-001 (Job Object 竞态修复)；751 tests pass
@@ -325,7 +331,7 @@
 | GSA-CORE | `artifact_registry.py`, `validator_bridge.py`, `general_science_review.py`, `general_science_cli.py` |
 | DeepSeek 适配 | `deepseek_adapter.py`, `deepseek_api_observation.py`, `deepseek_stream_observation.py` |
 | 数据/存储 | `storage_adapter.py`, `conversation.py`, `profile_registry.py` |
-| PDF 证据 (LBR-001) | `pdf_evidence.py`, `evidence_store.py`, `evidence_store.schema.json` |
+| PDF 证据 (LBR-001) | `pdf_evidence.py`, `evidence_store.py`, `evidence_store.schema.json`, `browser_retrieval.py`, `retrieval_workflow.py` |
 | TUI (GAK-UI-001) | `tui/commands.py`, `tui/widgets.py`, `tui/app.py`, `tui/pt_app.py`, `tui/view_models.py`, `tui/main.py`, `tui/events.py`, `tui/event_source.py`, `tui/projector.py` |
 | 公共 | `__init__.py` (392 行公共 API 导出), `contracts.py`, `errors.py`, `utils.py`, `runner_public_output.py`, `runner_scoring_handoff.py` |
 

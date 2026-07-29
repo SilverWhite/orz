@@ -72,10 +72,21 @@ class TuiImportIsolationTests(unittest.TestCase):
             "assurance.keystore",
             "assurance.sandbox",
             "assurance.windows_sandbox",
+            "assurance.retrieval_workflow",
+            "assurance.browser_retrieval",
+            "assurance.pdf_evidence",
+            "assurance.evidence_store",
         }
+
+        # main.py and bridge.py are the application boundary — they wire
+        # assurance modules to the TUI and are explicitly allowed to import
+        # from assurance.
+        _WIRING_FILES = {"main.py", "bridge.py"}
 
         violations: list[str] = []
         for py_file in sorted(tui_dir.glob("*.py")):
+            if py_file.name in _WIRING_FILES:
+                continue
             source = py_file.read_text(encoding="utf-8")
             for mod in assurance_core_modules:
                 short = mod.split(".")[-1]
@@ -755,8 +766,8 @@ class CommandRegistryTests(unittest.TestCase):
         from assurance.tui.commands import CommandRegistry
         self.registry = CommandRegistry.with_builtins()
 
-    def test_fifteen_commands_registered(self) -> None:
-        self.assertEqual(len(self.registry), 15)
+    def test_seventeen_commands_registered(self) -> None:
+        self.assertEqual(len(self.registry), 17)
 
     def test_defaults_are_six(self) -> None:
         defaults = self.registry.get_defaults()
@@ -821,7 +832,7 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.get("/status").category, "系统")
 
     def test_search_second_priority_commands(self) -> None:
-        self.assertEqual(len(self.registry.search("/r")), 2)  # /run + /rewind
+        self.assertEqual(len(self.registry.search("/r")), 3)  # /run + /rewind + /retrieve
         self.assertTrue(any(c.slash == "/rewind" for c in self.registry.search("/re")))
         self.assertEqual(len(self.registry.search("/m")), 1)   # /model
         self.assertEqual(len(self.registry.search("/st")), 1)  # /status
@@ -1440,6 +1451,10 @@ class FakeEventSourceTests(unittest.TestCase):
         source = FakeEventSource(preload=[RunStartedEvent()])
         self.assertTrue(source.is_active())
         source.poll()
+        # After draining, is_active() remains True until close()
+        # (streaming semantics — events may arrive later)
+        self.assertTrue(source.is_active())
+        source.close()
         self.assertFalse(source.is_active())
 
     def test_closed_source_rejects_push(self) -> None:
@@ -1736,6 +1751,9 @@ class TuiPrototypeEventIntegrationTests(unittest.TestCase):
         msgs = app.poll_events()
         self.assertGreater(len(msgs), 0)
         self.assertEqual(len(app._event_log), 2)
+        # is_active() remains True until close() — streaming semantics
+        self.assertTrue(source.is_active())
+        source.close()
         self.assertFalse(source.is_active())
 
     def test_poll_events_no_source_returns_empty(self) -> None:
@@ -1789,6 +1807,8 @@ class EventImportIsolationTests(unittest.TestCase):
             "assurance.envelope", "assurance.guarded_execution",
             "assurance.instruction_provenance_gate", "assurance.keystore",
             "assurance.sandbox", "assurance.windows_sandbox",
+            "assurance.retrieval_workflow", "assurance.browser_retrieval",
+            "assurance.pdf_evidence", "assurance.evidence_store",
         }
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -1812,3 +1832,473 @@ class EventImportIsolationTests(unittest.TestCase):
 
     def test_projector_py_no_assurance_imports(self) -> None:
         self._check_module("assurance/tui/projector.py")
+
+    def test_app_py_no_assurance_imports(self) -> None:
+        self._check_module("assurance/tui/app.py")
+
+
+# ── GAK-UI-001 Phase 2: typed gate events ───────────────────────────────────
+
+
+class TypedGateEventTests(unittest.TestCase):
+    """New typed event dataclasses for IPG, tool availability, orientation."""
+
+    def test_instruction_provenance_gate_event_defaults(self) -> None:
+        from assurance.tui.events import InstructionProvenanceGateEvent, TuiEventKind
+        evt = InstructionProvenanceGateEvent()
+        self.assertEqual(evt.kind, TuiEventKind.INSTRUCTION_PROVENANCE_GATE)
+        self.assertEqual(evt.decision, "")
+        self.assertEqual(evt.receipt_sha256, "")
+
+    def test_instruction_provenance_gate_event_with_fields(self) -> None:
+        from assurance.tui.events import InstructionProvenanceGateEvent
+        evt = InstructionProvenanceGateEvent(
+            decision="allow",
+            receipt_sha256="abc123",
+            routing_count=3,
+        )
+        self.assertEqual(evt.decision, "allow")
+        self.assertEqual(evt.receipt_sha256, "abc123")
+        self.assertEqual(evt.routing_count, 3)
+
+    def test_tool_availability_event_defaults(self) -> None:
+        from assurance.tui.events import ToolAvailabilityEvent, TuiEventKind
+        evt = ToolAvailabilityEvent()
+        self.assertEqual(evt.kind, TuiEventKind.TOOL_AVAILABILITY_CHECK)
+        self.assertEqual(evt.available, 0)
+        self.assertEqual(evt.degraded, 0)
+
+    def test_tool_availability_event_with_counts(self) -> None:
+        from assurance.tui.events import ToolAvailabilityEvent
+        evt = ToolAvailabilityEvent(available=5, unavailable=1, unprobed=2)
+        self.assertEqual(evt.available, 5)
+        self.assertEqual(evt.unavailable, 1)
+        self.assertEqual(evt.unprobed, 2)
+
+    def test_orientation_checkpoint_event_defaults(self) -> None:
+        from assurance.tui.events import OrientationCheckpointEvent, TuiEventKind
+        evt = OrientationCheckpointEvent()
+        self.assertEqual(evt.kind, TuiEventKind.ORIENTATION_CHECKPOINT)
+        self.assertEqual(evt.checkpoint_sha256, "")
+        self.assertEqual(evt.trigger_step, 0)
+
+    def test_orientation_checkpoint_event_with_fields(self) -> None:
+        from assurance.tui.events import OrientationCheckpointEvent
+        evt = OrientationCheckpointEvent(
+            checkpoint_sha256="def456",
+            trigger_step=3,
+        )
+        self.assertEqual(evt.checkpoint_sha256, "def456")
+        self.assertEqual(evt.trigger_step, 3)
+
+
+# ── GAK-UI-001 Phase 2: bridge layer tests ──────────────────────────────────
+
+
+class BridgeEventFactoryTests(unittest.TestCase):
+    """LBR-001: bridge.py event factory for JSONL journal lines."""
+
+    def test_build_run_preflight(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import RunPreflightEvent
+        line = {
+            "event_type": "run_preflight",
+            "payload": {
+                "model_id": "deepseek-v4-pro",
+                "adapter_id": "fake",
+                "real_network_allowed": True,
+            },
+            "timestamp": "2026-07-29T00:00:00Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, RunPreflightEvent)
+        self.assertEqual(evt.model_id, "deepseek-v4-pro")
+        self.assertEqual(evt.adapter_id, "fake")
+        self.assertTrue(evt.real_network_allowed)
+
+    def test_build_run_started(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import RunStartedEvent
+        line = {
+            "event_type": "run_started",
+            "payload": {"task_id": "TASK-001", "run_root": "/tmp/run"},
+            "timestamp": "2026-07-29T00:00:01Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, RunStartedEvent)
+        self.assertEqual(evt.task_id, "TASK-001")
+
+    def test_build_gate_decision_source_visibility(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import GateDecisionEvent, SourceVisibilityEvent
+        line = {
+            "event_type": "gate_decision",
+            "payload": {
+                "decision": "allow",
+                "reference_count": 3,
+                "reference_decisions": [
+                    {"ref_id": "ref-1", "source_id": "src-1",
+                     "observed_visibility": "full_text_observed",
+                     "required_visibility": "full_text_observed",
+                     "decision": "allow", "claim_allowed": "full_text_claim"},
+                ],
+            },
+            "timestamp": "2026-07-29T00:00:02Z",
+        }
+        result = build_event_from_jsonl_line(line)
+        # Returns a list because gate_decision produces multiple events
+        self.assertIsInstance(result, list)
+        self.assertGreater(len(result), 0)
+        # First event should be the overall GateDecisionEvent
+        self.assertIsInstance(result[0], GateDecisionEvent)
+        self.assertEqual(result[0].gate_name, "source_visibility")
+        self.assertEqual(result[0].decision, "allow")
+        # Second should be per-reference SourceVisibilityEvent
+        self.assertIsInstance(result[1], SourceVisibilityEvent)
+        self.assertEqual(result[1].source_id, "ref-1")
+
+    def test_build_ipg_event(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import InstructionProvenanceGateEvent
+        line = {
+            "event_type": "instruction_provenance_gate",
+            "payload": {"receipt_sha256": "abc123def456", "context_sha256": "ctx789"},
+            "timestamp": "2026-07-29T00:00:00Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, InstructionProvenanceGateEvent)
+        self.assertEqual(evt.receipt_sha256, "abc123def456")
+        self.assertEqual(evt.decision, "evaluated")
+
+    def test_build_tool_availability_event(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import ToolAvailabilityEvent
+        line = {
+            "event_type": "tool_availability_check",
+            "payload": {
+                "available_count": 5, "unavailable_count": 1,
+                "unprobed_count": 2, "degraded_count": 0,
+            },
+            "timestamp": "2026-07-29T00:00:00Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, ToolAvailabilityEvent)
+        self.assertEqual(evt.available, 5)
+        self.assertEqual(evt.unavailable, 1)
+        self.assertEqual(evt.unprobed, 2)
+        self.assertEqual(evt.degraded, 0)
+
+    def test_build_orientation_event(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import OrientationCheckpointEvent
+        line = {
+            "event_type": "orientation_checkpoint",
+            "payload": {"checkpoint_sha256": "chk123", "trigger_step": 0},
+            "timestamp": "2026-07-29T00:00:00Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, OrientationCheckpointEvent)
+        self.assertEqual(evt.checkpoint_sha256, "chk123")
+
+    def test_build_run_finished(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import RunFinishedEvent
+        line = {
+            "event_type": "run_finished",
+            "payload": {"status": "completed"},
+            "timestamp": "2026-07-29T00:00:03Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, RunFinishedEvent)
+        self.assertEqual(evt.status, "completed")
+
+    def test_build_run_failed(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import RunFailedEvent
+        line = {
+            "event_type": "run_failed",
+            "payload": {"status": "ipg_blocked"},
+            "timestamp": "2026-07-29T00:00:03Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, RunFailedEvent)
+        self.assertEqual(evt.reason, "ipg_blocked")
+
+    def test_build_model_request(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import ModelRequestEvent
+        line = {
+            "event_type": "model_request",
+            "payload": {"provider": "deepseek", "model_id": "deepseek-v4-pro"},
+            "timestamp": "2026-07-29T00:00:02Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, ModelRequestEvent)
+        self.assertEqual(evt.provider, "deepseek")
+        self.assertEqual(evt.model_id, "deepseek-v4-pro")
+
+    def test_unknown_event_type_produces_bare_event(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import TuiEvent, TuiEventKind
+        line = {
+            "event_type": "nonexistent_type",
+            "payload": {},
+            "timestamp": "2026-07-29T00:00:00Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, TuiEvent)
+        # Should still have a kind (best-effort mapping)
+
+
+# ── GAK-UI-001 Phase 2: LiveRunEventSource tests ────────────────────────────
+
+
+class LiveRunEventSourceTests(unittest.TestCase):
+    """LBR-001: LiveRunEventSource lifecycle and threading."""
+
+    def test_initial_state(self) -> None:
+        from assurance.tui.event_source import LiveRunEventSource
+        source = LiveRunEventSource(run_fn=lambda cb: {})
+        self.assertFalse(source.is_active())
+
+    def test_start_and_poll(self) -> None:
+        from assurance.tui.event_source import LiveRunEventSource
+        import time
+
+        # A run_fn that pushes a synthetic event via the callback
+        def _run_fn(on_event: object) -> dict:
+            # calls the on_event callback with a fake journal dict
+            on_event({  # type: ignore[misc]
+                "event_type": "run_preflight",
+                "payload": {"model_id": "test-model", "adapter_id": "test-adapter", "real_network_allowed": False},
+                "timestamp": "2026-01-01T00:00:00Z",
+            })
+            on_event({  # type: ignore[misc]
+                "event_type": "run_finished",
+                "payload": {"status": "completed"},
+                "timestamp": "2026-01-01T00:00:01Z",
+            })
+            return {"valid": True}
+
+        source = LiveRunEventSource(run_fn=_run_fn)
+        self.assertFalse(source.is_active())
+        source.start()
+
+        # Wait briefly for the thread to push events
+        deadline = time.time() + 2.0
+        events = []
+        while time.time() < deadline:
+            events.extend(source.poll())
+            if len(events) >= 2:
+                break
+            time.sleep(0.05)
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].kind.value, "run_preflight")
+        self.assertEqual(events[1].kind.value, "run_finished")
+
+    def test_close_stops_source(self) -> None:
+        from assurance.tui.event_source import LiveRunEventSource
+        source = LiveRunEventSource(run_fn=lambda cb: {})
+        source.close()
+        self.assertFalse(source.is_active())
+
+    def test_error_handling_in_run_fn(self) -> None:
+        from assurance.tui.event_source import LiveRunEventSource
+        import time
+
+        def _failing_fn(_cb: object) -> dict:
+            raise ValueError("test error")
+
+        source = LiveRunEventSource(run_fn=_failing_fn)
+        source.start()
+
+        deadline = time.time() + 2.0
+        while source.is_active() and time.time() < deadline:
+            time.sleep(0.05)
+
+        self.assertIsNotNone(source.error)
+        self.assertIn("test error", source.error or "")
+
+    def test_receipt_populated_after_run(self) -> None:
+        from assurance.tui.event_source import LiveRunEventSource
+        import time
+
+        def _receipt_fn(_cb: object) -> dict:
+            return {"valid": True, "run_id": "TEST-RUN-001"}
+
+        source = LiveRunEventSource(run_fn=_receipt_fn)
+        source.start()
+
+        deadline = time.time() + 2.0
+        while source.is_active() and time.time() < deadline:
+            time.sleep(0.05)
+
+        self.assertIsNotNone(source.receipt)
+        self.assertEqual(source.receipt["run_id"], "TEST-RUN-001")  # type: ignore[index]
+
+
+# ── GAK-UI-001 Phase 2: projector typed-field handler tests ──────────────────
+
+
+class ProjectorTypedGateHandlerTests(unittest.TestCase):
+    """Verify the updated handlers consume typed fields correctly."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from assurance.tui.app import TuiPrototype
+        cls.app = TuiPrototype.with_sample_data()
+
+    def test_ipg_handler_uses_decision_field(self) -> None:
+        from assurance.tui.projector import apply_event
+        from assurance.tui.events import InstructionProvenanceGateEvent
+        evt = InstructionProvenanceGateEvent(
+            decision="allow", receipt_sha256="abc123",
+        )
+        msgs = apply_event(self.app, evt)
+        # Should return a non-empty message list now
+        self.assertGreater(len(msgs), 0)
+        self.assertIn("IPG: allow", msgs[0])
+
+    def test_tool_availability_handler_uses_count_fields(self) -> None:
+        from assurance.tui.projector import apply_event
+        from assurance.tui.events import ToolAvailabilityEvent
+        evt = ToolAvailabilityEvent(available=3, unavailable=1)
+        msgs = apply_event(self.app, evt)
+        self.assertGreater(len(msgs), 0)
+        self.assertIn("3 avail", msgs[0])
+        self.assertIn("1 unavail", msgs[0])
+
+    def test_orientation_handler_uses_checkpoint_id(self) -> None:
+        from assurance.tui.projector import apply_event
+        from assurance.tui.events import OrientationCheckpointEvent
+        evt = OrientationCheckpointEvent(
+            checkpoint_sha256="checkpoint123abc", trigger_step=1,
+        )
+        msgs = apply_event(self.app, evt)
+        # Orientation handler returns []
+        self.assertEqual(msgs, [])
+
+    def test_ipg_handler_falls_back_for_bare_event(self) -> None:
+        """Even a bare TuiEvent with the right kind should work (backward compat)."""
+        from assurance.tui.projector import apply_event
+        from assurance.tui.events import TuiEvent, TuiEventKind
+        evt = TuiEvent(kind=TuiEventKind.INSTRUCTION_PROVENANCE_GATE)
+        msgs = apply_event(self.app, evt)
+        # Should default to "IPG: evaluated"
+        self.assertGreater(len(msgs), 0)
+        self.assertIn("IPG: evaluated", msgs[0])
+
+
+# ── GAK-UI-001 Phase 3: real adapter wiring tests ──────────────────────────
+
+
+class BuildLiveRunFnRealAdapterTests(unittest.TestCase):
+    """GAK-UI-001 Phase 3: ``build_live_run_fn(real_adapter=True)`` wiring."""
+
+    def test_real_adapter_false_calls_fake_cli(self) -> None:
+        """When real_adapter=False, calls run_canonical_guarded_cli (fake)."""
+        from unittest.mock import patch
+        from assurance.tui.bridge import build_live_run_fn
+
+        with patch("assurance.canonical_cli.run_canonical_guarded_cli") as mock_fake, \
+             patch("assurance.canonical_cli.run_canonical_guarded_cli_real") as mock_real:
+            mock_fake.return_value = {"valid": True}
+            run_fn = build_live_run_fn(run_root="/tmp/test", ask="test?", real_adapter=False)
+            result = run_fn(lambda evt: None)
+            mock_fake.assert_called_once()
+            mock_real.assert_not_called()
+            self.assertTrue(result["valid"])
+
+    def test_real_adapter_true_calls_real_cli(self) -> None:
+        """When real_adapter=True, calls run_canonical_guarded_cli_real."""
+        from unittest.mock import patch
+        from assurance.tui.bridge import build_live_run_fn
+
+        with patch("assurance.canonical_cli.run_canonical_guarded_cli_real") as mock_real, \
+             patch("assurance.canonical_cli.run_canonical_guarded_cli") as mock_fake:
+            mock_real.return_value = {"valid": True}
+            run_fn = build_live_run_fn(run_root="/tmp/test", ask="real?", real_adapter=True)
+            result = run_fn(lambda evt: None)
+            mock_real.assert_called_once()
+            mock_fake.assert_not_called()
+            self.assertTrue(result["valid"])
+
+    def test_real_adapter_passes_credential_target(self) -> None:
+        """real_adapter=True passes credential_target through to canonical CLI."""
+        from unittest.mock import patch
+        from assurance.tui.bridge import build_live_run_fn
+
+        with patch("assurance.canonical_cli.run_canonical_guarded_cli_real") as mock_real:
+            mock_real.return_value = {"valid": True}
+            run_fn = build_live_run_fn(
+                run_root="/tmp/test", ask="test",
+                real_adapter=True,
+                credential_target="FEP-Agent/Custom-Target",
+            )
+            run_fn(lambda evt: None)
+            _, kwargs = mock_real.call_args
+            self.assertEqual(kwargs["credential_target"], "FEP-Agent/Custom-Target")
+
+    def test_real_adapter_on_event_streams_through_bridge(self) -> None:
+        """Events from the real path are correctly mapped by the bridge."""
+        from unittest.mock import patch
+        from assurance.tui.bridge import build_live_run_fn, build_on_event_callback
+        import queue
+
+        def _fake_real_cli(**kwargs):  # noqa: ANN003
+            on_event = kwargs["on_event"]
+            on_event({
+                "event_type": "run_preflight",
+                "payload": {
+                    "model_id": "deepseek-v4-pro",
+                    "adapter_id": "canonical-cli-real-deepseek-adapter",
+                    "real_network_allowed": True,
+                },
+                "timestamp": "2026-07-29T00:00:00Z",
+            })
+            on_event({
+                "event_type": "run_started",
+                "payload": {"task_id": "TASK-001", "run_root": "/tmp/test"},
+                "timestamp": "2026-07-29T00:00:01Z",
+            })
+            on_event({
+                "event_type": "model_request",
+                "payload": {
+                    "provider": "deepseek",
+                    "model_id": "deepseek-v4-pro",
+                    "real_network_used": True,
+                },
+                "timestamp": "2026-07-29T00:00:02Z",
+            })
+            on_event({
+                "event_type": "run_finished",
+                "payload": {"status": "completed"},
+                "timestamp": "2026-07-29T00:00:03Z",
+            })
+            return {"valid": True}
+
+        with patch("assurance.canonical_cli.run_canonical_guarded_cli_real",
+                   side_effect=_fake_real_cli):
+            run_fn = build_live_run_fn(run_root="/tmp/test", ask="test", real_adapter=True)
+            q: queue.Queue = queue.Queue()
+            on_event = build_on_event_callback(q)
+            run_fn(on_event)
+
+            events = []
+            while True:
+                try:
+                    events.append(q.get_nowait())
+                except queue.Empty:
+                    break
+
+            self.assertEqual(len(events), 4)
+            self.assertEqual(events[0].kind.value, "run_preflight")
+            self.assertEqual(events[1].kind.value, "run_started")
+            self.assertEqual(events[2].kind.value, "model_request")
+            self.assertEqual(events[3].kind.value, "run_finished")
+            # Verify the preflight event carries real adapter fields
+            self.assertEqual(events[0].model_id, "deepseek-v4-pro")
+            self.assertTrue(getattr(events[0], "real_network_allowed", False))
+            # Verify model_request carries real network indicator
+            self.assertEqual(events[2].provider, "deepseek")

@@ -150,6 +150,20 @@ _BUILTIN_COMMANDS: list[CommandDef] = [
         uri="command://conversation/export",
     ),
     CommandDef(
+        slash="/search",
+        name_zh="网络搜索",
+        description_zh="通过本地浏览器搜索网络，打开结果页面并提取内容（B 级 evidence）",
+        category="检索",
+        uri="command://retrieval/search",
+    ),
+    CommandDef(
+        slash="/retrieve",
+        name_zh="论文获取",
+        description_zh="通过本地浏览器打开论文页，检测 PDF 并下载存入 evidence store（A 级 evidence）",
+        category="检索",
+        uri="command://retrieval/paper",
+    ),
+    CommandDef(
         slash="/help",
         name_zh="指令列表",
         description_zh="显示全部指令、中文说明及键盘快捷键参考",

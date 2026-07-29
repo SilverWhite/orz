@@ -1,9 +1,12 @@
-"""Event source abstraction — GAK-UI-001 Phase 1.
+"""Event source abstraction — GAK-UI-001 Phase 2.
 
-Defines the :class:`EventSource` protocol and provides two implementations:
+Defines the :class:`EventSource` protocol and provides three implementations:
 
 * :class:`FakeEventSource` — in-process queue fed from tests or demo scenarios
 * :class:`JsonlFileSource` — reads events from a canonical JSONL journal file
+  (now uses the bridge layer for typed event construction)
+* :class:`LiveRunEventSource` — wraps a running canonical CLI in a background
+  thread, streaming events into the TUI drain loop
 
 Pre-built demo scenarios (:func:`build_gate_chain_demo`, etc.) produce
 realistic synthetic event sequences for interactive demonstration.
@@ -12,8 +15,9 @@ realistic synthetic event sequences for interactive demonstration.
 from __future__ import annotations
 
 import queue
+import threading
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 from .events import (
     ArtifactRegisteredEvent,
@@ -115,7 +119,11 @@ class FakeEventSource(EventSource):
         self._closed = True
 
     def is_active(self) -> bool:
-        return not self._queue.empty()
+        # Return True until explicitly closed — this matches the base class
+        # default and supports streaming scenarios where events may arrive
+        # after an idle period.  For test scenarios that need drain-then-stop
+        # behaviour, call close() after the last push.
+        return not self._closed
 
 
 # ── JSONL file source ────────────────────────────────────────────────────────
@@ -153,6 +161,8 @@ class JsonlFileSource(EventSource):
         "run_finished": TuiEventKind.RUN_FINISHED,
         "run_failed": TuiEventKind.RUN_FAILED,
         "run_cancelled": TuiEventKind.RUN_CANCELLED,
+        "error_event": TuiEventKind.ERROR_EVENT,
+        "status_update": TuiEventKind.STATUS_UPDATE,
     }
 
     def __init__(self, journal_path: str) -> None:
@@ -176,8 +186,13 @@ class JsonlFileSource(EventSource):
             pass
 
     def poll(self) -> list[TuiEvent]:
-        """Return the next unread event, or empty list if exhausted."""
+        """Return the next unread event as a typed :class:`TuiEvent` subclass.
+
+        Uses :func:`.bridge.build_event_from_jsonl_line` to map each
+        JSONL line to the correct typed event with payload fields populated.
+        """
         import json
+
         self._ensure_loaded()
         if self._index >= len(self._lines):
             return []
@@ -187,12 +202,11 @@ class JsonlFileSource(EventSource):
             raw = json.loads(line)
         except json.JSONDecodeError:
             return []
-        event_type = raw.get("event_type", "")
-        kind = self._KIND_MAP.get(event_type)
-        if kind is None:
-            return []
-        payload = raw.get("payload", {})
-        return [TuiEvent(kind=kind, timestamp=raw.get("timestamp", ""))]
+
+        # Use the bridge layer to construct a typed TuiEvent subclass.
+        # bridge.py is the ONLY module allowed to import from assurance.*.
+        from .bridge import build_event_from_jsonl_line
+        return [build_event_from_jsonl_line(raw)]
 
     def close(self) -> None:
         self._lines.clear()
@@ -201,6 +215,102 @@ class JsonlFileSource(EventSource):
     def is_active(self) -> bool:
         self._ensure_loaded()
         return self._index < len(self._lines)
+
+
+# ── live run source (GAK-UI-001 Phase 2) ──────────────────────────────────────
+
+
+class LiveRunEventSource(EventSource):
+    """Event source that wraps a canonical CLI run in a background thread.
+
+    Accepts a *run_fn* callable (provided by :mod:`.bridge`) that takes
+    an ``on_event`` callback and executes the CLI.  This keeps
+    ``event_source.py`` free of ``assurance.*`` imports — the bridge
+    layer handles the wiring.
+
+    Usage::
+
+        from .bridge import build_live_run_fn
+        source = LiveRunEventSource(
+            run_fn=build_live_run_fn(run_root=..., ask="..."),
+            on_event=build_on_event_callback(queue),
+        )
+        source.start()
+    """
+
+    def __init__(
+        self,
+        run_fn: Callable[[Callable[[dict[str, Any]], None]], Any],
+    ) -> None:
+        self._queue: queue.Queue[TuiEvent] = queue.Queue()
+        self._thread: threading.Thread | None = None
+        self._run_fn = run_fn
+        self._started = False
+        self._receipt: dict[str, Any] | None = None
+        self._error: str | None = None
+        self._closed = False
+
+    def start(self) -> None:
+        """Launch the canonical CLI run in a background daemon thread.
+
+        Idempotent — calling :meth:`start` on an already-started source
+        is a no-op.
+        """
+        if self._started:
+            return
+        self._started = True
+
+        from .bridge import build_on_event_callback
+
+        on_event = build_on_event_callback(self._queue)
+
+        def _run() -> None:
+            try:
+                receipt = self._run_fn(on_event)
+                self._receipt = receipt
+            except Exception as exc:
+                self._error = str(exc)
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def poll(self) -> list[TuiEvent]:
+        """Drain all currently queued events (non-blocking)."""
+        results: list[TuiEvent] = []
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is not None:
+                results.append(item)
+        return results
+
+    def close(self) -> None:
+        """Signal the source to stop."""
+        self._closed = True
+
+    def is_active(self) -> bool:
+        """Return ``True`` while the CLI thread is alive or events remain.
+
+        Once the thread has exited AND the queue is drained, the drain
+        loop will exit naturally.
+        """
+        if self._closed:
+            return False
+        thread_alive = self._thread is not None and self._thread.is_alive()
+        queue_has_items = not self._queue.empty()
+        return thread_alive or queue_has_items
+
+    @property
+    def receipt(self) -> dict[str, Any] | None:
+        """The run receipt, populated after the CLI run completes."""
+        return self._receipt
+
+    @property
+    def error(self) -> str | None:
+        """Exception message if the CLI run crashed."""
+        return self._error
 
 
 # ── demo scenario builders ───────────────────────────────────────────────────

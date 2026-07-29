@@ -89,6 +89,23 @@ class PageContent:
 
 
 @dataclass
+class PageStatus:
+    """Classification of a page's accessibility state.
+
+    Detected by :meth:`BrowserCDPClient.classify_page` after navigation.
+    Used to surface LOGIN_REQUIRED / CAPTCHA_REQUIRED states per §15 of
+    the LBR-001 design.
+    """
+
+    is_login_page: bool = False
+    is_captcha_page: bool = False
+    login_indicators: list[str] = field(default_factory=list)
+    captcha_indicators: list[str] = field(default_factory=list)
+    http_status: int = 0
+    page_title: str = ""
+
+
+@dataclass
 class TabInfo:
     """Metadata about an AI-owned tab."""
 
@@ -221,6 +238,7 @@ class BrowserCDPClient:
         args = [
             exe_path,
             f"--remote-debugging-port={port}",
+            "--remote-allow-origins=*",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-extensions",
@@ -296,7 +314,8 @@ class BrowserCDPClient:
     def navigate(self, target_id: str, url: str) -> None:
         """Navigate an AI-owned tab to *url*.
 
-        Raises :class:`AssuranceError` if the URL is blocked.
+        Raises :class:`AssuranceError` if the URL is blocked (checked both
+        before navigation and after redirects — see §19.1 of the design).
         """
         self._require_connected()
         _validate_navigation_url(url)
@@ -304,18 +323,35 @@ class BrowserCDPClient:
         self._send(target_id, "Page.navigate", {"url": url})
         # Wait for page load
         self._wait_for_load(target_id)
+
+        # §19.1: Re-validate URL after redirects.  The browser may have
+        # followed a redirect chain to a different host — we must check
+        # the final URL before allowing any content to be read.
+        final_url = self._get_current_url(target_id)
+        if final_url and final_url != url:
+            _validate_navigation_url(final_url)
+            logger.info("Redirect detected: %s → %s", url[:80], final_url[:80])
+
         tab = self._owned_tabs.get(target_id)
         if tab:
-            tab.url = url
+            tab.url = final_url or url
 
     def close_tab(self, target_id: str) -> None:
-        """Close an AI-owned tab."""
+        """Close an AI-owned tab.
+
+        Best-effort: if the tab was already closed externally (e.g. by the
+        user), we still clean up the local WebSocket connection and tracking
+        state.
+        """
         self._require_connected()
         try:
             self._send(target_id, "Page.disable")
         except AssuranceError:
             pass
-        self._send_browser("Target.closeTarget", {"targetId": target_id})
+        try:
+            self._send_browser("Target.closeTarget", {"targetId": target_id})
+        except AssuranceError:
+            pass  # tab may already be closed
         if target_id in self._ws_connections:
             try:
                 self._ws_connections[target_id].close()
@@ -409,6 +445,115 @@ class BrowserCDPClient:
             meta["citation"] = citation["value"]
 
         return meta
+
+    # ── page classification (LBR-001 §15, §23 AC-9) ─────────────────────────
+
+    def classify_page(self, target_id: str) -> PageStatus:
+        """Classify the current page for login/CAPTCHA gates.
+
+        Checks for:
+        - Password input fields (login form)
+        - Known CAPTCHA providers (reCAPTCHA, hCaptcha, Cloudflare Turnstile)
+        - HTTP 401/403 status via document title
+
+        Returns a :class:`PageStatus` with detection results.
+        """
+        self._require_connected()
+
+        status = PageStatus()
+
+        # Get page title for HTTP status clues
+        try:
+            title_result = self._evaluate(target_id, "document.title")
+            status.page_title = (
+                title_result.get("value", "")
+                if isinstance(title_result, dict) else ""
+            )
+        except Exception:
+            pass
+
+        # HTTP status in title (e.g. "401 Unauthorized")
+        import re
+        http_match = re.search(r"\b(401|403|407)\b", status.page_title)
+        if http_match:
+            status.http_status = int(http_match.group(1))
+
+        # Check for login forms: password input fields
+        try:
+            pw_result = self._evaluate(
+                target_id,
+                "document.querySelectorAll('input[type=\"password\"]').length",
+            )
+            pw_count = (
+                pw_result.get("value", 0)
+                if isinstance(pw_result, dict) else 0
+            )
+            if isinstance(pw_count, (int, float)) and pw_count > 0:
+                status.is_login_page = True
+                status.login_indicators.append(
+                    f"Found {int(pw_count)} password input(s)"
+                )
+        except Exception:
+            pass
+
+        # Check for login text in common elements.
+        # Only text patterns that strongly indicate a login *gate* (not
+        # merely a navigation link).  Common nav links like "Log in" or
+        # "Login" are NOT sufficient — a real login gate has a password
+        # field, an HTTP error status, or imperative/error phrasing.
+        try:
+            login_text = self._evaluate(
+                target_id,
+                "document.body ? document.body.innerText.substring(0, 800).toLowerCase() : ''",
+            )
+            body = (
+                login_text.get("value", "")
+                if isinstance(login_text, dict) else ""
+            )
+            # Strong signals: imperative requests, error messages, or
+            # dedicated login-page markers.  Generic "log in" / "login"
+            # are excluded — they appear in nearly every site's nav bar.
+            login_keywords = [
+                "please log in to", "please sign in to",
+                "log in to continue", "sign in to continue",
+                "authentication required", "login required",
+                "you must be logged in", "you must be signed in",
+                "you need to log in", "you need to sign in",
+            ]
+            for kw in login_keywords:
+                if kw in str(body).lower():
+                    status.is_login_page = True
+                    status.login_indicators.append(f"Body contains '{kw}'")
+                    break
+        except Exception:
+            pass
+
+        # Check for CAPTCHA
+        captcha_checks = [
+            (".g-recaptcha", "reCAPTCHA widget"),
+            (".h-captcha", "hCaptcha widget"),
+            ("[src*='recaptcha']", "reCAPTCHA iframe"),
+            ("[src*='hcaptcha']", "hCaptcha iframe"),
+            (".cf-turnstile", "Cloudflare Turnstile"),
+            ("[src*='challenges.cloudflare.com']", "Cloudflare challenge"),
+        ]
+        for selector, label in captcha_checks:
+            try:
+                result = self._evaluate(
+                    target_id,
+                    f"document.querySelectorAll('{selector}').length",
+                )
+                count = (
+                    result.get("value", 0)
+                    if isinstance(result, dict) else 0
+                )
+                if isinstance(count, (int, float)) and count > 0:
+                    status.is_captcha_page = True
+                    status.captcha_indicators.append(label)
+            except Exception:
+                pass
+
+        return status
 
     # ── link & PDF detection ────────────────────────────────────────────────
 
@@ -593,6 +738,19 @@ class BrowserCDPClient:
                 self._send_browser("Target.activateTarget", {"targetId": target_id})
             except AssuranceError:
                 pass  # best-effort
+
+    def _get_current_url(self, target_id: str) -> str:
+        """Return the current URL of *target_id* after any redirects.
+
+        Uses ``window.location.href`` to get the post-redirect URL.
+        Returns an empty string on failure (best-effort).
+        """
+        try:
+            result = self._evaluate(target_id, "window.location.href")
+            url = result.get("value", "") if isinstance(result, dict) else ""
+            return str(url) if url else ""
+        except Exception:
+            return ""
 
 
 # ── URL validation ───────────────────────────────────────────────────────────

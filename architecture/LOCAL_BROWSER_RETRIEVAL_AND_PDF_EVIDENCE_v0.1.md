@@ -963,7 +963,63 @@ The first usable version should demonstrate:
 7. Should exploratory JavaScript evaluation be postponed until after the PDF flow is stable?
 8. How strict should `version_confidence` be before a document can be treated as the publisher version?
 
-## 25. Current Recommendation
+## 25. Chrome Profile Isolation (2026-07-29)
+
+### 25.1 Known Limitation
+
+Chrome's main user profile is blocked from CDP connections by enterprise security
+policy on the development machine. Attempting to connect to a browser instance
+that uses the user's main profile results in a connection refusal.
+
+This is an expected behavior under Windows enterprise policy — the main profile
+carries cookies, passwords, and session state that must not be exposed over the
+debugging protocol.
+
+### 25.2 Workaround: Project-Isolated Profile
+
+The retrieval workflow auto-launches Chrome with a dedicated profile stored at
+``<project_root>/.gsa_chrome_profile/``. This profile:
+
+- Is created automatically on first launch.
+- Is stored inside the project directory (never conflicts with the user's main
+  Chrome profile).
+- Persists cookies and Google login state across retrieval sessions.
+- Never accesses the user's main Chrome data (cookies, passwords, bookmarks,
+  history).
+
+The workaround is implemented in ``_ensure_browser()``
+(:file:`assurance/retrieval_workflow.py:699-703`).
+
+### 25.3 Future Resolution Paths
+
+Three options for removing the workaround (in priority order):
+
+1. **Chrome enterprise policy** — if the enterprise ``DeveloperToolsAvailability``
+   policy can be set to ``1`` (allow developer tools) for the main profile,
+   CDP connection would work without a separate profile. This requires IT
+   administrator action.
+
+2. **User-managed profile** — the user explicitly selects a Chrome profile
+   directory via a CLI flag (``--chrome-profile=<path>``), making the
+   isolation opt-in and transparent.
+
+3. **Edge fallback** — Microsoft Edge CDP may not be subject to the same
+   enterprise policy. If confirmed, Edge becomes the default browser for
+   retrieval on Windows.
+
+### 25.4 Impact
+
+- **New windows and multi-tab retrieval**: fully functional through the
+  project-isolated profile.
+- **Main profile tab access**: not available. AI-owned tabs are created in a
+  dedicated window under the project profile.
+- **User's existing Google login**: not shared. The user must log into Google
+  once in the project profile window, after which cookies persist.
+- **Security posture**: profile isolation is actually *stronger* than sharing
+  the main profile — the AI can never access the user's email, banking,
+  or other authenticated sessions by accident.
+
+## 26. Current Recommendation
 
 Build the first version around this narrow loop:
 

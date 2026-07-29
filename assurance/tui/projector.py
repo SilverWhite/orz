@@ -176,22 +176,48 @@ def _on_gate_decision(app: Any, event: GateDecisionEvent) -> list[str]:
 
 @_register(TuiEventKind.INSTRUCTION_PROVENANCE_GATE)
 def _on_ipg(app: Any, event: TuiEvent) -> list[str]:
-    """Handle instruction_provenance_gate journal events."""
-    app.explorer_pane.add_event_entry("Decisions", "IPG: evaluated")
-    return []
+    """Handle instruction_provenance_gate events — now with typed fields."""
+    decision = getattr(event, "decision", "") or "evaluated"
+    receipt = getattr(event, "receipt_sha256", "")
+    reason = getattr(event, "reason", "")
+    text = f"IPG: {decision}"
+    if reason:
+        text += f" — {reason}"
+    elif receipt:
+        text += f" (receipt: {receipt[:12]}…)"
+    app.explorer_pane.add_event_entry("Decisions", text)
+    return [text]
 
 
 @_register(TuiEventKind.TOOL_AVAILABILITY_CHECK)
 def _on_tool_availability(app: Any, event: TuiEvent) -> list[str]:
-    """Handle tool_availability_check journal events."""
-    app.explorer_pane.add_event_entry("Decisions", "Tools: probed")
-    return []
+    """Handle tool_availability_check events — now with typed fields."""
+    avail = getattr(event, "available", 0)
+    unavail = getattr(event, "unavailable", 0)
+    unprobed = getattr(event, "unprobed", 0)
+    degraded = getattr(event, "degraded", 0)
+    parts = [f"{avail} avail"]
+    if unavail:
+        parts.append(f"{unavail} unavail")
+    if unprobed:
+        parts.append(f"{unprobed} unprobed")
+    if degraded:
+        parts.append(f"{degraded} degraded")
+    text = f"Tools: {', '.join(parts)}"
+    app.explorer_pane.add_event_entry("Decisions", text)
+    return [text]
 
 
 @_register(TuiEventKind.ORIENTATION_CHECKPOINT)
 def _on_orientation(app: Any, event: TuiEvent) -> list[str]:
-    """Handle orientation_checkpoint journal events."""
-    app.explorer_pane.add_event_entry("Run", "checkpoint: saved")
+    """Handle orientation_checkpoint events — now with typed fields."""
+    cid = getattr(event, "checkpoint_sha256", "")
+    step = getattr(event, "trigger_step", 0)
+    if cid:
+        text = f"Orientation: step {step} ({cid[:12]}…)"
+    else:
+        text = "checkpoint: saved"
+    app.explorer_pane.add_event_entry("Run", text)
     return []
 
 

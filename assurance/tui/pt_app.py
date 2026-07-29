@@ -294,8 +294,9 @@ def run_tui_demo(
                         and tui_app.event_source.is_active()
                     ):
                         messages = tui_app.poll_events()
-                        if messages:
-                            app.invalidate()
+                    # Always invalidate — handlers may mutate widgets
+                    # without returning messages (e.g. _on_ipg returns []).
+                    app.invalidate()
                     await asyncio.sleep(0.05)
 
             drain_task = asyncio.create_task(_drain())

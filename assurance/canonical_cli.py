@@ -747,6 +747,7 @@ def _build_events_and_receipt(
     answer_packet_sha256: str,
     event_specs: list[tuple[str, str, dict[str, Any], str]],
     created_at: str | None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Shared journal write and receipt build.
 
@@ -754,6 +755,10 @@ def _build_events_and_receipt(
     and returns the verifiable run receipt.  The caller must have already
     written the answer packet to *gates["answer_packet_path"]* and
     computed *answer_packet_sha256* via :func:`sha256_file`.
+
+    When *on_event* is provided it is called for each event dict as it
+    is built, allowing live consumers (e.g. the TUI) to stream events
+    before the journal is written.
     """
     manifest = gates["manifest"]
     run_manifest_path = gates["run_manifest_path"]
@@ -781,6 +786,8 @@ def _build_events_and_receipt(
             timestamp=timestamp,
         )
         events.append(event)
+        if on_event:
+            on_event(event)
         previous = event["event_sha256"]
     _write_journal(journal_path, events)
 
@@ -813,11 +820,15 @@ def run_canonical_guarded_cli(
     run_id: str = DEFAULT_RUN_ID,
     task_id: str = DEFAULT_TASK_ID,
     created_at: str | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the canonical guarded CLI with a fake offline adapter.
 
     All gates evaluate before the fake answer packet is constructed.
     No network access is attempted.
+
+    When *on_event* is provided, each journal event dict is passed to
+    it as it is built (before the journal is written to disk).
     """
     gates = _resolve_and_setup_gates(
         run_root=run_root,
@@ -963,6 +974,7 @@ def run_canonical_guarded_cli(
         answer_packet_sha256=ap_sha256,
         event_specs=event_specs,
         created_at=created_at,
+        on_event=on_event,
     )
 
 
@@ -978,12 +990,17 @@ def run_canonical_guarded_cli_real(
     created_at: str | None = None,
     credential_target: str = DEFAULT_CREDENTIAL_TARGET,
     api_timeout_seconds: int = 60,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    audit: bool = False,
 ) -> dict[str, Any]:
     """Run the canonical guarded CLI with a REAL DeepSeek API call.
 
     This is the P0 production path: all gates evaluate before the model is
     called, the API key is read from Windows Credential Manager and never
     persisted, and only public assistant text enters the answer packet.
+
+    When *on_event* is provided, each journal event dict is passed to
+    it as it is built (before the journal is written to disk).
     """
     # Create a runtime key store for the namespace envelope
     key_store = MemoryInstallationKeyStore()
@@ -1007,6 +1024,24 @@ def run_canonical_guarded_cli_real(
         )
         namespace = gates["namespace"]
         governor = gates["governor"]
+
+        # === GAK-EVT-001: wire audit ledger (opt-in) ===
+        _audit_seal = None
+        _composed_on_event = on_event
+
+        if audit:
+            from .audit_integration import build_audit_writer
+            _audit_on_event, _audit_seal = build_audit_writer(
+                namespace=namespace,
+                key_store=key_store,
+                run_id=run_id,
+            )
+            _original_on_event = on_event
+
+            def _composed_on_event(evt: dict[str, Any]) -> None:
+                if _original_on_event:
+                    _original_on_event(evt)
+                _audit_on_event(evt)
 
         # === REAL ADAPTER: enforce adapter gate, then call DeepSeek API ===
         from .adapter_gate import AdapterGateContext, enforce_adapter_call
@@ -1044,6 +1079,8 @@ def run_canonical_guarded_cli_real(
                     messages,
                     timeout_seconds=api_timeout_seconds,
                     conversation_id=namespace.conversation_id,
+                    attempt=1,
+                    turn=1,
                     allowed_categories={"llm_provider"},
                     allowed_endpoints={"api.deepseek.com"},
                 ),
@@ -1065,7 +1102,7 @@ def run_canonical_guarded_cli_real(
                 api_key = "\x00" * len(api_key)  # GAK-CRED-001: best-effort scrub
                 del api_key
     finally:
-        key_store.close()
+        pass  # key_store kept alive for audit seal below
 
     # Build the answer packet (from real output or error fallback)
     if model_output and not api_error:
@@ -1280,12 +1317,27 @@ def run_canonical_guarded_cli_real(
         ),
     ]
 
-    return _build_events_and_receipt(
+    run_receipt = _build_events_and_receipt(
         gates=gates,
         answer_packet_sha256=ap_sha256,
         event_specs=event_specs,
         created_at=created_at,
+        on_event=_composed_on_event,
     )
+    # GAK-EVT-001: seal the audit ledger (opt-in)
+    if _audit_seal is not None:
+        try:
+            audit_seal_receipt = _audit_seal()
+            run_receipt["audit_seal"] = {
+                "receipt_id": audit_seal_receipt["receipt_id"],
+                "ledger_id": audit_seal_receipt["ledger_id"],
+                "event_count": audit_seal_receipt["journal"]["event_count"],
+                "sha256": audit_seal_receipt["journal"]["sha256"],
+            }
+        except Exception as exc:
+            run_receipt["audit_seal"] = {"error": str(exc)}
+    key_store.close()
+    return run_receipt
 
 
 def _read_journal(journal_path: Path) -> list[dict[str, Any]]:

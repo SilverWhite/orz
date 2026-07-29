@@ -423,10 +423,31 @@ def build_real_deepseek_context(
 
     available_tools = tool_availability_report.get("available", [])
     unavailable_tools = tool_availability_report.get("unavailable", [])
+    unprobed_tools = tool_availability_report.get("unprobed", [])
+    degraded_tools = tool_availability_report.get("degraded", [])
+
+    def _tool_names(entries: list[dict[str, Any]]) -> str:
+        names = [t.get("tool_name", t.get("tool_id", "?")) for t in entries]
+        return ", ".join(names) if names else "none"
+
+    tool_lines = []
+    if available_tools:
+        tool_lines.append(f"AVAILABLE: {_tool_names(available_tools)}")
+    if unavailable_tools:
+        tool_lines.append(f"UNAVAILABLE: {_tool_names(unavailable_tools)}")
+    if degraded_tools:
+        tool_lines.append(f"DEGRADED: {_tool_names(degraded_tools)}")
+    if unprobed_tools:
+        tool_lines.append(f"UNPROBED: {_tool_names(unprobed_tools)}")
+    if not tool_lines:
+        tool_lines.append("No tool availability data available.")
+
     tool_block = (
-        f"AVAILABLE tools: {', '.join(available_tools) if available_tools else 'none'}.\n"
-        f"UNAVAILABLE tools: {', '.join(unavailable_tools) if unavailable_tools else 'none'}.\n"
-        "You MUST NOT guess what an unavailable tool would return."
+        "\n".join(tool_lines) + "\n"
+        "You MUST NOT guess whether an unavailable tool exists or what it would return. "
+        "You MUST NOT fabricate tool call results or search results when the tool is unavailable. "
+        "If a tool is listed as UNAVAILABLE, explicitly state that it is unavailable and suggest "
+        "the user enable it or proceed with available tools only."
     )
 
     system_content = (

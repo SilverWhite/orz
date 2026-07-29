@@ -11,6 +11,8 @@ pattern-matching dispatch in the projector layer.
 
 from __future__ import annotations
 
+import time as _time
+
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -233,6 +235,79 @@ class StatusUpdateEvent(TuiEvent):
     kind: TuiEventKind = field(default=TuiEventKind.STATUS_UPDATE, init=False)
     label: str = ""
     ok: bool = True
+
+
+# ── gate-specific typed events (GAK-UI-001 Phase 2) ──────────────────────────
+
+
+@dataclass
+class InstructionProvenanceGateEvent(TuiEvent):
+    """IPG evaluation result — typed fields for the previously-bare event kind."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.INSTRUCTION_PROVENANCE_GATE, init=False)
+    decision: str = ""            # "allow" | "defer" | "block" | "evaluated"
+    reason: str = ""
+    receipt_sha256: str = ""
+    routing_count: int = 0
+    blocked_count: int = 0
+
+
+@dataclass
+class ToolAvailabilityEvent(TuiEvent):
+    """Tool availability check result — typed fields."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.TOOL_AVAILABILITY_CHECK, init=False)
+    decision: str = ""            # "allow" | "defer" | "block" | "evaluated"
+    available: int = 0
+    unavailable: int = 0
+    unprobed: int = 0
+    degraded: int = 0
+
+
+@dataclass
+class OrientationCheckpointEvent(TuiEvent):
+    """Orientation checkpoint created — typed fields."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.ORIENTATION_CHECKPOINT, init=False)
+    checkpoint_sha256: str = ""
+    trigger_step: int = 0
+
+
+# ── retrieval events (LBR-001) ────────────────────────────────────────────────
+
+
+@dataclass
+class RetrievalProgress:
+    """Progress update emitted during a browser retrieval workflow.
+
+    TUI-owned type — mirrors :class:`assurance.retrieval_workflow.RetrievalProgress`
+    without importing from the assurance core.  The wiring layer at
+    :mod:`assurance.tui.main` bridges the two.
+    """
+
+    stage: str       # "launching", "connecting", "navigating", "reading",
+                     # "finding_pdf", "downloading", "validating",
+                     # "storing", "indexing", "done", "failed",
+                     # "searching", "retrieving"
+    message: str
+    detail: str = ""
+    timestamp: float = field(default_factory=_time.time)
+
+
+@dataclass
+class RetrievalOutcome:
+    """Final result of a retrieval workflow, TUI-owned.
+
+    The wiring layer maps :class:`assurance.retrieval_workflow.RetrievalResult`
+    and :class:`assurance.retrieval_workflow.WebRetrievalResult` into this
+    single type so the TUI never touches assurance types.
+    """
+
+    ok: bool = True
+    title: str = ""
+    summary: str = ""   # one-line summary for content pane
+    detail: str = ""    # detailed info for content pane
+    error: str = ""
 
 
 # ── known terminal event kinds ───────────────────────────────────────────────

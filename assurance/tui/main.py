@@ -5,9 +5,97 @@ Usage::
     python -m assurance.tui.main              # render at 100×30
     python -m assurance.tui.main -w 140 -h 40 # render at 140×40
     python -m assurance.tui.main --demo       # run interactive prompt_toolkit demo
+    python -m assurance.tui.main --demo --live-retrieval
+        # run interactive demo with live browser retrieval wired
 """
 
 from __future__ import annotations
+
+from typing import Any, Callable
+
+from .events import RetrievalOutcome, RetrievalProgress
+
+
+# ── retrieval handler wiring (LBR-001) ────────────────────────────────────────
+
+
+def build_retrieval_handler(
+) -> Callable[[str, str, Callable[[RetrievalProgress], None]], RetrievalOutcome]:
+    """Build a retrieval handler wired to the real assurance workflow.
+
+    This function is the **only** place where the TUI layer touches
+    ``assurance.retrieval_workflow``.  It lives in the application entry
+    point (:mod:`assurance.tui.main`) rather than in the TUI rendering
+    layer, satisfying the architectural constraint that TUI widgets
+    must not import from the assurance core.
+
+    Returns a callable with signature::
+
+        (mode: str, target: str, on_progress: Callable) -> RetrievalOutcome
+
+    where *mode* is ``"search"`` or ``"retrieve"``.
+    """
+    from assurance.retrieval_workflow import (
+        RetrievalProgress as AssuranceRetrievalProgress,
+        RetrievalResult,
+        WebRetrievalResult,
+        retrieve_search,
+        run_retrieval,
+    )
+
+    def _adapt_progress(ap: AssuranceRetrievalProgress) -> RetrievalProgress:
+        """Map the assurance progress type to the TUI-owned type."""
+        return RetrievalProgress(
+            stage=ap.stage,
+            message=ap.message,
+            detail=ap.detail,
+            timestamp=ap.timestamp,
+        )
+
+    def _handler(
+        mode: str,
+        target: str,
+        on_progress: Callable[[RetrievalProgress], None],
+    ) -> RetrievalOutcome:
+        if mode == "search":
+            raw: WebRetrievalResult = retrieve_search(
+                target,
+                launch_browser=True,
+                headless=False,
+                on_progress=lambda ap: on_progress(_adapt_progress(ap)),
+                max_results=3,
+            )
+            return RetrievalOutcome(
+                ok=True,
+                title="SEARCH DONE",
+                detail=f"{len(raw.pages)} pages, {raw.total_chars} chars",
+                summary=f"{len(raw.pages)} pages from web search",
+            )
+        else:
+            raw_result: RetrievalResult = run_retrieval(
+                target,
+                launch_browser=True,
+                headless=False,
+                on_progress=lambda ap: on_progress(_adapt_progress(ap)),
+            )
+            if raw_result.error:
+                return RetrievalOutcome(
+                    ok=False,
+                    title="FAILED",
+                    error=raw_result.error,
+                    detail=raw_result.error,
+                )
+            return RetrievalOutcome(
+                ok=True,
+                title="RETRIEVED",
+                detail=(
+                    f"{raw_result.title[:80]} — "
+                    f"{raw_result.page_count}pp, {raw_result.total_chars} chars"
+                ),
+                summary=raw_result.title,
+            )
+
+    return _handler
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,6 +131,34 @@ def main(argv: list[str] | None = None) -> int:
         choices=["gate_chain", "gate_defer", "run_failed"],
         help="Run interactive demo with a live event scenario",
     )
+    parser.add_argument(
+        "--live-retrieval", action="store_true",
+        help="Wire live browser retrieval handler (requires Chrome on port 9222)",
+    )
+    parser.add_argument(
+        "--replay", type=str, default=None, metavar="JOURNAL_PATH",
+        help="Replay events from an existing events.jsonl file",
+    )
+    parser.add_argument(
+        "--run", type=str, default=None, metavar="ASK_TEXT",
+        help="Run the canonical CLI (offline fake adapter by default; "
+             "use --real for live DeepSeek API) and display in TUI",
+    )
+    parser.add_argument(
+        "--real", action="store_true",
+        help="Use the real DeepSeek adapter for --run (requires API key "
+             "in Windows Credential Manager)",
+    )
+    parser.add_argument(
+        "--credential-target", type=str, default="FEP-Agent/DeepSeek",
+        metavar="TARGET",
+        help="Windows Credential Manager target name for DeepSeek API key "
+             "(default: FEP-Agent/DeepSeek)",
+    )
+    parser.add_argument(
+        "--run-root", type=str, default=None,
+        help="Run root directory for --run (default: auto-generated temp dir)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -75,6 +191,55 @@ def main(argv: list[str] | None = None) -> int:
             app.dialog.visible = True
         if args.with_properties:
             app.properties.visible = True
+
+    # Wire live retrieval handler if requested
+    if args.live_retrieval:
+        handler = build_retrieval_handler()
+        app.retrieval_handler = handler
+
+    # ── --replay: replay events from a journal file ──────────────────────
+    if args.replay:
+        from .event_source import JsonlFileSource
+        source = JsonlFileSource(args.replay)
+        app = TuiPrototype.with_event_source(source)
+        if args.with_dialog:
+            app.dialog.visible = True
+        if args.with_properties:
+            app.properties.visible = True
+        if args.live_retrieval:
+            handler = build_retrieval_handler()
+            app.retrieval_handler = handler
+        return _run_demo(app, args.width, args.height)
+
+    # ── --run: live CLI run ─────────────────────────────────────────────
+    if args.run:
+        import tempfile
+        from pathlib import Path
+        run_root = Path(args.run_root) if args.run_root else Path(
+            tempfile.mkdtemp(prefix="gsa-run-")
+        )
+        from .bridge import build_live_run_fn
+        from .event_source import LiveRunEventSource
+        extra_kwargs: dict[str, Any] = {}
+        if args.real:
+            extra_kwargs["credential_target"] = args.credential_target
+        run_fn = build_live_run_fn(
+            run_root=str(run_root),
+            ask=args.run,
+            real_adapter=args.real,
+            **extra_kwargs,
+        )
+        source = LiveRunEventSource(run_fn=run_fn)
+        app = TuiPrototype.with_event_source(source)
+        if args.with_dialog:
+            app.dialog.visible = True
+        if args.with_properties:
+            app.properties.visible = True
+        if args.live_retrieval:
+            handler = build_retrieval_handler()
+            app.retrieval_handler = handler
+        source.start()
+        return _run_demo(app, args.width, args.height)
 
     if args.demo or args.demo_events:
         return _run_demo(app, args.width, args.height)

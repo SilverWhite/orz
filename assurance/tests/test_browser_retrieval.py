@@ -222,29 +222,48 @@ class BrowserCDPClientConstructionTests(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Live browser tests (skipped when Chrome is not running with --remote-debugging-port)
+# Live browser tests (auto-launch headless Chrome when installed;
+# skipped only when no Chrome/Edge binary is found on the system)
 # ══════════════════════════════════════════════════════════════════════════════
 
-
-def _chrome_available() -> bool:
-    """Return True if a Chrome/Edge instance is reachable on port 9222."""
-    from assurance.browser_retrieval import BrowserCDPClient
-    client = BrowserCDPClient(port=9222)
-    return client.connect()
+_LIVE_PORT = 19223  # off the default 9222 to avoid conflicts
 
 
-@unittest.skipUnless(_chrome_available(), "Chrome not running on port 9222")
+def _chrome_installed() -> bool:
+    """Return True if Chrome or Edge is installed on this system."""
+    from assurance.browser_retrieval import _find_chrome, _find_edge
+    for path in (*_find_chrome(), *_find_edge()):
+        if Path(path).is_file():
+            return True
+    return False
+
+
+@unittest.skipUnless(_chrome_installed(), "Chrome/Edge not installed")
 class LiveBrowserTests(unittest.TestCase):
     """LBR-001: live Chrome CDP integration tests.
 
-    Requires Chrome/Edge running with ``--remote-debugging-port=9222``.
+    Auto-launches headless Chrome with a project-isolated profile on
+    :data:`_LIVE_PORT`.  No manual browser setup required.
     """
+
+    _proc: object = None  # subprocess.Popen | None
 
     @classmethod
     def setUpClass(cls) -> None:
         from assurance.browser_retrieval import BrowserCDPClient
-        cls._client = BrowserCDPClient(port=9222)
-        cls._client.connect()
+        from assurance.retrieval_workflow import _ensure_browser
+
+        # Auto-launch headless Chrome with the project-isolated profile.
+        # _ensure_browser handles the "try connect first, then launch"
+        # strategy and waits up to 30s for CDP to be ready.
+        client = BrowserCDPClient(port=_LIVE_PORT)
+        cls._client, cls._proc = _ensure_browser(
+            client=client,
+            port=_LIVE_PORT,
+            launch=True,
+            browser="chrome",
+            headless=True,
+        )
         cls._created_tabs: list[str] = []
 
     @classmethod
@@ -254,7 +273,15 @@ class LiveBrowserTests(unittest.TestCase):
                 cls._client.close_tab(target_id)
             except Exception:
                 pass
-        cls._client.disconnect()
+        try:
+            cls._client.disconnect()
+        except Exception:
+            pass
+        if cls._proc is not None:
+            try:
+                cls._proc.terminate()
+            except Exception:
+                pass
 
     def test_new_tab_creates_target(self) -> None:
         target_id = self._client.new_tab("about:blank")
@@ -266,7 +293,9 @@ class LiveBrowserTests(unittest.TestCase):
         target_id = self._client.new_tab("about:blank")
         self.__class__._created_tabs.append(target_id)
 
-        self._client.navigate(target_id, "https://httpbin.org/html")
+        # example.com is the most reliable page on the internet;
+        # httpbin.org has intermittent timeouts in headless Chrome
+        self._client.navigate(target_id, "https://example.com")
         content = self._client.read_page(target_id, max_chars=5000)
         self.assertGreater(len(content.text), 0)
         self.assertGreater(content.char_count, 0)
@@ -275,7 +304,8 @@ class LiveBrowserTests(unittest.TestCase):
         target_id = self._client.new_tab("about:blank")
         self.__class__._created_tabs.append(target_id)
 
-        self._client.navigate(target_id, "https://httpbin.org/links/10/0")
+        # example.com is fast, always available, and contains <a> elements
+        self._client.navigate(target_id, "https://example.com")
         links = self._client.get_links(target_id)
         self.assertGreater(len(links), 0)
         for link in links:
