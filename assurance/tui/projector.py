@@ -20,9 +20,14 @@ from .events import (
     ArtifactRegisteredEvent,
     ErrorEvent,
     GateDecisionEvent,
+    InstructionProvenanceGateEvent,
     ModelOutputEvent,
     ModelRequestEvent,
+    OrientationCheckpointEvent,
     PermissionDecisionEvent,
+    PlanApprovalDecisionEvent,
+    PlanPhaseEnteredEvent,
+    PlanPhaseSubmittedEvent,
     RunCancelledEvent,
     RunFailedEvent,
     RunFinishedEvent,
@@ -30,11 +35,13 @@ from .events import (
     RunStartedEvent,
     SourceVisibilityEvent,
     StatusUpdateEvent,
+    ToolAvailabilityEvent,
     ToolCompletedEvent,
     ToolProposalEvent,
     ToolStartedEvent,
     TuiEvent,
     TuiEventKind,
+    UsageSampleEvent,
     is_terminal,
 )
 
@@ -90,8 +97,8 @@ def _register(kind: TuiEventKind):
 def _on_run_preflight(app: Any, event: RunPreflightEvent) -> list[str]:
     model_id = getattr(event, "model_id", "")
     adapter_id = getattr(event, "adapter_id", "")
-    app.status_bar.update_item("PREFLIGHT", True)
-    app.status_bar.update_item("IDLE", False)
+    app.status_bar.update_item("预检", True)
+    app.status_bar.update_item("空闲", False)
     if model_id:
         app.status_bar.update_item(model_id, True)
     app.explorer_pane.add_event_entry(
@@ -104,7 +111,7 @@ def _on_run_preflight(app: Any, event: RunPreflightEvent) -> list[str]:
 def _on_run_started(app: Any, event: RunStartedEvent) -> list[str]:
     app.running = True
     app.status_bar.update_item("PREFLIGHT", False)
-    app.status_bar.update_item("RUNNING", True)
+    app.status_bar.update_item("运行中", True)
     app.explorer_pane.add_event_entry(
         "Run", f"started: {event.task_id}"
     )
@@ -115,8 +122,8 @@ def _on_run_started(app: Any, event: RunStartedEvent) -> list[str]:
 @_register(TuiEventKind.RUN_FINISHED)
 def _on_run_finished(app: Any, event: RunFinishedEvent) -> list[str]:
     app.running = False
-    app.status_bar.update_item("RUNNING", False)
-    app.status_bar.update_item("IDLE", True)
+    app.status_bar.update_item("运行中", False)
+    app.status_bar.update_item("空闲", True)
     app.explorer_pane.add_event_entry("Run", f"finished ({event.status})")
     app.content_pane.set_disposition("COMPLETED", "")
     return [f"Run finished: {event.status}"]
@@ -126,7 +133,7 @@ def _on_run_finished(app: Any, event: RunFinishedEvent) -> list[str]:
 def _on_run_failed(app: Any, event: RunFailedEvent) -> list[str]:
     app.running = False
     app.status_bar.update_item("RUNNING", False)
-    app.status_bar.update_item("FAILED", True)
+    app.status_bar.update_item("失败", True)
     app.explorer_pane.add_event_entry("Run", f"FAILED: {event.reason}")
     app.explorer_pane.add_event_entry("Errors", event.reason)
     app.content_pane.set_disposition("FAILED", event.reason)
@@ -136,8 +143,8 @@ def _on_run_failed(app: Any, event: RunFailedEvent) -> list[str]:
 @_register(TuiEventKind.RUN_CANCELLED)
 def _on_run_cancelled(app: Any, event: RunCancelledEvent) -> list[str]:
     app.running = False
-    app.status_bar.update_item("RUNNING", False)
-    app.status_bar.update_item("IDLE", True)
+    app.status_bar.update_item("运行中", False)
+    app.status_bar.update_item("空闲", True)
     app.explorer_pane.add_event_entry("Run", "cancelled")
     return ["Run cancelled"]
 
@@ -226,7 +233,7 @@ def _on_orientation(app: Any, event: TuiEvent) -> list[str]:
 
 @_register(TuiEventKind.MODEL_REQUEST)
 def _on_model_request(app: Any, event: ModelRequestEvent) -> list[str]:
-    app.status_bar.update_item("MODEL", True)
+    app.status_bar.update_item("模型", True)
     app.status_bar.update_item("RUNNING", False)
     app.explorer_pane.add_event_entry(
         "Run", f"model request: {event.provider}/{event.model_id}"
@@ -236,8 +243,8 @@ def _on_model_request(app: Any, event: ModelRequestEvent) -> list[str]:
 
 @_register(TuiEventKind.MODEL_OUTPUT)
 def _on_model_output(app: Any, event: ModelOutputEvent) -> list[str]:
-    app.status_bar.update_item("MODEL", False)
-    app.status_bar.update_item("RUNNING", True)
+    app.status_bar.update_item("模型", False)
+    app.status_bar.update_item("运行中", True)
     valid_str = "valid" if event.structured_output_valid else "INVALID"
     app.explorer_pane.add_event_entry(
         "Run", f"model output ({valid_str})"
@@ -301,7 +308,7 @@ def _on_artifact(app: Any, event: ArtifactRegisteredEvent) -> list[str]:
 
 @_register(TuiEventKind.ERROR_EVENT)
 def _on_error(app: Any, event: ErrorEvent) -> list[str]:
-    app.status_bar.update_item("ERROR", False)
+    app.status_bar.update_item("错误", False)
     app.explorer_pane.add_event_entry(
         "Errors", f"[{event.source}] {event.message}"
     )
@@ -312,3 +319,40 @@ def _on_error(app: Any, event: ErrorEvent) -> list[str]:
 def _on_status_update(app: Any, event: StatusUpdateEvent) -> list[str]:
     app.status_bar.update_item(event.label, event.ok)
     return [f"Status: {event.label}={event.ok}"]
+
+
+# ── plan mode handlers (GAK-PLAN-001) ───────────────────────────────────────
+
+
+@_register(TuiEventKind.PLAN_PHASE_ENTERED)
+def _on_plan_phase_entered(app: Any, event: PlanPhaseEnteredEvent) -> list[str]:
+    app.status_bar.update_item("计划", True)
+    app.status_bar.update_item("空闲", False)
+    return [f"计划阶段: policy={event.planning_policy}"]
+
+
+@_register(TuiEventKind.PLAN_PHASE_SUBMITTED)
+def _on_plan_phase_submitted(app: Any, event: PlanPhaseSubmittedEvent) -> list[str]:
+    app.status_bar.update_item("等待", True)
+    return [f"计划已提交: {event.plan_id} v{event.version}"]
+
+
+@_register(TuiEventKind.PLAN_APPROVAL_DECISION)
+def _on_plan_approval_decision(app: Any, event: PlanApprovalDecisionEvent) -> list[str]:
+    app.status_bar.update_item("计划", False)
+    app.status_bar.update_item("等待", False)
+    decision = event.decision
+    if decision == "approve":
+        app.status_bar.update_item("执行", True)
+    return [f"计划{decision}: {event.plan_id}"]
+
+
+# ── process usage monitor handler ────────────────────────────────────────────
+
+
+@_register(TuiEventKind.USAGE_SAMPLE)
+def _on_usage_sample(app: Any, event: UsageSampleEvent) -> list[str]:
+    line = event.anomaly_line or event.status_line
+    if line:
+        app.status_bar.update_item("资源", True)
+    return [line] if line else []

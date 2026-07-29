@@ -195,12 +195,12 @@ SAMPLE_EVENT_GROUPS: list[EventGroup] = [
 # ── Status bar ──────────────────────────────────────────────────────────────
 
 SAMPLE_STATUS_ITEMS = [
-    ("GUARDED", True),
-    ("NET OFF", True),
-    ("SBX STRICT", True),
-    ("SOURCES 3/4", False),
-    ("DEEPSEEK", True),
-    ("IDLE", True),
+    ("守护", True),
+    ("网络关闭", True),
+    ("沙箱严格", True),
+    ("来源 3/4", False),
+    ("DeepSeek", True),
+    ("空闲", True),
 ]
 
 # ── Dialog mock ─────────────────────────────────────────────────────────────
@@ -290,33 +290,29 @@ SAMPLE_PROPERTIES: dict[str, Any] = {
 # Displayed when the user invokes /help.
 # Format: (shortcut, description_zh)
 SAMPLE_SHORTCUTS: list[tuple[str, str]] = [
-    ("/", "指令面板 — 显示 6 个最常用指令"),
-    ("Alt+字母", "菜单激活 — Alt+F 文件, Alt+E 编辑, Alt+S 来源, …"),
-    ("F5", "切换运行状态（原型演示用）"),
-    ("F6", "焦点循环 — 在资源管理器/内容/标记/地址栏/查找栏之间切换"),
+    ("/", "指令面板 — 显示常用指令"),
+    ("Alt+字母", "菜单激活 — 例如 Alt+W 文件"),
+    ("F6", "焦点循环 — 在主要区域之间切换"),
     ("Tab", "焦点内移动 / 指令面板中切换选项"),
     ("Shift+Tab", "焦点内反向移动"),
-    ("Ctrl+Z", "撤回已发送输入 — 取消当前 agent 运行并回填指令到输入框"),
-    ("Ctrl+L", "聚焦地址栏 — 直接输入指令或 URI"),
-    ("Ctrl+C", "退出 GSA CLI"),
-    ("Esc", "关闭 — 清空输入缓冲 / 关闭菜单 / 关闭对话框"),
+    ("Ctrl+Z", "撤回已发送输入 — 取消当前运行并回填指令"),
+    ("Ctrl+L", "打开命令/位置输入弹窗"),
+    ("Esc", "关闭 — 清空输入 / 关闭菜单 / 关闭弹窗"),
     ("Enter", "激活选中项 / 发送指令"),
-    ("↑↓←→", "方向键 — 在面板内移动选择 / 指令面板中上下切换"),
+    ("↑↓←→", "方向键 — 在面板内移动选择"),
     ("Backspace", "输入框删除上一个字符"),
-    ("d", "切换对话框覆盖层（演示用）"),
-    ("p", "切换属性页覆盖层（演示用）"),
-    ("q", "退出（交互演示模式）"),
 ]
 
 # ── Menu definitions ────────────────────────────────────────────────────────
 
 SAMPLE_MENUS = {
-    "File": ["Open Workspace", "Save", "Save As...", "Exit"],
-    "Edit": ["Cut", "Copy", "Paste", "Select All"],
-    "View": ["Refresh", "Show Log", "Show History", "Properties"],
-    "Sources": ["Add Source", "Remove Source", "Source Visibility", "Source Provenance"],
-    "Agent": ["Start", "Stop", "Pause", "Resume", "Set Budget"],
-    "Run": ["Run", "Verify", "Dry Run", "Replay"],
-    "Verify": ["Verify All", "Verify Source", "Verify Claim", "Verify Adapter"],
-    "Help": ["About GSA", "Keyboard Shortcuts", "Documentation"],
+    "文件": ["打开工作区", "保存", "另存为...", "退出"],
+    "事件": ["显示事件", "隐藏事件", "事件过滤..."],
+    "标记": ["显示标记", "隐藏标记", "标记过滤..."],
+    "编辑模式": ["插入/覆盖", "半角/全角", "自动换行", "多行输入"],
+    "模型": ["切换模型", "推理强度", "Plan/Manual/Auto", "适配器状态"],
+    "来源": ["添加来源", "移除来源", "来源可见性", "来源溯源"],
+    "运行": ["运行", "验证", "试运行", "重放"],
+    "验证": ["验证全部", "验证来源", "验证声明", "验证适配器"],
+    "帮助": ["快捷键", "命令列表", "模型说明", "审批说明", "终端说明", "来源说明"],
 }

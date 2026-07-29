@@ -328,9 +328,9 @@ class StatusBarRenderTests(unittest.TestCase):
     def test_renders_items(self) -> None:
         bar = StatusBar(items=list(SAMPLE_STATUS_ITEMS))
         result = bar.render(100, 1)
-        self.assertIn("GUARDED", result[0])
-        self.assertIn("NET OFF", result[0])
-        self.assertIn("IDLE", result[0])
+        self.assertIn("守护", result[0])
+        self.assertIn("网络关闭", result[0])
+        self.assertIn("空闲", result[0])
 
     def test_empty_items_produces_space(self) -> None:
         bar = StatusBar(items=[])
@@ -530,21 +530,21 @@ class FullScreenRenderTests(unittest.TestCase):
         self.assertLessEqual(len(lines), 35, "Screen should not exceed 35 lines")
 
         # All seven regions (v2 adds FindBar + ContentMarker)
-        self.assertIn("File", output, "MenuBar missing")
-        self.assertIn("Back", output, "Toolbar missing")
+        self.assertIn("文件", output, "MenuBar missing")
+        self.assertIn("后退", output, "Toolbar missing")
         self.assertIn("Address:", output, "AddressBar missing")
         self.assertIn("Find:", output, "FindBar missing")
         self.assertIn("INDEX", output, "ExplorerPane missing")
         self.assertIn("Source Visibility", output, "ContentPane missing")
         self.assertIn("Markers", output, "ContentMarker missing")
-        self.assertIn("GUARDED", output, "StatusBar missing")
+        self.assertIn("守护", output, "StatusBar missing")
 
     def test_render_at_140x40_wider_layout(self) -> None:
         output = render_screen(140, 40)
         lines = output.split("\n")
         self.assertGreater(len(lines), 35)
         self.assertLessEqual(len(lines), 45)
-        self.assertIn("File", output)
+        self.assertIn("文件", output)
         self.assertIn("Source Visibility", output)
         self.assertIn("Find:", output)
         self.assertIn("Markers", output)
@@ -582,12 +582,12 @@ class FullScreenRenderTests(unittest.TestCase):
 
     def test_toolbar_has_standard_actions(self) -> None:
         output = render_screen(100, 30)
-        for btn in ["Back", "Forward", "Stop", "Refresh", "Verify", "Properties"]:
+        for btn in ["后退", "前进", "刷新", "停止", "打开", "验证", "属性"]:
             self.assertIn(btn, output, f"Toolbar missing '{btn}'")
 
     def test_status_bar_shows_mode_indicators(self) -> None:
         output = render_screen(100, 30)
-        for indicator in ["GUARDED", "NET OFF", "SBX STRICT", "SOURCES", "IDLE"]:
+        for indicator in ["守护", "网络关闭", "沙箱严格", "来源", "空闲"]:
             self.assertIn(indicator, output, f"StatusBar missing '{indicator}'")
 
     def test_explorer_shows_source_tree_groups(self) -> None:
@@ -606,11 +606,12 @@ class FullScreenRenderTests(unittest.TestCase):
             self.assertIn(menu_name, output, f"MenuBar missing '{menu_name}'")
 
     def test_lines_are_consistent_width(self) -> None:
+        from assurance.tui.widgets import display_width
         output = render_screen(100, 30)
         for i, line in enumerate(output.split("\n")):
             self.assertEqual(
-                len(line), 100,
-                f"Line {i} has width {len(line)}, expected 100: {line[:40]}..."
+                display_width(line), 100,
+                f"Line {i} has display width {display_width(line)}, expected 100: {line[:40]}..."
             )
 
 
@@ -640,7 +641,7 @@ class KeyboardNavigationTests(unittest.TestCase):
 
     def test_alt_key_activates_menu(self) -> None:
         self.app.handle_key("alt+f")
-        self.assertEqual(self.app.menu_bar.active_menu, "File")
+        self.assertEqual(self.app.menu_bar.active_menu, "文件")
 
     def test_esc_closes_menu(self) -> None:
         self.app.handle_key("alt+f")
@@ -1217,15 +1218,15 @@ class EscCancelRunTests(unittest.TestCase):
     def test_status_bar_shows_running_when_active(self) -> None:
         self.app.handle_key("f5")  # start run
         output = self.app.render(100, 30)
-        self.assertIn("RUNNING", output)
-        self.assertNotIn("IDLE", output)
+        self.assertIn("运行中", output)
+        self.assertNotIn("空闲", output)
 
     def test_status_bar_shows_idle_after_ctrl_z_cancel(self) -> None:
         self.app.handle_key("f5")
         self.app.handle_key("c-z")
         output = self.app.render(100, 30)
-        self.assertIn("IDLE", output)
-        self.assertNotIn("RUNNING", output)
+        self.assertIn("空闲", output)
+        self.assertNotIn("运行中", output)
 
     def test_ctrl_z_with_buffer_and_running_restores_last_sent(self) -> None:
         """Running takes priority — Ctrl+Z cancels run, restores last sent."""
@@ -1321,7 +1322,7 @@ class TuiEventDataclassTests(unittest.TestCase):
 
     def test_all_event_kinds_recognised(self) -> None:
         from assurance.tui.events import TuiEventKind
-        self.assertEqual(len(TuiEventKind), 18)
+        self.assertEqual(len(TuiEventKind), 22)
         self.assertEqual(TuiEventKind.RUN_PREFLIGHT.value, "run_preflight")
         self.assertEqual(TuiEventKind.RUN_FINISHED.value, "run_finished")
         self.assertEqual(TuiEventKind.GATE_DECISION.value, "gate_decision")
@@ -1504,14 +1505,14 @@ class ProjectorUnitTests(unittest.TestCase):
         msgs = self.apply(self.app, RunPreflightEvent(model_id="deepseek-v4", adapter_id="fake"))
         self.assertTrue(any("deepseek" in m for m in msgs))
         labels = [it[0] for it in self.app.status_bar.items]
-        self.assertIn("PREFLIGHT", labels)
+        self.assertIn("预检", labels)
 
     def test_run_started_sets_running(self) -> None:
         from assurance.tui.events import RunStartedEvent
         self.apply(self.app, RunStartedEvent(task_id="T-1"))
         self.assertTrue(self.app.running)
         labels = [it[0] for it in self.app.status_bar.items]
-        self.assertIn("RUNNING", labels)
+        self.assertIn("运行中", labels)
 
     def test_run_finished_clears_running(self) -> None:
         from assurance.tui.events import RunStartedEvent, RunFinishedEvent
@@ -1520,7 +1521,7 @@ class ProjectorUnitTests(unittest.TestCase):
         self.apply(self.app, RunFinishedEvent(status="completed"))
         self.assertFalse(self.app.running)
         labels = [it[0] for it in self.app.status_bar.items]
-        self.assertIn("IDLE", labels)
+        self.assertIn("空闲", labels)
 
     def test_run_failed_sets_failed_and_adds_error(self) -> None:
         from assurance.tui.events import RunFailedEvent
@@ -1579,7 +1580,7 @@ class ProjectorUnitTests(unittest.TestCase):
         from assurance.tui.events import ErrorEvent
         self.apply(self.app, ErrorEvent(message="network timeout", source="network"))
         labels = [it[0] for it in self.app.status_bar.items]
-        self.assertIn("ERROR", labels)
+        self.assertIn("错误", labels)
 
     def test_status_update_event_direct_to_status_bar(self) -> None:
         from assurance.tui.events import StatusUpdateEvent
@@ -1628,7 +1629,7 @@ class ProjectorUnitTests(unittest.TestCase):
             self.apply(self.app, evt)
         self.assertFalse(self.app.running)
         labels = [it[0] for it in self.app.status_bar.items]
-        self.assertIn("FAILED", labels)
+        self.assertIn("失败", labels)
 
     def test_event_log_accumulates(self) -> None:
         from assurance.tui.app import TuiPrototype
@@ -1767,7 +1768,7 @@ class TuiPrototypeEventIntegrationTests(unittest.TestCase):
         app = TuiPrototype.with_sample_data()
         output = app.render(100, 30)
         self.assertIn("Source Visibility", output)
-        self.assertIn("File", output)
+        self.assertIn("文件", output)
         self.assertIsNone(app.event_source)
 
     def test_render_with_event_source_is_deterministic(self) -> None:

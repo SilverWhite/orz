@@ -29,6 +29,9 @@ from .events import (
     ModelOutputEvent,
     ModelRequestEvent,
     OrientationCheckpointEvent,
+    PlanApprovalDecisionEvent,
+    PlanPhaseEnteredEvent,
+    PlanPhaseSubmittedEvent,
     RetrievalOutcome,
     RetrievalProgress,
     RunFailedEvent,
@@ -40,6 +43,7 @@ from .events import (
     ToolAvailabilityEvent,
     TuiEvent,
     TuiEventKind,
+    UsageSampleEvent,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -314,6 +318,54 @@ def _make_error_event(payload: dict[str, Any], timestamp: str) -> ErrorEvent:
     )
 
 
+# ── plan mode factories (GAK-PLAN-001) ──────────────────────────────────────
+
+
+def _make_plan_phase_entered(payload: dict[str, Any], timestamp: str) -> PlanPhaseEnteredEvent:
+    return PlanPhaseEnteredEvent(
+        timestamp=timestamp,
+        planning_policy=payload.get("planning_policy", ""),
+        task_id=payload.get("task_id", ""),
+        run_id=payload.get("run_id", ""),
+    )
+
+
+def _make_plan_phase_submitted(payload: dict[str, Any], timestamp: str) -> PlanPhaseSubmittedEvent:
+    return PlanPhaseSubmittedEvent(
+        timestamp=timestamp,
+        plan_id=payload.get("plan_id", ""),
+        plan_sha256=payload.get("plan_sha256", ""),
+        section_count=payload.get("section_count", 4),
+        version=payload.get("version", 1),
+    )
+
+
+def _make_plan_approval_decision(payload: dict[str, Any], timestamp: str) -> PlanApprovalDecisionEvent:
+    return PlanApprovalDecisionEvent(
+        timestamp=timestamp,
+        plan_id=payload.get("plan_id", ""),
+        decision=payload.get("decision", ""),
+        authority=payload.get("authority", ""),
+        execution_policy=payload.get("execution_policy", ""),
+    )
+
+
+# ── process usage factory ───────────────────────────────────────────────────
+
+
+def _make_usage_sample(payload: dict[str, Any], timestamp: str) -> UsageSampleEvent:
+    return UsageSampleEvent(
+        timestamp=timestamp,
+        cpu_percent=payload.get("cpu_percent", 0.0),
+        memory_bytes=payload.get("memory_bytes", 0),
+        elapsed_seconds=payload.get("elapsed_seconds", 0.0),
+        process_count=payload.get("process_count", 0),
+        completeness=payload.get("completeness", "complete"),
+        status_line=payload.get("status_line", ""),
+        anomaly_line=payload.get("anomaly_line", ""),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Dispatch tables
 # ══════════════════════════════════════════════════════════════════════════════
@@ -333,6 +385,10 @@ _EVENT_FACTORY: dict[str, Callable[[dict[str, Any], str], TuiEvent | list[TuiEve
     "run_failed": _make_run_failed,
     "run_cancelled": _make_run_failed,   # same shape
     "error_event": _make_error_event,
+    "plan_phase_entered": _make_plan_phase_entered,
+    "plan_phase_submitted": _make_plan_phase_submitted,
+    "plan_approval_decision": _make_plan_approval_decision,
+    "usage_sample": _make_usage_sample,
 }
 
 
@@ -351,6 +407,10 @@ _KIND_MAP: dict[str, TuiEventKind] = {
     "run_cancelled": TuiEventKind.RUN_CANCELLED,
     "error_event": TuiEventKind.ERROR_EVENT,
     "status_update": TuiEventKind.STATUS_UPDATE,
+    "plan_phase_entered": TuiEventKind.PLAN_PHASE_ENTERED,
+    "plan_phase_submitted": TuiEventKind.PLAN_PHASE_SUBMITTED,
+    "plan_approval_decision": TuiEventKind.PLAN_APPROVAL_DECISION,
+    "usage_sample": TuiEventKind.USAGE_SAMPLE,
 }
 
 

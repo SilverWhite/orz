@@ -132,6 +132,33 @@ class MenuBar(Widget):
     menus: dict[str, list[str]] = field(default_factory=dict)
     active_menu: str = ""
     focusable: bool = True
+    # Access key mapping: "alt+<letter>" → menu key (§10 keyboard model)
+    _access_keys: dict[str, str] = field(default_factory=dict)
+
+    # Default Chinese access key mapping (F=文件, S=事件, B=标记, E=编辑模式, M=模型, O=来源, R=运行, V=验证, H=帮助)
+    DEFAULT_ACCESS_KEYS: dict[str, str] = field(default_factory=lambda: {
+        "f": "文件", "s": "事件", "b": "标记", "e": "编辑模式",
+        "m": "模型", "o": "来源", "r": "运行", "v": "验证", "h": "帮助",
+    })
+
+    def _resolve_access(self, letter: str) -> str | None:
+        """Find the menu key for an access letter."""
+        lower = letter.lower()
+        # Try the explicit mapping first (only if the target exists in menus)
+        if lower in self._access_keys:
+            target = self._access_keys[lower]
+            if target in self.menus:
+                return target
+        # Try the default Chinese mapping (only if the target exists in menus)
+        if lower in self.DEFAULT_ACCESS_KEYS:
+            target = self.DEFAULT_ACCESS_KEYS[lower]
+            if target in self.menus:
+                return target
+        # Try first-letter match (for backwards compatibility with English menus)
+        for name in self.menus:
+            if name.upper().startswith(letter):
+                return name
+        return None
 
     def render(self, width: int, height: int) -> list[str]:
         if height < 1:
@@ -142,17 +169,11 @@ class MenuBar(Widget):
 
         label_chunks: list[str] = []
         for name in names:
-            marker = "&" if self.focused or self.active_menu else " "
-            # Underline the first letter hint for Alt+letter access
-            first = name[0]
-            label_chunks.append(f"{marker}{first}{name[1:]}")
+            marker = " " if (self.focused or self.active_menu) else " "
+            label_chunks.append(f"{marker}{name}")
 
-        # Build the menu bar line: " File  Edit  View ..."
-        line = ""
-        sep = "  "
-        for chunk in label_chunks:
-            line += chunk + sep
-        line = line.rstrip()
+        # Build the menu bar line
+        line = "  ".join(label_chunks)
 
         # If a menu is active, show its dropdown items
         if self.active_menu and self.active_menu in self.menus:
@@ -166,11 +187,10 @@ class MenuBar(Widget):
         names = list(self.menus.keys())
         chunks = []
         for name in names:
-            first = name[0]
             if name == self.active_menu:
-                chunks.append(f"▼{first}{name[1:]}")
+                chunks.append(f"▼{name}")
             else:
-                chunks.append(f" {first}{name[1:]}")
+                chunks.append(f" {name}")
         menu_line = "  ".join(chunks)
         result.append(pad_to_width(menu_line, width))
 
@@ -191,10 +211,10 @@ class MenuBar(Widget):
     def handle_key(self, key: str) -> bool:
         if key.startswith("alt+"):
             letter = key[4:].upper()
-            for name in self.menus:
-                if name.upper().startswith(letter):
-                    self.active_menu = name
-                    return True
+            name = self._resolve_access(letter)
+            if name is not None and name in self.menus:
+                self.active_menu = name
+                return True
         if key == "esc" and self.active_menu:
             self.active_menu = ""
             return True
@@ -987,6 +1007,281 @@ class PropertiesSheet(Widget):
             return True
         if key in ("s-tab", "left"):
             self._active_tab = (self._active_tab - 1) % len(self.tabs)
+            return True
+        return False
+
+
+# ── HelpOverlay (modal overlay, GAK-UI-001 P2) ────────────────────────────
+
+
+@dataclass
+class HelpOverlay(Widget):
+    """Help modal overlay with tabbed pages (§12).
+
+    Reuses the same overlay pattern as :class:`PropertiesSheet`.  Tabs are:
+    快捷键 | 命令 | 模型 | 审批 | 终端 | 来源
+
+    Keyboard: Esc close, Tab/Shift+Tab move focus, ←/→ switch tabs.
+    """
+
+    title: str = "帮助"
+    tabs: list[dict[str, Any]] = field(default_factory=list)
+    visible: bool = False
+    _active_tab: int = 0
+
+    @classmethod
+    def with_defaults(cls) -> HelpOverlay:
+        """Build a HelpOverlay pre-populated with reference content."""
+        from .view_models import SAMPLE_COMMANDS, SAMPLE_SHORTCUTS
+
+        shortcuts_content = "\n".join(
+            f"  {key:<16} {desc}"
+            for key, desc in SAMPLE_SHORTCUTS
+        )
+
+        commands_content = "\n".join(
+            f"  {cmd.slash:<16} {cmd.name_zh:<10} {cmd.description_zh}"
+            for cmd in SAMPLE_COMMANDS[:12]
+        )
+
+        return cls(
+            tabs=[
+                {
+                    "name": "快捷键",
+                    "fields": [],
+                    "content": shortcuts_content,
+                },
+                {
+                    "name": "命令",
+                    "fields": [],
+                    "content": commands_content,
+                },
+                {
+                    "name": "模型",
+                    "fields": [
+                        ("当前适配器", "DeepSeek v4 Pro"),
+                        ("可用模型", "deepseek-chat, deepseek-reasoner"),
+                        ("推理强度", "low / medium / high / xhigh / max"),
+                        ("Plan 模式", "/plan — 进入只读计划阶段"),
+                    ],
+                },
+                {
+                    "name": "审批",
+                    "fields": [
+                        ("Plan 审批", "计划完成后需用户审批再进入执行"),
+                        ("Action 审批", "敏感操作可设为手动/自动/混合"),
+                        ("审批策略", "manual / auto / mixed"),
+                        ("Ctrl+Z", "取消当前运行，回填指令"),
+                    ],
+                },
+                {
+                    "name": "终端",
+                    "fields": [
+                        ("系统终端", "状态栏实时显示 CPU/MEM/时间"),
+                        ("VS Code", "终端标题 2 秒刷新资源占用"),
+                        ("标题格式", "CPU 185% MEM 2.1G 14m"),
+                        ("异常提示", "HIGH CPU / HIGH MEM / IDLE?"),
+                    ],
+                },
+                {
+                    "name": "来源",
+                    "fields": [
+                        ("可见性等级", "FULL TEXT / PARTIAL / NONE"),
+                        ("证据等级", "A (论文PDF) / B (网页) / C (元数据)"),
+                        ("Gate 检查", "来源全文可见性门控"),
+                        ("检索命令", "/search 网络搜索 / /retrieve 论文获取"),
+                    ],
+                },
+            ],
+        )
+
+    def render_overlay(self, width: int, height: int) -> list[str] | None:
+        if not self.visible or not self.tabs:
+            return None
+
+        tab_names = [t["name"] for t in self.tabs]
+        tab = self.tabs[self._active_tab]
+
+        # Calculate dimensions
+        prop_w = min(max(width - 8, 36), 68)
+        prop_w = max(prop_w, 28)
+        inner_w = prop_w - 2
+
+        result: list[str] = []
+        # Top border
+        result.append(box_horizontal(f" {self.title} ", prop_w, focused=True))
+        # Tab row
+        tab_line = "  ".join(
+            f"▸{name}" if i == self._active_tab else f" {name} "
+            for i, name in enumerate(tab_names)
+        )
+        result.append(edge() + pad_to_width(tab_line, inner_w) + edge())
+        result.append(box_t_junction(prop_w))
+
+        # Content: either "fields" (key-value) or "content" (free text)
+        fields = tab.get("fields", [])
+        content_text = tab.get("content", "")
+        if content_text:
+            for line in content_text.split("\n"):
+                if display_width(line) > inner_w:
+                    line = line[: inner_w - 3] + "…"
+                result.append(edge() + pad_to_width(line, inner_w) + edge())
+        elif fields:
+            for k, v in fields:
+                field_line = f"  {k}: {v}"
+                if display_width(field_line) > inner_w:
+                    field_line = field_line[: inner_w - 3] + "…"
+                result.append(edge() + pad_to_width(field_line, inner_w) + edge())
+        else:
+            result.append(edge() + pad_to_width("（暂无内容）", inner_w) + edge())
+
+        # Footer hint
+        result.append(box_t_junction(prop_w))
+        result.append(edge() + pad_to_width(" Esc 关闭  ←→ 切换标签  ", inner_w, align="center") + edge())
+        # Bottom
+        result.append(box_bottom(prop_w, focused=True))
+
+        # Center overlay
+        BG = " "
+        prop_h = len(result)
+        top_pad = max(1, (height - prop_h) // 2)
+        left_pad = max(0, (width - prop_w) // 2)
+        padded: list[str] = []
+        for _ in range(top_pad):
+            padded.append(BG * width)
+        for line in result:
+            padded.append(BG * left_pad + pad_to_width(line, prop_w) + BG * (width - left_pad - prop_w))
+        for _ in range(height - len(padded)):
+            padded.append(BG * width)
+        return padded[:height]
+
+    def handle_key(self, key: str) -> bool:
+        if not self.visible:
+            return False
+        if key == "esc":
+            self.visible = False
+            return True
+        if key in ("tab", "right"):
+            self._active_tab = (self._active_tab + 1) % len(self.tabs)
+            return True
+        if key in ("s-tab", "left"):
+            self._active_tab = (self._active_tab - 1) % len(self.tabs)
+            return True
+        return False
+
+
+# ── FindDialog (modal overlay, GAK-UI-001 P2) ────────────────────────────────
+
+
+@dataclass
+class FindDialog(Widget):
+    """Modal overlay for multi-line / advanced search (§6).
+
+    Provides a larger input area for complex search queries, regex, scope
+    selection, and case-sensitivity toggles.
+    """
+
+    query: str = ""
+    scope: str = "对话"
+    scopes: list[str] = field(default_factory=lambda: [
+        "对话", "项目文档", "当前文件", "运行/制品", "索引来源",
+    ])
+    case_sensitive: bool = False
+    use_regex: bool = False
+    visible: bool = False
+    _focus_row: int = 0  # 0=query, 1=scope, 2=case, 3=regex, 4=buttons
+    _scope_idx: int = 0
+
+    def render_overlay(self, width: int, height: int) -> list[str] | None:
+        if not self.visible:
+            return None
+
+        dialog_w = min(max(width - 8, 32), 56)
+        inner_w = dialog_w - 2
+
+        result: list[str] = []
+        result.append(box_horizontal(" 查找 ", dialog_w, focused=True))
+
+        # Query input area
+        q_prefix = "▸ " if self._focus_row == 0 else "  "
+        q_text = self.query or "（输入查找内容）"
+        q_line = f"{q_prefix}查找: {q_text}"
+        result.append(edge() + pad_to_width(q_line, inner_w) + edge())
+
+        # Scope
+        s_prefix = "▸ " if self._focus_row == 1 else "  "
+        s_line = f"{s_prefix}范围: {self.scope}"
+        result.append(edge() + pad_to_width(s_line, inner_w) + edge())
+
+        # Options row
+        case_mark = "▸ " if self._focus_row == 2 else "  "
+        regex_mark = "▸ " if self._focus_row == 3 else "  "
+        opts_line = (
+            f"{case_mark}大小写: {'是' if self.case_sensitive else '否'}  "
+            f"{regex_mark}正则: {'是' if self.use_regex else '否'}"
+        )
+        result.append(edge() + pad_to_width(opts_line, inner_w) + edge())
+
+        # Separator
+        result.append(box_t_junction(dialog_w))
+
+        # Action buttons
+        btn_line = "  [ 查找 ]    [ 取消 ]"
+        if self._focus_row == 4:
+            btn_line = "▸ [ 查找 ]    [ 取消 ]"
+        result.append(edge() + pad_to_width(btn_line, inner_w, align="center") + edge())
+        result.append(box_bottom(dialog_w, focused=True))
+
+        # Center overlay
+        BG = " "
+        dialog_h = len(result)
+        top_pad = max(0, (height - dialog_h) // 2)
+        left_pad = max(0, (width - dialog_w) // 2)
+        padded: list[str] = []
+        for _ in range(top_pad):
+            padded.append(BG * width)
+        for line in result:
+            padded.append(BG * left_pad + pad_to_width(line, dialog_w) + BG * (width - left_pad - dialog_w))
+        for _ in range(height - len(padded)):
+            padded.append(BG * width)
+        return padded[:height]
+
+    def handle_key(self, key: str) -> bool:
+        if not self.visible:
+            return False
+        if key == "esc":
+            self.visible = False
+            return True
+        if key in ("up", "s-tab"):
+            self._focus_row = (self._focus_row - 1) % 5
+            return True
+        if key in ("down", "tab"):
+            self._focus_row = (self._focus_row + 1) % 5
+            return True
+        if key == "enter" and self._focus_row == 4:
+            self.visible = False  # execute find
+            return True
+        if key == "enter" and self._focus_row == 1:
+            # Cycle scope
+            idx = self.scopes.index(self.scope) if self.scope in self.scopes else 0
+            self.scope = self.scopes[(idx + 1) % len(self.scopes)]
+            self._scope_idx = (self._scope_idx + 1) % len(self.scopes)
+            return True
+        if key == "enter" and self._focus_row == 2:
+            self.case_sensitive = not self.case_sensitive
+            return True
+        if key == "enter" and self._focus_row == 3:
+            self.use_regex = not self.use_regex
+            return True
+        # Printable characters in query field
+        if self._focus_row == 0 and len(key) == 1 and key.isprintable():
+            self.query += key
+            return True
+        if self._focus_row == 0 and key == "backspace" and self.query:
+            self.query = self.query[:-1]
+            return True
+        if self._focus_row == 0 and key == "space":
+            self.query += " "
             return True
         return False
 

@@ -45,6 +45,12 @@ class TuiEventKind(str, Enum):
     RUN_CANCELLED = "run_cancelled"
     ERROR_EVENT = "error_event"
     STATUS_UPDATE = "status_update"
+    # ── plan mode (GAK-PLAN-001) ──
+    PLAN_PHASE_ENTERED = "plan_phase_entered"
+    PLAN_PHASE_SUBMITTED = "plan_phase_submitted"
+    PLAN_APPROVAL_DECISION = "plan_approval_decision"
+    # ── process usage monitor ──
+    USAGE_SAMPLE = "usage_sample"
 
 
 # ── base event ───────────────────────────────────────────────────────────────
@@ -308,6 +314,62 @@ class RetrievalOutcome:
     summary: str = ""   # one-line summary for content pane
     detail: str = ""    # detailed info for content pane
     error: str = ""
+
+
+# ── plan mode events (GAK-PLAN-001) ──────────────────────────────────────────
+
+
+@dataclass
+class PlanPhaseEnteredEvent(TuiEvent):
+    """Emitted when the planning phase begins."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.PLAN_PHASE_ENTERED, init=False)
+    planning_policy: str = ""     # "none" | "suggested" | "required"
+    task_id: str = ""
+    run_id: str = ""
+
+
+@dataclass
+class PlanPhaseSubmittedEvent(TuiEvent):
+    """Emitted when a plan is submitted for approval."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.PLAN_PHASE_SUBMITTED, init=False)
+    plan_id: str = ""
+    plan_sha256: str = ""
+    section_count: int = 4
+    version: int = 1
+
+
+@dataclass
+class PlanApprovalDecisionEvent(TuiEvent):
+    """Emitted when the user or policy approves/revises/rejects a plan."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.PLAN_APPROVAL_DECISION, init=False)
+    plan_id: str = ""
+    decision: str = ""            # "approve" | "revise" | "reject"
+    authority: str = ""           # "user" | "policy:auto"
+    execution_policy: str = ""    # "manual" | "auto" | "mixed"
+
+
+# ── process usage monitor events ─────────────────────────────────────────────
+
+
+@dataclass
+class UsageSampleEvent(TuiEvent):
+    """A single resource-usage sample from the process tree monitor.
+
+    Emitted periodically during live runs (§4.2-4.3).  The TUI can display
+    the latest sample in its status bar without overwhelming the log.
+    """
+
+    kind: TuiEventKind = field(default=TuiEventKind.USAGE_SAMPLE, init=False)
+    cpu_percent: float = 0.0
+    memory_bytes: int = 0
+    elapsed_seconds: float = 0.0
+    process_count: int = 0
+    completeness: str = "complete"  # "complete" | "partial" | "unavailable"
+    status_line: str = ""           # pre-formatted: "CPU 185% MEM 2.1G 14m 12p"
+    anomaly_line: str = ""          # non-empty only on threshold breach
 
 
 # ── known terminal event kinds ───────────────────────────────────────────────

@@ -39,6 +39,8 @@ from .widgets import (
     Dialog,
     ExplorerPane,
     FindBar,
+    FindDialog,
+    HelpOverlay,
     MenuBar,
     PropertiesSheet,
     StatusBar,
@@ -84,6 +86,13 @@ class TuiPrototype:
     dialog: Dialog = field(default_factory=Dialog)
     properties: PropertiesSheet = field(default_factory=PropertiesSheet)
     command_palette: CommandPalette = field(default_factory=CommandPalette)
+    help_overlay: HelpOverlay = field(default_factory=HelpOverlay.with_defaults)
+    find_dialog: FindDialog = field(default_factory=FindDialog)
+
+    # ── sidebar visibility (GAK-UI-001 P2) ──
+    show_explorer: bool = True
+    show_events: bool = True
+    show_markers: bool = True
 
     # ── event-driven state (Phase 1) ──
     event_source: Any | None = None   # EventSource | None (typed Any to avoid circular import)
@@ -115,25 +124,25 @@ class TuiPrototype:
         inner_w = width - 2  # inside │ borders
         lines: list[str] = []
 
+        # ── visibility flags shorthand ──
+        se = self.show_explorer
+        sm = self.show_markers
+
         # ── top border ──
         lines.append(box_horizontal("", width))
 
-        # ── Row 0: MenuBar ──
+        # ── Row 0: MenuBar (two-row: menus + toolbar) ──
         menu = self.menu_bar.render(inner_w, 1)
         lines.append("│" + menu[0] + "│")
-        lines.append(box_t_junction(width))
 
         # ── Row 1: Toolbar ──
         tool = self.toolbar.render(inner_w, 1)
         lines.append("│" + tool[0] + "│")
         lines.append(box_t_junction(width))
 
-        # ── Row 2: AddressBar (variable height for multi-line input) ──
-        addr_lines_count = self.address_bar._line_count
-        addr = self.address_bar.render(inner_w, addr_lines_count)
-        for i, addr_line in enumerate(addr):
-            lines.append("│" + addr_line + "│")
-        # Separator below the last address bar row
+        # ── Row 2: AddressBar (compact — single line, no multi-line expand) ──
+        addr = self.address_bar.render(inner_w, 1)
+        lines.append("│" + addr[0] + "│")
         lines.append(box_t_junction(width))
 
         # ── Row 3: FindBar ──
@@ -141,53 +150,63 @@ class TuiPrototype:
         lines.append("│" + find[0] + "│")
 
         # ── explorer / content / marker 3-column split ──
-        exp_w = EXPLORER_WIDTH - 2   # inner explorer width
-        marker_w = MARKER_WIDTH - 2  # inner marker width
-        content_w = inner_w - exp_w - marker_w - 2  # minus two │ separators
-        sep_line = (
-            "├" + "─" * exp_w + "┬" + "─" * content_w + "┬" + "─" * marker_w + "┤"
-        )
+        exp_w = (EXPLORER_WIDTH - 2) if se else 0
+        marker_w = (MARKER_WIDTH - 2) if sm else 0
+        # Count visible separators
+        sep_count = (1 if se else 0) + (1 if sm else 0)
+        content_w = inner_w - exp_w - marker_w - sep_count
+
+        # Separator line
+        seps: list[str] = []
+        if se:
+            seps.append("─" * exp_w)
+            seps.append("┬")
+        seps.append("─" * content_w)
+        if sm:
+            seps.append("┬")
+            seps.append("─" * marker_w)
+        sep_line = "├" + "".join(seps) + "┤"
         lines.append(sep_line)
 
-        # ── Body: ExplorerPane | ContentPane | ContentMarker ──
-        # Account for extra address bar rows beyond the first
-        extra_addr_rows = addr_lines_count - 1
-        body_height = height - TOTAL_FIXED_ROWS - 5 - extra_addr_rows
+        # ── Body ──
+        body_height = height - TOTAL_FIXED_ROWS - 5
         if body_height < 3:
             body_height = 3
 
-        explorer_inner = self._render_pane_inner(
-            self.explorer_pane, exp_w, body_height
-        )
-        content_inner = self._render_pane_inner(
-            self.content_pane, content_w, body_height
-        )
-        marker_inner = self._render_pane_inner(
-            self.content_marker, marker_w, body_height
-        )
+        explorer_inner = self._render_pane_inner(self.explorer_pane, exp_w, body_height) if se else []
+        content_inner = self._render_pane_inner(self.content_pane, content_w, body_height)
+        marker_inner = self._render_pane_inner(self.content_marker, marker_w, body_height) if sm else []
 
         for i in range(body_height):
-            el = explorer_inner[i] if i < len(explorer_inner) else " " * exp_w
+            row_parts: list[str] = ["│"]
+            if se:
+                el = explorer_inner[i] if i < len(explorer_inner) else " " * exp_w
+                row_parts.append(pad_to_width(el, exp_w) + "│")
             cl = content_inner[i] if i < len(content_inner) else " " * content_w
-            ml = marker_inner[i] if i < len(marker_inner) else " " * marker_w
-            lines.append(
-                "│" + pad_to_width(el, exp_w)
-                + "│" + pad_to_width(cl, content_w)
-                + "│" + pad_to_width(ml, marker_w)
-                + "│"
-            )
+            row_parts.append(pad_to_width(cl, content_w))
+            if sm:
+                row_parts.append("│")
+                ml = marker_inner[i] if i < len(marker_inner) else " " * marker_w
+                row_parts.append(pad_to_width(ml, marker_w))
+            row_parts.append("│")
+            lines.append("".join(row_parts))
 
         # ── body bottom separator ──
-        bot_sep = (
-            "├" + "─" * exp_w + "┴" + "─" * content_w + "┴" + "─" * marker_w + "┤"
-        )
+        bot_seps: list[str] = []
+        if se:
+            bot_seps.append("─" * exp_w)
+            bot_seps.append("┴")
+        bot_seps.append("─" * content_w)
+        if sm:
+            bot_seps.append("┴")
+            bot_seps.append("─" * marker_w)
+        bot_sep = "├" + "".join(bot_seps) + "┤"
         lines.append(bot_sep)
 
-        # ── StatusBar (dynamic: IDLE ↔ RUNNING) ──
-        # Update the last status item to reflect current run state
-        if self.status_bar.items and self.status_bar.items[-1][0] in ("IDLE", "RUNNING"):
+        # ── StatusBar ──
+        if self.status_bar.items and self.status_bar.items[-1][0] in ("空闲", "运行中", "IDLE", "RUNNING"):
             fixed = list(self.status_bar.items)
-            fixed[-1] = ("RUNNING", True) if self.running else ("IDLE", True)
+            fixed[-1] = ("运行中", True) if self.running else ("空闲", True)
             self.status_bar.items = fixed
         status = self.status_bar.render(inner_w, 1)
         lines.append("│" + status[0] + "│")
@@ -197,11 +216,20 @@ class TuiPrototype:
 
         result = "\n".join(lines)
 
-        # Overlays (command palette → dialog → properties, lowest priority first)
-        if (
-            self.address_bar.focused
-            and self.address_bar._show_autocomplete
-        ):
+        # ── Overlays (priority: help > find > palette > dialog > properties) ──
+        if self.help_overlay.visible:
+            overlay = self.help_overlay.render_overlay(width, height)
+            if overlay:
+                result = self._blend_overlay(result, overlay, height)
+            return result  # help blocks everything else
+
+        if self.find_dialog.visible:
+            overlay = self.find_dialog.render_overlay(width, height)
+            if overlay:
+                result = self._blend_overlay(result, overlay, height)
+            return result
+
+        if self.address_bar.focused and self.address_bar._show_autocomplete:
             self.command_palette.candidates = self.address_bar.autocomplete_candidates
             self.command_palette.selected_index = self.address_bar._selected_index
             self.command_palette.visible = True
@@ -247,55 +275,75 @@ class TuiPrototype:
 
     def handle_key(self, key: str) -> str | None:
         """Dispatch *key* and return an optional status message."""
+        # HelpOverlay consumes all keys while visible
+        if self.help_overlay.visible:
+            self.help_overlay.handle_key(key)
+            return None
+
+        # FindDialog consumes all keys while visible
+        if self.find_dialog.visible:
+            self.find_dialog.handle_key(key)
+            return None
+
         # Dialogs/properties consume all keys while visible
         if self.dialog.visible:
             consumed = self.dialog.handle_key(key)
             if key == "enter" and self.dialog.visible:
-                # User confirmed via Enter on the selected action
                 action_idx = self.dialog._selected_action
                 if action_idx < len(self.dialog.actions):
                     action_value = self.dialog.actions[action_idx][1]
                     self.dialog.visible = False
                     if action_value == "approve":
                         self._execute_retrieval()
-                        return "Retrieval started"
-                    return "Cancelled"
+                        return "检索已启动"
+                    return "已取消"
             if key == "esc":
                 self.dialog.visible = False
-                return "Cancelled"
+                return "已取消"
             return None
         if self.properties.visible:
             self.properties.handle_key(key)
             return None
 
-        # Menu activation
+        # Menu activation (Alt+letter for Chinese menus)
         if key.startswith("alt+"):
             self.menu_bar.handle_key(key)
             return None
 
+        # F1 or Alt+H → Help overlay
+        if key in ("f1", "alt+h"):
+            self.help_overlay.visible = not self.help_overlay.visible
+            return "帮助" if self.help_overlay.visible else None
+
+        # Ctrl+F → Find dialog
+        if key == "c-f":
+            self.find_dialog.visible = not self.find_dialog.visible
+            return "查找" if self.find_dialog.visible else None
+
         if key == "esc":
-            # 1. If address bar has auto-complete or buffer, clear it
+            # 1. If help is visible, close it
+            if self.help_overlay.visible:
+                self.help_overlay.visible = False
+                return None
+            # 2. If address bar has auto-complete or buffer, clear it
             if self.address_bar.focused and (
                 self.address_bar._show_autocomplete or self.address_bar._buffer
             ):
                 self.address_bar.handle_key("esc")
                 return None
-            # 2. If menu is open, close it
+            # 3. If menu is open, close it
             if self.menu_bar.active_menu:
                 self.menu_bar.handle_key("esc")
                 return None
             return None
 
         if key == "backspace":
-            # If address bar has buffer, delete last character
             if self.active_pane == "address" and self.address_bar._buffer:
                 self.address_bar.handle_key("backspace")
                 return None
             return None
 
         if key == "c-z":
-            # If agent is running, cancel the current run (retract sent input).
-            # Ctrl+Z = universal undo/retract, works on all keyboard form factors.
             if self.running:
                 self._cancel_run()
                 return "已取消当前运行"
@@ -309,7 +357,6 @@ class TuiPrototype:
 
         # Printable characters + editing keys → route to focused address bar.
         if self.active_pane == "address":
-            # Save buffer BEFORE routing (widget may clear it on Enter)
             if key == "enter" and self.address_bar._buffer:
                 self._last_sent = self.address_bar._buffer
             if self.address_bar.handle_key(key):
@@ -345,28 +392,48 @@ class TuiPrototype:
         """Route a slash command or URI entered in the address bar."""
         text = text.strip()
 
+        # /help — show Help overlay
+        if text == "/help":
+            self.help_overlay.visible = not self.help_overlay.visible
+            return "帮助" if self.help_overlay.visible else None
+
         # /search <query> — browser-based web search
         if text.startswith("/search "):
             query = text[len("/search "):].strip()
             if not query:
-                return "Usage: /search <query>"
+                return "用法: /search <关键词>"
             self._show_retrieval_dialog("search", query)
-            return f"Search: {query}"
+            return f"搜索: {query}"
 
         # /retrieve <url> — browser-based paper retrieval
         if text.startswith("/retrieve "):
             url = text[len("/retrieve "):].strip()
             if not url:
-                return "Usage: /retrieve <url>"
+                return "用法: /retrieve <url>"
             self._show_retrieval_dialog("retrieve", url)
-            return f"Retrieve: {url}"
+            return f"获取: {url}"
 
-        # Other slash commands — just acknowledge
+        # /plan — enter plan mode via canonical CLI
+        if text == "/plan":
+            return "Plan 模式: 需通过 canonical CLI 进入（GAK-PLAN-001）"
+
+        # Sidebar toggle commands
+        if text == "/toggle-explorer":
+            self.show_explorer = not self.show_explorer
+            return f"资源管理器: {'显示' if self.show_explorer else '隐藏'}"
+        if text == "/toggle-events":
+            self.show_events = not self.show_events
+            return f"事件: {'显示' if self.show_events else '隐藏'}"
+        if text == "/toggle-markers":
+            self.show_markers = not self.show_markers
+            return f"标记: {'显示' if self.show_markers else '隐藏'}"
+
+        # Other slash commands — acknowledge
         if text.startswith("/"):
-            return f"Activated: {text}"
+            return f"已激活: {text}"
 
         # URI navigation
-        return f"Go to: {text}"
+        return f"导航至: {text}"
 
     def _show_retrieval_dialog(self, mode: str, target: str) -> None:
         """Show a permission dialog for browser retrieval."""
@@ -426,10 +493,10 @@ class TuiPrototype:
             self._status_messages.append(
                 "WARNING: retrieval_handler not wired — retrieval is a no-op in static/demo mode"
             )
-            self.status_bar.update_item("IDLE", True)
+            self.status_bar.update_item("空闲", True)
             self.content_pane.set_disposition(
-                "NO HANDLER",
-                "Retrieval handler not wired. Run from main.py for live retrieval.",
+                "未接线",
+                "检索处理器未接线。请从 main.py 运行以启用实时检索。",
             )
             return
 
@@ -444,13 +511,13 @@ class TuiPrototype:
             self._status_messages.append(msg)
             self.explorer_pane.add_event_entry("Retrieval", msg)
             stage_labels: dict[str, str] = {
-                "searching": "SEARCHING", "navigating": "FETCHING",
-                "reading": "READING", "downloading": "DOWNLOADING",
-                "storing": "STORING", "indexing": "INDEXING",
-                "done": "IDLE", "failed": "ERROR",
-                "launching": "LAUNCHING", "connecting": "CONNECTING",
-                "finding_pdf": "FIND PDF", "validating": "VALIDATING",
-                "retrieving": "RETRIEVING",
+                "searching": "搜索中", "navigating": "获取中",
+                "reading": "读取中", "downloading": "下载中",
+                "storing": "存储中", "indexing": "索引中",
+                "done": "空闲", "failed": "错误",
+                "launching": "启动中", "connecting": "连接中",
+                "finding_pdf": "查找PDF", "validating": "验证中",
+                "retrieving": "检索中",
             }
             label = stage_labels.get(evt.stage, evt.stage.upper())
             self.status_bar.update_item(label, evt.stage != "failed")
@@ -461,17 +528,17 @@ class TuiPrototype:
                     mode, target, _on_progress,
                 )
                 if outcome.ok:
-                    self.status_bar.update_item("IDLE", True)
+                    self.status_bar.update_item("空闲", True)
                     self.content_pane.set_disposition(outcome.title, outcome.detail)
                 else:
-                    self.status_bar.update_item("ERROR", False)
+                    self.status_bar.update_item("错误", False)
                     self.content_pane.set_disposition(
-                        outcome.title or "FAILED",
+                        outcome.title or "失败",
                         outcome.error or outcome.detail,
                     )
             except Exception as exc:
-                self._status_messages.append(f"ERROR: {exc}")
-                self.status_bar.update_item("ERROR", False)
+                self._status_messages.append(f"错误: {exc}")
+                self.status_bar.update_item("错误", False)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -600,7 +667,7 @@ class TuiPrototype:
         return cls(
             menu_bar=MenuBar(menus=dict(SAMPLE_MENUS)),
             toolbar=Toolbar(buttons=[
-                "Back", "Forward", "Stop", "Refresh", "Open", "Verify", "Properties",
+                "后退", "前进", "刷新", "停止", "打开", "验证", "属性",
             ]),
             address_bar=AddressBar(uri=SAMPLE_COMMAND_URI),
             find_bar=FindBar(
@@ -613,7 +680,7 @@ class TuiPrototype:
                 event_groups=list(SAMPLE_EVENT_GROUPS),
             ),
             content_pane=ContentPane(
-                title="Current Task",
+                title="当前任务",
                 source_table=list(SAMPLE_SOURCE_TABLE),
                 claim_disposition=SAMPLE_CLAIM_DISPOSITION,
                 disposition_reason=SAMPLE_DISPOSITION_REASON,
@@ -644,10 +711,12 @@ class TuiPrototype:
 
 
 def pad_to_width(text: str, width: int) -> str:
-    """Pad *text* to exactly *width* characters."""
-    if len(text) >= width:
+    """Pad *text* to exactly *width* display cells."""
+    from .widgets import display_width
+    current = display_width(text)
+    if current >= width:
         return text[:width]
-    return text + " " * (width - len(text))
+    return text + " " * (width - current)
 
 
 # ── convenience entry point ─────────────────────────────────────────────────

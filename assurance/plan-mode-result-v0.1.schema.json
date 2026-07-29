@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/plan-mode-result-v0.1.schema.json",
+  "title": "Plan Mode Result v0.1",
+  "description": "A structured four-part plan artifact with version chain and approval record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "task_id",
+    "run_id",
+    "workspace_root",
+    "created_at",
+    "planning_policy",
+    "version",
+    "previous_plan_sha256",
+    "sections",
+    "deferred_decisions",
+    "approval_decision",
+    "approval_timestamp",
+    "approval_authority",
+    "selected_approval_policy",
+    "plan_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "plan_id": { "type": "string", "pattern": "^PLAN-[A-F0-9]{12}$" },
+    "task_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "workspace_root": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "planning_policy": { "enum": ["none", "suggested", "required"] },
+    "version": { "type": "integer", "minimum": 1 },
+    "previous_plan_sha256": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        { "type": "string", "maxLength": 0 }
+      ]
+    },
+    "sections": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "content_md", "evidence_status"],
+        "properties": {
+          "title": {
+            "enum": ["前期调查", "具体计划", "具体设计", "实施方案"]
+          },
+          "content_md": { "type": "string", "minLength": 1 },
+          "evidence_status": {
+            "enum": ["observed", "inferred", "unverified"]
+          },
+          "source_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "deferred_decisions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "approval_decision": {
+      "enum": ["", "approve", "revise", "reject"]
+    },
+    "approval_timestamp": { "type": "string" },
+    "approval_authority": { "type": "string" },
+    "selected_approval_policy": {
+      "enum": ["", "manual", "auto", "mixed"]
+    },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

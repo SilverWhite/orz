@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-29 (R14：GAK-UX-001 development baseline 达成 — UXSafetyEvaluator + 10 UX 安全场景 + 8 种断言类型 + 20 tests；全部中等严重度 Gap 已关闭)
+**更新**: 2026-07-29 (R15：Task Checklist Announcement Supplement 冻结 — 顶部公告式 checklist、plan annotations、软约束/运行记录、中性 Orientation Runtime Guard 接入边界)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -98,7 +98,7 @@
 
 ### E. CLI 与执行 (CLI & Execution)
 
-- **gsa CLI 入口** (2026-07, 事实): 顶级 CLI 分发器——`gsa doctor`, `gsa source gate`, `gsa run`, `gsa verify`。注意: 当前为命令行参数模式；未来 TUI 将通过此入口启动（CLI_UI_INTERACTION_MODEL 定义交互语法，本入口保持为启动点）。入口: `gsa.py` / `assurance/cli.py`；TUI 设计: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`
+- **gsa CLI 入口** (2026-07, 事实): 顶级 CLI 分发器——`gsa doctor`, `gsa source gate`, `gsa run`, `gsa verify`, `gsa tui`。注意: TUI 已通过此入口启动；CLI_UI_INTERACTION_MODEL 定义交互语法，本入口保持为启动点。入口: `gsa.py` / `assurance/cli.py`；TUI 设计: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`
 - **Canonical Guarded CLI** (2026-07-26, 事实): 规范守卫 CLI 主路径——manifests, fake answer packets, verification。注意: TUI 将消费本模块的结构化事件流（gate_decision, run_state 等），通过 view model 投影渲染到终端；本模块保持事件发射职责，不耦合 UI 渲染。入口: `docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md` / `assurance/canonical_cli.py` / `assurance/canonical_cli_main.py`；TUI 设计: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`
 - **Disposable Reproduction** (2026-07-26, 事实): 可处置复现——manifest, receipt, proof 的完整生命周期。入口: `docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md` / `assurance/disposable_reproduction.py` / `assurance/execution_lock.py`
 - **Guarded Execution** (2026-07-24, 事实): P2.5 守卫执行——进程追踪与输出拦截。入口: `assurance/guarded_execution.py` / `assurance/child_capability_enforcer.py`
@@ -126,6 +126,9 @@
 
 - **产品定位与参考策略** (v0.1, 设计约束): 核心定位——运行时中立的通用科学保证内核，不绑定单一 LLM 运行时。入口: `architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`
 - **CLI UI Interaction Model** (v0.1, 事实/2026-07-29 Phase 2 事件流桥接完成): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型。第一原型已完成（9 个模块 ~3900 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、17 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。Phase 2 已完成：canonical CLI 事件流桥接——`bridge.py`（映射层，导入 assurance.* 的唯一 TUI 模块）、`LiveRunEventSource`（后台线程实时消费 CLI 事件）、`JsonlFileSource`（journal 重放，payload 解析为 typed event 子类）、3 个 typed gate event（IPG/Tool Avail/Orientation）、`--run`/`--replay` CLI 参数。217 tests pass。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`bridge.py` / `commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py` / `events.py` / `event_source.py` / `projector.py`）；Gap Register: GAK-UI-001
+- **CLI UI Simplification Supplement** (v0.1, 设计约束/待实施): 下一轮 TUI 精简与中文化方向——默认中文、Help modal overlay、大主窗模式、顶部两层压缩、Address 弹窗化、Find 多行适配、`Agent`→`模型`、`Edit`→`编辑模式`、聊天室式可折叠任务流。别名: UI 精简, 中文 TUI, Help 弹窗, 大主窗。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`
+- **Task Checklist Announcement Supplement** (v0.1, 设计约束/待实施): 主对话顶部公告式 checklist 与展开式工作清单页——Plan mode 批准后生成稳定 step ID 与 plan annotations；常态只显示步骤，展开显示软约束、运行记录和验收引用；Orientation Runtime Guard 只读取中性定位上下文，不询问是否偏移/正确/卡住。别名: checklist 公告, 工作清单, plan annotations, soft workboard, orientation checkpoint context。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
+- **Plan Mode and Process Usage Monitor** (v0.1, 设计约束/待实施): 稳定 Plan mode 与运行进程占用监控契约——计划固定四部分（前期调查/具体计划/具体设计/实施方案）、plan approval 与 action approval 分离、root PID 进程树 CPU/MEM/time 采样、系统终端即时显示、VS Code terminal title 2 秒刷新。别名: plan mode, process usage monitor, CPU/MEM, VS Code terminal title。入口: `architecture/PLAN_MODE_AND_PROCESS_USAGE_MONITOR_v0.1.md`
 - **Grok Build 适配** (v0.1, 设计约束): 以 Grok Build 为参考运行时的适配策略。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md`
 - **Upstream First 集成** (v0.1, 设计约束): 上游优先集成策略——先锁定上游版本再进行适配。入口: `architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`
 - **Upstream 版本策略** (v0.1, 设计约束): 上游版本锁定、候选评估与升级流程。入口: `architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`
@@ -292,6 +295,7 @@
 | No-Model | 无模型——不依赖 LLM 调用的纯机械验证步骤 | 架构 |
 | Runner | 执行器——控制 agent 执行生命周期的骨架 | 执行 |
 | TUI | Terminal User Interface——终端 UI，本项目指 retro 桌面风格（Explorer/老 IE 式）的字符单元交互界面 | UI |
+| Task Checklist | 任务工作清单——顶部公告式软工作板，展开后显示 plan annotations、运行记录和验收引用 | UI/协作 |
 
 ---
 
@@ -299,6 +303,7 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
+- 2026-07-29-R15: Task Checklist Announcement Supplement — 顶部公告式 checklist、稳定 step ID、plan annotations、软约束/运行记录、与中性 Orientation Runtime Guard 的接入边界；入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
 - 2026-07-29-R14: GAK-UX-001 — UXSafetyEvaluator + 10 UX 安全场景 + 8 种断言类型 + 签名 receipt；20 tests pass；全部中等严重度 Gap 全部关闭
 - 2026-07-29-R13: GAK-REC-001 — ShadowRecoveryStore + RecoveryDiffPreview + RecoveryExecutor；23 tests pass；shadow recovery store 闭合
 - 2026-07-29-R12: GAK-CMP-001 — AutomaticCompactionSimulator + ManualCompactionSimulator + 6 invariant validators；automatic threshold honest unknown 不变性证明；36 tests pass；`AUTOMATIC_THRESHOLD_NOT_OBSERVED` → `AUTOMATIC_THRESHOLD_OBSERVED`
