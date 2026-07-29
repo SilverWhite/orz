@@ -447,3 +447,35 @@ def _visibility_label(raw: str) -> str:
         "unavailable": "NONE",
     }
     return mapping.get(raw, raw.upper())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Checklist bridge (GAK-PLAN-001 extension — Part B)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def build_checklist_from_plan_id(plan_id: str) -> list[dict[str, object]] | None:
+    """Load a :class:`PlanArtifact` from disk and derive checklist items.
+
+    This is the **only** TUI-side function allowed to import from
+    ``assurance.task_checklist`` and ``assurance.plan_mode``.  It is called
+    by the projector when a plan is approved, so the announcement strip can
+    be populated immediately without waiting for a journal event.
+
+    Returns ``None`` if the plan cannot be loaded (e.g. demo/replay mode
+    where no plan directory exists on disk).
+    """
+    try:
+        from assurance.plan_mode import load_plan_artifact
+        from assurance.task_checklist import derive_checklist_from_plan
+        from pathlib import Path
+
+        plan_dir = Path(".gsa_plans") / plan_id
+        if not plan_dir.is_dir():
+            return None
+
+        artifact = load_plan_artifact(plan_dir)
+        checklist = derive_checklist_from_plan(artifact)
+        return [item.to_dict() for item in checklist.items]
+    except Exception:
+        return None

@@ -304,14 +304,15 @@ class AddressBar(Widget):
             available = 10
 
         if not self.focused or not self._buffer:
-            # Static URI display
-            uri_display = self.uri if not self.focused else (
-                self._buffer or self.uri
-            )
-            if self.focused:
+            # Resident summary display (B4 — short hint, not full path)
+            if not self.focused:
+                uri_display = (
+                    f"当前: {self.uri}" if self.uri else "Ctrl+L 命令…"
+                )
+            else:
                 uri_display = (self._buffer or self.uri) + "█"
-                if display_width(uri_display) > available:
-                    uri_display = "…" + uri_display[-(available - 4):]
+            if self.focused and display_width(uri_display) > available:
+                uri_display = "…" + uri_display[-(available - 4):]
             else:
                 if display_width(uri_display) > available:
                     uri_display = uri_display[:available - 3] + "..."

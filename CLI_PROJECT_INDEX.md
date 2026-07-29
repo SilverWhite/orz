@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-29 (R15：Plan Mode + TUI Simplification 实施完成 + Task Checklist 设计冻结；R15 后索引状态修正 — 3 处过时标记更新)
+**更新**: 2026-07-29 (R16：Part A Task Checklist 核心链路 + Part B 系统集成实施完成 — 公告条/展开清单/聊天室流/方向桥接/日志注册/GPS映射/地址弹窗；326 tests pass)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -265,32 +265,7 @@
 
 ### 待实施 / 进行中 (Pending / In Progress)
 
-剩余待实施内容分为两个 Part：Part A 是 Task Checklist 核心链路 + 聊天室任务流（用户可见的最小可用闭环），Part B 是系统集成 + UI 收尾（跨子系统桥接与 Address 弹窗化）。
-
-#### Part A：Task Checklist 核心链路 + 聊天室任务流（用户可见闭环）
-
-依赖：已完成 `plan_mode.py` + TUI 框架。独立于 GPS、journal、orientation guard 改动。
-
-- **A1 — Checklist view model**：`TaskChecklist` 数据结构（item/status/annotation/step_id）。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md` §4/§5/§6
-- **A2 — Plan mode bridge**：`PlanArtifact` → `TaskChecklist` 派生逻辑。Plan mode 审批后自动生成 checklist items + plan annotations。入口: §6
-- **A3 — Announcement strip（L1 公告条）**：TUI 主窗顶部常驻紧凑公告条，默认仅显示**最近 3 条**——上一条（计划顺序中的前一条，非最近完成条）+ 当前进行条 + 后一条。刚开始时显示第 1/2/3 条（无前一条），最后一步时显示 N-2/N-1/N（无后一条）。仅单行，不换行。入口: §3/§12
-- **A4 — Expanded checklist（L2 全条目列表 + L3 单条详情）**：三层渐进式展开——**L2**：用户点击公告条时，在主窗内 **inline 展开**全部条目标题 + 状态，不显示详情；最高为主窗口高度的 2/3，超出时支持 ↑/↓ 方向键滚动浏览；滚动高亮移动不触发 L3。**L3**：仅当用户对具体条目按 Enter 或点击时，才展开该条（不全部展开，不自动展开），显示 plan annotations、soft constraints、runtime records、acceptance refs。**关闭**：`Esc` on L3 → 关闭该条详情，回到 L2（全条目列表）；`Esc` on L2 → 关闭列表，回到 L1（仅公告条 3 条）。L2/L3 常态折叠。入口: §3/§7/§12
-- **A5 — 聊天室式可折叠任务流**：主窗以 AI 任务输出流为中心（用户输入→模型公开输出→Plan mode 四部分→工具调用摘要→权限请求/结果→来源检查→运行资源摘要→验证结果）。运行中显示关键状态，当前进程结束后工具调用/事件/来源检查默认折叠；折叠不能隐藏阻塞错误、未审批动作或 verifier failure。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md` §11
-
-**Part A 交付标准**：Plan mode 审批 → L1 公告条常驻显示最近 3 条 → 点击 → L2 inline 展开全条目列表（2/3 高度，可滚动）→ 点击具体条目 → L3 展开该条详情 → 任务完成后可折叠。
-
-#### Part B：系统集成 + UI 收尾（跨系统桥接）
-
-依赖 Part A 稳定。涉及修改现有子系统（orientation guard / journal / GPS / TUI address bar）。
-
-- **B1 — Orientation context bridge**：checklist 当前 step ID/title/position → orientation checkpoint 中性上下文。Orientation Runtime Guard 只读取上下文，不询问是否偏移/正确/卡住。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md` §8
-- **B2 — Journal/artifact registration**：checklist 版本与状态变更持久化到 run journal。入口: §6/§13.6
-- **B3 — GPS mapping**：checklist item ID → GPS step_id、status → progress item state、acceptance refs → acceptance_coverage、plan revision → GPS plan_revision。入口: §10
-- **B4 — Address 完整输入弹窗化**：长路径/URI/命令从常驻 address row 移入 modal overlay（支持历史记录、slash command autocomplete、`Esc` 关闭、`Enter` 确认）。常驻入口仅显示短摘要（如 `命令...` / `当前: run/current-task`）。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md` §5
-
-**Part B 交付标准**：Orientation guard 可读取当前 step、checklist 状态可持久化并映射到 GPS、address 输入弹窗可正常工作。
-
----
+（当前无进行中条目。Part A + Part B 已于 2026-07-29 R16 全部实施完成。）
 
 所有已注册 Gap（含全部 8 个中等严重度 Gap）均已关闭或达到 development baseline。GAK-XPLAT-001 显式推迟 ≥1 年。
 
@@ -330,6 +305,7 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
+- 2026-07-29-R16: Part A Task Checklist + Part B System Integration — `task_checklist.py` (~420 行, 25 tests)：ChecklistStatus/ChecklistItem/TaskChecklist/derive_checklist_from_plan + journal payload + GPS mapping；TUI AnnouncementStrip（L1/L2/L3 三层渐进式）+ ContentPane message mode（可折叠任务流）+ AddressDialog modal（Ctrl+L 弹窗）+ projector/bridge 全链路；orientation guard checklist_context 注入；12 files, 1687 行新增；326 tests pass；入口: `assurance/task_checklist.py` / `assurance/tui/widgets.py` / `assurance/tui/app.py`
 - 2026-07-29-R15: Plan Mode + TUI Simplification 实施完成 + Task Checklist 设计冻结 — `plan_mode.py` (~700 行, 80 tests)：PlanArtifact + PlanVerifier + PlanStateMachine (8-state) + ProcessUsageSampler (psutil 后台采样 + adaptive backoff) + VSCodeTitleUpdater + terminal status line；TUI Phase 4 中文化（菜单/工具栏/状态栏/对话框全中文化）+ HelpOverlay modal (6 tabs) + FindDialog modal + 大主窗模式 (221 tests)；Task Checklist 架构文档冻结 (268 行)；入口: `assurance/plan_mode.py` / `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md` / `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
 - 2026-07-29-R14: GAK-UX-001 — UXSafetyEvaluator + 10 UX 安全场景 + 8 种断言类型 + 签名 receipt；20 tests pass；全部中等严重度 Gap 全部关闭
 - 2026-07-29-R13: GAK-REC-001 — ShadowRecoveryStore + RecoveryDiffPreview + RecoveryExecutor；23 tests pass；shadow recovery store 闭合

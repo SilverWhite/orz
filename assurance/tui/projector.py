@@ -368,6 +368,18 @@ def _on_plan_approval_decision(app: Any, event: PlanApprovalDecisionEvent) -> li
     decision = event.decision
     if decision == "approve":
         app.status_bar.update_item("执行", True)
+        # Derive checklist from plan and populate the announcement strip.
+        try:
+            from .bridge import build_checklist_from_plan_id
+            items = build_checklist_from_plan_id(event.plan_id)
+            if items:
+                app.announcement_strip.load_checklist(
+                    plan_id=event.plan_id,
+                    task_id="",
+                    items=items,
+                )
+        except Exception:
+            pass
     app.content_pane.add_message(
         "计划审批", f"Plan {event.plan_id}: {decision}",
         warning=decision not in ("approve",),
