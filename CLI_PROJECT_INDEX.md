@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-29 (R13：GAK-REC-001 development baseline 达成 — ShadowRecoveryStore + RecoveryDiffPreview + RecoveryExecutor + 23 tests；shadow recovery store 闭合，审计事件不删除红线保持)
+**更新**: 2026-07-29 (R14：GAK-UX-001 development baseline 达成 — UXSafetyEvaluator + 10 UX 安全场景 + 8 种断言类型 + 20 tests；全部中等严重度 Gap 已关闭)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -256,12 +256,13 @@
 - **GAK-INJ-001 Instruction Provenance Gate 产品化** (2026-07-28 关闭): 新增 production content parser + obfuscation detector + canonicalizer 集成；25 个注入模式；adversarial injection 47 测试 + bypass hardening 8 测试。89 tests pass。入口: `assurance/instruction_provenance_gate.py` / `assurance/tests/test_injection_adversarial.py`
 - **GAK-CMP-001 Automatic Compaction Observation** (2026-07-29 关闭): 新增 `compaction_observer.py` — `AutomaticCompactionSimulator`（自动阈值触发，boundary zone honest unknown）+ `ManualCompactionSimulator` + 6 个 invariant validator。36 tests pass。核心不变性：`classification_confidence < 1.0` 时必须有 unknown range；unknown 不可静默升级为 retained/discarded。`AUTOMATIC_THRESHOLD_NOT_OBSERVED` → `AUTOMATIC_THRESHOLD_OBSERVED`。入口: `assurance/compaction_observer.py` / `assurance/tests/test_compaction_observer.py`
 - **GAK-REC-001 Shadow Recovery Store & Executor** (2026-07-29 关闭): 新增 `shadow_recovery.py` — `ShadowRecoveryStore`（SHA-256 内容寻址 store/retrieve/verify/list）+ `RecoveryDiffPreview`（元数据级 diff，不泄露内容）+ `RecoveryExecutor`（唯一执行恢复的组件，原子写入 + 签名 execution receipt，审计事件不删除）。23 tests pass。入口: `assurance/shadow_recovery.py` / `assurance/tests/test_shadow_recovery.py`
+- **GAK-UX-001 UX Safety Validation Framework** (2026-07-29 关闭): 新增 `ux_safety.py` — `UXSafetyEvaluator` + 10 个 UX 安全场景（4 novice + 3 experienced + 3 shared），8 种 UXAssertionKind。签名 `ux_safety_evaluation_receipt`。20 tests pass。全部 8 个中等严重度 Gap 全部关闭。入口: `assurance/ux_safety.py` / `assurance/tests/test_ux_safety.py`
 - **GAK-RET-001 Retention/Deletion Controller 产品化** (2026-07-28 关闭)
 - **GAK-SESSION-001 Conversation Namespace → Real Runtime** (2026-07-28 关闭): `ConversationNamespace` 已接入 canonical CLI 真实 adapter 路径。新增 `SessionGovernor`；`run_canonical_guarded_cli_real()` 通过 `enforce_adapter_call()` 包装 DeepSeek API 调用；10 个 integration 测试。548 tests pass。入口: `assurance/session_governor.py` / `assurance/tests/test_session_namespace.py`: StorageAdapter 已接入 ArchiveController（替代裸 DeleteFile 回调）；archive_recovery.py 提供 holistic 恢复编排器（classify_archive_failure → recover_archive，覆盖 clean_interrupted/torn_journal/corrupt_journal/stale_lock/archiving_no_journal 五个恢复路径）；detect_stale_archive_lock + cleanup_stale_archive_lock 处理崩溃后孤儿锁；FaultInjectionStorageAdapter 支持故障注入测试；新增 18 个测试。484 tests pass。入口: `assurance/archive.py` / `assurance/archive_recovery.py` / `assurance/archive_journal.py` / `assurance/tests/test_archive_recovery.py` / `assurance/tests/storage_faults.py`
 
 ### 待实施 / 进行中 (Pending / In Progress)
 
-（当前无进行中条目。所有已注册 Gap 均已关闭或达到 development baseline。）
+（当前无进行中条目。所有已注册 Gap — 包括全部 8 个中等严重度 Gap — 均已关闭或达到 development baseline。剩余开放项：GAK-XPLAT-001 显式推迟 ≥1 年；GAK-EVT-001 / GAK-UI-001 / GAK-CRED-001 为 development baseline。）
 
 ---
 
@@ -298,6 +299,7 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
+- 2026-07-29-R14: GAK-UX-001 — UXSafetyEvaluator + 10 UX 安全场景 + 8 种断言类型 + 签名 receipt；20 tests pass；全部中等严重度 Gap 全部关闭
 - 2026-07-29-R13: GAK-REC-001 — ShadowRecoveryStore + RecoveryDiffPreview + RecoveryExecutor；23 tests pass；shadow recovery store 闭合
 - 2026-07-29-R12: GAK-CMP-001 — AutomaticCompactionSimulator + ManualCompactionSimulator + 6 invariant validators；automatic threshold honest unknown 不变性证明；36 tests pass；`AUTOMATIC_THRESHOLD_NOT_OBSERVED` → `AUTOMATIC_THRESHOLD_OBSERVED`
 - 2026-07-29-R11: GAK-EVT-001 — audit_integration 桥接层、`--run --real` 自动产出审计封印、provider partial/kernel complete/missing unknown 完整语义、11 audit tests；263 全量回归 pass
@@ -331,7 +333,7 @@
 | 安全/沙箱 | `sandbox.py`, `sandbox_verifier.py`, `windows_sandbox.py`, `network_permit_gateway.py`, `workspace_trust.py`, `keystore.py`, `key_lifecycle.py`, `envelope.py`, `permit.py`, `endpoint_canonicalizer.py` |
 | 审计/归档 | `audit.py`, `archive.py`, `archive_journal.py`, `archive_verifier.py`, `recovery.py`, `shadow_recovery.py`, `compaction_observer.py` |
 | P3 授权 | `instruction_gate.py`, `child_capability_enforcer.py` |
-| P5 预检 | `user_task_evaluation.py`, `runtime_preflight.py`, `readonly_projection.py`, `task_contract.py` |
+| P5 预检 | `user_task_evaluation.py`, `runtime_preflight.py`, `readonly_projection.py`, `task_contract.py`, `ux_safety.py` |
 | GSA-CORE | `artifact_registry.py`, `validator_bridge.py`, `general_science_review.py`, `general_science_cli.py` |
 | DeepSeek 适配 | `deepseek_adapter.py`, `deepseek_api_observation.py`, `deepseek_stream_observation.py` |
 | 数据/存储 | `storage_adapter.py`, `conversation.py`, `profile_registry.py` |

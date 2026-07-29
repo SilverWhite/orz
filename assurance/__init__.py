@@ -315,6 +315,14 @@ from .workspace_trust import (
     verify_workspace_trust,
     workspace_trust_for_adapter,
 )
+from .ux_safety import (
+    UXAssertion,
+    UXAssertionKind,
+    UXPersona,
+    UXSafetyEvaluator,
+    UXSafetyScenario,
+    UXSafetySuite,
+)
 from .user_task_evaluation import (
     load_synthetic_user_task_suite,
     run_synthetic_user_task_evaluation,
@@ -464,6 +472,12 @@ __all__ = [
     "run_retrieval_subagent_fixture",
     "run_runner_public_output_extraction_fixture",
     "run_synthetic_user_task_evaluation",
+    "UXAssertion",
+    "UXAssertionKind",
+    "UXPersona",
+    "UXSafetyEvaluator",
+    "UXSafetyScenario",
+    "UXSafetySuite",
     "run_windows_native_sandbox_probe",
     "run_general_science_validators",
     "sanitize_child_environment",
