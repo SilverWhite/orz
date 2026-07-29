@@ -7,6 +7,7 @@ name = "gsa-assurance"
 version = "0.1.0"
 description = "General Scientific Assurance kernel — runtime-neutral agent assurance engineering"
 requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
 dependencies = [
   "jsonschema>=4.20,<5",
   "pypdf>=6,<7",
@@ -28,6 +29,7 @@ scripts = [
 
 [project.scripts]
 gsa = "assurance.cli:main"
+gsa-tui = "assurance.tui.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

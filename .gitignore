@@ -13,4 +13,5 @@ tmp*/
 
 # GSA runtime artifacts (local only)
 .gsa_chrome_profile/
+.gsa_shadow_recovery/
 evidence/

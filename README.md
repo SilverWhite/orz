@@ -226,3 +226,7 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`r
   SourceRouter、EvidenceKernel、ClaimBoundary、ResearchLifecycle、ValidatorBridge、ScenarioExporter、
   LeakScanner 和 EvaluationRunner；`lif-research` 只添加当前来源路由与 validator 增量。Grok 仅作为
   当前 reference adapter，不扩张通用产品功能面。
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

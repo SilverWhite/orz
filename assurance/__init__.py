@@ -37,6 +37,20 @@ from .artifact_registry import (
     validate_artifact_registry_semantics,
 )
 from .audit import AuditLedger, verify_audit_seal
+from .compaction_observer import (
+    AutomaticCompactionSimulator,
+    CompactionReason,
+    ManualCompactionSimulator,
+    SimulatedCompaction,
+    SourceItem,
+    assert_compaction_ranges_valid,
+    estimate_tokens,
+    validate_automatic_trigger_honesty,
+    validate_compaction_classification_required,
+    validate_compaction_non_overlap,
+    validate_summary_never_promoted,
+    validate_unknown_not_promoted,
+)
 from .canonical_cli import (
     build_canonical_cli_run_manifest,
     build_fake_answer_packet,
@@ -269,6 +283,15 @@ from .recovery import (
     verify_recovery_authorization,
     verify_recovery_candidate,
 )
+from .shadow_recovery import (
+    DiffPreview,
+    ExecutionReceipt,
+    RecoveryDiffPreview,
+    RecoveryExecutor,
+    ShadowRecoveryStore,
+    StoreEntry,
+    verify_execution_receipt,
+)
 from .session_governor import SessionGovernor
 from .sandbox import (
     build_sandbox_selection_receipt,
@@ -307,6 +330,18 @@ __all__ = [
     "AdapterGateBlockedError",
     "AdapterGateContext",
     "ArchiveController",
+    "assert_compaction_ranges_valid",
+    "AutomaticCompactionSimulator",
+    "CompactionReason",
+    "estimate_tokens",
+    "ManualCompactionSimulator",
+    "SimulatedCompaction",
+    "SourceItem",
+    "validate_automatic_trigger_honesty",
+    "validate_compaction_classification_required",
+    "validate_compaction_non_overlap",
+    "validate_summary_never_promoted",
+    "validate_unknown_not_promoted",
     "ArchiveJournalWriter",
     "AuditLedger",
     "AssuranceError",
@@ -350,6 +385,13 @@ __all__ = [
     "authorize_recovery_candidate",
     "create_security_envelope",
     "create_recovery_candidate",
+    "DiffPreview",
+    "ExecutionReceipt",
+    "RecoveryDiffPreview",
+    "RecoveryExecutor",
+    "ShadowRecoveryStore",
+    "StoreEntry",
+    "verify_execution_receipt",
     "docker_candidate_from_observation",
     "consume_sensitive_action_permit",
     "delegate_capabilities",

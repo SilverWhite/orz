@@ -197,6 +197,38 @@ def _run_verify(args: argparse.Namespace) -> int:
     return 0 if receipt["valid"] else 1
 
 
+def _run_tui(args: argparse.Namespace) -> int:
+    from assurance.tui.main import main as tui_main
+
+    tui_args: list[str] = [
+        "--width",
+        str(args.width),
+        "--height",
+        str(args.height),
+    ]
+    if args.demo:
+        tui_args.append("--demo")
+    if args.with_dialog:
+        tui_args.append("--with-dialog")
+    if args.with_properties:
+        tui_args.append("--with-properties")
+    if args.demo_events:
+        tui_args.extend(["--demo-events", args.demo_events])
+    if args.live_retrieval:
+        tui_args.append("--live-retrieval")
+    if args.replay:
+        tui_args.extend(["--replay", str(args.replay)])
+    if args.tui_run:
+        tui_args.extend(["--run", args.tui_run])
+    if args.real:
+        tui_args.append("--real")
+    if args.credential_target:
+        tui_args.extend(["--credential-target", args.credential_target])
+    if args.tui_run_root:
+        tui_args.extend(["--run-root", str(args.tui_run_root)])
+    return tui_main(tui_args)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gsa",
@@ -254,6 +286,74 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--run-root", type=Path, required=True)
     verify.add_argument("--json", action="store_true")
     verify.set_defaults(handler=_run_verify)
+
+    tui = subparsers.add_parser("tui", help="Render or run the terminal UI prototype.")
+    tui.add_argument(
+        "-w",
+        "--width",
+        type=int,
+        default=100,
+        help="Viewport width in terminal cells.",
+    )
+    tui.add_argument(
+        "-H",
+        "--height",
+        type=int,
+        default=30,
+        help="Viewport height in terminal rows.",
+    )
+    tui.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run the interactive prompt_toolkit demo instead of a static render.",
+    )
+    tui.add_argument(
+        "--with-dialog",
+        action="store_true",
+        help="Show the permission dialog overlay in static render/demo.",
+    )
+    tui.add_argument(
+        "--with-properties",
+        action="store_true",
+        help="Show the properties sheet overlay in static render/demo.",
+    )
+    tui.add_argument(
+        "--demo-events",
+        choices=["gate_chain", "gate_defer", "run_failed"],
+        help="Run the interactive demo with a live event scenario.",
+    )
+    tui.add_argument(
+        "--live-retrieval",
+        action="store_true",
+        help="Wire the live browser retrieval handler.",
+    )
+    tui.add_argument(
+        "--replay",
+        type=Path,
+        help="Replay events from an existing events.jsonl file.",
+    )
+    tui.add_argument(
+        "--run",
+        dest="tui_run",
+        help="Run the canonical CLI and display it in the TUI.",
+    )
+    tui.add_argument(
+        "--real",
+        action="store_true",
+        help="Use the real DeepSeek adapter for --run.",
+    )
+    tui.add_argument(
+        "--credential-target",
+        default="FEP-Agent/DeepSeek",
+        help="Windows Credential Manager target name for the DeepSeek API key.",
+    )
+    tui.add_argument(
+        "--run-root",
+        dest="tui_run_root",
+        type=Path,
+        help="Run root directory for --run.",
+    )
+    tui.set_defaults(handler=_run_tui)
 
     return parser
 

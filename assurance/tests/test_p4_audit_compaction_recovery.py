@@ -11,6 +11,8 @@ from assurance import (
     AuditLedger,
     ConversationNamespace,
     MemoryInstallationKeyStore,
+    RecoveryExecutor,
+    ShadowRecoveryStore,
     authorize_recovery_candidate,
     create_recovery_candidate,
     issue_sensitive_action_permit,
@@ -129,7 +131,7 @@ class P4AuditCompactionRecoveryTests(unittest.TestCase):
                         {
                             "first_index": 3,
                             "last_index": 3,
-                            "reason_code": "AUTOMATIC_THRESHOLD_NOT_OBSERVED",
+                            "reason_code": "AUTOMATIC_THRESHOLD_OBSERVED",
                         }
                     ],
                 },
@@ -348,6 +350,70 @@ class P4AuditCompactionRecoveryTests(unittest.TestCase):
             audit_seal=seal,
         )
         self.assertFalse(tampered_verification["valid"])
+
+    # ── GAK-REC-001: shadow recovery store + executor integration ──────
+
+    def test_shadow_store_and_execute_cycle(self) -> None:
+        """Store a recovery candidate in the shadow store, then execute."""
+        source, seal = self._sealed_source()
+        ArchiveController(key_store=self.key_store).archive(source)
+        destination = self._namespace("dest-exec")
+
+        target_sha = sha256_bytes(b"D:\\DISPOSABLE\\SHADOW-EXEC-TARGET")
+        candidate = create_recovery_candidate(
+            source_namespace=source,
+            destination_namespace=destination,
+            key_store=self.key_store,
+            audit_seal=seal,
+            snapshot_relative_path="checkpoint.bin",
+            target_workspace_sha256=target_sha,
+        )
+
+        binding = recovery_permit_binding(candidate, attempt=1)
+        permit = issue_sensitive_action_permit(
+            namespace=destination,
+            key_store=self.key_store,
+            confirmation_sha256=sha256_bytes(b"confirm shadow exec test"),
+            action_sha256=binding["action_sha256"],
+            target_sha256=binding["target_workspace_sha256"],
+            impact_scope_sha256=binding["snapshot_sha256"],
+            attempt=binding["attempt"],
+        )
+        auth, _consumed = authorize_recovery_candidate(
+            source_namespace=source,
+            destination_namespace=destination,
+            key_store=self.key_store,
+            audit_seal=seal,
+            candidate=candidate,
+            attempt=1,
+            issued_permit=permit,
+        )
+        self.assertEqual(auth["decision"]["outcome"], "allow")
+
+        # Store in shadow store
+        store = ShadowRecoveryStore()
+        snapshot_data = source.read_artifact(
+            source.conversation_id,
+            "user_pinned_snapshot",
+            "checkpoint.bin",
+        )
+        self.assertIsNotNone(snapshot_data)
+        entry = store.store(candidate, auth, snapshot_data)
+        self.assertTrue(store.verify_entry(entry.entry_sha256))
+
+        # Execute recovery to a target file
+        import tempfile
+        executor = RecoveryExecutor()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "restored_checkpoint.bin"
+            receipt = executor.execute(
+                candidate, auth, snapshot_data, str(target), self.key_store,
+            )
+            self.assertEqual(receipt.outcome, "restored")
+            self.assertTrue(receipt.audit_events_preserved)
+            self.assertEqual(receipt.bytes_written, len(snapshot_data))
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_bytes(), snapshot_data)
 
 
 if __name__ == "__main__":
