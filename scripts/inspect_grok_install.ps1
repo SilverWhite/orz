@@ -59,7 +59,7 @@ try {
 $peHeader = '{0:X2}{1:X2}' -f $first, $second
 $signature = Get-AuthenticodeSignature -LiteralPath $resolved
 $versionOutput = (& $resolved --version 2>&1 | Out-String).Trim()
-$expectedVersion = "grok $($expected.version) ($($expected.build_id))"
+$expectedVersionPrefix = "grok $($expected.version) ($($expected.build_id))"
 
 $signerCommonName = $null
 if ($signature.SignerCertificate) {
@@ -87,7 +87,10 @@ $report.checks = [ordered]@{
     sha256_match = ($sha256 -eq $expected.sha256)
     authenticode_valid = ($signature.Status.ToString() -eq $expected.authenticode_status)
     signer_match = ($signerCommonName -eq $expected.signer_common_name)
-    version_match = ($versionOutput -eq $expectedVersion)
+    version_match = (
+        $versionOutput -eq $expectedVersionPrefix -or
+        $versionOutput.StartsWith("$expectedVersionPrefix ", [System.StringComparison]::Ordinal)
+    )
 }
 $report.valid = -not ($report.checks.Values -contains $false)
 $report | ConvertTo-Json -Depth 8

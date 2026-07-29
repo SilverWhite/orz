@@ -162,6 +162,28 @@ The simplification supplement is retained as a guardrail: the UI should be famil
 
 Grok ACP / Grok Build remains the primary reference runtime path. The repository should use it to avoid reimplementing mature agent features. Candidate runtimes are judged by their ability to supply the generic platform responsibilities listed in section 4.1 and to emit enough observable state for the assurance layer.
 
+Current 2026-07-30 upstream scan adds these routing constraints:
+
+- The installed PATH `grok` reports `0.2.112 (9bbd559437) [stable]`, while the checked-in promoted lock still points at the previously verified `0.2.111` binary. Treat `0.2.112` as the next candidate until the same binary identity, conformance, and assurance gates pass.
+- Grok Build is now an open-source upstream base with its own TUI, ACP/headless entrypoints, session/runtime loop, tool dispatch, permissions, sandbox, hooks, MCP, plugins, skills, subagents, workflows, checkpoint/workspace behavior, and configuration surface. These are runtime-owned unless a concrete audit proves a missing capability.
+- Grok configuration now exposes useful graft points such as custom models, custom query parameters, environment-sourced HTTP headers, `.grok/agents`, `.grok/workflows`, `.grok/hooks`, MCP, permissions, and subagent/workflow toggles. Local product code should consume or wrap these surfaces, not duplicate them.
+- The two retained retrieval subagent designs should be mapped to Grok-native subagent/workflow surfaces where possible, while preserving this repository's capability receipts, child capability enforcement, evidence gates, and redaction rules.
+- The preserved UI should display real Grok workflow/subagent/approval/runtime state through normalized events. It must not become a second scheduler or model loop.
+- Claude Code, Gemini CLI, Qwen Code, Goose, Codex CLI, and Aider remain reference frameworks for specific mature patterns: scoped subagents, hooks, MCP/extension discovery, recipes/workflows, sandbox/approval UX, and git-aware edit loops. They are design references, not a reason to switch the primary base away from Grok.
+
+Reference links for this scan:
+
+- [Grok Build repository](https://github.com/xai-org/grok-build)
+- [Grok Build open-source announcement](https://x.ai/news/grok-build-open-source)
+- [Grok Build overview](https://docs.x.ai/build/overview)
+- [Grok Build configuration](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md)
+- [Claude Code subagents](https://code.claude.com/docs/en/sub-agents)
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+- [Qwen Code](https://github.com/QwenLM/qwen-code)
+- [Goose](https://github.com/block/goose)
+- [OpenAI Codex CLI](https://github.com/openai/codex)
+- [Aider](https://github.com/aider-ai/aider)
+
 ### 5.6 DeepSeek And Provider Bridge
 
 The DeepSeek work is retained as a narrow provider bridge and conformance target. It should not expand into a second generic transport/runtime layer. Provider-private reasoning must remain private; audit records can store digests and derived receipts, not raw hidden reasoning.
@@ -320,6 +342,7 @@ The following project design, audit, protocol, fixture, and index documents were
 - `docs/GLOBAL_PROGRESS_TRANSITION_GATE_AUDIT_2026-07-25.md`
 - `docs/GROK_ACP_FAKE_TOOL_SPIKE_2026-07-23.md`
 - `docs/GROK_ACP_INITIALIZE_AUDIT_2026-07-21.md`
+- `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md`
 - `docs/GROK_COMPACTION_PROVENANCE_2026-07-23.md`
 - `docs/GROK_EVENT_BRIDGE_AUDIT_2026-07-21.md`
 - `docs/GROK_FAKE_PROVIDER_AUDIT_2026-07-21.md`
@@ -388,5 +411,7 @@ The next implementation work should be ordered around the corrected ownership bo
 4. Keep assurance gates strict and runtime-neutral.
 5. Add explicit labels in code/docs for `runtime-owned`, `adapter-owned`, `assurance-owned`, `ui-owned`, and `fixture-only` modules.
 6. Update audits to check ownership drift, not only local correctness.
+7. Promote Grok `0.2.112` only after updating the lock metadata and rerunning identity, ACP initialize, fake tool/permission/cancel, child-tree, workspace trust, event bridge, subagent/workflow, and UI projection checks.
+8. Convert the retained retrieval subagents into Grok-compatible agent/workflow profiles before adding any new local subagent scheduler.
 
 The desired end state is not less design. It is the same design, with the generic agent platform work moved back onto mature foundations.
