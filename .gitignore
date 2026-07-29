@@ -6,6 +6,7 @@ prototype/.pytest_cache/
 **/__pycache__/
 **/*.py[cod]
 .tools/
+.claude/
 .observed-runs/
 
 tmp*/
