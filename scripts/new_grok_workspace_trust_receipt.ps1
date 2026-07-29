@@ -36,6 +36,18 @@ function Get-TextSha256 {
     }
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        return (($algorithm.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+}
+
 function Write-Utf8Atomic {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -110,11 +122,17 @@ function Test-PathContainedOrEqual {
     )
 }
 
+function ConvertTo-NormalizedPathForComparison {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/'))
+}
+
 $workspace = (Resolve-Path -LiteralPath $WorkspacePath -ErrorAction Stop).Path
 $workspaceItem = Get-Item -LiteralPath $workspace -Force -ErrorAction Stop
 if (-not $workspaceItem.PSIsContainer) {
     throw "Workspace must be a directory: $workspace"
 }
+$workspace = $workspaceItem.FullName
 $output = [System.IO.Path]::GetFullPath($OutputPath)
 if (Test-Path -LiteralPath $output) {
     throw "Output already exists; refusing to overwrite: $output"
@@ -132,6 +150,7 @@ if ([string]::IsNullOrWhiteSpace($ProjectRootPath)) {
     if (-not $projectRootItem.PSIsContainer) {
         throw "Project root must be a directory: $projectRoot"
     }
+    $projectRoot = $projectRootItem.FullName
 }
 if (-not (Test-PathContainedOrEqual -Root $projectRoot -Child $workspace)) {
     throw 'Workspace is not contained by the discovered project root.'
@@ -139,14 +158,17 @@ if (-not (Test-PathContainedOrEqual -Root $projectRoot -Child $workspace)) {
 
 $scopeDirectories = New-Object System.Collections.Generic.List[string]
 $scopeCursor = Get-Item -LiteralPath $workspace -Force
+$normalizedProjectRoot = ConvertTo-NormalizedPathForComparison $projectRoot
 while ($null -ne $scopeCursor) {
     $scopeDirectories.Add($scopeCursor.FullName)
-    if ($scopeCursor.FullName.Equals($projectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $normalizedScopeCursor = ConvertTo-NormalizedPathForComparison $scopeCursor.FullName
+    if ($normalizedScopeCursor.Equals($normalizedProjectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         break
     }
     $scopeCursor = $scopeCursor.Parent
 }
-if ($scopeDirectories[$scopeDirectories.Count - 1] -ne $projectRoot) {
+$lastScopeDirectory = ConvertTo-NormalizedPathForComparison $scopeDirectories.Item($scopeDirectories.Count - 1)
+if (-not $lastScopeDirectory.Equals($normalizedProjectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Could not build project-root-to-workspace discovery scope.'
 }
 $scopeDirectories = @($scopeDirectories.ToArray())
@@ -227,7 +249,7 @@ function Add-ControlCandidate {
         capability = $Capability
         upstream_folder_trust = $UpstreamFolderTrust
         bytes = $length
-        sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-FileSha256 -Path $item.FullName
     })
 }
 

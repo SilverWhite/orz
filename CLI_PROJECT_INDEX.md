@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-29 (R5：GAK-UI-001 斜杠命令系统 — 15 个中文命令 + CommandRegistry + CommandPalette 覆盖层 + 地址栏历史/多行/自动补全 + Ctrl+Z 取消运行；附A 新增 2026-07-29-R5 条目)
+**更新**: 2026-07-29 (R6：LBR-001 Phase 1 PDF Evidence Store — PDF 验证/文本提取/页面索引/SHA-256 内容寻址存储 + source record schema；附A 新增 2026-07-29-R6 条目)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成与关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -69,7 +69,7 @@
 - **Orientation Runtime Guard** (2026-07-27, 事实): 中性方向检查点 + 运行时停滞守卫——检测 agent 是否陷入循环/停滞。别名: orientation checkpoint, stagnation guard。入口: `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md` / `assurance/orientation_runtime_guard.py` / `assurance/orientation_runtime_integration.py` / `assurance/orientation_runtime_journal.py` / `assurance/orientation-checkpoint-v0.1.schema.json` / `assurance/runtime-stagnation-guard-receipt-v0.1.schema.json`
 - **Workspace Trust Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-TRUST-001): 统一工作区信任——全部 Python 入口点（canonical CLI + 检索子代理 ×2）在 IPG 评估前建立 workspace trust receipt。`AdapterGateContext` 携带 trust_receipt + trust_status。别名: GAK-TRUST-001。入口: `assurance/workspace_trust.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py` / `assurance/retrieval_subagent.py`
 - **Source Visibility Gate** (2026-07-26, 事实): 全文可见性检查 Gate——验证引用源的完整文本可见性。入口: `docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md` / `assurance/source_visibility.py` / `assurance/source_visibility_cli.py`
-- **Local Browser Retrieval and PDF Evidence** (2026-07-28, 设计约束/待实施): 本地浏览器外部检索与论文 PDF 确定性证据链；网页证据仅保留 URL/accessed_at/content_hash/usage_trace，不默认保存全文快照；论文证据下载为本地 SHA-256 PDF 并按页索引；OCR 明确不使用。别名/关键词: browser retrieval, local browser, PDF evidence, usage_trace, no OCR。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
+- **Local Browser Retrieval and PDF Evidence** (2026-07-28 设计冻结, 2026-07-29 Phase 1 完成): 本地浏览器外部检索与论文 PDF 确定性证据链。Phase 1 Evidence Store 已完成——PDF 验证/文本提取/页面索引、SHA-256 内容寻址存储、source record schema (A/B/C 证据等级)、version guessing (6 种版本类型)。42 tests pass。Phase 2: 本地 Chrome CDP 后台检索。别名/关键词: browser retrieval, local browser, PDF evidence, LBR-001, CDP。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` / `assurance/pdf_evidence.py` / `assurance/evidence_store.py` / `assurance/evidence_store.schema.json`
 - **Child Capability Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-CHILD-001): 子代理/子进程 capability 传递——`spawn_child_context()` 统一入口；检索子代理接受 parent_envelope；`execute_guarded_no_model_action()` 在 Docker create 前调用 `enforce_child_capabilities()`。别名: GAK-CHILD-001。入口: `assurance/child_capability_enforcer.py` / `assurance/instruction_gate.py` / `assurance/retrieval_subagent.py` / `assurance/guarded_execution.py`
 - **Network Permit Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-NET-001): 网络许可统一覆盖——`call_deepseek_api()` 在 HTTP 请求前调用 `evaluate_network_permit()`；`AdapterGateContext` 携带 network_policy；`_resolve_and_setup_gates()` 构建 guarded 模式默认 policy。别名: GAK-NET-001。入口: `assurance/network_permit_gateway.py` / `assurance/deepseek_adapter.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py`
 - **Adapter Gate** (2026-07-27, 事实): 适配器调用旁路执行 Gate——防止运行时绕过适配器直接调用模型。别名: adapter gate enforcement, adapter preflight。入口: `docs/ADAPTER_GATE_AUDIT_2026-07-28.md` / `assurance/adapter_gate.py` / `assurance/adapter_preflight.py` / `assurance/adapter_output_validator.py` / `assurance/adapter_failure_classifier.py` / `assurance/adapter-gate-enforcement-receipt-v0.1.schema.json`
@@ -258,7 +258,7 @@
 
 ### 待实施 (Pending)
 
-- **Local Browser Retrieval and PDF Evidence** (2026-07-28, 设计约束/待实施): 本地浏览器外部检索与论文 PDF 确定性证据链；网页证据仅保留 URL/accessed_at/content_hash/usage_trace，不默认保存全文快照；论文证据下载为本地 SHA-256 PDF 并按页索引。架构文档已冻结，代码实现未开始。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
+- **LBR-001 Phase 2: Browser Background Retrieval** (2026-07-29, 待实施): 使用 Chrome DevTools Protocol (CDP) 直接控制本地 Chrome——后台创建 AI 拥有标签页、读取渲染文本/元数据/链接、识别 PDF 候选下载。Phase 1 Evidence Store 已完成。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` §5.1-5.3, §22
 
 ---
 
@@ -295,6 +295,7 @@
 
 > 按日期倒序排列的审计文档入口。查具体审计结论时从此表定位。
 
+- 2026-07-29-R6: LBR-001 Phase 1 PDF Evidence Store — PDF 验证/文本提取/页面索引 + SHA-256 内容寻址存储 + source record schema (A/B/C 证据等级) + version guessing；42 tests pass
 - 2026-07-29-R5: GAK-UI-001 斜杠命令系统 — 15 个中文命令 + CommandRegistry + CommandPalette 覆盖层 + 地址栏历史/多行/自动补全 + Ctrl+Z 取消运行；137 TUI tests pass；989 total tests pass
 - 2026-07-28-R5: 关闭 GAK-UI-001 (TUI 第一原型完成)、GAK-CRED-001 (凭据生命周期守卫)、GAK-WIN-001 (Job Object 竞态修复)；751 tests pass
 - 2026-07-28: `ADAPTER_GATE_AUDIT`, `ORIENTATION_RUNTIME_GUARD_AUDIT`, `P1_CONVERSATION_ARCHIVE_LIFECYCLE_AUDIT`
@@ -324,7 +325,8 @@
 | GSA-CORE | `artifact_registry.py`, `validator_bridge.py`, `general_science_review.py`, `general_science_cli.py` |
 | DeepSeek 适配 | `deepseek_adapter.py`, `deepseek_api_observation.py`, `deepseek_stream_observation.py` |
 | 数据/存储 | `storage_adapter.py`, `conversation.py`, `profile_registry.py` |
-| TUI (GAK-UI-001) | `tui/commands.py`, `tui/widgets.py`, `tui/app.py`, `tui/pt_app.py`, `tui/view_models.py`, `tui/main.py` |
+| PDF 证据 (LBR-001) | `pdf_evidence.py`, `evidence_store.py`, `evidence_store.schema.json` |
+| TUI (GAK-UI-001) | `tui/commands.py`, `tui/widgets.py`, `tui/app.py`, `tui/pt_app.py`, `tui/view_models.py`, `tui/main.py`, `tui/events.py`, `tui/event_source.py`, `tui/projector.py` |
 | 公共 | `__init__.py` (392 行公共 API 导出), `contracts.py`, `errors.py`, `utils.py`, `runner_public_output.py`, `runner_scoring_handoff.py` |
 
 ---

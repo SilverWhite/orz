@@ -1,0 +1,30 @@
+{
+  "schema_version": "0.1.0-draft",
+  "record_kind": "pdf_evidence_source_record",
+  "source_id": "src_004",
+  "task_id": "retrieval_20260728_001",
+  "source_type": "paper_pdf",
+  "evidence_level": "A",
+  "query": "non-Markovian LIF memory kernel",
+  "title": "A Non-Markovian Approach to Leaky Integrate-and-Fire Neuron Models",
+  "original_url": "https://doi.org/10.1234/example",
+  "final_url": "https://publisher.example/article",
+  "redirect_chain": [
+    "https://doi.org/10.1234/example",
+    "https://publisher.example/article"
+  ],
+  "accessed_at": "2026-07-28T14:35:00Z",
+  "doi": "10.1234/example",
+  "document_id": "sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+  "work_id": "doi:10.1234/example",
+  "version_guess": "publisher",
+  "version_confidence": 0.86,
+  "citation_locations": [
+    {
+      "page": 7,
+      "section": "Methods",
+      "evidence_role": "method",
+      "quote_hash": "sha256:abc123def456"
+    }
+  ]
+}
