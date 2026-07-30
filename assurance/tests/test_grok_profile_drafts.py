@@ -15,16 +15,18 @@ from assurance.grok_profile_drafts import (
 
 
 class GrokProfileDraftTests(unittest.TestCase):
-    def test_repository_has_exactly_two_retrieval_profile_drafts(self) -> None:
+    def test_repository_has_exactly_two_retrieval_profile_drafts_and_one_workflow(self) -> None:
         receipt = verify_grok_retrieval_profile_drafts()
 
         self.assertTrue(receipt["valid"], receipt["errors"])
         self.assertEqual(receipt["agent_profile_count"], 2)
-        self.assertEqual(receipt["workflow_draft_count"], 0)
+        self.assertGreaterEqual(receipt["workflow_draft_count"], 1)
         self.assertEqual(
             {profile["name"] for profile in receipt["profiles"]},
             {"gsa-project-doc-retrieval", "gsa-external-retrieval"},
         )
+        workflow_names = {wf["name"] for wf in receipt.get("workflows", [])}
+        self.assertIn("gsa-retrieval", workflow_names)
 
     def test_project_doc_profile_excludes_external_retrieval_tools(self) -> None:
         draft = load_grok_retrieval_profile_draft(
@@ -47,7 +49,7 @@ class GrokProfileDraftTests(unittest.TestCase):
         self.assertNotIn("workflow", {tool.lower() for tool in draft.tools})
         self.assertNotIn("spawn_subagent", {tool.lower() for tool in draft.tools})
 
-    def test_workflow_drafts_are_rejected_until_syntax_is_verified(self) -> None:
+    def test_workflow_draft_accepted_when_rhai_structure_is_valid(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
             root = Path(temporary)
             agents = root / ".grok" / "agents"
@@ -55,16 +57,46 @@ class GrokProfileDraftTests(unittest.TestCase):
             agents.mkdir(parents=True)
             workflows.mkdir(parents=True)
             for source in (ROOT / ".grok" / "agents").glob("*.md"):
-                (agents / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-            (workflows / "gsa-project-doc-retrieval.rhai").write_text(
-                "let meta = #{ name: \"gsa-project-doc-retrieval\" };\n",
+                (agents / source.name).write_text(
+                    source.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            (workflows / "gsa-retrieval.rhai").write_text(
+                "let meta = #{\n"
+                '    name: "gsa-retrieval",\n'
+                '    description: "GSA parallel retrieval workflow",\n'
+                "    phases: [ #{ title: \"Retrieve\", detail: \"retrieval\" } ],\n"
+                "};\n"
+                'phase("Retrieve");\n'
+                'let results = parallel([#{ prompt: "test", label: "test", '
+                'capability_mode: "read-only" }]);\n',
+                encoding="utf-8",
+            )
+
+            receipt = verify_grok_retrieval_profile_drafts(root)
+
+        self.assertTrue(receipt["valid"], receipt["errors"])
+        self.assertEqual(receipt["workflow_draft_count"], 1)
+
+    def test_workflow_missing_meta_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            root = Path(temporary)
+            agents = root / ".grok" / "agents"
+            workflows = root / ".grok" / "workflows"
+            agents.mkdir(parents=True)
+            workflows.mkdir(parents=True)
+            for source in (ROOT / ".grok" / "agents").glob("*.md"):
+                (agents / source.name).write_text(
+                    source.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            (workflows / "bad.rhai").write_text(
+                "// no meta header\nlet x = 1;\n",
                 encoding="utf-8",
             )
 
             receipt = verify_grok_retrieval_profile_drafts(root)
 
         self.assertFalse(receipt["valid"])
-        self.assertIn("premature workflows", "\n".join(receipt["errors"]))
+        self.assertIn("must start with", "\n".join(receipt["errors"]))
 
     def test_locked_grok_inspect_discovers_project_agent_profiles(self) -> None:
         binary = ROOT / ".tools" / "grok" / "0.2.112" / "grok.exe"

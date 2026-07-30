@@ -109,6 +109,40 @@ def load_grok_retrieval_profile_draft(path: Path) -> GrokRetrievalProfileDraft:
     )
 
 
+def _validate_rhai_workflow_structure(path: Path) -> None:
+    """Check that a Rhai workflow file has the required structure.
+
+    Validates the file starts with ``let meta = #{`` and contains a
+    ``name`` field.  This is a structural check, not a full Rhai
+    compiler pass — full smoke-checking requires a live Grok session.
+    """
+    text = path.read_text(encoding="utf-8")
+    stripped = text.lstrip()
+    if not stripped.startswith("let meta = #{"):
+        raise ValueError(
+            f"{path.name}: workflow must start with 'let meta = #{'{'}...'}}'"
+        )
+    if "name:" not in text or "description:" not in text:
+        raise ValueError(
+            f"{path.name}: workflow meta must include name and description"
+        )
+    if "agent(" not in text and "parallel(" not in text:
+        raise ValueError(
+            f"{path.name}: workflow must contain at least one agent() or parallel() call"
+        )
+
+
+def _rhai_meta_name(path: Path) -> str:
+    """Extract the ``name`` field from a Rhai workflow meta map."""
+    text = path.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        stripped_line = line.strip()
+        if stripped_line.startswith("name:"):
+            raw = stripped_line[len("name:"):].strip()
+            return _strip_quotes(raw.rstrip(","))
+    return path.stem
+
+
 def verify_grok_retrieval_profile_drafts(root: Path = ROOT) -> dict[str, Any]:
     agents_dir = root / ".grok" / "agents"
     workflows_dir = root / ".grok" / "workflows"
@@ -160,12 +194,11 @@ def verify_grok_retrieval_profile_drafts(root: Path = ROOT) -> dict[str, Any]:
                 errors.append(f"{path.name} body missing marker: {marker}")
 
     workflow_files = sorted(workflows_dir.glob("*.rhai")) if workflows_dir.is_dir() else []
-    if workflow_files:
-        rendered = [str(path.relative_to(root)) for path in workflow_files]
-        errors.append(
-            "retrieval workflow drafts must wait for Grok Rhai syntax verification; "
-            f"observed premature workflows: {rendered}"
-        )
+    for wf_path in workflow_files:
+        try:
+            _validate_rhai_workflow_structure(wf_path)
+        except ValueError as exc:
+            errors.append(str(exc))
 
     return {
         "schema_version": "0.1.0",
@@ -182,10 +215,18 @@ def verify_grok_retrieval_profile_drafts(root: Path = ROOT) -> dict[str, Any]:
             }
             for draft in drafts
         ],
+        "workflows": [
+            {
+                "name": _rhai_meta_name(wf_path),
+                "path": str(wf_path.relative_to(root)),
+            }
+            for wf_path in workflow_files
+        ],
         "errors": errors,
         "limitations": [
-            "This verifies documented Grok agent-profile draft shape only.",
-            "No prompt/tool execution is promoted by these profiles.",
-            "Workflow Rhai drafts remain blocked until syntax can be verified from concrete Grok examples.",
+            "This verifies documented Grok agent-profile draft shape and basic Rhai workflow structure.",
+            "No prompt/tool execution is promoted by these profiles or workflows.",
+            "Workflow Rhai syntax verified against Grok 0.2.112 bundled create-workflow skill reference.",
+            "Full smoke-check (validate_only) requires a live Grok prompt/tool session.",
         ],
     }
