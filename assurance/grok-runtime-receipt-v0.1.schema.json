@@ -42,7 +42,7 @@
       "additionalProperties": false,
       "required": ["mode", "retrieval_mode", "retrieval_mode_explicit", "workspace_path", "run_root"],
       "properties": {
-        "mode": { "enum": ["version_smoke"] },
+        "mode": { "enum": ["version_smoke", "prompt_smoke"] },
         "retrieval_mode": { "$ref": "#/$defs/retrieval_mode" },
         "retrieval_mode_explicit": { "type": "boolean" },
         "workspace_path": { "type": "string", "minLength": 1 },
@@ -65,7 +65,7 @@
         "mode": { "$ref": "#/$defs/retrieval_mode" },
         "selected_explicitly": { "type": "boolean" },
         "applies_to": { "const": "prompt_tool_runs" },
-        "active_for_current_mode": { "const": false },
+        "active_for_current_mode": { "type": "boolean" },
         "runtime_tool_retrieval_allowed": { "type": "boolean" },
         "assurance_receipts_required": { "type": "boolean" },
         "valid_modes": {
@@ -118,7 +118,7 @@
         "stderr_sha256"
       ],
       "properties": {
-        "command_kind": { "const": "grok_version" },
+        "command_kind": { "enum": ["grok_version", "grok_prompt"] },
         "pid": { "type": "integer", "minimum": 1 },
         "exit_code": { "type": ["integer", "null"] },
         "timeout_seconds": { "type": "integer", "minimum": 1 },
@@ -127,6 +127,31 @@
         "stdout_sha256": { "$ref": "#/$defs/sha256" },
         "stderr_sha256": { "$ref": "#/$defs/sha256" }
       }
+    },
+    "prompt": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "prompt_sha256", "prompt_bytes", "model_id",
+            "max_turns", "response_summary", "response_sha256",
+            "response_finish_reason", "response_token_count", "output_format"
+          ],
+          "properties": {
+            "prompt_sha256": { "$ref": "#/$defs/sha256" },
+            "prompt_bytes": { "type": "integer", "minimum": 1 },
+            "model_id": { "type": "string", "minLength": 1 },
+            "max_turns": { "type": "integer", "minimum": 1 },
+            "response_summary": { "type": "string" },
+            "response_sha256": { "$ref": "#/$defs/sha256" },
+            "response_finish_reason": { "type": "string" },
+            "response_token_count": { "type": "integer", "minimum": 0 },
+            "output_format": { "const": "streaming_json" }
+          }
+        }
+      ]
     },
     "containment": {
       "type": "object",

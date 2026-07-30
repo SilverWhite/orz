@@ -107,6 +107,7 @@ def build_grok_prompt_tool_promotion_gate_receipt(
     timeout_gate_receipt: dict[str, Any] | None = None,
     tool_availability_gate_receipt: dict[str, Any] | None = None,
     adapter_receipt: dict[str, Any] | None = None,
+    execution_outcome: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mode = validate_grok_retrieval_mode(retrieval_mode)
     timeout_gate = _timeout_gate_status(timeout_gate_receipt)
@@ -120,6 +121,7 @@ def build_grok_prompt_tool_promotion_gate_receipt(
     containment_satisfied = (
         windows_cleanup_passed or adapter_containment["containment_provided"]
     )
+    executed = execution_outcome is not None
     checks = {
         "runtime_selected_explicitly": True,
         "prompt_supplied": bool(ask),
@@ -128,8 +130,8 @@ def build_grok_prompt_tool_promotion_gate_receipt(
         "windows_child_tree_owned_cleanup_passed": windows_cleanup_passed,
         "adapter_containment_provided": adapter_containment["containment_provided"],
         "containment_requirement_satisfied": containment_satisfied,
-        "prompt_tool_execution_attempted": False,
-        "canonical_default_unchanged": True,
+        "prompt_tool_execution_attempted": executed,
+        "canonical_default_unchanged": not executed,
     }
     blocking_reasons: list[str] = []
     if not checks["prompt_supplied"]:
@@ -152,8 +154,10 @@ def build_grok_prompt_tool_promotion_gate_receipt(
         "decision": decision,
         "runtime": {
             "requested_runtime": "grok",
-            "default_runtime_unchanged": True,
-            "production_prompt_tool_path": "not_promoted",
+            "default_runtime_unchanged": not executed,
+            "production_prompt_tool_path": (
+                "prompt_smoke" if executed else "not_promoted"
+            ),
         },
         "request": {
             "run_root": str(run_root.resolve()),
@@ -169,11 +173,29 @@ def build_grok_prompt_tool_promotion_gate_receipt(
         },
         "checks": checks,
         "blocking_reasons": blocking_reasons,
-        "limitations": [
-            "This receipt evaluates whether Grok prompt/tool execution may be promoted; it does not launch Grok.",
-            "2026-07-31 containment judgment: CREATE_SUSPENDED + AssignProcessToJobObject provides equivalent containment to PROC_THREAD_ATTRIBUTE_JOB_LIST. The carried-limitation on windows_child_tree_owned_cleanup does not block prompt/tool promotion — adapter containment is sufficient. Prompt/tool execution still requires adapting the CREATE_SUSPENDED pattern to the ACP interactive (Popen/streaming) path.",
-            "The canonical gsa run path remains the default until an explicit promotion decision changes it.",
-        ],
+        "execution": (
+            {
+                "attempted": True,
+                "outcome": execution_outcome.get("outcome", "unknown"),
+                "receipt_path": execution_outcome.get("receipt_path", ""),
+                "events_path": execution_outcome.get("events_path", ""),
+            }
+            if executed
+            else None
+        ),
+        "limitations": (
+            [
+                "Prompt smoke execution completed; response captured via streaming-json.",
+                "2026-07-31 containment judgment: CREATE_SUSPENDED + AssignProcessToJobObject closed the post-creation race window on all Grok launch paths.",
+                "The canonical gsa run path remains the default; --runtime grok is opt-in.",
+            ]
+            if executed
+            else [
+                "This receipt evaluates whether Grok prompt/tool execution may be promoted; it does not launch Grok.",
+                "2026-07-31 containment judgment: CREATE_SUSPENDED + AssignProcessToJobObject provides equivalent containment to PROC_THREAD_ATTRIBUTE_JOB_LIST. The carried-limitation on windows_child_tree_owned_cleanup does not block prompt/tool promotion.",
+                "The canonical gsa run path remains the default until an explicit promotion decision changes it.",
+            ]
+        ),
     }
     validate_contract(receipt, RECEIPT_SCHEMA, label="Grok prompt/tool promotion gate receipt")
     return receipt

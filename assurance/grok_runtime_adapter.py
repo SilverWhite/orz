@@ -48,6 +48,9 @@ class GrokRunRequest:
     trust_decision: str = "restricted"
     retrieval_mode: str = DEFAULT_RETRIEVAL_MODE
     retrieval_mode_explicit: bool = False
+    prompt_text: str | None = None
+    model_id: str = "lif-fake-deepseek"
+    max_turns: int = 1
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -174,21 +177,61 @@ def _ensure_empty_run_root(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def _parse_streaming_json_output(
+    stdout: str,
+) -> tuple[str, str, int]:
+    """Parse Grok streaming-json output into (response_text, finish_reason, token_count).
+
+    Grok ``--output-format streaming-json`` produces newline-delimited JSON
+    objects with ``type`` fields: ``text`` (incremental text), ``end``
+    (terminal with finish reason and usage), ``thought`` (reasoning —
+    captured but not included in response_text).
+    """
+    response_parts: list[str] = []
+    finish_reason = ""
+    token_count = 0
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = obj.get("type", "")
+        if t == "text":
+            response_parts.append(obj.get("text", ""))
+        elif t == "end":
+            finish_reason = obj.get("finish_reason", "")
+            usage = obj.get("usage", {})
+            if isinstance(usage, dict):
+                token_count = usage.get("total_tokens", 0)
+        # "thought" events are intentionally discarded — they may contain
+        # internal reasoning that should not appear in the receipt.
+
+    return "".join(response_parts), finish_reason, token_count
+
+
+
 def run_grok_headless_once(
     request: GrokRunRequest,
     config: GrokRuntimeConfig | None = None,
     *,
     popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
 ) -> dict[str, Any]:
-    """Run the first product-side Grok adapter smoke.
+    """Run a single Grok headless invocation through the locked binary.
 
-    This slice intentionally executes only ``grok --version`` through the
-    locked binary.  It proves adapter launch, isolated environment, workspace
-    trust ordering, artifact capture, root-process exit, and no root-process
-    residue.  It does not send a prompt or invoke a model.
+    Supported modes:
+
+    * ``version_smoke`` — ``grok --version`` (proves binary identity,
+      workspace trust, environment isolation, containment, no residue).
+    * ``prompt_smoke`` — ``grok --prompt-file <path> --output-format
+      streaming-json`` (proves the full prompt→response chain with
+      model invocation, streaming-json output capture, token counting).
     """
     cfg = config or GrokRuntimeConfig()
-    if request.mode != "version_smoke":
+    if request.mode not in ("version_smoke", "prompt_smoke"):
         raise AssuranceError(f"unsupported Grok runtime mode: {request.mode}")
     retrieval_mode = validate_grok_retrieval_mode(request.retrieval_mode)
     _ensure_empty_run_root(request.run_root)
@@ -201,6 +244,11 @@ def run_grok_headless_once(
             )
     if not request.workspace_path.is_dir():
         raise AssuranceError(f"workspace_path must be an existing directory: {request.workspace_path}")
+
+    if request.mode == "prompt_smoke" and not request.prompt_text:
+        raise AssuranceError("prompt_text is required for mode 'prompt_smoke'")
+    if request.mode == "version_smoke" and request.prompt_text:
+        raise AssuranceError("prompt_text must not be set for mode 'version_smoke'")
 
     created_at = utc_now()
     trust_path = request.run_root / "workspace-trust.json"
@@ -247,8 +295,27 @@ def run_grok_headless_once(
         containment_diag["containment_available"] = False
         raise
 
+    # Build command args based on mode.
+    prompt_path: Path | None = None
+    if request.mode == "version_smoke":
+        cmd = [str(binary_path), "--version"]
+    else:  # prompt_smoke
+        prompt_path = request.run_root / "prompt.txt"
+        prompt_path.write_text(request.prompt_text or "", encoding="utf-8")
+        cmd = [
+            str(binary_path),
+            "--prompt-file", str(prompt_path),
+            "--output-format", "streaming-json",
+            "--max-turns", str(request.max_turns),
+            "--model", request.model_id,
+            "--no-memory",
+            "--sandbox", "read-only",
+            "--permission-mode", "bypassPermissions",
+            "--tools", "",
+        ]
+
     process = popen_factory(
-        [str(binary_path), "--version"],
+        cmd,
         cwd=request.workspace_path,
         env=_clean_environment(profile, temp),
         stdin=subprocess.DEVNULL,
@@ -279,13 +346,35 @@ def run_grok_headless_once(
     stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
     release = load_json(cfg.release_metadata_path)
     release_binary = release["binary_release"]
-    expected_version_prefix = (
-        f"grok {release_binary['version']} ({release_binary['build_id']})"
-    )
-    version_output_matches_lock = (
-        stdout_text == expected_version_prefix
-        or stdout_text.startswith(f"{expected_version_prefix} ")
-    )
+
+    # Mode-specific validation.
+    is_prompt_smoke = request.mode == "prompt_smoke"
+    version_output_matches_lock = False
+    prompt_output_valid = False
+    response_text = ""
+    response_finish_reason = ""
+    response_token_count = 0
+    prompt_sha256 = ""
+
+    if not is_prompt_smoke:
+        expected_version_prefix = (
+            f"grok {release_binary['version']} ({release_binary['build_id']})"
+        )
+        version_output_matches_lock = (
+            stdout_text == expected_version_prefix
+            or stdout_text.startswith(f"{expected_version_prefix} ")
+        )
+    else:
+        prompt_sha256 = sha256_bytes(
+            (request.prompt_text or "").encode("utf-8")
+        )
+        response_text, response_finish_reason, response_token_count = (
+            _parse_streaming_json_output(stdout_text)
+        )
+        prompt_output_valid = (
+            process.returncode == 0 and bool(response_text.strip())
+        )
+
     checks = {
         "binary_inspection_valid": inspection.get("valid") is True,
         "workspace_trust_valid": trust.get("valid") is True,
@@ -294,6 +383,7 @@ def run_grok_headless_once(
         "no_residue_observed": no_residue_observed,
         "exit_code_zero": process.returncode == 0,
         "version_output_matches_lock": version_output_matches_lock,
+        "prompt_output_valid": prompt_output_valid if is_prompt_smoke else True,
         "adapter_containment_available": containment_diag[
             "containment_available"
         ],
@@ -323,7 +413,7 @@ def run_grok_headless_once(
             "mode": retrieval_mode,
             "selected_explicitly": request.retrieval_mode_explicit,
             "applies_to": "prompt_tool_runs",
-            "active_for_current_mode": False,
+            "active_for_current_mode": request.mode != "version_smoke",
             "runtime_tool_retrieval_allowed": retrieval_mode != "off",
             "assurance_receipts_required": retrieval_mode != "off",
             "valid_modes": list(SUPPORTED_RETRIEVAL_MODES),
@@ -342,7 +432,7 @@ def run_grok_headless_once(
             "aggregate_sha256": trust["discovery"]["aggregate_sha256"],
         },
         "execution": {
-            "command_kind": "grok_version",
+            "command_kind": "grok_version" if not is_prompt_smoke else "grok_prompt",
             "pid": int(process.pid),
             "exit_code": process.returncode,
             "timeout_seconds": cfg.timeout_seconds,
@@ -351,6 +441,24 @@ def run_grok_headless_once(
             "stdout_sha256": sha256_file(stdout_path),
             "stderr_sha256": sha256_file(stderr_path),
         },
+        "prompt": (
+            {
+                "prompt_sha256": prompt_sha256,
+                "prompt_bytes": len(request.prompt_text or ""),
+                "model_id": request.model_id,
+                "max_turns": request.max_turns,
+                "response_summary": response_text[:200] if response_text else "",
+                "response_sha256": (
+                    sha256_bytes(response_text.encode("utf-8"))
+                    if response_text else ""
+                ),
+                "response_finish_reason": response_finish_reason,
+                "response_token_count": response_token_count,
+                "output_format": "streaming_json",
+            }
+            if is_prompt_smoke
+            else None
+        ),
         "containment": {
             "no_residue_required": True,
             "no_residue_observed": no_residue_observed,
@@ -371,12 +479,21 @@ def run_grok_headless_once(
             "events_path": str(events_path.resolve()),
         },
         "checks": checks,
-        "limitations": [
-            "This first adapter slice runs only grok --version; it does not send a prompt or model request.",
-            "Adapter-side Kill-On-Close Job Object containment is active via JobObjectSupervisor (CREATE_SUSPENDED + AssignProcessToJobObject — post-creation race window closed). 2026-07-31 judgment: containment sufficient for prompt/tool promotion; PROC_THREAD_ATTRIBUTE_JOB_LIST is a code-quality refinement, not a security prerequisite.",
-            "Retrieval mode is plumbed for future Grok prompt/tool runs only; version-smoke never performs retrieval.",
-            "Captured stdout/stderr are metadata-bound artifacts; no raw prompt, hidden reasoning, or authorization material is recorded.",
-        ],
+        "limitations": (
+            [
+                "Prompt smoke: first model-invocation slice — only text responses captured (no tool calls, no ACP).",
+                "Adapter-side Kill-On-Close Job Object containment is active via JobObjectSupervisor (CREATE_SUSPENDED + AssignProcessToJobObject — post-creation race window closed). 2026-07-31 judgment: containment sufficient for prompt/tool promotion; PROC_THREAD_ATTRIBUTE_JOB_LIST is a code-quality refinement, not a security prerequisite.",
+                "Retrieval mode is plumbed but prompt_smoke uses bypassPermissions with empty tools — retrieval is inactive.",
+                "Captured stdout/stderr are metadata-bound artifacts; raw prompt content is hashed, not stored in receipt.",
+            ]
+            if is_prompt_smoke
+            else [
+                "This first adapter slice runs only grok --version; it does not send a prompt or model request.",
+                "Adapter-side Kill-On-Close Job Object containment is active via JobObjectSupervisor (CREATE_SUSPENDED + AssignProcessToJobObject — post-creation race window closed). 2026-07-31 judgment: containment sufficient for prompt/tool promotion; PROC_THREAD_ATTRIBUTE_JOB_LIST is a code-quality refinement, not a security prerequisite.",
+                "Retrieval mode is plumbed for future Grok prompt/tool runs only; version-smoke never performs retrieval.",
+                "Captured stdout/stderr are metadata-bound artifacts; no raw prompt, hidden reasoning, or authorization material is recorded.",
+            ]
+        ),
     }
     validate_contract(receipt, RECEIPT_SCHEMA, label="Grok runtime receipt")
     atomic_write_json(receipt_path, receipt)

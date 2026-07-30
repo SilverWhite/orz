@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/grok-prompt-tool-promotion-gate-receipt-v0.1.schema.json",
   "title": "Grok prompt/tool promotion gate receipt",
-  "description": "Receipt for the explicit gsa run --runtime grok prompt/tool promotion gate. The gate records prerequisites and never launches Grok prompt or tool execution.",
+  "description": "Receipt for the explicit gsa run --runtime grok prompt/tool promotion gate. Records prerequisite evaluation and execution outcome when gate allows and --grok-execute is passed.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -47,8 +47,8 @@
       ],
       "properties": {
         "requested_runtime": { "const": "grok" },
-        "default_runtime_unchanged": { "const": true },
-        "production_prompt_tool_path": { "const": "not_promoted" }
+        "default_runtime_unchanged": { "type": "boolean" },
+        "production_prompt_tool_path": { "enum": ["not_promoted", "prompt_smoke"] }
       }
     },
     "request": {
@@ -161,9 +161,25 @@
         "windows_child_tree_owned_cleanup_passed": { "type": "boolean" },
         "adapter_containment_provided": { "type": "boolean" },
         "containment_requirement_satisfied": { "type": "boolean" },
-        "prompt_tool_execution_attempted": { "const": false },
-        "canonical_default_unchanged": { "const": true }
+        "prompt_tool_execution_attempted": { "type": "boolean" },
+        "canonical_default_unchanged": { "type": "boolean" }
       }
+    },
+    "execution": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attempted", "outcome", "receipt_path", "events_path"],
+          "properties": {
+            "attempted": { "const": true },
+            "outcome": { "enum": ["completed", "failed", "unknown"] },
+            "receipt_path": { "$ref": "#/$defs/nonempty" },
+            "events_path": { "$ref": "#/$defs/nonempty" }
+          }
+        }
+      ]
     },
     "blocking_reasons": {
       "type": "array",

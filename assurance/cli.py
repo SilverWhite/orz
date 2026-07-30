@@ -182,12 +182,76 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
         tool_availability_gate_path=args.grok_tool_availability_gate,
         adapter_receipt_path=args.grok_adapter_receipt,
     )
+
+    # If gate allows and --grok-execute is set, run headless prompt smoke.
+    executed = False
+    if receipt["decision"] == "allow" and getattr(args, "grok_execute", False):
+        if not args.ask:
+            raise AssuranceError(
+                "--ask is required when --grok-execute is set"
+            )
+        from .grok_runtime_adapter import (
+            GrokRunRequest,
+            run_grok_headless_once,
+        )
+        adapter_request = GrokRunRequest(
+            run_root=args.run_root,
+            workspace_path=args.run_root / "workspace",
+            mode="prompt_smoke",
+            prompt_text=args.ask,
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
+        )
+        adapter_receipt = run_grok_headless_once(adapter_request)
+        executed = True
+        # Rebuild the gate receipt with execution outcome attached.
+        from .grok_prompt_tool_gate import (
+            build_grok_prompt_tool_promotion_gate_receipt,
+        )
+        from .utils import load_json as _load_json
+        receipt = build_grok_prompt_tool_promotion_gate_receipt(
+            run_root=args.run_root,
+            ask=args.ask,
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
+            run_id=run_id,
+            timeout_gate_receipt=(
+                _load_json(args.grok_timeout_gate)
+                if args.grok_timeout_gate else None
+            ),
+            tool_availability_gate_receipt=(
+                _load_json(args.grok_tool_availability_gate)
+                if args.grok_tool_availability_gate else None
+            ),
+            adapter_receipt=(
+                _load_json(args.grok_adapter_receipt)
+                if args.grok_adapter_receipt else None
+            ),
+            execution_outcome={
+                "outcome": (
+                    "completed" if adapter_receipt.get("valid") else "failed"
+                ),
+                "receipt_path": str(
+                    (args.run_root / "grok-runtime-receipt.json").resolve()
+                ),
+                "events_path": str(
+                    (args.run_root / "events.jsonl").resolve()
+                ),
+            },
+        )
+        from .utils import atomic_write_json
+        atomic_write_json(
+            args.run_root / "grok-prompt-tool-promotion-gate.json",
+            receipt,
+            overwrite=True,
+        )
+
     human_lines = [
         f"grok prompt/tool gate: {receipt['decision']}",
         f"run_id: {receipt['run_id']}",
         f"run_root: {receipt['request']['run_root']}",
         f"retrieval mode: {receipt['request']['retrieval_mode']}",
-        "prompt/tool execution attempted: false",
+        f"prompt/tool execution attempted: {str(executed).lower()}",
     ]
     if receipt["blocking_reasons"]:
         human_lines.append(
@@ -532,6 +596,16 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Attach a Grok runtime adapter receipt with containment "
             "evidence for --runtime grok promotion gating."
+        ),
+    )
+    run.add_argument(
+        "--grok-execute",
+        action="store_true",
+        help=(
+            "When --runtime grok and gate decision is 'allow', execute "
+            "a headless prompt_smoke with the locked Grok binary "
+            "(grok --prompt-file). Without this flag, only the gate "
+            "receipt is written."
         ),
     )
     run.set_defaults(handler=_run_canonical)

@@ -18,6 +18,8 @@ SUPPORTED_EVENT_TYPES = {
     "artifact_registered",
     "run_finished",
     "run_failed",
+    "prompt_submitted",
+    "model_response_received",
 }
 
 
@@ -88,6 +90,7 @@ def normalize_grok_runtime_receipt(
     """
     run_id = str(receipt["run_id"])
     timestamp = created_at or str(receipt.get("created_at") or utc_now())
+    is_prompt = receipt["request"]["mode"] == "prompt_smoke"
     manifest = {
         "schema_version": "0.1.0-draft",
         "manifest_kind": "grok_runtime_adapter_projection",
@@ -109,7 +112,7 @@ def normalize_grok_runtime_receipt(
         "no_residue_observed": receipt["containment"]["no_residue_observed"],
         "external_cleanup_required": receipt["containment"]["external_cleanup_required"],
     }
-    specs = [
+    specs: list[tuple[str, dict[str, Any]]] = [
         (
             "run_preflight",
             {
@@ -132,16 +135,40 @@ def normalize_grok_runtime_receipt(
                 "mode": receipt["request"]["mode"],
             },
         ),
-        (
-            "artifact_registered",
-            {
-                "artifact_path": receipt["artifacts"]["receipt_path"],
-                "artifact_kind": "grok_runtime_adapter_receipt",
-                "metadata_only": True,
-            },
-        ),
-        (terminal_type, terminal_payload),
     ]
+    # Prompt-specific events: prompt_submitted + model_response_received.
+    if is_prompt and receipt.get("prompt") is not None:
+        prompt_block = receipt["prompt"]
+        specs.append((
+            "prompt_submitted",
+            {
+                "prompt_sha256": prompt_block["prompt_sha256"],
+                "prompt_bytes": prompt_block["prompt_bytes"],
+                "model_id": prompt_block["model_id"],
+                "max_turns": prompt_block["max_turns"],
+            },
+        ))
+        specs.append((
+            "model_response_received",
+            {
+                "response_sha256": prompt_block["response_sha256"],
+                "response_summary_sha256": sha256_bytes(
+                    prompt_block["response_summary"].encode("utf-8")
+                ) if prompt_block["response_summary"] else "",
+                "finish_reason": prompt_block["response_finish_reason"],
+                "token_count": prompt_block["response_token_count"],
+                "output_format": prompt_block["output_format"],
+            },
+        ))
+    specs.append(
+        ("artifact_registered",
+         {
+             "artifact_path": receipt["artifacts"]["receipt_path"],
+             "artifact_kind": "grok_runtime_adapter_receipt",
+             "metadata_only": True,
+         }),
+    )
+    specs.append((terminal_type, terminal_payload))
     events: list[dict[str, Any]] = []
     previous: str | None = None
     for sequence, (event_type, payload) in enumerate(specs):
