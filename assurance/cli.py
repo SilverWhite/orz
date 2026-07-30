@@ -338,6 +338,7 @@ def _run_grok_observe_tools(args: argparse.Namespace) -> int:
         build_grok_tool_permission_observation_bundle,
         observe_grok_tool_permission_surfaces,
     )
+    from .utils import atomic_write_json
 
     receipt = observe_grok_tool_permission_surfaces(
         acp_verification_paths=args.acp_verification
@@ -353,6 +354,11 @@ def _run_grok_observe_tools(args: argparse.Namespace) -> int:
         f"tool availability gate: {gate['decisions']['gate_decision']}",
         "prompt/tool promotion: blocked",
     ]
+    if args.output_gate_receipt:
+        atomic_write_json(args.output_gate_receipt, gate)
+        human_lines.append(
+            f"gate receipt written: {args.output_gate_receipt}"
+        )
     payload = bundle if args.include_tool_availability else receipt
     _print_or_json(payload, json_output=args.json, human_lines=human_lines)
     return 0 if receipt["valid"] else 1
@@ -589,6 +595,11 @@ def _parser() -> argparse.ArgumentParser:
         "--include-tool-availability",
         action="store_true",
         help="Include the projected tool availability report and gate receipt.",
+    )
+    grok_observe_tools.add_argument(
+        "--output-gate-receipt",
+        type=Path,
+        help="Write only the tool availability gate receipt to a file for use with --runtime grok promotion gating.",
     )
     grok_observe_tools.add_argument("--json", action="store_true")
     grok_observe_tools.set_defaults(handler=_run_grok_observe_tools)

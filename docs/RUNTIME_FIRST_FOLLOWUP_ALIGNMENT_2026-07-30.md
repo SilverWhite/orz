@@ -32,7 +32,7 @@ Source routes checked:
 | Retrieval mode selection | assurance-owned policy around runtime tools | The only valid modes are `local_browser`, `framework_fallback`, and `off`. Runtime tool calls may perform retrieval, but the selected mode and receipt semantics remain explicit. | First CLI/TUI/receipt plumbing is complete; prompt/tool execution remains blocked until Grok-owned cleanup or equivalent stronger containment is proven. |
 | Project-document retrieval subagent | Grok-compatible profile plus assurance wrapper | One project-doc retrieval agent draft now exists at `.grok/agents/gsa-project-doc-retrieval.md`. It may read project docs and produce retrieval/capability receipts. It must not become a local scheduler. | P2 Rhai syntax verified: `gsa-retrieval.rhai` workflow draft written using Grok 0.2.112 bundled `create-workflow` skill reference. Full smoke-check requires live Grok prompt/tool session. |
 | External retrieval subagent | Grok-compatible profile plus assurance wrapper | One external retrieval agent draft now exists at `.grok/agents/gsa-external-retrieval.md`. Network capability, source visibility, PDF evidence, redaction, and fallback mode receipts remain in this repository. | Runtime event capture for network/tool permission state. Workflow draft verified for Rhai syntax; full smoke-check pending. |
-| Tool availability | Grok registry/permission observed through assurance receipts | Grok owns tool registry, tool dispatch, and permission UX. This repository owns the explicit availability receipt, UI/prompt visibility, and tool-belief stagnation checks. | Observation slice is complete: `gsa grok observe-tools` records static registry/permission controls and projects them into the existing tool availability gate. ACP permission semantics remain degraded unless valid `allow_once` and `cancel_permission` fake-tool verification receipts are attached. |
+| Tool availability | Grok registry/permission observed through assurance receipts | Grok owns tool registry, tool dispatch, and permission UX. This repository owns the explicit availability receipt, UI/prompt visibility, and tool-belief stagnation checks. | P3 ACP dual verification closed: both `allow_once` and `cancel_permission` fake-tool verifications required for `decision: allow`. End-to-end test proves full promotion chain (dual ACP + containment → allow). `--output-gate-receipt` writes gate receipt for promotion gate consumption. |
 | Global Progress / Orientation | assurance-owned guard over Grok workflow state | Grok workflow state can be consumed as input. Global Progress, Orientation Guard, neutral inquiry, counterexample gate, and diagnostic coverage decisions remain outside Grok workflow policy. | First lifecycle projection slice is complete: metadata-only Grok workflow/subagent events can be projected into GPS journal events and neutral Orientation context. |
 | UI projection | UI-owned workbench consuming normalized runtime events | The TUI should display Grok workflow/subagent/tool/permission/runtime events and assurance receipts. It must not own scheduling, model loop, tool dispatch, or session persistence. | Expand beyond the first-slice `version-smoke` projection after stronger containment. |
 | Prototype references | fixture-only / git-history reference | `prototype/` is retired and contains only a boundary README. Active support code now lives in `assurance/`, `runtime/`, `integration/grok/`, scripts, schemas, and tests. | Clean remaining historical audit prose only when it appears in active routing or quickstarts. |
@@ -82,7 +82,15 @@ Source routes checked:
 7. Done (P1): add adapter-side Job Object containment.
 
 8. Done (P2): verify Grok Rhai workflow syntax and write retrieval workflow
-   draft.  Full Rhai reference obtained from Grok 0.2.112 bundled
+   draft.
+
+9. Done (P3): close ACP permission dual verification gap.
+   `gsa grok observe-tools --output-gate-receipt` writes the gate receipt
+   for promotion gate consumption.  End-to-end test proves that dual ACP
+   verification (allow_once + cancel_permission) plus adapter containment
+   produces `decision: "allow"` in the promotion gate.  The tool
+   availability gate now supports full `allow` when both scenarios are
+   verified.  Full Rhai reference obtained from Grok 0.2.112 bundled
    `create-workflow` skill.  `.grok/workflows/gsa-retrieval.rhai` drafts
    a parallel project-doc + external retrieval workflow.  Profile draft
    verifier updated to accept Rhai workflows with structural validation

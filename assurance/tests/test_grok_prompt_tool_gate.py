@@ -216,6 +216,41 @@ class GrokPromptToolGateTests(unittest.TestCase):
         )
         self.assertFalse(receipt["checks"]["containment_requirement_satisfied"])
 
+    def test_full_promotion_chain_allow_with_dual_acp_and_containment(self) -> None:
+        """End-to-end: dual ACP verification + adapter containment → allow.
+        This is the target state for gsa run --runtime grok promotion."""
+        receipt = build_grok_prompt_tool_promotion_gate_receipt(
+            run_root=self.root / "run",
+            ask="review the project structure",
+            retrieval_mode="local_browser",
+            retrieval_mode_explicit=True,
+            tool_availability_gate_receipt=_tool_gate("allow"),
+            timeout_gate_receipt=_timeout_gate(
+                owned_status="carried-limitation",
+                prompt_ready=False,
+            ),
+            adapter_receipt=_adapter_receipt(job_assigned=True),
+        )
+
+        self.assertEqual(receipt["decision"], "allow")
+        self.assertEqual(receipt["blocking_reasons"], [])
+        self.assertTrue(receipt["checks"]["tool_availability_gate_allows"])
+        self.assertTrue(receipt["checks"]["adapter_containment_provided"])
+        self.assertTrue(receipt["checks"]["containment_requirement_satisfied"])
+        self.assertFalse(receipt["checks"]["prompt_tool_execution_attempted"])
+        self.assertTrue(receipt["checks"]["canonical_default_unchanged"])
+        # Verify all three prerequisites are satisfied
+        self.assertEqual(
+            receipt["prerequisites"]["tool_availability"]["status"], "passed"
+        )
+        self.assertEqual(
+            receipt["prerequisites"]["adapter_containment"]["status"], "passed"
+        )
+        self.assertEqual(
+            receipt["prerequisites"]["adapter_containment"]["containment_provided"],
+            True,
+        )
+
     def test_write_receipt_loads_attached_evidence(self) -> None:
         run_root = self.root / "run"
         tool_path = self.root / "tool-gate.json"

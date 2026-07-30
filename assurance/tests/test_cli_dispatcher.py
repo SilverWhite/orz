@@ -552,3 +552,97 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         report = json.loads(completed.stdout)
         self.assertEqual(report["report_kind"], "gsa_cli_doctor_report")
+
+    def test_grok_observe_tools_output_gate_receipt_writes_file(self) -> None:
+        temp_dir = Path(self.temporary.name)
+        gate_path = temp_dir / "tool-gate.json"
+        exit_code, _stdout = self._capture_json(
+            [
+                "grok",
+                "observe-tools",
+                "--json",
+                "--output-gate-receipt",
+                str(gate_path),
+            ],
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(gate_path.is_file())
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        self.assertEqual(gate["receipt_kind"], "tool_availability_gate_receipt")
+        self.assertIn("gate_decision", gate["decisions"])
+
+    def test_run_runtime_grok_allow_with_dual_acp_and_containment(
+        self,
+    ) -> None:
+        temp_dir = Path(self.temporary.name)
+        gate_path = temp_dir / "tool-gate.json"
+        adapter_path = temp_dir / "adapter-receipt.json"
+        gate_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "0.1.0-draft",
+                    "receipt_kind": "tool_availability_gate_receipt",
+                    "valid": True,
+                    "report_id": "TOOL-AVAIL-GROK-001",
+                    "report_sha256": "a" * 64,
+                    "available_count": 6,
+                    "unavailable_count": 0,
+                    "unprobed_count": 0,
+                    "degraded_count": 0,
+                    "context_block_sha256": "b" * 64,
+                    "decisions": {
+                        "gate_decision": "allow",
+                        "context_injected": True,
+                        "model_must_not_guess": True,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        adapter_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "0.1.0",
+                    "receipt_kind": "grok_runtime_adapter_receipt",
+                    "valid": True,
+                    "containment": {
+                        "no_residue_required": True,
+                        "no_residue_observed": True,
+                        "root_process_exited": True,
+                        "external_cleanup_required": False,
+                        "residue_scan_scope": "job_object_contained",
+                        "job_object_created": True,
+                        "job_object_assigned": True,
+                        "containment_provider": "adapter_job_object",
+                        "containment_available": True,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        exit_code, receipt = self._capture_json(
+            [
+                "run",
+                "--runtime",
+                "grok",
+                "--ask",
+                "review the project",
+                "--run-root",
+                str(self.run_root),
+                "--grok-tool-availability-gate",
+                str(gate_path),
+                "--grok-adapter-receipt",
+                str(adapter_path),
+                "--retrieval-mode",
+                "local_browser",
+                "--json",
+            ],
+        )
+
+        self.assertEqual(receipt["decision"], "allow")
+        self.assertEqual(receipt["blocking_reasons"], [])
+        self.assertTrue(receipt["checks"]["tool_availability_gate_allows"])
+        self.assertTrue(receipt["checks"]["containment_requirement_satisfied"])
+        self.assertFalse(receipt["checks"]["prompt_tool_execution_attempted"])
