@@ -216,7 +216,8 @@ draft
 
 ## 14. Development-only contract probe
 
-`../prototype/` 当前提供一个可丢弃的 Python probe，用于在生产语言和 adapter 决策前暴露契约错误。它具备以下窄能力：
+`../prototype/` 已从当前 runtime-first 链路退休，只保留 `README.md` 作为边界标记。
+早期 Python probe 曾用于在生产语言和 adapter 决策前暴露契约错误，其已验证的窄能力包括：
 
 - 从 revision 4 seed corpus 确定性导出 development/challenge 场景，并把内部 case ID 替换为 HMAC 派生 opaque token；
 - 只复制 `scenario_only` fixture，验证相对路径、root containment、reparse/link 与 SHA-256；
@@ -224,4 +225,6 @@ draft
 - 在 development 下允许 `warn` 产物用于 smoke，在 challenge 下 `defer`，evaluation/holdout 仍不可由该 probe 创建或放行；
 - 生成明确标记 `no-model-smoke` 的 immutable RunManifest、RFC 8785/SHA-256 hash-chain JSONL journal，并验证 replay 与篡改失败。
 
-该 probe 不是 `EvaluationRunner`，其成功只证明当前机械契约在一个 fixture 上可执行，不证明 Agent 正确性、隔离强度或评测有效性。
+该 probe 不是 `EvaluationRunner`，其成功只证明当时机械契约在一个 fixture 上可执行，不证明 Agent 正确性、隔离强度或评测有效性。
+当前可执行的 support code、schemas、fixtures 和 verifier 路径应从 `assurance/`、`runtime/`、`integration/grok/`、`scripts/`
+以及 git history 中按需回查；不得把 retired `prototype/` 当作 active runner 或实现入口。

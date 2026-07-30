@@ -4,6 +4,12 @@
 [`UPSTREAM_FIRST_INTEGRATION_v0.1.md`](UPSTREAM_FIRST_INTEGRATION_v0.1.md) 收缩为 upstream-first，产品与术语
 定位见 [`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
 
+2026-07-30 follow-up alignment：Grok `0.2.112` 已提升为默认 lock，Runtime-First
+路线已把 Grok ACP/workflow/subagent/permission/tool registry 作为后续主嫁接面。
+本文件第 3 节的旧 V0 矩阵已按该裁决更新：headless 保留为 narrow smoke，
+ACP 优先用于真实 prompt/tool observability；两个检索子代理映射到 Grok-compatible
+profile/workflow，不再作为本地 scheduler 扩展。
+
 参考快照：`xai-org/grok-build` `main`，检查日期 2026-07-19，仓库 `SOURCE_REV` 为 `f9736c7b86f8e1c0e99e20ebbbd1195cd0c147e3`。
 
 上游状态注记：2026-07-21 复查时 build 仓库提交为 `a881e6703f46b01d8c7d4a5437683546df30449d`，`SOURCE_REV` 为 `c5c4ce03436b4bb2cec43d3feaa27dee0109bf37`。两者不是同一个 Git 历史，不能互相做 compare。当前集成基线与职责集合记录在 [`../upstream/grok-build.lock.json`](../upstream/grok-build.lock.json)。
@@ -48,8 +54,8 @@ workspace、MCP、skills、plugins、hooks、permissions、sandbox、memory、su
 | Grok Build 能力 | 本项目 V0 决策 | 适配方式 |
 |---|---|---|
 | composition root / runtime / tools / workspace 分离 | 采用 | 保持内核、模型 adapter、工具与 UI 解耦 |
-| headless JSON | 采用 | 作为第一入口；先于 TUI |
-| ACP stdio | 预留 | V0 先用版本化 JSONL，接口稳定后再做 ACP adapter |
+| headless JSON | 保留为 narrow smoke | 适合 `version-smoke`、一次性结构化 smoke 和候选 gate；不作为真实 prompt/tool observability 主路径 |
+| ACP stdio | 优先嫁接 | 真实 prompt/tool 路径优先使用 ACP/等价 runtime event 面，以观察 session、tool、permission 和 streaming update |
 | session persistence / authoritative event log | 采用 | append-only journal + immutable run manifest |
 | permission rules + sandbox | 采用并收紧 | guarded/evaluation 默认 deny；权限许可不能改变证据资格 |
 | hooks | 限制采用 | 只做通知、观察和非关键扩展；证据门禁与 leak gate 不放进 fail-open hook |
@@ -57,9 +63,9 @@ workspace、MCP、skills、plugins、hooks、permissions、sandbox、memory、su
 | tools / MCP | 采用 adapter 思路 | 工具能力声明、side-effect 分类和权限契约必须模型无关 |
 | skills / plugins | 延后 | 协议稳定后再提供；不能动态绕过 gate registry |
 | memory | 普通会话可选，评测关闭 | 历史案例不作为默认 session memory；evaluation/holdout 强制 disabled |
-| subagents / personas | V0 延后 | 先证明单 Agent 的状态和审计语义；多 Agent 不得稀释责任归属 |
+| subagents / personas | 限定采用 | 只承载两个检索子代理的 Grok-compatible profile/workflow 映射；不新增本地 multi-agent scheduler |
 | worktrees / rewind | 延后采用 | 对实现任务有价值，但不是证据内核前置条件 |
-| TUI / dashboard / theming | 延后 | 不影响研究工作流正确性 |
+| TUI / dashboard / theming | 采用状态投影 | 本仓库 TUI 作为 assurance workbench 消费 normalized Grok runtime/workflow/subagent/permission events，不拥有执行调度 |
 | remote relay / cloud service | 不采用 | 保持 local-first；用户确认当前移动端设计已覆盖远程使用，详见 ADR-0002 |
 | external telemetry | 默认不采用 | 本地审计日志优先；任何外发必须显式 opt-in 和脱敏 |
 | vendor auth / update channel | 不采用 | 模型 provider 由 adapter 处理 |
