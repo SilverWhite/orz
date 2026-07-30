@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+import ctypes
+from ctypes import wintypes
+import os
+import subprocess
+from typing import Any
+
+from .errors import AssuranceError
+
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+
+PROCESS_SET_QUOTA = 0x0100
+PROCESS_TERMINATE = 0x0001
+PROCESS_QUERY_INFORMATION = 0x0400
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+class _IOCounters(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_ulonglong),
+        ("WriteOperationCount", ctypes.c_ulonglong),
+        ("OtherOperationCount", ctypes.c_ulonglong),
+        ("ReadTransferCount", ctypes.c_ulonglong),
+        ("WriteTransferCount", ctypes.c_ulonglong),
+        ("OtherTransferCount", ctypes.c_ulonglong),
+    ]
+
+
+class _BasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _ExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _BasicLimitInformation),
+        ("IoInfo", _IOCounters),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+def _create_kill_on_close_job() -> wintypes.HANDLE | None:
+    """Create a Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
+
+    Returns None if Job Object creation fails.  Caller decides whether to
+    treat this as a fail-closed error or a degraded path.
+    """
+    if os.name != "nt":
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    handle = kernel32.CreateJobObjectW(None, None)
+    if not handle:
+        return None
+    limits = _ExtendedLimitInformation()
+    limits.BasicLimitInformation.LimitFlags = wintypes.DWORD(
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    )
+    limits.JobMemoryLimit = 0
+    succeeded = kernel32.SetInformationJobObject(
+        wintypes.HANDLE(handle),
+        JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(limits),
+        ctypes.sizeof(limits),
+    )
+    if not succeeded:
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+        return None
+    return wintypes.HANDLE(handle)
+
+
+def _open_process(pid: int) -> wintypes.HANDLE | None:
+    """Open a process handle for Job Object assignment.
+
+    Requires PROCESS_SET_QUOTA (AssignProcessToJobObject),
+    PROCESS_TERMINATE (kill-on-close), and PROCESS_QUERY_INFORMATION
+    (status checks).  Falls back to PROCESS_QUERY_LIMITED_INFORMATION
+    when PROCESS_QUERY_INFORMATION is denied.
+    """
+    if os.name != "nt":
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+
+    desired = wintypes.DWORD(
+        PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION
+    )
+    handle = kernel32.OpenProcess(desired, False, wintypes.DWORD(pid))
+    if handle:
+        return wintypes.HANDLE(handle)
+
+    desired = wintypes.DWORD(
+        PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
+    )
+    handle = kernel32.OpenProcess(desired, False, wintypes.DWORD(pid))
+    if handle:
+        return wintypes.HANDLE(handle)
+
+    desired = wintypes.DWORD(PROCESS_SET_QUOTA | PROCESS_TERMINATE)
+    handle = kernel32.OpenProcess(desired, False, wintypes.DWORD(pid))
+    if handle:
+        return wintypes.HANDLE(handle)
+
+    return None
+
+
+def _assign_process_to_job(
+    job: wintypes.HANDLE, process_handle: wintypes.HANDLE
+) -> bool:
+    """Assign a process handle to a Job Object."""
+    if os.name != "nt":
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    return bool(kernel32.AssignProcessToJobObject(job, process_handle))
+
+
+def _close_handle(handle: wintypes.HANDLE) -> None:
+    """Close a Windows kernel handle.  No-op on null handles."""
+    if not handle:
+        return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle(handle)
+
+
+class JobObjectSupervisor:
+    """A Kill-On-Close Job Object that contains a root process tree.
+
+    Creates a Windows Job Object with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE``
+    set.  When the supervisor closes the Job Object handle the kernel
+    terminates every process that was assigned to the job — root and all
+    descendants.  No breakaway flags are set; child processes inherit the
+    Job constraint automatically.
+
+    This is a thin supervision layer, not a full sandbox.  It provides a
+    containment guarantee that the adapter can offer even when the
+    upstream runtime (Grok) has not yet proven internal child-process
+    cleanup.
+
+    Phase 1 limitation: uses post-creation ``AssignProcessToJobObject``
+    rather than ``PROC_THREAD_ATTRIBUTE_JOB_LIST`` (GAK-WIN-001
+    creation-time assignment).  The post-creation race window is
+    acceptable for ``grok --version`` smoke but will be upgraded to the
+    zero-race creation-time pattern before prompt/tool mode promotion.
+    """
+
+    def __init__(self) -> None:
+        """Create a Kill-On-Close Job Object.
+
+        Raises :class:`AssuranceError` when the Job Object cannot be
+        created (fail-closed — the adapter must not launch without
+        containment on Windows).
+        """
+        self._job: wintypes.HANDLE | None = None
+        self._assigned: bool = False
+
+        if os.name != "nt":
+            return
+
+        job = _create_kill_on_close_job()
+        if not job:
+            raise AssuranceError(
+                "cannot create Kill-On-Close Job Object for adapter containment"
+            )
+        self._job = job
+
+    # -----------------------------------------------------------------
+    # Public API
+    # -----------------------------------------------------------------
+
+    @property
+    def is_active(self) -> bool:
+        """``True`` when a Job Object was created (Windows only)."""
+        return self._job is not None
+
+    @property
+    def is_assigned(self) -> bool:
+        """``True`` when at least one process was assigned to the Job."""
+        return self._assigned
+
+    def assign_process(self, pid: int) -> None:
+        """Assign a running process (by *pid*) to the Job Object.
+
+        Opens the process handle with the required access rights and
+        calls ``AssignProcessToJobObject``.  Must be called immediately
+        after the process is created, before it spawns child processes.
+
+        Raises :class:`AssuranceError` when the process cannot be opened
+        or assigned (fail-closed).
+        """
+        if self._job is None:
+            return
+        handle = _open_process(pid)
+        if not handle:
+            raise AssuranceError(
+                f"cannot open process {pid} for Job Object assignment"
+            )
+        try:
+            if not _assign_process_to_job(self._job, handle):
+                raise AssuranceError(
+                    f"cannot assign process {pid} to Kill-On-Close Job Object"
+                )
+            self._assigned = True
+        finally:
+            _close_handle(handle)
+
+    def close(self) -> None:
+        """Close the Job Object handle.
+
+        Closing a Kill-On-Close Job Object causes the kernel to
+        terminate every process still associated with the job.
+        """
+        if self._job is not None:
+            _close_handle(self._job)
+            self._job = None
+
+    def __enter__(self) -> "JobObjectSupervisor":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+
+def run_with_job_object_containment(
+    command: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str] | None = None,
+    timeout: int = 30,
+    popen_factory: Any = subprocess.Popen,
+) -> subprocess.Popen[bytes]:
+    """Launch *command* inside a Kill-On-Close Job Object.
+
+    Convenience wrapper that creates a :class:`JobObjectSupervisor`,
+    starts the process via *popen_factory*, assigns it to the Job, and
+    returns the :class:`~subprocess.Popen` instance.  The caller **must**
+    close the supervisor (or use it as a context manager) to release
+    the Job Object handle.
+
+    Returns the :class:`~subprocess.Popen` instance along with the
+    supervisor attached as ``_job_supervisor``.
+
+    Raises :class:`AssuranceError` on containment failure.
+    """
+    supervisor = JobObjectSupervisor()
+    process = popen_factory(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if supervisor.is_active:
+        supervisor.assign_process(process.pid)
+    process._job_supervisor = supervisor  # type: ignore[attr-defined]
+    return process

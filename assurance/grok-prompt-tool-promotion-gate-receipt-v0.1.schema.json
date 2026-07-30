@@ -79,7 +79,8 @@
       "additionalProperties": false,
       "required": [
         "tool_availability",
-        "windows_child_tree_owned_cleanup"
+        "windows_child_tree_owned_cleanup",
+        "adapter_containment"
       ],
       "properties": {
         "tool_availability": {
@@ -117,6 +118,24 @@
               "enum": ["missing", "passed", "failed", "carried-limitation"]
             }
           }
+        },
+        "adapter_containment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "evidence_attached",
+            "containment_provided",
+            "containment_provider"
+          ],
+          "properties": {
+            "status": { "$ref": "#/$defs/prerequisiteStatus" },
+            "evidence_attached": { "type": "boolean" },
+            "containment_provided": { "type": "boolean" },
+            "containment_provider": {
+              "enum": ["none", "adapter_job_object", "grok_owned"]
+            }
+          }
         }
       }
     },
@@ -129,6 +148,8 @@
         "retrieval_mode_explicit_or_off",
         "tool_availability_gate_allows",
         "windows_child_tree_owned_cleanup_passed",
+        "adapter_containment_provided",
+        "containment_requirement_satisfied",
         "prompt_tool_execution_attempted",
         "canonical_default_unchanged"
       ],
@@ -138,6 +159,8 @@
         "retrieval_mode_explicit_or_off": { "type": "boolean" },
         "tool_availability_gate_allows": { "type": "boolean" },
         "windows_child_tree_owned_cleanup_passed": { "type": "boolean" },
+        "adapter_containment_provided": { "type": "boolean" },
+        "containment_requirement_satisfied": { "type": "boolean" },
         "prompt_tool_execution_attempted": { "const": false },
         "canonical_default_unchanged": { "const": true }
       }

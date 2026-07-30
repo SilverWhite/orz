@@ -67,6 +67,29 @@ def _timeout_gate(
     }
 
 
+def _adapter_receipt(
+    *,
+    job_assigned: bool = True,
+    provider: str = "adapter_job_object",
+) -> dict[str, object]:
+    return {
+        "schema_version": "0.1.0",
+        "receipt_kind": "grok_runtime_adapter_receipt",
+        "valid": True,
+        "containment": {
+            "no_residue_required": True,
+            "no_residue_observed": True,
+            "root_process_exited": True,
+            "external_cleanup_required": False,
+            "residue_scan_scope": "job_object_contained" if job_assigned else "root_process_only",
+            "job_object_created": job_assigned,
+            "job_object_assigned": job_assigned,
+            "containment_provider": provider,
+            "containment_available": job_assigned,
+        },
+    }
+
+
 class GrokPromptToolGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=ROOT)
@@ -140,22 +163,79 @@ class GrokPromptToolGateTests(unittest.TestCase):
                 ask="hello",
             )
 
+    def test_adapter_containment_satisfies_when_timeout_is_carried(self) -> None:
+        """Adapter-side Job Object containment alone allows promotion
+        even when Grok-owned cleanup is carried-limitation."""
+        receipt = build_grok_prompt_tool_promotion_gate_receipt(
+            run_root=self.root / "run",
+            ask="hello",
+            tool_availability_gate_receipt=_tool_gate("allow"),
+            timeout_gate_receipt=_timeout_gate(
+                owned_status="carried-limitation",
+                prompt_ready=False,
+            ),
+            adapter_receipt=_adapter_receipt(job_assigned=True),
+        )
+
+        self.assertEqual(receipt["decision"], "allow")
+        self.assertEqual(receipt["blocking_reasons"], [])
+        self.assertTrue(receipt["checks"]["adapter_containment_provided"])
+        self.assertTrue(receipt["checks"]["containment_requirement_satisfied"])
+        self.assertFalse(
+            receipt["checks"]["windows_child_tree_owned_cleanup_passed"]
+        )
+        self.assertEqual(
+            receipt["prerequisites"]["adapter_containment"]["containment_provider"],
+            "adapter_job_object",
+        )
+
+    def test_adapter_containment_without_timeout_gate_allows(self) -> None:
+        """Adapter containment alone (no timeout gate at all) still allows."""
+        receipt = build_grok_prompt_tool_promotion_gate_receipt(
+            run_root=self.root / "run",
+            ask="hello",
+            tool_availability_gate_receipt=_tool_gate("allow"),
+            adapter_receipt=_adapter_receipt(job_assigned=True),
+        )
+
+        self.assertEqual(receipt["decision"], "allow")
+        self.assertTrue(receipt["checks"]["containment_requirement_satisfied"])
+
+    def test_no_containment_and_no_timeout_blocks(self) -> None:
+        """Missing both sources → containment_requirement_satisfied is false."""
+        receipt = build_grok_prompt_tool_promotion_gate_receipt(
+            run_root=self.root / "run",
+            ask="hello",
+            tool_availability_gate_receipt=_tool_gate("allow"),
+        )
+
+        self.assertEqual(receipt["decision"], "block")
+        self.assertIn(
+            "windows_child_tree_owned_cleanup_not_passed",
+            receipt["blocking_reasons"],
+        )
+        self.assertFalse(receipt["checks"]["containment_requirement_satisfied"])
+
     def test_write_receipt_loads_attached_evidence(self) -> None:
         run_root = self.root / "run"
         tool_path = self.root / "tool-gate.json"
         timeout_path = self.root / "timeout-gate.json"
+        adapter_path = self.root / "adapter-receipt.json"
         atomic_write_json(tool_path, _tool_gate("allow"))
         atomic_write_json(timeout_path, _timeout_gate())
+        atomic_write_json(adapter_path, _adapter_receipt(job_assigned=True))
 
         receipt = write_grok_prompt_tool_promotion_gate_receipt(
             run_root=run_root,
             ask="hello",
             tool_availability_gate_path=tool_path,
             timeout_gate_path=timeout_path,
+            adapter_receipt_path=adapter_path,
         )
 
         self.assertTrue((run_root / "grok-prompt-tool-promotion-gate.json").is_file())
         self.assertEqual(receipt["decision"], "allow")
+        self.assertTrue(receipt["checks"]["adapter_containment_provided"])
 
 
 if __name__ == "__main__":

@@ -180,6 +180,7 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
         run_id=run_id,
         timeout_gate_path=args.grok_timeout_gate,
         tool_availability_gate_path=args.grok_tool_availability_gate,
+        adapter_receipt_path=args.grok_adapter_receipt,
     )
     human_lines = [
         f"grok prompt/tool gate: {receipt['decision']}",
@@ -199,10 +200,11 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
 def _run_canonical(args: argparse.Namespace) -> int:
     if args.runtime == "grok":
         return _run_grok_prompt_tool_gate(args)
-    if args.retrieval_mode or args.grok_timeout_gate or args.grok_tool_availability_gate:
+    if args.retrieval_mode or args.grok_timeout_gate or args.grok_tool_availability_gate or args.grok_adapter_receipt:
         raise AssuranceError(
-            "--retrieval-mode, --grok-timeout-gate, and "
-            "--grok-tool-availability-gate are only valid with --runtime grok"
+            "--retrieval-mode, --grok-timeout-gate, "
+            "--grok-tool-availability-gate, and --grok-adapter-receipt "
+            "are only valid with --runtime grok"
         )
     if args.mode == "real":
         receipt = run_canonical_guarded_cli_real(
@@ -516,6 +518,14 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Attach a tool-availability gate receipt produced from Grok "
             "observe-tools for --runtime grok promotion gating."
+        ),
+    )
+    run.add_argument(
+        "--grok-adapter-receipt",
+        type=Path,
+        help=(
+            "Attach a Grok runtime adapter receipt with containment "
+            "evidence for --runtime grok promotion gating."
         ),
     )
     run.set_defaults(handler=_run_canonical)

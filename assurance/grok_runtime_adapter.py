@@ -12,6 +12,7 @@ import uuid
 from .contracts import validate_contract
 from .errors import AssuranceError
 from .grok_event_normalizer import normalize_grok_runtime_receipt, write_grok_events_jsonl
+from .job_object_supervisor import JobObjectSupervisor
 from .utils import atomic_write_json, load_json, sha256_file, utc_now
 
 
@@ -223,6 +224,26 @@ def run_grok_headless_once(
     binary_path = Path(str(inspection["binary_path"]))
     stdout_handle = stdout_path.open("wb")
     stderr_handle = stderr_path.open("wb")
+
+    containment_diag: dict[str, Any] = {
+        "job_object_created": False,
+        "job_object_assigned": False,
+        "containment_provider": "none",
+        "containment_available": False,
+    }
+
+    supervisor: JobObjectSupervisor | None = None
+    try:
+        supervisor = JobObjectSupervisor()
+        containment_diag["job_object_created"] = supervisor.is_active
+        containment_diag["containment_available"] = supervisor.is_active
+        if supervisor.is_active:
+            containment_diag["containment_provider"] = "adapter_job_object"
+    except AssuranceError:
+        containment_diag["job_object_created"] = False
+        containment_diag["containment_available"] = False
+        raise
+
     process = popen_factory(
         [str(binary_path), "--version"],
         cwd=request.workspace_path,
@@ -233,13 +254,21 @@ def run_grok_headless_once(
         creationflags=CREATE_NO_WINDOW,
     )
     try:
+        if supervisor is not None and supervisor.is_active:
+            supervisor.assign_process(process.pid)
+            containment_diag["job_object_assigned"] = supervisor.is_assigned
+
         try:
             process.wait(timeout=cfg.timeout_seconds)
         except subprocess.TimeoutExpired as exc:
-            raise AssuranceError("Grok version smoke did not exit before timeout") from exc
+            raise AssuranceError(
+                "Grok version smoke did not exit before timeout"
+            ) from exc
     finally:
         stdout_handle.close()
         stderr_handle.close()
+        if supervisor is not None:
+            supervisor.close()
 
     root_process_exited = process.poll() is not None
     no_residue_observed = root_process_exited
@@ -261,6 +290,12 @@ def run_grok_headless_once(
         "no_residue_observed": no_residue_observed,
         "exit_code_zero": process.returncode == 0,
         "version_output_matches_lock": version_output_matches_lock,
+        "adapter_containment_available": containment_diag[
+            "containment_available"
+        ],
+        "adapter_containment_provided": containment_diag[
+            "job_object_assigned"
+        ],
     }
     receipt = {
         "schema_version": "0.1.0",
@@ -317,7 +352,15 @@ def run_grok_headless_once(
             "no_residue_observed": no_residue_observed,
             "root_process_exited": root_process_exited,
             "external_cleanup_required": False,
-            "residue_scan_scope": "root_process_only",
+            "residue_scan_scope": (
+                "job_object_contained"
+                if containment_diag["job_object_assigned"]
+                else "root_process_only"
+            ),
+            "job_object_created": containment_diag["job_object_created"],
+            "job_object_assigned": containment_diag["job_object_assigned"],
+            "containment_provider": containment_diag["containment_provider"],
+            "containment_available": containment_diag["containment_available"],
         },
         "artifacts": {
             "receipt_path": str(receipt_path.resolve()),
@@ -326,8 +369,7 @@ def run_grok_headless_once(
         "checks": checks,
         "limitations": [
             "This first adapter slice runs only grok --version; it does not send a prompt or model request.",
-            "No-residue observation covers the supervised root process for this smoke path, not arbitrary tool child trees.",
-            "Future prompt/tool modes must use stronger Windows Job Object containment before promotion.",
+            "Adapter-side Kill-On-Close Job Object containment is active via JobObjectSupervisor (Phase 1: post-creation AssignProcessToJobObject). GAK-WIN-001 creation-time assignment planned for prompt/tool refactor.",
             "Retrieval mode is plumbed for future Grok prompt/tool runs only; version-smoke never performs retrieval.",
             "Captured stdout/stderr are metadata-bound artifacts; no raw prompt, hidden reasoning, or authorization material is recorded.",
         ],

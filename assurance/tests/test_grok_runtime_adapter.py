@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import Mock, patch
 
 from assurance.errors import AssuranceError
 from assurance.grok_runtime_adapter import (
@@ -29,7 +31,7 @@ class _FakeProcess:
         version_output: str = "grok 0.2.112 (9bbd559437) [stable]\n",
     ) -> None:
         self.args = args
-        self.pid = 4242
+        self.pid = os.getpid()
         self.returncode = returncode
         self._returncode = returncode
         stdout.write(version_output.encode("utf-8"))
@@ -43,6 +45,38 @@ class _FakeProcess:
 
     def poll(self) -> int | None:
         return self.returncode
+
+
+class _FakeSupervisor:
+    """A do-nothing supervisor that reports containment as active.
+
+    Prevents the real JobObjectSupervisor from assigning the test
+    process to a Kill-On-Close Job Object, which would kill the test
+    suite when the supervisor is closed.
+    """
+
+    def __init__(self) -> None:
+        self._assigned = False
+
+    @property
+    def is_active(self) -> bool:
+        return True
+
+    @property
+    def is_assigned(self) -> bool:
+        return self._assigned
+
+    def assign_process(self, pid: int) -> None:
+        self._assigned = True
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "_FakeSupervisor":
+        return self
+
+    def __exit__(self, *args: object) -> None:  # type: ignore[override]
+        pass
 
 
 def _inspection(binary: Path) -> dict[str, object]:
@@ -88,7 +122,10 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
         with patch(
             "assurance.grok_runtime_adapter.inspect_grok_runtime",
             return_value=_inspection(self.binary),
-        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()):
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ):
             receipt = run_grok_headless_once(
                 GrokRunRequest(run_root=run_root, workspace_path=self.workspace),
                 config=self.config,
@@ -100,6 +137,19 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
         self.assertFalse(receipt["retrieval"]["active_for_current_mode"])
         self.assertTrue(receipt["containment"]["no_residue_required"])
         self.assertTrue(receipt["containment"]["no_residue_observed"])
+        self.assertTrue(receipt["containment"]["job_object_created"])
+        self.assertTrue(receipt["containment"]["job_object_assigned"])
+        self.assertEqual(
+            receipt["containment"]["containment_provider"],
+            "adapter_job_object",
+        )
+        self.assertTrue(receipt["containment"]["containment_available"])
+        self.assertEqual(
+            receipt["containment"]["residue_scan_scope"],
+            "job_object_contained",
+        )
+        self.assertTrue(receipt["checks"]["adapter_containment_available"])
+        self.assertTrue(receipt["checks"]["adapter_containment_provided"])
         self.assertTrue((run_root / "grok-runtime-receipt.json").is_file())
         self.assertTrue((run_root / "events.jsonl").is_file())
         self.assertIn(
@@ -121,7 +171,10 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
         with patch(
             "assurance.grok_runtime_adapter.inspect_grok_runtime",
             return_value=_inspection(self.binary),
-        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()):
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ):
             with self.assertRaises(AssuranceError) as raised:
                 run_grok_headless_once(
                     GrokRunRequest(run_root=run_root, workspace_path=self.workspace),
@@ -142,7 +195,10 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
         with patch(
             "assurance.grok_runtime_adapter.inspect_grok_runtime",
             return_value=_inspection(self.binary),
-        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()):
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ):
             receipt = run_grok_headless_once(
                 GrokRunRequest(
                     run_root=run_root,

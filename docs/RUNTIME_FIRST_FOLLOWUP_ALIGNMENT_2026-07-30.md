@@ -3,9 +3,9 @@
 Date: 2026-07-30
 
 Status: alignment complete; retrieval mode plumbing, two retrieval profile drafts,
-tool/permission observation, lifecycle projection, timeout gate split, and
-fail-closed Grok prompt/tool promotion gate implemented; actual prompt/tool
-execution remains unpromoted
+tool/permission observation, lifecycle projection, timeout gate split,
+fail-closed Grok prompt/tool promotion gate, and adapter-side Job Object
+containment (P1) implemented; actual prompt/tool execution remains unpromoted
 
 ## Purpose
 
@@ -36,8 +36,9 @@ Source routes checked:
 | Global Progress / Orientation | assurance-owned guard over Grok workflow state | Grok workflow state can be consumed as input. Global Progress, Orientation Guard, neutral inquiry, counterexample gate, and diagnostic coverage decisions remain outside Grok workflow policy. | First lifecycle projection slice is complete: metadata-only Grok workflow/subagent events can be projected into GPS journal events and neutral Orientation context. |
 | UI projection | UI-owned workbench consuming normalized runtime events | The TUI should display Grok workflow/subagent/tool/permission/runtime events and assurance receipts. It must not own scheduling, model loop, tool dispatch, or session persistence. | Expand beyond the first-slice `version-smoke` projection after stronger containment. |
 | Prototype references | fixture-only / git-history reference | `prototype/` is retired and contains only a boundary README. Active support code now lives in `assurance/`, `runtime/`, `integration/grok/`, scripts, schemas, and tests. | Clean remaining historical audit prose only when it appears in active routing or quickstarts. |
-| Windows child-tree timeout | split candidate/prompt-tool gate | `windows_child_tree_baseline_regression` is now separate from `windows_child_tree_owned_cleanup`. The baseline-regression gate can pass for default-version selection while owned-cleanup remains `carried-limitation`. | Prompt/tool mode remains unpromoted until owned cleanup passes or an explicit stronger-containment decision replaces it. |
-| Grok prompt/tool run entry | explicit fail-closed promotion gate | `gsa run --runtime grok` now writes a `grok_prompt_tool_promotion_gate_receipt` and preserves the canonical default. It does not launch Grok prompt/tool execution. | The gate remains blocked unless attached tool availability is `allow` and `windows_child_tree_owned_cleanup` is `passed` with `prompt_tool_promotion_ready=true`. |
+| Windows child-tree timeout | split candidate/prompt-tool gate | `windows_child_tree_baseline_regression` is now separate from `windows_child_tree_owned_cleanup`. The baseline-regression gate can pass for default-version selection while owned-cleanup remains `carried-limitation`. | P1 adapter-side Job Object containment implemented: `JobObjectSupervisor` wraps Grok root process in a Kill-On-Close Job, providing equivalent containment without Grok-owned cleanup. `grok_prompt_tool_gate` now accepts `adapter_containment_provided` as sufficient for `containment_requirement_satisfied`. |
+| Grok prompt/tool run entry | explicit fail-closed promotion gate | `gsa run --runtime grok` now writes a `grok_prompt_tool_promotion_gate_receipt` and preserves the canonical default. It does not launch Grok prompt/tool execution. | The gate is `allow` when: tool availability is `allow` AND adapter containment is active (Job Object assigned) OR Grok-owned cleanup is proven. `--grok-adapter-receipt` accepts the runtime adapter receipt as containment evidence. |
+| Adapter Job Object containment | adapter-side process tree supervision | `JobObjectSupervisor` wraps every Grok launch in a Kill-On-Close Job Object. Phase 1 uses post-creation `AssignProcessToJobObject`; GAK-WIN-001 `PROC_THREAD_ATTRIBUTE_JOB_LIST` planned for prompt/tool refactor. The adapter receipt records `job_object_created/assigned`, `containment_provider`, and `residue_scan_scope`. | First slice complete: `version_smoke` runs contained; promotion gate accepts adapter containment. Full prompt/tool mode still requires containment + tool availability + a new adapter mode. |
 
 ## Non-Goals
 
@@ -77,6 +78,16 @@ Source routes checked:
    tool availability evidence, timeout split evidence, blocking reasons, and
    `prompt_tool_execution_attempted=false`; the canonical `gsa run` default is
    unchanged.
+
+7. Done (P1): add adapter-side Job Object containment.
+   `assurance/job_object_supervisor.py` provides `JobObjectSupervisor` —
+   Kill-On-Close Job Object wrapping the Grok root process.  The adapter
+   assigns every Grok launch to the Job; closing the handle kills all
+   remaining children.  The promotion gate accepts
+   `adapter_containment_provided` as an alternative containment path.
+   Phase 1 uses post-creation `AssignProcessToJobObject`; GAK-WIN-001
+   `PROC_THREAD_ATTRIBUTE_JOB_LIST` upgrade planned for prompt/tool
+   refactor.
 
 This alignment is deliberately narrow: it updates ownership and route status so
 the next implementation slice has a clean target.

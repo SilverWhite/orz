@@ -143,7 +143,15 @@
         "no_residue_observed": { "type": "boolean" },
         "root_process_exited": { "type": "boolean" },
         "external_cleanup_required": { "type": "boolean" },
-        "residue_scan_scope": { "enum": ["root_process_only"] }
+        "residue_scan_scope": {
+          "enum": ["root_process_only", "job_object_contained", "full_tree"]
+        },
+        "job_object_created": { "type": "boolean" },
+        "job_object_assigned": { "type": "boolean" },
+        "containment_provider": {
+          "enum": ["none", "adapter_job_object", "grok_owned"]
+        },
+        "containment_available": { "type": "boolean" }
       }
     },
     "artifacts": {

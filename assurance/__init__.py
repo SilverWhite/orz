@@ -130,6 +130,7 @@ from .grok_runtime_adapter import (
     run_grok_version_smoke,
     validate_grok_retrieval_mode,
 )
+from .job_object_supervisor import JobObjectSupervisor
 from .global_review_mode import (
     build_global_review_mode_receipt,
 )

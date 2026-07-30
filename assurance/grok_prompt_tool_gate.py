@@ -47,6 +47,35 @@ def _timeout_gate_status(timeout_gate_receipt: dict[str, Any] | None) -> dict[st
     }
 
 
+def _adapter_containment_status(
+    adapter_receipt: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Evaluate whether the adapter receipt records Job Object containment."""
+    if not adapter_receipt:
+        return {
+            "status": "missing",
+            "evidence_attached": False,
+            "containment_provided": False,
+            "containment_provider": "none",
+        }
+    containment = adapter_receipt.get("containment", {})
+    if not isinstance(containment, dict):
+        return {
+            "status": "missing",
+            "evidence_attached": True,
+            "containment_provided": False,
+            "containment_provider": "none",
+        }
+    job_assigned = containment.get("job_object_assigned") is True
+    provider = containment.get("containment_provider", "none")
+    return {
+        "status": "passed" if job_assigned else "blocked",
+        "evidence_attached": True,
+        "containment_provided": job_assigned,
+        "containment_provider": provider if isinstance(provider, str) else "none",
+    }
+
+
 def _tool_availability_status(
     tool_availability_gate_receipt: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -77,17 +106,28 @@ def build_grok_prompt_tool_promotion_gate_receipt(
     run_id: str | None = None,
     timeout_gate_receipt: dict[str, Any] | None = None,
     tool_availability_gate_receipt: dict[str, Any] | None = None,
+    adapter_receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mode = validate_grok_retrieval_mode(retrieval_mode)
     timeout_gate = _timeout_gate_status(timeout_gate_receipt)
     tool_gate = _tool_availability_status(tool_availability_gate_receipt)
+    adapter_containment = _adapter_containment_status(adapter_receipt)
+
+    windows_cleanup_passed = (
+        timeout_gate["status"] == "passed"
+        and timeout_gate["prompt_tool_promotion_ready"]
+    )
+    containment_satisfied = (
+        windows_cleanup_passed or adapter_containment["containment_provided"]
+    )
     checks = {
         "runtime_selected_explicitly": True,
         "prompt_supplied": bool(ask),
         "retrieval_mode_explicit_or_off": retrieval_mode_explicit or mode == "off",
         "tool_availability_gate_allows": tool_gate["status"] == "passed",
-        "windows_child_tree_owned_cleanup_passed": timeout_gate["status"] == "passed"
-        and timeout_gate["prompt_tool_promotion_ready"],
+        "windows_child_tree_owned_cleanup_passed": windows_cleanup_passed,
+        "adapter_containment_provided": adapter_containment["containment_provided"],
+        "containment_requirement_satisfied": containment_satisfied,
         "prompt_tool_execution_attempted": False,
         "canonical_default_unchanged": True,
     }
@@ -98,7 +138,7 @@ def build_grok_prompt_tool_promotion_gate_receipt(
         blocking_reasons.append("retrieval_mode_not_explicit")
     if not checks["tool_availability_gate_allows"]:
         blocking_reasons.append("tool_availability_gate_not_allow")
-    if not checks["windows_child_tree_owned_cleanup_passed"]:
+    if not checks["containment_requirement_satisfied"]:
         blocking_reasons.append("windows_child_tree_owned_cleanup_not_passed")
 
     decision = "allow" if not blocking_reasons else "block"
@@ -125,6 +165,7 @@ def build_grok_prompt_tool_promotion_gate_receipt(
         "prerequisites": {
             "tool_availability": tool_gate,
             "windows_child_tree_owned_cleanup": timeout_gate,
+            "adapter_containment": adapter_containment,
         },
         "checks": checks,
         "blocking_reasons": blocking_reasons,
@@ -147,10 +188,12 @@ def write_grok_prompt_tool_promotion_gate_receipt(
     run_id: str | None = None,
     timeout_gate_path: Path | None = None,
     tool_availability_gate_path: Path | None = None,
+    adapter_receipt_path: Path | None = None,
 ) -> dict[str, Any]:
     _ensure_empty_run_root(run_root)
     timeout_gate = load_json(timeout_gate_path) if timeout_gate_path else None
     tool_gate = load_json(tool_availability_gate_path) if tool_availability_gate_path else None
+    adapter_receipt = load_json(adapter_receipt_path) if adapter_receipt_path else None
     receipt = build_grok_prompt_tool_promotion_gate_receipt(
         run_root=run_root,
         ask=ask,
@@ -159,6 +202,7 @@ def write_grok_prompt_tool_promotion_gate_receipt(
         run_id=run_id,
         timeout_gate_receipt=timeout_gate,
         tool_availability_gate_receipt=tool_gate,
+        adapter_receipt=adapter_receipt,
     )
     atomic_write_json(run_root / "grok-prompt-tool-promotion-gate.json", receipt)
     return receipt
