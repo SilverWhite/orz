@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/grok-tool-permission-observation-receipt-v0.1.schema.json",
+  "title": "Grok tool registry and permission observation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "valid",
+    "decision",
+    "observed_at",
+    "runtime_owner",
+    "runtime_id",
+    "inputs",
+    "surface",
+    "controls",
+    "acp_permission_observation",
+    "checks",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "receipt_kind": { "const": "grok_tool_permission_observation_receipt" },
+    "receipt_id": { "type": "string", "pattern": "^GROK-TOOL-PERM-[A-F0-9]{16}$" },
+    "valid": { "type": "boolean" },
+    "decision": { "type": "string", "enum": ["allow", "defer", "block"] },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "runtime_owner": { "const": "grok" },
+    "runtime_id": { "type": "string", "pattern": "^GROK-[0-9][A-Za-z0-9._-]*$" },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inspect_source",
+        "grok_help_source",
+        "agent_help_source",
+        "acp_verification_count"
+      ],
+      "properties": {
+        "inspect_source": { "$ref": "#/$defs/nonempty" },
+        "grok_help_source": { "$ref": "#/$defs/nonempty" },
+        "agent_help_source": { "$ref": "#/$defs/nonempty" },
+        "acp_verification_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grok_version",
+        "project_trusted",
+        "project_agent_count",
+        "builtin_agent_count",
+        "project_agents",
+        "builtin_agents",
+        "mcp_server_count",
+        "permissions"
+      ],
+      "properties": {
+        "grok_version": { "$ref": "#/$defs/nonempty" },
+        "project_trusted": { "type": "boolean" },
+        "project_agent_count": { "type": "integer", "minimum": 0 },
+        "builtin_agent_count": { "type": "integer", "minimum": 0 },
+        "project_agents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "uniqueItems": true
+        },
+        "builtin_agents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "uniqueItems": true
+        },
+        "mcp_server_count": { "type": "integer", "minimum": 0 },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "loaded",
+            "skipped_count",
+            "sources_count",
+            "managed_settings_active"
+          ],
+          "properties": {
+            "loaded": { "type": "integer", "minimum": 0 },
+            "skipped_count": { "type": "integer", "minimum": 0 },
+            "sources_count": { "type": "integer", "minimum": 0 },
+            "managed_settings_active": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grok_help_flags",
+        "agent_help_flags",
+        "permission_control_flags_present",
+        "tool_filter_flags_present",
+        "web_disable_flag_present",
+        "agent_profile_flag_present"
+      ],
+      "properties": {
+        "grok_help_flags": { "$ref": "#/$defs/flag_map" },
+        "agent_help_flags": { "$ref": "#/$defs/flag_map" },
+        "permission_control_flags_present": { "type": "boolean" },
+        "tool_filter_flags_present": { "type": "boolean" },
+        "web_disable_flag_present": { "type": "boolean" },
+        "agent_profile_flag_present": { "type": "boolean" }
+      }
+    },
+    "acp_permission_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attached",
+        "valid_count",
+        "invalid_count",
+        "probe_ids",
+        "result_sha256",
+        "scenario_semantics_verified",
+        "safety_checks_verified"
+      ],
+      "properties": {
+        "attached": { "type": "boolean" },
+        "valid_count": { "type": "integer", "minimum": 0 },
+        "invalid_count": { "type": "integer", "minimum": 0 },
+        "probe_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^ACPTOOL-[0-9a-f]{32}$" },
+          "uniqueItems": true
+        },
+        "result_sha256": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "uniqueItems": true
+        },
+        "scenario_semantics_verified": { "type": "boolean" },
+        "safety_checks_verified": { "type": "boolean" }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grok_inspect_observed",
+        "grok_help_observed",
+        "agent_help_observed",
+        "expected_project_agents_discovered",
+        "permission_controls_observed",
+        "agent_profile_control_observed",
+        "web_disable_control_observed",
+        "acp_permission_probe_attached",
+        "acp_permission_probe_valid_when_attached",
+        "no_model_invoked",
+        "no_network_requested",
+        "prompt_tool_promotion_blocked"
+      ],
+      "properties": {
+        "grok_inspect_observed": { "type": "boolean" },
+        "grok_help_observed": { "type": "boolean" },
+        "agent_help_observed": { "type": "boolean" },
+        "expected_project_agents_discovered": { "type": "boolean" },
+        "permission_controls_observed": { "type": "boolean" },
+        "agent_profile_control_observed": { "type": "boolean" },
+        "web_disable_control_observed": { "type": "boolean" },
+        "acp_permission_probe_attached": { "type": "boolean" },
+        "acp_permission_probe_valid_when_attached": { "type": "boolean" },
+        "no_model_invoked": { "type": "boolean" },
+        "no_network_requested": { "type": "boolean" },
+        "prompt_tool_promotion_blocked": { "type": "boolean" }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "flag_map": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "minProperties": 1
+    },
+    "nonempty": { "type": "string", "minLength": 1 }
+  }
+}

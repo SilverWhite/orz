@@ -100,12 +100,31 @@ from .grok_event_normalizer import (
     project_grok_events_for_tui,
     write_grok_events_jsonl,
 )
+from .grok_lifecycle_projection import (
+    build_grok_lifecycle_orientation_checkpoint,
+    project_grok_lifecycle_events_to_global_progress,
+)
+from .grok_profile_drafts import (
+    EXPECTED_PROFILES as EXPECTED_GROK_RETRIEVAL_PROFILES,
+    load_grok_retrieval_profile_draft,
+    verify_grok_retrieval_profile_drafts,
+)
+from .grok_tool_permission_observer import (
+    GrokToolPermissionObservationConfig,
+    build_grok_tool_availability_projection,
+    build_grok_tool_permission_observation_bundle,
+    build_grok_tool_permission_observation_receipt,
+    observe_grok_tool_permission_surfaces,
+)
 from .grok_runtime_adapter import (
+    DEFAULT_RETRIEVAL_MODE,
     GrokRunRequest,
     GrokRuntimeConfig,
+    SUPPORTED_RETRIEVAL_MODES,
     inspect_grok_runtime,
     run_grok_headless_once,
     run_grok_version_smoke,
+    validate_grok_retrieval_mode,
 )
 from .global_review_mode import (
     build_global_review_mode_receipt,
@@ -432,6 +451,10 @@ __all__ = [
     "build_task_contract_from_ask",
     "build_gsa_runtime_preflight_projection",
     "build_global_review_mode_receipt",
+    "build_grok_lifecycle_orientation_checkpoint",
+    "build_grok_tool_availability_projection",
+    "build_grok_tool_permission_observation_bundle",
+    "build_grok_tool_permission_observation_receipt",
     "build_workspace_first_frozen_context",
     "build_tool_availability_context_block",
     "build_tool_availability_gate_receipt",
@@ -516,6 +539,7 @@ __all__ = [
     "LocalStorageAdapter",
     "parse_instruction_content",
     "project_complex_task_readonly",
+    "project_grok_lifecycle_events_to_global_progress",
     "ProjectDocIndex",
     "probe_tool_availability",
     "classify_archive_failure",
@@ -528,6 +552,8 @@ __all__ = [
     "dispatch_retrieval_subagent_online",
     "DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET",
     "get_scrub_audit",
+    "GrokToolPermissionObservationConfig",
+    "observe_grok_tool_permission_surfaces",
     "recover_archive",
     "recover_archive_journal",
     "recovery_permit_binding",

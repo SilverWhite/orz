@@ -38,7 +38,7 @@
     },
     "message_block": {
       "type": "string",
-      "pattern": "^(\\[TOOL_AVAILABILITY v0\\.1\\]|\\[ORIENTATION_CHECKPOINT v0\\.1\\])"
+      "pattern": "^(\\[TOOL_AVAILABILITY v0\\.1\\]|\\[CHECKLIST_CONTEXT v0\\.1\\]|\\[GROK_LIFECYCLE_CONTEXT v0\\.1\\]|\\[ORIENTATION_CHECKPOINT v0\\.1\\])"
     },
     "allowed_response_fields": {
       "type": "array",

@@ -32,8 +32,19 @@ def _receipt(valid: bool = True) -> dict[str, object]:
         },
         "request": {
             "mode": "version_smoke",
+            "retrieval_mode": "local_browser",
+            "retrieval_mode_explicit": True,
             "workspace_path": "D:\\CLI",
             "run_root": "D:\\CLI\\tmp-grok-smoke",
+        },
+        "retrieval": {
+            "mode": "local_browser",
+            "selected_explicitly": True,
+            "applies_to": "prompt_tool_runs",
+            "active_for_current_mode": False,
+            "runtime_tool_retrieval_allowed": True,
+            "assurance_receipts_required": True,
+            "valid_modes": ["local_browser", "framework_fallback", "off"],
         },
         "binary": {
             "inspection_path": "D:\\CLI\\tmp-grok-smoke\\binary-inspection.json",
@@ -98,6 +109,9 @@ class GrokEventNormalizerTests(unittest.TestCase):
             [event["event_type"] for event in events],
             ["run_preflight", "run_started", "artifact_registered", "run_finished"],
         )
+        self.assertEqual(events[0]["payload"]["retrieval_mode"], "local_browser")
+        self.assertFalse(events[0]["payload"]["retrieval_active_for_current_mode"])
+        self.assertTrue(events[0]["payload"]["retrieval_mode_explicit"])
         self.assertTrue(events[-1]["payload"]["no_residue_observed"])
 
     def test_invalid_receipt_projects_failed_terminal(self) -> None:

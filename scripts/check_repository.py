@@ -1745,6 +1745,17 @@ def check_repository() -> dict[str, Any]:
             errors.append(f"Grok post-run bridge is missing safety marker: {marker}")
     counts["grok_event_bridge_fixtures"] = 1
 
+    from assurance.grok_profile_drafts import verify_grok_retrieval_profile_drafts
+
+    grok_profile_drafts = verify_grok_retrieval_profile_drafts(ROOT)
+    errors.extend(grok_profile_drafts["errors"])
+    counts["grok_retrieval_profile_drafts"] = grok_profile_drafts[
+        "agent_profile_count"
+    ]
+    counts["grok_retrieval_workflow_drafts"] = grok_profile_drafts[
+        "workflow_draft_count"
+    ]
+
     runtime_examples = {
         "example-deepseek-adapter-profile.json": "deepseek-adapter-profile-v0.1.schema.json",
         "example-leak-scan-report.json": "leak-scan-report-v0.1.schema.json",

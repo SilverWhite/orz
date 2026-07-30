@@ -166,6 +166,8 @@ def build_grok_live_run_fn(
     run_root: str,
     workspace: str | None = None,
     run_id: str | None = None,
+    retrieval_mode: str = "off",
+    retrieval_mode_explicit: bool = False,
 ) -> Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]:
     """Build a Grok ``version-smoke`` run function for the TUI event source.
 
@@ -185,6 +187,8 @@ def build_grok_live_run_fn(
             run_root=_run_root,
             workspace_path=_workspace,
             run_id=run_id,
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
         )
         events_path = Path(str(receipt["artifacts"]["events_path"]))
         with events_path.open("r", encoding="utf-8") as handle:

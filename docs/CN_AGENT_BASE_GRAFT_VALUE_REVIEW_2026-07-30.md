@@ -673,11 +673,11 @@ VS Code 相关内容的当前保留状态应表述为：
 
 不要先做大重构。建议按这个顺序评估嫁接价值：
 
-1. 两个 retrieval subagent 的 Grok profile 草案：只写配置/映射，不写新调度器。
-2. 检索与 source visibility 的嫁接路径：先定义显式检索模式开关，再让 Grok 负责调用工具、本仓库负责证据 gate。
-3. Tool availability 与 Grok tool registry/permission 的对齐：确认内部工具状态如何返回给 UI 和 prompt。
+1. 两个 retrieval subagent 的 Grok profile 草案：已新增恰好两个 `.grok/agents/*.md` project agent drafts，不写新调度器；workflow Rhai 草案仍等待具体语法验证。
+2. 检索与 source visibility 的嫁接路径：显式检索模式开关已完成 CLI/TUI/receipt plumbing；下一步让 Grok 负责调用工具、本仓库负责证据 gate。
+3. Tool availability 与 Grok tool registry/permission 的对齐：首个观察切片已完成，`gsa grok observe-tools --include-tool-availability` 可把 `grok inspect --json`、`grok --help`、`grok agent --help` 的 registry/permission 控制面转成 receipt 和 availability gate 投影；未附加 ACP fake-tool verification 时仍保持 degraded/block。
 4. 中立询问和反例询问触发点对齐：反例只进 plan/conclusion gate，中立询问进执行过程回看；子代理关闭前增加“是否已获得所需内容”的中性确认；debug 中增加递进阈值的诊断覆盖检查。
-5. Global Progress / Orientation Guard 与 Grok workflow 的对齐：确认 workflow 能否给足够状态用于反哨兵。
+5. Global Progress / Orientation Guard 与 Grok workflow/subagent lifecycle 的对齐：首个 metadata-only projection 已完成，可把支持的 workflow/subagent lifecycle 事件转成 GPS journal events 和中性 Orientation context；Grok workflow 仍只提供输入，不拥有 GPS/Orientation 决策。
 6. UI 投影评估：现有 UI 显示哪些 Grok 原生状态，哪些仍显示本仓库 receipt。
 7. VS Code 内部终端初步适配复核：只确认生命周期观测价值，不扩展为完整 IDE 产品线。
 8. 底部客户端混搭评估：最后再决定本地 TUI、Web、移动、远程入口组合。

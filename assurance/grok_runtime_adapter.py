@@ -20,6 +20,8 @@ ADAPTER_ID = "grok-runtime-adapter"
 ADAPTER_VERSION = "0.1.0"
 RECEIPT_SCHEMA = "grok-runtime-receipt-v0.1.schema.json"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+SUPPORTED_RETRIEVAL_MODES = ("local_browser", "framework_fallback", "off")
+DEFAULT_RETRIEVAL_MODE = "off"
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,8 @@ class GrokRunRequest:
     run_id: str = "RUN-GROK-RUNTIME-SMOKE-001"
     mode: str = "version_smoke"
     trust_decision: str = "restricted"
+    retrieval_mode: str = DEFAULT_RETRIEVAL_MODE
+    retrieval_mode_explicit: bool = False
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -122,6 +126,13 @@ def _trust_launch_permitted(receipt: dict[str, Any]) -> bool:
     return isinstance(decision, dict) and decision.get("launch_permitted") is True
 
 
+def validate_grok_retrieval_mode(mode: str) -> str:
+    if mode not in SUPPORTED_RETRIEVAL_MODES:
+        allowed = ", ".join(SUPPORTED_RETRIEVAL_MODES)
+        raise AssuranceError(f"unsupported Grok retrieval mode: {mode} (allowed: {allowed})")
+    return mode
+
+
 def _clean_environment(profile: Path, temp: Path) -> dict[str, str]:
     keep = (
         "SystemRoot",
@@ -175,6 +186,7 @@ def run_grok_headless_once(
     cfg = config or GrokRuntimeConfig()
     if request.mode != "version_smoke":
         raise AssuranceError(f"unsupported Grok runtime mode: {request.mode}")
+    retrieval_mode = validate_grok_retrieval_mode(request.retrieval_mode)
     _ensure_empty_run_root(request.run_root)
     if not request.workspace_path.exists():
         if request.workspace_path.resolve().parent == request.run_root.resolve():
@@ -263,8 +275,19 @@ def run_grok_headless_once(
         },
         "request": {
             "mode": request.mode,
+            "retrieval_mode": retrieval_mode,
+            "retrieval_mode_explicit": request.retrieval_mode_explicit,
             "workspace_path": str(request.workspace_path.resolve()),
             "run_root": str(request.run_root.resolve()),
+        },
+        "retrieval": {
+            "mode": retrieval_mode,
+            "selected_explicitly": request.retrieval_mode_explicit,
+            "applies_to": "prompt_tool_runs",
+            "active_for_current_mode": False,
+            "runtime_tool_retrieval_allowed": retrieval_mode != "off",
+            "assurance_receipts_required": retrieval_mode != "off",
+            "valid_modes": list(SUPPORTED_RETRIEVAL_MODES),
         },
         "binary": {
             "inspection_path": str(inspection_path.resolve()),
@@ -305,6 +328,7 @@ def run_grok_headless_once(
             "This first adapter slice runs only grok --version; it does not send a prompt or model request.",
             "No-residue observation covers the supervised root process for this smoke path, not arbitrary tool child trees.",
             "Future prompt/tool modes must use stronger Windows Job Object containment before promotion.",
+            "Retrieval mode is plumbed for future Grok prompt/tool runs only; version-smoke never performs retrieval.",
             "Captured stdout/stderr are metadata-bound artifacts; no raw prompt, hidden reasoning, or authorization material is recorded.",
         ],
     }
@@ -320,6 +344,8 @@ def run_grok_version_smoke(
     run_root: Path,
     workspace_path: Path | None = None,
     run_id: str | None = None,
+    retrieval_mode: str = DEFAULT_RETRIEVAL_MODE,
+    retrieval_mode_explicit: bool = False,
     config: GrokRuntimeConfig | None = None,
 ) -> dict[str, Any]:
     chosen_run_id = run_id or f"RUN-GROK-RUNTIME-SMOKE-{uuid.uuid4().hex[:8].upper()}"
@@ -330,6 +356,8 @@ def run_grok_version_smoke(
             workspace_path=chosen_workspace,
             run_id=chosen_run_id,
             mode="version_smoke",
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
         ),
         config=config,
     )

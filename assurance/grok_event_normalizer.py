@@ -95,6 +95,8 @@ def normalize_grok_runtime_receipt(
         "adapter_id": receipt["adapter"]["adapter_id"],
         "runtime_owner": receipt["adapter"]["runtime_owner"],
         "mode": receipt["request"]["mode"],
+        "retrieval_mode": receipt["retrieval"]["mode"],
+        "retrieval_active_for_current_mode": receipt["retrieval"]["active_for_current_mode"],
         "binary_sha256": receipt["binary"]["sha256"],
         "workspace_trust_sha256": receipt["workspace_trust"]["aggregate_sha256"],
         "no_residue_required": receipt["containment"]["no_residue_required"],
@@ -117,6 +119,9 @@ def normalize_grok_runtime_receipt(
                 "real_network_allowed": False,
                 "binary_valid": receipt["binary"]["valid"],
                 "workspace_trust_granted": receipt["workspace_trust"]["trust_granted"],
+                "retrieval_mode": receipt["retrieval"]["mode"],
+                "retrieval_active_for_current_mode": receipt["retrieval"]["active_for_current_mode"],
+                "retrieval_mode_explicit": receipt["retrieval"]["selected_explicitly"],
             },
         ),
         (

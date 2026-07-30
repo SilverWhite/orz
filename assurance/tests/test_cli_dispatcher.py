@@ -147,6 +147,10 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertTrue(report["valid"])
         self.assertEqual(report["report_kind"], "grok_cli_doctor_report")
         self.assertEqual(report["runtime_boundaries"]["supported_mode"], "version-smoke")
+        self.assertEqual(
+            report["runtime_boundaries"]["retrieval_modes"],
+            ["local_browser", "framework_fallback", "off"],
+        )
         self.assertTrue(report["runtime_boundaries"]["no_residue_required"])
 
     @patch("assurance.grok_runtime_adapter.run_grok_version_smoke")
@@ -159,6 +163,12 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "run_root": str(self.run_root.resolve()),
                 "workspace_path": str(ROOT.resolve()),
                 "mode": "version_smoke",
+                "retrieval_mode": "local_browser",
+                "retrieval_mode_explicit": True,
+            },
+            "retrieval": {
+                "mode": "local_browser",
+                "active_for_current_mode": False,
             },
             "binary": {
                 "version_output": "grok 0.2.112 (9bbd559437) [stable]",
@@ -180,6 +190,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "--mode", "version-smoke",
                 "--run-root", str(self.run_root),
                 "--workspace", str(ROOT),
+                "--retrieval-mode", "local_browser",
                 "--run-id", "RUN-GROK-CLI-TEST-001",
                 "--json",
             ]
@@ -193,7 +204,106 @@ class GsaCliDispatcherTests(unittest.TestCase):
             run_root=self.run_root,
             workspace_path=ROOT,
             run_id="RUN-GROK-CLI-TEST-001",
+            retrieval_mode="local_browser",
+            retrieval_mode_explicit=True,
         )
+
+    @patch("assurance.grok_tool_permission_observer.observe_grok_tool_permission_surfaces")
+    def test_grok_observe_tools_json_reports_permission_surface(self, mock_observe) -> None:
+        mock_observe.return_value = {
+            "schema_version": "0.1.0-draft",
+            "receipt_kind": "grok_tool_permission_observation_receipt",
+            "receipt_id": "GROK-TOOL-PERM-0123456789ABCDEF",
+            "valid": True,
+            "decision": "defer",
+            "observed_at": "2026-07-30T00:00:00Z",
+            "runtime_owner": "grok",
+            "runtime_id": "GROK-0.2.112",
+            "inputs": {
+                "inspect_source": "fixture",
+                "grok_help_source": "fixture",
+                "agent_help_source": "fixture",
+                "acp_verification_count": 0,
+            },
+            "surface": {
+                "grok_version": "0.2.112",
+                "project_trusted": False,
+                "project_agent_count": 2,
+                "builtin_agent_count": 2,
+                "project_agents": [
+                    "gsa-external-retrieval",
+                    "gsa-project-doc-retrieval",
+                ],
+                "builtin_agents": ["explore", "general-purpose"],
+                "mcp_server_count": 0,
+                "permissions": {
+                    "loaded": 0,
+                    "skipped_count": 0,
+                    "sources_count": 0,
+                    "managed_settings_active": False,
+                },
+            },
+            "controls": {
+                "grok_help_flags": {
+                    "--allow": True,
+                    "--deny": True,
+                    "--permission-mode": True,
+                    "--always-approve": True,
+                    "--disable-web-search": True,
+                    "--tools": True,
+                    "--disallowed-tools": True,
+                },
+                "agent_help_flags": {
+                    "--agent-profile": True,
+                    "--always-approve": True,
+                },
+                "permission_control_flags_present": True,
+                "tool_filter_flags_present": True,
+                "web_disable_flag_present": True,
+                "agent_profile_flag_present": True,
+            },
+            "acp_permission_observation": {
+                "attached": False,
+                "valid_count": 0,
+                "invalid_count": 0,
+                "probe_ids": [],
+                "result_sha256": [],
+                "scenario_semantics_verified": False,
+                "safety_checks_verified": False,
+            },
+            "checks": {
+                "grok_inspect_observed": True,
+                "grok_help_observed": True,
+                "agent_help_observed": True,
+                "expected_project_agents_discovered": True,
+                "permission_controls_observed": True,
+                "agent_profile_control_observed": True,
+                "web_disable_control_observed": True,
+                "acp_permission_probe_attached": False,
+                "acp_permission_probe_valid_when_attached": True,
+                "no_model_invoked": True,
+                "no_network_requested": True,
+                "prompt_tool_promotion_blocked": True,
+            },
+            "limitations": [
+                "fixture observation only.",
+            ],
+        }
+
+        exit_code, bundle = self._capture_json(
+            ["grok", "observe-tools", "--include-tool-availability", "--json"]
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            bundle["observation_receipt"]["receipt_kind"],
+            "grok_tool_permission_observation_receipt",
+        )
+        self.assertEqual(
+            bundle["tool_availability_gate_receipt"]["decisions"]["gate_decision"],
+            "block",
+        )
+        mock_observe.assert_called_once_with(acp_verification_paths=[])
 
     @patch("assurance.tui.main.main")
     def test_tui_runtime_grok_dispatches_to_tui_main(self, mock_tui_main) -> None:
@@ -206,6 +316,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "--run", "version-smoke",
                 "--run-root", str(self.run_root),
                 "--workspace", str(ROOT),
+                "--retrieval-mode", "framework_fallback",
             ]
         )
 
@@ -215,6 +326,8 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertIn("grok", forwarded)
         self.assertIn("--workspace", forwarded)
         self.assertIn(str(ROOT), forwarded)
+        self.assertIn("--retrieval-mode", forwarded)
+        self.assertIn("framework_fallback", forwarded)
 
     def test_review_global_json_activates_explicit_mode(self) -> None:
         exit_code, receipt = self._capture_json(

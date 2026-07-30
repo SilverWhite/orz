@@ -60,6 +60,8 @@ class GrokTuiWiringTests(unittest.TestCase):
             run_root=str(self.run_root),
             workspace=str(ROOT),
             run_id="RUN-GROK-TUI-TEST-001",
+            retrieval_mode="framework_fallback",
+            retrieval_mode_explicit=True,
         )
 
         receipt = run_fn(lambda event: emitted.append(event))
@@ -74,4 +76,6 @@ class GrokTuiWiringTests(unittest.TestCase):
             run_root=self.run_root,
             workspace_path=ROOT,
             run_id="RUN-GROK-TUI-TEST-001",
+            retrieval_mode="framework_fallback",
+            retrieval_mode_explicit=True,
         )

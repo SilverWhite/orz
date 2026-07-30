@@ -11,6 +11,7 @@ from assurance.grok_runtime_adapter import (
     GrokRunRequest,
     GrokRuntimeConfig,
     run_grok_headless_once,
+    validate_grok_retrieval_mode,
 )
 
 
@@ -95,6 +96,8 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
             )
 
         self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["retrieval"]["mode"], "off")
+        self.assertFalse(receipt["retrieval"]["active_for_current_mode"])
         self.assertTrue(receipt["containment"]["no_residue_required"])
         self.assertTrue(receipt["containment"]["no_residue_observed"])
         self.assertTrue((run_root / "grok-runtime-receipt.json").is_file())
@@ -141,12 +144,22 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
             return_value=_inspection(self.binary),
         ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()):
             receipt = run_grok_headless_once(
-                GrokRunRequest(run_root=run_root, workspace_path=isolated_workspace),
+                GrokRunRequest(
+                    run_root=run_root,
+                    workspace_path=isolated_workspace,
+                    retrieval_mode="local_browser",
+                    retrieval_mode_explicit=True,
+                ),
                 config=self.config,
                 popen_factory=popen_factory,
             )
 
         self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["request"]["retrieval_mode"], "local_browser")
+        self.assertTrue(receipt["request"]["retrieval_mode_explicit"])
+        self.assertTrue(receipt["retrieval"]["runtime_tool_retrieval_allowed"])
+        self.assertTrue(receipt["retrieval"]["assurance_receipts_required"])
+        self.assertFalse(receipt["retrieval"]["active_for_current_mode"])
         self.assertTrue(isolated_workspace.is_dir())
         self.assertEqual(
             receipt["request"]["workspace_path"],
@@ -163,6 +176,11 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
                 GrokRunRequest(run_root=run_root, workspace_path=self.workspace),
                 config=self.config,
             )
+
+    def test_retrieval_mode_allowlist_is_closed(self) -> None:
+        self.assertEqual(validate_grok_retrieval_mode("framework_fallback"), "framework_fallback")
+        with self.assertRaises(AssuranceError):
+            validate_grok_retrieval_mode("implicit_runtime_search")
 
 
 if __name__ == "__main__":

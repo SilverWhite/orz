@@ -14,6 +14,7 @@
     "request",
     "binary",
     "workspace_trust",
+    "retrieval",
     "execution",
     "containment",
     "artifacts",
@@ -39,11 +40,45 @@
     "request": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "workspace_path", "run_root"],
+      "required": ["mode", "retrieval_mode", "retrieval_mode_explicit", "workspace_path", "run_root"],
       "properties": {
         "mode": { "enum": ["version_smoke"] },
+        "retrieval_mode": { "$ref": "#/$defs/retrieval_mode" },
+        "retrieval_mode_explicit": { "type": "boolean" },
         "workspace_path": { "type": "string", "minLength": 1 },
         "run_root": { "type": "string", "minLength": 1 }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "selected_explicitly",
+        "applies_to",
+        "active_for_current_mode",
+        "runtime_tool_retrieval_allowed",
+        "assurance_receipts_required",
+        "valid_modes"
+      ],
+      "properties": {
+        "mode": { "$ref": "#/$defs/retrieval_mode" },
+        "selected_explicitly": { "type": "boolean" },
+        "applies_to": { "const": "prompt_tool_runs" },
+        "active_for_current_mode": { "const": false },
+        "runtime_tool_retrieval_allowed": { "type": "boolean" },
+        "assurance_receipts_required": { "type": "boolean" },
+        "valid_modes": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "local_browser" },
+            { "const": "framework_fallback" },
+            { "const": "off" }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        }
       }
     },
     "binary": {
@@ -132,6 +167,7 @@
     }
   },
   "$defs": {
+    "retrieval_mode": { "enum": ["local_browser", "framework_fallback", "off"] },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   }
 }

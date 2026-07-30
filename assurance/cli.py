@@ -198,7 +198,7 @@ def _run_verify(args: argparse.Namespace) -> int:
 
 
 def _run_grok_doctor(args: argparse.Namespace) -> int:
-    from .grok_runtime_adapter import inspect_grok_runtime
+    from .grok_runtime_adapter import SUPPORTED_RETRIEVAL_MODES, inspect_grok_runtime
 
     inspection = inspect_grok_runtime()
     report = {
@@ -220,6 +220,8 @@ def _run_grok_doctor(args: argparse.Namespace) -> int:
         },
         "runtime_boundaries": {
             "supported_mode": "version-smoke",
+            "retrieval_modes": list(SUPPORTED_RETRIEVAL_MODES),
+            "default_retrieval_mode": "off",
             "network": "disabled",
             "prompt_submission": "not_supported_in_this_slice",
             "tool_execution": "not_supported_in_this_slice",
@@ -238,6 +240,7 @@ def _run_grok_doctor(args: argparse.Namespace) -> int:
         f"version: {observed.get('version_output', '')}",
         f"sha256 match: {inspection.get('checks', {}).get('sha256_match')}",
         "supported run mode: version-smoke",
+        "retrieval modes: local_browser, framework_fallback, off",
         "no-residue required: true",
     ]
     _print_or_json(report, json_output=args.json, human_lines=human_lines)
@@ -245,14 +248,18 @@ def _run_grok_doctor(args: argparse.Namespace) -> int:
 
 
 def _run_grok(args: argparse.Namespace) -> int:
-    from .grok_runtime_adapter import run_grok_version_smoke
+    from .grok_runtime_adapter import DEFAULT_RETRIEVAL_MODE, run_grok_version_smoke
 
     if args.mode != "version-smoke":
         raise AssuranceError(f"unsupported Grok run mode: {args.mode}")
+    retrieval_mode_explicit = args.retrieval_mode is not None
+    retrieval_mode = args.retrieval_mode or DEFAULT_RETRIEVAL_MODE
     receipt = run_grok_version_smoke(
         run_root=args.run_root,
         workspace_path=args.workspace,
         run_id=args.run_id,
+        retrieval_mode=retrieval_mode,
+        retrieval_mode_explicit=retrieval_mode_explicit,
     )
     containment = receipt.get("containment", {})
     human_lines = [
@@ -260,11 +267,37 @@ def _run_grok(args: argparse.Namespace) -> int:
         f"run_id: {receipt['run_id']}",
         f"run_root: {receipt['request']['run_root']}",
         f"version: {receipt['binary']['version_output']}",
+        f"retrieval mode: {receipt['retrieval']['mode']}",
         f"no residue observed: {containment.get('no_residue_observed')}",
         f"external cleanup required: {containment.get('external_cleanup_required')}",
         f"events: {receipt['artifacts']['events_path']}",
     ]
     _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["valid"] else 1
+
+
+def _run_grok_observe_tools(args: argparse.Namespace) -> int:
+    from .grok_tool_permission_observer import (
+        build_grok_tool_permission_observation_bundle,
+        observe_grok_tool_permission_surfaces,
+    )
+
+    receipt = observe_grok_tool_permission_surfaces(
+        acp_verification_paths=args.acp_verification
+    )
+    bundle = build_grok_tool_permission_observation_bundle(receipt)
+    gate = bundle["tool_availability_gate_receipt"]
+    human_lines = [
+        f"grok observe-tools: {receipt['decision']}",
+        f"receipt_id: {receipt['receipt_id']}",
+        f"project agents: {', '.join(receipt['surface']['project_agents'])}",
+        f"permission controls observed: {receipt['checks']['permission_controls_observed']}",
+        f"acp verification attached: {receipt['checks']['acp_permission_probe_attached']}",
+        f"tool availability gate: {gate['decisions']['gate_decision']}",
+        "prompt/tool promotion: blocked",
+    ]
+    payload = bundle if args.include_tool_availability else receipt
+    _print_or_json(payload, json_output=args.json, human_lines=human_lines)
     return 0 if receipt["valid"] else 1
 
 
@@ -303,6 +336,10 @@ def _run_global_review(args: argparse.Namespace) -> int:
 def _run_tui(args: argparse.Namespace) -> int:
     from assurance.tui.main import main as tui_main
 
+    if args.grok_retrieval_mode and args.runtime != "grok":
+        print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)
+        return 2
+
     tui_args: list[str] = [
         "--width",
         str(args.width),
@@ -333,6 +370,8 @@ def _run_tui(args: argparse.Namespace) -> int:
         tui_args.extend(["--run-root", str(args.tui_run_root)])
     if args.workspace:
         tui_args.extend(["--workspace", str(args.workspace)])
+    if args.grok_retrieval_mode:
+        tui_args.extend(["--retrieval-mode", args.grok_retrieval_mode])
     return tui_main(tui_args)
 
 
@@ -421,9 +460,36 @@ def _parser() -> argparse.ArgumentParser:
         default="version-smoke",
         help="Grok adapter mode. Only version-smoke is currently promoted.",
     )
+    grok_run.add_argument(
+        "--retrieval-mode",
+        choices=["local_browser", "framework_fallback", "off"],
+        default=None,
+        help=(
+            "Explicit retrieval mode for future Grok prompt/tool runs. "
+            "version-smoke records the selection but never performs retrieval."
+        ),
+    )
     grok_run.add_argument("--run-id")
     grok_run.add_argument("--json", action="store_true")
     grok_run.set_defaults(handler=_run_grok)
+    grok_observe_tools = grok_subparsers.add_parser(
+        "observe-tools",
+        help="Observe Grok tool registry and permission controls without prompt/tool execution.",
+    )
+    grok_observe_tools.add_argument(
+        "--acp-verification",
+        type=Path,
+        action="append",
+        default=[],
+        help="Attach a grok-acp-fake-tool-probe verification JSON receipt.",
+    )
+    grok_observe_tools.add_argument(
+        "--include-tool-availability",
+        action="store_true",
+        help="Include the projected tool availability report and gate receipt.",
+    )
+    grok_observe_tools.add_argument("--json", action="store_true")
+    grok_observe_tools.set_defaults(handler=_run_grok_observe_tools)
 
     review = subparsers.add_parser("review", help="Review-mode utilities.")
     review_subparsers = review.add_subparsers(dest="review_command", required=True)
@@ -524,6 +590,16 @@ def _parser() -> argparse.ArgumentParser:
         "--workspace",
         type=Path,
         help="Workspace directory for Grok runtime --run.",
+    )
+    tui.add_argument(
+        "--retrieval-mode",
+        dest="grok_retrieval_mode",
+        choices=["local_browser", "framework_fallback", "off"],
+        default=None,
+        help=(
+            "Explicit retrieval mode for Grok prompt/tool runs. "
+            "Forwarded only when --runtime grok is selected."
+        ),
     )
     tui.set_defaults(handler=_run_tui)
 

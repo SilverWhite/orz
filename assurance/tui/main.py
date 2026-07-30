@@ -167,6 +167,16 @@ def main(argv: list[str] | None = None) -> int:
         "--workspace", type=str, default=None,
         help="Workspace directory for Grok --run (default: isolated directory under run root)",
     )
+    parser.add_argument(
+        "--retrieval-mode",
+        type=str,
+        default=None,
+        choices=["local_browser", "framework_fallback", "off"],
+        help=(
+            "Explicit retrieval mode for Grok prompt/tool runs. "
+            "version-smoke records the selection but never performs retrieval."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -242,8 +252,13 @@ def main(argv: list[str] | None = None) -> int:
             run_fn = build_grok_live_run_fn(
                 run_root=str(run_root),
                 workspace=args.workspace,
+                retrieval_mode=args.retrieval_mode or "off",
+                retrieval_mode_explicit=args.retrieval_mode is not None,
             )
         else:
+            if args.retrieval_mode is not None:
+                print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)
+                return 2
             if args.real:
                 extra_kwargs["credential_target"] = args.credential_target
             run_fn = build_live_run_fn(
