@@ -79,6 +79,7 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
             "source_gate": "python gsa.py source gate --ledger <path>",
             "run_fake": "python gsa.py run --ask <q> --source-ledger <path> --run-root <path>",
             "run_real": "python gsa.py run --mode real --ask <q> --source-ledger <path> --run-root <path>",
+            "run_grok_gate": "python gsa.py run --runtime grok --ask <q> --run-root <path>",
             "verify": "python gsa.py verify --run-root <path>",
         },
         "runtime_boundaries": {
@@ -86,11 +87,13 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
             "default_credential_use": "disabled",
             "canonical_run_fake": "offline_no_network",
             "canonical_run_real": "deepseek_api_exactly_one_request",
+            "grok_run_prompt_tool_gate": "explicit_fail_closed_no_prompt_or_tool_execution",
         },
         "limitations": [
             "doctor verifies repository mechanics and CLI wiring, not scientific correctness.",
             "canonical run supports fake (offline) and real (DeepSeek API) adapter modes.",
             "real adapter reads credentials from Windows Credential Manager and never persists them.",
+            "gsa run --runtime grok emits a promotion gate receipt only; it does not launch prompt/tool execution.",
             "GSA-CORE review and evaluation bridges exist but have not been connected to a live runtime.",
         ],
     }
@@ -148,7 +151,59 @@ def _run_source_gate(args: argparse.Namespace) -> int:
     return 0 if receipt["decision"] != "block" else 1
 
 
+def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
+    from .grok_prompt_tool_gate import (
+        DEFAULT_RETRIEVAL_MODE,
+        write_grok_prompt_tool_promotion_gate_receipt,
+    )
+
+    if args.source_ledger or args.instruction_context or args.task:
+        raise AssuranceError(
+            "--source-ledger, --instruction-context, and --task are canonical-only "
+            "for gsa run; use --runtime canonical or omit them for --runtime grok"
+        )
+    if args.mode != "fake":
+        raise AssuranceError("--mode real is canonical-only for gsa run")
+
+    retrieval_mode_explicit = args.retrieval_mode is not None
+    retrieval_mode = args.retrieval_mode or DEFAULT_RETRIEVAL_MODE
+    run_id = (
+        None
+        if args.run_id == "RUN-CANONICAL-CLI-FAKE-001"
+        else args.run_id
+    )
+    receipt = write_grok_prompt_tool_promotion_gate_receipt(
+        run_root=args.run_root,
+        ask=args.ask,
+        retrieval_mode=retrieval_mode,
+        retrieval_mode_explicit=retrieval_mode_explicit,
+        run_id=run_id,
+        timeout_gate_path=args.grok_timeout_gate,
+        tool_availability_gate_path=args.grok_tool_availability_gate,
+    )
+    human_lines = [
+        f"grok prompt/tool gate: {receipt['decision']}",
+        f"run_id: {receipt['run_id']}",
+        f"run_root: {receipt['request']['run_root']}",
+        f"retrieval mode: {receipt['request']['retrieval_mode']}",
+        "prompt/tool execution attempted: false",
+    ]
+    if receipt["blocking_reasons"]:
+        human_lines.append(
+            f"blocking reasons: {', '.join(receipt['blocking_reasons'])}"
+        )
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["decision"] == "allow" else 1
+
+
 def _run_canonical(args: argparse.Namespace) -> int:
+    if args.runtime == "grok":
+        return _run_grok_prompt_tool_gate(args)
+    if args.retrieval_mode or args.grok_timeout_gate or args.grok_tool_availability_gate:
+        raise AssuranceError(
+            "--retrieval-mode, --grok-timeout-gate, and "
+            "--grok-tool-availability-gate are only valid with --runtime grok"
+        )
     if args.mode == "real":
         receipt = run_canonical_guarded_cli_real(
             run_root=args.run_root,
@@ -399,8 +454,20 @@ def _parser() -> argparse.ArgumentParser:
     gate.add_argument("--summary", action="store_true")
     gate.set_defaults(handler=_run_source_gate)
 
-    run = subparsers.add_parser("run", help="Run canonical guarded CLI path.")
+    run = subparsers.add_parser(
+        "run",
+        help="Run the selected guarded CLI runtime path.",
+    )
     run.add_argument("--run-root", type=Path, required=True)
+    run.add_argument(
+        "--runtime",
+        choices=["canonical", "grok"],
+        default="canonical",
+        help=(
+            "Runtime path. canonical is the default; grok emits an explicit "
+            "fail-closed prompt/tool promotion gate receipt."
+        ),
+    )
     run.add_argument("--source-ledger", type=Path)
     run.add_argument("--instruction-context", type=Path)
     run.add_argument("--ask")
@@ -425,6 +492,31 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=60,
         help="Timeout in seconds for the DeepSeek API call.",
+    )
+    run.add_argument(
+        "--retrieval-mode",
+        choices=["local_browser", "framework_fallback", "off"],
+        default=None,
+        help=(
+            "Explicit retrieval mode for --runtime grok promotion gating. "
+            "The gate records the mode but does not perform retrieval."
+        ),
+    )
+    run.add_argument(
+        "--grok-timeout-gate",
+        type=Path,
+        help=(
+            "Attach a grok-timeout-gate-split verification receipt for "
+            "--runtime grok promotion gating."
+        ),
+    )
+    run.add_argument(
+        "--grok-tool-availability-gate",
+        type=Path,
+        help=(
+            "Attach a tool-availability gate receipt produced from Grok "
+            "observe-tools for --runtime grok promotion gating."
+        ),
     )
     run.set_defaults(handler=_run_canonical)
 

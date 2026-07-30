@@ -100,6 +100,52 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertIn("exactly one", error["error"])
         self.assertFalse(self.run_root.exists())
 
+    def test_run_runtime_grok_json_emits_fail_closed_gate(self) -> None:
+        exit_code, receipt = self._capture_json(
+            [
+                "run",
+                "--runtime", "grok",
+                "--run-root", str(self.run_root),
+                "--ask", "hello Grok",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(
+            receipt["receipt_kind"],
+            "grok_prompt_tool_promotion_gate_receipt",
+        )
+        self.assertEqual(receipt["decision"], "block")
+        self.assertFalse(receipt["checks"]["prompt_tool_execution_attempted"])
+        self.assertTrue(receipt["checks"]["canonical_default_unchanged"])
+        self.assertIn(
+            "windows_child_tree_owned_cleanup_not_passed",
+            receipt["blocking_reasons"],
+        )
+        self.assertTrue(
+            (self.run_root / "grok-prompt-tool-promotion-gate.json").is_file()
+        )
+
+    def test_run_canonical_rejects_grok_only_options(self) -> None:
+        error_output = StringIO()
+        with redirect_stderr(error_output):
+            exit_code = gsa_main(
+                [
+                    "run",
+                    "--run-root", str(self.run_root),
+                    "--source-ledger", str(SOURCE_LEDGER),
+                    "--ask", ASK,
+                    "--retrieval-mode", "local_browser",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 2)
+        error = json.loads(error_output.getvalue())
+        self.assertIn("only valid with --runtime grok", error["error"])
+        self.assertFalse(self.run_root.exists())
+
     def test_source_gate_summary_output(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
@@ -268,6 +314,11 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "invalid_count": 0,
                 "probe_ids": [],
                 "result_sha256": [],
+                "covered_scenarios": [],
+                "required_scenarios": ["allow_once", "cancel_permission"],
+                "required_scenarios_verified": False,
+                "permission_outcomes": [],
+                "provider_scenarios": [],
                 "scenario_semantics_verified": False,
                 "safety_checks_verified": False,
             },
@@ -281,6 +332,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "web_disable_control_observed": True,
                 "acp_permission_probe_attached": False,
                 "acp_permission_probe_valid_when_attached": True,
+                "acp_permission_required_scenarios_verified_when_attached": True,
                 "no_model_invoked": True,
                 "no_network_requested": True,
                 "prompt_tool_promotion_blocked": True,

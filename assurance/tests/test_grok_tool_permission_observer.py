@@ -64,12 +64,25 @@ def _inspect_report() -> dict[str, object]:
     }
 
 
-def _acp_verification(valid: bool = True) -> dict[str, object]:
+def _acp_verification(
+    valid: bool = True,
+    *,
+    scenario: str = "allow_once",
+) -> dict[str, object]:
+    permission_outcome = "allow_once" if scenario == "allow_once" else "cancelled"
+    provider_scenario = "tool-continuity" if scenario == "allow_once" else "tool-cancel"
     return {
         "schema_version": "0.1.0",
         "verification_kind": "grok-acp-fake-tool-probe-verification",
         "valid": valid,
-        "probe_id": "ACPTOOL-0123456789abcdef0123456789abcdef",
+        "probe_id": (
+            "ACPTOOL-0123456789abcdef0123456789abcdef"
+            if scenario == "allow_once"
+            else "ACPTOOL-fedcba9876543210fedcba9876543210"
+        ),
+        "scenario": scenario,
+        "permission_outcome": permission_outcome,
+        "provider_scenario": provider_scenario,
         "result_sha256": "a" * 64,
         "checks": {
             "result_schema_valid": True,
@@ -121,18 +134,44 @@ class GrokToolPermissionObserverTests(unittest.TestCase):
             inspect_report=_inspect_report(),
             grok_help_text=HELP_TEXT,
             agent_help_text=AGENT_HELP_TEXT,
-            acp_verifications=[_acp_verification()],
+            acp_verifications=[
+                _acp_verification(scenario="allow_once"),
+                _acp_verification(scenario="cancel_permission"),
+            ],
             observed_at="2026-07-30T00:00:00Z",
         )
 
         self.assertTrue(receipt["valid"])
         self.assertEqual(receipt["decision"], "allow")
+        self.assertEqual(
+            receipt["acp_permission_observation"]["covered_scenarios"],
+            ["allow_once", "cancel_permission"],
+        )
         bundle = build_grok_tool_permission_observation_bundle(receipt)
         self.assertEqual(
             bundle["tool_availability_gate_receipt"]["decisions"]["gate_decision"],
             "allow",
         )
         self.assertEqual(bundle["tool_availability_report"]["degraded"], [])
+
+    def test_single_attached_acp_probe_stays_degraded(self) -> None:
+        receipt = build_grok_tool_permission_observation_receipt(
+            inspect_report=_inspect_report(),
+            grok_help_text=HELP_TEXT,
+            agent_help_text=AGENT_HELP_TEXT,
+            acp_verifications=[_acp_verification(scenario="allow_once")],
+            observed_at="2026-07-30T00:00:00Z",
+        )
+
+        self.assertFalse(receipt["valid"])
+        self.assertEqual(receipt["decision"], "block")
+        self.assertFalse(
+            receipt["checks"][
+                "acp_permission_required_scenarios_verified_when_attached"
+            ]
+        )
+        report = build_grok_tool_availability_projection(receipt)
+        self.assertEqual(report["degraded"][0]["tool_id"], "grok_acp_permission_probe")
 
     def test_missing_permission_flag_blocks_observation(self) -> None:
         receipt = build_grok_tool_permission_observation_receipt(

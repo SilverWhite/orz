@@ -1,7 +1,8 @@
 # Grok 0.2.112 Timeout Triage
 
 Date: 2026-07-30
-Status: resolved for promotion; carried-forward limitation remains open
+Status: resolved for default-version promotion; split gates implemented;
+carried-forward owned-cleanup limitation remains open
 
 ## Verdict
 
@@ -41,14 +42,18 @@ Representative diagnostic fields from r4:
 - not proven: Grok-owned timeout cleanup of the full child process tree;
 - not proven: real external model reasoning continuity in this receipt.
 
-The candidate metadata records `windows_child_tree_timeout` as `carried-limitation`, not `passed`.
+The candidate metadata now records this as two gates:
+
+- `windows_child_tree_baseline_regression`: `passed`;
+- `windows_child_tree_owned_cleanup`: `carried-limitation`.
 
 ## Follow-Up
 
-Keep a later task to redesign this gate into two separate checks:
+The gate has been redesigned into two separate checks:
 
 1. baseline-regression gate: candidate behavior must not be worse than the current lock;
 2. owned-cleanup gate: Grok itself must terminate the timed-out child tree before harness cleanup.
 
-Only the first check is satisfied for the `0.2.112` promotion.
-
+Only the first check is satisfied for the `0.2.112` default-version promotion.
+The split verifier emits `prompt_tool_promotion_ready=false` while
+`windows_child_tree_owned_cleanup` remains a carried limitation.

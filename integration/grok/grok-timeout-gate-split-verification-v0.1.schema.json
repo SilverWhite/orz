@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep.invalid/integration/grok/grok-timeout-gate-split-verification/v0.1/schema.json",
+  "title": "Grok Timeout Gate Split Verification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "verifier",
+    "summary",
+    "baseline_version",
+    "candidate_version",
+    "valid",
+    "prompt_tool_promotion_ready",
+    "evidence_checks",
+    "gates",
+    "observed_signatures",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "receipt_kind": { "const": "grok-timeout-gate-split-verification" },
+    "verifier": { "const": "grok-timeout-gate-split-independent" },
+    "summary": { "$ref": "#/$defs/artifact" },
+    "baseline_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "candidate_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "valid": { "type": "boolean" },
+    "prompt_tool_promotion_ready": { "type": "boolean" },
+    "evidence_checks": {
+      "type": "object",
+      "minProperties": 8,
+      "additionalProperties": { "type": "boolean" }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "windows_child_tree_baseline_regression",
+        "windows_child_tree_owned_cleanup"
+      ],
+      "properties": {
+        "windows_child_tree_baseline_regression": { "$ref": "#/$defs/gate" },
+        "windows_child_tree_owned_cleanup": { "$ref": "#/$defs/gate" }
+      }
+    },
+    "observed_signatures": {
+      "type": "object",
+      "minProperties": 2,
+      "additionalProperties": { "$ref": "#/$defs/signature" }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 3,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checks"],
+      "properties": {
+        "status": {
+          "enum": ["passed", "failed", "carried-limitation"]
+        },
+        "checks": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "boolean" }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "probe_passed",
+        "probe_failed_with_diagnostic",
+        "failure_artifact_exists",
+        "result_artifact_exists",
+        "verification_artifact_exists",
+        "diagnostic_kind",
+        "scenario",
+        "provider_terminal_succeeded",
+        "primary_request_count",
+        "tool_sequence",
+        "grok_returncode_before_job_close",
+        "pre_close_nonce_process_count",
+        "post_job_close_nonce_process_count",
+        "outer_job_created",
+        "outer_job_assigned",
+        "outer_job_closed_before_diagnostic",
+        "outer_job_closed_after_diagnostic"
+      ],
+      "properties": {
+        "probe_passed": { "type": "boolean" },
+        "probe_failed_with_diagnostic": { "type": "boolean" },
+        "failure_artifact_exists": { "type": "boolean" },
+        "result_artifact_exists": { "type": "boolean" },
+        "verification_artifact_exists": { "type": "boolean" },
+        "diagnostic_kind": {
+          "type": ["string", "null"]
+        },
+        "scenario": {
+          "type": ["string", "null"]
+        },
+        "provider_terminal_succeeded": { "type": "boolean" },
+        "primary_request_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "tool_sequence": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "grok_returncode_before_job_close": {
+          "type": ["integer", "null"]
+        },
+        "pre_close_nonce_process_count": { "type": "integer", "minimum": -1 },
+        "post_job_close_nonce_process_count": { "type": "integer", "minimum": -1 },
+        "outer_job_created": { "type": "boolean" },
+        "outer_job_assigned": { "type": "boolean" },
+        "outer_job_closed_before_diagnostic": { "type": "boolean" },
+        "outer_job_closed_after_diagnostic": { "type": "boolean" }
+      }
+    }
+  }
+}

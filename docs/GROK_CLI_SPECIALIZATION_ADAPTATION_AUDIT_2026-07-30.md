@@ -19,7 +19,7 @@ Observed local state:
 
 - `grok --version` on PATH now reports `grok 0.2.112 (9bbd559437) [stable]`.
 - Follow-up gates promoted `upstream/grok-build.lock.json` to the verified local binary `0.2.112 (9bbd559437)`.
-- Therefore `0.2.112` is now the project default lock, with `windows_child_tree_timeout` recorded only as a carried-forward limitation rather than a proven Grok-owned cleanup guarantee.
+- Therefore `0.2.112` is now the project default lock, with `windows_child_tree_baseline_regression` passed and `windows_child_tree_owned_cleanup` recorded only as a carried-forward limitation rather than a proven Grok-owned cleanup guarantee.
 
 Grok Build surfaces that should now be treated as first-class graft points:
 
@@ -71,7 +71,7 @@ References:
 
 ### Current Mismatch
 
-- `gsa run` still executes `run_canonical_guarded_cli` or `run_canonical_guarded_cli_real`; this is a local fake/direct-DeepSeek path, not a Grok runtime path.
+- `gsa run` still defaults to `run_canonical_guarded_cli` or `run_canonical_guarded_cli_real`; this remains the local fake/direct-DeepSeek path. `gsa run --runtime grok` now exists, but it is only a fail-closed prompt/tool promotion gate and does not launch Grok prompt/tool execution.
 - `gsa tui --run` uses `assurance.tui.bridge.build_live_run_fn`, which also calls the canonical fake/direct-DeepSeek path.
 - Grok launcher logic exists as PowerShell scripts, not as an importable Python adapter that the CLI/TUI can call consistently.
 - `scripts/build_grok_event_bridge.py` produces a Grok-specific bridge event schema, but those events are not yet normalized into `runtime/run-event-v0.1.schema.json` or the TUI's `TuiEvent` stream.
@@ -115,7 +115,8 @@ Add:
 Also change the existing run command only after the Grok path is stable:
 
 - `gsa run --runtime canonical|grok`
-- default remains explicit until Grok smoke and TUI wiring pass.
+- default remains canonical until Grok smoke, TUI wiring, tool availability, and owned-cleanup gates pass.
+- current `--runtime grok` behavior is a promotion gate receipt: it records blocking reasons and `prompt_tool_execution_attempted=false`.
 
 ### 3.3 TUI Live Source
 
@@ -237,7 +238,7 @@ Completed for `0.2.112` promotion:
 
 - Candidate metadata was updated for `0.2.112 (9bbd559437)`.
 - Binary identity, signature, size/hash, version, workspace trust, ACP initialize, fake tool/permission/cancel, child-tree comparison, compaction provenance, event bridge, TUI projection, and repository regression checks were rerun or reconciled in the promotion docs.
-- `0.2.112` is now the promoted lock. Keep a separate follow-up to split `windows_child_tree_timeout` into baseline-regression and Grok-owned cleanup gates.
+- `0.2.112` is now the promoted lock. The timeout gate is split: baseline regression passed, while Grok-owned cleanup remains a carried limitation before prompt/tool promotion. `gsa run --runtime grok` now enforces that boundary as a receipt-only gate.
 
 ### Step A: Adapter Skeleton
 
@@ -265,7 +266,7 @@ This is the main specialization graft: it translates Grok's mature runtime into 
 
 Add `gsa grok doctor` and `gsa grok run`.
 
-Do not replace `gsa run` yet. The migration should be visible and reversible until the Grok path has smoke coverage.
+Do not replace the default `gsa run` yet. The migration is visible through `gsa run --runtime grok`, but that path currently writes a fail-closed promotion receipt instead of launching prompt/tool execution.
 
 ### Step D: TUI Wiring
 
@@ -368,4 +369,4 @@ returned:
 grok 0.2.112 (9bbd559437) [stable]
 ```
 
-This originally proved only that the PATH-resolved stable Grok was newer than the promoted project lock. Subsequent candidate-gate and timeout-triage docs promoted `0.2.112` as the default lock with `windows_child_tree_timeout` carried forward as an explicit limitation.
+This originally proved only that the PATH-resolved stable Grok was newer than the promoted project lock. Subsequent candidate-gate and timeout-triage docs promoted `0.2.112` as the default lock with `windows_child_tree_baseline_regression` passed and `windows_child_tree_owned_cleanup` carried forward as an explicit limitation.

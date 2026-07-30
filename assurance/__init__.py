@@ -104,6 +104,10 @@ from .grok_lifecycle_projection import (
     build_grok_lifecycle_orientation_checkpoint,
     project_grok_lifecycle_events_to_global_progress,
 )
+from .grok_prompt_tool_gate import (
+    build_grok_prompt_tool_promotion_gate_receipt,
+    write_grok_prompt_tool_promotion_gate_receipt,
+)
 from .grok_profile_drafts import (
     EXPECTED_PROFILES as EXPECTED_GROK_RETRIEVAL_PROFILES,
     load_grok_retrieval_profile_draft,
@@ -452,6 +456,7 @@ __all__ = [
     "build_gsa_runtime_preflight_projection",
     "build_global_review_mode_receipt",
     "build_grok_lifecycle_orientation_checkpoint",
+    "build_grok_prompt_tool_promotion_gate_receipt",
     "build_grok_tool_availability_projection",
     "build_grok_tool_permission_observation_bundle",
     "build_grok_tool_permission_observation_receipt",
@@ -627,6 +632,7 @@ __all__ = [
     "verify_security_envelope",
     "verify_sensitive_action_permit",
     "write_gsa_runtime_preflight_journal",
+    "write_grok_prompt_tool_promotion_gate_receipt",
     "write_orientation_stagnation_runtime_journal",
     "validate_profile_registry_semantics",
     "verify_profile_registry_completeness",

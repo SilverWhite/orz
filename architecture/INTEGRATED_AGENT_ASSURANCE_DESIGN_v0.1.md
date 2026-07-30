@@ -164,11 +164,12 @@ Grok ACP / Grok Build remains the primary reference runtime path. The repository
 
 Current 2026-07-30 upstream scan and follow-up promotion add these routing constraints:
 
-- The installed PATH `grok` reports `0.2.112 (9bbd559437) [stable]`, and the checked-in promoted lock now points at the verified `0.2.112` binary. Treat `windows_child_tree_timeout` as a carried-forward baseline limitation, not as proof of Grok-owned timeout cleanup.
+- The installed PATH `grok` reports `0.2.112 (9bbd559437) [stable]`, and the checked-in promoted lock now points at the verified `0.2.112` binary. Treat `windows_child_tree_baseline_regression` as passed for default-version selection, and `windows_child_tree_owned_cleanup` as a carried-forward limitation rather than proof of Grok-owned timeout cleanup.
 - Grok Build is now an open-source upstream base with its own TUI, ACP/headless entrypoints, session/runtime loop, tool dispatch, permissions, sandbox, hooks, MCP, plugins, skills, subagents, workflows, checkpoint/workspace behavior, and configuration surface. These are runtime-owned unless a concrete audit proves a missing capability.
 - Grok configuration now exposes useful graft points such as custom models, custom query parameters, environment-sourced HTTP headers, `.grok/agents`, `.grok/workflows`, `.grok/hooks`, MCP, permissions, and subagent/workflow toggles. Local product code should consume or wrap these surfaces, not duplicate them.
 - The two retained retrieval subagent designs should be mapped to Grok-native subagent/workflow surfaces where possible, while preserving this repository's capability receipts, child capability enforcement, evidence gates, and redaction rules.
 - The preserved UI should display real Grok workflow/subagent/approval/runtime state through normalized events. It must not become a second scheduler or model loop.
+- `gsa run --runtime grok` is now an explicit fail-closed promotion gate, not a production prompt/tool launcher. It records the selected retrieval mode, attached tool availability evidence, and timeout split evidence while preserving the canonical default path.
 - Claude Code, Gemini CLI, Qwen Code, Goose, Codex CLI, and Aider remain reference frameworks for specific mature patterns: scoped subagents, hooks, MCP/extension discovery, recipes/workflows, sandbox/approval UX, and git-aware edit loops. They are design references, not a reason to switch the primary base away from Grok.
 
 Reference links for this scan:
@@ -411,7 +412,8 @@ The next implementation work should be ordered around the corrected ownership bo
 4. Keep assurance gates strict and runtime-neutral.
 5. Add explicit labels in code/docs for `runtime-owned`, `adapter-owned`, `assurance-owned`, `ui-owned`, and `fixture-only` modules.
 6. Update audits to check ownership drift, not only local correctness.
-7. Keep the Grok `0.2.112` promotion boundary explicit: lock metadata and core conformance checks are complete, while `windows_child_tree_timeout` still needs a later baseline-regression versus Grok-owned cleanup split.
+7. Keep the Grok `0.2.112` promotion boundary explicit: lock metadata and core conformance checks are complete, `windows_child_tree_baseline_regression` is passed, and `windows_child_tree_owned_cleanup` remains a carried limitation before prompt/tool promotion.
 8. Convert the retained retrieval subagents into Grok-compatible agent/workflow profiles before adding any new local subagent scheduler.
+9. Keep `gsa run --runtime grok` fail-closed until tool availability is `allow` and owned cleanup is `passed`; the command must keep writing receipts without launching prompt/tool execution while those prerequisites are absent.
 
 The desired end state is not less design. It is the same design, with the generic agent platform work moved back onto mature foundations.

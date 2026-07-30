@@ -64,7 +64,8 @@
       { "id": "acp_initialize", "status": "passed" },
       { "id": "fake_tool_allow", "status": "passed" },
       { "id": "fake_tool_cancel", "status": "passed" },
-      { "id": "windows_child_tree_timeout", "status": "carried-limitation" },
+      { "id": "windows_child_tree_baseline_regression", "status": "passed" },
+      { "id": "windows_child_tree_owned_cleanup", "status": "carried-limitation" },
       { "id": "deepseek_reasoning_continuity", "status": "passed" },
       { "id": "repository_regression", "status": "passed" }
     ]
@@ -77,7 +78,7 @@
     "Administrator live gates were run through scripts/run_grok_0_2_112_live_gates.ps1 in candidate-gates/grok-0.2.112-live-gates-admin-r3.",
     "ACP initialize, fake-tool allow, fake-tool cancel, child-tree task_cancel, child-tree parent_exit, compaction provenance, TUI baseline, and repository regression passed for the 0.2.112 candidate.",
     "Timeout triage in candidate-gates/grok-timeout-triage-admin-r2 through r4 showed the tool_timeout behavior is not a 0.2.112 regression: 0.2.111 and 0.2.112 both completed the fake provider flow, emitted the terminal marker, exited only after the provider server timeout, and left the child tree alive until the outer Job Object closed.",
-    "The windows_child_tree_timeout promotion gate is accepted only as a carried-forward baseline limitation for default-version selection; it does not prove Grok-owned timeout cleanup of the full child tree.",
+    "The old windows_child_tree_timeout promotion gate has been split: windows_child_tree_baseline_regression is passed for default-version selection, while windows_child_tree_owned_cleanup remains a carried limitation and does not prove Grok-owned timeout cleanup of the full child tree.",
     "DeepSeek reasoning continuity is covered by the fake-provider reasoning marker and Grok integration/static tests in this promotion pass; no real external DeepSeek request is included in this receipt.",
     "Repository regression passed after replacing retired prototype file requirements in scripts/check_repository.py with the current runtime-first script and schema entry points.",
     "0.2.112 is selected as the project default after the timeout failure was reclassified as a non-regressing carried-forward limitation; upstream/grok-build.lock.json now records 0.2.112."

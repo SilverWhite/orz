@@ -19,6 +19,12 @@ RESULT_SCHEMA = (
     / "grok"
     / "grok-acp-fake-tool-probe-result-v0.1.schema.json"
 )
+VERIFICATION_SCHEMA = (
+    ROOT
+    / "integration"
+    / "grok"
+    / "grok-acp-fake-tool-probe-verification-v0.1.schema.json"
+)
 
 spec = importlib.util.spec_from_file_location("acp_fake_tool_verifier", VERIFIER_PATH)
 assert spec and spec.loader
@@ -602,6 +608,12 @@ class AcpFakeToolVerifierTests(unittest.TestCase):
             report = verifier.verify(result_path, lock_path=lock_path)
             self.assertTrue(report["valid"], report["errors"])
             self.assertTrue(all(report["checks"].values()))
+            self.assertEqual(report["scenario"], "allow_once")
+            self.assertEqual(report["permission_outcome"], "allow_once")
+            self.assertEqual(report["provider_scenario"], "tool-continuity")
+            Draft202012Validator(
+                json.loads(VERIFICATION_SCHEMA.read_text(encoding="utf-8"))
+            ).validate(report)
 
     def test_cancel_fixture_requires_cancelled_prompt_and_no_second_request(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -610,6 +622,12 @@ class AcpFakeToolVerifierTests(unittest.TestCase):
             )
             report = verifier.verify(result_path, lock_path=lock_path)
             self.assertTrue(report["valid"], report["errors"])
+            self.assertEqual(report["scenario"], "cancel_permission")
+            self.assertEqual(report["permission_outcome"], "cancelled")
+            self.assertEqual(report["provider_scenario"], "tool-cancel")
+            Draft202012Validator(
+                json.loads(VERIFICATION_SCHEMA.read_text(encoding="utf-8"))
+            ).validate(report)
 
     def test_cancel_fixture_accepts_failed_terminal_without_tool_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

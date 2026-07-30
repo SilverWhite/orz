@@ -1026,8 +1026,11 @@ def check_repository() -> dict[str, Any]:
         assurance_root / "canonical-cli-run-receipt-v0.1.schema.json",
         assurance_root / "canonical_cli.py",
         assurance_root / "canonical_cli_main.py",
+        assurance_root / "grok-prompt-tool-promotion-gate-receipt-v0.1.schema.json",
+        assurance_root / "grok_prompt_tool_gate.py",
         assurance_root / "tests/test_cli_dispatcher.py",
         assurance_root / "tests/test_canonical_cli.py",
+        assurance_root / "tests/test_grok_prompt_tool_gate.py",
         ROOT / "docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md",
     ):
         if not required_path.is_file():
@@ -1310,7 +1313,8 @@ def check_repository() -> dict[str, Any]:
         "acp_initialize",
         "fake_tool_allow",
         "fake_tool_cancel",
-        "windows_child_tree_timeout",
+        "windows_child_tree_baseline_regression",
+        "windows_child_tree_owned_cleanup",
         "deepseek_reasoning_continuity",
         "repository_regression",
     }
@@ -1521,6 +1525,13 @@ def check_repository() -> dict[str, Any]:
     acp_tool_verifier_source = (
         ROOT / "scripts/verify_grok_acp_fake_tool_probe.py"
     ).read_text(encoding="utf-8")
+    grok_tool_permission_observer_source = (
+        ROOT / "assurance/grok_tool_permission_observer.py"
+    ).read_text(encoding="utf-8")
+    grok_prompt_tool_gate_source = (
+        ROOT / "assurance/grok_prompt_tool_gate.py"
+    ).read_text(encoding="utf-8")
+    gsa_cli_source = (ROOT / "assurance/cli.py").read_text(encoding="utf-8")
     fake_provider_source = (
         ROOT / "scripts/fake_deepseek_provider.py"
     ).read_text(encoding="utf-8")
@@ -1559,11 +1570,22 @@ def check_repository() -> dict[str, Any]:
         "session_evidence_matches",
         "workspace_receipts_match",
         "scenario_semantics_match",
+        "permission_outcome",
+        "provider_scenario",
     ):
         if marker not in acp_tool_verifier_source:
             errors.append(f"ACP fake-tool verifier is missing replay marker: {marker}")
     if "tool-cancel" not in fake_provider_source:
         errors.append("fake provider is missing the ACP tool-cancel scenario")
+    for marker in (
+        "REQUIRED_ACP_PERMISSION_SCENARIOS",
+        "allow_once",
+        "cancel_permission",
+        "required_scenarios_verified",
+        "acp_permission_required_scenarios_verified_when_attached",
+    ):
+        if marker not in grok_tool_permission_observer_source:
+            errors.append(f"Grok tool permission observer is missing ACP coverage marker: {marker}")
     if not (ROOT / "integration/grok/tests/test_acp_fake_tool_probe.py").is_file():
         errors.append("missing ACP fake-tool verifier regression tests")
     counts["grok_acp_fake_tool_probe_fixtures"] = 2
@@ -1580,12 +1602,16 @@ def check_repository() -> dict[str, Any]:
     child_tree_verifier_source = (
         ROOT / "scripts/verify_grok_windows_child_tree_probe.py"
     ).read_text(encoding="utf-8")
+    timeout_split_verifier_source = (
+        ROOT / "scripts/verify_grok_timeout_gate_split.py"
+    ).read_text(encoding="utf-8")
     firewall_source = (
         ROOT / "scripts/manage_grok_probe_firewall.ps1"
     ).read_text(encoding="utf-8")
     for schema_name in (
         "grok-windows-child-tree-probe-result-v0.1.schema.json",
         "grok-windows-child-tree-probe-verification-v0.1.schema.json",
+        "grok-timeout-gate-split-verification-v0.1.schema.json",
     ):
         if not (ROOT / "integration/grok" / schema_name).is_file():
             errors.append(f"missing Windows child-tree probe schema: {schema_name}")
@@ -1635,6 +1661,15 @@ def check_repository() -> dict[str, Any]:
         if marker not in child_tree_verifier_source:
             errors.append(f"child-tree verifier is missing replay marker: {marker}")
     for marker in (
+        "windows_child_tree_baseline_regression",
+        "windows_child_tree_owned_cleanup",
+        "prompt_tool_promotion_ready",
+        "carried-limitation",
+        "candidate_pre_close_residue_not_greater",
+    ):
+        if marker not in timeout_split_verifier_source:
+            errors.append(f"timeout split verifier is missing gate marker: {marker}")
+    for marker in (
         "New-NetFirewallRule",
         "Remove-NetFirewallRule",
         "nonloopback_ipv4_blocked",
@@ -1648,6 +1683,26 @@ def check_repository() -> dict[str, Any]:
     if not (ROOT / "integration/grok/tests/test_windows_child_tree_probe.py").is_file():
         errors.append("missing Windows child-tree verifier regression tests")
     counts["grok_windows_child_tree_fixtures"] = 3
+
+    for marker in (
+        "grok_prompt_tool_promotion_gate_receipt",
+        "prompt_tool_execution_attempted",
+        "windows_child_tree_owned_cleanup_not_passed",
+        "canonical_default_unchanged",
+        "production_prompt_tool_path",
+    ):
+        if marker not in grok_prompt_tool_gate_source:
+            errors.append(f"Grok prompt/tool gate is missing fail-closed marker: {marker}")
+    for marker in (
+        "--runtime",
+        "grok_timeout_gate",
+        "grok_tool_availability_gate",
+        "_run_grok_prompt_tool_gate",
+        "explicit_fail_closed_no_prompt_or_tool_execution",
+    ):
+        if marker not in gsa_cli_source:
+            errors.append(f"gsa run Grok gate wiring is missing marker: {marker}")
+    counts["grok_prompt_tool_gate_fixtures"] = 1
 
     compaction_launcher_source = (
         ROOT / "scripts/invoke_grok_compaction_provenance_probe.ps1"

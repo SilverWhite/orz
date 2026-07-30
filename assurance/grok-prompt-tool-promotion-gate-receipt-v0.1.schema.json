@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/grok-prompt-tool-promotion-gate-receipt-v0.1.schema.json",
+  "title": "Grok prompt/tool promotion gate receipt",
+  "description": "Receipt for the explicit gsa run --runtime grok prompt/tool promotion gate. The gate records prerequisites and never launches Grok prompt or tool execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "run_id",
+    "created_at",
+    "valid",
+    "decision",
+    "runtime",
+    "request",
+    "prerequisites",
+    "checks",
+    "blocking_reasons",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "receipt_kind": { "const": "grok_prompt_tool_promotion_gate_receipt" },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^GROK-PROMPT-TOOL-GATE-[A-Z0-9]+$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Z0-9._-]+$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "valid": { "const": true },
+    "decision": { "enum": ["allow", "block"] },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_runtime",
+        "default_runtime_unchanged",
+        "production_prompt_tool_path"
+      ],
+      "properties": {
+        "requested_runtime": { "const": "grok" },
+        "default_runtime_unchanged": { "const": true },
+        "production_prompt_tool_path": { "const": "not_promoted" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_root",
+        "ask_present",
+        "retrieval_mode",
+        "retrieval_mode_explicit",
+        "valid_retrieval_modes"
+      ],
+      "properties": {
+        "run_root": { "$ref": "#/$defs/nonempty" },
+        "ask_present": { "type": "boolean" },
+        "retrieval_mode": { "$ref": "#/$defs/retrievalMode" },
+        "retrieval_mode_explicit": { "type": "boolean" },
+        "valid_retrieval_modes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/retrievalMode" },
+          "minItems": 3,
+          "uniqueItems": true
+        }
+      }
+    },
+    "prerequisites": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_availability",
+        "windows_child_tree_owned_cleanup"
+      ],
+      "properties": {
+        "tool_availability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "evidence_attached",
+            "required_decision",
+            "observed_decision"
+          ],
+          "properties": {
+            "status": { "$ref": "#/$defs/prerequisiteStatus" },
+            "evidence_attached": { "type": "boolean" },
+            "required_decision": { "const": "allow" },
+            "observed_decision": { "enum": ["missing", "allow", "defer", "block"] }
+          }
+        },
+        "windows_child_tree_owned_cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "evidence_attached",
+            "prompt_tool_promotion_ready",
+            "required_status",
+            "observed_status"
+          ],
+          "properties": {
+            "status": { "$ref": "#/$defs/prerequisiteStatus" },
+            "evidence_attached": { "type": "boolean" },
+            "prompt_tool_promotion_ready": { "type": "boolean" },
+            "required_status": { "const": "passed" },
+            "observed_status": {
+              "enum": ["missing", "passed", "failed", "carried-limitation"]
+            }
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_selected_explicitly",
+        "prompt_supplied",
+        "retrieval_mode_explicit_or_off",
+        "tool_availability_gate_allows",
+        "windows_child_tree_owned_cleanup_passed",
+        "prompt_tool_execution_attempted",
+        "canonical_default_unchanged"
+      ],
+      "properties": {
+        "runtime_selected_explicitly": { "const": true },
+        "prompt_supplied": { "type": "boolean" },
+        "retrieval_mode_explicit_or_off": { "type": "boolean" },
+        "tool_availability_gate_allows": { "type": "boolean" },
+        "windows_child_tree_owned_cleanup_passed": { "type": "boolean" },
+        "prompt_tool_execution_attempted": { "const": false },
+        "canonical_default_unchanged": { "const": true }
+      }
+    },
+    "blocking_reasons": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "missing_prompt",
+          "retrieval_mode_not_explicit",
+          "tool_availability_gate_not_allow",
+          "windows_child_tree_owned_cleanup_not_passed"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 },
+    "prerequisiteStatus": { "enum": ["missing", "blocked", "passed"] },
+    "retrievalMode": {
+      "enum": ["local_browser", "framework_fallback", "off"]
+    }
+  }
+}

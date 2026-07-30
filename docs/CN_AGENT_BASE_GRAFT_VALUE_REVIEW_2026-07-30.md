@@ -328,6 +328,7 @@ Grok 做通用 agent runtime；
 Grok 不是“全权接管”。采用 Grok 的同时，必须遵守这些限制：
 
 - `0.2.112` 已提升为当前默认 lock；但 `windows_child_tree_timeout` 只是 carried-forward limitation，不能解释为 Grok 已证明完整 timeout cleanup。
+- `gsa run --runtime grok` 现在只是显式 fail-closed promotion gate；它写出阻断/放行 receipt，但在 owned cleanup 和 tool availability 前置证据满足前不执行 prompt/tool，也不改变 `gsa run` 的 canonical 默认。
 - 不能因为 Grok 有 subagents 就发展出多 agent 生态。
 - 不能因为 Grok 有 workflow 就删除 Global Progress Sentinel 或 Orientation Guard。
 - 不能因为 Grok 有 web/search/MCP 就隐式绕过本地浏览器检索和 source visibility。
@@ -675,13 +676,14 @@ VS Code 相关内容的当前保留状态应表述为：
 
 1. 两个 retrieval subagent 的 Grok profile 草案：已新增恰好两个 `.grok/agents/*.md` project agent drafts，不写新调度器；workflow Rhai 草案仍等待具体语法验证。
 2. 检索与 source visibility 的嫁接路径：显式检索模式开关已完成 CLI/TUI/receipt plumbing；下一步让 Grok 负责调用工具、本仓库负责证据 gate。
-3. Tool availability 与 Grok tool registry/permission 的对齐：首个观察切片已完成，`gsa grok observe-tools --include-tool-availability` 可把 `grok inspect --json`、`grok --help`、`grok agent --help` 的 registry/permission 控制面转成 receipt 和 availability gate 投影；未附加 ACP fake-tool verification 时仍保持 degraded/block。
+3. Tool availability 与 Grok tool registry/permission 的对齐：观察切片已完成，`gsa grok observe-tools --include-tool-availability` 可把 `grok inspect --json`、`grok --help`、`grok agent --help` 的 registry/permission 控制面转成 receipt 和 availability gate 投影；ACP permission projection 需同时附加有效 `allow_once` 与 `cancel_permission` fake-tool verification，否则仍保持 degraded/block。
 4. 中立询问和反例询问触发点对齐：反例只进 plan/conclusion gate，中立询问进执行过程回看；子代理关闭前增加“是否已获得所需内容”的中性确认；debug 中增加递进阈值的诊断覆盖检查。
 5. Global Progress / Orientation Guard 与 Grok workflow/subagent lifecycle 的对齐：首个 metadata-only projection 已完成，可把支持的 workflow/subagent lifecycle 事件转成 GPS journal events 和中性 Orientation context；Grok workflow 仍只提供输入，不拥有 GPS/Orientation 决策。
 6. UI 投影评估：现有 UI 显示哪些 Grok 原生状态，哪些仍显示本仓库 receipt。
 7. VS Code 内部终端初步适配复核：只确认生命周期观测价值，不扩展为完整 IDE 产品线。
 8. 底部客户端混搭评估：最后再决定本地 TUI、Web、移动、远程入口组合。
-9. 后续 timeout gate 拆分：把 `windows_child_tree_timeout` 拆成 baseline-regression gate 与 Grok-owned cleanup gate，避免 carried limitation 被误读为已通过。
+9. Timeout gate 拆分已完成：`windows_child_tree_baseline_regression` 可为 default-version promotion 通过；`windows_child_tree_owned_cleanup` 仍为 carried-limitation，继续阻止 prompt/tool mode 被误提升为已具备 Grok-owned cleanup。
+10. `gsa run --runtime grok` fail-closed gate 已完成：默认 `gsa run` 仍是 canonical；Grok prompt/tool 路径只生成 promotion gate receipt，需 tool availability `allow` 且 owned cleanup `passed` 后才可考虑真正运行。
 
 ## 9. 一句话结论
 

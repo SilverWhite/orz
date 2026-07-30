@@ -9,7 +9,7 @@ Status: promoted with carried-forward timeout limitation
 
 The candidate binary identity gate passed against the checked-in candidate metadata. Static Grok integration tests, TUI projection tests, workspace trust receipt generation, repository regression, ACP initialize, fake-tool allow, fake-tool cancel, child-tree task_cancel, child-tree parent_exit, and compaction provenance passed.
 
-The original Windows child-tree `tool_timeout` gate failed under Windows Administrator. Follow-up triage compared `0.2.111` and `0.2.112` under the same fake-provider timeout scenario and found the behavior is carried forward from the current default rather than introduced by `0.2.112`.
+The original Windows child-tree `tool_timeout` gate failed under Windows Administrator. Follow-up triage compared `0.2.111` and `0.2.112` under the same fake-provider timeout scenario and found the behavior is carried forward from the current default rather than introduced by `0.2.112`. The gate is now split into `windows_child_tree_baseline_regression` (`passed`) and `windows_child_tree_owned_cleanup` (`carried-limitation`).
 
 `upstream/grok-build.lock.json` now records the promoted `0.2.112` default.
 
@@ -53,13 +53,13 @@ The original Windows child-tree `tool_timeout` gate failed under Windows Adminis
 
 ## Promotion State
 
-Promote `0.2.112` with the timeout limitation carried forward.
+Promote `0.2.112` with the owned-cleanup timeout limitation carried forward.
 
-The candidate was promoted because the blocker was reclassified as a non-regressing baseline limitation after direct `0.2.111` / `0.2.112` comparison. The limitation remains open: this promotion does not prove Grok-owned cleanup of a timed-out full child process tree.
+The candidate was promoted because the blocker was reclassified as a non-regressing baseline limitation after direct `0.2.111` / `0.2.112` comparison. The split `windows_child_tree_baseline_regression` gate is passed; `windows_child_tree_owned_cleanup` remains open and does not prove Grok-owned cleanup of a timed-out full child process tree.
 
 ## Limitations
 
 - Binary identity does not prove binary/source correspondence.
 - The final timeout limitation is observed in both `0.2.111` and `0.2.112`, not unique `0.2.112` behavior and not environment privilege.
-- The candidate schema still tracks the older seven promotion gates; the runtime-first gate list now also calls out workflow/subagent, event bridge, and TUI projection explicitly.
+- The candidate schema now tracks the timeout split as two promotion gates; the runtime-first gate list also calls out workflow/subagent, event bridge, and TUI projection explicitly.
 - `candidate-gates/` is a local ignored run-artifact directory; promotion claims should cite checked-in audit text and candidate metadata, not require these artifacts to be committed.

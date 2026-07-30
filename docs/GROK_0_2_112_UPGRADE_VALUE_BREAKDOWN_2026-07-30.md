@@ -58,6 +58,6 @@ Likely non-blockers:
 
 ## Current Decision
 
-Promote `0.2.112` as the default with `windows_child_tree_timeout` recorded as `carried-limitation`.
+Promote `0.2.112` as the default with `windows_child_tree_baseline_regression` recorded as `passed` and `windows_child_tree_owned_cleanup` recorded as `carried-limitation`.
 
-Keep a separate follow-up to split the timeout gate into baseline-regression and Grok-owned cleanup checks.
+The split is now mechanical; keep `windows_child_tree_owned_cleanup` as the remaining prompt/tool promotion blocker until Grok-owned cleanup or an explicit stronger-containment replacement is proven.

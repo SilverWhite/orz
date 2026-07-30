@@ -9,6 +9,9 @@
     "verification_kind",
     "valid",
     "probe_id",
+    "scenario",
+    "permission_outcome",
+    "provider_scenario",
     "result_sha256",
     "checks",
     "errors"
@@ -18,6 +21,9 @@
     "verification_kind": { "const": "grok-acp-fake-tool-probe-verification" },
     "valid": { "type": "boolean" },
     "probe_id": { "type": "string", "pattern": "^ACPTOOL-[0-9a-f]{32}$" },
+    "scenario": { "enum": ["allow_once", "cancel_permission"] },
+    "permission_outcome": { "enum": ["allow_once", "cancelled"] },
+    "provider_scenario": { "enum": ["tool-continuity", "tool-cancel"] },
     "result_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "checks": {
       "type": "object",

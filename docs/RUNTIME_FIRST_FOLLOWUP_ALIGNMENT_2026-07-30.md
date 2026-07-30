@@ -2,8 +2,10 @@
 
 Date: 2026-07-30
 
-Status: alignment complete; retrieval mode plumbing and two retrieval profile
-drafts implemented; remaining implementation slices remain explicit follow-ups
+Status: alignment complete; retrieval mode plumbing, two retrieval profile drafts,
+tool/permission observation, lifecycle projection, timeout gate split, and
+fail-closed Grok prompt/tool promotion gate implemented; actual prompt/tool
+execution remains unpromoted
 
 ## Purpose
 
@@ -27,13 +29,15 @@ Source routes checked:
 
 | Surface | Current owner | Alignment decision | Still pending |
 |---|---|---|---|
-| Retrieval mode selection | assurance-owned policy around runtime tools | The only valid modes are `local_browser`, `framework_fallback`, and `off`. Runtime tool calls may perform retrieval, but the selected mode and receipt semantics remain explicit. | First CLI/TUI/receipt plumbing is complete; prompt/tool execution remains blocked until containment and follow-up observation gates land. |
+| Retrieval mode selection | assurance-owned policy around runtime tools | The only valid modes are `local_browser`, `framework_fallback`, and `off`. Runtime tool calls may perform retrieval, but the selected mode and receipt semantics remain explicit. | First CLI/TUI/receipt plumbing is complete; prompt/tool execution remains blocked until Grok-owned cleanup or equivalent stronger containment is proven. |
 | Project-document retrieval subagent | Grok-compatible profile plus assurance wrapper | One project-doc retrieval agent draft now exists at `.grok/agents/gsa-project-doc-retrieval.md`. It may read project docs and produce retrieval/capability receipts. It must not become a local scheduler. | Workflow Rhai draft remains blocked until concrete syntax is verified. |
 | External retrieval subagent | Grok-compatible profile plus assurance wrapper | One external retrieval agent draft now exists at `.grok/agents/gsa-external-retrieval.md`. Network capability, source visibility, PDF evidence, redaction, and fallback mode receipts remain in this repository. | Runtime event capture for network/tool permission state. Workflow Rhai draft remains blocked until concrete syntax is verified. |
-| Tool availability | Grok registry/permission observed through assurance receipts | Grok owns tool registry, tool dispatch, and permission UX. This repository owns the explicit availability receipt, UI/prompt visibility, and tool-belief stagnation checks. | First observation slice is complete: `gsa grok observe-tools` records static registry/permission controls and projects them into the existing tool availability gate. ACP permission semantics remain degraded unless a valid fake-tool verification receipt is attached. |
+| Tool availability | Grok registry/permission observed through assurance receipts | Grok owns tool registry, tool dispatch, and permission UX. This repository owns the explicit availability receipt, UI/prompt visibility, and tool-belief stagnation checks. | Observation slice is complete: `gsa grok observe-tools` records static registry/permission controls and projects them into the existing tool availability gate. ACP permission semantics remain degraded unless valid `allow_once` and `cancel_permission` fake-tool verification receipts are attached. |
 | Global Progress / Orientation | assurance-owned guard over Grok workflow state | Grok workflow state can be consumed as input. Global Progress, Orientation Guard, neutral inquiry, counterexample gate, and diagnostic coverage decisions remain outside Grok workflow policy. | First lifecycle projection slice is complete: metadata-only Grok workflow/subagent events can be projected into GPS journal events and neutral Orientation context. |
 | UI projection | UI-owned workbench consuming normalized runtime events | The TUI should display Grok workflow/subagent/tool/permission/runtime events and assurance receipts. It must not own scheduling, model loop, tool dispatch, or session persistence. | Expand beyond the first-slice `version-smoke` projection after stronger containment. |
 | Prototype references | fixture-only / git-history reference | `prototype/` is retired and contains only a boundary README. Active support code now lives in `assurance/`, `runtime/`, `integration/grok/`, scripts, schemas, and tests. | Clean remaining historical audit prose only when it appears in active routing or quickstarts. |
+| Windows child-tree timeout | split candidate/prompt-tool gate | `windows_child_tree_baseline_regression` is now separate from `windows_child_tree_owned_cleanup`. The baseline-regression gate can pass for default-version selection while owned-cleanup remains `carried-limitation`. | Prompt/tool mode remains unpromoted until owned cleanup passes or an explicit stronger-containment decision replaces it. |
+| Grok prompt/tool run entry | explicit fail-closed promotion gate | `gsa run --runtime grok` now writes a `grok_prompt_tool_promotion_gate_receipt` and preserves the canonical default. It does not launch Grok prompt/tool execution. | The gate remains blocked unless attached tool availability is `allow` and `windows_child_tree_owned_cleanup` is `passed` with `prompt_tool_promotion_ready=true`. |
 
 ## Non-Goals
 
@@ -42,8 +46,8 @@ Source routes checked:
 - Do not check in speculative `.grok/agents` or `.grok/workflows` files until
   their syntax is verified against the selected Grok build.
 - Do not treat hooks as hard gates; hooks may observe or annotate only.
-- Do not treat the carried-forward `windows_child_tree_timeout` limitation as a
-  passed Grok-owned cleanup guarantee.
+- Do not treat the carried-forward `windows_child_tree_owned_cleanup`
+  limitation as a passed Grok-owned cleanup guarantee.
 
 ## Next Implementation Order
 
@@ -54,16 +58,25 @@ Source routes checked:
 3. Done: add Grok tool registry and permission observation receipts.
    `gsa grok observe-tools --include-tool-availability` observes
    `grok inspect --json`, `grok --help`, and `grok agent --help` without
-   prompt/tool execution. Without attached ACP fake-tool verification, the
-   observation receipt is valid but the availability projection remains
+   prompt/tool execution. Without attached valid ACP fake-tool verification
+   for both `allow_once` and `cancel_permission`, the observation receipt is
+   valid for static observation but the availability projection remains
    `block` because permission-request semantics are still degraded.
 4. Done: map Grok workflow/subagent lifecycle events into Global Progress and
    Orientation inputs. `grok_lifecycle_projection` converts supported
    metadata-only workflow/subagent events into GPS journal events and a neutral
    `[GROK_LIFECYCLE_CONTEXT v0.1]` block. It fail-closes on unsupported event
    types, content-bearing fields, or step/direction binding mismatches.
-5. Split `windows_child_tree_timeout` into baseline-regression and Grok-owned
-   cleanup gates before promoting prompt/tool mode.
+5. Done: split `windows_child_tree_timeout` into
+   `windows_child_tree_baseline_regression` and
+   `windows_child_tree_owned_cleanup`. The split receipt keeps
+   `prompt_tool_promotion_ready=false` while owned cleanup remains a
+   carried limitation.
+6. Done: add `gsa run --runtime grok` as an explicit fail-closed
+   prompt/tool promotion gate. The receipt records retrieval mode, attached
+   tool availability evidence, timeout split evidence, blocking reasons, and
+   `prompt_tool_execution_attempted=false`; the canonical `gsa run` default is
+   unchanged.
 
 This alignment is deliberately narrow: it updates ownership and route status so
 the next implementation slice has a clean target.

@@ -162,7 +162,8 @@
                   "acp_initialize",
                   "fake_tool_allow",
                   "fake_tool_cancel",
-                  "windows_child_tree_timeout",
+                  "windows_child_tree_baseline_regression",
+                  "windows_child_tree_owned_cleanup",
                   "deepseek_reasoning_continuity",
                   "repository_regression"
                 ]

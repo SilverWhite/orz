@@ -121,6 +121,11 @@
         "invalid_count",
         "probe_ids",
         "result_sha256",
+        "covered_scenarios",
+        "required_scenarios",
+        "required_scenarios_verified",
+        "permission_outcomes",
+        "provider_scenarios",
         "scenario_semantics_verified",
         "safety_checks_verified"
       ],
@@ -136,6 +141,30 @@
         "result_sha256": {
           "type": "array",
           "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "uniqueItems": true
+        },
+        "covered_scenarios": {
+          "type": "array",
+          "items": { "enum": ["allow_once", "cancel_permission"] },
+          "uniqueItems": true
+        },
+        "required_scenarios": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "allow_once" },
+            { "const": "cancel_permission" }
+          ],
+          "items": false
+        },
+        "required_scenarios_verified": { "type": "boolean" },
+        "permission_outcomes": {
+          "type": "array",
+          "items": { "enum": ["allow_once", "cancelled"] },
+          "uniqueItems": true
+        },
+        "provider_scenarios": {
+          "type": "array",
+          "items": { "enum": ["tool-continuity", "tool-cancel"] },
           "uniqueItems": true
         },
         "scenario_semantics_verified": { "type": "boolean" },
@@ -155,6 +184,7 @@
         "web_disable_control_observed",
         "acp_permission_probe_attached",
         "acp_permission_probe_valid_when_attached",
+        "acp_permission_required_scenarios_verified_when_attached",
         "no_model_invoked",
         "no_network_requested",
         "prompt_tool_promotion_blocked"
@@ -169,6 +199,7 @@
         "web_disable_control_observed": { "type": "boolean" },
         "acp_permission_probe_attached": { "type": "boolean" },
         "acp_permission_probe_valid_when_attached": { "type": "boolean" },
+        "acp_permission_required_scenarios_verified_when_attached": { "type": "boolean" },
         "no_model_invoked": { "type": "boolean" },
         "no_network_requested": { "type": "boolean" },
         "prompt_tool_promotion_blocked": { "type": "boolean" }

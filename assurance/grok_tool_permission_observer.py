@@ -32,6 +32,7 @@ GROK_HELP_FLAGS = (
     "--disallowed-tools",
 )
 AGENT_HELP_FLAGS = ("--agent-profile", "--always-approve")
+REQUIRED_ACP_PERMISSION_SCENARIOS = ("allow_once", "cancel_permission")
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,9 @@ def _summarize_acp_verifications(
     invalid_count = 0
     probe_ids: set[str] = set()
     result_hashes: set[str] = set()
+    covered_scenarios: set[str] = set()
+    permission_outcomes: set[str] = set()
+    provider_scenarios: set[str] = set()
     scenario_semantics = []
     safety_checks = []
     for verification in acp_verifications:
@@ -203,6 +207,15 @@ def _summarize_acp_verifications(
         )
         if valid:
             valid_count += 1
+            scenario = verification.get("scenario")
+            if isinstance(scenario, str):
+                covered_scenarios.add(scenario)
+            permission_outcome = verification.get("permission_outcome")
+            if isinstance(permission_outcome, str):
+                permission_outcomes.add(permission_outcome)
+            provider_scenario = verification.get("provider_scenario")
+            if isinstance(provider_scenario, str):
+                provider_scenarios.add(provider_scenario)
         else:
             invalid_count += 1
         probe_id = verification.get("probe_id")
@@ -219,12 +232,20 @@ def _summarize_acp_verifications(
             safety_checks.append(False)
 
     attached = len(acp_verifications) > 0
+    required_scenarios_verified = set(REQUIRED_ACP_PERMISSION_SCENARIOS).issubset(
+        covered_scenarios
+    )
     return {
         "attached": attached,
         "valid_count": valid_count,
         "invalid_count": invalid_count,
         "probe_ids": sorted(probe_ids),
         "result_sha256": sorted(result_hashes),
+        "covered_scenarios": sorted(covered_scenarios),
+        "required_scenarios": list(REQUIRED_ACP_PERMISSION_SCENARIOS),
+        "required_scenarios_verified": required_scenarios_verified,
+        "permission_outcomes": sorted(permission_outcomes),
+        "provider_scenarios": sorted(provider_scenarios),
         "scenario_semantics_verified": attached and all(scenario_semantics),
         "safety_checks_verified": attached and all(safety_checks),
     }
@@ -271,6 +292,10 @@ def build_grok_tool_permission_observation_receipt(
         "acp_permission_probe_valid_when_attached": (
             not acp_observation["attached"] or acp_observation["invalid_count"] == 0
         ),
+        "acp_permission_required_scenarios_verified_when_attached": (
+            not acp_observation["attached"]
+            or acp_observation["required_scenarios_verified"]
+        ),
         "no_model_invoked": True,
         "no_network_requested": True,
         "prompt_tool_promotion_blocked": True,
@@ -284,6 +309,7 @@ def build_grok_tool_permission_observation_receipt(
         "agent_profile_control_observed",
         "web_disable_control_observed",
         "acp_permission_probe_valid_when_attached",
+        "acp_permission_required_scenarios_verified_when_attached",
         "no_model_invoked",
         "no_network_requested",
         "prompt_tool_promotion_blocked",
@@ -291,7 +317,7 @@ def build_grok_tool_permission_observation_receipt(
     valid = all(checks[name] for name in hard_check_names)
     if not valid:
         decision = "block"
-    elif acp_observation["attached"]:
+    elif acp_observation["required_scenarios_verified"]:
         decision = "allow"
     else:
         decision = "defer"
@@ -407,11 +433,9 @@ def build_grok_tool_availability_projection(
         "grok_project_retrieval_agents": checks["expected_project_agents_discovered"],
         "grok_permission_controls": checks["permission_controls_observed"],
         "grok_web_retrieval_controls": checks["web_disable_control_observed"],
-        "grok_acp_permission_probe": (
-            acp["valid_count"] > 0 and acp["invalid_count"] == 0
-            if acp["attached"]
-            else None
-        ),
+        "grok_acp_permission_probe": None
+        if not acp["attached"] or not acp["required_scenarios_verified"]
+        else acp["invalid_count"] == 0,
     }
     return probe_tool_availability(
         tool_specs=tool_specs,
