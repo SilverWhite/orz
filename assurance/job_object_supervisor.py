@@ -362,10 +362,14 @@ def run_with_job_object_containment(
     """Launch *command* inside a Kill-On-Close Job Object.
 
     Convenience wrapper that creates a :class:`JobObjectSupervisor`,
-    starts the process via *popen_factory*, assigns it to the Job, and
+    starts the process via *popen_factory* with ``CREATE_SUSPENDED``,
+    assigns it to the Job while frozen, resumes the main thread, and
     returns the :class:`~subprocess.Popen` instance.  The caller **must**
     close the supervisor (or use it as a context manager) to release
     the Job Object handle.
+
+    The post-creation race window is closed: no user-mode code executes
+    before Job membership is established (2026-07-31 judgment).
 
     Returns the :class:`~subprocess.Popen` instance along with the
     supervisor attached as ``_job_supervisor``.
@@ -380,10 +384,11 @@ def run_with_job_object_containment(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | CREATE_SUSPENDED,
     )
     if supervisor.is_active:
         supervisor.assign_process(process.pid)
+        _resume_main_thread(process.pid)
     process._job_supervisor = supervisor  # type: ignore[attr-defined]
     return process
 

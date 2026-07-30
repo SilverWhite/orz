@@ -12,7 +12,12 @@ import uuid
 from .contracts import validate_contract
 from .errors import AssuranceError
 from .grok_event_normalizer import normalize_grok_runtime_receipt, write_grok_events_jsonl
-from .job_object_supervisor import JobObjectSupervisor, contained_run
+from .job_object_supervisor import (
+    CREATE_SUSPENDED,
+    JobObjectSupervisor,
+    _resume_main_thread,
+    contained_run,
+)
 from .utils import atomic_write_json, load_json, sha256_file, utc_now
 
 
@@ -249,12 +254,13 @@ def run_grok_headless_once(
         stdin=subprocess.DEVNULL,
         stdout=stdout_handle,
         stderr=stderr_handle,
-        creationflags=CREATE_NO_WINDOW,
+        creationflags=CREATE_NO_WINDOW | CREATE_SUSPENDED,
     )
     try:
         if supervisor is not None and supervisor.is_active:
             supervisor.assign_process(process.pid)
             containment_diag["job_object_assigned"] = supervisor.is_assigned
+            _resume_main_thread(process.pid)
 
         try:
             process.wait(timeout=cfg.timeout_seconds)
