@@ -309,32 +309,32 @@
 #### D1. 部分实现需补齐 (Partial → Complete)
 
 10. **ACP 实时事件流接入 TUI** (部分实现, 2026-07-30 差距分析): `grok_event_normalizer.py` 当前只处理 version-smoke 的静态 stdout 解析。设计文档要求 ACP 实时 JSON-RPC event stream（`session/update` 中的 `tool_call` / `tool_call_update` / permission 交互）作为 TUI `LiveRunEventSource` 的实时数据源，而非事后解析 headless 文本输出。阻塞因素：prompt/tool 执行未提升。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §5 ACP-first / `assurance/grok_event_normalizer.py` / `assurance/tui/event_source.py`
-11. **Shadow Git 改为实际 Git Repo** (部分实现, 2026-07-30 差距分析): 当前 `shadow_recovery.py` 使用 SHA-256 内容寻址文件系统存储，不是 Git。设计文档明确要求使用独立 Git repository（借鉴 Gemini CLI / OpenCode / Cline），利用 commit/tree ID、`git diff`、`git restore` 等现成能力；audit receipt 应引用 shadow Git 的 commit/tree ID。当前 store 提供等效的 content-addressed 存储和 `RecoveryDiffPreview`，但缺少 Git 语义带来的版本历史、三方合并和外部可验证性。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.1, §5 / `assurance/shadow_recovery.py`
+11. **Shadow Git 改为实际 Git Repo** (已关闭, 2026-07-31): `shadow_recovery.py` 已从 SHA-256 CAS 文件系统完全重构为独立 Git repository（借鉴 Gemini CLI / OpenCode / Cline checkpointing）。`ShadowRecoveryStore` 每个 store 调用创建 Git commit（candidate.json + authorization.json + snapshot.bin 作为 blobs），commit_sha（40-char hex）是主键，tree-SHA 去重实现幂等。`ExecutionReceipt` 携带 `shadow_commit_sha`。Git 对象模型提供完整性验证（`verify_entry` 通过 `git cat-file -t` 校验 commit/tree/blob 链）。`RecoveryDiffPreview` 提供元数据级 diff。旧 SHA-256 CAS 格式已废弃（DeprecationWarning）。24 tests pass。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.1, §5 / `assurance/shadow_recovery.py`
 12. **Post-Run Session File 交叉核验** (部分实现, 2026-07-30 差距分析): 设计文档要求 runtime event ↔ session file（`updates.jsonl`/`events.jsonl`）的 post-run 对账，验证 ID、terminal、tool call 序列的一致性。当前 `grok_lifecycle_projection.py` 只做 metadata-only 投影，不执行与 session file 的交叉核验。阻塞因素：prompt/tool 执行未提升，无真实 session file 产出。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §3 所有权矩阵 / `assurance/grok_lifecycle_projection.py`
 13. **Approval → Real Grok ACP Permission Bridge** (部分实现, 2026-07-30 差距分析): TUI 有 `permission_decision` event 类型和 permission dialog UI，ACP fake-tool allow/cancel 探针已通过静态验证，但两者之间没有实时桥接——真实 Grok session 中的 permission request 不会出现在 TUI 中，用户无法通过 TUI 审批 Grok 的 tool 调用。阻塞因素：prompt/tool 执行未提升。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §3 / `assurance/tui/events.py` / `assurance/grok_tool_permission_observer.py`
 
 #### D2. LIF 科学保障组件 (First Slice Implemented — Design from GROK_BUILD_ADAPTATION_v0.1 §4)
 
-> `GROK_BUILD_ADAPTATION_v0.1` §4 列出了 11 项"不可省略的能力"。其中 6 项已于 2026-07-31 完成第一切片实现（15-20）；2 项（14 SourceRouter、21 ClaimRegistrySync）明确不实现——这些属于 LIF 项目通用纪律而非本项目做 assurance 过程中暴露的科学性问题，且 CLI 需保持通用性。
+> `GROK_BUILD_ADAPTATION_v0.1` §4 列出了 11 项"不可省略的能力"。其中 6 项已于 2026-07-31 完成第一切片实现（15-20）；2 项（14 SourceRouter、21 ClaimRegistrySync）明确不实现——这些属于 LIF 项目通用纪律，区别于本项目需处理的通用科学性问题，且 CLI 需保持通用性。
 
-14. **SourceRouter** (不实现, 2026-07-31 明确排除): 属于 LIF 项目通用纪律（LIF INDEX + 必读文档已覆盖），非本项目做 assurance 过程中暴露的科学性问题。CLI 需保持通用性，过专化的来源路由组件会干扰其他任务类型。**本项目明确不实现。**入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 1 项（仅设计参考）
+14. **SourceRouter** (不实现, 2026-07-31 明确排除): 属于 LIF 项目通用纪律（LIF INDEX + 必读文档已覆盖），区别于本项目需处理的通用科学性问题。CLI 需保持通用性，过专化的来源路由组件会干扰其他任务类型。**本项目明确不实现。**入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 1 项（仅设计参考）
 15. **EvidenceKernel** (第一切片已完成, 2026-07-31):: 维护 action / evidence / claim 三套独立状态，每层有各自的 reason-code gate；action 不能自动升级为 evidence，evidence 不能自动升级为 claim。当前 `runner_scoring_handoff.py` 有 action DAG 但不维护三层状态机。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 3 项 / `assurance/runner_scoring_handoff.py`
 16. **ClaimBoundary** (第一切片已完成, 2026-07-31):: 区分 measured / direct comparison / bridge hypothesis / promotion eligibility 四种 claim 类型，各自有不同的证据要求和 promotion 路径。当前只在 `test_runner_scoring.py` 中有 `ClaimBoundaryScoringTests` 测试类，无生产实现。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 5 项 / `assurance/tests/test_runner_scoring.py`
 17. **LeakScanner** (第一切片已完成, 2026-07-31):: 机械检查 + 独立语义审阅双通道；evaluation/holdout 场景 fail-closed；不依赖模型判断"是否泄漏"。当前 `credential_scrub` 覆盖凭据层面但不覆盖跨场景信息泄漏检测。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 7 项
 18. **ScenarioExporter** (第一切片已完成, 2026-07-31):: 从 regression corpus 生成只有可见事实的匿名场景包，供外部评测使用；不泄露原始数据、模型内部状态或未脱敏内容。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 6 项 / `regression/cases-v0.1.yaml`
 19. **EvaluationRunner** (第一切片已完成, 2026-07-31):: 冻结模型/prompt/工具/预算/digest；append-only journal；与 oracle 物理隔离。当前 `evaluation/` 目录有 scoring protocol 和 partition 文档，但无可执行 runner。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 8 项 / `evaluation/SCORING_PROTOCOL_v0.1.md`
 20. **CaseRetrievalGuard** (第一切片已完成, 2026-07-31):: blind-first 原则——历史案例检索必须在 precommitment（先独立形成判断）之后执行，防止锚定效应和 hindsight bias。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 9 项
-21. **ClaimRegistrySync** (不实现, 2026-07-31 明确排除): 属于 LIF 项目通用纪律（LIF INDEX + 必读文档已覆盖），非本项目做 assurance 过程中暴露的科学性问题。CLI 需保持通用性，过专化的注册表同步组件会干扰其他任务类型。**本项目明确不实现。**入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 10 项（仅设计参考）
+21. **ClaimRegistrySync** (不实现, 2026-07-31 明确排除): 属于 LIF 项目通用纪律（LIF INDEX + 必读文档已覆盖），区别于本项目需处理的通用科学性问题。CLI 需保持通用性，过专化的注册表同步组件会干扰其他任务类型。**本项目明确不实现。**入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` §4 第 10 项（仅设计参考）
 
 #### D3. 设计分离未强制 (Design Separation Not Enforced)
 
 22. **Finding ↔ Permission 代码层强制分离** (未实现, 2026-07-30 差距分析): 借鉴 Goose 设计——scanner 输出 finding ID + 证据 + 置信度，permission 独立记录 allow/deny/ask + 依据。设计文档明确要求"启发式 finding 不能伪装成安全证明，permission 也不能抹掉 finding"（§4.3），但当前代码中没有通用的 finding/permission 分离层来强制这一不变量。`ux_safety.py` 有 scenario 级断言但不构成通用分离机制。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.3 / `assurance/ux_safety.py`
-23. **Audit Checkpoint 引用 Shadow Commit/Tree ID** (未实现, 2026-07-30 差距分析): 设计文档 §4.1 要求 audit receipt（hash-only）引用独立 shadow Git store 的 commit/tree ID，二者不能用同一个模糊的"checkpoint 成功"状态代替。当前 fixture checkpoint/delta 和 `shadow_recovery.py` 是两套独立系统，没有互相引用。此条与 D1.11（shadow Git 改为实际 Git repo）联动。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.1 / `assurance/shadow_recovery.py` / `assurance/audit.py`
+23. **Audit Checkpoint 引用 Shadow Commit/Tree ID** (已关闭, 2026-07-31): `AuditLedger.seal()` 已新增可选 `shadow_refs` 参数（commit_sha + tree_sha，均为 40-char Git SHA），写入 audit seal receipt 的 `shadow_refs` 块。`audit-seal-receipt-v0.1.schema.json` 已新增 `shadow_refs` 定义和 `git_sha` pattern。此条随 D1.11（shadow Git repo）一并关闭——audit receipt 现在可明确引用独立 shadow Git store 的 commit/tree ID，不再依赖模糊的 checkpoint 布尔值。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.1 / `assurance/shadow_recovery.py` / `assurance/audit.py`
 
 #### 阻塞依赖
 
 - **D1.10 / D1.12 / D1.13** 共同阻塞因素：prompt/tool 执行路径未提升（`windows_child_tree_owned_cleanup` = `carried-limitation`）。需先决定 Phase 1 `AssignProcessToJobObject` containment 是否足以提升，或需等 GAK-WIN-001 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 升级。
-- **D1.11** 与 D3.23 联动：shadow Git 改造后 audit checkpoint 才能引用 commit/tree ID。
+- **D1.11 / D3.23** 已于 2026-07-31 同步关闭：shadow Git repo + audit shadow_refs 全链路闭合。
 - **D2.15–20** 第一切片已完成（6/6 组件 + 测试）。**D2.14 / D2.21** 明确不实现（LIF 项目通用纪律，非本仓库科学性问题）。
 - **D3.22** 为架构层分离约束，应在相关模块（scanner、permit、ux_safety）新增时强制落实，不要求立即改造已有代码。
 
