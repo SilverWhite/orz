@@ -283,3 +283,102 @@ def run_with_job_object_containment(
         supervisor.assign_process(process.pid)
     process._job_supervisor = supervisor  # type: ignore[attr-defined]
     return process
+
+
+# For test injection — tests can patch contained_run with a no-op that
+# delegates to plain subprocess.run.
+CONTAINMENT_ENABLED = True
+
+
+def contained_run(
+    command: list[str],
+    *,
+    cwd: Path | str,
+    timeout: int,
+    env: dict[str, str] | None = None,
+    text: bool = False,
+    encoding: str = "utf-8",
+    errors: str = "replace",
+    stdin: int | None = None,
+) -> subprocess.CompletedProcess[bytes] | subprocess.CompletedProcess[str]:
+    """Run *command* inside a Kill-On-Close Job Object.
+
+    Drop-in replacement for :func:`subprocess.run` that wraps every
+    subprocess call in a :class:`JobObjectSupervisor`.  The Job handle
+    is closed in a ``finally`` block, so even if the command hangs or
+    the caller's timeout kills the Python thread, the kernel guarantees
+    the entire process tree is terminated.
+
+    On non-Windows platforms this is a thin passthrough to
+    :func:`subprocess.run`.
+    """
+    if not CONTAINMENT_ENABLED:
+        return subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL if stdin is None else stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+            encoding=encoding,
+            errors=errors,
+            timeout=timeout,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    supervisor = JobObjectSupervisor()
+    process: subprocess.Popen[bytes] | subprocess.Popen[str] | None = None
+    try:
+        if supervisor.is_active:
+            # Start the process suspended so we can assign to the Job
+            # before any code runs.  This also prevents the process from
+            # creating child processes before containment is established.
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL if stdin is None else stdin,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=text,
+                encoding=encoding,
+                errors=errors,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            supervisor.assign_process(process.pid)
+
+        stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
+        returncode = process.poll()
+        if returncode is None:
+            process.kill()
+            process.wait(timeout=5)
+            returncode = process.poll() or -1
+    except subprocess.TimeoutExpired:
+        if process is not None:
+            process.kill()
+            try:
+                stdout_bytes, stderr_bytes = process.communicate(timeout=5)
+                returncode = process.poll() or -1
+            except subprocess.TimeoutExpired:
+                stdout_bytes, stderr_bytes = (b"", b"")
+                returncode = -1
+    finally:
+        if supervisor is not None:
+            supervisor.close()
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+    return subprocess.CompletedProcess(
+        args=command,
+        returncode=returncode,
+        stdout=stdout_bytes,
+        stderr=stderr_bytes,
+    )

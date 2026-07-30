@@ -12,7 +12,7 @@ import uuid
 from .contracts import validate_contract
 from .errors import AssuranceError
 from .grok_event_normalizer import normalize_grok_runtime_receipt, write_grok_events_jsonl
-from .job_object_supervisor import JobObjectSupervisor
+from .job_object_supervisor import JobObjectSupervisor, contained_run
 from .utils import atomic_write_json, load_json, sha256_file, utc_now
 
 
@@ -46,22 +46,20 @@ class GrokRunRequest:
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
-    completed = subprocess.run(
+    completed = contained_run(
         command,
         cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
-        check=False,
-        creationflags=CREATE_NO_WINDOW,
     )
     if completed.returncode != 0:
+        stderr_text = (
+            completed.stderr.strip() if isinstance(completed.stderr, str) else ""
+        )
         raise AssuranceError(
-            f"command failed ({completed.returncode}): {completed.stderr.strip()}"
+            f"command failed ({completed.returncode}): {stderr_text}"
         )
     try:
         value = json.loads(completed.stdout)

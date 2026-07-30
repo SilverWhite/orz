@@ -4,13 +4,13 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 from typing import Any, Sequence
 
 from .contracts import validate_contract
 from .errors import AssuranceError
 from .grok_profile_drafts import EXPECTED_PROFILES
+from .job_object_supervisor import contained_run
 from .tool_availability_gate import (
     build_tool_availability_gate_receipt,
     probe_tool_availability,
@@ -20,7 +20,6 @@ from .utils import canonical_bytes, load_json, sha256_bytes, utc_now
 
 ROOT = Path(__file__).resolve().parents[1]
 RECEIPT_SCHEMA = "grok-tool-permission-observation-receipt-v0.1.schema.json"
-CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 GROK_HELP_FLAGS = (
     "--allow",
@@ -49,25 +48,23 @@ def _run_text_command(
     timeout: int,
     environment: dict[str, str],
 ) -> str:
-    completed = subprocess.run(
+    completed = contained_run(
         command,
         cwd=cwd,
         env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
-        check=False,
-        creationflags=CREATE_NO_WINDOW,
     )
     if completed.returncode != 0:
-        raise AssuranceError(
-            f"command failed ({completed.returncode}): {completed.stderr.strip()}"
+        stderr_text = (
+            completed.stderr.strip() if isinstance(completed.stderr, str) else ""
         )
-    return completed.stdout
+        raise AssuranceError(
+            f"command failed ({completed.returncode}): {stderr_text}"
+        )
+    return completed.stdout if isinstance(completed.stdout, str) else ""
 
 
 def _run_json_command(
