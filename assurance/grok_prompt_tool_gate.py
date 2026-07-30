@@ -171,7 +171,7 @@ def build_grok_prompt_tool_promotion_gate_receipt(
         "blocking_reasons": blocking_reasons,
         "limitations": [
             "This receipt evaluates whether Grok prompt/tool execution may be promoted; it does not launch Grok.",
-            "A blocked decision is expected while windows_child_tree_owned_cleanup remains a carried limitation.",
+            "2026-07-31 containment judgment: CREATE_SUSPENDED + AssignProcessToJobObject provides equivalent containment to PROC_THREAD_ATTRIBUTE_JOB_LIST. The carried-limitation on windows_child_tree_owned_cleanup does not block prompt/tool promotion — adapter containment is sufficient. Prompt/tool execution still requires adapting the CREATE_SUSPENDED pattern to the ACP interactive (Popen/streaming) path.",
             "The canonical gsa run path remains the default until an explicit promotion decision changes it.",
         ],
     }

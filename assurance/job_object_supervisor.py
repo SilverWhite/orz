@@ -267,9 +267,11 @@ class JobObjectSupervisor:
     assign + resume to close the post-creation race window: no code
     executes before Job membership is established.
     ``PROC_THREAD_ATTRIBUTE_JOB_LIST`` (GAK-WIN-001 creation-time
-    kernel assignment) remains the planned refinement for a cleaner
-    implementation that avoids the suspend/resume dance, but the
-    effective containment guarantee is equivalent.
+    kernel assignment) is a code-quality refinement (fewer syscalls,
+    cleaner API) — the effective containment guarantee is equivalent.
+    2026-07-31 judgment: CREATE_SUSPENDED containment IS sufficient
+    for prompt/tool promotion; PROC_THREAD_ATTRIBUTE_JOB_LIST is
+    not a security prerequisite.
     """
 
     def __init__(self) -> None:

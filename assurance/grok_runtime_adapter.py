@@ -367,7 +367,7 @@ def run_grok_headless_once(
         "checks": checks,
         "limitations": [
             "This first adapter slice runs only grok --version; it does not send a prompt or model request.",
-            "Adapter-side Kill-On-Close Job Object containment is active via JobObjectSupervisor (Phase 1: post-creation AssignProcessToJobObject). GAK-WIN-001 creation-time assignment planned for prompt/tool refactor.",
+            "Adapter-side Kill-On-Close Job Object containment is active via JobObjectSupervisor (CREATE_SUSPENDED + AssignProcessToJobObject — post-creation race window closed). 2026-07-31 judgment: containment sufficient for prompt/tool promotion; PROC_THREAD_ATTRIBUTE_JOB_LIST is a code-quality refinement, not a security prerequisite.",
             "Retrieval mode is plumbed for future Grok prompt/tool runs only; version-smoke never performs retrieval.",
             "Captured stdout/stderr are metadata-bound artifacts; no raw prompt, hidden reasoning, or authorization material is recorded.",
         ],
