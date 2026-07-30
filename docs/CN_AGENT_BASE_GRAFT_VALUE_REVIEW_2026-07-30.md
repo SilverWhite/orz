@@ -208,13 +208,13 @@ Grok CLI / Grok Build 对本项目最有价值的是：
 grok 0.2.112 (9bbd559437) [stable]
 ```
 
-但仓库里已验证并提升的 lock 仍是：
+后续 gate 已完成后，仓库里当前已验证并提升的 lock 是：
 
 ```text
-0.2.111 (94172f2aa4)
+0.2.112 (9bbd559437)
 ```
 
-所以 `0.2.112` 现在只是候选，不是项目默认。后续要先做 identity、hash/signature、ACP initialize、fake tool/permission/cancel、child-tree、workspace trust、workflow/subagent、event bridge、TUI projection 等 gate，再考虑提升。
+所以 `0.2.112` 已从环境候选提升为项目默认 lock。提升边界是：identity、hash/signature、ACP initialize、fake tool/permission/cancel、child-tree 对照、workspace trust、event bridge、TUI projection 和仓库回归已通过；`windows_child_tree_timeout` 只按 `0.2.111`/`0.2.112` 对照结果记录为 carried-forward limitation，不证明 Grok-owned timeout cleanup。
 
 ## 4. 其他成熟框架的借鉴价值
 
@@ -327,7 +327,7 @@ Grok 做通用 agent runtime；
 
 Grok 不是“全权接管”。采用 Grok 的同时，必须遵守这些限制：
 
-- `0.2.112` 目前只是候选；项目默认仍以已验证 lock 为准，直到候选 gate 通过。
+- `0.2.112` 已提升为当前默认 lock；但 `windows_child_tree_timeout` 只是 carried-forward limitation，不能解释为 Grok 已证明完整 timeout cleanup。
 - 不能因为 Grok 有 subagents 就发展出多 agent 生态。
 - 不能因为 Grok 有 workflow 就删除 Global Progress Sentinel 或 Orientation Guard。
 - 不能因为 Grok 有 web/search/MCP 就隐式绕过本地浏览器检索和 source visibility。
@@ -428,10 +428,12 @@ Gemini CLI 和 Qwen Code 的价值主要在“成熟 CLI 底座可 fork/可适�
 | source visibility | 这是科学证据边界，不是通用搜索 |
 | PDF evidence | 需要本地哈希、可见性、receipt |
 | retrieval receipt | 需要区分本地浏览器、外部检索、fallback |
+| subagent retrieval completion check | 子代理关闭前需要中性确认是否获得当前主任务所需内容 |
 | tool availability gate | 需要把真实工具状态显式返回给模型和 UI |
 | tool belief stagnation | 防止模型持续相信不可用工具 |
 | counterexample gate | 只在 plan/conclusion 写入前触发 |
 | neutral inquiry | 执行中辅助全局回看 |
+| diagnostic coverage check | debug 停滞或路线锁死时递进触发，检查关键诊断面是否足够覆盖 |
 | Global Progress Sentinel | 防止整体方向单向过推进 |
 | Orientation Runtime Guard | 防停滞、防重复、防方向漂移 |
 | capability receipts | 子代理和网络能力边界需要本地审计 |
@@ -550,16 +552,62 @@ Gemini CLI 和 Qwen Code 的价值主要在“成熟 CLI 底座可 fork/可适�
 - 目的是辅助模型回看全局方向、任务目标、遗漏输入、局部优化和执行偏移。
 - 更接近 runtime orientation aid，而不是 claim/conclusion gate。
 
+子代理检索完成确认：
+
+- 发生在两个检索子代理完成任务，主 agent 判断准备关闭该子代理前。
+- 询问内容仅限于：“是否已经获得完成当前主任务所需的内容？”
+- 不询问“是否缺少”“是否过量”“是否错误”“是否需要反例”。
+- 允许回答 `yes` / `no` / `uncertain`，并附简短理由。
+- 若为 `no` 或 `uncertain`，只列还需要的内容类型，不自动扩展为新子代理或无限补检索。
+- 目的是降低子代理到主 agent 汇总交接时的信息缺失、内容遗漏和压缩损失风险。
+- 该检查归入中立询问机制，不归入反例询问或全局审查模式。
+
+诊断覆盖检查：
+
+- 发生在 debug / 问题处理过程中，用于防止模型在多轮失败后陷入单一路线、单一解释或单一修复方案。
+- 推荐触发语句为：“继续沿当前路线前，关键诊断面是否已经覆盖到足以选择下一步？”
+- 不使用“是否已经完整分析”作为硬标准，避免诱导过度分析。
+- 该检查不是反例询问，不要求推翻当前方案，也不进入全局审查模式。
+- 触发后输出限制为 `yes` / `no` / `uncertain`，并简短列出已覆盖诊断面、仍缺诊断面和下一步。
+- 若为 `no` 或 `uncertain`，只允许一个最小补诊断动作，例如查看一个日志、跑一个更小测试、检查一个调用边界；不得展开成大型重新审计。
+
+递进触发规则：
+
+- 作用域为单个 bug / 单个 debug episode。
+- 初始阈值为 2 个硬信号。
+- 首次触发后，硬信号计数清零，下一次触发阈值 +1。
+- 阈值序列为 `2 -> 3 -> 4 -> 5`，建议封顶 5。
+- 当前 bug 解决后，计数清零，阈值恢复为 2。
+- 用户说“继续”或“继续这条路线”不清零、不关闭、不覆盖该检查。
+- 用户要求“不要分析，直接改”最多影响回答形式，不取消硬信号累计。
+
+硬信号示例：
+
+- 同一问题连续失败。
+- 同一测试或命令失败形态重复。
+- 连续修改落在同一模块或同一路线，但没有新证据。
+- 新错误类别、stack trace、失败位置或复现条件出现，但当前计划没有吸收。
+- 准备做大范围改动，且当前诊断证据少于 2 类。
+- 关键日志、trace、source、边界条件仍未查看。
+
+新证据降噪：
+
+- 如果一次失败产生了明确新证据，可以不累计硬信号，或只记 0.5。
+- 新证据必须是可指向的，例如新错误类别、新 stack trace、新失败位置、新约束、新复现条件、新通过/失败分界。
+- “我又想了想”不算新证据。
+
 评判：
 
 - 赞成明确分离。
 - 反例询问是 plan/conclusion gate。
 - 中立询问是执行过程中的全局回看辅助。
+- 子代理检索完成确认是子代理关闭前的中性 completeness check。
+- 诊断覆盖检查是 debug 停滞/路线锁死时的递进中性拉回机制。
 - 后续嫁接到 Grok workflow 或 UI 时也要保留这两个触发位置差异。
 
 ### 7.4 新增专门审查模式
 
-本轮过重自制内容清扫暴露了一个重要案例：过去多次审查看到了局部实现是否成立，却没有充分结合原设计理念判断整体方向是否偏离。
+本轮多次方向校正和排障暴露了一个重要案例：过去多次审查看到了局部实现是否成立，却没有充分结合原设计理念、当前进度、实现定位和任务边界判断整体方向是否偏离。
 
 后续应增加一个显式的“全局审查模式”。
 
@@ -572,10 +620,10 @@ Gemini CLI 和 Qwen Code 的价值主要在“成熟 CLI 底座可 fork/可适�
 明确进入审查模式时：
 
 - 检查当前实现是否背离原设计理念。
-- 检查是否又在自建成熟 runtime 已经提供的能力。
+- 检查当前进度判断是否诚实：哪些已完成、哪些仍在进行、哪些只是 carried limitation 或待评估。
+- 检查当前实现内容定位是否准确：它是产品能力、通用组件、adapter、fixture、测试、文档、原型，还是临时脚手架。
 - 检查 UI、检索、工具状态、中立询问、反例询问、反哨兵等关键设计是否被误删或降级。
-- 检查本地实现是产品能力、adapter、fixture，还是过度自制。
-- 检查与 Grok/其他成熟框架的职责边界是否仍成立。
+- 检查项目任务边界是否清楚：当前任务内、当前任务外、依赖项和后续待办是否被混在一起。
 
 评判：
 
@@ -625,15 +673,15 @@ VS Code 相关内容的当前保留状态应表述为：
 
 不要先做大重构。建议按这个顺序评估嫁接价值：
 
-1. Grok `0.2.112` 候选能力审计：确认 subagents/workflows/config/MCP/hooks 是否真能覆盖我们当前自制逻辑。
-2. 两个 retrieval subagent 的 Grok profile 草案：只写配置/映射，不写新调度器。
-3. 检索与 source visibility 的嫁接路径：先定义显式检索模式开关，再让 Grok 负责调用工具、本仓库负责证据 gate。
-4. Tool availability 与 Grok tool registry/permission 的对齐：确认内部工具状态如何返回给 UI 和 prompt。
-5. 中立询问和反例询问触发点对齐：反例只进 plan/conclusion gate，中立询问进执行过程回看。
-6. Global Progress / Orientation Guard 与 Grok workflow 的对齐：确认 workflow 能否给足够状态用于反哨兵。
-7. UI 投影评估：现有 UI 显示哪些 Grok 原生状态，哪些仍显示本仓库 receipt。
-8. VS Code 内部终端初步适配复核：只确认生命周期观测价值，不扩展为完整 IDE 产品线。
-9. 底部客户端混搭评估：最后再决定本地 TUI、Web、移动、远程入口组合。
+1. 两个 retrieval subagent 的 Grok profile 草案：只写配置/映射，不写新调度器。
+2. 检索与 source visibility 的嫁接路径：先定义显式检索模式开关，再让 Grok 负责调用工具、本仓库负责证据 gate。
+3. Tool availability 与 Grok tool registry/permission 的对齐：确认内部工具状态如何返回给 UI 和 prompt。
+4. 中立询问和反例询问触发点对齐：反例只进 plan/conclusion gate，中立询问进执行过程回看；子代理关闭前增加“是否已获得所需内容”的中性确认；debug 中增加递进阈值的诊断覆盖检查。
+5. Global Progress / Orientation Guard 与 Grok workflow 的对齐：确认 workflow 能否给足够状态用于反哨兵。
+6. UI 投影评估：现有 UI 显示哪些 Grok 原生状态，哪些仍显示本仓库 receipt。
+7. VS Code 内部终端初步适配复核：只确认生命周期观测价值，不扩展为完整 IDE 产品线。
+8. 底部客户端混搭评估：最后再决定本地 TUI、Web、移动、远程入口组合。
+9. 后续 timeout gate 拆分：把 `windows_child_tree_timeout` 拆成 baseline-regression gate 与 Grok-owned cleanup gate，避免 carried limitation 被误读为已通过。
 
 ## 9. 一句话结论
 

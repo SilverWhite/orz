@@ -13,10 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from prototype.fep_agent_proto.codex_app_server_turn_probe import (
+from assurance.codex_app_server_turn_probe import (
     probe_synthetic_turn,
 )
-from prototype.fep_agent_proto.errors import PrototypeError
+from assurance.errors import AssuranceError as PrototypeError
 
 
 def main() -> int:

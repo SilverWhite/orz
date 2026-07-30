@@ -14,22 +14,22 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from prototype.fep_agent_proto.codex_app_server_capture import (
+from assurance.codex_app_server_capture import (
     CAPTURE_RECEIPT_SCHEMA,
     INITIALIZE_REQUEST_ID,
     THREAD_START_REQUEST_ID,
 )
-from prototype.fep_agent_proto.codex_app_server_lifecycle import (
+from assurance.codex_app_server_lifecycle import (
     CAPTURE_RECORD_SCHEMA,
 )
-from prototype.fep_agent_proto.errors import PrototypeError
-from prototype.fep_agent_proto.io_utils import (
+from assurance.errors import AssuranceError as PrototypeError
+from assurance.io_utils import (
     atomic_write_json,
     load_json,
     sha256_bytes,
 )
-from prototype.fep_agent_proto.layout import RUNTIME_ROOT
-from prototype.fep_agent_proto.schema import validate_instance
+from assurance.layout import RUNTIME_ROOT
+from assurance.schema import validate_instance
 
 
 VERIFICATION_SCHEMA = (

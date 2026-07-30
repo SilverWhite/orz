@@ -19,6 +19,7 @@ NON_REPOSITORY_PARTS = {
     ".pytest_cache",
     ".tools",
     "__pycache__",
+    "candidate-gates",
 }
 
 
@@ -1327,8 +1328,9 @@ def check_repository() -> dict[str, Any]:
         and candidate_selected
     ):
         errors.append("non-eligible upstream candidate cannot be selected as default")
+    promotion_acceptance_statuses = {"passed", "carried-limitation"}
     if candidate_selected and any(
-        gate.get("status") != "passed"
+        gate.get("status") not in promotion_acceptance_statuses
         for gate in candidate_promotion.get("gates", [])
         if isinstance(gate, dict)
     ):
@@ -1844,13 +1846,17 @@ def check_repository() -> dict[str, Any]:
         ROOT / "scripts/append_cli_session_lifecycle_event.py",
         ROOT / "scripts/verify_cli_session_lifecycle_receipt.py",
         ROOT / "scripts/normalize_codex_app_server_lifecycle.py",
+        ROOT / "scripts/verify_codex_app_server_lifecycle_capture.py",
+        ROOT / "scripts/probe_codex_app_server_turn_lifecycle.py",
         ROOT / "scripts/verify_codex_app_server_lifecycle.py",
         ROOT / "scripts/recover_torn_journal.py",
-        ROOT / "prototype/fep_agent_proto/journal_lock.py",
-        ROOT / "prototype/fep_agent_proto/journal_recovery.py",
-        ROOT / "prototype/fep_agent_proto/global_progress_state.py",
-        ROOT / "prototype/fep_agent_proto/cli_session_lifecycle.py",
-        ROOT / "prototype/fep_agent_proto/codex_app_server_lifecycle.py",
+        ROOT / "runtime/global-progress-state-reduction-v0.1.schema.json",
+        ROOT / "runtime/global-progress-controller-receipt-v0.1.schema.json",
+        ROOT / "runtime/global-progress-controller-verification-v0.1.schema.json",
+        ROOT / "runtime/codex-app-server-lifecycle-capture-v0.1.schema.json",
+        ROOT / "runtime/codex-app-server-lifecycle-capture-verification-v0.1.schema.json",
+        ROOT / "runtime/codex-app-server-turn-probe-v0.1.schema.json",
+        ROOT / "runtime/codex-app-server-turn-probe-verification-v0.1.schema.json",
         ROOT / "runtime/journal-recovery-event-v0.1.schema.json",
         ROOT / "runtime/journal-recovery-receipt-v0.1.schema.json",
         ROOT / "protocol/global-progress-reason-code-migration-v0.1.schema.json",

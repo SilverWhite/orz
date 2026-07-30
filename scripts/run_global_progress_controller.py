@@ -20,14 +20,14 @@ from append_global_progress_transition_event import (
     append_transition_event,
 )
 from build_global_progress_transition_event import TransitionError, build_event
-from prototype.fep_agent_proto.errors import PrototypeError
-from prototype.fep_agent_proto.io_utils import (
+from assurance.errors import AssuranceError as PrototypeError
+from assurance.io_utils import (
     atomic_write_json,
     sha256_file,
 )
-from prototype.fep_agent_proto.journal_lock import JournalLockError
-from prototype.fep_agent_proto.journal_recovery import inspect_journal_recovery
-from prototype.fep_agent_proto.schema import validate_instance
+from assurance.journal_lock import JournalLockError
+from assurance.journal_recovery import inspect_journal_recovery
+from assurance.schema import validate_instance
 
 
 RECEIPT_SCHEMA = ROOT / "runtime" / "global-progress-controller-receipt-v0.1.schema.json"

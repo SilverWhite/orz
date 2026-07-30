@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from append_global_progress_transition_event import AppendError, _canonical, _replay
-from prototype.fep_agent_proto.cli_session_lifecycle import (
+from assurance.cli_session_lifecycle import (
     CliLifecycleError,
     PAYLOAD_SCHEMA_NAME,
     build_run_event,
@@ -26,15 +26,15 @@ from prototype.fep_agent_proto.cli_session_lifecycle import (
     reduce_cli_lifecycle,
     validate_observation,
 )
-from prototype.fep_agent_proto.global_progress_state import (
+from assurance.global_progress_state import (
     reduce_global_progress_events,
 )
-from prototype.fep_agent_proto.io_utils import atomic_write_json, sha256_file
-from prototype.fep_agent_proto.journal_lock import (
+from assurance.io_utils import atomic_write_json, sha256_file
+from assurance.journal_lock import (
     JournalLockError,
     exclusive_journal_lock,
 )
-from prototype.fep_agent_proto.schema import validate_instance
+from assurance.schema import validate_instance
 
 
 RECEIPT_SCHEMA = (

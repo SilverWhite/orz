@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from prototype.fep_agent_proto.journal import append_event, replay_journal
+from assurance.journal import append_event, replay_journal
 
 
 ROOT = Path(__file__).resolve().parents[2]

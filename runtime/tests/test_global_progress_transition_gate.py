@@ -8,8 +8,8 @@ import sys
 import tempfile
 import unittest
 
-from prototype.fep_agent_proto.journal import append_event, replay_journal
-from prototype.fep_agent_proto.journal_lock import exclusive_journal_lock
+from assurance.journal import append_event, replay_journal
+from assurance.journal_lock import exclusive_journal_lock
 
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from prototype.fep_agent_proto.errors import PrototypeError
-from prototype.fep_agent_proto.journal_recovery import (
+from assurance.errors import AssuranceError as PrototypeError
+from assurance.journal_recovery import (
     inspect_journal_recovery,
     recover_journal,
 )

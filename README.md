@@ -7,8 +7,8 @@ development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只
 已启动并通过；GSA-CORE 已新增首个非 LIF、多文件、确定性只读审查切片。标准模式默认使用受限工作区内的固定动作；Docker 只保留为显式、
 按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend 已具备 AppContainer
 profile/observation/verifier 与 live probe：本机已 observed 进程/文件/注册表隔离，但 raw TCP
-出站在空 capability AppContainer 下仍可能成功，因此 outcome 保持 noncompliant，selection 不 allow。Grok Build 是当前证据最完整的参考框架，
-其官方 Windows binary 已完成锁定与离线核验。首个 Codex app-server 双向 ordered-capture lifecycle normalizer
+出站在空 capability AppContainer 下仍可能成功，因此 outcome 保持 noncompliant，selection 不 allow。Grok Build 是当前第一生产 runtime 底座候选，
+`0.2.112 (9bbd559437)` 已完成本地锁定、离线核验与 promotion gate；`windows_child_tree_timeout` 仅作为 carried-forward limitation 记录。首个 Codex app-server 双向 ordered-capture lifecycle normalizer
 已完成 no-model 离线实现、独立重放与隔离 live app-server smoke；live 路径只执行 initialize 和
 ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
 真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
@@ -26,7 +26,7 @@ gate → orientation checkpoint → source visibility gate → fake DeepSeek-sha
 runtime JSONL journal → independent verifier。配套新增工具可用性探测/信念停滞 guard、检索子代理 no-model
 fixture，以及 Windows native sandbox 合同层；这些均不调用真实模型、不联网、不读取 credential。
 P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`run` 支持 `--ask` 生成冻结 task contract，
-也支持 `--task` 复用既有合同。当前入口仍是 offline/fake。
+也支持 `--task` 复用既有合同。`gsa grok doctor`、`gsa grok run --mode version-smoke` 与 `gsa tui --runtime grok --run version-smoke` 已接入 Grok first slice；默认 `gsa run` 仍保留 canonical fixture/assurance path。
 
 本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它从 FEP/LIF 工作流暴露的问题出发，但把
 来源先行、证据分层、独立性、反例搜索、机械验证和 claim 边界抽为通用科学保障能力，目标是让接入的模型
@@ -35,8 +35,8 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`r
 
 ## 产品定位
 
-- **runtime-neutral**：通用 model/tool/session runtime 由通过 capability gate 的外部框架提供；Grok Build
-  是当前 reference runtime，不是默认、强制或唯一底座。
+- **runtime-neutral / runtime-first**：通用 model/tool/session runtime 由通过 capability gate 的外部框架提供；Grok Build
+  是当前第一生产底座候选与默认锁定 runtime，其他框架保留为部件级设计参考。
 - **核心差异**：`general-science` profile 负责领域无关的来源/证据/claim 边界、研究生命周期、
   validator、场景导出和评测隔离；`lif-research` 只添加 LIF 当前来源路由与 validator 增量。
 - **多源借鉴**：Grok、Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 均可提供设计参考；新增
@@ -162,7 +162,6 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`r
 - [`scripts/verify_global_progress_checkpoint.py`](scripts/verify_global_progress_checkpoint.py)：重新运行上游独立 verifier、重建 checkpoint、检查 hash/provenance/policy continuity 与 focus 消耗。
 - [`scripts/build_global_progress_transition_event.py`](scripts/build_global_progress_transition_event.py)：将 checkpoint verification 投影为 hash-chained `gate_decision` run event；阻断时保持原状态并保留 receipt。
 - [`scripts/append_global_progress_transition_event.py`](scripts/append_global_progress_transition_event.py)：在共享跨进程锁内，只把能精确延伸 run/manifest/sequence/hash chain 的 transition event 追加到 JSONL journal，并在追加后重放。
-- [`prototype/fep_agent_proto/journal_lock.py`](prototype/fep_agent_proto/journal_lock.py)：Windows/POSIX writer 共用的 sidecar advisory lock；覆盖 replay→append 临界区并提供有界超时。
 - [`scripts/recover_torn_journal.py`](scripts/recover_torn_journal.py)：默认只读检查 journal；仅在显式 `--apply`、有效前缀可独立重放且损坏限于无换行尾部时执行锁内恢复，并生成 quarantine 与恢复收据。
 - [`scripts/run_global_progress_controller.py`](scripts/run_global_progress_controller.py)：no-model disposable controller；组合 transition builder、幂等锁内 append、journal 恢复分类与状态投影，但不自动修复 journal。
 - [`scripts/verify_global_progress_controller_receipt.py`](scripts/verify_global_progress_controller_receipt.py)：只读重建 controller 候选结果，并交叉检查 source digests、当前 journal 快照、事件唯一性与状态投影。
@@ -204,7 +203,7 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`r
 
 ## 当前边界
 
-- 正式通用 runtime 由通过门禁的外部框架提供；Grok Build 仅为当前 reference runtime。本仓库不复刻
+- 正式通用 runtime 由通过门禁的外部框架提供；Grok Build 是当前第一生产底座候选。本仓库不复刻
   model/session/tool/permission 栈。P2 只实现 runtime-neutral sandbox launcher/verifier，不实现平行 runtime。
 - 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher、已成功的显式确认/零重试 DeepSeek one-shot probe，以及一次成功完成的固定 Grok→DeepSeek 真实模型会话；尚未执行任意 prompt、真实 workspace、评分或生产 Agent session，修复后的 terminal `result.json` 路径也尚未用第二次真实请求复验。
 - 不决定全部使用 Rust；只把 Rust 视为少量保障组件与 Windows 进程边界的候选实现语言。

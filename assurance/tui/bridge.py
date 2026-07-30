@@ -161,6 +161,41 @@ def build_live_run_fn(
     return _run
 
 
+def build_grok_live_run_fn(
+    *,
+    run_root: str,
+    workspace: str | None = None,
+    run_id: str | None = None,
+) -> Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]:
+    """Build a Grok ``version-smoke`` run function for the TUI event source.
+
+    The first Grok slice runs only the locked binary ``--version`` smoke.
+    It writes a Grok runtime receipt plus normalized ``events.jsonl``; this
+    bridge then streams those already-normalized runtime events into the TUI.
+    """
+    from pathlib import Path
+
+    from assurance.grok_runtime_adapter import run_grok_version_smoke
+
+    _run_root = Path(run_root)
+    _workspace = Path(workspace) if workspace else None
+
+    def _run(on_event: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+        receipt = run_grok_version_smoke(
+            run_root=_run_root,
+            workspace_path=_workspace,
+            run_id=run_id,
+        )
+        events_path = Path(str(receipt["artifacts"]["events_path"]))
+        with events_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    on_event(json.loads(line))
+        return receipt
+
+    return _run
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # on_event callback factory (for live streaming)
 # ══════════════════════════════════════════════════════════════════════════════

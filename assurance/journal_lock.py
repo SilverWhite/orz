@@ -9,6 +9,8 @@ from typing import BinaryIO, Iterator
 
 from .errors import AssuranceError
 
+JournalLockError = AssuranceError
+
 
 def journal_lock_path(journal_path: Path) -> Path:
     return Path(f"{journal_path}.lock")

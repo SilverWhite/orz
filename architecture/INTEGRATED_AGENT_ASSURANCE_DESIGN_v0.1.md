@@ -162,9 +162,9 @@ The simplification supplement is retained as a guardrail: the UI should be famil
 
 Grok ACP / Grok Build remains the primary reference runtime path. The repository should use it to avoid reimplementing mature agent features. Candidate runtimes are judged by their ability to supply the generic platform responsibilities listed in section 4.1 and to emit enough observable state for the assurance layer.
 
-Current 2026-07-30 upstream scan adds these routing constraints:
+Current 2026-07-30 upstream scan and follow-up promotion add these routing constraints:
 
-- The installed PATH `grok` reports `0.2.112 (9bbd559437) [stable]`, while the checked-in promoted lock still points at the previously verified `0.2.111` binary. Treat `0.2.112` as the next candidate until the same binary identity, conformance, and assurance gates pass.
+- The installed PATH `grok` reports `0.2.112 (9bbd559437) [stable]`, and the checked-in promoted lock now points at the verified `0.2.112` binary. Treat `windows_child_tree_timeout` as a carried-forward baseline limitation, not as proof of Grok-owned timeout cleanup.
 - Grok Build is now an open-source upstream base with its own TUI, ACP/headless entrypoints, session/runtime loop, tool dispatch, permissions, sandbox, hooks, MCP, plugins, skills, subagents, workflows, checkpoint/workspace behavior, and configuration surface. These are runtime-owned unless a concrete audit proves a missing capability.
 - Grok configuration now exposes useful graft points such as custom models, custom query parameters, environment-sourced HTTP headers, `.grok/agents`, `.grok/workflows`, `.grok/hooks`, MCP, permissions, and subagent/workflow toggles. Local product code should consume or wrap these surfaces, not duplicate them.
 - The two retained retrieval subagent designs should be mapped to Grok-native subagent/workflow surfaces where possible, while preserving this repository's capability receipts, child capability enforcement, evidence gates, and redaction rules.
@@ -411,7 +411,7 @@ The next implementation work should be ordered around the corrected ownership bo
 4. Keep assurance gates strict and runtime-neutral.
 5. Add explicit labels in code/docs for `runtime-owned`, `adapter-owned`, `assurance-owned`, `ui-owned`, and `fixture-only` modules.
 6. Update audits to check ownership drift, not only local correctness.
-7. Promote Grok `0.2.112` only after updating the lock metadata and rerunning identity, ACP initialize, fake tool/permission/cancel, child-tree, workspace trust, event bridge, subagent/workflow, and UI projection checks.
+7. Keep the Grok `0.2.112` promotion boundary explicit: lock metadata and core conformance checks are complete, while `windows_child_tree_timeout` still needs a later baseline-regression versus Grok-owned cleanup split.
 8. Convert the retained retrieval subagents into Grok-compatible agent/workflow profiles before adding any new local subagent scheduler.
 
 The desired end state is not less design. It is the same design, with the generic agent platform work moved back onto mature foundations.

@@ -17,11 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from prototype.fep_agent_proto.journal_lock import (
+from assurance.journal_lock import (
     JournalLockError,
     exclusive_journal_lock,
 )
-from prototype.fep_agent_proto.global_progress_state import (
+from assurance.global_progress_state import (
     reduce_global_progress_events,
 )
 

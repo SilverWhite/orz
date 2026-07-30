@@ -18,7 +18,10 @@ param(
     [int]$ToolTimeoutMilliseconds = 3000,
 
     [ValidateRange(20, 180)]
-    [int]$TimeoutSeconds = 60
+    [int]$TimeoutSeconds = 60,
+
+    [ValidateRange(0, 30)]
+    [int]$ExitGraceSeconds = 10
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +46,8 @@ $arguments = @(
     '--release-metadata', $release,
     '--python-path', $python,
     '--tool-timeout-ms', [string]$ToolTimeoutMilliseconds,
-    '--timeout-seconds', [string]$TimeoutSeconds
+    '--timeout-seconds', [string]$TimeoutSeconds,
+    '--exit-grace-seconds', [string]$ExitGraceSeconds
 )
 if ($BinaryPath) {
     $arguments += @('--binary', (Resolve-Path -LiteralPath $BinaryPath -ErrorAction Stop).Path)

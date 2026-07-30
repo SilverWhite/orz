@@ -13,10 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from prototype.fep_agent_proto.codex_app_server_capture import (
+from assurance.codex_app_server_capture import (
     capture_ephemeral_thread,
 )
-from prototype.fep_agent_proto.errors import PrototypeError
+from assurance.errors import AssuranceError as PrototypeError
 
 
 def main() -> int:

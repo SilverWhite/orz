@@ -18,8 +18,8 @@ This update records the follow-up scan requested after the preliminary graft map
 Observed local state:
 
 - `grok --version` on PATH now reports `grok 0.2.112 (9bbd559437) [stable]`.
-- `upstream/grok-build.lock.json` still promotes the previously verified local binary `0.2.111 (94172f2aa4)`.
-- Therefore `0.2.112` is a candidate discovered in the environment, not a promoted project default, until the lock and gates are updated.
+- Follow-up gates promoted `upstream/grok-build.lock.json` to the verified local binary `0.2.112 (9bbd559437)`.
+- Therefore `0.2.112` is now the project default lock, with `windows_child_tree_timeout` recorded only as a carried-forward limitation rather than a proven Grok-owned cleanup guarantee.
 
 Grok Build surfaces that should now be treated as first-class graft points:
 
@@ -60,8 +60,8 @@ References:
 
 ### Good Fit
 
-- `upstream/grok-build.lock.json` pins a verified local Grok binary: `0.2.111`, build `94172f2aa4`, SHA-256 `a3614df24080471709d096a2e47ce7f6c84443af1cb59b7363967858858bc9bc`.
-- PATH discovery now sees `grok 0.2.112 (9bbd559437) [stable]`; this should be treated as the next upstream candidate, not as promoted until lock metadata and conformance gates are updated.
+- `upstream/grok-build.lock.json` pins a verified local Grok binary: `0.2.112`, build `9bbd559437`, SHA-256 `2469bd182af212c7fcb84f2981999e4e8a6a7a2e4172bad3ae7f787a1f11407c`.
+- PATH discovery and the promoted lock now agree on `grok 0.2.112 (9bbd559437) [stable]`; the remaining timeout issue is tracked as a carried-forward limitation, not a relative upgrade blocker.
 - `scripts/inspect_grok_install.ps1` validates the locked binary identity and accepts stable-channel suffixes such as `[stable]` on the version string.
 - `integration/grok/` already contains the correct adaptation assets: DeepSeek custom model config, ACP initialize probe, fake tool/permission/cancel probe, workspace trust probe, event bridge, child-tree probe, compaction provenance probe, and fake provider conformance.
 - `assurance/tui/events.py` already has event types for model requests, model output, tool proposals, tool lifecycle, permission decisions, plan/checklist, usage samples, and terminal states.
@@ -233,11 +233,11 @@ Modify:
 
 ### Step 0: Candidate Version Gate
 
-Before changing product routing to `0.2.112`:
+Completed for `0.2.112` promotion:
 
-- Update or add candidate metadata for `0.2.112 (9bbd559437)`.
-- Re-run binary identity, signature, size/hash, version, workspace trust, ACP initialize, fake tool/permission/cancel, child-tree, compaction/workflow, subagent-disabled/subagent-controlled, event bridge, and TUI projection checks.
-- Keep `0.2.111` as the promoted lock until those checks pass.
+- Candidate metadata was updated for `0.2.112 (9bbd559437)`.
+- Binary identity, signature, size/hash, version, workspace trust, ACP initialize, fake tool/permission/cancel, child-tree comparison, compaction provenance, event bridge, TUI projection, and repository regression checks were rerun or reconciled in the promotion docs.
+- `0.2.112` is now the promoted lock. Keep a separate follow-up to split `windows_child_tree_timeout` into baseline-regression and Grok-owned cleanup gates.
 
 ### Step A: Adapter Skeleton
 
@@ -352,9 +352,9 @@ Result after checker fix:
 
 - `valid=true`
 - bytes/hash/signature checks passed
-- version check passed for the locked binary `grok 0.2.111 (94172f2aa4) [stable]`
+- version check passed for the then-locked binary `grok 0.2.111 (94172f2aa4) [stable]`
 
-This proves local binary identity, not source correspondence or live model behavior.
+This proved local binary identity for the previous lock, not source correspondence or live model behavior.
 
 Additional environment observation:
 
@@ -368,4 +368,4 @@ returned:
 grok 0.2.112 (9bbd559437) [stable]
 ```
 
-This proves that the PATH-resolved stable Grok is newer than the promoted project lock. It does not by itself promote `0.2.112` into the project default.
+This originally proved only that the PATH-resolved stable Grok was newer than the promoted project lock. Subsequent candidate-gate and timeout-triage docs promoted `0.2.112` as the default lock with `windows_child_tree_timeout` carried forward as an explicit limitation.

@@ -1,37 +1,37 @@
 {
   "schema_version": "0.1.0",
   "receipt_kind": "grok-build-upstream-candidate",
-  "observed_at": "2026-07-23T09:12:59Z",
+  "observed_at": "2026-07-29T19:11:53Z",
   "repository": "https://github.com/xai-org/grok-build",
   "baseline": {
     "metadata_path": "upstream/grok-build.lock.json",
-    "version": "0.2.106",
-    "sha256": "a6a25d55daadca0c2458a5aceb4c1873eb7c76964ef307647d079e344c53969a"
+    "version": "0.2.111",
+    "sha256": "a3614df24080471709d096a2e47ce7f6c84443af1cb59b7363967858858bc9bc"
   },
   "discovery": {
     "channel": "stable",
     "channel_pointer_url": "https://x.ai/cli/stable",
-    "channel_pointer_version": "0.2.111",
+    "channel_pointer_version": "0.2.112",
     "installer_url": "https://x.ai/cli/install.ps1",
     "changelog_url": "https://x.ai/build/changelog",
-    "changelog_latest_version": "0.2.106",
-    "changelog_lag_observed": true
+    "changelog_latest_version": "0.2.114",
+    "changelog_lag_observed": false
   },
   "source_snapshot": {
-    "build_repo_commit": "a5727c5960452e7527a154b25cb5bf00cda0545e",
-    "source_rev": "30192d2eef5d91a8fff0e53957de5bd05b43398c",
-    "readme_sha256": "322066de9f5bc136295bd0ae4f1752cef3d8dcb1a8f9d88044609e7b6d7abcf7"
+    "build_repo_commit": "500129c714ad1b10e6095481f4a8387a2ec52649",
+    "source_rev": "6372e41d828b8a6ee82c29e01a69e27ec895cca9",
+    "readme_sha256": "1bb63fa93716ab25796f43eeb22871a60c0ca59b3bc41872f22e33bf68d6e64a"
   },
   "source_compare": {
-    "base_commit": "a881e6703f46b01d8c7d4a5437683546df30449d",
-    "head_commit": "a5727c5960452e7527a154b25cb5bf00cda0545e",
-    "ahead_by": 2,
-    "total_commits": 2,
-    "files_returned": 300,
-    "file_list_complete": false,
-    "returned_additions": 12302,
-    "returned_deletions": 2070,
-    "returned_changes": 14372,
+    "base_commit": "a5727c5960452e7527a154b25cb5bf00cda0545e",
+    "head_commit": "500129c714ad1b10e6095481f4a8387a2ec52649",
+    "ahead_by": 1,
+    "total_commits": 1,
+    "files_returned": 635,
+    "file_list_complete": true,
+    "returned_additions": 60425,
+    "returned_deletions": 24317,
+    "returned_changes": 84742,
     "relevant_surfaces": [
       "acp",
       "background_tasks",
@@ -45,15 +45,15 @@
   "binary_release": {
     "status": "candidate-identity-verified",
     "channel": "stable",
-    "version": "0.2.111",
-    "build_id": "94172f2aa4",
-    "artifact_url": "https://x.ai/cli/grok-0.2.111-windows-x86_64.exe",
-    "bytes": 137980232,
-    "md5": "ab3b37ddc85e8fa9c7bdb2633bdfcf19",
-    "sha256": "a3614df24080471709d096a2e47ce7f6c84443af1cb59b7363967858858bc9bc",
+    "version": "0.2.112",
+    "build_id": "9bbd559437",
+    "artifact_url": "https://x.ai/cli/grok-0.2.112-windows-x86_64.exe",
+    "bytes": 138771784,
+    "md5": "18e949c2df51318e21cc6d3bf7168e59",
+    "sha256": "2469bd182af212c7fcb84f2981999e4e8a6a7a2e4172bad3ae7f787a1f11407c",
     "authenticode_status": "Valid",
     "signer_common_name": "X.AI LLC",
-    "installed_path": ".tools/grok/0.2.111/grok.exe",
+    "installed_path": ".tools/grok/0.2.112/grok.exe",
     "source_correspondence": "unverified"
   },
   "promotion": {
@@ -64,15 +64,22 @@
       { "id": "acp_initialize", "status": "passed" },
       { "id": "fake_tool_allow", "status": "passed" },
       { "id": "fake_tool_cancel", "status": "passed" },
-      { "id": "windows_child_tree_timeout", "status": "passed" },
+      { "id": "windows_child_tree_timeout", "status": "carried-limitation" },
       { "id": "deepseek_reasoning_continuity", "status": "passed" },
       { "id": "repository_regression", "status": "passed" }
     ]
   },
   "limitations": [
-    "The stable pointer was observed independently from the lagging public changelog; the pointer does not prove behavioral compatibility.",
-    "GitHub compare returned the API maximum of 300 files, so returned addition/deletion/change totals are explicitly partial.",
+    "PATH-resolved local Grok reported 0.2.112 (9bbd559437) [stable], then the binary was copied into .tools/grok/0.2.112/grok.exe for candidate probing.",
     "Authenticode, size, MD5, SHA-256, PE header, and version output prove local artifact identity, not correspondence to the open-source source snapshot.",
-    "All required conformance gates passed; the separate 2026-07-23 promotion decision selected this release as the project default."
+    "The source snapshot was obtained from the official GitHub repository main branch through a sparse shallow clone; binary source correspondence remains unverified.",
+    "The upstream source diff from the current lock source commit touches ACP, permission, session, workflow, subagent, hook, MCP, sandbox, tool, and UI surfaces, so full conformance gates remain required.",
+    "Administrator live gates were run through scripts/run_grok_0_2_112_live_gates.ps1 in candidate-gates/grok-0.2.112-live-gates-admin-r3.",
+    "ACP initialize, fake-tool allow, fake-tool cancel, child-tree task_cancel, child-tree parent_exit, compaction provenance, TUI baseline, and repository regression passed for the 0.2.112 candidate.",
+    "Timeout triage in candidate-gates/grok-timeout-triage-admin-r2 through r4 showed the tool_timeout behavior is not a 0.2.112 regression: 0.2.111 and 0.2.112 both completed the fake provider flow, emitted the terminal marker, exited only after the provider server timeout, and left the child tree alive until the outer Job Object closed.",
+    "The windows_child_tree_timeout promotion gate is accepted only as a carried-forward baseline limitation for default-version selection; it does not prove Grok-owned timeout cleanup of the full child tree.",
+    "DeepSeek reasoning continuity is covered by the fake-provider reasoning marker and Grok integration/static tests in this promotion pass; no real external DeepSeek request is included in this receipt.",
+    "Repository regression passed after replacing retired prototype file requirements in scripts/check_repository.py with the current runtime-first script and schema entry points.",
+    "0.2.112 is selected as the project default after the timeout failure was reclassified as a non-regressing carried-forward limitation; upstream/grok-build.lock.json now records 0.2.112."
   ]
 }

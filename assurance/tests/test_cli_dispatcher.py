@@ -129,6 +129,122 @@ class GsaCliDispatcherTests(unittest.TestCase):
         error = json.loads(error_output.getvalue())
         self.assertIn("empty or absent", error["error"])
 
+    @patch("assurance.grok_runtime_adapter.inspect_grok_runtime")
+    def test_grok_doctor_json_reports_locked_binary_boundary(self, mock_inspect) -> None:
+        mock_inspect.return_value = {
+            "valid": True,
+            "binary_path": str(ROOT / ".tools" / "grok" / "0.2.112" / "grok.exe"),
+            "checks": {"sha256_match": True},
+            "observed": {
+                "version_output": "grok 0.2.112 (9bbd559437) [stable]",
+                "sha256": "2" * 64,
+            },
+        }
+
+        exit_code, report = self._capture_json(["grok", "doctor", "--json"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["report_kind"], "grok_cli_doctor_report")
+        self.assertEqual(report["runtime_boundaries"]["supported_mode"], "version-smoke")
+        self.assertTrue(report["runtime_boundaries"]["no_residue_required"])
+
+    @patch("assurance.grok_runtime_adapter.run_grok_version_smoke")
+    def test_grok_run_version_smoke_json_preserves_no_residue(self, mock_run) -> None:
+        events_path = self.run_root / "events.jsonl"
+        mock_run.return_value = {
+            "valid": True,
+            "run_id": "RUN-GROK-CLI-TEST-001",
+            "request": {
+                "run_root": str(self.run_root.resolve()),
+                "workspace_path": str(ROOT.resolve()),
+                "mode": "version_smoke",
+            },
+            "binary": {
+                "version_output": "grok 0.2.112 (9bbd559437) [stable]",
+            },
+            "containment": {
+                "no_residue_required": True,
+                "no_residue_observed": True,
+                "external_cleanup_required": False,
+            },
+            "artifacts": {
+                "events_path": str(events_path.resolve()),
+            },
+        }
+
+        exit_code, receipt = self._capture_json(
+            [
+                "grok",
+                "run",
+                "--mode", "version-smoke",
+                "--run-root", str(self.run_root),
+                "--workspace", str(ROOT),
+                "--run-id", "RUN-GROK-CLI-TEST-001",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(receipt["valid"])
+        self.assertTrue(receipt["containment"]["no_residue_required"])
+        self.assertTrue(receipt["containment"]["no_residue_observed"])
+        mock_run.assert_called_once_with(
+            run_root=self.run_root,
+            workspace_path=ROOT,
+            run_id="RUN-GROK-CLI-TEST-001",
+        )
+
+    @patch("assurance.tui.main.main")
+    def test_tui_runtime_grok_dispatches_to_tui_main(self, mock_tui_main) -> None:
+        mock_tui_main.return_value = 0
+
+        exit_code = gsa_main(
+            [
+                "tui",
+                "--runtime", "grok",
+                "--run", "version-smoke",
+                "--run-root", str(self.run_root),
+                "--workspace", str(ROOT),
+            ]
+        )
+
+        self.assertEqual(exit_code, 0)
+        forwarded = mock_tui_main.call_args.args[0]
+        self.assertIn("--runtime", forwarded)
+        self.assertIn("grok", forwarded)
+        self.assertIn("--workspace", forwarded)
+        self.assertIn(str(ROOT), forwarded)
+
+    def test_review_global_json_activates_explicit_mode(self) -> None:
+        exit_code, receipt = self._capture_json(
+            [
+                "review",
+                "global",
+                "--no-git-status",
+                "--path", "CLI_PROJECT_INDEX.md",
+                "--path", "assurance/global_review_mode.py",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["receipt_kind"], "global_review_mode_receipt")
+        self.assertTrue(receipt["mode_activation"]["explicit_only"])
+        self.assertEqual(receipt["scope"]["source"], "explicit_paths")
+        self.assertEqual(len(receipt["dimensions"]), 5)
+        self.assertEqual(
+            [item["dimension_id"] for item in receipt["dimensions"]],
+            [
+                "design_intent_alignment",
+                "current_progress_judgment",
+                "implementation_content_positioning",
+                "critical_design_preservation",
+                "project_task_boundary",
+            ],
+        )
+
     @patch("assurance.canonical_cli.build_real_deepseek_context")
     @patch("assurance.canonical_cli._read_windows_credential")
     @patch("assurance.canonical_cli.call_deepseek_api")

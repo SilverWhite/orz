@@ -95,6 +95,21 @@ from .deepseek_stream_observation import (
     run_deepseek_stream_observation_fixture,
     verify_deepseek_stream_observation_fixture,
 )
+from .grok_event_normalizer import (
+    normalize_grok_runtime_receipt,
+    project_grok_events_for_tui,
+    write_grok_events_jsonl,
+)
+from .grok_runtime_adapter import (
+    GrokRunRequest,
+    GrokRuntimeConfig,
+    inspect_grok_runtime,
+    run_grok_headless_once,
+    run_grok_version_smoke,
+)
+from .global_review_mode import (
+    build_global_review_mode_receipt,
+)
 from .browser_retrieval import (
     BrowserCDPClient,
     PageContent,
@@ -416,6 +431,7 @@ __all__ = [
     "build_retrieval_task_contract",
     "build_task_contract_from_ask",
     "build_gsa_runtime_preflight_projection",
+    "build_global_review_mode_receipt",
     "build_workspace_first_frozen_context",
     "build_tool_availability_context_block",
     "build_tool_availability_gate_receipt",

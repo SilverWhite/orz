@@ -201,6 +201,7 @@ function New-RestrictedWorkspaceTrustReceipt {
     $script = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'new_grok_workspace_trust_receipt.ps1')).Path
     $json = (& powershell -NoProfile -ExecutionPolicy Bypass -File $script `
         -WorkspacePath $WorkspacePath `
+        -ProjectRootPath $WorkspacePath `
         -OutputPath $ReceiptPath `
         -Decision restricted 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {

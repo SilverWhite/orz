@@ -197,6 +197,109 @@ def _run_verify(args: argparse.Namespace) -> int:
     return 0 if receipt["valid"] else 1
 
 
+def _run_grok_doctor(args: argparse.Namespace) -> int:
+    from .grok_runtime_adapter import inspect_grok_runtime
+
+    inspection = inspect_grok_runtime()
+    report = {
+        "schema_version": "0.1.0-draft",
+        "report_kind": "grok_cli_doctor_report",
+        "valid": inspection.get("valid") is True,
+        "workspace_root": str(ROOT),
+        "inspection": inspection,
+        "entrypoints": {
+            "doctor": "python gsa.py grok doctor",
+            "version_smoke": (
+                "python gsa.py grok run --mode version-smoke "
+                "--run-root <path>"
+            ),
+            "tui_version_smoke": (
+                "python gsa.py tui --runtime grok --run version-smoke "
+                "--run-root <path>"
+            ),
+        },
+        "runtime_boundaries": {
+            "supported_mode": "version-smoke",
+            "network": "disabled",
+            "prompt_submission": "not_supported_in_this_slice",
+            "tool_execution": "not_supported_in_this_slice",
+            "no_residue_required": True,
+            "residue_scan_scope": "root_process_only_for_version_smoke",
+        },
+        "limitations": [
+            "Grok CLI wiring currently supports only locked-binary doctor and version-smoke execution.",
+            "Prompt and tool modes remain blocked until stronger Windows child-tree containment is wired.",
+        ],
+    }
+    observed = inspection.get("observed", {}) if isinstance(inspection, dict) else {}
+    human_lines = [
+        f"Grok CLI doctor: {'valid' if report['valid'] else 'invalid'}",
+        f"binary: {inspection.get('binary_path', '')}",
+        f"version: {observed.get('version_output', '')}",
+        f"sha256 match: {inspection.get('checks', {}).get('sha256_match')}",
+        "supported run mode: version-smoke",
+        "no-residue required: true",
+    ]
+    _print_or_json(report, json_output=args.json, human_lines=human_lines)
+    return 0 if report["valid"] else 1
+
+
+def _run_grok(args: argparse.Namespace) -> int:
+    from .grok_runtime_adapter import run_grok_version_smoke
+
+    if args.mode != "version-smoke":
+        raise AssuranceError(f"unsupported Grok run mode: {args.mode}")
+    receipt = run_grok_version_smoke(
+        run_root=args.run_root,
+        workspace_path=args.workspace,
+        run_id=args.run_id,
+    )
+    containment = receipt.get("containment", {})
+    human_lines = [
+        f"grok run [version-smoke]: {'valid' if receipt['valid'] else 'invalid'}",
+        f"run_id: {receipt['run_id']}",
+        f"run_root: {receipt['request']['run_root']}",
+        f"version: {receipt['binary']['version_output']}",
+        f"no residue observed: {containment.get('no_residue_observed')}",
+        f"external cleanup required: {containment.get('external_cleanup_required')}",
+        f"events: {receipt['artifacts']['events_path']}",
+    ]
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["valid"] else 1
+
+
+def _run_global_review(args: argparse.Namespace) -> int:
+    from .global_review_mode import build_global_review_mode_receipt
+    from .utils import atomic_write_json
+
+    receipt = build_global_review_mode_receipt(
+        paths=args.path,
+        include_git_status=not args.no_git_status,
+        review_id=args.review_id,
+    )
+    if args.output:
+        atomic_write_json(args.output, receipt)
+    triggered = sorted(
+        {
+            flag
+            for finding in receipt["path_findings"]
+            for flag in finding["risk_flags"]
+        }
+    )
+    output_line = f"receipt: {args.output}" if args.output else "receipt: stdout"
+    human_lines = [
+        "global review mode: active",
+        f"review_id: {receipt['review_id']}",
+        f"scope: {receipt['scope']['source']} ({receipt['scope']['path_count']} paths)",
+        f"dimensions: {len(receipt['dimensions'])} required",
+        f"risk flags: {', '.join(triggered) if triggered else 'none'}",
+        output_line,
+        "ordinary review remains: local_engineering_review",
+    ]
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0
+
+
 def _run_tui(args: argparse.Namespace) -> int:
     from assurance.tui.main import main as tui_main
 
@@ -205,6 +308,8 @@ def _run_tui(args: argparse.Namespace) -> int:
         str(args.width),
         "--height",
         str(args.height),
+        "--runtime",
+        args.runtime,
     ]
     if args.demo:
         tui_args.append("--demo")
@@ -226,6 +331,8 @@ def _run_tui(args: argparse.Namespace) -> int:
         tui_args.extend(["--credential-target", args.credential_target])
     if args.tui_run_root:
         tui_args.extend(["--run-root", str(args.tui_run_root)])
+    if args.workspace:
+        tui_args.extend(["--workspace", str(args.workspace)])
     return tui_main(tui_args)
 
 
@@ -287,6 +394,60 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--json", action="store_true")
     verify.set_defaults(handler=_run_verify)
 
+    grok = subparsers.add_parser("grok", help="Grok runtime adapter commands.")
+    grok_subparsers = grok.add_subparsers(dest="grok_command", required=True)
+    grok_doctor = grok_subparsers.add_parser(
+        "doctor",
+        help="Inspect the locked Grok binary and runtime boundary.",
+    )
+    grok_doctor.add_argument("--json", action="store_true")
+    grok_doctor.set_defaults(handler=_run_grok_doctor)
+    grok_run = grok_subparsers.add_parser(
+        "run",
+        help="Run a supported Grok adapter smoke.",
+    )
+    grok_run.add_argument("--run-root", type=Path, required=True)
+    grok_run.add_argument(
+        "--workspace",
+        type=Path,
+        help=(
+            "Workspace directory to trust and use as Grok cwd "
+            "(default: isolated directory under --run-root)."
+        ),
+    )
+    grok_run.add_argument(
+        "--mode",
+        choices=["version-smoke"],
+        default="version-smoke",
+        help="Grok adapter mode. Only version-smoke is currently promoted.",
+    )
+    grok_run.add_argument("--run-id")
+    grok_run.add_argument("--json", action="store_true")
+    grok_run.set_defaults(handler=_run_grok)
+
+    review = subparsers.add_parser("review", help="Review-mode utilities.")
+    review_subparsers = review.add_subparsers(dest="review_command", required=True)
+    global_review = review_subparsers.add_parser(
+        "global",
+        help="Explicitly activate Global Review Mode.",
+    )
+    global_review.add_argument(
+        "--path",
+        type=Path,
+        action="append",
+        default=[],
+        help="Path to include in the global-review scope; repeatable.",
+    )
+    global_review.add_argument(
+        "--no-git-status",
+        action="store_true",
+        help="Use only explicit --path values instead of also reading git status.",
+    )
+    global_review.add_argument("--review-id")
+    global_review.add_argument("--output", type=Path)
+    global_review.add_argument("--json", action="store_true")
+    global_review.set_defaults(handler=_run_global_review)
+
     tui = subparsers.add_parser("tui", help="Render or run the terminal UI prototype.")
     tui.add_argument(
         "-w",
@@ -335,7 +496,13 @@ def _parser() -> argparse.ArgumentParser:
     tui.add_argument(
         "--run",
         dest="tui_run",
-        help="Run the canonical CLI and display it in the TUI.",
+        help="Run the selected runtime and display it in the TUI.",
+    )
+    tui.add_argument(
+        "--runtime",
+        choices=["canonical", "grok"],
+        default="canonical",
+        help="Runtime to use for --run.",
     )
     tui.add_argument(
         "--real",
@@ -352,6 +519,11 @@ def _parser() -> argparse.ArgumentParser:
         dest="tui_run_root",
         type=Path,
         help="Run root directory for --run.",
+    )
+    tui.add_argument(
+        "--workspace",
+        type=Path,
+        help="Workspace directory for Grok runtime --run.",
     )
     tui.set_defaults(handler=_run_tui)
 

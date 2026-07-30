@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/global-review-mode-receipt-v0.1.schema.json",
+  "title": "Global review mode activation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "review_id",
+    "created_at",
+    "valid",
+    "mode_activation",
+    "scope",
+    "dimensions",
+    "path_findings",
+    "decision",
+    "safety",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "receipt_kind": {
+      "const": "global_review_mode_receipt"
+    },
+    "review_id": {
+      "$ref": "#/$defs/id"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "valid": {
+      "const": true
+    },
+    "mode_activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activation",
+        "explicit_only",
+        "ordinary_review_scope",
+        "source_policy"
+      ],
+      "properties": {
+        "activation": {
+          "const": "explicit_global_review_mode"
+        },
+        "explicit_only": {
+          "const": true
+        },
+        "ordinary_review_scope": {
+          "const": "local_engineering_review"
+        },
+        "source_policy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_root",
+        "source",
+        "path_count",
+        "git_status_available",
+        "git_status_exit_code"
+      ],
+      "properties": {
+        "workspace_root": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "enum": [
+            "explicit_paths",
+            "git_status",
+            "explicit_paths_plus_git_status",
+            "empty_scope"
+          ]
+        },
+        "path_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "git_status_available": {
+          "type": "boolean"
+        },
+        "git_status_exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dimension_id",
+          "required",
+          "question",
+          "triggered_by_risk_flags",
+          "source_anchor"
+        ],
+        "properties": {
+          "dimension_id": {
+            "enum": [
+              "design_intent_alignment",
+              "current_progress_judgment",
+              "implementation_content_positioning",
+              "critical_design_preservation",
+              "project_task_boundary"
+            ]
+          },
+          "required": {
+            "const": true
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          },
+          "triggered_by_risk_flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/id"
+            },
+            "uniqueItems": true
+          },
+          "source_anchor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      }
+    },
+    "path_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "exists",
+          "sha256",
+          "tags",
+          "risk_flags"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/sha256"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/id"
+            },
+            "uniqueItems": true
+          },
+          "risk_flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/id"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "decision": {
+      "enum": [
+        "ready_for_global_review",
+        "ready_for_global_review_no_paths"
+      ]
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_invoked",
+        "network_attempted",
+        "files_modified_by_review",
+        "ordinary_review_replaced"
+      ],
+      "properties": {
+        "model_invoked": {
+          "const": false
+        },
+        "network_attempted": {
+          "const": false
+        },
+        "files_modified_by_review": {
+          "const": false
+        },
+        "ordinary_review_replaced": {
+          "const": false
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 600
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

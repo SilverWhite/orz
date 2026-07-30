@@ -51,11 +51,12 @@
 
 - **Runtime-First Graft Decision** (2026-07-30, 设计约束): 通用 agent runtime 不再由本仓库自建；Grok CLI / Grok Build 是第一生产底座候选，本仓库保留 assurance、evidence、UI、adapter、fixture 和审查模式。别名: agent 底座嫁接, runtime-first, ownership correction。入口: `architecture/INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
 - **Agent Base Component Adoption Matrix** (2026-07-30, 设计约束): 部件级采用裁决——Grok 生产采用 model loop/session/tool/permission/sandbox/ACP/workflow/subagent；Claude/Goose/Aider/Codex/Gemini/Qwen 只借鉴 scoped subagent、workflow、MCP、git loop、approval、provider layout 等成熟模式。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
-- **Grok CLI Specialization Graft Map** (2026-07-30, 待实施/适配审计): Grok runtime adapter、event normalizer、TUI live source、workflow/subagent/profile、`0.2.112` candidate gate 的初步嫁接位置。注意: `0.2.112` 只是候选，默认 lock 仍是已验证 `0.2.111`。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `upstream/grok-build.lock.json`
+- **Grok CLI Specialization Graft Map** (2026-07-30, 进行中/适配审计): Grok runtime adapter、event normalizer、TUI live source、workflow/subagent/profile、`0.2.112` promoted lock 的初步嫁接位置。注意: CLI/TUI 当前只提升 locked binary doctor 与 `version-smoke`，真实 prompt/tool path 仍需 stronger Windows Job Object containment。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `upstream/grok-build.lock.json`
 - **Explicit Retrieval Mode Constraint** (2026-07-30, 设计约束): 检索模式必须显式选择 `local_browser` / `framework_fallback` / `off`；框架自带检索只作本地浏览器不可用或用户允许时的兜底，不得隐式并存或切换。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
 - **Two-Subagent Default Constraint** (2026-07-30, 设计约束): 默认仅保留项目文档检索子代理和外部检索子代理；不得默认发展第三类或本地多代理调度器。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md` / `assurance/retrieval_subagent.py`
-- **Neutral vs Counterexample Trigger Split** (2026-07-30, 设计约束): 反例询问只在 plan 写入前和最终结论写入前触发；中立询问发生在执行过程中，用于全局回看和方向辅助。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md` / `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md`
-- **Global Review Mode** (2026-07-30, 待实施/审查约束): 新增显式全局审查模式；日常 review 仍做局部工程审查，明确进入审查模式时才检查原设计理念、runtime 所有权漂移、过度自制和关键设计误删。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
+- **Neutral vs Counterexample Trigger Split** (2026-07-30, 设计约束): 反例询问只在 plan 写入前和最终结论写入前触发；中立询问发生在执行过程中，用于全局回看和方向辅助；检索子代理关闭前增加“是否已获得完成当前主任务所需内容”的中性完成确认。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md` / `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md`
+- **Diagnostic Coverage Check** (2026-07-30, 设计约束): debug/问题处理中的递进中性拉回机制。硬信号达到阈值时询问“继续沿当前路线前，关键诊断面是否已经覆盖到足以选择下一步？”阈值按单个 bug 递进 `2 -> 3 -> 4 -> 5`，新证据降噪，用户“继续”不关闭触发。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
+- **Global Review Mode** (2026-07-30, 第一切片已完成/审查约束): 显式全局审查模式；日常 review 仍做局部工程审查，明确进入审查模式时才检查原设计理念、当前进度判断、当前实现内容定位、关键设计保留和项目任务边界。已接 `gsa review global` 生成结构化 activation receipt；该 receipt 只激活和界定全局审查义务，不冒充最终审查结论，也不专门服务 CLI/Grok。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `assurance/global_review_mode.py` / `assurance/global-review-mode-receipt-v0.1.schema.json`
 
 ### A. P 级合约总览 (P-Level Contract Hierarchy)
 
@@ -75,8 +76,8 @@
 
 - **GAK-INJ-001 指令来源 Gate** (2026-07-27, 事实/2026-07-28 关闭): 入口级多源指令分类/反注入 Gate——batch gate 对多源指令进行 provenance 分类，拦截注入。2026-07-28: 新增 production content parser（parse_instruction_content + detect_obfuscated_injection）、canonicalizer 集成（路径遍历/SSRF 检测）、25 个注入模式、unified gate entry 验证；89 tests pass。别名: instruction provenance gate。入口: `docs/GAK_INJ_001_AUDIT_2026-07-27.md` / `assurance/instruction_provenance_gate.py` / `assurance/tests/test_injection_adversarial.py`
 - **Tool Availability Gate** (2026-07-27, 事实/assurance-owned): 机械式工具可用性探测——在模型调用前验证工具声明与运行时实际可用性一致性，检测 belief mismatch/stagnation。Grok 负责实际 tool registry/dispatch，本 Gate 负责状态 receipt 和 UI/prompt 可见性。入口: `docs/TOOL_AVAILABILITY_GATE_AUDIT_2026-07-27.md` / `assurance/tool_availability_gate.py`
-- **Retrieval Subagents (2 only)** (2026-07-27, 事实/assurance-owned, 2026-07-30 重分类): 默认仅保留两个检索子代理：项目文档检索子代理和外部检索子代理。后续优先映射到 Grok subagent/workflow/profile，不新增本地多代理调度器。入口: `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `assurance/retrieval_subagent.py` / `assurance/project_doc_index.py` / `assurance/tests/test_retrieval_subagent_real.py`
-- **Orientation Runtime Guard / Neutral Inquiry** (2026-07-27, 事实/assurance-owned): 中性方向检查点 + 运行时停滞守卫——执行过程中辅助全局回看，检测 agent 是否陷入循环/停滞。注意: 与反例询问分离；反例只在 plan/conclusion 写入前触发。入口: `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `assurance/orientation_runtime_guard.py` / `assurance/orientation_runtime_integration.py` / `assurance/orientation_runtime_journal.py` / `assurance/orientation-checkpoint-v0.1.schema.json`
+- **Retrieval Subagents (2 only)** (2026-07-27, 事实/assurance-owned, 2026-07-30 重分类): 默认仅保留两个检索子代理：项目文档检索子代理和外部检索子代理。关闭子代理前执行中性 completion check：只问是否已获得当前主任务所需内容。后续优先映射到 Grok subagent/workflow/profile，不新增本地多代理调度器。入口: `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `assurance/retrieval_subagent.py` / `assurance/project_doc_index.py` / `assurance/tests/test_retrieval_subagent_real.py`
+- **Orientation Runtime Guard / Neutral Inquiry** (2026-07-27, 事实/assurance-owned): 中性方向检查点 + 运行时停滞守卫——执行过程中辅助全局回看，检测 agent 是否陷入循环/停滞。2026-07-30 补充: debug 路线锁死时使用 Diagnostic Coverage Check，按递进阈值触发。入口: `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `assurance/orientation_runtime_guard.py` / `assurance/orientation_runtime_integration.py` / `assurance/orientation_runtime_journal.py` / `assurance/orientation-checkpoint-v0.1.schema.json`
 - **Workspace Trust Gate** (2026-07-28, 事实/2026-07-28 关闭 GAK-TRUST-001): 统一工作区信任——全部 Python 入口点（canonical CLI + 检索子代理 ×2）在 IPG 评估前建立 workspace trust receipt。`AdapterGateContext` 携带 trust_receipt + trust_status。别名: GAK-TRUST-001。入口: `assurance/workspace_trust.py` / `assurance/adapter_gate.py` / `assurance/canonical_cli.py` / `assurance/retrieval_subagent.py`
 - **Source Visibility Gate** (2026-07-26, 事实): 全文可见性检查 Gate——验证引用源的完整文本可见性。入口: `docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md` / `assurance/source_visibility.py` / `assurance/source_visibility_cli.py`
 - **Local Browser Retrieval and PDF Evidence** (2026-07-28 设计冻结, 2026-07-29 关闭/assurance-owned): 本地浏览器外部检索与论文 PDF 确定性证据链。2026-07-30 约束: 默认主路径为 `local_browser`；框架自带检索只作 `framework_fallback`，不得隐式并存或切换。别名/关键词: browser retrieval, local_browser, framework_fallback, PDF evidence, LBR-001, CDP, GSA Chrome profile。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `assurance/pdf_evidence.py` / `assurance/evidence_store.py` / `assurance/browser_retrieval.py` / `assurance/retrieval_workflow.py` / `assurance/tests/test_browser_retrieval_e2e.py`
@@ -87,7 +88,7 @@
 
 ### C. 运行时集成 (Runtime Integration)
 
-- **Grok Build / Grok CLI** (2026-07-21~30, runtime-owned/第一生产底座候选): 当前优先生产 runtime 底座。Grok 应拥有 model loop、session、tool dispatch、permission 基础面、sandbox/进程基础、custom model config、ACP、workflow、subagent、MCP/plugins/skills、compaction/checkpoint。项目 lock 仍为已验证 `0.2.111`; PATH 发现 `0.2.112` 仅为 candidate，需 gate 后提升。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` / `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `upstream/grok-build.lock.json` / `integration/grok/`
+- **Grok Build / Grok CLI** (2026-07-21~30, runtime-owned/第一生产底座): 当前优先生产 runtime 底座。Grok 应拥有 model loop、session、tool dispatch、permission 基础面、sandbox/进程基础、custom model config、ACP、workflow、subagent、MCP/plugins/skills、compaction/checkpoint。项目默认 lock 已提升至 `0.2.112 (9bbd559437)`；Windows child-tree `tool_timeout` 经对照重分类为 carried-forward limitation，prompt/tool 模式仍需 stronger containment 后才能接入。入口: `architecture/GROK_BUILD_ADAPTATION_v0.1.md` / `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `docs/GROK_0_2_112_CANDIDATE_GATE_2026-07-30.md` / `docs/GROK_0_2_112_TIMEOUT_TRIAGE_2026-07-30.md` / `upstream/grok-build.lock.json` / `integration/grok/`
 - **DeepSeek Adapter** (2026-07-23, 事实/首个真实适配器): 首个真实模型适配器——通过 DeepSeek API 进行 one-shot/stream 观察。凭证硬化已完成。入口: `docs/DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md` / `architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md` / `assurance/deepseek_adapter.py` / `assurance/deepseek_api_observation.py` / `assurance/deepseek_stream_observation.py`
 - **Codex App Server / VS Code Internal Terminal Lifecycle** (2026-07-25~30, 事实/生命周期研究): Codex app server、VS Code 内部终端方向的初步会话生命周期捕获、标准化与验证。2026-07-30 裁决: 保留为本地 IDE/session 观测基础，不升级为完整 VS Code 插件或完整 IDE 前端适配层。入口: `docs/CODEX_APP_SERVER_LIFECYCLE_NORMALIZER_AUDIT_2026-07-25.md` / `docs/CLI_SESSION_LIFECYCLE_ADAPTER_AUDIT_2026-07-25.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `runtime/codex-app-server-*.schema.json` / `scripts/capture_codex_app_server_lifecycle.py`
 
@@ -107,7 +108,7 @@
 
 ### E. CLI 与执行 (CLI & Execution)
 
-- **gsa CLI 入口** (2026-07, 事实): 顶级 CLI 分发器——`gsa doctor`, `gsa source gate`, `gsa run`, `gsa verify`, `gsa tui`。注意: TUI 已通过此入口启动；CLI_UI_INTERACTION_MODEL 定义交互语法，本入口保持为启动点。入口: `gsa.py` / `assurance/cli.py`；TUI 设计: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`
+- **gsa CLI 入口** (2026-07, 事实): 顶级 CLI 分发器——`gsa doctor`, `gsa source gate`, `gsa run`, `gsa verify`, `gsa tui`, `gsa grok doctor`, `gsa grok run --mode version-smoke`, `gsa review global`。注意: `gsa run` 仍保持 canonical 默认路径；Grok 仅接入 locked-binary doctor/version-smoke；全局审查需显式触发。入口: `gsa.py` / `assurance/cli.py`；TUI 设计: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md` / `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`
 - **Canonical Guarded CLI** (2026-07-26, 事实): 规范守卫 CLI 主路径——manifests, fake answer packets, verification。注意: TUI 将消费本模块的结构化事件流（gate_decision, run_state 等），通过 view model 投影渲染到终端；本模块保持事件发射职责，不耦合 UI 渲染。入口: `docs/CANONICAL_CLI_QUICKSTART_2026-07-26.md` / `assurance/canonical_cli.py` / `assurance/canonical_cli_main.py`；TUI 设计: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`
 - **Disposable Reproduction** (2026-07-26, 事实): 可处置复现——manifest, receipt, proof 的完整生命周期。入口: `docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md` / `assurance/disposable_reproduction.py` / `assurance/execution_lock.py`
 - **Guarded Execution** (2026-07-24, 事实): P2.5 守卫执行——进程追踪与输出拦截。入口: `assurance/guarded_execution.py` / `assurance/child_capability_enforcer.py`
@@ -136,8 +137,8 @@
 - **产品定位与参考策略** (v0.1, 设计约束): 核心定位——运行时中立的通用科学保证内核，不绑定单一 LLM 运行时。入口: `architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`
 - **Integrated Agent Assurance Design** (v0.1, 设计约束/2026-07-30 修正): 保留全部关键设计，但明确成熟 runtime 拥有通用 agent 平台，本仓库拥有 assurance/evidence/UI/adapter/fixture。入口: `architecture/INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md`
 - **Agent 底座嫁接价值中文评估** (2026-07-30, 设计约束/中文主入口): 中文确认保留内容、检索显式开关、两个子代理限制、中立/反例触发分离、全局审查模式、VS Code 内部终端保留、部件级采用裁决。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
-- **Grok CLI Specialization Adaptation Audit** (2026-07-30, 待实施/嫁接审计): Grok runtime adapter、event normalizer、TUI live source、workflow/subagent/profile、`0.2.112` candidate gate 的实现路由。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md`
-- **CLI UI Interaction Model** (v0.1, 事实/2026-07-29 Phase 4 中文化完成): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型。第一原型已完成（9 个模块 ~3900 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、17 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。Phase 2：canonical CLI 事件流桥接（`bridge.py`、`LiveRunEventSource`、`JsonlFileSource`、3 个 typed gate event、`--run`/`--replay`）。Phase 3：真实 DeepSeek adapter 接入（`--real`、`build_live_run_fn(real_adapter=True)` 全链路贯通）。Phase 4 (R15)：默认中文 UI + HelpOverlay modal (6 tabs) + FindDialog modal + 大主窗模式（侧栏 toggle）+ `Agent`→`模型` + `Edit`→`编辑模式`。221 tests pass。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`bridge.py` / `commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py` / `events.py` / `event_source.py` / `projector.py`）；Gap Register: GAK-UI-001
+- **Grok CLI Specialization Adaptation Audit** (2026-07-30, 进行中/嫁接审计): Grok runtime adapter、event normalizer、TUI live source、workflow/subagent/profile、`0.2.112` promoted gate 的实现路由；CLI/TUI 已接 first-slice version-smoke。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md`
+- **CLI UI Interaction Model** (v0.1, 事实/2026-07-30 Grok first-slice 接入): Windows-only 复古桌面/老 IE 风格终端 UI 交互模型。第一原型已完成（9 个模块 ~3900 行）：静态框架 + prompt_toolkit + 自定义 retro widget 层（10 个 widget 类）、17 个中文斜杠命令 + CommandRegistry + CommandPalette 覆盖层、地址栏命令历史/多行输入/自动补全、Ctrl+Z 取消运行。Phase 2：canonical CLI 事件流桥接（`bridge.py`、`LiveRunEventSource`、`JsonlFileSource`、3 个 typed gate event、`--run`/`--replay`）。Phase 3：真实 DeepSeek adapter 接入（`--real`、`build_live_run_fn(real_adapter=True)` 全链路贯通）。Phase 4 (R15)：默认中文 UI + HelpOverlay modal (6 tabs) + FindDialog modal + 大主窗模式（侧栏 toggle）+ `Agent`→`模型` + `Edit`→`编辑模式`。2026-07-30: 新增 `--runtime grok` first-slice，只运行 `version-smoke` 并消费 Grok normalized events；221 tests pass。别名: retro TUI, Explorer-style UI, old IE UI, terminal TUI。入口: `architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`；代码: `assurance/tui/`（`bridge.py` / `commands.py` / `widgets.py` / `app.py` / `pt_app.py` / `view_models.py` / `main.py` / `events.py` / `event_source.py` / `projector.py`）；Gap Register: GAK-UI-001
 - **CLI UI Simplification Supplement** (v0.1, 设计约束/2026-07-29 R16 实施闭合): 下一轮 TUI 精简与中文化方向——R15 完成默认中文 UI（菜单/工具栏/状态栏/对话框全中文化）、HelpOverlay modal（6 tabs, Esc 关闭, ←/→ 导航）、FindDialog modal（Ctrl+F 多行/高级搜索）、大主窗模式（侧栏 toggle）、顶部两层布局保留、`Agent`→`模型`、`Edit`→`编辑模式`；R16 补齐 Address 完整输入弹窗化、聊天室式可折叠任务流与 Task Checklist 公告/展开联动。别名: UI 精简, 中文 TUI, Help 弹窗, 大主窗, AddressDialog, 可折叠任务流。入口: `architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md` / `assurance/tui/app.py` / `assurance/tui/widgets.py`
 - **Task Checklist Announcement Supplement** (v0.1, 设计约束/2026-07-29 R16 已实施): 主对话顶部公告式 checklist 与展开式工作清单页——Plan mode 批准后生成稳定 step ID 与 plan annotations；常态只显示步骤，展开显示软约束、运行记录和验收引用；Orientation Runtime Guard 只读取中性定位上下文，不询问是否偏移/正确/卡住。2026-07-29 R15 冻结架构文档（268 行）；R16 完成 7 个实施切片（checklist view model → plan mode bridge → announcement strip projection → expanded checklist page → orientation context bridge → journal/artifact registration → GPS mapping），25 checklist tests + 221 TUI tests + 80 plan mode tests pass。别名: checklist 公告, 工作清单, plan annotations, soft workboard, orientation checkpoint context。入口: `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md` / `assurance/task_checklist.py` / `assurance/tui/projector.py` / `assurance/tui/bridge.py`
 - **Plan Mode and Process Usage Monitor** (v0.1, 设计约束/2026-07-29 R15 已实施): 稳定 Plan mode 与运行进程占用监控契约——计划固定四部分（前期调查/具体计划/具体设计/实施方案）、plan approval 与 action approval 分离、root PID 进程树 CPU/MEM/time 采样、系统终端即时显示、VS Code terminal title 2 秒刷新。R15 已交付：`plan_mode.py` (~700 行) — PlanArtifact（4-section structured plan）、PlanVerifier（7 check categories）、PlanStateMachine（8-state lifecycle）、ProcessUsageSampler（psutil 后台采样 + adaptive backoff）、VSCodeTitleUpdater、terminal status line；`plan-mode-result-v0.1.schema.json`；4 个新 TUI event 类型（plan_phase_entered/submitted/approval_decision/usage_sample）；80 tests pass。别名: plan mode, process usage monitor, CPU/MEM, VS Code terminal title。入口: `architecture/PLAN_MODE_AND_PROCESS_USAGE_MONITOR_v0.1.md` / `assurance/plan_mode.py` / `assurance/plan-mode-result-v0.1.schema.json` / `assurance/tests/test_plan_mode.py`
@@ -261,15 +262,21 @@
 
 - **Canonical Guarded CLI** (保留为 fixture+assurance path): 不再作为最终 production agent runtime 叙事；后续 Grok 嫁接后用于 conformance、离线回归、Gate 行为证明。入口: `assurance/canonical_cli.py` / `docs/CANONICAL_GUARDED_CLI_P0_AUDIT_2026-07-26.md`
 - **Local Browser Retrieval / PDF Evidence** (保留为 assurance-owned): 主检索证据链保留；必须通过显式 `local_browser` 模式启用，framework 检索只作 fallback。入口: `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md` / `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
-- **Retrieval Subagents** (保留为两个固定子代理): 项目文档检索与外部检索保留；后续优先映射到 Grok profiles/workflows，不新增本地 scheduler。入口: `assurance/retrieval_subagent.py` / `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md`
+- **Retrieval Subagents** (保留为两个固定子代理): 项目文档检索与外部检索保留；子代理关闭前做中性 completion check，确认是否已获得当前主任务所需内容；后续优先映射到 Grok profiles/workflows，不新增本地 scheduler。入口: `assurance/retrieval_subagent.py` / `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md`
 - **Counterexample / Neutral Inquiry** (保留但触发分离): 反例询问只在 plan/conclusion 写入前；中立询问在执行中辅助全局回看。入口: `docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md` / `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md`
+- **Diagnostic Coverage Check** (保留为中立询问子机制): 单个 bug/debug episode 内硬信号递进触发；每次触发后计数清零、阈值 +1，bug 解决后重置。用户继续不覆盖；明确新证据可降噪。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
 - **Codex App Server / VS Code Internal Terminal Lifecycle** (保留为生命周期观测): 保留初步适配证据，不升级为完整 VS Code 插件。入口: `docs/CODEX_APP_SERVER_LIFECYCLE_NORMALIZER_AUDIT_2026-07-25.md`
 
 ### 待嫁接 / Runtime-First In Progress
 
-- **Grok Runtime Adapter** (待实施): 建立薄 adapter，调用锁定 Grok binary，做 workspace trust、runtime preflight、event normalization、TUI projection；不实现 model loop/tool dispatcher/session runtime。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md`
-- **Grok `0.2.112` Candidate Gate** (待实施): PATH 已发现 `0.2.112 (9bbd559437) [stable]`；提升前需 binary identity、ACP initialize、fake tool/permission/cancel、child-tree、workspace trust、workflow/subagent、event bridge、TUI projection 等 gate。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `upstream/grok-build.lock.json`
-- **Global Review Mode** (待实施): 显式审查模式，检查整体设计理念、runtime 所有权漂移、过度自制和关键设计误删；不影响日常局部 review。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
+当前待办顺序（初步确定，2026-07-30）:
+
+1. **Grok `0.2.112` Candidate Gate** (已完成/已提升): PATH 已发现并登记 `0.2.112 (9bbd559437) [stable]`；candidate metadata、binary identity、static Grok integration tests、TUI baseline、repository regression、ACP initialize、fake tool allow/cancel、child-tree task_cancel/parent_exit、compaction provenance 均已通过；Windows child-tree `tool_timeout` 经 `0.2.111` / `0.2.112` 管理员对照后重分类为 carried-forward limitation，不作为相对升级阻断；默认 lock 已更新为 `0.2.112`。入口: `docs/GROK_0_2_112_CANDIDATE_GATE_2026-07-30.md` / `docs/GROK_0_2_112_TIMEOUT_TRIAGE_2026-07-30.md` / `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `upstream/grok-build.candidate.json` / `upstream/grok-build.lock.json`
+2. **Grok `0.2.112` Upgrade Value Breakdown + Timeout Triage Decision** (已完成/已提升): `0.2.112` 更新集中在 background task lifecycle、terminal output capture、workflow/subagent、MCP inheritance、permission/search controls、Windows auth/provider helpers 和 session resume/fork；升级价值足够高，且 `tool_timeout` 不是新版本回归，因此按 carried limitation 提升。入口: `docs/GROK_0_2_112_UPGRADE_VALUE_BREAKDOWN_2026-07-30.md` / `docs/GROK_0_2_112_TIMEOUT_TRIAGE_2026-07-30.md`
+3. **Grok Runtime Adapter + Event Normalizer** (第一切片已完成): 已新增薄 adapter 与事件正规化层；当前切片覆盖锁定 Grok binary inspection、workspace trust 先行、隔离 profile/temp、`grok --version` headless smoke、metadata-only stdout/stderr artifact、canonical runtime event JSONL、TUI-ready metadata projection，并强制记录 `no_residue_required` / `no_residue_observed`。该切片不实现 model loop/tool dispatcher/session runtime；后续 prompt/tool 模式必须使用更强 Windows Job Object containment。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `assurance/grok_runtime_adapter.py` / `assurance/grok_event_normalizer.py` / `assurance/grok-runtime-receipt-v0.1.schema.json`
+4. **CLI / TUI Grok Wiring** (第一切片已完成): 已新增 `gsa grok doctor`、`gsa grok run --mode version-smoke`、`gsa tui --runtime grok --run version-smoke`。默认 Grok smoke 使用 `run_root/workspace` 干净隔离目录；显式传入含控制面的项目根会被 restricted workspace trust 正确拒绝。真实 smoke `candidate-gates/grok-cli-version-smoke-r2` 通过: locked `0.2.112` binary、root process exited、`no_residue_observed=true`、`external_cleanup_required=false`、normalized `events.jsonl` 已生成。暂不替换 `gsa run` 默认路径，真实 prompt/tool path 仍待 stronger containment。入口: `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` / `assurance/cli.py` / `assurance/tui/main.py` / `assurance/tui/bridge.py`
+5. **Global Review Mode** (第一切片已完成/2026-07-30 通用化修正): 已新增 `gsa review global` 和 `global_review_mode_receipt`，固定五个通用全局审查维度：原设计理念、当前进度判断、当前实现内容定位、关键设计保留、项目任务边界。默认可从 git status 收集范围，也可 `--no-git-status --path ...` 显式指定；输出只表示全局审查模式已激活并界定范围，不替代最终审查判断，不影响日常局部 engineering review，也不专门服务 CLI/Grok。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `assurance/global_review_mode.py` / `assurance/global-review-mode-receipt-v0.1.schema.json` / `assurance/tests/test_global_review_mode.py`
+6. **Runtime-First Follow-up Alignment** (后续待实施): 两个 retrieval subagent 的 Grok profile/workflow 映射、显式 retrieval mode、Tool Availability 与 Grok registry/permission 对齐、Global Progress / Orientation 与 Grok workflow 对齐、旧 prototype 文档清理。入口: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` / `architecture/INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md`
 
 ### 已关闭 (Closed)
 
@@ -291,9 +298,9 @@
 
 ### 待实施 / 进行中 (Pending / In Progress)
 
-（当前无进行中条目。Part A + Part B 已于 2026-07-29 R16 全部实施完成。）
+旧 GAK / Part A / Part B 待办当前无进行中条目：Part A + Part B 已于 2026-07-29 R16 全部实施完成；所有已注册 Gap（含全部 8 个中等严重度 Gap）均已关闭或达到 development baseline。GAK-XPLAT-001 显式推迟 ≥1 年。
 
-所有已注册 Gap（含全部 8 个中等严重度 Gap）均已关闭或达到 development baseline。GAK-XPLAT-001 显式推迟 ≥1 年。
+当前活跃待办以上方 **待嫁接 / Runtime-First In Progress** 顺序为准。
 
 ---
 
@@ -330,8 +337,10 @@
 | fixture-only | 只作回归/探针/证明，不作为生产 runtime 路径 | 状态 |
 | local_browser | 显式本地浏览器检索模式，默认主检索证据链 | 检索 |
 | framework_fallback | 框架自带检索兜底模式，只在本地浏览器不可用或用户允许时使用 | 检索 |
-| Global Review Mode | 全局审查模式——明确进入审查时检查原设计理念、runtime 所有权漂移和过度自制 | 审查 |
+| Global Review Mode | 全局审查模式——明确进入审查时检查原设计理念、当前进度判断、当前实现内容定位、关键设计保留和项目任务边界 | 审查 |
 | Neutral Inquiry | 中立询问——执行过程中辅助全局回看，不等同于反例 gate | 保障 |
+| Subagent Retrieval Completion Check | 子代理检索完成确认——子代理关闭前只问是否已获得当前主任务所需内容 | 保障 |
+| Diagnostic Coverage Check | 诊断覆盖检查——debug 路线锁死时递进触发，检查关键诊断面是否足以选择下一步 | 保障 |
 | Counterexample Gate | 反例询问门——仅在 plan 写入前和最终结论写入前触发 | 保障 |
 
 ---
@@ -383,7 +392,8 @@
 | 数据/存储 | `storage_adapter.py`, `conversation.py`, `profile_registry.py` |
 | PDF 证据 (LBR-001) | `pdf_evidence.py`, `evidence_store.py`, `evidence_store.schema.json`, `browser_retrieval.py`, `retrieval_workflow.py` |
 | TUI (GAK-UI-001) | `tui/commands.py`, `tui/widgets.py`, `tui/app.py`, `tui/pt_app.py`, `tui/view_models.py`, `tui/main.py`, `tui/events.py`, `tui/event_source.py`, `tui/projector.py` |
-| 公共 | `__init__.py` (392 行公共 API 导出), `contracts.py`, `errors.py`, `utils.py`, `runner_public_output.py`, `runner_scoring_handoff.py` |
+| 全局审查模式 | `global_review_mode.py`, `global-review-mode-receipt-v0.1.schema.json` |
+| 公共 | `__init__.py` (616 行公共 API 导出), `contracts.py`, `errors.py`, `utils.py`, `runner_public_output.py`, `runner_scoring_handoff.py` |
 
 ---
 
@@ -394,6 +404,7 @@
 - 出现与本文冲突的新审计文档或架构文档时，以后续文档、Schema 和代码实现为准，并更新本文对应路由。
 - 原型代码 (`prototype/`) 的结论不可直接用于主项目的保证论证。需要引用原型结论时必须标注"仅设计参考"。
 - 修改 P 级合约或 Gate 链路时，必须在同一会话内更新本文对应条目和入口。
-- 局部工程 review 不能替代全局审查。只有明确进入“审查模式/全局审查模式”时，才要求结合原设计理念、runtime 所有权和过度自制风险进行判断。
+- 局部工程 review 不能替代全局审查。只有明确进入“审查模式/全局审查模式”时，才要求结合原设计理念、当前进度判断、当前实现内容定位、关键设计保留和项目任务边界进行判断。
 - 不得把“已关闭/已实现”解释为“继续作为本仓库 production runtime 所有”。2026-07-30 后必须同时核对 runtime-owned / assurance-owned / fixture-only 分类。
-- 检索不得隐式混用 `local_browser` 与 `framework_fallback`；子代理默认不得超过两个；反例询问不得扩散到每个执行步骤。
+- 检索不得隐式混用 `local_browser` 与 `framework_fallback`；子代理默认不得超过两个；子代理关闭前 completion check 只能中性询问是否获得所需内容；反例询问不得扩散到每个执行步骤。
+- Diagnostic Coverage Check 不受用户“继续”关闭；只能由 bug 解决、阈值递进或明确新证据降噪影响触发，不得扩展成全局审查或大型重新分析。

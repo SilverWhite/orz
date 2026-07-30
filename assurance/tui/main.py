@@ -141,8 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--run", type=str, default=None, metavar="ASK_TEXT",
-        help="Run the canonical CLI (offline fake adapter by default; "
-             "use --real for live DeepSeek API) and display in TUI",
+        help="Run the selected runtime and display it in TUI",
+    )
+    parser.add_argument(
+        "--runtime", type=str, default="canonical",
+        choices=["canonical", "grok"],
+        help="Runtime for --run (default: canonical)",
     )
     parser.add_argument(
         "--real", action="store_true",
@@ -158,6 +162,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--run-root", type=str, default=None,
         help="Run root directory for --run (default: auto-generated temp dir)",
+    )
+    parser.add_argument(
+        "--workspace", type=str, default=None,
+        help="Workspace directory for Grok --run (default: isolated directory under run root)",
     )
 
     args = parser.parse_args(argv)
@@ -218,17 +226,32 @@ def main(argv: list[str] | None = None) -> int:
         run_root = Path(args.run_root) if args.run_root else Path(
             tempfile.mkdtemp(prefix="gsa-run-")
         )
-        from .bridge import build_live_run_fn
+        from .bridge import build_grok_live_run_fn, build_live_run_fn
         from .event_source import LiveRunEventSource
         extra_kwargs: dict[str, Any] = {}
-        if args.real:
-            extra_kwargs["credential_target"] = args.credential_target
-        run_fn = build_live_run_fn(
-            run_root=str(run_root),
-            ask=args.run,
-            real_adapter=args.real,
-            **extra_kwargs,
-        )
+        if args.runtime == "grok":
+            if args.real:
+                print("--real is only valid with --runtime canonical", file=sys.stderr)
+                return 2
+            if args.run not in {"version-smoke", "version_smoke"}:
+                print(
+                    "--runtime grok currently supports only --run version-smoke",
+                    file=sys.stderr,
+                )
+                return 2
+            run_fn = build_grok_live_run_fn(
+                run_root=str(run_root),
+                workspace=args.workspace,
+            )
+        else:
+            if args.real:
+                extra_kwargs["credential_target"] = args.credential_target
+            run_fn = build_live_run_fn(
+                run_root=str(run_root),
+                ask=args.run,
+                real_adapter=args.real,
+                **extra_kwargs,
+            )
         source = LiveRunEventSource(run_fn=run_fn)
         app = TuiPrototype.with_event_source(source)
         if args.with_dialog:

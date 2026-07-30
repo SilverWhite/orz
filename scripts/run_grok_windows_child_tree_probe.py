@@ -459,6 +459,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     provider_stderr_path = output / "provider.stderr.log"
     grok_stdout_path = output / "grok.stdout.log"
     grok_stderr_path = output / "grok.stderr.log"
+    timeout_diagnostic_path = output / "timeout-diagnostic.json"
     private_capture_path = provider_directory / "requests.private.jsonl"
     role_paths = [process_records / f"{role}.json" for role in ROLES]
 
@@ -685,9 +686,128 @@ rules = [
         try:
             grok.wait(timeout=args.timeout_seconds)
         except subprocess.TimeoutExpired as error:
-            if job is not None:
-                job.close()
-            raise TimeoutError("Grok did not reach the expected terminal state") from error
+            try:
+                grok.wait(timeout=args.exit_grace_seconds)
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                error = None
+            if grok.poll() is not None:
+                error = None
+            if error is None:
+                pass
+            else:
+                for handle in (
+                    grok_stdout_handle,
+                    grok_stderr_handle,
+                    provider_stdout_handle,
+                    provider_stderr_handle,
+                ):
+                    if handle is not None and not handle.closed:
+                        handle.flush()
+                timeout_primary = _primary_requests(private_capture_path)
+                timeout_combined_capture = b"".join(
+                    path.read_bytes()
+                    for path in (private_capture_path, grok_stdout_path, grok_stderr_path)
+                    if path.is_file()
+                )
+                before_job_close_processes = _scan_nonce_processes(nonce)
+                provider_result_path = provider_directory / "provider-result.json"
+                provider_result_value = (
+                    _read_json(provider_result_path)
+                    if provider_result_path.is_file()
+                    else None
+                )
+                job_closed_before_diagnostic = job is not None and job.closed
+                if job is not None:
+                    job.close()
+                time.sleep(0.75)
+                after_job_close_processes = _scan_nonce_processes(nonce)
+                _atomic_write_json(
+                    timeout_diagnostic_path,
+                    {
+                        "schema_version": "0.1.0",
+                        "diagnostic_kind": "grok-windows-child-tree-timeout",
+                        "probe_id": probe_id,
+                        "scenario": scenario,
+                        "nonce": nonce,
+                        "elapsed_seconds": round(time.time() - started_at, 3),
+                        "timeout_seconds": args.timeout_seconds,
+                        "exit_grace_seconds": args.exit_grace_seconds,
+                        "tool_timeout_ms": args.tool_timeout_ms,
+                        "grok": {
+                            "pid": grok.pid if grok is not None else None,
+                            "returncode_before_job_close": (
+                                grok.poll() if grok is not None else None
+                            ),
+                        },
+                        "provider": {
+                            "pid": provider.pid if provider is not None else None,
+                            "returncode_before_job_close": (
+                                provider.poll() if provider is not None else None
+                            ),
+                            "primary_request_count": len(timeout_primary),
+                            "tool_sequence": _tool_sequence(timeout_primary),
+                            "result_exists": provider_result_path.is_file(),
+                            "result": provider_result_value,
+                        },
+                        "process_tree": {
+                            "role_files_present": [
+                                path.name for path in role_paths if path.is_file()
+                            ],
+                            "before_job_close_processes": before_job_close_processes,
+                            "after_job_close_processes": after_job_close_processes,
+                        },
+                        "capture": {
+                            "grok_stdout": (
+                                _artifact(grok_stdout_path)
+                                if grok_stdout_path.is_file()
+                                else None
+                            ),
+                            "grok_stderr": (
+                                _artifact(grok_stderr_path)
+                                if grok_stderr_path.is_file()
+                                else None
+                            ),
+                            "provider_stdout": (
+                                _artifact(provider_stdout_path)
+                                if provider_stdout_path.is_file()
+                                else None
+                            ),
+                            "provider_stderr": (
+                                _artifact(provider_stderr_path)
+                                if provider_stderr_path.is_file()
+                                else None
+                            ),
+                            "marker_projection": {
+                                role: {
+                                    "stdout": (
+                                        f"LIF_CHILD_TREE_STDOUT:{nonce}:{role}:ready".encode()
+                                        in timeout_combined_capture
+                                    ),
+                                    "stderr": (
+                                        f"LIF_CHILD_TREE_STDERR:{nonce}:{role}:ready".encode()
+                                        in timeout_combined_capture
+                                    ),
+                                }
+                                for role in ROLES
+                            },
+                        },
+                        "job": {
+                            "created": job is not None,
+                            "assigned": job is not None and job.assigned,
+                            "closed_before_diagnostic": job_closed_before_diagnostic,
+                            "closed_after_diagnostic": job is not None and job.closed,
+                        },
+                        "diagnostic_boundary": (
+                            "Collected after Grok exceeded the outer expected-terminal-state "
+                            "timeout and grace window, before raising the gate failure."
+                        ),
+                    },
+                )
+                raise TimeoutError(
+                    "Grok did not reach the expected terminal state"
+                ) from error
         if job is not None and not job.closed:
             job.close()
         time.sleep(0.75)
@@ -968,11 +1088,14 @@ def main() -> int:
     parser.add_argument("--python-path", type=Path)
     parser.add_argument("--tool-timeout-ms", type=int, default=3000)
     parser.add_argument("--timeout-seconds", type=int, default=60)
+    parser.add_argument("--exit-grace-seconds", type=int, default=10)
     args = parser.parse_args()
     if args.tool_timeout_ms < 1000 or args.tool_timeout_ms > 30000:
         parser.error("--tool-timeout-ms must be in [1000, 30000]")
     if args.timeout_seconds < 20 or args.timeout_seconds > 180:
         parser.error("--timeout-seconds must be in [20, 180]")
+    if args.exit_grace_seconds < 0 or args.exit_grace_seconds > 30:
+        parser.error("--exit-grace-seconds must be in [0, 30]")
     try:
         result = run(args)
     except Exception as error:

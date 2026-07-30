@@ -14,17 +14,17 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from prototype.fep_agent_proto.codex_app_server_lifecycle import (
+from assurance.codex_app_server_lifecycle import (
     NORMALIZATION_SCHEMA,
     CodexLifecycleNormalizationError,
     normalize_capture,
     observations_bytes,
     sha256_bytes,
 )
-from prototype.fep_agent_proto.errors import PrototypeError
-from prototype.fep_agent_proto.io_utils import atomic_write_json
-from prototype.fep_agent_proto.layout import RUNTIME_ROOT
-from prototype.fep_agent_proto.schema import validate_instance
+from assurance.errors import AssuranceError as PrototypeError
+from assurance.io_utils import atomic_write_json
+from assurance.layout import RUNTIME_ROOT
+from assurance.schema import validate_instance
 
 
 VERIFICATION_SCHEMA = (

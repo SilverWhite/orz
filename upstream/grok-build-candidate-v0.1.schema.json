@@ -167,7 +167,15 @@
                   "repository_regression"
                 ]
               },
-              "status": { "enum": ["pending", "passed", "failed", "not-applicable"] }
+              "status": {
+                "enum": [
+                  "pending",
+                  "passed",
+                  "failed",
+                  "not-applicable",
+                  "carried-limitation"
+                ]
+              }
             }
           }
         }
