@@ -48,7 +48,7 @@
       "properties": {
         "requested_runtime": { "const": "grok" },
         "default_runtime_unchanged": { "type": "boolean" },
-        "production_prompt_tool_path": { "enum": ["not_promoted", "prompt_smoke"] }
+        "production_prompt_tool_path": { "enum": ["not_promoted", "prompt_smoke", "acp_smoke"] }
       }
     },
     "request": {

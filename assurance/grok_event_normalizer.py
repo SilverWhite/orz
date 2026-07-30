@@ -20,6 +20,11 @@ SUPPORTED_EVENT_TYPES = {
     "run_failed",
     "prompt_submitted",
     "model_response_received",
+    "acp_initialize",
+    "acp_session_created",
+    "tool_proposal",
+    "permission_requested",
+    "permission_decision",
 }
 
 
@@ -91,6 +96,7 @@ def normalize_grok_runtime_receipt(
     run_id = str(receipt["run_id"])
     timestamp = created_at or str(receipt.get("created_at") or utc_now())
     is_prompt = receipt["request"]["mode"] == "prompt_smoke"
+    is_acp = receipt["request"]["mode"] == "acp_smoke"
     manifest = {
         "schema_version": "0.1.0-draft",
         "manifest_kind": "grok_runtime_adapter_projection",
@@ -160,6 +166,43 @@ def normalize_grok_runtime_receipt(
                 "output_format": prompt_block["output_format"],
             },
         ))
+    # ACP-specific events: session lifecycle + tool/permission observability.
+    if is_acp and receipt.get("acp") is not None:
+        acp_block = receipt["acp"]
+        specs.append((
+            "acp_initialize",
+            {
+                "protocol_version": acp_block["protocol_version"],
+            },
+        ))
+        specs.append((
+            "acp_session_created",
+            {
+                "session_id_hash": acp_block["session_id_hash"],
+            },
+        ))
+        if acp_block.get("tool_call_count", 0) > 0:
+            specs.append((
+                "tool_proposal",
+                {
+                    "tool_call_count": acp_block["tool_call_count"],
+                },
+            ))
+        if acp_block.get("permission_requests_count", 0) > 0:
+            specs.append((
+                "permission_requested",
+                {
+                    "permission_requests_count": acp_block["permission_requests_count"],
+                    "permission_outcomes": acp_block["permission_outcomes"],
+                },
+            ))
+            specs.append((
+                "permission_decision",
+                {
+                    "permission_requests_count": acp_block["permission_requests_count"],
+                    "permission_outcomes": acp_block["permission_outcomes"],
+                },
+            ))
     specs.append(
         ("artifact_registered",
          {

@@ -156,7 +156,8 @@ def build_grok_prompt_tool_promotion_gate_receipt(
             "requested_runtime": "grok",
             "default_runtime_unchanged": not executed,
             "production_prompt_tool_path": (
-                "prompt_smoke" if executed else "not_promoted"
+                execution_outcome.get("mode", "prompt_smoke")
+                if executed else "not_promoted"
             ),
         },
         "request": {

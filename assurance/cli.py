@@ -183,26 +183,32 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
         adapter_receipt_path=args.grok_adapter_receipt,
     )
 
-    # If gate allows and --grok-execute is set, run headless prompt smoke.
+    # If gate allows and --grok-execute is set, run the selected Grok mode.
     executed = False
     if receipt["decision"] == "allow" and getattr(args, "grok_execute", False):
         if not args.ask:
             raise AssuranceError(
                 "--ask is required when --grok-execute is set"
             )
+        grok_mode = getattr(args, "grok_mode", "prompt-smoke")
         from .grok_runtime_adapter import (
             GrokRunRequest,
             run_grok_headless_once,
+            run_grok_acp_once,
         )
+        adapter_mode = "prompt_smoke" if grok_mode == "prompt-smoke" else "acp_smoke"
         adapter_request = GrokRunRequest(
             run_root=args.run_root,
             workspace_path=args.run_root / "workspace",
-            mode="prompt_smoke",
+            mode=adapter_mode,
             prompt_text=args.ask,
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
         )
-        adapter_receipt = run_grok_headless_once(adapter_request)
+        if adapter_mode == "acp_smoke":
+            adapter_receipt = run_grok_acp_once(adapter_request)
+        else:
+            adapter_receipt = run_grok_headless_once(adapter_request)
         executed = True
         # Rebuild the gate receipt with execution outcome attached.
         from .grok_prompt_tool_gate import (
@@ -231,6 +237,7 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
                 "outcome": (
                     "completed" if adapter_receipt.get("valid") else "failed"
                 ),
+                "mode": adapter_mode,
                 "receipt_path": str(
                     (args.run_root / "grok-runtime-receipt.json").resolve()
                 ),
@@ -603,9 +610,18 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "When --runtime grok and gate decision is 'allow', execute "
-            "a headless prompt_smoke with the locked Grok binary "
-            "(grok --prompt-file). Without this flag, only the gate "
-            "receipt is written."
+            "a Grok session with the locked binary. Mode is selected "
+            "by --grok-mode (default: prompt-smoke)."
+        ),
+    )
+    run.add_argument(
+        "--grok-mode",
+        choices=["prompt-smoke", "acp-smoke"],
+        default="prompt-smoke",
+        help=(
+            "Execution mode for --grok-execute. "
+            "'prompt-smoke' uses headless --prompt-file; "
+            "'acp-smoke' uses grok agent stdio (ACP JSON-RPC)."
         ),
     )
     run.set_defaults(handler=_run_canonical)

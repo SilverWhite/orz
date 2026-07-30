@@ -42,7 +42,7 @@
       "additionalProperties": false,
       "required": ["mode", "retrieval_mode", "retrieval_mode_explicit", "workspace_path", "run_root"],
       "properties": {
-        "mode": { "enum": ["version_smoke", "prompt_smoke"] },
+        "mode": { "enum": ["version_smoke", "prompt_smoke", "acp_smoke"] },
         "retrieval_mode": { "$ref": "#/$defs/retrieval_mode" },
         "retrieval_mode_explicit": { "type": "boolean" },
         "workspace_path": { "type": "string", "minLength": 1 },
@@ -118,7 +118,7 @@
         "stderr_sha256"
       ],
       "properties": {
-        "command_kind": { "enum": ["grok_version", "grok_prompt"] },
+        "command_kind": { "enum": ["grok_version", "grok_prompt", "grok_acp"] },
         "pid": { "type": "integer", "minimum": 1 },
         "exit_code": { "type": ["integer", "null"] },
         "timeout_seconds": { "type": "integer", "minimum": 1 },
