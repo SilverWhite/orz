@@ -236,25 +236,29 @@ def main(argv: list[str] | None = None) -> int:
         run_root = Path(args.run_root) if args.run_root else Path(
             tempfile.mkdtemp(prefix="gsa-run-")
         )
-        from .bridge import build_grok_live_run_fn, build_live_run_fn
+        from .bridge import build_grok_acp_live_run_fn, build_grok_live_run_fn, build_live_run_fn
         from .event_source import LiveRunEventSource
         extra_kwargs: dict[str, Any] = {}
         if args.runtime == "grok":
             if args.real:
                 print("--real is only valid with --runtime canonical", file=sys.stderr)
                 return 2
-            if args.run not in {"version-smoke", "version_smoke"}:
-                print(
-                    "--runtime grok currently supports only --run version-smoke",
-                    file=sys.stderr,
+            if args.run in {"version-smoke", "version_smoke"}:
+                run_fn = build_grok_live_run_fn(
+                    run_root=str(run_root),
+                    workspace=args.workspace,
+                    retrieval_mode=args.retrieval_mode or "off",
+                    retrieval_mode_explicit=args.retrieval_mode is not None,
                 )
-                return 2
-            run_fn = build_grok_live_run_fn(
-                run_root=str(run_root),
-                workspace=args.workspace,
-                retrieval_mode=args.retrieval_mode or "off",
-                retrieval_mode_explicit=args.retrieval_mode is not None,
-            )
+            else:
+                # ACP live session — real-time event streaming from grok agent stdio
+                run_fn = build_grok_acp_live_run_fn(
+                    run_root=str(run_root),
+                    workspace=args.workspace,
+                    prompt_text=args.run,
+                    retrieval_mode=args.retrieval_mode or "off",
+                    retrieval_mode_explicit=args.retrieval_mode is not None,
+                )
         else:
             if args.retrieval_mode is not None:
                 print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)

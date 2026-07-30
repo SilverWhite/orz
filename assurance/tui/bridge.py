@@ -22,6 +22,8 @@ from typing import Any, Callable
 
 # ── TUI-owned types (no assurance imports needed for these) ──────────────────
 from .events import (
+    AcpInitializeEvent,
+    AcpSessionCreatedEvent,
     ArtifactRegisteredEvent,
     ChecklistItemStatusEvent,
     ErrorEvent,
@@ -30,6 +32,8 @@ from .events import (
     ModelOutputEvent,
     ModelRequestEvent,
     OrientationCheckpointEvent,
+    PermissionDecisionEvent,
+    PermissionRequestedEvent,
     PlanApprovalDecisionEvent,
     PlanPhaseEnteredEvent,
     PlanPhaseSubmittedEvent,
@@ -43,6 +47,7 @@ from .events import (
     StatusUpdateEvent,
     TaskChecklistEvent,
     ToolAvailabilityEvent,
+    ToolProposalEvent,
     TuiEvent,
     TuiEventKind,
     UsageSampleEvent,
@@ -195,6 +200,63 @@ def build_grok_live_run_fn(
             for line in handle:
                 if line.strip():
                     on_event(json.loads(line))
+        return receipt
+
+    return _run
+
+
+def build_grok_acp_live_run_fn(
+    *,
+    run_root: str,
+    workspace: str | None = None,
+    run_id: str | None = None,
+    prompt_text: str,
+    model_id: str = "lif-fake-deepseek",
+    retrieval_mode: str = "off",
+    retrieval_mode_explicit: bool = False,
+) -> Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]:
+    """Build a Grok ACP live run function for the TUI event source.
+
+    Launches ``grok agent stdio`` in ACP JSON-RPC mode (the primary
+    observability path per design).  Emits metadata-only runtime events
+    in *real time* as ACP notifications arrive, rather than waiting for
+    the session to complete.
+    """
+    from pathlib import Path
+
+    from assurance.grok_runtime_adapter import GrokRunRequest, run_grok_acp_once
+
+    _run_root = Path(run_root)
+    _workspace = Path(workspace) if workspace else None
+
+    def _run(on_event: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+        import json as _json
+        request = GrokRunRequest(
+            run_root=_run_root,
+            workspace_path=_workspace or (_run_root / "workspace"),
+            mode="acp_smoke",
+            run_id=run_id or "RUN-GROK-ACP-TUI-001",
+            prompt_text=prompt_text,
+            model_id=model_id,
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
+        )
+        receipt = run_grok_acp_once(request, on_acp_event=on_event)
+        # After session completes, replay normalized events for
+        # completeness (run_preflight, run_finished, artifact_registered).
+        # Skip event types already emitted in real-time during ACP.
+        _LIVE_EMITTED = {
+            "acp_initialize", "acp_session_created",
+            "tool_proposal", "permission_requested", "permission_decision",
+        }
+        events_path = Path(str(receipt["artifacts"]["events_path"]))
+        if events_path.is_file():
+            with events_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.strip():
+                        evt = _json.loads(line)
+                        if evt.get("event_type") not in _LIVE_EMITTED:
+                            on_event(evt)
         return receipt
 
     return _run
@@ -421,6 +483,47 @@ def _make_checklist_derived(payload: dict[str, Any], timestamp: str) -> TaskChec
     )
 
 
+# ── ACP / Grok runtime factories ──────────────────────────────────────────────
+
+
+def _make_acp_initialize(payload: dict[str, Any], timestamp: str) -> AcpInitializeEvent:
+    return AcpInitializeEvent(
+        timestamp=timestamp,
+        protocol_version=payload.get("protocol_version", 0),
+    )
+
+
+def _make_acp_session_created(payload: dict[str, Any], timestamp: str) -> AcpSessionCreatedEvent:
+    return AcpSessionCreatedEvent(
+        timestamp=timestamp,
+        session_id_hash=payload.get("session_id_hash", ""),
+    )
+
+
+def _make_tool_proposal(payload: dict[str, Any], timestamp: str) -> ToolProposalEvent:
+    return ToolProposalEvent(
+        timestamp=timestamp,
+        tool_name=payload.get("tool_name", ""),
+        tool_call_id=payload.get("tool_call_id", ""),
+    )
+
+
+def _make_permission_requested(payload: dict[str, Any], timestamp: str) -> PermissionRequestedEvent:
+    return PermissionRequestedEvent(
+        timestamp=timestamp,
+        permission=payload.get("permission", payload.get("tool_name", "")),
+        options=payload.get("options", []),
+    )
+
+
+def _make_permission_decision(payload: dict[str, Any], timestamp: str) -> PermissionDecisionEvent:
+    return PermissionDecisionEvent(
+        timestamp=timestamp,
+        permission=payload.get("permission", ""),
+        decision=payload.get("decision", payload.get("outcome", "")),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Dispatch tables
 # ══════════════════════════════════════════════════════════════════════════════
@@ -445,6 +548,12 @@ _EVENT_FACTORY: dict[str, Callable[[dict[str, Any], str], TuiEvent | list[TuiEve
     "plan_approval_decision": _make_plan_approval_decision,
     "usage_sample": _make_usage_sample,
     "checklist_derived": _make_checklist_derived,
+    # ── Grok / ACP events ──
+    "acp_initialize": _make_acp_initialize,
+    "acp_session_created": _make_acp_session_created,
+    "tool_proposal": _make_tool_proposal,
+    "permission_requested": _make_permission_requested,
+    "permission_decision": _make_permission_decision,
 }
 
 
@@ -469,6 +578,12 @@ _KIND_MAP: dict[str, TuiEventKind] = {
     "usage_sample": TuiEventKind.USAGE_SAMPLE,
     "checklist_derived": TuiEventKind.CHECKLIST_DERIVED,
     "checklist_item_status_changed": TuiEventKind.CHECKLIST_ITEM_STATUS_CHANGED,
+    # ── Grok / ACP events ──
+    "acp_initialize": TuiEventKind.ACP_INITIALIZE,
+    "acp_session_created": TuiEventKind.ACP_SESSION_CREATED,
+    "tool_proposal": TuiEventKind.TOOL_PROPOSAL,
+    "permission_requested": TuiEventKind.PERMISSION_REQUESTED,
+    "permission_decision": TuiEventKind.PERMISSION_DECISION,
 }
 
 

@@ -507,12 +507,17 @@ def run_grok_acp_once(
     config: GrokRuntimeConfig | None = None,
     *,
     popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+    on_acp_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a single Grok ACP session via ``grok agent stdio``.
 
     Launches Grok in ACP stdio mode, negotiates the JSON-RPC 2.0 lifecycle
     (initialize → session/new → session/prompt), captures all agent→client
     events as metadata, and returns a receipt.
+
+    When *on_acp_event* is provided it is called with metadata-only event
+    dicts in real time as ACP notifications arrive — enabling live TUI
+    streaming without waiting for session completion.
 
     This is the primary observability path per
     :file:`docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md` §7.
@@ -664,12 +669,41 @@ def run_grok_acp_once(
                 update_type = update.get("sessionUpdate", "")
                 if update_type == "tool_call":
                     tool_call_count += 1
+                    if on_acp_event:
+                        tool_info = update.get("tool_call", {}) if isinstance(update.get("tool_call"), dict) else {}
+                        on_acp_event({
+                            "event_type": "tool_proposal",
+                            "timestamp": utc_now(),
+                            "payload": {
+                                "tool_name": tool_info.get("title", tool_info.get("name", "")),
+                                "tool_call_id": tool_info.get("id", ""),
+                            },
+                            "redaction": "metadata_only",
+                        })
                 elif update_type == "turn_completed":
                     turn_count += 1
                     stop_reason = update.get("stop_reason", stop_reason)
             elif method == "session/request_permission" and "id" in msg:
                 permission_requests_count += 1
                 options = params.get("options", [])
+                option_labels = [
+                    o.get("kind", "") for o in options
+                    if isinstance(o, dict)
+                ]
+                if on_acp_event:
+                    tool_name = ""
+                    if options:
+                        first = options[0] if isinstance(options[0], dict) else {}
+                        tool_name = first.get("toolTitle", first.get("title", ""))
+                    on_acp_event({
+                        "event_type": "permission_requested",
+                        "timestamp": utc_now(),
+                        "payload": {
+                            "permission": tool_name,
+                            "options": option_labels,
+                        },
+                        "redaction": "metadata_only",
+                    })
                 allow_id = next(
                     (o["optionId"] for o in options
                      if isinstance(o, dict) and o.get("kind") == "allow_once"),
@@ -687,6 +721,16 @@ def run_grok_acp_once(
                         "result": {"outcome": {"outcome": "cancelled"}},
                     })
                     permission_outcomes.append("cancelled")
+                if on_acp_event:
+                    on_acp_event({
+                        "event_type": "permission_decision",
+                        "timestamp": utc_now(),
+                        "payload": {
+                            "permission": tool_name if tool_name else option_labels[0] if option_labels else "",
+                            "decision": permission_outcomes[-1] if permission_outcomes else "cancelled",
+                        },
+                        "redaction": "metadata_only",
+                    })
             elif method == "_x.ai/session/prompt_complete":
                 stop_reason = params.get("stopReason", stop_reason)
                 if params.get("sessionId"):
@@ -699,12 +743,30 @@ def run_grok_acp_once(
             "clientInfo": {"name": "gsa-acp-adapter", "title": "GSA ACP Adapter", "version": "0.1.0"},
         })
         protocol_version = init_result.get("protocolVersion", 0)
+        if on_acp_event:
+            on_acp_event({
+                "event_type": "acp_initialize",
+                "timestamp": utc_now(),
+                "payload": {"protocol_version": protocol_version},
+                "redaction": "metadata_only",
+            })
 
         session_result = _acp_request("acp-session-1", "session/new", {
             "cwd": str(request.workspace_path.resolve()),
             "mcpServers": [],
         })
         session_id = session_result.get("sessionId", session_id)
+        if on_acp_event:
+            on_acp_event({
+                "event_type": "acp_session_created",
+                "timestamp": utc_now(),
+                "payload": {
+                    "session_id_hash": sha256_bytes(
+                        session_id.encode("utf-8")
+                    ) if session_id else "",
+                },
+                "redaction": "metadata_only",
+            })
 
         _acp_send({
             "jsonrpc": "2.0", "id": "acp-prompt-1",

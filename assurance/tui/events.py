@@ -36,9 +36,13 @@ class TuiEventKind(str, Enum):
     MODEL_REQUEST = "model_request"
     MODEL_OUTPUT = "model_output"
     TOOL_PROPOSAL = "tool_proposal"
+    PERMISSION_REQUESTED = "permission_requested"
     PERMISSION_DECISION = "permission_decision"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
+    # ── ACP session lifecycle (Grok runtime) ──
+    ACP_INITIALIZE = "acp_initialize"
+    ACP_SESSION_CREATED = "acp_session_created"
     ARTIFACT_REGISTERED = "artifact_registered"
     RUN_FINISHED = "run_finished"
     RUN_FAILED = "run_failed"
@@ -200,7 +204,35 @@ class ToolCompletedEvent(TuiEvent):
     status: str = "success"   # "success" | "error" | "timeout"
 
 
+# ── ACP session lifecycle events (Grok runtime) ────────────────────────────────
+
+
+@dataclass
+class AcpInitializeEvent(TuiEvent):
+    """ACP JSON-RPC initialize handshake completed."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.ACP_INITIALIZE, init=False)
+    protocol_version: int = 0
+
+
+@dataclass
+class AcpSessionCreatedEvent(TuiEvent):
+    """ACP session/new completed — a Grok agent session is now active."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.ACP_SESSION_CREATED, init=False)
+    session_id_hash: str = ""
+
+
 # ── permission / artifact events ─────────────────────────────────────────────
+
+
+@dataclass
+class PermissionRequestedEvent(TuiEvent):
+    """A permission request has been received from the agent (before decision)."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.PERMISSION_REQUESTED, init=False)
+    permission: str = ""
+    options: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -190,13 +190,13 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
             raise AssuranceError(
                 "--ask is required when --grok-execute is set"
             )
-        grok_mode = getattr(args, "grok_mode", "prompt-smoke")
+        grok_mode = getattr(args, "grok_mode", "acp-smoke")
         from .grok_runtime_adapter import (
             GrokRunRequest,
             run_grok_headless_once,
             run_grok_acp_once,
         )
-        adapter_mode = "prompt_smoke" if grok_mode == "prompt-smoke" else "acp_smoke"
+        adapter_mode = "acp_smoke" if grok_mode == "acp-smoke" else "prompt_smoke"
         adapter_request = GrokRunRequest(
             run_root=args.run_root,
             workspace_path=args.run_root / "workspace",
@@ -611,17 +611,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "When --runtime grok and gate decision is 'allow', execute "
             "a Grok session with the locked binary. Mode is selected "
-            "by --grok-mode (default: prompt-smoke)."
+            "by --grok-mode (default: acp-smoke)."
         ),
     )
     run.add_argument(
         "--grok-mode",
         choices=["prompt-smoke", "acp-smoke"],
-        default="prompt-smoke",
+        default="acp-smoke",
         help=(
             "Execution mode for --grok-execute. "
-            "'prompt-smoke' uses headless --prompt-file; "
-            "'acp-smoke' uses grok agent stdio (ACP JSON-RPC)."
+            "'acp-smoke' uses grok agent stdio (ACP JSON-RPC, primary); "
+            "'prompt-smoke' uses headless --prompt-file (narrow smoke only)."
         ),
     )
     run.set_defaults(handler=_run_canonical)

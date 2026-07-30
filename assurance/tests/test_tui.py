@@ -1325,7 +1325,7 @@ class TuiEventDataclassTests(unittest.TestCase):
 
     def test_all_event_kinds_recognised(self) -> None:
         from assurance.tui.events import TuiEventKind
-        self.assertEqual(len(TuiEventKind), 24)
+        self.assertEqual(len(TuiEventKind), 27)
         self.assertEqual(TuiEventKind.RUN_PREFLIGHT.value, "run_preflight")
         self.assertEqual(TuiEventKind.RUN_FINISHED.value, "run_finished")
         self.assertEqual(TuiEventKind.GATE_DECISION.value, "gate_decision")
