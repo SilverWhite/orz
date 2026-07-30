@@ -1,7 +1,7 @@
 """Tests for shadow recovery store and recovery executor — GAK-REC-001.
 
 Covers:
-1. ShadowRecoveryStore: store/retrieve/verify/list
+1. ShadowRecoveryStore: store/retrieve/verify/list (Git-backed)
 2. RecoveryDiffPreview: metadata-level diff
 3. RecoveryExecutor: execute/verify/reject/fail
 4. End-to-end: candidate → authorize → store → execute → verify
@@ -132,10 +132,15 @@ def _make_authorization(
 
 
 class ShadowRecoveryStoreTests(unittest.TestCase):
-    """Tests for :class:`ShadowRecoveryStore`."""
+    """Tests for :class:`ShadowRecoveryStore` (Git-backed)."""
 
     def setUp(self) -> None:
-        self.store = ShadowRecoveryStore()
+        # Isolate each test in its own temp directory containing a fresh Git repo.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = ShadowRecoveryStore(repo_root=Path(self._tmp.name))
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
 
     def test_store_and_retrieve_cycle(self) -> None:
         """Store → retrieve produces matching entry."""
@@ -147,9 +152,11 @@ class ShadowRecoveryStoreTests(unittest.TestCase):
         self.assertEqual(entry.snapshot_sha256, sha256_bytes(snapshot))
         self.assertEqual(entry.snapshot_bytes, len(snapshot))
         self.assertIsNotNone(entry.authorization_sha256)
+        self.assertTrue(entry.commit_sha)
+        self.assertIsNone(entry.entry_sha256)  # Git mode: no SHA-256 entry key
 
-        retrieved = self.store.retrieve(entry.entry_sha256)
-        self.assertEqual(retrieved.entry_sha256, entry.entry_sha256)
+        retrieved = self.store.retrieve(entry.commit_sha)
+        self.assertEqual(retrieved.commit_sha, entry.commit_sha)
         self.assertEqual(retrieved.candidate_sha256, entry.candidate_sha256)
         self.assertEqual(retrieved.snapshot_sha256, entry.snapshot_sha256)
         self.assertEqual(retrieved.snapshot_bytes, len(snapshot))
@@ -161,8 +168,9 @@ class ShadowRecoveryStoreTests(unittest.TestCase):
 
         entry = self.store.store(candidate, None, snapshot)
         self.assertIsNone(entry.authorization_sha256)
+        self.assertTrue(entry.commit_sha)
 
-        retrieved = self.store.retrieve(entry.entry_sha256)
+        retrieved = self.store.retrieve(entry.commit_sha)
         self.assertIsNone(retrieved.authorization_sha256)
 
     def test_verify_entry_passes_for_valid_entry(self) -> None:
@@ -172,30 +180,36 @@ class ShadowRecoveryStoreTests(unittest.TestCase):
         snapshot = b"verifiable data"
 
         entry = self.store.store(candidate, auth, snapshot)
-        self.assertTrue(self.store.verify_entry(entry.entry_sha256))
+        self.assertTrue(self.store.verify_entry(entry.commit_sha))
 
     def test_verify_entry_fails_for_missing_entry(self) -> None:
-        """verify_entry returns False for non-existent entries."""
-        fake_sha = "f" * 64
+        """verify_entry returns False for non-existent commits."""
+        fake_sha = "f" * 40  # 40-char hex for Git commit SHA
         self.assertFalse(self.store.verify_entry(fake_sha))
 
-    def test_tampered_manifest_detected_on_retrieve(self) -> None:
-        """Tampered manifest causes retrieve to fail."""
-        from assurance.shadow_recovery import _entry_dir
-
+    def test_tampered_git_object_detected_on_verify(self) -> None:
+        """Corrupting a Git object file causes verify_entry to fail."""
         candidate = _make_candidate("RCV-TAMPER-001")
         auth = _make_authorization("RCV-TAMPER-001")
         snapshot = b"data to tamper"
 
         entry = self.store.store(candidate, auth, snapshot)
+        self.assertTrue(self.store.verify_entry(entry.commit_sha))
 
-        # Tamper with the manifest
-        entry_dir = _entry_dir(entry.entry_sha256)
-        manifest_path = entry_dir / "store_manifest.json"
-        manifest_path.write_text('{"tampered": true}', encoding="utf-8")
+        # Corrupt a blob object in the Git object store.
+        # Git object files are read-only on Windows, so chmod first.
+        objects_dir = self.store._repo / ".git" / "objects"
+        for obj_root, _dirs, files in objects_dir.walk():
+            for fname in files:
+                obj_path = obj_root / fname
+                obj_path.chmod(0o644)
+                obj_path.write_bytes(b"corrupted git object")
+                break
+            else:
+                continue
+            break
 
-        # Retrieve should detect corruption
-        self.assertFalse(self.store.verify_entry(entry.entry_sha256))
+        self.assertFalse(self.store.verify_entry(entry.commit_sha))
 
     def test_list_entries(self) -> None:
         """list_entries returns all stored entries."""
@@ -221,14 +235,14 @@ class ShadowRecoveryStoreTests(unittest.TestCase):
             self.store.store(candidate, None, b"")
 
     def test_duplicate_store_is_idempotent(self) -> None:
-        """Storing the same data twice produces the same entry key."""
+        """Storing the same data twice produces the same commit SHA."""
         candidate = _make_candidate("RCV-DUP-001")
         auth = _make_authorization("RCV-DUP-001")
         snapshot = b"duplicate snapshot"
 
         entry1 = self.store.store(candidate, auth, snapshot)
         entry2 = self.store.store(candidate, auth, snapshot)
-        self.assertEqual(entry1.entry_sha256, entry2.entry_sha256)
+        self.assertEqual(entry1.commit_sha, entry2.commit_sha)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -260,7 +274,7 @@ class RecoveryDiffPreviewTests(unittest.TestCase):
         self.assertIsNotNone(diff.current_sha256)
         self.assertIsNotNone(diff.current_bytes)
         self.assertGreater(diff.bytes_to_add, 0)
-        self.assertEqual(diff.snapshot_lines, 4)  # trailing \\n → 4 lines
+        self.assertEqual(diff.snapshot_lines, 4)  # trailing \n → 4 lines
 
     def test_target_does_not_exist(self) -> None:
         """When target doesn't exist, all bytes are 'to add'."""
@@ -342,13 +356,28 @@ class RecoveryExecutorTests(unittest.TestCase):
 
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
+            shadow_commit_sha="a" * 40,
         )
         self.assertEqual(receipt.outcome, "restored")
         self.assertEqual(receipt.bytes_written, len(snapshot))
         self.assertIsNotNone(receipt.diff_preview)
         self.assertTrue(receipt.audit_events_preserved)
+        self.assertEqual(receipt.shadow_commit_sha, "a" * 40)
         self.assertTrue(target.exists())
         self.assertEqual(target.read_bytes(), snapshot)
+
+    def test_shadow_commit_sha_defaults_to_none(self) -> None:
+        """Omitting shadow_commit_sha produces receipt with None."""
+        target = self.root / "default_sha.txt"
+        snapshot = b"default sha test\n"
+        candidate = _make_candidate("RCV-DEFAULTSHA")
+        auth = _make_authorization("RCV-DEFAULTSHA", outcome="allow")
+
+        receipt = self.executor.execute(
+            candidate, auth, snapshot, str(target), self.key_store,
+        )
+        self.assertEqual(receipt.outcome, "restored")
+        self.assertIsNone(receipt.shadow_commit_sha)
 
     def test_execution_receipt_verification(self) -> None:
         """Execution receipt can be independently verified."""
@@ -361,6 +390,7 @@ class RecoveryExecutorTests(unittest.TestCase):
 
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
+            shadow_commit_sha="b" * 40,
         )
 
         # Read the persisted receipt
@@ -373,9 +403,9 @@ class RecoveryExecutorTests(unittest.TestCase):
             receipt_path = exec_dir / "execution_receipt.json"
             if not receipt_path.exists():
                 continue
-            candidate = json.loads(receipt_path.read_text(encoding="utf-8"))
-            if candidate.get("receipt_id") == receipt.receipt_id:
-                persisted = candidate
+            candidate_data = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if candidate_data.get("receipt_id") == receipt.receipt_id:
+                persisted = candidate_data
                 break
         self.assertIsNotNone(persisted, f"receipt not found: {receipt.receipt_id}")
         result = verify_execution_receipt(persisted, self.key_store)
@@ -470,7 +500,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.key_store = MemoryInstallationKeyStore()
-        self.store = ShadowRecoveryStore()
+        self.store = ShadowRecoveryStore(repo_root=self.root)
         self.executor = RecoveryExecutor()
 
     def tearDown(self) -> None:
@@ -482,20 +512,22 @@ class EndToEndRecoveryTests(unittest.TestCase):
         candidate = _make_candidate("RCV-E2E-001", snapshot_sha=sha256_bytes(snapshot))
         auth = _make_authorization("RCV-E2E-001", outcome="allow")
 
-        # 1. Store in shadow store
+        # 1. Store in shadow store (Git-backed)
         entry = self.store.store(candidate, auth, snapshot)
-        self.assertTrue(self.store.verify_entry(entry.entry_sha256))
+        self.assertTrue(self.store.verify_entry(entry.commit_sha))
 
         # 2. Retrieve from shadow store
-        retrieved = self.store.retrieve(entry.entry_sha256)
+        retrieved = self.store.retrieve(entry.commit_sha)
         self.assertEqual(retrieved.snapshot_sha256, sha256_bytes(snapshot))
 
-        # 3. Execute recovery
+        # 3. Execute recovery with shadow_commit_sha
         target = self.root / "e2e_restored.bin"
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
+            shadow_commit_sha=entry.commit_sha,
         )
         self.assertEqual(receipt.outcome, "restored")
+        self.assertEqual(receipt.shadow_commit_sha, entry.commit_sha)
 
         # 4. Verify file was restored correctly
         self.assertTrue(target.exists())
@@ -554,8 +586,8 @@ class EndToEndRecoveryTests(unittest.TestCase):
 
         entries = self.store.list_entries()
         self.assertEqual(len(entries), before + 3)
-        self.assertTrue(entry_a.entry_sha256)
-        self.assertTrue(entry_c.entry_sha256)
+        self.assertTrue(entry_a.commit_sha)
+        self.assertTrue(entry_c.commit_sha)
 
         # Restore only B
         target = self.root / "restore_b.txt"

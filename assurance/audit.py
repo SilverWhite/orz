@@ -379,6 +379,7 @@ class AuditLedger:
         *,
         source_completeness: dict[str, str],
         now: datetime | None = None,
+        shadow_refs: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         if self._sealed:
             raise AssuranceError("audit ledger is already sealed")
@@ -484,6 +485,25 @@ class AuditLedger:
                 ),
             },
         }
+        if shadow_refs is not None:
+            commit_sha = shadow_refs.get("commit_sha", "")
+            tree_sha = shadow_refs.get("tree_sha", "")
+            if not isinstance(commit_sha, str) or not re.match(
+                r"^[a-f0-9]{40}$", commit_sha
+            ):
+                raise AssuranceError(
+                    "shadow_refs.commit_sha must be a 40-char Git commit SHA"
+                )
+            if not isinstance(tree_sha, str) or not re.match(
+                r"^[a-f0-9]{40}$", tree_sha
+            ):
+                raise AssuranceError(
+                    "shadow_refs.tree_sha must be a 40-char Git tree SHA"
+                )
+            body["shadow_refs"] = {
+                "commit_sha": commit_sha,
+                "tree_sha": tree_sha,
+            }
         receipt = _sign(body, key_store=self.key_store)
         validate_contract(
             receipt,

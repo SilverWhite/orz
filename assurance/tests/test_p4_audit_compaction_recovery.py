@@ -391,7 +391,7 @@ class P4AuditCompactionRecoveryTests(unittest.TestCase):
         self.assertEqual(auth["decision"]["outcome"], "allow")
 
         # Store in shadow store
-        store = ShadowRecoveryStore()
+        store = ShadowRecoveryStore(repo_root=self.root)
         snapshot_data = source.read_artifact(
             source.conversation_id,
             "user_pinned_snapshot",
@@ -399,7 +399,7 @@ class P4AuditCompactionRecoveryTests(unittest.TestCase):
         )
         self.assertIsNotNone(snapshot_data)
         entry = store.store(candidate, auth, snapshot_data)
-        self.assertTrue(store.verify_entry(entry.entry_sha256))
+        self.assertTrue(store.verify_entry(entry.commit_sha))
 
         # Execute recovery to a target file
         import tempfile

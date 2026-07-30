@@ -106,10 +106,21 @@
         }
       }
     },
+    "shadow_refs": {
+      "description": "Optional reference to the independent shadow Git store commit/tree that contains a restorable snapshot corresponding to this audit seal.  The commit_sha and tree_sha together identify the exact Git objects; they are NOT replaceable by a vague 'checkpoint succeeded' boolean.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit_sha", "tree_sha"],
+      "properties": {
+        "commit_sha": { "$ref": "#/$defs/git_sha" },
+        "tree_sha": { "$ref": "#/$defs/git_sha" }
+      }
+    },
     "integrity": { "$ref": "#/$defs/integrity" }
   },
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "git_sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
     "count_map": {
       "type": "object",
       "propertyNames": { "pattern": "^[a-z][a-z0-9_.:-]{0,127}$" },

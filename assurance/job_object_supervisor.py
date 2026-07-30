@@ -150,6 +150,105 @@ def _close_handle(handle: wintypes.HANDLE) -> None:
     kernel32.CloseHandle(handle)
 
 
+# ---------------------------------------------------------------------------
+# CREATE_SUSPENDED + resume helpers
+# ---------------------------------------------------------------------------
+
+CREATE_SUSPENDED = 0x00000004
+TH32CS_SNAPTHREAD = 0x00000004
+THREAD_SUSPEND_RESUME = 0x0002
+INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+
+class _THREADENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ThreadID", wintypes.DWORD),
+        ("th32OwnerProcessID", wintypes.DWORD),
+        ("tpBasePri", wintypes.LONG),
+        ("tpDeltaPri", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
+def _resume_main_thread(pid: int) -> None:
+    """Resume the main thread of a process created with ``CREATE_SUSPENDED``.
+
+    A newly-created suspended process has exactly one thread (the main
+    thread).  We snapshot all threads, pick the one owned by *pid*, open
+    it with ``THREAD_SUSPEND_RESUME``, call ``ResumeThread``, and close
+    the thread handle.
+
+    Raises :class:`AssuranceError` when the thread cannot be found,
+    opened, or resumed (fail-closed — a hung suspended process is a
+    resource leak).
+    """
+    if os.name != "nt":
+        return
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+
+    kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_THREADENTRY32)]
+    kernel32.Thread32First.restype = wintypes.BOOL
+
+    kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_THREADENTRY32)]
+    kernel32.Thread32Next.restype = wintypes.BOOL
+
+    kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenThread.restype = wintypes.HANDLE
+
+    kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+    kernel32.ResumeThread.restype = wintypes.DWORD
+
+    h_snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+    if h_snapshot == INVALID_HANDLE_VALUE:
+        raise AssuranceError(
+            f"cannot create thread snapshot to resume process {pid}"
+        )
+
+    try:
+        te = _THREADENTRY32()
+        te.dwSize = ctypes.sizeof(_THREADENTRY32)
+
+        if not kernel32.Thread32First(h_snapshot, ctypes.byref(te)):
+            raise AssuranceError(
+                f"cannot enumerate threads to resume process {pid}"
+            )
+
+        while True:
+            if te.th32OwnerProcessID == pid:
+                h_thread = kernel32.OpenThread(
+                    wintypes.DWORD(THREAD_SUSPEND_RESUME), False,
+                    wintypes.DWORD(te.th32ThreadID),
+                )
+                if not h_thread:
+                    raise AssuranceError(
+                        f"cannot open thread {te.th32ThreadID} "
+                        f"to resume process {pid}"
+                    )
+                try:
+                    # ResumeThread returns the previous suspend count.
+                    # A value of 1 is expected for CREATE_SUSPENDED.
+                    kernel32.ResumeThread(h_thread)
+                finally:
+                    _close_handle(h_thread)
+                return
+
+            if not kernel32.Thread32Next(h_snapshot, ctypes.byref(te)):
+                break
+
+        raise AssuranceError(
+            f"no thread found for process {pid} — "
+            f"cannot resume suspended process"
+        )
+    finally:
+        _close_handle(h_snapshot)
+
+
 class JobObjectSupervisor:
     """A Kill-On-Close Job Object that contains a root process tree.
 
@@ -164,11 +263,13 @@ class JobObjectSupervisor:
     upstream runtime (Grok) has not yet proven internal child-process
     cleanup.
 
-    Phase 1 limitation: uses post-creation ``AssignProcessToJobObject``
-    rather than ``PROC_THREAD_ATTRIBUTE_JOB_LIST`` (GAK-WIN-001
-    creation-time assignment).  The post-creation race window is
-    acceptable for ``grok --version`` smoke but will be upgraded to the
-    zero-race creation-time pattern before prompt/tool mode promotion.
+    The :func:`contained_run` helper uses ``CREATE_SUSPENDED`` +
+    assign + resume to close the post-creation race window: no code
+    executes before Job membership is established.
+    ``PROC_THREAD_ATTRIBUTE_JOB_LIST`` (GAK-WIN-001 creation-time
+    kernel assignment) remains the planned refinement for a cleaner
+    implementation that avoids the suspend/resume dance, but the
+    effective containment guarantee is equivalent.
     """
 
     def __init__(self) -> None:
@@ -309,10 +410,15 @@ def contained_run(
     the caller's timeout kills the Python thread, the kernel guarantees
     the entire process tree is terminated.
 
+    On Windows the process is created with ``CREATE_SUSPENDED``,
+    assigned to the Job Object while frozen, then resumed.  No code
+    executes before Job membership is established — the post-creation
+    race window is closed.
+
     On non-Windows platforms this is a thin passthrough to
     :func:`subprocess.run`.
     """
-    if not CONTAINMENT_ENABLED:
+    if not CONTAINMENT_ENABLED or os.name != "nt":
         return subprocess.run(
             command,
             cwd=cwd,
@@ -332,23 +438,23 @@ def contained_run(
     supervisor = JobObjectSupervisor()
     process: subprocess.Popen[bytes] | subprocess.Popen[str] | None = None
     try:
-        if supervisor.is_active:
-            # Start the process suspended so we can assign to the Job
-            # before any code runs.  This also prevents the process from
-            # creating child processes before containment is established.
-            process = subprocess.Popen(
-                command,
-                cwd=cwd,
-                env=env,
-                stdin=subprocess.DEVNULL if stdin is None else stdin,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=text,
-                encoding=encoding,
-                errors=errors,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            supervisor.assign_process(process.pid)
+        # CREATE_SUSPENDED: the process is created but its initial thread
+        # is frozen.  We assign it to the Job Object and resume — no code
+        # executes before containment is established.
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL if stdin is None else stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+            encoding=encoding,
+            errors=errors,
+            creationflags=CREATE_NO_WINDOW | CREATE_SUSPENDED,
+        )
+        supervisor.assign_process(process.pid)
+        _resume_main_thread(process.pid)
 
         stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
         returncode = process.poll()

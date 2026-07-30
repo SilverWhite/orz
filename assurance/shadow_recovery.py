@@ -3,7 +3,7 @@
 Provides the missing pieces between recovery *authorization* (proven in
 :mod:`~.recovery`) and recovery *execution*:
 
-1. :class:`ShadowRecoveryStore` — content-addressed, integrity-verified
+1. :class:`ShadowRecoveryStore` — Git-backed, integrity-verified
    storage for recovery candidates, authorizations, and snapshot data.
    Independent of the source namespace (which may have been archived or
    deleted).
@@ -18,36 +18,39 @@ Provides the missing pieces between recovery *authorization* (proven in
    :class:`ExecutionReceipt`.  Audit events are **never** modified or
    deleted — the executor only reads the audit seal for verification.
 
-The store layout follows the same content-addressed pattern as
-:mod:`~.evidence_store`::
+The store is an independent Git repository (inspired by Gemini CLI,
+OpenCode, and Cline checkpointing patterns)::
 
     <project>/.gsa_shadow_recovery/
-      store/
-        {sha256[:2]}/
-          {sha256}/
-            candidate.json
-            authorization.json
-            snapshot.bin
-            store_manifest.json
+      repo/                        # Git repository
+        .git/                      # Git internals (objects, refs, HEAD)
       executions/
         {timestamp}-{uuid8}/
           execution_receipt.json
           diff_preview.json
 
-Design references:
-- :mod:`assurance.evidence_store` — SHA-256 content-addressed layout
-- :mod:`assurance.recovery` — recovery candidate/authorization signatures
-- :mod:`assurance.audit` — ``_sign()`` / receipt verification patterns
-- :mod:`assurance.endpoint_canonicalizer` — path safety
-"""
+Each :meth:`ShadowRecoveryStore.store` call creates a Git commit
+containing ``candidate.json``, ``authorization.json`` (optional), and
+``snapshot.bin`` as blobs.  The commit SHA (40-char hex) is the entry
+identifier.  Idempotency is achieved via tree-SHA deduplication.
 
+The old SHA-256 content-addressed filesystem layout (``store/{prefix2}/{sha256}/``)
+is deprecated.  A ``DeprecationWarning`` is issued if it still exists.
+
+Design references:
+- Gemini CLI checkpointing — independent shadow Git with conversation/tool-call association
+- OpenCode snapshot/revert — Git store + patch/restore + session/message boundaries
+- Cline checkpoints — separate Git repository, file + task restore
+"""
 from __future__ import annotations
 
 import json
 import os
 import re
+import subprocess
 import tempfile
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,24 +74,22 @@ from .utils import (
 # ── paths ─────────────────────────────────────────────────────────────────────
 
 SHADOW_ROOT: Path = ASSURANCE_ROOT.parent / ".gsa_shadow_recovery"
-SHADOW_STORE: Path = SHADOW_ROOT / "store"
+SHADOW_REPO: Path = SHADOW_ROOT / "repo"
 SHADOW_EXECUTIONS: Path = SHADOW_ROOT / "executions"
 
-SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
-
-
-def _ensure_dirs() -> None:
-    SHADOW_STORE.mkdir(parents=True, exist_ok=True)
-    SHADOW_EXECUTIONS.mkdir(parents=True, exist_ok=True)
+COMMIT_SHA_RE = re.compile(r"^[a-f0-9]{40}$")
+CREATE_NO_WINDOW: int = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _validate_sha256(value: str, *, label: str) -> None:
-    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
-        raise AssuranceError(f"{label} must be a 64-char SHA-256 hex digest")
+def _validate_commit_sha(value: str, *, label: str) -> None:
+    if not isinstance(value, str) or not COMMIT_SHA_RE.fullmatch(value):
+        raise AssuranceError(
+            f"{label} must be a 40-char Git commit SHA hex digest"
+        )
 
 
 def _sign_body(
@@ -123,10 +124,6 @@ def _verify_body_signature(
     return errors
 
 
-def _entry_dir(entry_sha256: str) -> Path:
-    return SHADOW_STORE / entry_sha256[:2] / entry_sha256
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # data types
 # ══════════════════════════════════════════════════════════════════════════════
@@ -136,12 +133,15 @@ def _entry_dir(entry_sha256: str) -> Path:
 class StoreEntry:
     """A recovery entry in the shadow store.
 
-    Contains candidate, authorization, and snapshot data — all
-    independently verifiable via the store manifest.
+    Each entry corresponds to a Git commit in the shadow repository.
+    *commit_sha* is the 40-character Git commit SHA (primary key).
+    *entry_sha256* is ``None`` in Git mode; retained for backward
+    compatibility with callers that check its truthiness.
     """
 
     entry_id: str
-    entry_sha256: str
+    commit_sha: str
+    entry_sha256: str | None
     candidate_sha256: str
     authorization_sha256: str | None
     snapshot_sha256: str
@@ -180,6 +180,9 @@ class ExecutionReceipt:
 
     The receipt records what was restored, where, and the outcome.
     It explicitly declares that audit events were **not** modified.
+
+    *shadow_commit_sha* is the Git commit SHA of the source entry
+    in the shadow repository (``None`` if not from a Git-backed store).
     """
 
     receipt_id: str
@@ -190,23 +193,25 @@ class ExecutionReceipt:
     pre_existing_sha256: str | None
     outcome: str            # "restored" | "failed" | "rejected"
     bytes_written: int
+    shadow_commit_sha: str | None = None
     diff_preview: dict[str, Any] | None = None
     errors: list[str] = field(default_factory=list)
     audit_events_preserved: bool = True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Shadow Recovery Store
+# Shadow Recovery Store (Git-backed)
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 class ShadowRecoveryStore:
-    """Content-addressed store for recovery artifacts.
+    """Git-backed store for recovery artifacts.
 
-    Each entry is keyed by the SHA-256 of the concatenation of
-    candidate + authorization + snapshot, ensuring idempotent storage.
-    The store manifest independently verifies the integrity of each
-    stored artifact.
+    Each :meth:`store` call creates a Git commit containing
+    ``candidate.json``, ``authorization.json`` (optional), and
+    ``snapshot.bin`` as blobs.  The 40-character commit SHA is the
+    entry identifier.  Git's object integrity model replaces the old
+    manifest-based verification.
 
     Usage::
 
@@ -217,12 +222,170 @@ class ShadowRecoveryStore:
             snapshot_bytes=b"checkpoint data",
         )
         # ... later ...
-        retrieved = store.retrieve(entry.entry_sha256)
-        assert store.verify_entry(entry.entry_sha256)
+        retrieved = store.retrieve(entry.commit_sha)
+        assert store.verify_entry(entry.commit_sha)
+
+    Pass *repo_root* to isolate tests (e.g. a :class:`tempfile.TemporaryDirectory`).
     """
 
-    def __init__(self) -> None:
-        _ensure_dirs()
+    def __init__(self, repo_root: Path | None = None) -> None:
+        base = repo_root or SHADOW_ROOT
+        self._repo: Path = base / "repo"
+        self._executions: Path = base / "executions"
+        self._executions.mkdir(parents=True, exist_ok=True)
+
+        # Warn if the old CAS store directory still exists.
+        old_store = base / "store"
+        if old_store.is_dir():
+            warnings.warn(
+                f"Old shadow store format detected at {old_store}. "
+                "This format is no longer used by ShadowRecoveryStore. "
+                f"The Git-backed store is at {self._repo}.",
+                DeprecationWarning, stacklevel=2,
+            )
+
+        self._init_repo()
+
+    # ── Git infrastructure ────────────────────────────────────────────────
+
+    def _git_env(self, **extra: str) -> dict[str, str]:
+        """Build an environment dict pointing at this store's Git repo."""
+        env = os.environ.copy()
+        env["GIT_DIR"] = str(self._repo / ".git")
+        for k, v in extra.items():
+            env[k] = v
+        return env
+
+    def _run_git(
+        self,
+        args: list[str],
+        *,
+        input: str | bytes | None = None,
+        env: dict[str, str] | None = None,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess:
+        """Run a git command; raise :class:`AssuranceError` on failure."""
+        try:
+            return subprocess.run(
+                ["git", *args],
+                input=input,
+                capture_output=True,
+                text=isinstance(input, str) or input is None,
+                check=check,
+                env=env or self._git_env(),
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (
+                exc.stderr.decode("utf-8", errors="replace")
+                if isinstance(exc.stderr, bytes)
+                else exc.stderr or ""
+            ).strip()
+            raise AssuranceError(
+                f"git {args[0]} failed: {stderr}"
+            ) from exc
+
+    def _git_bytes(self, args: list[str]) -> bytes:
+        """Run a git command and return raw stdout bytes.
+
+        Used for retrieving binary blobs (e.g. ``snapshot.bin``) that
+        ``text=True`` would mangle.
+        """
+        env = self._git_env()
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                capture_output=True,
+                check=True,
+                env=env,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            return result.stdout
+        except subprocess.CalledProcessError as exc:
+            stderr = (
+                exc.stderr.decode("utf-8", errors="replace")
+                if isinstance(exc.stderr, bytes)
+                else exc.stderr or ""
+            ).strip()
+            raise AssuranceError(
+                f"git {args[0]} failed: {stderr}"
+            ) from exc
+
+    def _init_repo(self) -> None:
+        """Initialize the Git repository if it does not already exist."""
+        self._repo.mkdir(parents=True, exist_ok=True)
+        dot_git = self._repo / ".git"
+        if dot_git.is_dir():
+            return
+
+        subprocess.run(
+            ["git", "-C", str(self._repo), "init"],
+            capture_output=True, text=True, check=True,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        # Local config so commits succeed without a global identity set.
+        subprocess.run(
+            ["git", "-C", str(self._repo), "config", "user.name", "GSA Shadow Recovery"],
+            capture_output=True, text=True, check=True,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        subprocess.run(
+            ["git", "-C", str(self._repo), "config", "user.email", "shadow-recovery@gsa.local"],
+            capture_output=True, text=True, check=True,
+            creationflags=CREATE_NO_WINDOW,
+        )
+
+    def _get_head(self) -> str | None:
+        """Return HEAD commit SHA, or ``None`` if the repo has no commits."""
+        try:
+            result = self._run_git(["rev-parse", "--verify", "HEAD"])
+            return result.stdout.strip()
+        except AssuranceError:
+            return None
+
+    def _find_commit_by_tree(self, tree_sha: str) -> str | None:
+        """Walk all commits looking for one whose tree matches *tree_sha*."""
+        try:
+            result = self._run_git(["log", "--all", "--format=%T %H"])
+        except AssuranceError:
+            return None
+        for line in result.stdout.strip().splitlines():
+            parts = line.strip().split(" ", 1)
+            if len(parts) == 2 and parts[0] == tree_sha:
+                return parts[1]
+        return None
+
+    def _create_commit(
+        self,
+        tree_sha: str,
+        candidate_sha256: str,
+        auth_sha256: str | None,
+        snapshot_sha256: str,
+        snapshot_bytes: int,
+        candidate_id: str,
+    ) -> str:
+        """Create a Git commit object for *tree_sha* and advance ``main``."""
+        msg_lines = [
+            f"candidate_sha256: {candidate_sha256}",
+            f"snapshot_sha256: {snapshot_sha256}",
+            f"snapshot_bytes: {snapshot_bytes}",
+        ]
+        if auth_sha256:
+            msg_lines.append(f"authorization_sha256: {auth_sha256}")
+        msg_lines.append(f"candidate_id: {candidate_id}")
+        commit_msg = "\n".join(msg_lines)
+
+        parent = self._get_head()
+        args = ["commit-tree", tree_sha, "-m", commit_msg]
+        if parent:
+            args = ["commit-tree", tree_sha, "-p", parent, "-m", commit_msg]
+
+        result = self._run_git(args)
+        commit_sha = result.stdout.strip()
+        self._run_git(["update-ref", "refs/heads/main", commit_sha])
+        return commit_sha
+
+    # ── public API ────────────────────────────────────────────────────────
 
     def store(
         self,
@@ -230,22 +393,21 @@ class ShadowRecoveryStore:
         authorization: dict[str, Any] | None,
         snapshot_bytes: bytes,
     ) -> StoreEntry:
-        """Store a recovery entry in the shadow store.
+        """Store a recovery entry as a Git commit.
 
         Parameters
         ----------
         candidate:
-            Recovery candidate receipt (from :func:`~.recovery.create_recovery_candidate`).
+            Recovery candidate receipt.
         authorization:
-            Recovery authorization receipt (from :func:`~.recovery.authorize_recovery_candidate`).
-            May be ``None`` for candidates that have not yet been authorized.
+            Recovery authorization receipt.  May be ``None``.
         snapshot_bytes:
             The snapshot data to store.
 
         Returns
         -------
         StoreEntry
-            Metadata about the stored entry.
+            Metadata about the stored entry.  *commit_sha* is the primary key.
 
         Raises
         ------
@@ -255,6 +417,7 @@ class ShadowRecoveryStore:
         if not snapshot_bytes:
             raise AssuranceError("shadow store: snapshot must not be empty")
 
+        # Compute content hashes (same algorithm as the old CAS store).
         candidate_json = canonical_bytes(candidate)
         candidate_sha256 = sha256_bytes(candidate_json)
         snapshot_sha256 = sha256_bytes(snapshot_bytes)
@@ -265,59 +428,78 @@ class ShadowRecoveryStore:
             auth_json = canonical_bytes(authorization)
             auth_sha256 = sha256_bytes(auth_json)
 
-        # Entry key = SHA-256(candidate || authorization || snapshot)
-        entry_payload = candidate_json + auth_json + snapshot_bytes
-        entry_sha256 = sha256_bytes(entry_payload)
+        # Stage files in a temp worktree and create a Git tree object.
+        with tempfile.TemporaryDirectory(prefix="shadow-store-") as tmp:
+            work = Path(tmp)
+            (work / "candidate.json").write_bytes(candidate_json)
+            if authorization is not None:
+                (work / "authorization.json").write_bytes(auth_json)
+            (work / "snapshot.bin").write_bytes(snapshot_bytes)
 
-        entry_dir = _entry_dir(entry_sha256)
-        entry_dir.mkdir(parents=True, exist_ok=True)
+            # GIT_INDEX_FILE must point to a path that does NOT exist yet —
+            # Git will create the index on first use.  An empty file (from
+            # mkstemp) trips "index file smaller than expected".
+            idx_path = os.path.join(tmp, "index")
+            env = self._git_env(
+                GIT_WORK_TREE=str(work),
+                GIT_INDEX_FILE=idx_path,
+            )
+            self._run_git(["add", "."], env=env)
+            result = self._run_git(["write-tree"], env=env)
+            tree_sha = result.stdout.strip()
 
-        now = _timestamp()
+        # Idempotency: same tree → same commit.
+        commit_sha = self._find_commit_by_tree(tree_sha)
+        if commit_sha is None:
+            commit_sha = self._create_commit(
+                tree_sha,
+                candidate_sha256,
+                auth_sha256,
+                snapshot_sha256,
+                len(snapshot_bytes),
+                candidate.get("candidate_id", ""),
+            )
 
-        # Write artifacts using canonical bytes (sorted, compact JSON) so
-        # retrieve() can recompute identical hashes from the on-disk bytes.
-        # overwrite=True: duplicate stores are idempotent (same key).
-        candidate_path = entry_dir / "candidate.json"
-        atomic_write_bytes(candidate_path, candidate_json, overwrite=True)
-        if authorization is not None:
-            auth_path = entry_dir / "authorization.json"
-            atomic_write_bytes(auth_path, auth_json, overwrite=True)
-        atomic_write_bytes(entry_dir / "snapshot.bin", snapshot_bytes, overwrite=True)
+        # Timestamp from the commit.
+        result = self._run_git(["log", "--format=%ct", "-1", commit_sha])
+        stored_at = datetime.fromtimestamp(
+            int(result.stdout.strip()), tz=timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
 
-        # Build and write manifest
         manifest = {
             "schema_version": "0.1.0-draft",
-            "entry_sha256": entry_sha256,
+            "commit_sha": commit_sha,
+            "tree_sha": tree_sha,
             "candidate_sha256": candidate_sha256,
             "authorization_sha256": auth_sha256,
             "snapshot_sha256": snapshot_sha256,
             "snapshot_bytes": len(snapshot_bytes),
-            "stored_at": now,
+            "stored_at": stored_at,
             "candidate_id": candidate.get("candidate_id", ""),
             "source_conversation_id": (
                 candidate.get("source", {}).get("conversation_id", "")
             ),
         }
-        atomic_write_json(entry_dir / "store_manifest.json", manifest, overwrite=True)
 
         return StoreEntry(
-            entry_id=f"SRV-{entry_sha256[:16]}",
-            entry_sha256=entry_sha256,
+            entry_id=f"SRV-{commit_sha[:16]}",
+            commit_sha=commit_sha,
+            entry_sha256=None,
             candidate_sha256=candidate_sha256,
             authorization_sha256=auth_sha256,
             snapshot_sha256=snapshot_sha256,
             snapshot_bytes=len(snapshot_bytes),
-            stored_at=now,
+            stored_at=stored_at,
             manifest=manifest,
         )
 
-    def retrieve(self, entry_sha256: str) -> StoreEntry:
-        """Retrieve a stored recovery entry by its SHA-256.
+    def retrieve(self, commit_sha: str) -> StoreEntry:
+        """Retrieve a stored recovery entry by its Git commit SHA.
 
         Parameters
         ----------
-        entry_sha256:
-            The 64-character SHA-256 hex digest of the entry.
+        commit_sha:
+            The 40-character Git commit SHA.
 
         Returns
         -------
@@ -327,118 +509,138 @@ class ShadowRecoveryStore:
         Raises
         ------
         AssuranceError
-            If the entry does not exist or the manifest is invalid.
+            If the commit does not exist or is corrupt.
         """
-        _validate_sha256(entry_sha256, label="entry_sha256")
-        entry_dir = _entry_dir(entry_sha256)
-        if not entry_dir.is_dir():
+        _validate_commit_sha(commit_sha, label="commit_sha")
+
+        # Verify the object exists and is a commit.
+        try:
+            result = self._run_git(["cat-file", "-t", commit_sha])
+            obj_type = result.stdout.strip()
+        except AssuranceError:
             raise AssuranceError(
-                f"shadow store: entry not found: {entry_sha256[:16]}…"
+                f"shadow store: entry not found: {commit_sha[:16]}…"
+            )
+        if obj_type != "commit":
+            raise AssuranceError(
+                f"shadow store: object {commit_sha[:16]}… is not a commit"
             )
 
-        manifest_path = entry_dir / "store_manifest.json"
-        if not manifest_path.is_file():
+        # Retrieve blob contents.
+        def _get_blob_text(path: str) -> bytes:
+            result = self._run_git(["show", f"{commit_sha}:{path}"])
+            return result.stdout.encode("utf-8")  # text=True → need to encode back
+
+        def _get_blob_raw(path: str) -> bytes:
+            return self._git_bytes(["show", f"{commit_sha}:{path}"])
+
+        try:
+            candidate_bytes = _get_blob_text("candidate.json")
+            snapshot_bytes = _get_blob_raw("snapshot.bin")
+        except AssuranceError as exc:
             raise AssuranceError(
-                f"shadow store: manifest missing for entry {entry_sha256[:16]}…"
-            )
+                f"shadow store: missing blob in commit {commit_sha[:16]}…"
+            ) from exc
 
-        manifest = load_json(manifest_path)
+        candidate_sha256 = sha256_bytes(candidate_bytes)
+        snapshot_sha256 = sha256_bytes(snapshot_bytes)
 
-        # Verify manifest integrity against stored artifacts
-        candidate_path = entry_dir / "candidate.json"
-        auth_path = entry_dir / "authorization.json"
-        snap_path = entry_dir / "snapshot.bin"
+        auth_sha256 = None
+        try:
+            auth_bytes = _get_blob_text("authorization.json")
+            auth_sha256 = sha256_bytes(auth_bytes)
+        except AssuranceError:
+            pass  # authorization is optional
 
-        if not candidate_path.is_file():
-            raise AssuranceError("shadow store: candidate artifact missing")
-        if not snap_path.is_file():
-            raise AssuranceError("shadow store: snapshot artifact missing")
+        # Get tree SHA and timestamp.
+        result = self._run_git(["rev-parse", f"{commit_sha}^{{tree}}"])
+        tree_sha = result.stdout.strip()
+        result = self._run_git(["log", "--format=%ct", "-1", commit_sha])
+        stored_at = datetime.fromtimestamp(
+            int(result.stdout.strip()), tz=timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
 
-        candidate_bytes = candidate_path.read_bytes()
-        actual_candidate_sha = sha256_bytes(candidate_bytes)
-        if actual_candidate_sha != manifest.get("candidate_sha256"):
-            raise AssuranceError(
-                "shadow store: candidate artifact tampered"
-            )
-
-        actual_snap = snap_path.read_bytes()
-        actual_snap_sha = sha256_bytes(actual_snap)
-        if actual_snap_sha != manifest.get("snapshot_sha256"):
-            raise AssuranceError(
-                "shadow store: snapshot artifact tampered"
-            )
-
-        actual_auth_sha = None
-        if auth_path.is_file():
-            auth_bytes = auth_path.read_bytes()
-            actual_auth_sha = sha256_bytes(auth_bytes)
-            if actual_auth_sha != manifest.get("authorization_sha256"):
-                raise AssuranceError(
-                    "shadow store: authorization artifact tampered"
-                )
-
-        # Recompute entry key (store() writes canonical bytes, so raw
-        # file bytes match what store() used for the entry key)
-        auth_bytes_for_key = auth_path.read_bytes() if auth_path.is_file() else b""
-        recomputed = (
-            candidate_bytes + auth_bytes_for_key + actual_snap
-        )
-        recomputed_sha = sha256_bytes(recomputed)
-        if recomputed_sha != entry_sha256:
-            raise AssuranceError(
-                "shadow store: entry key mismatch — data may be corrupted"
-            )
+        manifest = {
+            "schema_version": "0.1.0-draft",
+            "commit_sha": commit_sha,
+            "tree_sha": tree_sha,
+            "candidate_sha256": candidate_sha256,
+            "authorization_sha256": auth_sha256,
+            "snapshot_sha256": snapshot_sha256,
+            "snapshot_bytes": len(snapshot_bytes),
+            "stored_at": stored_at,
+        }
 
         return StoreEntry(
-            entry_id=f"SRV-{entry_sha256[:16]}",
-            entry_sha256=entry_sha256,
-            candidate_sha256=actual_candidate_sha,
-            authorization_sha256=actual_auth_sha,
-            snapshot_sha256=actual_snap_sha,
-            snapshot_bytes=len(actual_snap),
-            stored_at=manifest.get("stored_at", ""),
+            entry_id=f"SRV-{commit_sha[:16]}",
+            commit_sha=commit_sha,
+            entry_sha256=None,
+            candidate_sha256=candidate_sha256,
+            authorization_sha256=auth_sha256,
+            snapshot_sha256=snapshot_sha256,
+            snapshot_bytes=len(snapshot_bytes),
+            stored_at=stored_at,
             manifest=manifest,
         )
 
     def list_entries(self) -> list[StoreEntry]:
-        """List all stored recovery entries."""
+        """List all stored recovery entries (all commits on all branches)."""
+        try:
+            result = self._run_git(["log", "--all", "--format=%H"])
+        except AssuranceError:
+            return []
+
+        sha_list = result.stdout.strip()
+        if not sha_list:
+            return []
+
         entries: list[StoreEntry] = []
-        if not SHADOW_STORE.is_dir():
-            return entries
-        for prefix_dir in sorted(SHADOW_STORE.iterdir()):
-            if not prefix_dir.is_dir() or len(prefix_dir.name) != 2:
+        for commit_sha in sha_list.splitlines():
+            commit_sha = commit_sha.strip()
+            if not commit_sha:
                 continue
-            for entry_dir in sorted(prefix_dir.iterdir()):
-                if not entry_dir.is_dir() or len(entry_dir.name) != 64:
-                    continue
-                manifest_path = entry_dir / "store_manifest.json"
-                if not manifest_path.is_file():
-                    continue
-                try:
-                    manifest = load_json(manifest_path)
-                    entry_sha = manifest.get("entry_sha256", entry_dir.name)
-                    entries.append(StoreEntry(
-                        entry_id=f"SRV-{entry_sha[:16]}",
-                        entry_sha256=entry_sha,
-                        candidate_sha256=manifest.get("candidate_sha256", ""),
-                        authorization_sha256=manifest.get("authorization_sha256"),
-                        snapshot_sha256=manifest.get("snapshot_sha256", ""),
-                        snapshot_bytes=manifest.get("snapshot_bytes", 0),
-                        stored_at=manifest.get("stored_at", ""),
-                        manifest=manifest,
-                    ))
-                except Exception:
-                    continue
+            try:
+                entries.append(self.retrieve(commit_sha))
+            except Exception:
+                continue
         return entries
 
-    def verify_entry(self, entry_sha256: str) -> bool:
-        """Verify the integrity of a stored entry.
+    def verify_entry(self, commit_sha: str) -> bool:
+        """Verify the integrity of a stored entry using Git's object model.
 
-        Returns ``True`` if the entry exists and all artifacts match
-        the manifest.
+        Checks that *commit_sha* is a valid commit whose tree and blobs
+        all exist and are not corrupt.
+
+        Returns ``True`` if all objects pass ``git cat-file -t`` checks.
         """
         try:
-            self.retrieve(entry_sha256)
+            _validate_commit_sha(commit_sha, label="commit_sha")
+
+            # Verify commit object.
+            obj_type = self._run_git(["cat-file", "-t", commit_sha]).stdout.strip()
+            if obj_type != "commit":
+                return False
+
+            # Verify tree object.
+            tree_sha = self._run_git(
+                ["rev-parse", f"{commit_sha}^{{tree}}"],
+            ).stdout.strip()
+            obj_type = self._run_git(["cat-file", "-t", tree_sha]).stdout.strip()
+            if obj_type != "tree":
+                return False
+
+            # Verify every blob in the tree.
+            tree_result = self._run_git(["ls-tree", tree_sha])
+            for line in tree_result.stdout.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 4:
+                    blob_sha = parts[2]
+                    obj_type = self._run_git(
+                        ["cat-file", "-t", blob_sha],
+                    ).stdout.strip()
+                    if obj_type != "blob":
+                        return False
+
             return True
         except AssuranceError:
             return False
@@ -559,6 +761,7 @@ class RecoveryExecutor:
             snapshot_bytes=store_entry_data,
             target_path="/path/to/restore",
             key_store=key_store,
+            shadow_commit_sha=entry.commit_sha,
         )
         assert verify_execution_receipt(receipt, key_store=key_store)["valid"]
     """
@@ -572,6 +775,7 @@ class RecoveryExecutor:
         key_store: InstallationKeyStore,
         base_root: Path | None = None,
         dry_run: bool = False,
+        shadow_commit_sha: str | None = None,
     ) -> ExecutionReceipt:
         """Execute a recovery — write *snapshot_bytes* to *target_path*.
 
@@ -593,6 +797,9 @@ class RecoveryExecutor:
             Optional root to scope *target_path* under.
         dry_run:
             If ``True``, produce the diff preview but do not write.
+        shadow_commit_sha:
+            Git commit SHA of the source entry in the shadow repository.
+            ``None`` if the snapshot did not come from a Git-backed store.
 
         Returns
         -------
@@ -618,9 +825,6 @@ class RecoveryExecutor:
         resolved = Path(canonical) if base_root is None else (base_root / canonical)
 
         # 2. Validate candidate structural integrity
-        # The candidate's signature was already verified by recovery.py
-        # at creation time.  The executor validates the candidate_id
-        # and source classification are present and correct.
         candidate_id = candidate.get("candidate_id", "")
         source = candidate.get("source", {})
         if source.get("classification") != "untrusted_recovery_candidate":
@@ -632,6 +836,7 @@ class RecoveryExecutor:
                 snapshot_sha256=sha256_bytes(snapshot_bytes),
                 pre_existing_sha256=None,
                 outcome="rejected",
+                shadow_commit_sha=shadow_commit_sha,
                 errors=["candidate classification must be untrusted_recovery_candidate"],
             )
 
@@ -646,13 +851,11 @@ class RecoveryExecutor:
                 pre_existing_sha256=None,
                 outcome="rejected",
                 bytes_written=0,
+                shadow_commit_sha=shadow_commit_sha,
                 errors=["recovery authorization is required for execution"],
             )
         auth_id = authorization.get("receipt_id", "")
 
-        # Verify authorization structural integrity.
-        # The authorization's signature was verified at creation time
-        # by recovery.py.  The executor validates the decision fields.
         auth_candidate_id = authorization.get("candidate_id", "")
         if auth_candidate_id != candidate_id:
             return ExecutionReceipt(
@@ -663,6 +866,7 @@ class RecoveryExecutor:
                 snapshot_sha256=sha256_bytes(snapshot_bytes),
                 pre_existing_sha256=None,
                 outcome="rejected",
+                shadow_commit_sha=shadow_commit_sha,
                 errors=[
                     f"authorization candidate_id '{auth_candidate_id}' "
                     f"does not match candidate_id '{candidate_id}'"
@@ -679,6 +883,7 @@ class RecoveryExecutor:
                 snapshot_sha256=sha256_bytes(snapshot_bytes),
                 pre_existing_sha256=None,
                 outcome="rejected",
+                shadow_commit_sha=shadow_commit_sha,
                 errors=[
                     f"authorization decision is '{decision.get('outcome')}', "
                     f"not 'allow'"
@@ -695,6 +900,7 @@ class RecoveryExecutor:
                 pre_existing_sha256=None,
                 outcome="rejected",
                 bytes_written=0,
+                shadow_commit_sha=shadow_commit_sha,
                 errors=["authorization already performed restoration"],
             )
 
@@ -729,6 +935,7 @@ class RecoveryExecutor:
                 pre_existing_sha256=pre_existing_sha,
                 outcome="rejected",
                 bytes_written=0,
+                shadow_commit_sha=shadow_commit_sha,
                 diff_preview=diff,
                 errors=["dry_run: no data written"],
             )
@@ -736,7 +943,6 @@ class RecoveryExecutor:
         # 6. Atomic write
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)
-            # Write to temp file in the same directory, then rename
             fd, tmp_path_str = tempfile.mkstemp(
                 dir=str(resolved.parent),
                 prefix=f".{resolved.name}.",
@@ -754,7 +960,6 @@ class RecoveryExecutor:
         except OSError as exc:
             errors.append(f"write failed: {exc}")
             outcome = "failed"
-            # Clean up temp file
             try:
                 Path(tmp_path_str).unlink(missing_ok=True)
             except Exception:
@@ -772,6 +977,7 @@ class RecoveryExecutor:
             "pre_existing_sha256": pre_existing_sha,
             "outcome": outcome,
             "bytes_written": bytes_written,
+            "shadow_commit_sha": shadow_commit_sha,
             "diff_preview": diff,
             "errors": errors,
             "audit_events_preserved": True,
@@ -780,8 +986,10 @@ class RecoveryExecutor:
         signed = _sign_body(body, key_store=key_store)
 
         # Persist execution receipt
-        _ensure_dirs()
-        exec_dir = SHADOW_EXECUTIONS / f"{_timestamp()[:19].replace(':', '')}-{receipt_id[-8:]}"
+        exec_dir = (
+            SHADOW_EXECUTIONS
+            / f"{_timestamp()[:19].replace(':', '')}-{receipt_id[-8:]}"
+        )
         exec_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_json(exec_dir / "execution_receipt.json", signed)
         if diff:
@@ -796,6 +1004,7 @@ class RecoveryExecutor:
             pre_existing_sha256=pre_existing_sha,
             outcome=outcome,
             bytes_written=bytes_written,
+            shadow_commit_sha=shadow_commit_sha,
             diff_preview=diff,
             errors=errors,
             audit_events_preserved=True,
