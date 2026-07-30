@@ -108,6 +108,11 @@ class TuiPrototype:
     # Wired at the application boundary (main.py) to avoid assurance imports in TUI.
     retrieval_handler: Any | None = None
 
+    # ── permission bridge (D1.13) ──
+    # True when the visible dialog is a pending ACP permission request.
+    # The key handler routes Enter/Esc decisions back to the event source.
+    _pending_permission: bool = False
+
     # ── runtime state ──
     running: bool = False       # True while agent is executing a run
     _last_sent: str = ""        # preserved when run is cancelled (refill bar)
@@ -328,12 +333,24 @@ class TuiPrototype:
                 if action_idx < len(self.dialog.actions):
                     action_value = self.dialog.actions[action_idx][1]
                     self.dialog.visible = False
+                    # ── Permission dialog (D1.13) ──
+                    if getattr(self, "_pending_permission", False):
+                        self._pending_permission = False
+                        if self.event_source and hasattr(self.event_source, "respond_to_permission"):
+                            self.event_source.respond_to_permission(action_value)
+                        return f"Permission: {action_value}"
                     if action_value == "approve":
                         self._execute_retrieval()
                         return "检索已启动"
                     return "已取消"
             if key == "esc":
                 self.dialog.visible = False
+                # Esc on a permission dialog = cancel
+                if getattr(self, "_pending_permission", False):
+                    self._pending_permission = False
+                    if self.event_source and hasattr(self.event_source, "respond_to_permission"):
+                        self.event_source.respond_to_permission("cancelled")
+                    return "Permission: cancelled"
                 return "已取消"
             return None
         if self.properties.visible:

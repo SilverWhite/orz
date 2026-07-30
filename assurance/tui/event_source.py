@@ -244,6 +244,8 @@ class LiveRunEventSource(EventSource):
     def __init__(
         self,
         run_fn: Callable[[Callable[[dict[str, Any]], None]], Any],
+        *,
+        permission_queue: queue.Queue[str] | None = None,
     ) -> None:
         self._queue: queue.Queue[TuiEvent] = queue.Queue()
         self._thread: threading.Thread | None = None
@@ -252,6 +254,16 @@ class LiveRunEventSource(EventSource):
         self._receipt: dict[str, Any] | None = None
         self._error: str | None = None
         self._closed = False
+        self._permission_queue: queue.Queue[str] | None = permission_queue
+
+    def respond_to_permission(self, decision: str) -> None:
+        """Send a user permission decision back to a running ACP session.
+
+        Called from the TUI main thread when the user approves or denies
+        a tool-call permission request.  Non-blocking.
+        """
+        if self._permission_queue is not None:
+            self._permission_queue.put(decision)
 
     def start(self) -> None:
         """Launch the canonical CLI run in a background daemon thread.

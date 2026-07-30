@@ -214,13 +214,22 @@ def build_grok_acp_live_run_fn(
     model_id: str = "lif-fake-deepseek",
     retrieval_mode: str = "off",
     retrieval_mode_explicit: bool = False,
-) -> Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]:
+    interactive: bool = False,
+) -> (
+    Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]
+    | tuple[Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]], "queue.Queue[str]"]
+):
     """Build a Grok ACP live run function for the TUI event source.
 
     Launches ``grok agent stdio`` in ACP JSON-RPC mode (the primary
     observability path per design).  Emits metadata-only runtime events
     in *real time* as ACP notifications arrive, rather than waiting for
     the session to complete.
+
+    When *interactive* is ``True``, permission requests are routed to
+    the TUI for user approval instead of being auto-decided.  Returns
+    ``(run_fn, permission_queue)`` so the caller can pass decisions
+    from the main thread back to the running ACP session.
     """
     from pathlib import Path
 
@@ -228,9 +237,24 @@ def build_grok_acp_live_run_fn(
 
     _run_root = Path(run_root)
     _workspace = Path(workspace) if workspace else None
+    _permission_queue: queue.Queue[str] | None = queue.Queue() if interactive else None
 
     def _run(on_event: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         import json as _json
+
+        def _acp_event_handler(event: dict[str, Any]) -> str | None:
+            """Callback for run_grok_acp_once — returns decision for permission events."""
+            if event["event_type"] == "permission_requested" and _permission_queue is not None:
+                # Push to TUI for display, then block waiting for user decision.
+                on_event(event)
+                try:
+                    decision: str = _permission_queue.get(timeout=300)  # 5 min
+                except queue.Empty:
+                    decision = "cancelled"
+                return decision
+            on_event(event)
+            return None
+
         request = GrokRunRequest(
             run_root=_run_root,
             workspace_path=_workspace or (_run_root / "workspace"),
@@ -241,7 +265,7 @@ def build_grok_acp_live_run_fn(
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
         )
-        receipt = run_grok_acp_once(request, on_acp_event=on_event)
+        receipt = run_grok_acp_once(request, on_acp_event=_acp_event_handler)
         # After session completes, replay normalized events for
         # completeness (run_preflight, run_finished, artifact_registered).
         # Skip event types already emitted in real-time during ACP.
@@ -259,6 +283,9 @@ def build_grok_acp_live_run_fn(
                             on_event(evt)
         return receipt
 
+    if interactive:
+        assert _permission_queue is not None
+        return _run, _permission_queue
     return _run
 
 
@@ -521,6 +548,7 @@ def _make_permission_decision(payload: dict[str, Any], timestamp: str) -> Permis
         timestamp=timestamp,
         permission=payload.get("permission", ""),
         decision=payload.get("decision", payload.get("outcome", "")),
+        decision_source=payload.get("decision_source", "adapter"),
     )
 
 

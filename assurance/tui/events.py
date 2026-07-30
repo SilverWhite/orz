@@ -242,6 +242,7 @@ class PermissionDecisionEvent(TuiEvent):
     kind: TuiEventKind = field(default=TuiEventKind.PERMISSION_DECISION, init=False)
     permission: str = ""
     decision: str = ""        # "granted" | "denied" | "deferred"
+    decision_source: str = ""  # "user" | "adapter"
 
 
 @dataclass

@@ -695,7 +695,7 @@ def run_grok_acp_once(
                     if options:
                         first = options[0] if isinstance(options[0], dict) else {}
                         tool_name = first.get("toolTitle", first.get("title", ""))
-                    on_acp_event({
+                    user_decision = on_acp_event({
                         "event_type": "permission_requested",
                         "timestamp": utc_now(),
                         "payload": {
@@ -704,23 +704,51 @@ def run_grok_acp_once(
                         },
                         "redaction": "metadata_only",
                     })
+                else:
+                    tool_name = ""
+                    user_decision = None
                 allow_id = next(
                     (o["optionId"] for o in options
                      if isinstance(o, dict) and o.get("kind") == "allow_once"),
                     None,
                 )
-                if allow_id:
+                # Honour user decision when provided (interactive mode).
+                # Fall back to auto-decision (allow_once if available, else cancel).
+                if user_decision == "allow_once" and allow_id is not None:
+                    _acp_send({
+                        "jsonrpc": "2.0", "id": msg["id"],
+                        "result": {"outcome": {"outcome": "selected", "optionId": allow_id}},
+                    })
+                    permission_outcomes.append("allow_once")
+                elif user_decision == "allow_once" and allow_id is None:
+                    # User wants to allow but no allow_once option exists — cancel.
+                    _acp_send({
+                        "jsonrpc": "2.0", "id": msg["id"],
+                        "result": {"outcome": {"outcome": "cancelled"}},
+                    })
+                    permission_outcomes.append("cancelled")
+                elif isinstance(user_decision, str) and user_decision:
+                    # User explicitly denied or chose another option.
+                    _acp_send({
+                        "jsonrpc": "2.0", "id": msg["id"],
+                        "result": {"outcome": {"outcome": "cancelled"}},
+                    })
+                    permission_outcomes.append(user_decision)
+                elif allow_id is not None:
+                    # Auto mode: default to allow_once when available.
                     _acp_send({
                         "jsonrpc": "2.0", "id": msg["id"],
                         "result": {"outcome": {"outcome": "selected", "optionId": allow_id}},
                     })
                     permission_outcomes.append("allow_once")
                 else:
+                    # Auto mode: no allow_once available — must cancel.
                     _acp_send({
                         "jsonrpc": "2.0", "id": msg["id"],
                         "result": {"outcome": {"outcome": "cancelled"}},
                     })
                     permission_outcomes.append("cancelled")
+                decision_source = "user" if user_decision else "adapter"
                 if on_acp_event:
                     on_acp_event({
                         "event_type": "permission_decision",
@@ -728,6 +756,7 @@ def run_grok_acp_once(
                         "payload": {
                             "permission": tool_name if tool_name else option_labels[0] if option_labels else "",
                             "decision": permission_outcomes[-1] if permission_outcomes else "cancelled",
+                            "decision_source": decision_source,
                         },
                         "redaction": "metadata_only",
                     })

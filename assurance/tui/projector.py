@@ -25,6 +25,7 @@ from .events import (
     ModelRequestEvent,
     OrientationCheckpointEvent,
     PermissionDecisionEvent,
+    PermissionRequestedEvent,
     PlanApprovalDecisionEvent,
     PlanPhaseEnteredEvent,
     PlanPhaseSubmittedEvent,
@@ -296,16 +297,55 @@ def _on_tool_completed(app: Any, event: ToolCompletedEvent) -> list[str]:
 # ── permission / artifact handlers ───────────────────────────────────────────
 
 
+@_register(TuiEventKind.PERMISSION_REQUESTED)
+def _on_permission_requested(app: Any, event: PermissionRequestedEvent) -> list[str]:
+    """Show a permission dialog when a Grok tool call needs user approval."""
+    options_str = ", ".join(event.options) if event.options else "allow/cancel"
+    title = "Tool Permission Required"
+    if hasattr(app, "_locale") and app._locale == "zh":
+        title = "工具权限请求"
+        message = (
+            f"Grok 请求执行工具调用：\n\n"
+            f"  {event.permission or '未知工具'}\n\n"
+            f"可用选项: {options_str}\n\n"
+            f"是否允许？"
+        )
+    else:
+        message = (
+            f"Grok is requesting permission to run a tool:\n\n"
+            f"  {event.permission or 'unknown tool'}\n\n"
+            f"Available options: {options_str}\n\n"
+            f"Allow this tool call?"
+        )
+    # Show dialog with Allow/Cancel actions.
+    from .app import TuiPrototype
+    app.dialog = type(app.dialog)(
+        title=title,
+        message=message,
+        actions=[
+            ("Allow Once", "allow_once"),
+            ("Cancel", "cancelled"),
+        ],
+        visible=True,
+    )
+    app.dialog._selected_action = 0
+    # Flag that this dialog is a permission request (so Enter routes to respond_to_permission).
+    app._pending_permission = True
+    return [f"Permission requested: {event.permission} — awaiting user decision"]
+
+
 @_register(TuiEventKind.PERMISSION_DECISION)
 def _on_permission(app: Any, event: PermissionDecisionEvent) -> list[str]:
+    source_label = f" [{event.decision_source}]" if event.decision_source else ""
     app.explorer_pane.add_event_entry(
-        "Permissions", f"{event.permission}: {event.decision}"
+        "Permissions", f"{event.permission}: {event.decision}{source_label}"
     )
     app.content_pane.add_message(
-        "权限", f"{event.permission}: {event.decision}",
-        warning=event.decision not in ("granted", "approved"),
+        "权限" if hasattr(app, "_locale") and app._locale == "zh" else "Permissions",
+        f"{event.permission}: {event.decision}{source_label}",
+        warning=event.decision not in ("granted", "approved", "allow_once"),
     )
-    return [f"Permission {event.permission}: {event.decision}"]
+    return [f"Permission {event.permission}: {event.decision}{source_label}"]
 
 
 @_register(TuiEventKind.ARTIFACT_REGISTERED)

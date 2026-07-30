@@ -252,13 +252,20 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 # ACP live session — real-time event streaming from grok agent stdio
-                run_fn = build_grok_acp_live_run_fn(
+                # Interactive mode: user approves/denies tool calls via TUI dialog
+                result = build_grok_acp_live_run_fn(
                     run_root=str(run_root),
                     workspace=args.workspace,
                     prompt_text=args.run,
                     retrieval_mode=args.retrieval_mode or "off",
                     retrieval_mode_explicit=args.retrieval_mode is not None,
+                    interactive=True,
                 )
+                if isinstance(result, tuple):
+                    run_fn, permission_queue = result
+                else:
+                    run_fn = result
+                    permission_queue = None
         else:
             if args.retrieval_mode is not None:
                 print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)
@@ -271,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
                 real_adapter=args.real,
                 **extra_kwargs,
             )
-        source = LiveRunEventSource(run_fn=run_fn)
+        source = LiveRunEventSource(run_fn=run_fn, permission_queue=permission_queue)
         app = TuiPrototype.with_event_source(source)
         if args.with_dialog:
             app.dialog.visible = True
