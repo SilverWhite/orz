@@ -1,3 +1,28 @@
+"""Canonical Guarded CLI — conformance / assurance fixture path.
+
+**Status: fixture-only / conformance path (not a production agent runtime).**
+
+Per the 2026-07-30 Runtime-First Graft Decision
+(``CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`` and
+``INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md``), the canonical CLI is
+retained as an offline regression, gate-behaviour verification, and
+conformance fixture.  It is **not** the production agent execution
+path — Grok ACP is the first-class production runtime.
+
+The module provides two run flavours:
+
+* ``run_canonical_guarded_cli()`` — fake offline adapter, no network.
+* ``run_canonical_guarded_cli_real()`` — real DeepSeek adapter, but
+  still classified as a conformance / development bridge, not the
+  main production path.
+
+Both paths prove the full Gate-chain orchestration shape (instruction
+provenance → tool availability → source visibility) and produce
+verifiable answer packets.  They do **not** implement a model loop,
+tool dispatcher, session runtime, or any other generic agent-runtime
+functionality.
+"""
+
 from __future__ import annotations
 
 import json
@@ -822,7 +847,12 @@ def run_canonical_guarded_cli(
     created_at: str | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Run the canonical guarded CLI with a fake offline adapter.
+    """Run the canonical guarded CLI with a fake offline adapter (fixture path).
+
+    This is a **conformance fixture** — it proves the Gate-chain
+    orchestration shape (instruction provenance → tool availability →
+    source visibility) with a fake adapter and no network access.  It
+    is not a production agent runtime.
 
     All gates evaluate before the fake answer packet is constructed.
     No network access is attempted.
@@ -993,11 +1023,16 @@ def run_canonical_guarded_cli_real(
     on_event: Callable[[dict[str, Any]], None] | None = None,
     audit: bool = False,
 ) -> dict[str, Any]:
-    """Run the canonical guarded CLI with a REAL DeepSeek API call.
+    """Run the canonical guarded CLI with a REAL DeepSeek API call (development bridge).
 
-    This is the P0 production path: all gates evaluate before the model is
-    called, the API key is read from Windows Credential Manager and never
-    persisted, and only public assistant text enters the answer packet.
+    This is the **P0 development / conformance bridge** — it calls a real
+    DeepSeek model through the full Gate chain, but it is *not* the main
+    production agent runtime.  Per the Runtime-First Graft Decision, Grok
+    ACP is the first-class production path.
+
+    All gates evaluate before the model is called, the API key is read
+    from Windows Credential Manager and never persisted, and only public
+    assistant text enters the answer packet.
 
     When *on_event* is provided, each journal event dict is passed to
     it as it is built (before the journal is written to disk).

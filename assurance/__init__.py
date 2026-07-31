@@ -141,6 +141,12 @@ from .browser_retrieval import (
     TabInfo,
 )
 from .retrieval_workflow import (
+    DEFAULT_RETRIEVAL_MODE as RETRIEVAL_WORKFLOW_DEFAULT_RETRIEVAL_MODE,
+)
+from .retrieval_workflow import (
+    SUPPORTED_RETRIEVAL_MODES as RETRIEVAL_WORKFLOW_SUPPORTED_RETRIEVAL_MODES,
+)
+from .retrieval_workflow import (
     RetrievalProgress,
     RetrievalResult,
     WebPageResult,
@@ -208,6 +214,12 @@ from .orientation_runtime_integration import (
 from .orientation_runtime_journal import (
     verify_orientation_stagnation_runtime_journal,
     write_orientation_stagnation_runtime_journal,
+)
+from .diagnostic_coverage import (
+    DiagnosticCoverageState,
+    build_diagnostic_coverage_check,
+    build_diagnostic_coverage_check_from_state,
+    evaluate_diagnostic_coverage_response,
 )
 from .instruction_gate import (
     authorize_action_candidate,
@@ -294,7 +306,10 @@ from .readonly_projection import (
 )
 from .project_doc_index import ProjectDocIndex
 from .retrieval_subagent import (
+    ALLOWED_SUBAGENT_COUNT,
+    RETRIEVAL_SUBAGENT_REGISTRY,
     build_fake_retrieval_result,
+    build_retrieval_completion_check,
     build_retrieval_session_close_receipt,
     build_retrieval_task_contract,
     DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET,
@@ -302,10 +317,12 @@ from .retrieval_subagent import (
     dispatch_retrieval_subagent,
     dispatch_retrieval_subagent_online,
     DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET,
+    evaluate_retrieval_completion_check_response,
     run_retrieval_subagent_fixture,
     validate_retrieval_result,
     verify_retrieval_result_sources,
     verify_retrieval_subagent_fixture,
+    verify_retrieval_subagent_registry,
 )
 from .runtime_preflight import (
     build_gsa_runtime_preflight_projection,

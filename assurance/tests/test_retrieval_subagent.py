@@ -401,3 +401,366 @@ class RetrievalSubagentFixtureTests(unittest.TestCase):
         )
         receipt = validate_retrieval_result(contract=contract, result=result)
         self.assertTrue(receipt["valid"])
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Retrieval Subagent Registry tests (F-003a)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class RetrievalSubagentRegistryTests(unittest.TestCase):
+    """Tests for RETRIEVAL_SUBAGENT_REGISTRY and its invariant verifier."""
+
+    def test_registry_has_exactly_two_entries(self) -> None:
+        from assurance.retrieval_subagent import (
+            ALLOWED_SUBAGENT_COUNT,
+            RETRIEVAL_SUBAGENT_REGISTRY,
+        )
+        self.assertEqual(
+            len(RETRIEVAL_SUBAGENT_REGISTRY),
+            ALLOWED_SUBAGENT_COUNT,
+            f"registry must contain exactly {ALLOWED_SUBAGENT_COUNT} entries "
+            f"per CN §7.2; got {len(RETRIEVAL_SUBAGENT_REGISTRY)}: "
+            f"{sorted(RETRIEVAL_SUBAGENT_REGISTRY.keys())}",
+        )
+        self.assertEqual(ALLOWED_SUBAGENT_COUNT, 2)
+
+    def test_registry_contains_both_subagent_kinds(self) -> None:
+        from assurance.retrieval_subagent import RETRIEVAL_SUBAGENT_REGISTRY
+
+        kinds = {e["kind"] for e in RETRIEVAL_SUBAGENT_REGISTRY.values()}
+        self.assertIn("internal", kinds, "must have an internal subagent")
+        self.assertIn("external", kinds, "must have an external subagent")
+        self.assertEqual(
+            len(kinds), 2,
+            f"expected exactly 2 distinct kinds; got {sorted(kinds)}",
+        )
+
+    def test_registry_keys_match_subagent_id_fields(self) -> None:
+        from assurance.retrieval_subagent import RETRIEVAL_SUBAGENT_REGISTRY
+
+        for key, entry in RETRIEVAL_SUBAGENT_REGISTRY.items():
+            self.assertEqual(
+                entry["subagent_id"], key,
+                f"registry key '{key}' != subagent_id "
+                f"'{entry['subagent_id']}'",
+            )
+
+    def test_registry_entries_have_all_required_keys(self) -> None:
+        from assurance.retrieval_subagent import RETRIEVAL_SUBAGENT_REGISTRY
+
+        required = {
+            "subagent_id", "kind", "category", "description",
+            "dispatch_fn_name", "credential_target_default",
+            "allowed_source_categories", "capabilities",
+        }
+        for key, entry in RETRIEVAL_SUBAGENT_REGISTRY.items():
+            missing = required - set(entry)
+            self.assertEqual(
+                missing, set(),
+                f"{key}: missing required keys {sorted(missing)}",
+            )
+
+    def test_registry_dispatch_fns_are_callable(self) -> None:
+        import sys as _sys
+
+        from assurance.retrieval_subagent import RETRIEVAL_SUBAGENT_REGISTRY
+
+        module = _sys.modules["assurance.retrieval_subagent"]
+        for key, entry in RETRIEVAL_SUBAGENT_REGISTRY.items():
+            fn_name = entry["dispatch_fn_name"]
+            fn_obj = getattr(module, fn_name, None)
+            self.assertIsNotNone(
+                fn_obj,
+                f"{key}: dispatch_fn_name '{fn_name}' not found in module",
+            )
+            self.assertTrue(
+                callable(fn_obj),
+                f"{key}: '{fn_name}' is not callable",
+            )
+
+    def test_verify_registry_passes_for_valid_registry(self) -> None:
+        from assurance.retrieval_subagent import verify_retrieval_subagent_registry
+
+        receipt = verify_retrieval_subagent_registry()
+        self.assertTrue(receipt["valid"])
+        self.assertTrue(receipt["checks"]["count_matches_design"])
+        self.assertTrue(receipt["checks"]["all_required_keys_present"])
+        self.assertTrue(receipt["checks"]["all_dispatch_fns_callable"])
+        self.assertTrue(receipt["checks"]["exactly_one_internal"])
+        self.assertTrue(receipt["checks"]["exactly_one_external"])
+        self.assertEqual(receipt["registry_size"], 2)
+        self.assertEqual(receipt["required_size"], 2)
+
+    def test_verify_registry_rejects_wrong_count(self) -> None:
+        from assurance.retrieval_subagent import (
+            ALLOWED_SUBAGENT_COUNT,
+            RETRIEVAL_SUBAGENT_REGISTRY,
+            verify_retrieval_subagent_registry,
+        )
+        from assurance.errors import AssuranceError
+
+        original = dict(RETRIEVAL_SUBAGENT_REGISTRY)
+        try:
+            popped = dict(original)
+            popped.pop("project-doc-retrieval")
+            import assurance.retrieval_subagent as _mod
+            _mod.RETRIEVAL_SUBAGENT_REGISTRY.clear()
+            _mod.RETRIEVAL_SUBAGENT_REGISTRY.update(popped)
+            with self.assertRaises(AssuranceError) as ctx:
+                verify_retrieval_subagent_registry()
+            self.assertIn("subagent count", str(ctx.exception))
+        finally:
+            _mod.RETRIEVAL_SUBAGENT_REGISTRY.clear()
+            _mod.RETRIEVAL_SUBAGENT_REGISTRY.update(original)
+
+    def test_registry_allowed_categories_are_valid(self) -> None:
+        from assurance.retrieval_subagent import (
+            EXTERNAL_SOURCE_CATEGORIES,
+            RETRIEVAL_SUBAGENT_REGISTRY,
+            SOURCE_TYPE_ALLOWED_PATTERNS,
+        )
+
+        # External subagent categories are in EXTERNAL_SOURCE_CATEGORIES;
+        # internal subagent categories may include SOURCE_TYPE_ALLOWED_PATTERNS
+        # + internal_knowledge_base.
+        valid = (
+            set(SOURCE_TYPE_ALLOWED_PATTERNS.keys())
+            | set(EXTERNAL_SOURCE_CATEGORIES)
+            | {"internal_knowledge_base"}
+        )
+        for key, entry in RETRIEVAL_SUBAGENT_REGISTRY.items():
+            for cat in entry["allowed_source_categories"]:
+                self.assertIn(
+                    cat, valid,
+                    f"{key}: source category '{cat}' not in "
+                    f"known categories ({sorted(valid)})",
+                )
+
+    def test_registry_capabilities_are_known(self) -> None:
+        from assurance.retrieval_subagent import (
+            RETRIEVAL_SUBAGENT_REGISTRY,
+            SUBAGENT_CAPABILITIES,
+        )
+
+        known = set(SUBAGENT_CAPABILITIES)
+        for key, entry in RETRIEVAL_SUBAGENT_REGISTRY.items():
+            for cap in entry["capabilities"]:
+                self.assertIn(
+                    cap, known,
+                    f"{key}: capability '{cap}' not in "
+                    f"SUBAGENT_CAPABILITIES ({sorted(known)})",
+                )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Retrieval Completion Check tests (F-003b)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class RetrievalCompletionCheckTests(unittest.TestCase):
+    """Tests for the neutral completion check before subagent close."""
+
+    def _build_check(self) -> dict[str, Any]:
+        from assurance.retrieval_subagent import build_retrieval_completion_check
+        return build_retrieval_completion_check(
+            subagent_session_id="CONV-AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD",
+            contract_id="RET-CTR-TEST-001",
+            result_id="RET-RES-TEST-001",
+        )
+
+    def test_build_check_uses_neutral_message(self) -> None:
+        check = self._build_check()
+        self.assertIn("[RETRIEVAL_COMPLETION_CHECK v0.1]", check["message_block"])
+        self.assertIn("是否已经获得完成当前主任务所需的内容", check["message_block"])
+        self.assertNotIn("是否正确", check["message_block"])
+        self.assertNotIn("反例", check["message_block"])
+        self.assertFalse(
+            check["claim_policy"]["may_generate_counterexample_candidate"])
+        self.assertFalse(check["claim_policy"]["may_request_new_subagent"])
+
+    def test_evaluate_yes_response_valid(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "yes",
+                "brief_reason": "All required docs and search results obtained.",
+            },
+        )
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["response_decision"], "yes")
+        self.assertTrue(receipt["checks"]["neutral_completion_only"])
+
+    def test_evaluate_no_response_with_missing_types(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "no",
+                "brief_reason": "Need more architecture docs.",
+                "missing_content_types": ["architecture docs", "ADR-0004"],
+            },
+        )
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["response_decision"], "no")
+        self.assertEqual(receipt["missing_content_type_count"], 2)
+        self.assertEqual(
+            receipt["missing_content_types"],
+            ["architecture docs", "ADR-0004"],
+        )
+
+    def test_evaluate_uncertain_response_valid(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "uncertain",
+                "brief_reason": "Got some but may need more recent versions.",
+                "missing_content_types": ["latest release notes"],
+            },
+        )
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["response_decision"], "uncertain")
+        self.assertEqual(receipt["missing_content_type_count"], 1)
+
+    def test_no_or_uncertain_without_missing_types_invalid(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "no",
+                "brief_reason": "Not enough.",
+            },
+        )
+        self.assertFalse(receipt["valid"])
+        self.assertFalse(
+            receipt["checks"]["missing_types_provided_when_needed"])
+
+    def test_rejects_counterexample_field(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "yes",
+                "brief_reason": "Done.",
+                "counterexample_candidate": "maybe the whole approach is wrong",
+            },
+        )
+        self.assertFalse(receipt["valid"])
+        self.assertIn(
+            "counterexample_candidate", receipt["forbidden_fields_observed"])
+
+    def test_rejects_new_subagent_request(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "no",
+                "brief_reason": "Need more.",
+                "missing_content_types": ["design docs"],
+                "new_subagent_requested": "create a security audit subagent",
+            },
+        )
+        self.assertFalse(receipt["valid"])
+        self.assertIn(
+            "new_subagent_requested", receipt["forbidden_fields_observed"])
+        self.assertFalse(receipt["checks"]["no_new_subagent"])
+
+    def test_rejects_missing_types_that_spawn_subagent(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "no",
+                "brief_reason": "Need more analysis.",
+                "missing_content_types": [
+                    "architecture docs",
+                    "spawn new agent for security review",  # illegal
+                ],
+            },
+        )
+        self.assertFalse(receipt["valid"])
+        self.assertFalse(
+            receipt["checks"]["missing_types_provided_when_needed"])
+
+    def test_invalid_decision_reported_as_unexpected(self) -> None:
+        from assurance.retrieval_subagent import evaluate_retrieval_completion_check_response
+
+        check = self._build_check()
+        receipt = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "maybe",
+                "brief_reason": "Not sure.",
+            },
+        )
+        self.assertFalse(receipt["valid"])
+        self.assertTrue(
+            any("decision" in u for u in receipt["unexpected_fields_observed"]))
+
+    def test_close_receipt_with_completion_check_passed(self) -> None:
+        from assurance.retrieval_subagent import (
+            build_retrieval_completion_check,
+            build_retrieval_session_close_receipt,
+            evaluate_retrieval_completion_check_response,
+        )
+
+        check = build_retrieval_completion_check(
+            subagent_session_id="CONV-AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD",
+            contract_id="RET-CTR-TEST-002",
+            result_id="RET-RES-TEST-002",
+        )
+        response = evaluate_retrieval_completion_check_response(
+            check=check,
+            response={
+                "decision": "yes",
+                "brief_reason": "Content sufficient for main task.",
+            },
+        )
+        self.assertTrue(response["valid"])
+
+        close = build_retrieval_session_close_receipt(
+            parent_session_id="CONV-AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD",
+            subagent_session_id="CONV-AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD",
+            contract_id="RET-CTR-TEST-002",
+            result_id="RET-RES-TEST-002",
+            triggered_by="completion_check_passed",
+            reason="completion check confirmed content sufficient",
+            completion_check=response,
+        )
+        self.assertEqual(
+            close["close_trigger"]["triggered_by"], "completion_check_passed")
+        self.assertIn("completion_check", close)
+        self.assertEqual(close["completion_check"]["decision"], "yes")
+        self.assertEqual(
+            close["completion_check"]["check_id"], check["check_id"])
+
+    def test_close_receipt_completion_check_passed_requires_completion_check(self) -> None:
+        from assurance.retrieval_subagent import build_retrieval_session_close_receipt
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            build_retrieval_session_close_receipt(
+                parent_session_id="CONV-AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD",
+                subagent_session_id="CONV-AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD",
+                contract_id="RET-CTR-TEST-003",
+                result_id="RET-RES-TEST-003",
+                triggered_by="completion_check_passed",
+                reason="should fail — no completion_check provided",
+            )
+        self.assertIn("completion_check is required", str(ctx.exception))

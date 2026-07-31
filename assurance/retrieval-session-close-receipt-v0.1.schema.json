@@ -32,8 +32,24 @@
       "additionalProperties": false,
       "required": ["triggered_by", "reason"],
       "properties": {
-        "triggered_by": { "enum": ["main_agent", "budget_exhausted", "scope_completed", "main_agent_abort"] },
+        "triggered_by": { "enum": ["main_agent", "budget_exhausted", "scope_completed", "main_agent_abort", "completion_check_passed"] },
         "reason": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "completion_check": {
+      "description": "Neutral completion check performed before closing the subagent per CN §7.3.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "decision", "brief_reason"],
+      "properties": {
+        "check_id": { "type": "string", "pattern": "^RET-CC-[A-F0-9]{32}$" },
+        "decision": { "enum": ["yes", "no", "uncertain"] },
+        "brief_reason": { "$ref": "#/$defs/nonempty" },
+        "missing_content_types": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "uniqueItems": true
+        }
       }
     },
     "archive_policy": {

@@ -455,5 +455,144 @@ class ProgressCallbackTests(unittest.TestCase):
         self.assertIn("launching", stages)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Retrieval Mode Guard tests (F-004)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class RetrievalModeGuardTests(unittest.TestCase):
+    """Tests for _require_local_browser_mode and retrieval_mode parameters."""
+
+    # ── _require_local_browser_mode ──
+
+    def test_local_browser_mode_passes(self) -> None:
+        from assurance.retrieval_workflow import _require_local_browser_mode
+        # Must not raise
+        _require_local_browser_mode("local_browser", caller="test")
+
+    def test_off_mode_raises(self) -> None:
+        from assurance.retrieval_workflow import _require_local_browser_mode
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            _require_local_browser_mode("off", caller="test_func")
+        self.assertIn("retrieval is disabled", str(ctx.exception))
+        self.assertIn("retrieval_mode='off'", str(ctx.exception))
+
+    def test_framework_fallback_mode_raises(self) -> None:
+        from assurance.retrieval_workflow import _require_local_browser_mode
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            _require_local_browser_mode("framework_fallback", caller="test_func")
+        self.assertIn("framework_fallback is active", str(ctx.exception))
+        self.assertIn("local browser retrieval must not be used", str(ctx.exception))
+
+    def test_unknown_mode_raises(self) -> None:
+        from assurance.retrieval_workflow import _require_local_browser_mode
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            _require_local_browser_mode("automatic", caller="unknown_caller")
+        self.assertIn("unsupported retrieval_mode", str(ctx.exception))
+        self.assertIn("'automatic'", str(ctx.exception))
+
+    # ── run_retrieval guard ──
+
+    def test_run_retrieval_rejects_off_mode(self) -> None:
+        from assurance.retrieval_workflow import run_retrieval
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            run_retrieval(
+                "https://example.com",
+                retrieval_mode="off",
+                launch_browser=False,
+            )
+        self.assertIn("retrieval is disabled", str(ctx.exception))
+
+    def test_run_retrieval_accepts_local_browser(self) -> None:
+        from assurance.retrieval_workflow import run_retrieval
+
+        # Should fail with connection error (no browser running), NOT
+        # with a retrieval-mode rejection.
+        result = run_retrieval(
+            "https://example.com",
+            retrieval_mode="local_browser",
+            launch_browser=False,
+        )
+        self.assertNotEqual(result.error, "")
+        # Error is connection-related, not mode-related
+        self.assertIn("onnect", result.error.lower())
+
+    # ── retrieve_urls guard ──
+
+    def test_retrieve_urls_rejects_off_mode(self) -> None:
+        from assurance.retrieval_workflow import retrieve_urls
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            retrieve_urls(
+                ["https://example.com"],
+                retrieval_mode="off",
+                launch_browser=False,
+            )
+        self.assertIn("retrieval is disabled", str(ctx.exception))
+
+    def test_retrieve_urls_rejects_framework_fallback(self) -> None:
+        from assurance.retrieval_workflow import retrieve_urls
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            retrieve_urls(
+                ["https://example.com"],
+                retrieval_mode="framework_fallback",
+                launch_browser=False,
+            )
+        self.assertIn("framework_fallback is active", str(ctx.exception))
+
+    # ── retrieve_search guard ──
+
+    def test_retrieve_search_rejects_off_mode(self) -> None:
+        from assurance.retrieval_workflow import retrieve_search
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            retrieve_search(
+                "test query",
+                retrieval_mode="off",
+                launch_browser=False,
+            )
+        self.assertIn("retrieval is disabled", str(ctx.exception))
+
+    def test_retrieve_search_rejects_framework_fallback(self) -> None:
+        from assurance.retrieval_workflow import retrieve_search
+        from assurance.errors import AssuranceError
+
+        with self.assertRaises(AssuranceError) as ctx:
+            retrieve_search(
+                "test query",
+                retrieval_mode="framework_fallback",
+                launch_browser=False,
+            )
+        self.assertIn("framework_fallback is active", str(ctx.exception))
+
+    # ── constants ──
+
+    def test_supported_modes_match_across_modules(self) -> None:
+        from assurance.retrieval_workflow import SUPPORTED_RETRIEVAL_MODES as rw_modes
+        from assurance.grok_runtime_adapter import SUPPORTED_RETRIEVAL_MODES as gra_modes
+
+        self.assertEqual(
+            set(rw_modes), set(gra_modes),
+            "retrieval_workflow and grok_runtime_adapter must agree on "
+            "SUPPORTED_RETRIEVAL_MODES",
+        )
+
+    def test_default_mode_is_off(self) -> None:
+        from assurance.retrieval_workflow import DEFAULT_RETRIEVAL_MODE
+        self.assertEqual(DEFAULT_RETRIEVAL_MODE, "off")
+
+
 if __name__ == "__main__":
     unittest.main()

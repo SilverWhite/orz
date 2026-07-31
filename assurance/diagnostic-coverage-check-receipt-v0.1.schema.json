@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/diagnostic-coverage-check-receipt-v0.1.schema.json",
+  "title": "Diagnostic Coverage Check Receipt",
+  "description": "A neutral check triggered when a debug episode accumulates enough hard signals to reach the progressive threshold. It asks whether key diagnostic surfaces have been covered sufficiently to choose a next step — not whether the current approach is correct.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "checkpoint_kind",
+    "checkpoint_id",
+    "bug_id",
+    "trigger",
+    "message_block",
+    "allowed_response_fields",
+    "forbidden_response_fields",
+    "claim_policy",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "checkpoint_kind": { "const": "diagnostic_coverage_check" },
+    "checkpoint_id": {
+      "type": "string",
+      "pattern": "^DIAG-COV-[A-Z0-9._-]+-[0-9]+$"
+    },
+    "bug_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hard_signal_count",
+        "current_threshold",
+        "trigger_count",
+        "signals"
+      ],
+      "properties": {
+        "hard_signal_count": {
+          "type": "number",
+          "minimum": 0
+        },
+        "current_threshold": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 5
+        },
+        "trigger_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["signal_type", "description", "weight", "recorded_at"],
+            "properties": {
+              "signal_type": {
+                "enum": [
+                  "consecutive_same_failure",
+                  "repeated_pattern",
+                  "same_module_no_evidence",
+                  "unabsorbed_new_evidence",
+                  "large_scope_low_diag",
+                  "key_surface_unexamined"
+                ]
+              },
+              "description": { "$ref": "#/$defs/nonempty" },
+              "weight": {
+                "type": "number",
+                "enum": [0, 0.5, 1.0]
+              },
+              "recorded_at": { "$ref": "#/$defs/nonempty" }
+            }
+          }
+        }
+      }
+    },
+    "message_block": {
+      "type": "string",
+      "pattern": "^\\[DIAGNOSTIC_COVERAGE_CHECK v0\\.1\\]"
+    },
+    "diagnostic_surfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["covered", "missing"],
+      "properties": {
+        "covered": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "uniqueItems": true
+        },
+        "missing": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "allowed_response_fields": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "decision",
+          "covered_diagnostic_surfaces",
+          "missing_diagnostic_surfaces",
+          "next_step"
+        ]
+      },
+      "minItems": 3,
+      "uniqueItems": true
+    },
+    "forbidden_response_fields": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "counterexample_candidate",
+          "claim_disposition",
+          "claim_promotion",
+          "root_cause_certain",
+          "global_review_requested"
+        ]
+      },
+      "minItems": 5,
+      "uniqueItems": true
+    },
+    "claim_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "may_generate_counterexample_candidate",
+        "may_set_claim_disposition",
+        "claim_strength_effect",
+        "may_enter_global_review"
+      ],
+      "properties": {
+        "may_generate_counterexample_candidate": { "const": false },
+        "may_set_claim_disposition": { "const": false },
+        "claim_strength_effect": { "const": "none" },
+        "may_enter_global_review": { "const": false }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty" }
+    }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 }
+  }
+}

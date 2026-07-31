@@ -37,6 +37,45 @@ from .utils import sha256_file, utc_now
 
 logger = logging.getLogger(__name__)
 
+# ── retrieval mode guard (CN §7.1) ───────────────────────────────────────────
+# Per the 2026-07-30 Runtime-First Graft Decision, retrieval mode must be
+# explicitly selected.  The browser-backed retrieval functions in this module
+# are only valid when retrieval_mode is "local_browser".
+
+SUPPORTED_RETRIEVAL_MODES = ("local_browser", "framework_fallback", "off")
+DEFAULT_RETRIEVAL_MODE = "off"
+
+VALID_MODES_FOR_LOCAL_BROWSER = frozenset({"local_browser"})
+
+
+def _require_local_browser_mode(retrieval_mode: str, *, caller: str) -> None:
+    """Raise :class:`AssuranceError` if *retrieval_mode* is not ``"local_browser"``.
+
+    CN §7.1 requires explicit retrieval-mode selection.  The browser/CDP
+    path is only valid under ``local_browser``:
+      - ``"off"`` → retrieval disabled — caller should not invoke this function.
+      - ``"framework_fallback"`` → framework handles retrieval — this module
+        must not be used.
+      - ``"local_browser"`` → proceed.
+    """
+    if retrieval_mode not in SUPPORTED_RETRIEVAL_MODES:
+        raise AssuranceError(
+            f"unsupported retrieval_mode {retrieval_mode!r} for {caller}; "
+            f"must be one of {SUPPORTED_RETRIEVAL_MODES}"
+        )
+    if retrieval_mode == "off":
+        raise AssuranceError(
+            f"{caller}: retrieval is disabled (retrieval_mode='off'). "
+            f"Set retrieval_mode='local_browser' to use local browser retrieval."
+        )
+    if retrieval_mode == "framework_fallback":
+        raise AssuranceError(
+            f"{caller}: framework_fallback is active — local browser retrieval "
+            f"must not be used.  Set retrieval_mode='local_browser' to enable "
+            f"the browser/CDP path, or use framework search instead."
+        )
+    # retrieval_mode == "local_browser" → ok
+
 
 # ── progress event types (TUI-compatible) ────────────────────────────────────
 
@@ -95,6 +134,7 @@ def run_retrieval(
     download_timeout: int = 60,
     max_pdf_bytes: int = 100 * 1024 * 1024,
     broker: Any | None = None,  # BrowserRetrievalBroker | None
+    retrieval_mode: str = "local_browser",
 ) -> RetrievalResult:
     """Execute the full retrieval pipeline for a paper URL.
 
@@ -128,6 +168,8 @@ def run_retrieval(
         A :class:`RetrievalResult` with the document ID, metadata, and
         any error information.
     """
+    _require_local_browser_mode(retrieval_mode, caller="run_retrieval")
+
     result = RetrievalResult(source_url=url)
     client: BrowserCDPClient | None = None
     proc = None
@@ -518,6 +560,7 @@ def retrieve_urls(
     on_progress: ProgressCallback | None = None,
     max_chars_per_page: int = 50_000,
     max_pages: int = 4,
+    retrieval_mode: str = "local_browser",
 ) -> WebRetrievalResult:
     """Open and read multiple URLs through the local browser.
 
@@ -526,7 +569,12 @@ def retrieve_urls(
 
     This is the general-purpose retrieval entry point — any external URL
     the agent needs to read should go through this function.
+
+    *retrieval_mode* must be ``"local_browser"`` (per CN §7.1) — this
+    function will refuse to run under ``"off"`` or ``"framework_fallback"``.
     """
+    _require_local_browser_mode(retrieval_mode, caller="retrieve_urls")
+
     result = WebRetrievalResult()
     client: BrowserCDPClient | None = None
     proc = None
@@ -618,17 +666,23 @@ def retrieve_search(
     on_progress: ProgressCallback | None = None,
     max_results: int = 4,
     engine: str = "google",
+    retrieval_mode: str = "local_browser",
 ) -> WebRetrievalResult:
     """Search the web through the user's local browser.
 
     Uses the browser's existing session — no API key, no separate
     search configuration.  The search runs in a background tab.
 
+    *retrieval_mode* must be ``"local_browser"`` (per CN §7.1) — this
+    function will refuse to run under ``"off"`` or ``"framework_fallback"``.
+
     Parameters
     ----------
     engine:
         ``"google"`` (default) or ``"duckduckgo"``.
     """
+    _require_local_browser_mode(retrieval_mode, caller="retrieve_search")
+
     from urllib.parse import quote_plus
 
     if engine == "google":

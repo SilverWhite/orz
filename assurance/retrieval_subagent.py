@@ -44,6 +44,66 @@ SUBAGENT_CAPABILITIES = [
 # Stored in Windows Credential Manager under this target name.
 DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET = "deepseek-retrieval-subagent"
 
+# ═══════════════════════════════════════════════════════════════════
+# Subagent Registry — canonical enumeration of all retrieval subagents
+# ═══════════════════════════════════════════════════════════════════
+#
+# Per CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30 §7.2:
+#   - Exactly two retrieval subagents MUST exist: project-doc + external.
+#   - No default third subagent type.
+#   - Any new subagent requires explicit proposal, review, and confirmation.
+#
+# This registry is the single source of truth.  CLI / Gate code MUST
+# reference it rather than hard-coding subagent names or counts.
+# :func:`verify_retrieval_subagent_registry` enforces the invariant at
+# test time and can be called at module-init for self-check.
+
+RETRIEVAL_SUBAGENT_REGISTRY = {
+    "project-doc-retrieval": {
+        "subagent_id": "project-doc-retrieval",
+        "kind": "internal",
+        "category": "project_documentation",
+        "description": (
+            "Project-internal document retrieval — scans local GSA docs, "
+            "architecture, ADR, schemas, and source code.  Does not make "
+            "outbound network requests."
+        ),
+        "dispatch_fn_name": "dispatch_retrieval_subagent",
+        "credential_target_default": "deepseek-retrieval-subagent",
+        "allowed_source_categories": [
+            "documentation",
+            "code_repository",
+            "internal_knowledge_base",
+        ],
+        "capabilities": ["search", "file_read"],
+    },
+    "external-retrieval": {
+        "subagent_id": "external-retrieval",
+        "kind": "external",
+        "category": "web_search",
+        "description": (
+            "External web search result processing — takes raw web search "
+            "results (title/URL/snippet) and processes them through a "
+            "constrained DeepSeek call.  Does NOT perform web searches itself; "
+            "search and result-processing are separate, auditable steps."
+        ),
+        "dispatch_fn_name": "dispatch_external_retrieval_subagent",
+        "credential_target_default": "FEP-Agent/DeepSeek-Retrieval",
+        "allowed_source_categories": [
+            "academic_paper",
+            "web_page",
+            "documentation",
+            "code_repository",
+            "thread_conversation",
+            "structured_data",
+        ],
+        "capabilities": ["search", "web_fetch"],
+    },
+}
+
+# Hard invariant — documented in CN §7.2.
+ALLOWED_SUBAGENT_COUNT = 2
+
 SUBAGENT_TOOL_SPECS: list[dict[str, Any]] = [
     {"tool_id": "search", "tool_name": "Search", "capability": "search", "probe_method": "subagent_capability_declaration"},
     {"tool_id": "web_fetch", "tool_name": "Web Fetch", "capability": "web_fetch", "probe_method": "subagent_capability_declaration"},
@@ -57,6 +117,136 @@ SOURCE_TYPE_ALLOWED_PATTERNS = {
     "documentation": {"url_pattern": "docs\\.|readthedocs|documentation"},
     "code_repository": {"url_pattern": "github\\.com|gitlab|bitbucket"},
 }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Registry self-verification
+# ═══════════════════════════════════════════════════════════════════
+
+
+def verify_retrieval_subagent_registry() -> dict[str, Any]:
+    """Verify that the subagent registry matches the design contract.
+
+    Checks enforced (per CN §7.2):
+      1. Exactly ``ALLOWED_SUBAGENT_COUNT`` (2) entries.
+      2. Every entry has the required metadata keys.
+      3. Every ``dispatch_fn_name`` resolves to a callable in this module.
+      4. No duplicate subagent IDs across entries.
+      5. ``kind`` is one of ``("internal", "external")`` — exactly one each.
+
+    Returns a verification receipt dict.  Raises :class:`AssuranceError`
+    on hard violations (wrong count, missing keys, unresolvable dispatch).
+    """
+    import inspect as _inspect
+    import sys as _sys
+
+    _current_module = _sys.modules[__name__]
+    _registry = RETRIEVAL_SUBAGENT_REGISTRY
+
+    required_keys = {
+        "subagent_id", "kind", "category", "description",
+        "dispatch_fn_name", "credential_target_default",
+        "allowed_source_categories", "capabilities",
+    }
+    valid_kinds = {"internal", "external"}
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    dispatch_ok: dict[str, bool] = {}
+    kinds_seen: list[str] = []
+
+    # 1. Count
+    actual_count = len(_registry)
+    if actual_count != ALLOWED_SUBAGENT_COUNT:
+        errors.append(
+            f"subagent count {actual_count} != {ALLOWED_SUBAGENT_COUNT}"
+        )
+
+    for subagent_id, entry in _registry.items():
+        # 2. Required keys
+        missing = required_keys - set(entry)
+        if missing:
+            errors.append(
+                f"{subagent_id}: missing required keys {sorted(missing)}"
+            )
+            dispatch_ok[subagent_id] = False
+            continue
+
+        # 3. Kind validity
+        kind = entry["kind"]
+        if kind not in valid_kinds:
+            errors.append(
+                f"{subagent_id}: kind '{kind}' not in {sorted(valid_kinds)}"
+            )
+        else:
+            kinds_seen.append(kind)
+
+        # 4. Dispatch function resolvability
+        fn_name = entry["dispatch_fn_name"]
+        fn_obj = getattr(_current_module, fn_name, None)
+        if fn_obj is None or not callable(fn_obj):
+            errors.append(
+                f"{subagent_id}: dispatch_fn_name '{fn_name}' "
+                f"is not a callable in {__name__}"
+            )
+            dispatch_ok[subagent_id] = False
+        else:
+            # Shallow check — real dispatch requires args we can't provide here.
+            dispatch_ok[subagent_id] = True
+
+    # 5. Duplicate subagent IDs (keys already unique in dict, but check
+    #    that subagent_id field matches dict key)
+    for subagent_id, entry in _registry.items():
+        if entry.get("subagent_id") != subagent_id:
+            errors.append(
+                f"{subagent_id}: subagent_id field "
+                f"'{entry.get('subagent_id')}' does not match registry key"
+            )
+
+    # 6. Exactly one internal + one external
+    if kinds_seen.count("internal") != 1:
+        warnings.append(
+            f"expected exactly 1 'internal' subagent, "
+            f"found {kinds_seen.count('internal')}"
+        )
+    if kinds_seen.count("external") != 1:
+        warnings.append(
+            f"expected exactly 1 'external' subagent, "
+            f"found {kinds_seen.count('external')}"
+        )
+
+    valid = not errors and not warnings
+    receipt = {
+        "schema_version": "0.1.0-draft",
+        "receipt_kind": "retrieval_subagent_registry_verification",
+        "valid": valid,
+        "registry_size": actual_count,
+        "required_size": ALLOWED_SUBAGENT_COUNT,
+        "subagent_ids": sorted(_registry.keys()),
+        "dispatch_functions_resolved": dispatch_ok,
+        "errors": errors,
+        "warnings": warnings,
+        "checks": {
+            "count_matches_design": actual_count == ALLOWED_SUBAGENT_COUNT,
+            "all_required_keys_present": not any(
+                required_keys - set(e) for e in _registry.values()
+            ),
+            "all_dispatch_fns_callable": all(dispatch_ok.values()),
+            "exactly_one_internal": kinds_seen.count("internal") == 1,
+            "exactly_one_external": kinds_seen.count("external") == 1,
+        },
+        "design_constraint": (
+            "CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30 §7.2: "
+            "exactly 2 retrieval subagents (project-doc + external). "
+            "Any new subagent requires explicit proposal, review, and confirmation."
+        ),
+    }
+    if errors:
+        raise AssuranceError(
+            "retrieval subagent registry verification FAILED: "
+            + "; ".join(errors)
+        )
+    return receipt
 
 
 def _new_id(prefix: str) -> str:
@@ -277,6 +467,167 @@ def validate_retrieval_result(
     return receipt
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Neutral Completion Check (CN §7.3 — subagent close gate)
+# ═══════════════════════════════════════════════════════════════════
+
+RETRIEVAL_COMPLETION_CHECK_MESSAGE = """\
+[RETRIEVAL_COMPLETION_CHECK v0.1]
+子代理检索任务已完成。关闭前请确认：
+
+是否已经获得完成当前主任务所需的内容？
+
+请回答 yes / no / uncertain，并附简短理由。
+若为 no 或 uncertain，只列出还需要的内容类型（不自动扩展为新子代理或无限补检索）。
+[/RETRIEVAL_COMPLETION_CHECK]"""
+
+ALLOWED_COMPLETION_CHECK_FIELDS = [
+    "decision",              # yes / no / uncertain
+    "brief_reason",          # short explanation
+    "missing_content_types",  # only when no/uncertain
+]
+
+FORBIDDEN_COMPLETION_CHECK_FIELDS = [
+    "counterexample_candidate",
+    "claim_disposition",
+    "claim_promotion",
+    "new_subagent_requested",
+    "global_review_requested",
+]
+
+
+def build_retrieval_completion_check(
+    *,
+    subagent_session_id: str,
+    contract_id: str,
+    result_id: str,
+) -> dict[str, Any]:
+    """Build a neutral completion-check receipt before closing a subagent.
+
+    Per CN §7.3: before the main agent closes a retrieval subagent it
+    must ask **only** whether the content obtained so far is sufficient
+    for the current main task.  The check is neutral — it does not
+    evaluate correctness, suggest counterexamples, or enter global review.
+
+    The closure code should call :func:`evaluate_retrieval_completion_check_response`
+    with the agent/operator response before writing the close receipt.
+    """
+    if not subagent_session_id or not contract_id or not result_id:
+        raise AssuranceError(
+            "subagent_session_id, contract_id, and result_id are all required"
+        )
+    seed = f"{subagent_session_id}:{contract_id}:{result_id}"
+    check_id = f"RET-CC-{sha256_bytes(seed.encode('utf-8'))[:32].upper()}"
+    check = {
+        "schema_version": "0.1.0-draft",
+        "receipt_kind": "retrieval_completion_check",
+        "check_id": check_id,
+        "subagent_session_id": subagent_session_id,
+        "contract_id": contract_id,
+        "result_id": result_id,
+        "message_block": RETRIEVAL_COMPLETION_CHECK_MESSAGE,
+        "allowed_response_fields": ALLOWED_COMPLETION_CHECK_FIELDS,
+        "forbidden_response_fields": FORBIDDEN_COMPLETION_CHECK_FIELDS,
+        "claim_policy": {
+            "may_generate_counterexample_candidate": False,
+            "may_set_claim_disposition": False,
+            "claim_strength_effect": "none",
+            "may_enter_global_review": False,
+            "may_request_new_subagent": False,
+        },
+        "notes": [
+            "Neutral completion check only — does not evaluate correctness or suggest counterexamples.",
+            "No/uncertain responses list only needed content types — no new subagents, no unlimited re-retrieval.",
+            "This check belongs to the neutral inquiry family, not counterexample gate or global review.",
+        ],
+    }
+    return check
+
+
+def evaluate_retrieval_completion_check_response(
+    *,
+    check: dict[str, Any],
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate a response to a retrieval completion check.
+
+    Validates that the response:
+      - Contains only allowed fields (no counterexample / claim / subagent-request).
+      - Has a ``decision`` of ``"yes"``, ``"no"``, or ``"uncertain"``.
+      - If ``"no"`` or ``"uncertain"``, ``missing_content_types`` must be a
+        non-empty list of content-type labels (no subagent instantiation).
+
+    Returns a verification receipt.  On valid ``"yes"`` the caller may
+    proceed to write the close receipt with ``triggered_by="completion_check_passed"``.
+    """
+    # Minimal manual validation (no JSON Schema for this lightweight receipt)
+    if not isinstance(check, dict) or check.get("receipt_kind") != "retrieval_completion_check":
+        raise AssuranceError(
+            "check must be a retrieval_completion_check receipt"
+        )
+
+    allowed = set(check["allowed_response_fields"])
+    forbidden = set(check["forbidden_response_fields"])
+    present = set(response)
+
+    forbidden_present = sorted(present & forbidden)
+    unexpected_present = sorted(present - allowed - forbidden)
+
+    decision = response.get("decision")
+    if decision not in ("yes", "no", "uncertain"):
+        if decision is not None:
+            unexpected_present.append(f"decision:{decision!r}")
+        else:
+            unexpected_present.append("decision:missing")
+        decision = "uncertain"
+
+    brief_reason = response.get("brief_reason", "")
+    missing_types = response.get("missing_content_types") or []
+
+    if isinstance(missing_types, str):
+        missing_types = [missing_types]
+
+    missing_count = len(missing_types)
+    invalid_missing = False
+    if decision in ("no", "uncertain") and missing_count == 0:
+        invalid_missing = True
+    # Check missing_content_types don't contain subagent instantiation language
+    for mt in missing_types:
+        if isinstance(mt, str) and any(
+            kw in mt.lower()
+            for kw in ("spawn", "new agent", "create subagent", "launch agent")
+        ):
+            invalid_missing = True
+
+    valid = (
+        not forbidden_present
+        and not unexpected_present
+        and not invalid_missing
+    )
+
+    return {
+        "schema_version": "0.1.0-draft",
+        "receipt_kind": "retrieval_completion_check_verification",
+        "valid": valid,
+        "check_id": check["check_id"],
+        "subagent_session_id": check["subagent_session_id"],
+        "response_decision": decision,
+        "brief_reason": brief_reason,
+        "missing_content_types": missing_types,
+        "missing_content_type_count": missing_count,
+        "forbidden_fields_observed": forbidden_present,
+        "unexpected_fields_observed": unexpected_present,
+        "checks": {
+            "neutral_completion_only": valid,
+            "no_counterexample_candidate": "counterexample_candidate" not in present,
+            "no_claim_disposition": "claim_disposition" not in present,
+            "no_new_subagent": "new_subagent_requested" not in present,
+            "no_global_review": "global_review_requested" not in present,
+            "missing_types_provided_when_needed": not invalid_missing,
+        },
+    }
+
+
 def build_retrieval_session_close_receipt(
     *,
     parent_session_id: str,
@@ -285,11 +636,19 @@ def build_retrieval_session_close_receipt(
     result_id: str,
     triggered_by: str = "main_agent",
     reason: str = "main agent confirms retrieval round complete",
+    completion_check: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if triggered_by not in ("main_agent", "budget_exhausted", "scope_completed", "main_agent_abort"):
+    if triggered_by not in (
+        "main_agent", "budget_exhausted", "scope_completed",
+        "main_agent_abort", "completion_check_passed",
+    ):
         raise AssuranceError(f"invalid close trigger: {triggered_by}")
+    if triggered_by == "completion_check_passed" and completion_check is None:
+        raise AssuranceError(
+            "completion_check is required when triggered_by='completion_check_passed'"
+        )
     receipt_id_seed = f"{result_id}:{triggered_by}"
-    receipt = {
+    receipt: dict[str, Any] = {
         "schema_version": "0.1.0-draft",
         "receipt_kind": "retrieval_session_close_receipt",
         "receipt_id": f"RET-CLS-{sha256_bytes(receipt_id_seed.encode('utf-8'))[:32].upper()}",
@@ -317,6 +676,15 @@ def build_retrieval_session_close_receipt(
             ],
         },
     }
+    if completion_check is not None:
+        receipt["completion_check"] = {
+            "check_id": completion_check["check_id"],
+            "decision": completion_check.get("response_decision", completion_check.get("decision", "unknown")),
+            "brief_reason": completion_check.get("brief_reason", ""),
+        }
+        missing = completion_check.get("missing_content_types") or []
+        if missing:
+            receipt["completion_check"]["missing_content_types"] = missing
     validate_contract(receipt, CLOSE_RECEIPT_SCHEMA, label="retrieval session close receipt")
     return receipt
 
