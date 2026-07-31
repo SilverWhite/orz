@@ -715,12 +715,32 @@ class TuiPrototype:
 
     @classmethod
     def with_event_source(cls, source: Any) -> TuiPrototype:
-        """Build a prototype wired to *source* with empty initial state.
+        """Build a prototype wired to *source* with full base UI.
 
-        The returned prototype has no sample data — event groups are
+        Menus, toolbar, status bar, and address bar are populated from
+        sample data so the TUI looks functional immediately.  Dynamic
+        content (event groups, source table, claim disposition) is
         created lazily on the first projected event.
         """
-        app = cls()
+        from .view_models import (
+            SAMPLE_COMMAND_URI, SAMPLE_FIND_QUERY, SAMPLE_FIND_SCOPE,
+            SAMPLE_FIND_SCOPES, SAMPLE_MENUS, SAMPLE_SOURCE_TREE,
+            SAMPLE_STATUS_ITEMS,
+        )
+        app = cls(
+            menu_bar=MenuBar(menus=dict(SAMPLE_MENUS)),
+            toolbar=Toolbar(buttons=[
+                "后退", "前进", "刷新", "停止", "打开", "验证", "属性",
+            ]),
+            address_bar=AddressBar(uri=SAMPLE_COMMAND_URI),
+            find_bar=FindBar(
+                query=SAMPLE_FIND_QUERY, scope=SAMPLE_FIND_SCOPE,
+                scopes=list(SAMPLE_FIND_SCOPES),
+            ),
+            explorer_pane=ExplorerPane(tree=list(SAMPLE_SOURCE_TREE)),
+            content_pane=ContentPane(title="当前任务"),
+            status_bar=StatusBar(items=list(SAMPLE_STATUS_ITEMS)),
+        )
         app.event_source = source
         app._ensure_event_groups()
         return app
