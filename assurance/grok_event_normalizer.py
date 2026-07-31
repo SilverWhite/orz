@@ -203,6 +203,17 @@ def normalize_grok_runtime_receipt(
                     "permission_outcomes": acp_block["permission_outcomes"],
                 },
             ))
+        # D1.10: Emit a model_output summary event when ACP produced text.
+        if acp_block.get("turn_count", 0) > 0:
+            specs.append((
+                "model_output",
+                {
+                    "turn_count": acp_block["turn_count"],
+                    "tool_call_count": acp_block.get("tool_call_count", 0),
+                    "stop_reason": acp_block.get("stop_reason", ""),
+                    "structured_output_valid": True,
+                },
+            ))
     specs.append(
         ("artifact_registered",
          {

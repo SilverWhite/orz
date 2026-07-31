@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .events import (
+    AcpInitializeEvent,
+    AcpSessionCreatedEvent,
     ArtifactRegisteredEvent,
     ErrorEvent,
     GateDecisionEvent,
@@ -253,11 +255,43 @@ def _on_model_output(app: Any, event: ModelOutputEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Run", f"model output ({valid_str})"
     )
-    app.content_pane.add_message(
-        "模型输出", f"sha256: {event.answer_packet_sha256[:20]}...",
-        warning=not event.structured_output_valid,
-    )
+    # D1.10: Display streaming text content when available (ACP real-time).
+    if event.text:
+        display_text = event.text[:500] + ("..." if len(event.text) > 500 else "")
+        label = f"模型输出 (turn {event.turn})" if event.turn else "模型输出"
+        app.content_pane.add_message(
+            label, display_text,
+            warning=not event.structured_output_valid,
+        )
+    elif event.answer_packet_sha256:
+        app.content_pane.add_message(
+            "模型输出", f"sha256: {event.answer_packet_sha256[:20]}...",
+            warning=not event.structured_output_valid,
+        )
     return [f"Model output received ({valid_str})"]
+
+
+# ── ACP lifecycle handlers (D1.10) ──────────────────────────────────────────
+
+
+@_register(TuiEventKind.ACP_INITIALIZE)
+def _on_acp_initialize(app: Any, event: AcpInitializeEvent) -> list[str]:
+    app.status_bar.update_item("ACP", True)
+    app.content_pane.add_message(
+        "ACP", f"协议版本 v{event.protocol_version} — Grok agent stdio 已连接",
+        collapsible=False,
+    )
+    return [f"ACP initialize v{event.protocol_version}"]
+
+
+@_register(TuiEventKind.ACP_SESSION_CREATED)
+def _on_acp_session_created(app: Any, event: AcpSessionCreatedEvent) -> list[str]:
+    session_label = (
+        f"会话已创建 (hash={event.session_id_hash[:12]}...)"
+        if event.session_id_hash else "会话已创建"
+    )
+    app.content_pane.add_message("会话", session_label, collapsible=True)
+    return ["ACP session created"]
 
 
 # ── tool handlers ────────────────────────────────────────────────────────────
@@ -267,6 +301,17 @@ def _on_model_output(app: Any, event: ModelOutputEvent) -> list[str]:
 def _on_tool_proposal(app: Any, event: ToolProposalEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Tool Calls", f"proposed: {event.tool_name}"
+    )
+    # D1.10: Show tool calls in ContentPane as collapsible messages.
+    detail = event.tool_name
+    if event.tool_call_id:
+        detail += f" (id={event.tool_call_id[:16]}...)"
+    if event.input_summary:
+        summary = event.input_summary[:200]
+        detail += f"\n{summary}"
+    app.content_pane.add_message(
+        "工具调用", detail,
+        collapsible=True,
     )
     return [f"Tool proposed: {event.tool_name}"]
 

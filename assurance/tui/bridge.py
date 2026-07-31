@@ -272,6 +272,7 @@ def build_grok_acp_live_run_fn(
         _LIVE_EMITTED = {
             "acp_initialize", "acp_session_created",
             "tool_proposal", "permission_requested", "permission_decision",
+            "model_output",
         }
         events_path = Path(str(receipt["artifacts"]["events_path"]))
         if events_path.is_file():
@@ -415,6 +416,8 @@ def _make_model_output(payload: dict[str, Any], timestamp: str) -> ModelOutputEv
         timestamp=timestamp,
         answer_packet_sha256=payload.get("answer_packet_sha256", ""),
         structured_output_valid=payload.get("structured_output_valid", True),
+        text=payload.get("text", ""),
+        turn=payload.get("turn", 0),
     )
 
 

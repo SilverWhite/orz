@@ -692,6 +692,61 @@ def run_grok_acp_once(
                             "payload": {
                                 "tool_name": tool_info.get("title", tool_info.get("name", "")),
                                 "tool_call_id": tool_info.get("id", ""),
+                                "input_summary": tool_info.get("description", ""),
+                            },
+                            "redaction": "metadata_only",
+                        })
+                elif update_type == "tool_call_update":
+                    # Incremental tool-argument build — emit as tool_proposal update.
+                    if on_acp_event:
+                        tool_info = update.get("tool_call", {}) if isinstance(update.get("tool_call"), dict) else {}
+                        args_text = tool_info.get("arguments", "")
+                        if isinstance(args_text, dict):
+                            import json as _json
+                            args_text = _json.dumps(args_text, ensure_ascii=False)[:200]
+                        elif isinstance(args_text, str) and len(args_text) > 200:
+                            args_text = args_text[:200]
+                        on_acp_event({
+                            "event_type": "tool_proposal",
+                            "timestamp": utc_now(),
+                            "payload": {
+                                "tool_name": tool_info.get("title", tool_info.get("name", "")),
+                                "tool_call_id": tool_info.get("id", ""),
+                                "input_summary": str(args_text)[:200] if args_text else "",
+                            },
+                            "redaction": "metadata_only",
+                        })
+                elif update_type in ("assistant_message", "message", "user_message"):
+                    # Model text output — stream to TUI in real time.
+                    text = ""
+                    if isinstance(update.get("content"), list):
+                        for block in update["content"]:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text += block.get("text", "")
+                    elif isinstance(update.get("text"), str):
+                        text = update["text"]
+                    elif isinstance(update.get("message"), dict):
+                        text = update["message"].get("content", "")
+                    if text and on_acp_event:
+                        on_acp_event({
+                            "event_type": "model_output",
+                            "timestamp": utc_now(),
+                            "payload": {
+                                "text": text,
+                                "turn": turn_count,
+                                "structured_output_valid": True,
+                            },
+                            "redaction": "metadata_only",
+                        })
+                elif update_type == "error":
+                    if on_acp_event:
+                        error_msg = update.get("message", update.get("error", "未知 ACP 错误"))
+                        on_acp_event({
+                            "event_type": "error_event",
+                            "timestamp": utc_now(),
+                            "payload": {
+                                "message": str(error_msg)[:500],
+                                "source": "acp_session_update",
                             },
                             "redaction": "metadata_only",
                         })
@@ -838,6 +893,7 @@ def run_grok_acp_once(
             "params": {
                 "sessionId": session_id,
                 "prompt": [{"type": "text", "text": request.prompt_text}],
+                "maxTurns": request.max_turns,
             },
         })
         prompt_result: dict[str, Any] = {}
@@ -847,6 +903,33 @@ def run_grok_acp_once(
                 if "error" in msg:
                     raise AssuranceError(f"session/prompt error: {msg['error']}")
                 prompt_result = msg.get("result", {}) if isinstance(msg.get("result"), dict) else {}
+                # D1.10: Extract final assistant text from the prompt result and
+                # emit as model_output so the TUI shows the complete response.
+                _stop_reason = prompt_result.get("stopReason", "")
+                if _stop_reason:
+                    stop_reason = _stop_reason
+                if on_acp_event and prompt_result:
+                    _final_text = ""
+                    if isinstance(prompt_result.get("message"), dict):
+                        _msg = prompt_result["message"]
+                        if isinstance(_msg.get("content"), list):
+                            for _block in _msg["content"]:
+                                if isinstance(_block, dict) and _block.get("type") == "text":
+                                    _final_text += _block.get("text", "")
+                        elif isinstance(_msg.get("content"), str):
+                            _final_text = _msg["content"]
+                    if _final_text:
+                        on_acp_event({
+                            "event_type": "model_output",
+                            "timestamp": utc_now(),
+                            "payload": {
+                                "text": _final_text,
+                                "turn": turn_count,
+                                "stop_reason": stop_reason,
+                                "structured_output_valid": True,
+                            },
+                            "redaction": "metadata_only",
+                        })
                 break
             _handle_acp_notification(msg)
 

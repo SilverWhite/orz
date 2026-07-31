@@ -168,11 +168,18 @@ class ModelRequestEvent(TuiEvent):
 
 @dataclass
 class ModelOutputEvent(TuiEvent):
-    """Emitted when the model response is received."""
+    """Emitted when model text or a structured answer packet is received.
+
+    For real-time ACP streaming, *text* carries the model's generated
+    content.  For canonical offline runs, *answer_packet_sha256* carries
+    the structured answer packet digest.
+    """
 
     kind: TuiEventKind = field(default=TuiEventKind.MODEL_OUTPUT, init=False)
     answer_packet_sha256: str = ""
     structured_output_valid: bool = True
+    text: str = ""
+    turn: int = 0
 
 
 # ── tool events ──────────────────────────────────────────────────────────────
@@ -180,10 +187,11 @@ class ModelOutputEvent(TuiEvent):
 
 @dataclass
 class ToolProposalEvent(TuiEvent):
-    """The model has proposed a tool call."""
+    """The model has proposed a tool call (or a tool-call update)."""
 
     kind: TuiEventKind = field(default=TuiEventKind.TOOL_PROPOSAL, init=False)
     tool_name: str = ""
+    tool_call_id: str = ""
     input_summary: str = ""
 
 
