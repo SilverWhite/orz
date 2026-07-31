@@ -1,4 +1,4 @@
-# P4 metadata audit, compaction, and recovery authorization — 2026-07-25
+# P4 metadata audit, compaction, and recovery authorization — 2026-07-25（2026-07-31 修订："尚未关闭"同步）
 
 ## 结论
 
@@ -78,14 +78,20 @@ P4 只增加 3 个组合测试：
 旧 Grok event bridge/compaction probe 提供参考证据，但 P4 实现位于 `assurance/`，不依赖 Grok
 binary、Grok schema 或 Grok session 路径。Grok 继续是 `reference_only` adapter。
 
-## 尚未关闭
+## 尚未关闭（2026-07-31 更新）
 
-- 没有实际 runtime adapter 写入统一 ledger；source completeness 是签名声明，不是“未遗漏”的证明；
-- 没有 automatic compaction threshold observation；
-- 没有 shadow Git/对象存储、snapshot creator、diff preview、路径 canonicalizer 或恢复执行器；
-- 没有跨进程 writer lock、崩溃中间态 seal recovery 或 key rotation；
-- HMAC 证明本地完整性，不是跨主机远程证明；
-- archive verification 不覆盖 provider retention、备份、pagefile、hibernation 或物理介质。
+以下条目为 2026-07-25 原始审计的”尚未关闭”列表。2026-07-31 审查确认部分已关闭：
+
+已关闭：
+- ~~没有 automatic compaction threshold observation~~ → GAK-CMP-001 已于 2026-07-29 关闭（`compaction_observer.py`，36 tests）
+- ~~没有 shadow Git/对象存储~~ → GAK-REC-001 已于 2026-07-29 关闭（`shadow_recovery.py`，Git-based store，24 tests）；D1.11+D3.23 已于 2026-07-31 同步关闭
+- ~~没有跨进程 writer lock、崩溃中间态 seal recovery~~ → `ArchiveController`（`archive.py`）已实现 advisory lock + journal replay crash recovery；`archive_journal.py` 已实现 `detect_stale_archive_lock()` / `cleanup_stale_archive_lock()` / `recover_archive_journal()`
+
+仍开放：
+- 没有实际 runtime adapter 写入统一 ledger；source completeness 是签名声明，不是”未遗漏”的证明
+- 没有 production shadow Git recovery executor（当前 recovery authorization 固定 `restoration_performed=false`）
+- HMAC 证明本地完整性，不是跨主机远程证明
+- archive verification 不覆盖 provider retention、备份、pagefile、hibernation 或物理介质
 
 合理的下一阶段不是直接让普通用户测试真实项目，而是先完成一个 P4.5 合成 adapter 纵向切片：
 把 P2.5 的真实无模型 guarded execution、P3 action gate 和 P4 audit ledger 串成同一个

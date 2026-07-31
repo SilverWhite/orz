@@ -1,4 +1,4 @@
-# P1 会话身份与归档删除生命周期审计（2026-07-28）
+# P1 会话身份与归档删除生命周期审计（2026-07-28，2026-07-31 修订：接口/分类/行数同步）
 
 ## 裁决
 
@@ -101,41 +101,73 @@ P1 的核心设计目标：
 - 递归验证：issued permit 独立验证；consumed permit 还会验证其引用的 issued receipt
 - 检查项：key_id、HMAC 签名、conversation/envelope 匹配、时效性、binding 一致性、issued_receipt_sha256
 
-### 4. 归档控制器 (`assurance/archive.py`)
+### 4. 归档控制器 (`assurance/archive.py`, 622 行)
 
-函数 `run_conversation_archive`：
-- 状态转移：`active` → `archiving` → `archived` / `failed`
+类 `ArchiveController`（支持 crash recovery 与可插拔 storage backend）：
+
+构造函数参数：
+- `key_store`：HMAC 签名密钥
+- `storage`：可插拔 `StorageAdapter`（默认 `LocalStorageAdapter`）
+- `delete_file`：向后兼容的 `DeleteFile` callback
+- `max_retries`：删除重试次数（默认 3，指数退避）
+- `retry_base_delay_seconds`：重试基础延迟（默认 0.1s）
+- `lock_timeout_seconds`：advisory lock 超时（默认 30s）
+
+方法 `.archive(namespace)`：
+- 全新归档：验证 active envelope → 写 lifecycle receipt → 状态转移 `active` → `archiving`
+- Crash recovery：若已在 `archiving` 状态 → `replay_archive_journal()` 重放 journal → 跳过已删除文件继续
+- 若 journal 已有 terminal event → 直接从磁盘 receipt 重建结果（`_rebuild_result_from_disk()`），不重新删除
+- 通过 `exclusive_archive_lock()` 获取 advisory file lock 后执行
 - 按 `retention-policy-v0.1.json` 定义的 `delete_on_archive` 16 个类别执行删除：
-  - `agent_output`、`approved_tool_calls`、`credential_store`、`derived_data`
-  - `failure_diagnostics`、`intermediate_artifacts`、`network_payloads`
-  - `original_user_query_raw`、`raw_model_io`、`runtime_environment`
-  - `streaming_buffer`、`synthetic_data`、`temporary_import_receipt`
-  - `unpinned_snapshot`、`unresolved_questions`、`untrusted_reference`
-- 每类删除顺序：阶段 1（文件删除 + 空目录清理）→ 阶段 2（父目录移除）
-- 生成 `terminal_deletion_receipt` 记录每个类别的删除计数和残留问题
+  - `raw_provider_payload`、`private_reasoning`、`raw_tool_result`、`full_stdout_stderr`
+  - `network_body`、`credential_lease`、`confirmation_token`、`one_shot_permit`
+  - `unpinned_snapshot`、`temporary_checkpoint`、`temporary_profile`、`sandbox_ephemeral_storage`
+  - `session_recall_index`、`active_security_envelope`、`temporary_lifecycle_receipt`、`temporary_import_receipt`
+- 逐文件带重试删除（指数退避）；失败记录到 `error_pairs`，不静默
+- 通过 `ArchiveJournalWriter` 写 append-only JSONL journal（每个 `file_deleted`/`file_failed`/`category_completed` 事件含 hash chain）
 - 保留 3 个类别（`redacted_conversation`、`user_pinned_snapshot`、`terminal_deletion_receipt`）跨越 archive boundary
 - `unsafe_entries` 追踪：symlink/reparse point/非文件实体标记为 unsafe，不遍历但记录
+- 生成双 receipt：`archive-deletion.json`（HMAC 签名 `archive-deletion-receipt`）+ `lifecycle-terminal.json`（`session-lifecycle-receipt`）
+- 最终状态转移至 `archived`（无残留且无错误）或 `failed`
 
-函数 `verify_conversation_archive`：
-- 独立验证 terminal deletion receipt 的签名和类别完整性
-- 检查保留类别未被意外删除
-- 验证删除类别目录已清空（除了记录的 unsafe/residual_entries）
+函数 `resume_archived_conversation()`（同模块）：
+- 调用 `verify_archive()` 确认 archive 完整性
+- 仅在 verified complete archive 上创建新 `ConversationNamespace`
+- 将旧 deletion receipt 的 `envelope_id` 作为新 namespace 的 `parent_envelope_id`
 
-### 5. 归档日志 (`assurance/archive_journal.py`)
+独立验证函数 `verify_archive()`（`assurance/archive_verifier.py`）：
+- 独立重读 `archive-deletion.json` + `lifecycle-terminal.json`，验证 schema 合规
+- 验证 HMAC 签名、conversation/envelope ID 匹配、状态一致性
+- **独立重新扫描文件系统**：对每个 delete 类别调用 `os.walk()` 重新计数，与 receipt 中的 `remaining_count` 比对
+- 重新计算 cleanup projection 与 receipt 中的值比对
+- 验证 `archive_complete=true` 时无 errors 且无残留；`archive_complete=false` 时有 unresolved categories
 
-函数 `write_archive_journal`：
-- 将 terminal deletion receipt 写入 JSONL journal
-- 使用 advisory file lock（Windows: `msvcrt.LK_NBLCK`，POSIX: `fcntl.LOCK_EX | LOCK_NB`）防止并发冲突
-- 每秒轮询一次 lock，最多 30 次
-- 每个 entry 含 `entry_id`（`AE-{UUID}`）、`entry_sha256`、`previous_entry_sha256`
-- Hash chain 保证 journal 防篡改
+### 5. 归档日志 (`assurance/archive_journal.py`, 632 行)
+
+类 `ArchiveJournalWriter`（context manager）：
+- `.append_event(event_type, payload)`：追加带 hash chain 的 journal entry
+- 每个 entry 含 `entry_id`（`AE-{UUID}`）、`entry_sha256`、`previous_entry_sha256`、`sequence`
+- 退出 context 时自动 flush
 - Journal 旋转策略：单文件最大 1 MiB，达到则创建新段
 
-函数 `verify_archive_journal`：
-- 加载并验证完整 journal
+Context manager `exclusive_archive_lock(journal_path, timeout_seconds)`：
+- Windows：`msvcrt.LK_NBLCK`；POSIX：`fcntl.LOCK_EX | LOCK_NB`
+- 每秒轮询一次 lock，直到超时
+
+函数 `replay_archive_journal(journal_path)`：
+- 在 crash recovery 时重放 journal，返回 `{valid, events, deleted_files, terminal_event, last_sequence, last_event_sha256}`
 - 验证 hash chain 完整性
-- 验证每个 entry 的 payload schema
-- 验证 entry 间的连续性
+- 使 `ArchiveController` 可跳过已删除文件继续归档
+
+函数 `recover_archive_journal(journal_path)`：
+- 修复截断/损坏的 journal tail
+- 支持五种恢复路径：clean_interrupted / torn_journal / corrupt_journal / stale_lock / archiving_no_journal
+
+函数 `detect_stale_archive_lock()` / `cleanup_stale_archive_lock()`：
+- 检测并清理崩溃后残留的孤儿 advisory lock
+
+函数 `inspect_archive_journal(journal_path)`：
+- 人类可读的 journal 内容检查入口
 
 ## 与 P 级合约的关系
 
@@ -174,12 +206,12 @@ P1 的核心设计目标：
 | 文件 | 行数 | 用途 |
 |---|---|---|
 | `assurance/conversation.py` | 257 | ConversationNamespace：隔离文件系统容器、artifact 读写、跨会话拒绝 |
-| `assurance/envelope.py` | ~200 | Security Envelope：HMAC 签名、capability 绑定、parent/child 链接 |
-| `assurance/permit.py` | 311 | Sensitive Action Permit：issue → sign → consume 完整生命周期 |
-| `assurance/archive.py` | ~350 | Archive Controller：状态转移、16 类删除、terminal deletion receipt |
-| `assurance/archive_journal.py` | ~350 | Archive Journal：advisory lock、JSONL hash chain、journal 旋转 |
-| `assurance/keystore.py` | ~200 | InstallationKeyStore：256-bit random key + Windows DPAPI / macOS Keychain |
-| `assurance/key_lifecycle.py` | ~100 | Key lifecycle：rotation、revocation（contract 层） |
+| `assurance/envelope.py` | 268 | Security Envelope：HMAC 签名、capability 绑定、parent/child 链接、key migration |
+| `assurance/permit.py` | 290 | Sensitive Action Permit：issue → sign → consume 完整生命周期 |
+| `assurance/archive.py` | 622 | ArchiveController：状态转移、16 类删除、crash recovery（journal replay + retry）、advisory lock |
+| `assurance/archive_journal.py` | 632 | ArchiveJournalWriter + crash recovery：advisory lock、JSONL hash chain、journal 旋转、replay/recover/inspect |
+| `assurance/keystore.py` | 305 | InstallationKeyStore：256-bit random key + Windows DPAPI / macOS Keychain |
+| `assurance/key_lifecycle.py` | 483 | Key lifecycle：rotation、revocation、crash-safe journal、envelope migration |
 
 ### 关联 Schema（8 个核心 + 3 个 fixture）
 已在上方 Schema 体系表中列出。
@@ -240,14 +272,14 @@ P1 的核心设计目标：
 - **Permit 不保留原始用户批准文本**：`raw_confirmation_recorded: false` 和 `raw_action_recorded: false`——事后无法从 permit 自身还原用户批准的原始内容，仅保留 SHA256
 - **Archive 的 delete 是尽力而为的**：`unsafe_entries` 和 `residual_entries` 记录在 terminal deletion receipt 中——不静默失败，但也不保证物理销毁
 - **Journal lock 是 advisory**：恶意或 buggy 进程可忽略 lock。lock 最多等待 30 秒（每秒轮询一次）
-- **当前为 development/conformance baseline**：P1 已完成 contract + fixture 层，但 rotation/revocation、并发、crash recovery、真实 runtime/storage 接入仍待生产化（GAK-ID-001, GAK-SESSION-001, GAK-RET-001）
+- **当前为 development/conformance baseline**：P1 已完成 contract + fixture 层 + ArchiveController crash recovery（journal replay + retry + exponential backoff + stale lock cleanup）；key rotation/revocation 第一切片已完成（GAK-ID-001）；真实 runtime adapter 接入（GAK-SESSION-001）与 retention/deletion 生产化 stress test（GAK-RET-001）仍待推进
 
 ## 下一步
 
 后续适合接入：
 - Key rotation/revocation 的完整生命周期（GAK-ID-001）
 - Conversation namespace 接入真实 runtime adapter（GAK-SESSION-001）
-- Retention/deletion controller 的 crash/retry/并发恢复（GAK-RET-001）
+- Retention/deletion controller 的生产化 stress test 与多进程并发恢复（GAK-RET-001；crash recovery / retry / journal replay 第一切片已在 `ArchiveController` 中实现）
 - Archive journal 的直接追加模式（替代当前的全量重写）
 - Permit 的 approval ledger 集成（`INTERACTIVE_APPROVAL_LEDGER_CONTRACT`）
 - Cross-conversation import 的安全策略（当前仅标记 untrusted，不做内容验证）
