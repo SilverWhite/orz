@@ -217,38 +217,35 @@ def build_grok_acp_live_run_fn(
     interactive: bool = False,
 ) -> (
     Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]
-    | tuple[Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]], "queue.Queue[str]"]
+    | tuple[Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]], "queue.Queue[str]", "queue.Queue[str]"]
 ):
     """Build a Grok ACP live run function for the TUI event source.
 
-    Launches ``grok agent stdio`` in ACP JSON-RPC mode (the primary
-    observability path per design).  Emits metadata-only runtime events
-    in *real time* as ACP notifications arrive, rather than waiting for
-    the session to complete.
+    Launches ``grok agent stdio`` in ACP JSON-RPC mode and keeps the
+    session alive for multiple prompts (D1.10 multi-prompt loop).
+    The TUI sends new prompts via the *prompt_queue*.
 
     When *interactive* is ``True``, permission requests are routed to
-    the TUI for user approval instead of being auto-decided.  Returns
-    ``(run_fn, permission_queue)`` so the caller can pass decisions
-    from the main thread back to the running ACP session.
+    the TUI for user approval.  Returns ``(run_fn, permission_queue,
+    prompt_queue)``.
     """
     from pathlib import Path
 
-    from assurance.grok_runtime_adapter import GrokRunRequest, run_grok_acp_once
+    from assurance.grok_runtime_adapter import GrokAcpSession, GrokRunRequest
 
     _run_root = Path(run_root)
     _workspace = Path(workspace) if workspace else None
     _permission_queue: queue.Queue[str] | None = queue.Queue() if interactive else None
+    _prompt_queue: queue.Queue[str | None] = queue.Queue()
 
     def _run(on_event: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         import json as _json
 
         def _acp_event_handler(event: dict[str, Any]) -> str | None:
-            """Callback for run_grok_acp_once — returns decision for permission events."""
             if event["event_type"] == "permission_requested" and _permission_queue is not None:
-                # Push to TUI for display, then block waiting for user decision.
                 on_event(event)
                 try:
-                    decision: str = _permission_queue.get(timeout=300)  # 5 min
+                    decision: str = _permission_queue.get(timeout=300)
                 except queue.Empty:
                     decision = "cancelled"
                 return decision
@@ -265,16 +262,32 @@ def build_grok_acp_live_run_fn(
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
         )
-        receipt = run_grok_acp_once(request, on_acp_event=_acp_event_handler)
-        # After session completes, replay normalized events for
-        # completeness (run_preflight, run_finished, artifact_registered).
-        # Skip event types already emitted in real-time during ACP.
+
+        with GrokAcpSession(request) as session:
+            # Send initial prompt.
+            session.send_prompt(prompt_text, on_acp_event=_acp_event_handler)
+
+            # D1.10: Multi-prompt loop — wait for follow-up prompts from
+            # the TUI.  A ``None`` sentinel in the queue ends the session.
+            while True:
+                try:
+                    next_prompt = _prompt_queue.get(timeout=0.5)
+                except queue.Empty:
+                    # No prompt yet — check if TUI still alive
+                    continue
+                if next_prompt is None:
+                    break  # Session ended by TUI
+                session.send_prompt(next_prompt, on_acp_event=_acp_event_handler)
+
+        receipt = session.receipt if session.receipt is not None else {}
+
+        # Replay normalized events (lifecycle events only).
         _LIVE_EMITTED = {
             "acp_initialize", "acp_session_created",
             "tool_proposal", "permission_requested", "permission_decision",
             "model_output",
         }
-        events_path = Path(str(receipt["artifacts"]["events_path"]))
+        events_path = Path(str(receipt.get("artifacts", {}).get("events_path", "")))
         if events_path.is_file():
             with events_path.open("r", encoding="utf-8") as handle:
                 for line in handle:
@@ -286,7 +299,7 @@ def build_grok_acp_live_run_fn(
 
     if interactive:
         assert _permission_queue is not None
-        return _run, _permission_queue
+        return _run, _permission_queue, _prompt_queue
     return _run
 
 

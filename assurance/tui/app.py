@@ -490,7 +490,15 @@ class TuiPrototype:
         if text.startswith("/"):
             return f"已激活: {text}"
 
-        # URI navigation
+        # D1.10: Non-command text during a live Grok ACP session → send as
+        # a new prompt on the existing session (multi-prompt loop).
+        if self.event_source is not None and hasattr(self.event_source, "send_prompt"):
+            self.content_pane.add_message("用户", text, collapsible=True)
+            self.event_source.send_prompt(text)
+            self.status_bar.update_item("Prompt", True)
+            return f"发送: {text[:60]}{'...' if len(text) > 60 else ''}"
+
+        # URI navigation fallback
         return f"导航至: {text}"
 
     def _show_retrieval_dialog(self, mode: str, target: str) -> None:

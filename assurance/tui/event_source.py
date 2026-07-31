@@ -246,6 +246,7 @@ class LiveRunEventSource(EventSource):
         run_fn: Callable[[Callable[[dict[str, Any]], None]], Any],
         *,
         permission_queue: queue.Queue[str] | None = None,
+        prompt_queue: queue.Queue[str | None] | None = None,
     ) -> None:
         self._queue: queue.Queue[TuiEvent] = queue.Queue()
         self._thread: threading.Thread | None = None
@@ -255,6 +256,7 @@ class LiveRunEventSource(EventSource):
         self._error: str | None = None
         self._closed = False
         self._permission_queue: queue.Queue[str] | None = permission_queue
+        self._prompt_queue: queue.Queue[str | None] | None = prompt_queue
 
     def respond_to_permission(self, decision: str) -> None:
         """Send a user permission decision back to a running ACP session.
@@ -264,6 +266,21 @@ class LiveRunEventSource(EventSource):
         """
         if self._permission_queue is not None:
             self._permission_queue.put(decision)
+
+    def send_prompt(self, prompt_text: str) -> None:
+        """Send a new prompt to a running multi-prompt ACP session (D1.10).
+
+        Called from the TUI main thread when the user enters a non-command
+        text in the address bar during a live Grok ACP session.
+        Non-blocking — the background thread picks it up in its loop.
+        """
+        if self._prompt_queue is not None:
+            self._prompt_queue.put(prompt_text)
+
+    def end_session(self) -> None:
+        """Signal the multi-prompt ACP session to close gracefully."""
+        if self._prompt_queue is not None:
+            self._prompt_queue.put(None)
 
     def start(self) -> None:
         """Launch the canonical CLI run in a background daemon thread.

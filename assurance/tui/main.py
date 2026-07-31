@@ -262,10 +262,11 @@ def main(argv: list[str] | None = None) -> int:
                     interactive=True,
                 )
                 if isinstance(result, tuple):
-                    run_fn, permission_queue = result
+                    run_fn, permission_queue, prompt_queue = result
                 else:
                     run_fn = result
                     permission_queue = None
+                    prompt_queue = None
         else:
             if args.retrieval_mode is not None:
                 print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)
@@ -278,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
                 real_adapter=args.real,
                 **extra_kwargs,
             )
-        source = LiveRunEventSource(run_fn=run_fn, permission_queue=permission_queue)
+        source = LiveRunEventSource(run_fn=run_fn, permission_queue=permission_queue, prompt_queue=prompt_queue)
         app = TuiPrototype.with_event_source(source)
         if args.with_dialog:
             app.dialog.visible = True
