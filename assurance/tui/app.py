@@ -35,6 +35,7 @@ from .widgets import (
     AddressBar,
     AddressDialog,
     AnnouncementStrip,
+    ChatMessage,
     CommandPalette,
     ContentMarker,
     ContentPane,
@@ -56,8 +57,7 @@ from .widgets import (
 # Layout constants
 EXPLORER_WIDTH = 22   # fixed-width explorer pane (20 + 2 borders)
 MARKER_WIDTH = 16     # right-side content marker (14 + 2 borders)
-FIXED_HEIGHT = 1      # menu, toolbar, address, find, status bars
-TOTAL_FIXED_ROWS = 6  # menu + toolbar + address + find + checklist + status
+FIXED_HEIGHT = 1      # each fixed row consumes 1 line
 
 
 @dataclass
@@ -119,9 +119,10 @@ class TuiPrototype:
 
     # ── focus ──
     _focusable_panes: tuple[str, ...] = (
-        "explorer", "checklist", "content", "marker", "address", "find",
+        "explorer", "checklist", "content", "marker",
     )
     _active_pane_index: int = 0
+    _last_esc_time: float = field(default=0.0)  # P3.4: double-Esc session list
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -144,27 +145,19 @@ class TuiPrototype:
         menu = self.menu_bar.render(inner_w, 1)
         lines.append("│" + menu[0] + "│")
 
-        # ── Row 1: Toolbar ──
+        # ── Row 1: Toolbar (P3.1: address/find folded in as right buttons) ──
         tool = self.toolbar.render(inner_w, 1)
         lines.append("│" + tool[0] + "│")
         lines.append(box_t_junction(width))
 
-        # ── Row 2: AddressBar (compact — single line, no multi-line expand) ──
-        addr = self.address_bar.render(inner_w, 1)
-        lines.append("│" + addr[0] + "│")
-        lines.append(box_t_junction(width))
-
-        # ── Row 3: FindBar ──
-        find = self.find_bar.render(inner_w, 1)
-        lines.append("│" + find[0] + "│")
-
-        # ── Row 4: AnnouncementStrip (L1 checklist bar) ──
-        chk_extra = self.announcement_strip.expanded_height
-        chk_height = 1 + chk_extra
-        chk = self.announcement_strip.render(inner_w, chk_height)
-        for chk_line in chk:
-            lines.append("│" + chk_line + "│")
-        lines.append(box_t_junction(width))
+        # ── Row 2: AnnouncementStrip (L1 checklist bar) — only when active ──
+        if self.announcement_strip.items:
+            chk_extra = self.announcement_strip.expanded_height
+            chk_height = 1 + chk_extra
+            chk = self.announcement_strip.render(inner_w, chk_height)
+            for chk_line in chk:
+                lines.append("│" + chk_line + "│")
+            lines.append(box_t_junction(width))
 
         # ── explorer / content / marker 3-column split ──
         exp_w = (EXPLORER_WIDTH - 2) if se else 0
@@ -186,7 +179,11 @@ class TuiPrototype:
         lines.append(sep_line)
 
         # ── Body ──
-        body_height = height - TOTAL_FIXED_ROWS - 5 - chk_extra
+        # Dynamic: menu(1) + toolbar(1) + status(1) + top(1)/bottom(1) border + 2 internal junctions
+        fixed = 1 + 1 + 1 + 1 + 1 + 2
+        if self.announcement_strip.items:
+            fixed += 1 + chk_extra + 1  # strip row(s) + junction
+        body_height = height - fixed
         if body_height < 3:
             body_height = 3
 
@@ -392,7 +389,22 @@ class TuiPrototype:
             if self.menu_bar.active_menu:
                 self.menu_bar.handle_key("esc")
                 return None
+            # 4. If session list is open in explorer, close it
+            if self.explorer_pane.in_session_mode:
+                self._toggle_session_list()
+                return "来源树"
+            # 5. Double-Esc (P3.4): nothing to dismiss → check for double-tap
+            import time as _t
+            now = _t.monotonic()
+            if now - self._last_esc_time < 0.5:
+                self._last_esc_time = 0.0
+                return self._toggle_session_list()
+            self._last_esc_time = now
             return None
+
+        # ── Session list navigation (P3.4) ──
+        if self.explorer_pane.in_session_mode and key in ("up", "down", "enter"):
+            return self._navigate_session_list(key)
 
         if key == "backspace":
             if self.active_pane == "address" and self.address_bar._buffer:
@@ -411,6 +423,14 @@ class TuiPrototype:
 
         if key == "f6":
             return self._cycle_focus()
+
+        # ── ContentPane tool expand/collapse (P2.3) ──
+        if key == "e" and self.active_pane == "content":
+            names = self.content_pane.tool_trace_names()
+            if names:
+                self.content_pane.toggle_tool_expand(names[-1])
+                return f"切换: {names[-1]}"
+            return None
 
         # Printable characters + editing keys → route to focused address bar.
         if self.active_pane == "address":
@@ -642,6 +662,114 @@ class TuiPrototype:
             new_pane.focused = True
         return f"Focus: {self.active_pane}"
 
+    # ── session list (P3.4) ───────────────────────────────────────────────
+
+    def _toggle_session_list(self) -> str:
+        """Toggle ExplorerPane between source-tree and session-list modes."""
+        pane = self.explorer_pane
+        if pane.in_session_mode:
+            pane.toggle_session_mode()
+            return "来源树"
+        # Load sessions from store and switch to session list mode.
+        try:
+            from assurance.session_store import SessionStore
+            store = SessionStore()
+            sessions = store.list_sessions()
+            pane.load_sessions(sessions)
+        except Exception:
+            pane.load_sessions([])
+        pane.toggle_session_mode()
+        return f"会话列表 ({len(pane._sessions)} sessions)"
+
+    def _navigate_session_list(self, direction: str) -> str | None:
+        """Handle Up/Down/Enter in session list mode."""
+        pane = self.explorer_pane
+        if not pane.in_session_mode:
+            return None
+        if direction == "up":
+            pane.session_selection_up()
+        elif direction == "down":
+            pane.session_selection_down()
+        elif direction == "enter":
+            sid = pane.selected_session_id()
+            if sid:
+                return self._resume_session(sid)
+        return None
+
+    def _resume_session(self, session_id: str) -> str | None:
+        """Resume a past session: load metadata and start a new Grok ACP session."""
+        try:
+            from assurance.session_store import SessionStore
+            store = SessionStore()
+            meta = store.load_metadata(session_id)
+        except Exception:
+            return f"无法加载会话: {session_id}"
+
+        if meta is None:
+            return f"会话未找到: {session_id}"
+
+        prompt_text = meta.get("first_prompt", "")
+        run_root_path = meta.get("run_root", "")
+        workspace_path = meta.get("workspace_path", "")
+
+        if not prompt_text:
+            return "会话元数据缺少 first_prompt，无法恢复"
+
+        # Close existing event source if any.
+        if self.event_source is not None:
+            try:
+                self.event_source.end_session()
+            except Exception:
+                pass
+            try:
+                self.event_source.close()
+            except Exception:
+                pass
+
+        # Build new ACP session.
+        import tempfile
+        from pathlib import Path
+        new_root = Path(tempfile.mkdtemp(prefix="gsa-resume-"))
+        new_workspace = new_root / "workspace"
+        new_workspace.mkdir(parents=True, exist_ok=True)
+
+        try:
+            from .bridge import build_grok_acp_live_run_fn
+            result = build_grok_acp_live_run_fn(
+                run_root=str(new_root),
+                workspace=str(new_workspace),
+                prompt_text=prompt_text,
+                interactive=True,
+            )
+        except Exception as exc:
+            return f"恢复失败: {exc}"
+
+        if isinstance(result, tuple):
+            run_fn, permission_queue, prompt_queue = result
+        else:
+            run_fn = result
+            permission_queue = None
+            prompt_queue = None
+
+        from .event_source import LiveRunEventSource
+        source = LiveRunEventSource(
+            run_fn=run_fn,
+            permission_queue=permission_queue,
+            prompt_queue=prompt_queue,
+        )
+        self.event_source = source
+        source.start()
+
+        # Switch explorer back to source tree.
+        self.explorer_pane.toggle_session_mode()
+
+        # Add a system message about the resume.
+        self.content_pane._items.append(ChatMessage(
+            role="系统", content=f"已恢复会话: {prompt_text[:60]}...",
+            collapsible=True,
+        ))
+        return f"已恢复: {prompt_text[:40]}..."
+
     @staticmethod
     def _blend_overlay(original: str, overlay: list[str], height: int) -> str:
         """Composite *overlay* lines on top of *original* using a
@@ -729,9 +857,10 @@ class TuiPrototype:
         )
         app = cls(
             menu_bar=MenuBar(menus=dict(SAMPLE_MENUS)),
-            toolbar=Toolbar(buttons=[
-                "后退", "前进", "刷新", "停止", "打开", "验证", "属性",
-            ]),
+            toolbar=Toolbar(
+                buttons=["后退", "前进", "刷新", "停止", "打开", "验证", "属性"],
+                right_buttons=["命令...", "查找..."],
+            ),
             address_bar=AddressBar(uri=SAMPLE_COMMAND_URI),
             find_bar=FindBar(
                 query=SAMPLE_FIND_QUERY, scope=SAMPLE_FIND_SCOPE,
@@ -752,9 +881,10 @@ class TuiPrototype:
         """Build a prototype populated with hard-coded sample data."""
         return cls(
             menu_bar=MenuBar(menus=dict(SAMPLE_MENUS)),
-            toolbar=Toolbar(buttons=[
-                "后退", "前进", "刷新", "停止", "打开", "验证", "属性",
-            ]),
+            toolbar=Toolbar(
+                buttons=["后退", "前进", "刷新", "停止", "打开", "验证", "属性"],
+                right_buttons=["命令...", "查找..."],
+            ),
             address_bar=AddressBar(uri=SAMPLE_COMMAND_URI),
             find_bar=FindBar(
                 query=SAMPLE_FIND_QUERY,

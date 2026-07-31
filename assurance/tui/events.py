@@ -58,6 +58,8 @@ class TuiEventKind(str, Enum):
     # ── task checklist (GAK-PLAN-001 extension) ──
     CHECKLIST_DERIVED = "checklist_derived"
     CHECKLIST_ITEM_STATUS_CHANGED = "checklist_item_status_changed"
+    # ── streaming text (P1.3) ──
+    TEXT_DELTA = "text_delta"
 
 
 # ── base event ───────────────────────────────────────────────────────────────
@@ -178,6 +180,21 @@ class ModelOutputEvent(TuiEvent):
     kind: TuiEventKind = field(default=TuiEventKind.MODEL_OUTPUT, init=False)
     answer_packet_sha256: str = ""
     structured_output_valid: bool = True
+    text: str = ""
+    turn: int = 0
+
+
+@dataclass
+class TextDeltaEvent(TuiEvent):
+    """Emitted for each incremental text chunk during streaming model output.
+
+    The projector accumulates these into the current model message card.
+    A :class:`ModelOutputEvent` with the complete text still fires at the
+    end of the turn (for archival/verifier purposes), but the user sees
+    :class:`TextDeltaEvent` chunks appear in real time.
+    """
+
+    kind: TuiEventKind = field(default=TuiEventKind.TEXT_DELTA, init=False)
     text: str = ""
     turn: int = 0
 

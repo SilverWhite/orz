@@ -227,17 +227,25 @@ class MenuBar(Widget):
 @dataclass
 class Toolbar(Widget):
     buttons: list[str] = field(default_factory=list)
+    right_buttons: list[str] = field(default_factory=list)
     focusable: bool = True
 
     def render(self, width: int, height: int) -> list[str]:
         if height < 1:
             return []
-        if not self.buttons:
-            return [" " * width]
         sep = "  "
-        line = sep.join(self.buttons)
-        if self.focused:
-            line = "[" + line + "]"
+        if self.right_buttons:
+            # Left buttons + gap + right-aligned buttons.
+            left = sep.join(self.buttons) if self.buttons else ""
+            right = sep.join(self.right_buttons)
+            left_w = display_width(left)
+            right_w = display_width(right)
+            gap = max(1, width - left_w - right_w)
+            line = left + " " * gap + right
+        elif self.buttons:
+            line = sep.join(self.buttons)
+        else:
+            line = " " * width
         return [pad_to_width(line, width)]
 
 
@@ -605,22 +613,88 @@ class ExplorerPane(Widget):
     event_groups: list[Any] = field(default_factory=list)  # list[EventGroup]
     focusable: bool = True
 
+    # ── session list mode (P3.4) ──
+    _session_mode: bool = False
+    _sessions: list[dict[str, Any]] = field(default_factory=list)
+    _session_sel: int = 0  # selected index in session list
+
+    def toggle_session_mode(self) -> None:
+        """Switch between source-tree and session-list modes."""
+        self._session_mode = not self._session_mode
+        self._session_sel = 0
+
+    @property
+    def in_session_mode(self) -> bool:
+        return self._session_mode
+
+    def load_sessions(self, sessions: list[dict[str, Any]]) -> None:
+        """Load session index data for display."""
+        self._sessions = list(sessions)
+        self._session_sel = 0
+
+    def session_selection_up(self) -> None:
+        if self._sessions and self._session_sel > 0:
+            self._session_sel -= 1
+
+    def session_selection_down(self) -> None:
+        if self._sessions and self._session_sel < len(self._sessions) - 1:
+            self._session_sel += 1
+
+    def selected_session_id(self) -> str | None:
+        """Return the session_id currently selected, or None."""
+        if not self._sessions or self._session_sel >= len(self._sessions):
+            return None
+        return self._sessions[self._session_sel].get("session_id")
+
     def render(self, width: int, height: int) -> list[str]:
         inner_w = width - 2
-        lines: list[str] = []
-        # Tree section
-        lines.extend(self._render_tree(self.tree, inner_w, "", 0))
-        # Separator between tree and events
-        if self.tree and self.event_groups:
-            lines.append("-" * inner_w)
-        # Event groups
-        lines.extend(self._render_events(self.event_groups, inner_w))
+        if self._session_mode:
+            lines = self._render_session_list(inner_w, height)
+        else:
+            lines: list[str] = []
+            lines.extend(self._render_tree(self.tree, inner_w, "", 0))
+            if self.tree and self.event_groups:
+                lines.append("-" * inner_w)
+            lines.extend(self._render_events(self.event_groups, inner_w))
         # Truncate/pad
         if len(lines) < height:
             lines += [" " * inner_w] * (height - len(lines))
         else:
             lines = lines[:height]
         return box_vertical(lines, width, focused=self.focused)
+
+    def _render_session_list(self, width: int, height: int) -> list[str]:
+        """Render sessions grouped by date in tree form."""
+        result: list[str] = []
+        title = "▾ 会话列表" if self.focused else "会话列表"
+        result.append(pad_to_width(title, width))
+        result.append("-" * width)
+
+        if not self._sessions:
+            result.append("  (无历史会话)")
+            return result
+
+        # Group by date.
+        from collections import OrderedDict
+        groups: dict[str, list[dict]] = OrderedDict()
+        for s in self._sessions:
+            created = s.get("created_at", "")[:10]  # "2026-08-01"
+            if created:
+                groups.setdefault(created, []).append(s)
+
+        idx = 0
+        for date, group in groups.items():
+            result.append(pad_to_width(f"▾ {date}  ({len(group)})", width))
+            for s in group:
+                preview = s.get("prompt_preview", s.get("first_prompt", ""))[:28]
+                turns = s.get("turn_count", 0)
+                sid_short = s.get("session_id", "")[-8:]  # last 8 chars
+                marker = "▸ " if idx == self._session_sel else "  "
+                line = f"  {marker}[{sid_short}] {turns}t  {preview}"
+                result.append(pad_to_width(line, width))
+                idx += 1
+
+        return result
 
     def _render_tree(
         self, nodes: list[Any], width: int, indent: str, depth: int
@@ -683,130 +757,447 @@ class ExplorerPane(Widget):
 # ── ContentPane ─────────────────────────────────────────────────────────────
 
 
+# ── chat message types ────────────────────────────────────────────────────────
+
+
+@dataclass
+class ToolEntry:
+    """A single tool invocation record within a tool trace."""
+    target: str     # "cli.py", '"main"'
+    detail: str     # "120 行", "3 matches"
+
+
+@dataclass
+class ToolTraceLine:
+    """Accumulated trace of a single tool's invocations.
+
+    Collapsed: single row ``[tool_name]   detail   ▸ [展开]``
+    Expanded: pin-to-top indented list of all entries.
+    """
+    tool_name: str
+    entries: list[ToolEntry] = field(default_factory=list)
+    expanded: bool = False
+
+
+@dataclass
+class ChatMessage:
+    """A single message in the ContentPane conversation stream."""
+    role: str            # "用户" | "模型" | "系统"
+    content: str         # message body text
+    turn: int = 0
+    collapsible: bool = False
+    collapsed: bool = False
+    warning: bool = False
+
+
+# ── ContentPane ─────────────────────────────────────────────────────────────
+
+
 @dataclass
 class ContentPane(Widget):
-    title: str = "Current Task"
+    title: str = "当前对话"
     source_table: list[Any] = field(default_factory=list)  # list[SourceVisibilityRow]
     claim_disposition: str = ""
     disposition_reason: str = ""
     next_actions: list[str] = field(default_factory=list)
     focusable: bool = True
 
-    # ── message mode (A5 — chat-style task flow) ──
-    _messages: list[dict[str, Any]] = field(default_factory=list)
-    _message_mode: bool = False
+    # ── conversation stream (P1.1 / P1.2) ──
+    _items: list[ChatMessage | ToolTraceLine] = field(default_factory=list)
+    _current_model_msg_index: int = -1  # index of last model ChatMessage, for text_delta append
+    _empty_hint: str = "输入问题开始对话..."
+
+    # ── add messages ──────────────────────────────────────────────────────
+
+    def add_user_message(self, content: str) -> None:
+        """Add a user message (minimal border card)."""
+        self._items.append(ChatMessage(role="用户", content=content))
+
+    def add_model_message(
+        self, content: str = "", turn: int = 0,
+        structured_output_valid: bool = True,
+    ) -> None:
+        """Add a model message card and mark it as the current text_delta target."""
+        self._items.append(ChatMessage(
+            role="模型", content=content, turn=turn,
+            warning=not structured_output_valid,
+        ))
+        self._current_model_msg_index = len(self._items) - 1
+
+    def append_text_delta(self, text: str) -> None:
+        """Append streaming text to the current model message card."""
+        if self._current_model_msg_index >= 0:
+            msg = self._items[self._current_model_msg_index]
+            if isinstance(msg, ChatMessage) and msg.role == "模型":
+                msg.content += text
+
+    # ── tool traces ───────────────────────────────────────────────────────
+
+    def add_or_update_tool_trace(
+        self, tool_name: str, target: str, detail: str,
+    ) -> None:
+        """Add a new tool trace line or update the existing one's latest detail.
+
+        Same tool name → reuse existing line, append entry, scroll detail.
+        Different tool name → new line.
+        """
+        for item in self._items:
+            if isinstance(item, ToolTraceLine) and item.tool_name == tool_name:
+                item.entries.append(ToolEntry(target=target, detail=detail))
+                return
+        # New tool — create trace line and append first entry.
+        trace = ToolTraceLine(tool_name=tool_name)
+        trace.entries.append(ToolEntry(target=target, detail=detail))
+        self._items.append(trace)
+
+    def tool_trace_names(self) -> list[str]:
+        """Return ordered list of tool names in the conversation stream."""
+        return [
+            item.tool_name
+            for item in self._items
+            if isinstance(item, ToolTraceLine)
+        ]
+
+    def toggle_tool_expand(self, tool_name: str) -> None:
+        """Toggle expand/collapse for *tool_name*; collapse all other tools."""
+        for item in self._items:
+            if isinstance(item, ToolTraceLine):
+                if item.tool_name == tool_name:
+                    item.expanded = not item.expanded
+                else:
+                    item.expanded = False
+
+    def collapse_non_warnings(self) -> None:
+        """Collapse all collapsible messages and tool traces (called on run end)."""
+        for item in self._items:
+            if isinstance(item, ChatMessage):
+                if item.collapsible and not item.warning:
+                    item.collapsed = True
+            elif isinstance(item, ToolTraceLine):
+                item.expanded = False
+
+    # ── legacy (kept for backward compat during transition) ────────────────
 
     def add_message(
         self, kind: str, content: str,
         collapsible: bool = False,
         warning: bool = False,
     ) -> None:
-        """Append a chat-style message to the task output stream.
+        """Legacy entry point — routes to new message types by *kind*."""
+        # Map old kind strings to new message roles.
+        if kind in ("用户", "user"):
+            self.add_user_message(content)
+        elif kind in ("模型输出", "模型", "model_output"):
+            self.add_model_message(content=content, structured_output_valid=not warning)
+        elif kind in ("工具调用", "tool_call", "tool"):
+            # Legacy tool calls without structured detail → generic trace.
+            self.add_or_update_tool_trace(
+                tool_name=kind, target=content[:60], detail="",
+            )
+        elif kind in ("错误", "error"):
+            self._items.append(ChatMessage(
+                role="系统", content=f"[{kind}] {content}",
+                warning=True,
+            ))
+        else:
+            # Generic system message.
+            self._items.append(ChatMessage(
+                role="系统", content=f"[{kind}] {content}",
+                collapsible=collapsible, warning=warning,
+            ))
 
-        *collapsible* messages auto-collapse when the run finishes.
-        *warning* messages are never collapsed (blocking errors, unapproved
-        actions, verifier failures).
-        """
-        self._messages.append({
-            "kind": kind,
-            "content": content,
-            "collapsible": collapsible,
-            "collapsed": False,
-            "warning": warning,
-        })
-        self._message_mode = True
-
-    def collapse_non_warnings(self) -> None:
-        """Collapse all collapsible, non-warning messages (called on run end)."""
-        for msg in self._messages:
-            if msg.get("collapsible") and not msg.get("warning"):
-                msg["collapsed"] = True
+    # ── render ────────────────────────────────────────────────────────────
 
     def render(self, width: int, height: int) -> list[str]:
         inner_w = width - 2
-        if self._message_mode and self._messages:
+        if self._items:
             return box_vertical(
-                self._render_messages(inner_w, height), width,
+                self._render_items(inner_w, height), width,
                 focused=self.focused,
             )
 
+        # ── legacy / empty state: source visibility table (if present) ──
         lines: list[str] = []
-
-        # Title
-        lines.append(pad_to_width(self.title, inner_w, align="center"))
-        lines.append("-" * inner_w)
-        lines.append("")
-
-        # Source Visibility table
-        lines.append("  Source Visibility")
-        lines.append("  " + "-" * (inner_w - 4))
-        if self.source_table:
-            # Header
-            header = "  {:<14} {:<10} {:<10} {:<8} {}".format(
-                "Source", "Observed", "Required", "Decision", "Claim"
-            )
-            lines.append(header[:inner_w])
-            lines.append("  " + "-" * (min(inner_w - 4, 54)))
-            for row in self.source_table:
-                rline = "  {:<14} {:<10} {:<10} {:<8} {}".format(
-                    row.ref_id[:12],
-                    row.observed[:8],
-                    row.required[:8],
-                    row.decision[:6],
-                    row.claim[:10],
-                )
-                lines.append(rline[:inner_w])
-        else:
-            lines.append("  (no sources loaded)")
-        lines.append("")
-
-        # Claim disposition
-        lines.append(f"  Claim disposition: {self.claim_disposition}")
-        if self.disposition_reason:
-            lines.append(f"  {self.disposition_reason}")
-        lines.append("")
-
-        # Next actions
-        if self.next_actions:
-            lines.append("  Next Actions")
+        if self.source_table or self.claim_disposition or self.next_actions:
+            lines.append(pad_to_width(self.title, inner_w, align="center"))
+            lines.append("-" * inner_w)
+            lines.append("")
+            lines.append("  Source Visibility")
             lines.append("  " + "-" * (inner_w - 4))
-            for i, action in enumerate(self.next_actions, 1):
-                lines.append(f"  {i}. {action}")
-
-        # Pad to height
+            if self.source_table:
+                header = "  {:<14} {:<10} {:<10} {:<8} {}".format(
+                    "Source", "Observed", "Required", "Decision", "Claim"
+                )
+                lines.append(header[:inner_w])
+                lines.append("  " + "-" * (min(inner_w - 4, 54)))
+                for row in self.source_table:
+                    rline = "  {:<14} {:<10} {:<10} {:<8} {}".format(
+                        row.ref_id[:12],
+                        row.observed[:8],
+                        row.required[:8],
+                        row.decision[:6],
+                        row.claim[:10],
+                    )
+                    lines.append(rline[:inner_w])
+            else:
+                lines.append("  (no sources loaded)")
+            lines.append("")
+            if self.claim_disposition:
+                lines.append(f"  Claim disposition: {self.claim_disposition}")
+                if self.disposition_reason:
+                    lines.append(f"  {self.disposition_reason}")
+                lines.append("")
+            if self.next_actions:
+                lines.append("  Next Actions")
+                lines.append("  " + "-" * (inner_w - 4))
+                for i, action in enumerate(self.next_actions, 1):
+                    lines.append(f"  {i}. {action}")
+        else:
+            # True empty state — no items, no source table.
+            lines.append("")
+            lines.append(pad_to_width(self._empty_hint, inner_w, align="center"))
+            lines.append("")
         if len(lines) < height:
             lines += [""] * (height - len(lines))
         return box_vertical(lines[:height], width, focused=self.focused)
 
-    def _render_messages(self, width: int, height: int) -> list[str]:
-        """Render the chat-style message output stream."""
+    def _render_items(self, width: int, height: int) -> list[str]:
+        """Render the full conversation stream."""
         lines: list[str] = []
-        for msg in self._messages:
-            kind = str(msg.get("kind", ""))
-            content = str(msg.get("content", ""))
-            collapsible = bool(msg.get("collapsible"))
-            collapsed = bool(msg.get("collapsed"))
-            warning = bool(msg.get("warning"))
+        expanded_tool_index: int = -1
 
-            # Build header
-            parts = []
-            if collapsible:
-                parts.append("▸" if collapsed else "▾")
-            if warning:
-                parts.append("⚠")
-            parts.append(f" [{kind}]")
-            header = " ".join(parts)
-            lines.append(header)
+        # Find expanded tool (if any) — render it first as pin-to-top.
+        for i, item in enumerate(self._items):
+            if isinstance(item, ToolTraceLine) and item.expanded:
+                expanded_tool_index = i
+                break
 
-            if not collapsed or warning:
-                for cl in content.split("\n"):
-                    lines.append(f"  {cl}")
-            lines.append("")
+        if expanded_tool_index >= 0:
+            expanded = self._items[expanded_tool_index]
+            assert isinstance(expanded, ToolTraceLine)
+            lines += self._render_expanded_tool(expanded, width)
+            lines.append("")  # separator
 
-        # Pad
-        if len(lines) < height:
-            lines += [""] * (height - len(lines))
+        # Render remaining items (skip the expanded one — already pinned).
+        remaining_height = height - len(lines)
+        for i, item in enumerate(self._items):
+            if i == expanded_tool_index:
+                continue  # already rendered at top
+            if isinstance(item, ChatMessage):
+                lines += self._render_chat_message(item, width)
+            elif isinstance(item, ToolTraceLine):
+                lines.append(self._render_tool_collapsed(item, width))
+
+        # Pad.
+        if len(lines) < remaining_height:
+            lines += [""] * (remaining_height - len(lines))
         return lines[:height]
+
+    # ── card renderers ─────────────────────────────────────────────────────
+
+    def _render_chat_message(self, msg: ChatMessage, width: int) -> list[str]:
+        """Render a user/model message as a minimal border card.
+
+        Border chars are ``┌─┐│└┘``.  The title line is ``┌ [role] · extra ───┐``.
+        """
+        inner = width - 2
+        lines: list[str] = []
+
+        if msg.collapsed and not msg.warning:
+            # Collapsed: single summary line.
+            preview = msg.content[:60].replace("\n", " ")
+            if len(msg.content) > 60:
+                preview += "..."
+            title = f" [{msg.role}]"
+            if msg.turn:
+                title += f" · turn {msg.turn}"
+            lines.append(f"  {title}  ▸ {preview}")
+            return lines
+
+        # Title row.
+        title = f" [{msg.role}]"
+        if msg.turn:
+            title += f" · turn {msg.turn}"
+        fill_w = max(0, inner - display_width(title) - 2)
+        lines.append("┌" + title + " " + "─" * fill_w + "┐")
+
+        # Content rows — format through markdown-aware parser (P2.1).
+        formatted = self._format_chat_content(msg.content, inner - 2)
+        for fl in formatted:
+            if fl == "":
+                lines.append("│" + " " * inner + "│")
+            else:
+                wrapped = self._wrap_line(fl, inner - 2)
+                for wl in wrapped:
+                    lines.append("│ " + pad_to_width(wl, inner - 2) + " │")
+
+        # Bottom border.
+        lines.append("└" + "─" * inner + "┘")
+        return lines
+
+    # ── markdown formatting (P2.1 / P2.2) ─────────────────────────────────
+
+    def _format_chat_content(self, content: str, width: int) -> list[str]:
+        """Parse basic markdown in *content* and return formatted plain-text lines.
+
+        Handles headings, bold, lists, and code blocks.  All output fits
+        within *width* display cells.
+        """
+        lines: list[str] = []
+        in_code_block = False
+        code_lines: list[str] = []
+        code_lang: str = ""
+
+        for raw in content.split("\n"):
+            line = raw.rstrip()
+
+            # ── code block fence ──────────────────────────────────────────
+            if line.startswith("```"):
+                if in_code_block:
+                    # Close code block.
+                    lines += self._render_code_block(code_lines, code_lang, width)
+                    code_lines.clear()
+                    code_lang = ""
+                    in_code_block = False
+                else:
+                    in_code_block = True
+                    code_lang = line[3:].strip()
+                continue
+
+            if in_code_block:
+                code_lines.append(line)
+                continue
+
+            # ── headings ──────────────────────────────────────────────────
+            if line.startswith("# ") or line.startswith("## ") or line.startswith("### "):
+                level = len(line) - len(line.lstrip("#"))
+                text = line.lstrip("#").strip()
+                lines.append(text)
+                if level == 1:
+                    lines.append("─" * min(display_width(text), width))
+                elif level == 2:
+                    lines.append("─" * min(display_width(text), width))
+                continue
+
+            # ── unordered list ────────────────────────────────────────────
+            if line.startswith("- ") or line.startswith("* "):
+                text = line[2:].strip()
+                # Strip inline bold markers.
+                text = self._strip_bold(text)
+                lines.append("  • " + text)
+                continue
+
+            # ── ordered list ──────────────────────────────────────────────
+            if len(line) > 2 and line[0].isdigit() and line[1:].startswith(". "):
+                text = line[line.index(". ") + 2:].strip()
+                text = self._strip_bold(text)
+                num = line[:line.index(".")]
+                lines.append(f"  {num}. {text}")
+                continue
+
+            # ── regular paragraph ─────────────────────────────────────────
+            text = self._strip_bold(line)
+            lines.append(text)
+
+        # Unclosed code block at EOF.
+        if code_lines:
+            lines += self._render_code_block(code_lines, code_lang, width)
+
+        return lines
+
+    @staticmethod
+    def _strip_bold(text: str) -> str:
+        """Strip ``**`` bold markers from *text* (plain-text terminal can't
+        render actual bold, but the text remains readable)."""
+        return text.replace("**", "")
+
+    @staticmethod
+    def _render_code_block(
+        code_lines: list[str], lang: str, width: int,
+    ) -> list[str]:
+        """Render a fenced code block inside a message card.
+
+        Uses indentation with line numbers — no nested border (the card
+        already provides the outer frame).
+
+        Format::
+
+             1  from __future__ import annotations
+             2  import argparse
+        """
+        if not code_lines:
+            return []
+        result: list[str] = []
+        n = len(code_lines)
+        num_w = len(str(n))
+        # Optional language label line.
+        if lang:
+            result.append(f"  [{lang}]")
+        for i, cl in enumerate(code_lines, 1):
+            prefix = f"  {i:>{num_w}d}  "
+            prefix_w = display_width(prefix)
+            available = max(0, width - prefix_w)
+            display = cl[:available] if len(cl) > available else cl
+            result.append(prefix + display)
+        return result
+
+    def _render_tool_collapsed(self, trace: ToolTraceLine, width: int) -> str:
+        """Render a single collapsed tool trace row.
+
+        Format: ``  [tool_name]   latest_target · latest_detail   ▸ [展开/关闭]``
+        """
+        btn = "[关闭]" if trace.expanded else "[展开]"
+        if trace.entries:
+            latest = trace.entries[-1]
+            detail = f"{latest.target} · {latest.detail}"
+        else:
+            detail = ""
+        left = f"  [{trace.tool_name}]   {detail}"
+        left_w = display_width(left)
+        right = f"▸ {btn}"
+        right_w = display_width(right)
+        # Pad between left detail and right button.
+        gap = max(1, width - left_w - right_w)
+        return left + " " * gap + right
+
+    def _render_expanded_tool(self, trace: ToolTraceLine, width: int) -> list[str]:
+        """Render an expanded tool trace (pin-to-top, indented list, no border).
+
+        Format::
+
+              [tool_name] ▸ [关闭]
+                1  target1 · detail1
+                2  target2 · detail2
+        """
+        lines: list[str] = []
+        header = f"  [{trace.tool_name}] ▸ [关闭]"
+        lines.append(header)
+        for i, entry in enumerate(trace.entries, 1):
+            lines.append(f"    {i:2d}  {entry.target} · {entry.detail}")
+        return lines
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _wrap_line(text: str, max_width: int) -> list[str]:
+        """Wrap *text* to *max_width* display cells, breaking on word boundaries
+        when possible, falling back to hard break for long tokens."""
+        if max_width <= 0:
+            return [text]
+        result: list[str] = []
+        while display_width(text) > max_width:
+            # Find break point.
+            cut = max_width
+            # Try to break at a space.
+            for ch_pos in range(max_width - 1, max_width // 2, -1):
+                if ch_pos < len(text) and text[ch_pos] == " ":
+                    cut = ch_pos
+                    break
+            result.append(text[:cut])
+            text = text[cut:].lstrip()
+        if text:
+            result.append(text)
+        return result if result else [text]
 
     # ── mutation helpers (event-driven updates) ───────────────────────────
 

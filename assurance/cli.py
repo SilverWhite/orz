@@ -509,12 +509,126 @@ def _run_tui(args: argparse.Namespace) -> int:
     return tui_main(tui_args)
 
 
+def _run_session_list(args: argparse.Namespace) -> int:
+    """List past GSA sessions."""
+    from .session_store import SessionStore
+
+    store = SessionStore()
+    sessions = store.list_sessions()
+    if not sessions:
+        print("No sessions found.")
+        return 0
+    print(f"{'SESSION ID':<28} {'TURNS':>5}  {'FIRST PROMPT'}")
+    print("-" * 78)
+    for s in sessions:
+        sid = s.get("session_id", "")[:26]
+        turns = s.get("turn_count", 0)
+        preview = s.get("prompt_preview", "")[:50]
+        print(f"{sid:<28} {turns:>5}  {preview}")
+    return 0
+
+
+def _run_session_resume(args: argparse.Namespace) -> int:
+    """Resume a past session in the TUI."""
+    from .session_store import SessionStore
+
+    store = SessionStore()
+    meta = store.load_metadata(args.session_id)
+    if meta is None:
+        print(f"Session not found: {args.session_id}", file=sys.stderr)
+        return 1
+
+    print(f"Resuming session: {args.session_id}")
+    print(f"  First prompt: {meta.get('first_prompt', '')[:80]}")
+    print(f"  Turns: {meta.get('turn_count', 0)}")
+    print(f"  Run root: {meta.get('run_root', '')}")
+    print()
+    print("Session resume is not yet fully implemented — use the existing")
+    print(f"run root to replay: gsa tui --replay {meta.get('run_root', '')}/events.jsonl")
+    return 0
+
+
+def _run_session_archive(args: argparse.Namespace) -> int:
+    """Archive a session (marks it as archived)."""
+    from .session_store import SessionStore
+
+    store = SessionStore()
+    meta = store.load_metadata(args.session_id)
+    if meta is None:
+        print(f"Session not found: {args.session_id}", file=sys.stderr)
+        return 1
+    store.update_status(args.session_id, "archived")
+    print(f"Session archived: {args.session_id}")
+    return 0
+
+
+def _run_session_delete(args: argparse.Namespace) -> int:
+    """Delete a session's run root and remove it from the index."""
+    import shutil
+    from .session_store import SessionStore
+
+    store = SessionStore()
+    meta = store.load_metadata(args.session_id)
+    if meta is None:
+        print(f"Session not found: {args.session_id}", file=sys.stderr)
+        return 1
+
+    run_root = meta.get("run_root", "")
+    if run_root and Path(run_root).is_dir():
+        shutil.rmtree(run_root, ignore_errors=True)
+        print(f"Deleted run root: {run_root}")
+    else:
+        print(f"Run root not found or already deleted: {run_root}")
+
+    # Remove from index and metadata.
+    import shutil as _shutil
+    session_dir = store._dir / args.session_id
+    if session_dir.is_dir():
+        _shutil.rmtree(session_dir, ignore_errors=True)
+    store._rebuild_index()
+    print(f"Session removed from index: {args.session_id}")
+    return 0
+
+
+def _run_default(args: argparse.Namespace) -> int:
+    """Start the TUI interactively (Phase 3 default entry point).
+
+    Detects Grok binary, prepares the environment, and launches the TUI
+    with sample data.  The user can start a Grok session via::
+
+        gsa tui --runtime grok --run "first prompt"
+
+    or use Ctrl+L / '命令...' button to open the AddressDialog.
+    """
+    from .grok_runtime_adapter import GrokRuntimeConfig, inspect_grok_runtime
+    from .tui.main import _run_demo as _tui_run_demo
+    from .tui.app import TuiPrototype
+
+    # ── Quick Grok check (non-fatal — TUI still works in demo mode) ────────
+    try:
+        cfg = GrokRuntimeConfig()
+        inspection = inspect_grok_runtime(cfg)
+        if not inspection.get("valid"):
+            print(f"gsa: note — Grok binary check: {inspection.get('error', 'unknown')}", file=sys.stderr)
+            print("  TUI will start in demo mode.", file=sys.stderr)
+    except Exception as exc:
+        print(f"gsa: note — Grok not detected: {exc}", file=sys.stderr)
+        print("  TUI will start in demo mode.", file=sys.stderr)
+
+    # ── Launch TUI with sample data ────────────────────────────────────────
+    app = TuiPrototype.with_sample_data()
+    # Auto-open address dialog so the user can type a command immediately.
+    app.address_dialog.open_dialog("")
+    return _tui_run_demo(app, 100, 30)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gsa",
         description="General Scientific Assurance CLI dispatcher.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.set_defaults(handler=_run_default)
+    subparsers = parser.add_subparsers(dest="command", required=False)
 
     doctor = subparsers.add_parser("doctor", help="Check local CLI readiness.")
     doctor.add_argument("--json", action="store_true", help="Emit JSON report.")
@@ -805,6 +919,25 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     tui.set_defaults(handler=_run_tui)
+
+    # ── session (Phase 3) ──────────────────────────────────────────────────
+    session = subparsers.add_parser("session", help="Session management.")
+    session_sub = session.add_subparsers(dest="session_command", required=True)
+
+    session_list = session_sub.add_parser("list", help="List past sessions.")
+    session_list.set_defaults(handler=_run_session_list)
+
+    session_resume = session_sub.add_parser("resume", help="Resume a session.")
+    session_resume.add_argument("session_id", help="Session ID to resume.")
+    session_resume.set_defaults(handler=_run_session_resume)
+
+    session_archive = session_sub.add_parser("archive", help="Archive a session.")
+    session_archive.add_argument("session_id", help="Session ID to archive.")
+    session_archive.set_defaults(handler=_run_session_archive)
+
+    session_delete = session_sub.add_parser("delete", help="Delete a session.")
+    session_delete.add_argument("session_id", help="Session ID to delete.")
+    session_delete.set_defaults(handler=_run_session_delete)
 
     return parser
 

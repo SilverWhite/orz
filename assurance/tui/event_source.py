@@ -30,6 +30,7 @@ from .events import (
     RunPreflightEvent,
     RunStartedEvent,
     SourceVisibilityEvent,
+    TextDeltaEvent,
     TuiEvent,
     TuiEventKind,
     is_terminal,

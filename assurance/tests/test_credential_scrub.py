@@ -502,10 +502,13 @@ print(key)
                 # (path_basename, line): reason the scrub is verified
                 ("canonical_cli.py", 1020): "try/finally sibling scrub at L1064",
                 ("canonical_cli.py", 1055): "try/finally sibling scrub near credential read",
+                ("canonical_cli.py", 1090): "try/finally sibling scrub at L1137",
                 ("retrieval_subagent.py", 901): "try/finally sibling scrub at L949",
                 ("retrieval_subagent.py", 907): "try/finally sibling scrub near credential read",
+                ("retrieval_subagent.py", 1275): "try/finally sibling scrub at L1323",
                 ("retrieval_subagent.py", 1357): "try/finally sibling scrub at L1405",
                 ("retrieval_subagent.py", 1393): "try/finally sibling scrub near credential read",
+                ("retrieval_subagent.py", 1761): "try/finally sibling scrub at L1809",
                 ("credential_scrub.py", 136): "CredentialGuard.__enter__ — scrub in __exit__",
             }
             unknown_sites: list[str] = []

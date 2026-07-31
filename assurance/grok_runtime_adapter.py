@@ -625,6 +625,7 @@ class GrokAcpSession:
         self.stop_reason: str = ""
         self.prompt_count: int = 0
         self._closed: bool = False
+        self._last_streamed_text_len: int = 0  # P1.3: track cumulative text for delta emission
         self.receipt: dict[str, Any] | None = None
 
     # ── ACP wire helpers ──────────────────────────────────────────────────
@@ -682,8 +683,48 @@ class GrokAcpSession:
         self, msg: dict[str, Any],
         on_acp_event: Callable[[dict[str, Any]], str | None] | None = None,
     ) -> None:
+        # ── JSON-RPC error response (no method field) ──
+        if "error" in msg and "method" not in msg:
+            err = msg["error"]
+            err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            if on_acp_event:
+                on_acp_event({
+                    "event_type": "error_event", "timestamp": utc_now(),
+                    "payload": {"message": str(err_msg)[:500], "source": "acp_rpc_error"},
+                    "redaction": "metadata_only",
+                })
+            return
+
         method = msg.get("method", "")
         params = msg.get("params", {}) if isinstance(msg.get("params"), dict) else {}
+
+        # ── Generic notification (ACP sends these alongside session/update) ──
+        if method == "notification":
+            notif_type = params.get("type", params.get("notificationType", ""))
+            if notif_type == "error" or notif_type == "warning":
+                if on_acp_event:
+                    err_msg = params.get("message", params.get("error", str(params)))
+                    on_acp_event({
+                        "event_type": "error_event", "timestamp": utc_now(),
+                        "payload": {
+                            "message": str(err_msg)[:500],
+                            "source": f"acp_{notif_type}",
+                        },
+                        "redaction": "metadata_only",
+                    })
+            elif notif_type == "status":
+                # Informational status — emit as status_update.
+                if on_acp_event:
+                    on_acp_event({
+                        "event_type": "status_update", "timestamp": utc_now(),
+                        "payload": {
+                            "label": str(params.get("message", ""))[:100],
+                            "ok": params.get("level", "info") != "error",
+                        },
+                        "redaction": "metadata_only",
+                    })
+            return
+
         if method == "session/update":
             update = params.get("update", {}) if isinstance(params.get("update"), dict) else {}
             update_type = update.get("sessionUpdate", "")
@@ -728,11 +769,15 @@ class GrokAcpSession:
                 elif isinstance(update.get("message"), dict):
                     text = update["message"].get("content", "")
                 if text and on_acp_event:
-                    on_acp_event({
-                        "event_type": "model_output", "timestamp": utc_now(),
-                        "payload": {"text": text, "turn": self.turn_count, "structured_output_valid": True},
-                        "redaction": "metadata_only",
-                    })
+                    # Emit only the incremental portion as text_delta (P1.3).
+                    new_text = text[self._last_streamed_text_len:]
+                    if new_text:
+                        on_acp_event({
+                            "event_type": "text_delta", "timestamp": utc_now(),
+                            "payload": {"text": new_text, "turn": self.turn_count},
+                            "redaction": "metadata_only",
+                        })
+                        self._last_streamed_text_len = len(text)
             elif update_type == "error":
                 if on_acp_event:
                     error_msg = update.get("message", update.get("error", "unknown ACP error"))
@@ -864,6 +909,7 @@ class GrokAcpSession:
         if self._closed:
             raise AssuranceError("GrokAcpSession is closed")
         self.prompt_count += 1
+        self._last_streamed_text_len = 0  # P1.3: reset per-turn text tracker
         is_first = self.prompt_count == 1
 
         if is_first and on_acp_event:

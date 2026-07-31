@@ -39,6 +39,7 @@ from .events import (
     SourceVisibilityEvent,
     StatusUpdateEvent,
     TaskChecklistEvent,
+    TextDeltaEvent,
     ToolAvailabilityEvent,
     ToolCompletedEvent,
     ToolProposalEvent,
@@ -48,6 +49,7 @@ from .events import (
     UsageSampleEvent,
     is_terminal,
 )
+from .widgets import ChatMessage
 
 
 # ── public API ───────────────────────────────────────────────────────────────
@@ -251,24 +253,44 @@ def _on_model_request(app: Any, event: ModelRequestEvent) -> list[str]:
 def _on_model_output(app: Any, event: ModelOutputEvent) -> list[str]:
     app.status_bar.update_item("模型", False)
     app.status_bar.update_item("运行中", True)
-    valid_str = "valid" if event.structured_output_valid else "INVALID"
     app.explorer_pane.add_event_entry(
-        "Run", f"model output ({valid_str})"
+        "Run", f"model output (turn {event.turn})"
     )
-    # D1.10: Display streaming text content when available (ACP real-time).
+    # P1.4: If text was already streamed via text_delta, don't create a
+    # duplicate card.  The model_output acts as end-of-turn confirmation.
+    cp = app.content_pane
+    if cp._current_model_msg_index >= 0:
+        current = cp._items[cp._current_model_msg_index]
+        if isinstance(current, ChatMessage) and current.role == "模型" and current.content:
+            cp._current_model_msg_index = -1  # reset — this turn is complete
+            return [f"Model output complete (turn {event.turn})"]
+    # No streaming happened (offline / canonical path) — create card.
     if event.text:
-        display_text = event.text[:500] + ("..." if len(event.text) > 500 else "")
-        label = f"模型输出 (turn {event.turn})" if event.turn else "模型输出"
-        app.content_pane.add_message(
-            label, display_text,
-            warning=not event.structured_output_valid,
+        cp.add_model_message(
+            content=event.text, turn=event.turn,
+            structured_output_valid=event.structured_output_valid,
         )
     elif event.answer_packet_sha256:
-        app.content_pane.add_message(
-            "模型输出", f"sha256: {event.answer_packet_sha256[:20]}...",
-            warning=not event.structured_output_valid,
+        cp.add_model_message(
+            content=f"sha256: {event.answer_packet_sha256[:20]}...",
+            structured_output_valid=event.structured_output_valid,
         )
-    return [f"Model output received ({valid_str})"]
+    return [f"Model output received (turn {event.turn})"]
+
+
+@_register(TuiEventKind.TEXT_DELTA)
+def _on_text_delta(app: Any, event: TextDeltaEvent) -> list[str]:
+    """Append streaming text chunk to the current model message card.
+
+    On the first delta of a turn, a new model message card is created.
+    Subsequent deltas append to the same card in real time.
+    """
+    cp = app.content_pane
+    if cp._current_model_msg_index < 0:
+        cp.add_model_message(content="", turn=event.turn)
+    cp.append_text_delta(event.text)
+    app.status_bar.update_item("模型", True)
+    return []
 
 
 # ── ACP lifecycle handlers (D1.10) ──────────────────────────────────────────
@@ -277,10 +299,11 @@ def _on_model_output(app: Any, event: ModelOutputEvent) -> list[str]:
 @_register(TuiEventKind.ACP_INITIALIZE)
 def _on_acp_initialize(app: Any, event: AcpInitializeEvent) -> list[str]:
     app.status_bar.update_item("ACP", True)
-    app.content_pane.add_message(
-        "ACP", f"协议版本 v{event.protocol_version} — Grok agent stdio 已连接",
-        collapsible=False,
-    )
+    app.content_pane._items.append(ChatMessage(
+        role="系统",
+        content=f"ACP 协议版本 v{event.protocol_version} — Grok agent stdio 已连接",
+        collapsible=True,
+    ))
     return [f"ACP initialize v{event.protocol_version}"]
 
 
@@ -290,7 +313,9 @@ def _on_acp_session_created(app: Any, event: AcpSessionCreatedEvent) -> list[str
         f"会话已创建 (hash={event.session_id_hash[:12]}...)"
         if event.session_id_hash else "会话已创建"
     )
-    app.content_pane.add_message("会话", session_label, collapsible=True)
+    app.content_pane._items.append(ChatMessage(
+        role="系统", content=session_label, collapsible=True,
+    ))
     return ["ACP session created"]
 
 
@@ -302,16 +327,9 @@ def _on_tool_proposal(app: Any, event: ToolProposalEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Tool Calls", f"proposed: {event.tool_name}"
     )
-    # D1.10: Show tool calls in ContentPane as collapsible messages.
-    detail = event.tool_name
-    if event.tool_call_id:
-        detail += f" (id={event.tool_call_id[:16]}...)"
-    if event.input_summary:
-        summary = event.input_summary[:200]
-        detail += f"\n{summary}"
-    app.content_pane.add_message(
-        "工具调用", detail,
-        collapsible=True,
+    target = event.input_summary[:80] if event.input_summary else event.tool_call_id[:16]
+    app.content_pane.add_or_update_tool_trace(
+        tool_name=event.tool_name, target=target, detail="...",
     )
     return [f"Tool proposed: {event.tool_name}"]
 
@@ -331,10 +349,8 @@ def _on_tool_completed(app: Any, event: ToolCompletedEvent) -> list[str]:
     app.explorer_pane.add_event_entry(
         "Tool Calls", f"completed: {event.tool_name} ({event.status})"
     )
-    app.content_pane.add_message(
-        "工具调用", f"{event.tool_name}: {event.status}",
-        collapsible=True,
-        warning=event.status != "success",
+    app.content_pane.add_or_update_tool_trace(
+        tool_name=event.tool_name, target="", detail=event.status,
     )
     return [f"Tool {event.tool_name}: {event.status}"]
 

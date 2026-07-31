@@ -523,17 +523,17 @@ class ExplorerPaneEventTests(unittest.TestCase):
 
 
 class FullScreenRenderTests(unittest.TestCase):
-    def test_render_at_100x30_has_all_seven_regions(self) -> None:
+    def test_render_at_100x30_has_all_regions(self) -> None:
         output = render_screen(100, 30)
         lines = output.split("\n")
-        self.assertGreater(len(lines), 25, "Screen should have at least 25 lines")
+        self.assertGreater(len(lines), 23, "Screen should have at least 23 lines")
         self.assertLessEqual(len(lines), 35, "Screen should not exceed 35 lines")
 
-        # All seven regions (v2 adds FindBar + ContentMarker)
+        # All regions (P3.1: address/find folded into toolbar)
         self.assertIn("文件", output, "MenuBar missing")
         self.assertIn("后退", output, "Toolbar missing")
-        self.assertIn("Address:", output, "AddressBar missing")
-        self.assertIn("Find:", output, "FindBar missing")
+        self.assertIn("命令...", output, "Toolbar address button missing")
+        self.assertIn("查找...", output, "Toolbar find button missing")
         self.assertIn("INDEX", output, "ExplorerPane missing")
         self.assertIn("Source Visibility", output, "ContentPane missing")
         self.assertIn("Markers", output, "ContentMarker missing")
@@ -546,13 +546,13 @@ class FullScreenRenderTests(unittest.TestCase):
         self.assertLessEqual(len(lines), 45)
         self.assertIn("文件", output)
         self.assertIn("Source Visibility", output)
-        self.assertIn("Find:", output)
+        self.assertIn("命令...", output)
         self.assertIn("Markers", output)
 
-    def test_command_uri_displayed(self) -> None:
-        """v2: address bar should show command:// URI."""
+    def test_command_buttons_on_toolbar(self) -> None:
+        """P3.1: toolbar should show address/find buttons."""
         output = render_screen(100, 30)
-        self.assertIn("command://run/current-task", output)
+        self.assertIn("命令...", output)
 
     def test_three_column_split_present(self) -> None:
         """v2: ├──┬──┬──┤ triple column split."""
@@ -577,8 +577,10 @@ class FullScreenRenderTests(unittest.TestCase):
         self.assertGreater(len(found), 3, f"Box-drawing chars missing: {output[:200]}")
 
     def test_address_bar_shows_uri(self) -> None:
+        """P3.1: address URI now lives in AddressDialog, not as a visible row.
+        The Toolbar shows '命令...' button instead."""
         output = render_screen(100, 30)
-        self.assertIn("command://run/current-task", output)
+        self.assertIn("命令...", output)
 
     def test_toolbar_has_standard_actions(self) -> None:
         output = render_screen(100, 30)
@@ -623,6 +625,7 @@ class KeyboardNavigationTests(unittest.TestCase):
         self.app = TuiPrototype.with_sample_data()
 
     def test_f6_cycles_focus(self) -> None:
+        """P3.1: address/find folded into toolbar — 4 panes now."""
         self.assertEqual(self.app.active_pane, "explorer")
         result = self.app.handle_key("f6")
         self.assertIn("checklist", result)
@@ -633,12 +636,6 @@ class KeyboardNavigationTests(unittest.TestCase):
         result = self.app.handle_key("f6")
         self.assertIn("marker", result)
         self.assertEqual(self.app.active_pane, "marker")
-        result = self.app.handle_key("f6")
-        self.assertIn("address", result)
-        self.assertEqual(self.app.active_pane, "address")
-        result = self.app.handle_key("f6")
-        self.assertIn("find", result)
-        self.assertEqual(self.app.active_pane, "find")
         result = self.app.handle_key("f6")
         self.assertEqual(self.app.active_pane, "explorer")
 
@@ -1325,7 +1322,7 @@ class TuiEventDataclassTests(unittest.TestCase):
 
     def test_all_event_kinds_recognised(self) -> None:
         from assurance.tui.events import TuiEventKind
-        self.assertEqual(len(TuiEventKind), 27)
+        self.assertEqual(len(TuiEventKind), 28)
         self.assertEqual(TuiEventKind.RUN_PREFLIGHT.value, "run_preflight")
         self.assertEqual(TuiEventKind.RUN_FINISHED.value, "run_finished")
         self.assertEqual(TuiEventKind.GATE_DECISION.value, "gate_decision")

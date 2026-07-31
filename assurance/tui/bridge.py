@@ -46,6 +46,7 @@ from .events import (
     SourceVisibilityEvent,
     StatusUpdateEvent,
     TaskChecklistEvent,
+    TextDeltaEvent,
     ToolAvailabilityEvent,
     ToolCompletedEvent,
     ToolProposalEvent,
@@ -243,7 +244,42 @@ def build_grok_acp_live_run_fn(
     def _run(on_event: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         import json as _json
 
+        # ── P4.1: Known-safe Grok tool names (inline gate) ──────────────
+        _KNOWN_TOOLS: frozenset[str] = frozenset({
+            "read_file", "write_file", "edit_file",
+            "list_directory", "search_file_content",
+            "search_files", "glob", "grep",
+            "run_terminal_command", "execute_command",
+            "web_search", "web_fetch",
+            "read_lints", "replace_in_file",
+            "task", "enter_plan_mode", "exit_plan_mode",
+            "think", "todo_write",
+        })
+
+        def _check_tool_availability(tool_name: str) -> str:
+            """Return 'allow' if *tool_name* is known, 'defer' otherwise."""
+            if not tool_name:
+                return "defer"
+            return "allow" if tool_name in _KNOWN_TOOLS else "defer"
+
         def _acp_event_handler(event: dict[str, Any]) -> str | None:
+            # ── P4.1: Inline tool availability gate ──
+            if event["event_type"] == "tool_proposal":
+                payload = event.get("payload", {})
+                tool_name = payload.get("tool_name", "")
+                # Emit a gate-decision event alongside the tool proposal.
+                gate_decision = _check_tool_availability(tool_name)
+                on_event({
+                    "event_type": "gate_decision", "timestamp": event.get("timestamp", ""),
+                    "payload": {
+                        "gate_name": "tool_availability",
+                        "decision": gate_decision,
+                        "reason": f"inline check: {tool_name}",
+                        "reference_count": 1,
+                    },
+                    "redaction": "metadata_only",
+                })
+
             if event["event_type"] == "permission_requested" and _permission_queue is not None:
                 on_event(event)
                 try:
@@ -284,12 +320,33 @@ def build_grok_acp_live_run_fn(
 
         receipt = session.receipt if session.receipt is not None else {}
 
+        # ── P3.3: Record session in persistent store ─────────────────────
+        try:
+            from assurance.session_store import SessionStore, utc_now
+            _store = SessionStore()
+            _store.record(
+                session_id=request.run_id,
+                metadata={
+                    "session_id": request.run_id,
+                    "created_at": utc_now(),
+                    "last_active_at": utc_now(),
+                    "first_prompt": prompt_text,
+                    "turn_count": session.turn_count,
+                    "run_root": str(request.run_root),
+                    "workspace_path": str(request.workspace_path),
+                    "model_id": request.model_id,
+                    "status": "active",
+                },
+            )
+        except Exception:
+            pass  # Non-fatal — session still works without persistence.
+
         # Replay normalized events (lifecycle events only).
         _LIVE_EMITTED = {
             "acp_initialize", "acp_session_created",
             "tool_proposal", "tool_completed",
             "permission_requested", "permission_decision",
-            "model_output",
+            "model_output", "text_delta",
         }
         events_path = Path(str(receipt.get("artifacts", {}).get("events_path", "")))
         if events_path.is_file():
@@ -433,6 +490,14 @@ def _make_model_output(payload: dict[str, Any], timestamp: str) -> ModelOutputEv
         timestamp=timestamp,
         answer_packet_sha256=payload.get("answer_packet_sha256", ""),
         structured_output_valid=payload.get("structured_output_valid", True),
+        text=payload.get("text", ""),
+        turn=payload.get("turn", 0),
+    )
+
+
+def _make_text_delta(payload: dict[str, Any], timestamp: str) -> TextDeltaEvent:
+    return TextDeltaEvent(
+        timestamp=timestamp,
         text=payload.get("text", ""),
         turn=payload.get("turn", 0),
     )
@@ -611,6 +676,7 @@ _EVENT_FACTORY: dict[str, Callable[[dict[str, Any], str], TuiEvent | list[TuiEve
     "tool_completed": _make_tool_completed,
     "permission_requested": _make_permission_requested,
     "permission_decision": _make_permission_decision,
+    "text_delta": _make_text_delta,
 }
 
 
@@ -642,6 +708,7 @@ _KIND_MAP: dict[str, TuiEventKind] = {
     "tool_completed": TuiEventKind.TOOL_COMPLETED,
     "permission_requested": TuiEventKind.PERMISSION_REQUESTED,
     "permission_decision": TuiEventKind.PERMISSION_DECISION,
+    "text_delta": TuiEventKind.TEXT_DELTA,
 }
 
 
