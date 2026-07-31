@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/finding-v0.1.schema.json",
+  "title": "Unified assurance finding",
+  "description": "Immutable, content-addressed finding produced by any assurance scanner. Findings record observations; they do NOT contain permission recommendations or block/allow signals (see permission-record-v0.1.schema.json for permission decisions).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "finding_kind",
+    "finding_id",
+    "created_at",
+    "source_scanner",
+    "category",
+    "severity",
+    "snippet_hash",
+    "evidence",
+    "finding_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "finding_kind": { "const": "assurance_finding" },
+    "finding_id": { "type": "string", "pattern": "^FIND-[A-F0-9]{16}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "source_scanner": {
+      "type": "string",
+      "enum": ["leak_scanner", "credential_scrub", "validator_bridge", "scenario_exporter", "adapter_output_validator", "general_science_review"]
+    },
+    "category": { "type": "string", "minLength": 1 },
+    "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "location": { "type": "string" },
+    "snippet_hash": { "$ref": "#/$defs/sha256" },
+    "evidence": { "type": "string", "minLength": 1, "description": "Human-readable justification for why this was flagged. Never contains raw matched content." },
+    "rule_id": { "type": "string" },
+    "channel": { "type": "string", "enum": ["mechanical", "semantic", "manual"] },
+    "finding_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

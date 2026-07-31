@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/permission-record-v0.1.schema.json",
+  "title": "Dissociated permission decision record",
+  "description": "Records a single permission decision independently of any findings. References findings by SHA-256 ID only — never embeds finding content, severity, or evidence. Designed to enforce the invariant from MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2 §4.3: heuristic findings must not masquerade as security proofs, and permissions must not erase findings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_kind",
+    "record_id",
+    "created_at",
+    "session_run_id",
+    "decision",
+    "authority",
+    "tool_name",
+    "referenced_finding_ids",
+    "basis",
+    "record_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "record_kind": { "const": "assurance_permission_record" },
+    "record_id": { "type": "string", "pattern": "^PERM-[A-F0-9]{16}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "session_run_id": { "type": "string", "minLength": 1 },
+    "decision": { "type": "string", "enum": ["allow_once", "cancelled", "denied", "deferred"] },
+    "authority": { "type": "string", "enum": ["user", "adapter", "policy"] },
+    "tool_name": { "type": "string" },
+    "referenced_finding_ids": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sha256" },
+      "description": "SHA-256 finding_ids of findings considered for this decision. References findings by identity only — finding content, severity, and evidence live independently in the finding registry."
+    },
+    "basis": { "type": "string", "description": "Free-text rationale for the decision." },
+    "record_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

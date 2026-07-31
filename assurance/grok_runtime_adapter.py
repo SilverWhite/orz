@@ -502,6 +502,16 @@ def run_grok_headless_once(
     return receipt
 
 
+def _append_permission_record_jsonl(path: Path, record: dict[str, Any]) -> None:
+    """Append a single permission record dict as a JSONL line (D3.22)."""
+    import json as _json
+    line = _json.dumps(
+        record, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
 def run_grok_acp_once(
     request: GrokRunRequest,
     config: GrokRuntimeConfig | None = None,
@@ -539,10 +549,15 @@ def run_grok_acp_once(
     events_path = request.run_root / "events.jsonl"
     acp_transcript_path = request.run_root / "acp_transcript.jsonl"
     stderr_path = request.run_root / "grok.stderr.log"
+    permission_records_path = request.run_root / "permission-records.jsonl"
     profile = request.run_root / "profile"
     temp = request.run_root / "temp"
     profile.mkdir()
     temp.mkdir()
+
+    # ── D3.22: Finding Registry (session-scoped) ──────────────────────────
+    from .finding_registry import FindingRegistry, record_permission_decision
+    finding_registry = FindingRegistry()
 
     # Pre-flight: binary inspection + workspace trust (same as headless).
     inspection = inspect_grok_runtime(cfg)
@@ -749,13 +764,33 @@ def run_grok_acp_once(
                     })
                     permission_outcomes.append("cancelled")
                 decision_source = "user" if user_decision else "adapter"
+                final_decision = permission_outcomes[-1] if permission_outcomes else "cancelled"
+                # ── D3.22: Record dissociated permission decision ──────────
+                try:
+                    perm_record = record_permission_decision(
+                        registry=finding_registry,
+                        session_run_id=request.run_id,
+                        decision=final_decision,
+                        authority=decision_source,
+                        tool_name=tool_name,
+                        basis=(
+                            f"user decided '{final_decision}' via TUI dialog"
+                            if decision_source == "user"
+                            else f"adapter auto-decided '{final_decision}'"
+                        ),
+                    )
+                    _append_permission_record_jsonl(
+                        permission_records_path, perm_record.to_dict()
+                    )
+                except Exception:
+                    pass  # Non-fatal: finding/permission separation is audit-only
                 if on_acp_event:
                     on_acp_event({
                         "event_type": "permission_decision",
                         "timestamp": utc_now(),
                         "payload": {
                             "permission": tool_name if tool_name else option_labels[0] if option_labels else "",
-                            "decision": permission_outcomes[-1] if permission_outcomes else "cancelled",
+                            "decision": final_decision,
                             "decision_source": decision_source,
                         },
                         "redaction": "metadata_only",
@@ -973,10 +1008,13 @@ def run_grok_acp_once(
         "artifacts": {
             "receipt_path": str(receipt_path.resolve()),
             "events_path": str(events_path.resolve()),
+            "permission_records_path": str(permission_records_path.resolve()),
+            "finding_count": len(finding_registry),
         },
         "checks": checks,
         "limitations": [
             "ACP smoke: first ACP session — observe agent lifecycle, permission handling, tool calls.",
+            "D3.22: Finding↔Permission separation enforced — permission records reference findings by SHA-256 identity only.",
             "Adapter-side containment via CREATE_SUSPENDED + JobObjectSupervisor.",
             "ACP transcript captured as metadata (hashes, counts); raw prompt/responses are not stored.",
             "Session files on disk (if any) are not read post-run; only in-session ACP events are recorded.",

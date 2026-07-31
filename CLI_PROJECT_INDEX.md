@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-31 (D1 全段关闭：D1.10 ACP 实时事件流→TUI + D1.11 Shadow Git + D1.12 Post-Run Session 交叉核验 + D1.13 交互式 ACP Permission Bridge；设计序列偏差修正闭合；D2.15-20 LIF 科学保障第一切片完成；D3.23 audit shadow_refs 已关闭)
+**更新**: 2026-07-31 (D1 全段关闭；D2.15-20 LIF 科学保障第一切片完成；D3.22 Finding↔Permission 分离薄层落地 + D3.23 audit shadow_refs 关闭；设计序列偏差修正闭合。D 段 2026-07-30 差距分析 14 条全部关闭)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成、运行时所有权和关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -330,7 +330,7 @@
 
 #### D3. 设计分离未强制 (Design Separation Not Enforced)
 
-22. **Finding ↔ Permission 代码层强制分离** (未实现, 2026-07-30 差距分析): 借鉴 Goose 设计——scanner 输出 finding ID + 证据 + 置信度，permission 独立记录 allow/deny/ask + 依据。设计文档明确要求"启发式 finding 不能伪装成安全证明，permission 也不能抹掉 finding"（§4.3），但当前代码中没有通用的 finding/permission 分离层来强制这一不变量。`ux_safety.py` 有 scenario 级断言但不构成通用分离机制。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.3 / `assurance/ux_safety.py`
+22. **Finding ↔ Permission 代码层强制分离** (已关闭/2026-07-31, 设计裁决: `docs/D3_22_FINDING_PERMISSION_SEPARATION_DECISION_2026-07-31.md`): 已落地薄架构不变量层。`Finding`（不可变/content-addressed/scanner 观察）+ `PermissionRecord`（独立决策记录/SHA-256 引用 findings/不嵌入内容）+ `FindingRegistry`（session-scoped 线程安全容器）。`run_grok_acp_once()` 每次 permission 决策自动记录 `PermissionRecord` → `permission-records.jsonl`。不变量：Finding 不含 permission 字段；PermissionRecord 不含 severity/evidence 字段。19 tests pass。入口: `assurance/finding_registry.py` / `assurance/finding-v0.1.schema.json` / `assurance/permission-record-v0.1.schema.json`
 23. **Audit Checkpoint 引用 Shadow Commit/Tree ID** (已关闭, 2026-07-31): `AuditLedger.seal()` 已新增可选 `shadow_refs` 参数（commit_sha + tree_sha，均为 40-char Git SHA），写入 audit seal receipt 的 `shadow_refs` 块。`audit-seal-receipt-v0.1.schema.json` 已新增 `shadow_refs` 定义和 `git_sha` pattern。此条随 D1.11（shadow Git repo）一并关闭——audit receipt 现在可明确引用独立 shadow Git store 的 commit/tree ID，不再依赖模糊的 checkpoint 布尔值。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.1 / `assurance/shadow_recovery.py` / `assurance/audit.py`
 
 #### 阻塞依赖
@@ -338,7 +338,7 @@
 - **D1 全段（D1.10/11/12/13）已于 2026-07-31 全部关闭**。D1.10 ACP 实时事件流→TUI（2c503e8）、D1.11 Shadow Git repo（早前已关闭）、D1.12 Post-Run Session 交叉核验（158f5e4）、D1.13 交互式 ACP Permission Bridge（b5a08ef）。D1 段"部分实现需补齐"全部闭合。
 - **D1.11 / D3.23** 已于 2026-07-31 同步关闭：shadow Git repo + audit shadow_refs 全链路闭合。
 - **D2.15–20** 第一切片已完成（6/6 组件 + 测试）。**D2.14 / D2.21** 明确不实现（LIF 项目通用纪律，非本仓库科学性问题）。
-- **D3.22** 为架构层分离约束，应在相关模块（scanner、permit、ux_safety）新增时强制落实，不要求立即改造已有代码。
+- **D3.22** 已于 2026-07-31 关闭——薄架构不变量层（Finding + PermissionRecord + FindingRegistry），详见设计裁决 `docs/D3_22_FINDING_PERMISSION_SEPARATION_DECISION_2026-07-31.md`。
 - **设计序列偏差** 已于 2026-07-31 修正闭合：`run_grok_acp_once()` 落地 + CLI `--grok-mode` 默认 `acp-smoke`，恢复 ACP→Headless 主次关系。`prompt_smoke` 降级为显式窄 smoke 路径。
 
 ---
