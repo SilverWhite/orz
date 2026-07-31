@@ -1,6 +1,6 @@
 ﻿# CLI_PROJECT_INDEX
 
-**更新**: 2026-07-31 (设计序列偏差修正闭合；D1.10 ACP 实时事件流接入 TUI；D1.13 交互式 ACP Permission Bridge 闭环——用户通过 TUI dialog 审批 Grok tool 调用；D1.11/D3.23 Shadow Git + audit shadow_refs 已关闭；D2.15-20 LIF 科学保障 6 组件第一切片完成)
+**更新**: 2026-07-31 (D1 全段关闭：D1.10 ACP 实时事件流→TUI + D1.11 Shadow Git + D1.12 Post-Run Session 交叉核验 + D1.13 交互式 ACP Permission Bridge；设计序列偏差修正闭合；D2.15-20 LIF 科学保障第一切片完成；D3.23 audit shadow_refs 已关闭)
 **定位**: GSA (General Scientific Assurance) 项目主召回索引 / 组件路由。本文收录**项目架构、P 级合约、Gate 链路、审计文档、Schema 体系、运行时集成、运行时所有权和关键设计约束**的召回入口，目标是让后续开发与回查可便捷定位到正确的文档、源码或 Schema。
 **本文不替代审计文档、架构文档、Schema 定义或源代码**；它只负责召回和路由，不负责完整证明。
 
@@ -312,7 +312,7 @@
 
 10. **ACP 实时事件流接入 TUI** (部分实现, 2026-07-30 差距分析, 2026-07-31 状态更新): `grok_event_normalizer.py` 当前处理 version-smoke 静态 stdout + ACP transcript metadata。设计文档要求 ACP 实时 JSON-RPC event stream（`session/update` 中的 `tool_call` / `tool_call_update` / permission 交互）作为 TUI `LiveRunEventSource` 的实时数据源。`run_grok_acp_once()` 已落地（ACP JSON-RPC 生命周期完整实现 + 5 个新事件类型），但 TUI 尚不通过实时 pipe 消费 ACP event stream。下一步：TUI `event_source.py` 桥接 ACP 实时 stdout pipe（非事后 transcript）。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §5 ACP-first / `assurance/grok_event_normalizer.py` / `assurance/grok_runtime_adapter.py` / `assurance/tui/event_source.py`
 11. **Shadow Git 改为实际 Git Repo** (已关闭, 2026-07-31): `shadow_recovery.py` 已从 SHA-256 CAS 文件系统完全重构为独立 Git repository（借鉴 Gemini CLI / OpenCode / Cline checkpointing）。`ShadowRecoveryStore` 每个 store 调用创建 Git commit（candidate.json + authorization.json + snapshot.bin 作为 blobs），commit_sha（40-char hex）是主键，tree-SHA 去重实现幂等。`ExecutionReceipt` 携带 `shadow_commit_sha`。Git 对象模型提供完整性验证（`verify_entry` 通过 `git cat-file -t` 校验 commit/tree/blob 链）。`RecoveryDiffPreview` 提供元数据级 diff。旧 SHA-256 CAS 格式已废弃（DeprecationWarning）。24 tests pass。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §4.1, §5 / `assurance/shadow_recovery.py`
-12. **Post-Run Session File 交叉核验** (部分实现, 2026-07-30 差距分析, 2026-07-31 状态更新): 设计文档要求 runtime event ↔ session file（`updates.jsonl`/`events.jsonl`）的 post-run 对账，验证 ID、terminal、tool call 序列的一致性。当前 `grok_lifecycle_projection.py` 只做 metadata-only 投影，不执行与 session file 的交叉核验。`run_grok_acp_once()` 已产生真实 ACP session transcript（`acp_transcript.jsonl`），交叉核验的数据源现可用。下一步：实现 post-run transcript ↔ events 对账逻辑。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §3 所有权矩阵 / `assurance/grok_lifecycle_projection.py` / `assurance/grok_runtime_adapter.py`
+12. **Post-Run Session File 交叉核验** (第一切片已完成/2026-07-31, 已关闭): 设计文档要求 runtime event ↔ session file 的 post-run 对账。`verify_acp_session()` 已落地（158f5e4）——7 项机械检查（acp_lifecycle_complete、session_id_consistent、tool_call_count_match、permission_count_match、permission_outcomes_match、transcript_has_expected_lifecycle、event_hash_chain_valid），验证 receipt ↔ events.jsonl ↔ acp_transcript.jsonl 三方数据源一致性。`run_grok_acp_once()` post-session 自动调用，写入 `session-verification.json`，非致命失败。14 tests pass。入口: `assurance/grok_session_verifier.py` / `assurance/grok-session-verification-receipt-v0.1.schema.json` / `assurance/tests/test_grok_session_verifier.py`
 13. **Approval → Real Grok ACP Permission Bridge** (第一切片已完成/2026-07-31): 交互式 permission 双向通道已落地（b5a08ef）。`on_acp_event` 回调返回值控制 decision（`"allow_once"` → allow，其他非空字符串 → cancel，`None` → 自动决策）。`build_grok_acp_live_run_fn(interactive=True)` 返回 `(run_fn, permission_queue)`；ACP 收到 `permission_requested` 时通过 bridge 阻塞等待用户决策（5-min timeout），TUI 弹出 modal dialog（Allow Once/Cancel），用户 Enter/Esc → `respond_to_permission()` 回传决策至后台线程。`permission_decision` event 携带 `decision_source` 字段（`"user"` / `"adapter"`）。入口: `MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2` §3 / `assurance/grok_runtime_adapter.py` / `assurance/tui/bridge.py` / `assurance/tui/event_source.py` / `assurance/tui/projector.py` / `assurance/tui/app.py`
 
 #### D2. LIF 科学保障组件 (First Slice Implemented — Design from GROK_BUILD_ADAPTATION_v0.1 §4)
@@ -335,7 +335,7 @@
 
 #### 阻塞依赖
 
-- **D1.10 / D1.12 / D1.13** — 2026-07-31 状态重大更新。D1.10（ACP 实时事件流→TUI）已落地（2c503e8）：`run_grok_acp_once(on_acp_event=...)` 5 个实时 event emission 点 + `build_grok_acp_live_run_fn()` + TUI 路由。D1.13（交互式 permission bridge）已落地（b5a08ef）：`on_acp_event` 双向通道 + `permission_queue` 阻塞等待 + TUI dialog → `respond_to_permission()` 回传决策。**D1.12 为剩余开放项**：需 post-run transcript↔events 对账逻辑，数据源（`acp_transcript.jsonl` + `events.jsonl`）均已就绪。
+- **D1 全段（D1.10/11/12/13）已于 2026-07-31 全部关闭**。D1.10 ACP 实时事件流→TUI（2c503e8）、D1.11 Shadow Git repo（早前已关闭）、D1.12 Post-Run Session 交叉核验（158f5e4）、D1.13 交互式 ACP Permission Bridge（b5a08ef）。D1 段"部分实现需补齐"全部闭合。
 - **D1.11 / D3.23** 已于 2026-07-31 同步关闭：shadow Git repo + audit shadow_refs 全链路闭合。
 - **D2.15–20** 第一切片已完成（6/6 组件 + 测试）。**D2.14 / D2.21** 明确不实现（LIF 项目通用纪律，非本仓库科学性问题）。
 - **D3.22** 为架构层分离约束，应在相关模块（scanner、permit、ux_safety）新增时强制落实，不要求立即改造已有代码。
