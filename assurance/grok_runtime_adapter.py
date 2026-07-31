@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,18 @@ import uuid
 
 from .contracts import validate_contract
 from .errors import AssuranceError
+
+
+class TerminalVisibility(str, Enum):
+    """How terminal commands are executed.
+
+    ``INLINE`` — Grok default (background execution, output to artifact).
+    ``POPOUT`` — Launch Windows Terminal / conhost in a visible window.
+    ``VSCODE`` — Reuse VS Code integrated terminal (only in extension mode).
+    """
+    INLINE = "inline"
+    POPOUT = "popout"
+    VSCODE = "vscode"
 from .grok_event_normalizer import normalize_grok_runtime_receipt, write_grok_events_jsonl
 from .job_object_supervisor import (
     CREATE_SUSPENDED,
@@ -52,6 +65,7 @@ class GrokRunRequest:
     model_id: str = "lif-fake-deepseek"
     max_turns: int = 1
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
+    terminal_visibility: TerminalVisibility = TerminalVisibility.POPOUT
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -77,6 +91,35 @@ def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[st
     if not isinstance(value, dict):
         raise AssuranceError("command JSON output is not an object")
     return value
+
+
+def launch_popout_terminal(command: str, *, cwd: str | None = None) -> subprocess.Popen[Any]:
+    """Launch *command* in a visible Windows Terminal window.
+
+    Uses ``Start-Process`` to open a new ``wt.exe`` (Windows Terminal) or
+    ``powershell.exe`` window.  The caller receives the ``Popen`` handle
+    but the window is owned by the user — closing it is their choice.
+
+    Returns the ``Popen`` for the launcher process (which exits immediately
+    after spawning the window).  On non-Windows, raises ``OSError``.
+    """
+    import shutil as _shutil
+    import platform as _platform
+    if _platform.system() != "Windows":
+        raise OSError("POPOUT terminal visibility is Windows-only")
+
+    wt_path = _shutil.which("wt.exe")
+    if wt_path:
+        popen = subprocess.Popen(
+            ["wt.exe", "powershell", "-NoExit", "-Command", command],
+            cwd=cwd, creationflags=subprocess.CREATE_NEW_CONSOLE if hasattr(subprocess, "CREATE_NEW_CONSOLE") else 0,
+        )
+    else:
+        popen = subprocess.Popen(
+            ["powershell", "-NoExit", "-Command", command],
+            cwd=cwd, creationflags=subprocess.CREATE_NEW_CONSOLE if hasattr(subprocess, "CREATE_NEW_CONSOLE") else 0,
+        )
+    return popen
 
 
 def inspect_grok_runtime(config: GrokRuntimeConfig | None = None) -> dict[str, Any]:

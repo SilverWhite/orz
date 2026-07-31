@@ -1,0 +1,63 @@
+{
+  "name": "gsa-assurance",
+  "displayName": "GSA Assurance",
+  "description": "General Scientific Assurance sidebar for Grok — gate decisions, source visibility, tool availability",
+  "version": "0.1.0",
+  "publisher": "gsa",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onView:gsa.assurancePanel"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gsa",
+          "title": "GSA Assurance",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gsa": [
+        {
+          "type": "webview",
+          "id": "gsa.assurancePanel",
+          "name": "Assurance"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gsa.verify",
+        "title": "GSA: Verify Current Session"
+      },
+      {
+        "command": "gsa.reviewGlobal",
+        "title": "GSA: Global Review"
+      },
+      {
+        "command": "gsa.runGrok",
+        "title": "GSA: Run Grok Session"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "tsc -p ./",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  }
+}

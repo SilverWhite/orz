@@ -165,6 +165,9 @@
 - **Loopback Transport & Private Transcript** (v0.1, 设计约束): 回环传输与私有转录——本地的安全通信通道。入口: `architecture/LOOPBACK_TRANSPORT_AND_PRIVATE_TRANSCRIPT_v0.1.md`
 - **D Salvage Matrix** (v0.1, 设计约束): 项目 D 源码挽救矩阵——标识可从旧项目复用的组件。入口: `architecture/D_SALVAGE_MATRIX_v0.1.md`
 - **Open Source Agent Gap Audit** (v0.1, 设计约束): 开源 agent 框架的功能差距审计。入口: `architecture/OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`
+- **VS Code Extension (ACP-based)** (v0.1, 第一切片已完成/2026-08-01): VS Code 扩展骨架——sidebar webview assurance 状态面板（gates/sources/tools/session 四区卡片），`gsa.verify`/`gsa.reviewGlobal`/`gsa.runGrok` 三个命令，ACP bridge（node-pty + Grok `agent stdio`），Python `vscode_bridge.py` 格式化 assurance 快照。不实现对话渲染/自有 model loop。别名: VS Code 扩展, ACP bridge, sidebar webview。入口: `vscode/` / `assurance/vscode_bridge.py` / `architecture/VSCODE_SHELL_AND_VISIBILITY_EXTENSIONS_v0.1.md`
+- **Terminal Title OSC Updates** (v0.1, 已实施/2026-08-01): 终端 tab 标题 OSC 转义序列——`GSA — 就绪`/`运行中 [turn N]`/`等待审批`/`⚠ gate`/`完成 ✓`/`失败 ✗`。`app.update_terminal_title()` + projector 事件触发 + `pt_app` 退出恢复。约30行。别名: terminal title, OSC 标题。入口: `assurance/tui/app.py` / `assurance/tui/pt_app.py` / `assurance/tui/projector.py`
+- **Terminal Visibility Strategy** (v0.1, 已实施/2026-08-01): `TerminalVisibility` 枚举（`inline`/`popout`/`vscode`），默认 `popout` 拉起 Windows Terminal 独立窗口。`launch_popout_terminal()` 通过 `Start-Process wt.exe` 实现。CLI `--terminal-visibility` flag。别名: popout terminal, 显式 shell。入口: `assurance/grok_runtime_adapter.py` / `assurance/cli.py`
 - **GPS 合约** (v0.1, 设计约束): Global Progress Sentinel 的架构合约。入口: `architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`
 
 ### H. ADR (Architecture Decision Records)

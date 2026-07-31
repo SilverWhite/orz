@@ -112,6 +112,9 @@ class TuiPrototype:
     # Wired at the application boundary (main.py) to avoid assurance imports in TUI.
     retrieval_handler: Any | None = None
 
+    # ── terminal title (P0 extension) ──
+    _title_prefix: str = "GSA"
+
     # ── permission bridge (D1.13) ──
     # True when the visible dialog is a pending ACP permission request.
     # The key handler routes Enter/Esc decisions back to the event source.
@@ -757,6 +760,15 @@ class TuiPrototype:
         self.status_bar.update_item("运行中", True)
         self._status_messages.append(f"已开始: {prompt_text[:60]}")
 
+    def update_terminal_title(self, status: str) -> None:
+        """Set terminal window/tab title via OSC escape sequence.
+
+        Call after state transitions (run start, permission wait, gate
+        block, completion, idle).  No-op outside a full-screen TUI session.
+        """
+        title = f"{self._title_prefix} — {status}"
+        _set_terminal_title(title)
+
     def _wire_find_callback(self) -> None:
         """Lazily wire the FindDialog's search callback to ContentPane."""
         if self.find_dialog.on_search is not None:
@@ -1077,6 +1089,37 @@ class TuiPrototype:
                 visible=False,
             ),
         )
+
+
+# ── terminal title (OSC escape sequences) ──────────────────────────────────
+
+
+def _set_terminal_title(title: str) -> None:
+    """Set terminal window/tab title via OSC 0 escape sequence.
+
+    ``OSC 0 ; <title> BEL`` sets both window title and icon name.
+    Most modern terminals (Windows Terminal, iTerm2, Alacritty, Kitty,
+    WezTerm) support this.  Silent no-op if stdout is not a TTY.
+    """
+    import sys as _sys
+    if not _sys.stdout.isatty():
+        return
+    try:
+        _sys.stdout.write(f"\x1b]0;{title}\x07")
+        _sys.stdout.flush()
+    except (OSError, BrokenPipeError):
+        pass
+
+
+_TITLE_RESTORED: bool = False
+
+def _restore_terminal_title(title: str = "") -> None:
+    """Restore terminal title on TUI exit (via atexit)."""
+    global _TITLE_RESTORED
+    if _TITLE_RESTORED:
+        return
+    _TITLE_RESTORED = True
+    _set_terminal_title(title)
 
 
 # ── helper ──────────────────────────────────────────────────────────────────

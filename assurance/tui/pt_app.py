@@ -297,6 +297,15 @@ def run_tui_demo(
     """
     app = create_pt_application(tui_app, width=width, height=height)
 
+    # ── terminal title ──────────────────────────────────────────────────────
+    _TITLE_BEFORE = ""
+    try:
+        import sys as _sys
+        # Best-effort save of existing title (not all terminals support query).
+    except Exception:
+        pass
+    tui_app.update_terminal_title("就绪")
+
     async def _run() -> None:
         drain_task = None
         if tui_app.event_source is not None:
@@ -323,5 +332,8 @@ def run_tui_demo(
                     await drain_task
                 except asyncio.CancelledError:
                     pass
+            # Restore terminal title.
+            from .app import _restore_terminal_title
+            _restore_terminal_title(_TITLE_BEFORE)
 
     asyncio.run(_run())

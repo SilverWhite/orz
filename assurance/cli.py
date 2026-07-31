@@ -624,6 +624,17 @@ def _parser() -> argparse.ArgumentParser:
             "'prompt-smoke' uses headless --prompt-file (narrow smoke only)."
         ),
     )
+    run.add_argument(
+        "--terminal-visibility",
+        choices=["inline", "popout", "vscode"],
+        default="popout",
+        help=(
+            "How terminal commands are executed. "
+            "'inline' — Grok default (background, output to artifact). "
+            "'popout' — launch Windows Terminal / conhost visible window. "
+            "'vscode' — reuse VS Code integrated terminal."
+        ),
+    )
     run.set_defaults(handler=_run_canonical)
 
     verify = subparsers.add_parser("verify", help="Verify canonical guarded CLI run root.")
@@ -803,6 +814,12 @@ def _parser() -> argparse.ArgumentParser:
             "Explicit retrieval mode for Grok prompt/tool runs. "
             "Forwarded only when --runtime grok is selected."
         ),
+    )
+    tui.add_argument(
+        "--terminal-visibility",
+        choices=["inline", "popout", "vscode"],
+        default="popout",
+        help="How terminal commands are executed (default: popout).",
     )
     tui.set_defaults(handler=_run_tui)
 

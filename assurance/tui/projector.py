@@ -123,6 +123,7 @@ def _on_run_started(app: Any, event: RunStartedEvent) -> list[str]:
         "Run", f"started: {event.task_id}"
     )
     app.content_pane.set_disposition("RUNNING", f"task: {event.task_id}")
+    app.update_terminal_title(f"运行中 [turn 1]")
     return [f"Run started: {event.task_id}"]
 
 
@@ -134,6 +135,7 @@ def _on_run_finished(app: Any, event: RunFinishedEvent) -> list[str]:
     app.explorer_pane.add_event_entry("Run", f"finished ({event.status})")
     app.content_pane.set_disposition("COMPLETED", "")
     app.content_pane.collapse_non_warnings()
+    app.update_terminal_title("完成 ✓")
     return [f"Run finished: {event.status}"]
 
 
@@ -146,6 +148,7 @@ def _on_run_failed(app: Any, event: RunFailedEvent) -> list[str]:
     app.explorer_pane.add_event_entry("Errors", event.reason)
     app.content_pane.set_disposition("FAILED", event.reason)
     app.content_pane.collapse_non_warnings()
+    app.update_terminal_title("失败 ✗")
     return [f"Run failed: {event.reason}"]
 
 
@@ -167,6 +170,10 @@ def _on_gate_decision(app: Any, event: GateDecisionEvent) -> list[str]:
     gate_name = getattr(event, "gate_name", "")
     decision = getattr(event, "decision", "?")
     reason = getattr(event, "reason", "")
+    # Update terminal title on block decisions.
+    if decision == "block":
+        gate_short = gate_name[:16] if gate_name else "gate"
+        app.update_terminal_title(f"⚠ {gate_short}")
     reference_count = getattr(event, "reference_count", 0)
 
     # If it's a per-source visibility event, update ContentPane
@@ -291,6 +298,8 @@ def _on_text_delta(app: Any, event: TextDeltaEvent) -> list[str]:
         cp.add_model_message(content="", turn=event.turn)
     cp.append_text_delta(event.text)
     app.status_bar.update_item("模型", True)
+    if event.turn:
+        app.update_terminal_title(f"运行中 [turn {event.turn}]")
     return []
 
 
@@ -393,6 +402,7 @@ def _on_permission_requested(app: Any, event: PermissionRequestedEvent) -> list[
     app.dialog._selected_action = 0
     # Flag that this dialog is a permission request (so Enter routes to respond_to_permission).
     app._pending_permission = True
+    app.update_terminal_title("等待审批")
     return [f"Permission requested: {event.permission} — awaiting user decision"]
 
 
