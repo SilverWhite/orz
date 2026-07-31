@@ -1,8 +1,9 @@
 # 会话持久化与布局压缩 v0.1
 
-**状态**: 设计冻结
+**状态**: 设计冻结（2026-08-01 修正：session 持久化所有权归 Grok）
 **日期**: 2026-07-31
-**范围**: session index 格式、会话恢复流程、Address/Find 折叠至 Toolbar
+**范围**: 布局压缩（Address/Find 折叠至 Toolbar）、会话列表 UI（只读视图，数据源为 Grok session 目录）
+**所有权裁决**: Grok 拥有 session 持久化和恢复；TUI 只提供只读会话列表视图（扫描 Grok 产出目录），不维护独立 session store。
 **依赖**: `CLI_UI_INTERACTION_MODEL_v0.1.md`、`CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`、`CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md`
 
 ---
@@ -59,51 +60,35 @@ AddressDialog 和 FindDialog 是已实现的 modal overlay。折叠到 Toolbar �
 
 ---
 
-## 2. 会话持久化
+## 2. 会话持久化（Grok-owned）
+
+**所有权裁决 (2026-08-01)**: session 持久化与恢复是 Grok 的通用 agent runtime 能力。本仓库**不维护独立 session store**。TUI 的会话列表是只读视图——扫描 Grok 的 run root 目录展示已有会话。恢复操作使用 `grok session resume`。
 
 ### 2.1 参考产品
 
 Claude Code 的 `/resume`：显示最近会话列表（标题 + 摘要），用户选择后加载历史上下文，恢复对话。
 
-### 2.2 Session Index 存储格式
+### 2.2 数据存储（Grok 产出，TUI 只读）
 
 目录结构：
 
 ```
-.gsa/
-  sessions/
-    index.jsonl          ← 全局会话索引（追加写，用于快速列表）
-    <session_id>/
-      metadata.json      ← 会话元数据
-      events.jsonl       ← 已有（Grok ACP 产出）
-      acp_transcript.jsonl ← 已有
-      session-verification.json ← 已有
+.gsa/runs/                   ← Grok ACP session 产出目录（由 bridge 管理）
+  <session_id>/
+    events.jsonl             ← 已有（Grok ACP 产出 — normalized events）
+    acp_transcript.jsonl     ← 已有（Grok ACP 产出 — raw transcript）
+    session-verification.json ← 已有（post-run verifier）
+    session.json             ← 薄标记（bridge 写入，供 TUI 列表发现）
 ```
 
-`index.jsonl` 格式（一行一条，追加写入，与 journal 格式一致）：
-
-```json
-{"session_id": "S-20260731-a1b2c3d4", "created_at": "2026-07-31T14:32:05Z", "last_active_at": "2026-07-31T14:45:12Z", "first_prompt": "帮我看看 gsa.py 的入口文件", "prompt_preview": "帮我看看 gsa.py 的入口文件", "turn_count": 5, "run_root": "/path/to/run-root", "status": "active"}
-```
-
-`metadata.json` 格式：
+`session.json`（TUI 发现用薄标记，非独立 store）：
 
 ```json
 {
   "session_id": "S-20260731-a1b2c3d4",
   "created_at": "2026-07-31T14:32:05Z",
-  "last_active_at": "2026-07-31T14:45:12Z",
   "first_prompt": "帮我看看 gsa.py 的入口文件",
-  "turn_count": 5,
-  "run_root": "/path/to/run-root",
-  "workspace_path": "/path/to/workspace",
-  "model_id": "lif-fake-deepseek",
-  "status": "active",
-  "artifacts": {
-    "events_path": "events.jsonl",
-    "acp_transcript_path": "acp_transcript.jsonl",
-    "session_verification_path": "session-verification.json"
-  }
+  "turn_count": 5
 }
 ```
 
@@ -115,7 +100,7 @@ S-YYYYMMDD-<8-char-hex>
 
 示例：`S-20260731-a1b2c3d4`
 
-### 2.4 恢复交互流程
+### 2.4 会话列表交互（TUI 只读视图）
 
 进入会话列表：
 - **双击 Esc**（两次 Esc 在 500ms 内）→ ExplorerPane 从"来源树模式"切换为"会话列表模式"
@@ -129,31 +114,22 @@ S-YYYYMMDD-<8-char-hex>
   ▸ 审查一下 assurance 层的 Gate... (12 turns)
 ▾ 2026-07-30
   ▸ 修复 Job Object 竞态窗口 (3 turns)
-  ▸ 跑 Grok session verifier... (1 turn)
 ```
 
 规则：
 - 按日期分组，日期倒序
-- 每个条目显示：`first_prompt` 截断至 40 字 + turn 数
-- 选中条目 → `Enter` → 恢复会话
+- 每个条目显示：`first_prompt` 截断至 28 字 + turn 数 + session ID 后 8 位
+- 选中 `Enter` → 显示 session ID（完整恢复用 `grok session resume`）
 
-恢复流程：
-1. 读取 `metadata.json`，获取 `run_root` 路径
-2. 验证 `events.jsonl` 和 `acp_transcript.jsonl` 完整性
-3. 创建新的 Grok ACP session
-4. 将历史 `acp_transcript.jsonl` 中的 `session/prompt` 和 assistant 消息作为上下文注入新 session
-5. TUI ContentPane 渲染历史对话流（从 `events.jsonl` 重放）
-6. ExplorerPane 切回来源树模式
-7. 用户继续对话
+### 2.5 恢复流程（Grok 原生）
 
-### 2.5 CLI 命令
+会话恢复使用 Grok 原生命令：
 
 ```
-gsa session list              ← 列出所有会话（日期、首条 prompt、turn 数）
-gsa session resume <id>       ← 恢复指定会话
-gsa session archive <id>      ← 归档（标记 archived，不删除文件）
-gsa session delete <id>       ← 删除（删除 run_root 目录，从 index 移除）
+grok session resume <session_id>
 ```
+
+本仓库不实现自有恢复逻辑。
 
 ---
 

@@ -320,26 +320,24 @@ def build_grok_acp_live_run_fn(
 
         receipt = session.receipt if session.receipt is not None else {}
 
-        # ── P3.3: Record session in persistent store ─────────────────────
+        # ── Write minimal session marker alongside Grok artifacts ─────────
+        # Grok owns session persistence.  We write one tiny summary file
+        # so the TUI session list can discover past runs without a
+        # separate index.  This is a read-only view; Grok is the authority.
         try:
-            from assurance.session_store import SessionStore, utc_now
-            _store = SessionStore()
-            _store.record(
-                session_id=request.run_id,
-                metadata={
-                    "session_id": request.run_id,
-                    "created_at": utc_now(),
-                    "last_active_at": utc_now(),
-                    "first_prompt": prompt_text,
-                    "turn_count": session.turn_count,
-                    "run_root": str(request.run_root),
-                    "workspace_path": str(request.workspace_path),
-                    "model_id": request.model_id,
-                    "status": "active",
-                },
+            _marker = {
+                "session_id": request.run_id,
+                "created_at": receipt.get("created_at", ""),
+                "first_prompt": prompt_text,
+                "turn_count": session.turn_count,
+            }
+            _marker_path = request.run_root / "session.json"
+            _marker_path.write_text(
+                _json.dumps(_marker, ensure_ascii=False, sort_keys=True, allow_nan=False),
+                encoding="utf-8",
             )
         except Exception:
-            pass  # Non-fatal — session still works without persistence.
+            pass  # Non-fatal — session list degrades gracefully.
 
         # Replay normalized events (lifecycle events only).
         _LIVE_EMITTED = {

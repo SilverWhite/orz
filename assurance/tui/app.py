@@ -665,24 +665,27 @@ class TuiPrototype:
     # ── session list (P3.4) ───────────────────────────────────────────────
 
     def _toggle_session_list(self) -> str:
-        """Toggle ExplorerPane between source-tree and session-list modes."""
+        """Toggle ExplorerPane between source-tree and session-list modes.
+
+        Session data is discovered by scanning ``.gsa/runs/`` for Grok ACP
+        session directories that contain an ``events.jsonl`` artifact.
+        Grok owns session persistence; the TUI only reads its output.
+        """
         pane = self.explorer_pane
         if pane.in_session_mode:
             pane.toggle_session_mode()
             return "来源树"
-        # Load sessions from store and switch to session list mode.
-        try:
-            from assurance.session_store import SessionStore
-            store = SessionStore()
-            sessions = store.list_sessions()
-            pane.load_sessions(sessions)
-        except Exception:
-            pane.load_sessions([])
+        sessions = _discover_sessions()
+        pane.load_sessions(sessions)
         pane.toggle_session_mode()
-        return f"会话列表 ({len(pane._sessions)} sessions)"
+        return f"会话列表 ({len(sessions)})"
 
     def _navigate_session_list(self, direction: str) -> str | None:
-        """Handle Up/Down/Enter in session list mode."""
+        """Handle Up/Down in session list mode.
+
+        Enter on a session opens its run_root for inspection (read-only);
+        full session resume uses ``grok session resume`` (Grok-owned).
+        """
         pane = self.explorer_pane
         if not pane.in_session_mode:
             return None
@@ -693,82 +696,9 @@ class TuiPrototype:
         elif direction == "enter":
             sid = pane.selected_session_id()
             if sid:
-                return self._resume_session(sid)
+                pane.toggle_session_mode()
+                return f"会话: {sid}"
         return None
-
-    def _resume_session(self, session_id: str) -> str | None:
-        """Resume a past session: load metadata and start a new Grok ACP session."""
-        try:
-            from assurance.session_store import SessionStore
-            store = SessionStore()
-            meta = store.load_metadata(session_id)
-        except Exception:
-            return f"无法加载会话: {session_id}"
-
-        if meta is None:
-            return f"会话未找到: {session_id}"
-
-        prompt_text = meta.get("first_prompt", "")
-        run_root_path = meta.get("run_root", "")
-        workspace_path = meta.get("workspace_path", "")
-
-        if not prompt_text:
-            return "会话元数据缺少 first_prompt，无法恢复"
-
-        # Close existing event source if any.
-        if self.event_source is not None:
-            try:
-                self.event_source.end_session()
-            except Exception:
-                pass
-            try:
-                self.event_source.close()
-            except Exception:
-                pass
-
-        # Build new ACP session.
-        import tempfile
-        from pathlib import Path
-        new_root = Path(tempfile.mkdtemp(prefix="gsa-resume-"))
-        new_workspace = new_root / "workspace"
-        new_workspace.mkdir(parents=True, exist_ok=True)
-
-        try:
-            from .bridge import build_grok_acp_live_run_fn
-            result = build_grok_acp_live_run_fn(
-                run_root=str(new_root),
-                workspace=str(new_workspace),
-                prompt_text=prompt_text,
-                interactive=True,
-            )
-        except Exception as exc:
-            return f"恢复失败: {exc}"
-
-        if isinstance(result, tuple):
-            run_fn, permission_queue, prompt_queue = result
-        else:
-            run_fn = result
-            permission_queue = None
-            prompt_queue = None
-
-        from .event_source import LiveRunEventSource
-        source = LiveRunEventSource(
-            run_fn=run_fn,
-            permission_queue=permission_queue,
-            prompt_queue=prompt_queue,
-        )
-        self.event_source = source
-        source.start()
-
-        # Switch explorer back to source tree.
-        self.explorer_pane.toggle_session_mode()
-
-        # Add a system message about the resume.
-        self.content_pane._items.append(ChatMessage(
-            role="系统", content=f"已恢复会话: {prompt_text[:60]}...",
-            collapsible=True,
-        ))
-        return f"已恢复: {prompt_text[:40]}..."
 
     @staticmethod
     def _blend_overlay(original: str, overlay: list[str], height: int) -> str:
@@ -933,6 +863,52 @@ def pad_to_width(text: str, width: int) -> str:
     if current >= width:
         return text[:width]
     return text + " " * (width - current)
+
+
+# ── session discovery (P3.4) ────────────────────────────────────────────────
+
+
+def _discover_sessions() -> list[dict[str, object]]:
+    """Scan ``.gsa/runs/`` for Grok ACP session directories.
+
+    Each session directory contains Grok artifacts (``events.jsonl``,
+    ``acp_transcript.jsonl``) and optionally a ``session.json`` summary
+    written by the bridge.
+
+    Returns a list of session summary dicts, newest first.  This is a
+    read-only view over Grok-owned session data — no separate index is
+    maintained.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    runs_dir = _Path(".gsa/runs")
+    if not runs_dir.is_dir():
+        return []
+
+    sessions: list[dict[str, object]] = []
+    for child in sorted(runs_dir.iterdir(), reverse=True):
+        if not child.is_dir():
+            continue
+        events_path = child / "events.jsonl"
+        if not events_path.is_file():
+            continue
+        meta_path = child / "session.json"
+        if meta_path.is_file():
+            try:
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+                sessions.append({
+                    "session_id": child.name,
+                    "created_at": meta.get("created_at", ""),
+                    "last_active_at": meta.get("last_active_at", ""),
+                    "first_prompt": meta.get("first_prompt", ""),
+                    "prompt_preview": meta.get("first_prompt", "")[:80],
+                    "turn_count": meta.get("turn_count", 0),
+                    "run_root": str(child),
+                })
+            except (_json.JSONDecodeError, OSError):
+                pass
+    return sessions
 
 
 # ── convenience entry point ─────────────────────────────────────────────────
