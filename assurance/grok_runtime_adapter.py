@@ -986,6 +986,24 @@ def run_grok_acp_once(
     atomic_write_json(receipt_path, receipt)
     events = normalize_grok_runtime_receipt(receipt, created_at=created_at)
     write_grok_events_jsonl(events_path, events)
+
+    # ── D1.12: Post-run cross-verification ──────────────────────────────
+    try:
+        from .grok_session_verifier import verify_acp_session, write_verification_receipt
+        verification = verify_acp_session(
+            receipt,
+            events_path=events_path,
+            transcript_path=acp_transcript_path,
+        )
+        verification_path = request.run_root / "session-verification.json"
+        write_verification_receipt(verification, verification_path)
+        receipt["artifacts"]["verification_path"] = str(verification_path.resolve())
+        receipt["artifacts"]["verification_valid"] = verification["valid"]
+    except Exception:
+        # Verification is a non-fatal assurance check.
+        receipt["artifacts"]["verification_path"] = ""
+        receipt["artifacts"]["verification_valid"] = False
+
     return receipt
 
 
