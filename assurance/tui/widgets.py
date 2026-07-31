@@ -617,6 +617,7 @@ class ExplorerPane(Widget):
     _session_mode: bool = False
     _sessions: list[dict[str, Any]] = field(default_factory=list)
     _session_sel: int = 0  # selected index in session list
+    show_events: bool = True  # controlled by /toggle-events
 
     def toggle_session_mode(self) -> None:
         """Switch between source-tree and session-list modes."""
@@ -653,9 +654,10 @@ class ExplorerPane(Widget):
         else:
             lines: list[str] = []
             lines.extend(self._render_tree(self.tree, inner_w, "", 0))
-            if self.tree and self.event_groups:
+            if self.tree and self.event_groups and self.show_events:
                 lines.append("-" * inner_w)
-            lines.extend(self._render_events(self.event_groups, inner_w))
+            if self.show_events:
+                lines.extend(self._render_events(self.event_groups, inner_w))
         # Truncate/pad
         if len(lines) < height:
             lines += [" " * inner_w] * (height - len(lines))
@@ -966,6 +968,16 @@ class ContentPane(Widget):
         lines: list[str] = []
         expanded_tool_index: int = -1
 
+        # ── Source visibility compact bar (when source rows exist) ─────────
+        if self.source_table:
+            src_parts: list[str] = []
+            for row in self.source_table[:4]:  # max 4 sources in compact bar
+                sym = _SRC_SYMBOL.get(row.decision, "?")
+                src_parts.append(f"{sym}{row.ref_id[:8]}")
+            src_line = pad_to_width("[来源] " + " ".join(src_parts), width)
+            lines.append(src_line)
+            lines.append("─" * width)
+
         # Find expanded tool (if any) — render it first as pin-to-top.
         for i, item in enumerate(self._items):
             if isinstance(item, ToolTraceLine) and item.expanded:
@@ -1198,6 +1210,33 @@ class ContentPane(Widget):
         if text:
             result.append(text)
         return result if result else [text]
+
+    # ── search ─────────────────────────────────────────────────────────────
+
+    def search(self, query: str, case_sensitive: bool = False) -> list[str]:
+        """Search conversation content for *query*, return match summaries."""
+        matches: list[str] = []
+        q = query if case_sensitive else query.lower()
+        for item in self._items:
+            if isinstance(item, ChatMessage):
+                text = item.content if case_sensitive else item.content.lower()
+                if q in text:
+                    idx = text.index(q)
+                    ctx = text[max(0, idx - 20):idx + len(q) + 30]
+                    matches.append(f"[{item.role}] ...{ctx}...")
+            elif isinstance(item, ToolTraceLine):
+                for entry in item.entries:
+                    target = entry.target if case_sensitive else entry.target.lower()
+                    if q in target:
+                        matches.append(f"[{item.tool_name}] {entry.target} · {entry.detail}")
+        self._search_results = matches
+        return matches
+
+    def clear_search(self) -> None:
+        self._search_results.clear()
+
+    # ── internal search state ──
+    _search_results: list[str] = field(default_factory=list)
 
     # ── mutation helpers (event-driven updates) ───────────────────────────
 
@@ -1649,6 +1688,7 @@ class FindDialog(Widget):
     visible: bool = False
     _focus_row: int = 0  # 0=query, 1=scope, 2=case, 3=regex, 4=buttons
     _scope_idx: int = 0
+    on_search: Any | None = None  # Callable[[str, str], str] | None
 
     def render_overlay(self, width: int, height: int) -> list[str] | None:
         if not self.visible:
@@ -1717,6 +1757,8 @@ class FindDialog(Widget):
             self._focus_row = (self._focus_row + 1) % 5
             return True
         if key == "enter" and self._focus_row == 4:
+            if self.on_search and self.query:
+                self.on_search(self.query, self.scope)
             self.visible = False  # execute find
             return True
         if key == "enter" and self._focus_row == 1:
@@ -1780,6 +1822,13 @@ class AnnouncementStrip(Widget):
         self.highlight_index = self._find_current_index()
         self.scroll_offset = 0
         self.visible = True
+
+    def update_item_status(self, step_id: str, status: str) -> None:
+        """Update the status of a single checklist item in-place."""
+        for item in self.items:
+            if item.get("step_id") == step_id:
+                item["status"] = status
+                return
 
     # ── rendering ──────────────────────────────────────────────────────────
 
@@ -1965,6 +2014,13 @@ _CHECKLIST_SYMBOLS: dict[str, str] = {
     "blocked": "!",
     "deferred": "~",
     "replanned": "*",
+}
+
+# Source visibility decision symbols for compact bar.
+_SRC_SYMBOL: dict[str, str] = {
+    "allow": "✓",
+    "defer": "~",
+    "block": "✗",
 }
 
 

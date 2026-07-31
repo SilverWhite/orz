@@ -239,6 +239,24 @@ def create_pt_application(
             tui_app.handle_key("f6")
         event.app.invalidate()
 
+    # ── mouse support ───────────────────────────────────────────────────────
+
+    @kb.add("<mouse_1>")
+    def _mouse_click(event: Any) -> None:
+        """Handle left-click: map coordinates to clickable regions.
+
+        prompt_toolkit provides mouse position in event.data as (x, y)
+        where x is 1-indexed character column and y is 1-indexed line.
+        """
+        pos = getattr(event, "data", None) if hasattr(event, "data") else None
+        if pos is None:
+            return
+        mx, my = pos
+        result = tui_app.handle_mouse_click(mx - 1, my - 1)
+        if result:
+            tui_app._status_messages.append(result)
+        event.app.invalidate()
+
     # ── layout ────────────────────────────────────────────────────────────
 
     window = Window(content=content_control, always_hide_cursor=False)
@@ -250,7 +268,7 @@ def create_pt_application(
         layout=layout,
         key_bindings=kb,
         full_screen=True,
-        mouse_support=False,
+        mouse_support=True,
     )
     # Minimise the delay before a bare Escape is recognised (default 1.0 s
     # is too sluggish for dialog-dismiss feedback).  100 ms is short enough

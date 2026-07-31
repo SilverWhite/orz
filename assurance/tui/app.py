@@ -98,6 +98,10 @@ class TuiPrototype:
     show_events: bool = True
     show_markers: bool = True
 
+    # ── navigation history (toolbar back/forward) ──
+    _nav_history: list[str] = field(default_factory=list)
+    _nav_index: int = -1
+
     # ── event-driven state (Phase 1) ──
     event_source: Any | None = None   # EventSource | None (typed Any to avoid circular import)
     _event_log: list[Any] = field(default_factory=list)  # list[TuiEvent]
@@ -366,6 +370,7 @@ class TuiPrototype:
 
         # Ctrl+F → Find dialog
         if key == "c-f":
+            self._wire_find_callback()
             self.find_dialog.visible = not self.find_dialog.visible
             return "查找" if self.find_dialog.visible else None
 
@@ -423,6 +428,19 @@ class TuiPrototype:
 
         if key == "f6":
             return self._cycle_focus()
+
+        # ── toolbar button keyboard shortcuts ──
+        if key == "a-left":
+            return self._trigger_toolbar("后退")
+        if key == "a-right":
+            return self._trigger_toolbar("前进")
+        if key == "c-c" and not self.running:
+            pass  # Ctrl+C = no-op (don't quit)
+        if key == "c-break":
+            if self.running:
+                self._cancel_run()
+                return "已强制停止"
+            return None
 
         # ── ContentPane tool expand/collapse (P2.3) ──
         if key == "e" and self.active_pane == "content":
@@ -491,9 +509,44 @@ class TuiPrototype:
             self._show_retrieval_dialog("retrieve", url)
             return f"获取: {url}"
 
-        # /plan — enter plan mode via canonical CLI
+        # /run — start a new Grok ACP session via address dialog
+        if text == "/run" or text.startswith("/run "):
+            prompt = text[len("/run "):].strip() if text.startswith("/run ") else ""
+            if prompt:
+                self._start_run(prompt)
+                return f"运行: {prompt[:60]}"
+            self.address_dialog.open_dialog("")
+            return "运行（输入任务）"
+
+        # /plan — show plan state or enter plan mode
         if text == "/plan":
-            return "Plan 模式: 需通过 canonical CLI 进入（GAK-PLAN-001）"
+            if self.announcement_strip.items:
+                self.announcement_strip.l2_expanded = True
+                return "Plan 展开"
+            return "Plan: 无活跃计划。使用 /run <任务> 开始。"
+
+        # /verify — trigger verification on current content
+        if text == "/verify":
+            cp = self.content_pane
+            source_count = len(cp.source_table)
+            msg_count = len(cp._items)
+            return f"验证: {source_count} sources, {msg_count} messages"
+
+        # /stop or /kill — force cancel
+        if text in ("/stop", "/kill"):
+            if self.running:
+                self._cancel_run()
+                return "已强制停止"
+            return "没有运行中的任务"
+
+        # /open <file> — open in PropertiesSheet
+        if text.startswith("/open "):
+            target = text[len("/open "):].strip()
+            if target:
+                self.properties.visible = True
+                self.properties._active_tab = 0
+                return f"打开: {target}"
+            return "用法: /open <文件路径>"
 
         # Sidebar toggle commands
         if text == "/toggle-explorer":
@@ -501,6 +554,7 @@ class TuiPrototype:
             return f"资源管理器: {'显示' if self.show_explorer else '隐藏'}"
         if text == "/toggle-events":
             self.show_events = not self.show_events
+            self.explorer_pane.show_events = self.show_events
             return f"事件: {'显示' if self.show_events else '隐藏'}"
         if text == "/toggle-markers":
             self.show_markers = not self.show_markers
@@ -661,6 +715,178 @@ class TuiPrototype:
         if new_pane:
             new_pane.focused = True
         return f"Focus: {self.active_pane}"
+
+    def _start_run(self, prompt_text: str) -> None:
+        """Start a new Grok ACP session with *prompt_text*.
+
+        Creates a temporary run root, builds the live run function via the
+        bridge, and attaches it as the active event source.
+        """
+        import tempfile
+        from pathlib import Path as _Path
+        run_root = _Path(tempfile.mkdtemp(prefix="gsa-run-"))
+        workspace = run_root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        try:
+            from .bridge import build_grok_acp_live_run_fn
+            result = build_grok_acp_live_run_fn(
+                run_root=str(run_root),
+                workspace=str(workspace),
+                prompt_text=prompt_text,
+                interactive=True,
+            )
+        except Exception as exc:
+            self._status_messages.append(f"运行失败: {exc}")
+            return
+
+        if isinstance(result, tuple):
+            run_fn, perm_q, prompt_q = result
+        else:
+            run_fn, perm_q, prompt_q = result, None, None
+
+        from .event_source import LiveRunEventSource
+        source = LiveRunEventSource(
+            run_fn=run_fn,
+            permission_queue=perm_q,
+            prompt_queue=prompt_q,
+        )
+        self.event_source = source
+        source.start()
+        self.running = True
+        self.status_bar.update_item("运行中", True)
+        self._status_messages.append(f"已开始: {prompt_text[:60]}")
+
+    def _wire_find_callback(self) -> None:
+        """Lazily wire the FindDialog's search callback to ContentPane."""
+        if self.find_dialog.on_search is not None:
+            return  # already wired
+        def _search(query: str, scope: str) -> None:
+            case = self.find_dialog.case_sensitive
+            results = self.content_pane.search(query, case_sensitive=case)
+            # Show results in status bar.
+            if results:
+                self.status_bar.update_item("查找", True)
+                self.status_bar.update_item(
+                    "查找结果", True,
+                )
+                self._status_messages.append(
+                    f"查找: {query} — {len(results)} matches"
+                )
+            else:
+                self._status_messages.append(f"查找: {query} — 未找到")
+        self.find_dialog.on_search = _search
+
+    def handle_mouse_click(self, col: int, row: int) -> str | None:
+        """Handle a mouse click at terminal coordinates (col, row).
+
+        Maps click position to clickable regions in the layout:
+        Row 1 = Toolbar, Row 3+ = body (Explorer/Content/Marker split).
+        """
+        # Row 1: Toolbar buttons
+        if row == 1:
+            for btn_name in self.toolbar.buttons + list(self.toolbar.right_buttons):
+                pos = self._find_button_position(btn_name)
+                if pos is not None and pos <= col < pos + len(btn_name) + 2:
+                    return self._trigger_toolbar(btn_name)
+        # Row 2: AnnouncementStrip (if visible)
+        if row == 2 and self.announcement_strip.items:
+            self.announcement_strip.l2_expanded = not self.announcement_strip.l2_expanded
+            return "切换 checklist"
+        # ContentPane area (approximate — clicks on [▸ 展开] / [关闭] regions)
+        if 22 <= col <= 84 and row >= 3:
+            return self._handle_content_click(col, row)
+        return None
+
+    def _find_button_position(self, name: str) -> int | None:
+        """Return the starting x-position of a toolbar button, or None."""
+        all_buttons = list(self.toolbar.buttons) + list(self.toolbar.right_buttons)
+        x = 1  # inside left border
+        sep = "  "
+        found_left = False
+        for btn in all_buttons:
+            if btn == name:
+                return x
+            x += len(btn) + len(sep)
+            if not found_left and btn == self.toolbar.buttons[-1] if self.toolbar.buttons else False:
+                # After left group, right-align right_buttons
+                found_left = True
+        return None
+
+    def _handle_content_click(self, col: int, row: int) -> str | None:
+        """Handle click in ContentPane area — check tool expand/collapse."""
+        cp = self.content_pane
+        names = cp.tool_trace_names()
+        if names:
+            cp.toggle_tool_expand(names[-1])
+            return f"切换: {names[-1]}"
+        return None
+
+    # ── toolbar actions (P4) ──────────────────────────────────────────────
+
+    def _trigger_toolbar(self, action: str) -> str | None:
+        """Execute a toolbar button action.  Returns a status message."""
+        # Record navigation before executing.
+        current = self.address_bar.uri
+        self._nav_push(current)
+
+        if action == "后退":
+            return self._nav_back()
+        elif action == "前进":
+            return self._nav_forward()
+        elif action == "刷新":
+            if self.running:
+                self._cancel_run()
+            self.content_pane._items.clear()
+            return "已刷新"
+        elif action == "停止":
+            if self.running:
+                self._cancel_run()
+                return "已停止"
+            return "没有运行中的任务"
+        elif action == "打开":
+            self.address_dialog.open_dialog(self.address_bar.uri)
+            return "打开地址..."
+        elif action == "验证":
+            self.address_bar.uri = "command://verify/current-task"
+            return "验证: 当前任务"
+        elif action == "属性":
+            self.properties.visible = True
+            return "属性"
+        elif action == "命令...":
+            self.address_dialog.open_dialog("")
+            return "命令..."
+        elif action == "查找...":
+            self.find_dialog.visible = True
+            return "查找..."
+        return f"未知操作: {action}"
+
+    # ── navigation history ────────────────────────────────────────────────
+
+    def _nav_push(self, uri: str) -> None:
+        """Push *uri* onto the navigation stack."""
+        if self._nav_index >= 0 and self._nav_history[self._nav_index] == uri:
+            return  # already at this location
+        # Truncate forward history.
+        self._nav_history = self._nav_history[:self._nav_index + 1]
+        self._nav_history.append(uri)
+        self._nav_index = len(self._nav_history) - 1
+
+    def _nav_back(self) -> str | None:
+        if self._nav_index > 0:
+            self._nav_index -= 1
+            prev = self._nav_history[self._nav_index]
+            self.address_bar.uri = prev
+            return f"后退: {prev[:40]}"
+        return "已是最早位置"
+
+    def _nav_forward(self) -> str | None:
+        if self._nav_index < len(self._nav_history) - 1:
+            self._nav_index += 1
+            nxt = self._nav_history[self._nav_index]
+            self.address_bar.uri = nxt
+            return f"前进: {nxt[:40]}"
+        return "已是最新位置"
 
     # ── session list (P3.4) ───────────────────────────────────────────────
 

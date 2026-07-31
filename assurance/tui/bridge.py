@@ -593,6 +593,15 @@ def _make_checklist_derived(payload: dict[str, Any], timestamp: str) -> TaskChec
     )
 
 
+def _make_checklist_item_status(payload: dict[str, Any], timestamp: str) -> ChecklistItemStatusEvent:
+    """Factory for ``checklist_item_status_changed`` events (GAK-PLAN-001)."""
+    return ChecklistItemStatusEvent(
+        timestamp=timestamp,
+        step_id=payload.get("step_id", ""),
+        status=payload.get("status", "todo"),
+    )
+
+
 # ── ACP / Grok runtime factories ──────────────────────────────────────────────
 
 
@@ -667,6 +676,7 @@ _EVENT_FACTORY: dict[str, Callable[[dict[str, Any], str], TuiEvent | list[TuiEve
     "plan_approval_decision": _make_plan_approval_decision,
     "usage_sample": _make_usage_sample,
     "checklist_derived": _make_checklist_derived,
+    "checklist_item_status_changed": _make_checklist_item_status,
     # ── Grok / ACP events ──
     "acp_initialize": _make_acp_initialize,
     "acp_session_created": _make_acp_session_created,

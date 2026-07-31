@@ -38,6 +38,7 @@ from .events import (
     RunStartedEvent,
     SourceVisibilityEvent,
     StatusUpdateEvent,
+    ChecklistItemStatusEvent,
     TaskChecklistEvent,
     TextDeltaEvent,
     ToolAvailabilityEvent,
@@ -496,6 +497,13 @@ def _on_checklist_derived(app: Any, event: TaskChecklistEvent) -> list[str]:
         items=event.items,
     )
     return [f"Checklist ready: {len(event.items)} items"]
+
+
+@_register(TuiEventKind.CHECKLIST_ITEM_STATUS_CHANGED)
+def _on_checklist_item_status(app: Any, event: ChecklistItemStatusEvent) -> list[str]:
+    """Update a single checklist item's status and redraw the strip."""
+    app.announcement_strip.update_item_status(event.step_id, event.status)
+    return [f"Checklist {event.step_id} → {event.status}"]
 
 
 # ── process usage monitor handler ────────────────────────────────────────────
