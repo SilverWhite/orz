@@ -47,6 +47,7 @@ from .events import (
     StatusUpdateEvent,
     TaskChecklistEvent,
     ToolAvailabilityEvent,
+    ToolCompletedEvent,
     ToolProposalEvent,
     TuiEvent,
     TuiEventKind,
@@ -215,6 +216,7 @@ def build_grok_acp_live_run_fn(
     retrieval_mode: str = "off",
     retrieval_mode_explicit: bool = False,
     interactive: bool = False,
+    mcp_servers: list[dict[str, Any]] | None = None,
 ) -> (
     Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]
     | tuple[Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]], "queue.Queue[str]", "queue.Queue[str]"]
@@ -261,6 +263,7 @@ def build_grok_acp_live_run_fn(
             model_id=model_id,
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
+            mcp_servers=mcp_servers or [],
         )
 
         with GrokAcpSession(request) as session:
@@ -284,7 +287,8 @@ def build_grok_acp_live_run_fn(
         # Replay normalized events (lifecycle events only).
         _LIVE_EMITTED = {
             "acp_initialize", "acp_session_created",
-            "tool_proposal", "permission_requested", "permission_decision",
+            "tool_proposal", "tool_completed",
+            "permission_requested", "permission_decision",
             "model_output",
         }
         events_path = Path(str(receipt.get("artifacts", {}).get("events_path", "")))
@@ -551,6 +555,14 @@ def _make_tool_proposal(payload: dict[str, Any], timestamp: str) -> ToolProposal
     )
 
 
+def _make_tool_completed(payload: dict[str, Any], timestamp: str) -> ToolCompletedEvent:
+    return ToolCompletedEvent(
+        timestamp=timestamp,
+        tool_name=payload.get("tool_name", ""),
+        status=payload.get("status", "success"),
+    )
+
+
 def _make_permission_requested(payload: dict[str, Any], timestamp: str) -> PermissionRequestedEvent:
     return PermissionRequestedEvent(
         timestamp=timestamp,
@@ -596,6 +608,7 @@ _EVENT_FACTORY: dict[str, Callable[[dict[str, Any], str], TuiEvent | list[TuiEve
     "acp_initialize": _make_acp_initialize,
     "acp_session_created": _make_acp_session_created,
     "tool_proposal": _make_tool_proposal,
+    "tool_completed": _make_tool_completed,
     "permission_requested": _make_permission_requested,
     "permission_decision": _make_permission_decision,
 }
@@ -626,6 +639,7 @@ _KIND_MAP: dict[str, TuiEventKind] = {
     "acp_initialize": TuiEventKind.ACP_INITIALIZE,
     "acp_session_created": TuiEventKind.ACP_SESSION_CREATED,
     "tool_proposal": TuiEventKind.TOOL_PROPOSAL,
+    "tool_completed": TuiEventKind.TOOL_COMPLETED,
     "permission_requested": TuiEventKind.PERMISSION_REQUESTED,
     "permission_decision": TuiEventKind.PERMISSION_DECISION,
 }

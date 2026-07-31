@@ -98,6 +98,31 @@ def build_retrieval_handler(
     return _handler
 
 
+def _load_mcp_config(path: str) -> list[dict[str, Any]]:
+    """Load MCP server configurations from a JSON file.
+
+    Expected format: a JSON array of objects, each with:
+    ``name`` (str), ``command`` (str), ``args`` (list[str], optional),
+    ``env`` (dict[str, str], optional).
+    """
+    import json as _json
+    config_path = Path(path)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"MCP config file not found: {path}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        data = _json.load(handle)
+    if not isinstance(data, list):
+        raise ValueError("MCP config must be a JSON array of server objects")
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise ValueError(f"MCP config entry {i} must be an object")
+        if "name" not in entry or "command" not in entry:
+            raise ValueError(
+                f"MCP config entry {i} must have 'name' and 'command' fields"
+            )
+    return data
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
@@ -177,6 +202,15 @@ def main(argv: list[str] | None = None) -> int:
             "version-smoke records the selection but never performs retrieval."
         ),
     )
+    parser.add_argument(
+        "--mcp-config",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to a JSON file containing MCP server configurations "
+             "(array of {name, command, args, env} objects). "
+             "Forwarded to Grok's session/new mcpServers parameter.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -253,6 +287,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 # ACP live session — real-time event streaming from grok agent stdio
                 # Interactive mode: user approves/denies tool calls via TUI dialog
+                mcp_servers = _load_mcp_config(args.mcp_config) if args.mcp_config else None
                 result = build_grok_acp_live_run_fn(
                     run_root=str(run_root),
                     workspace=args.workspace,
@@ -260,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                     retrieval_mode=args.retrieval_mode or "off",
                     retrieval_mode_explicit=args.retrieval_mode is not None,
                     interactive=True,
+                    mcp_servers=mcp_servers,
                 )
                 if isinstance(result, tuple):
                     run_fn, permission_queue, prompt_queue = result

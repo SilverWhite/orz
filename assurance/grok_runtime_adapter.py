@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
@@ -51,6 +51,7 @@ class GrokRunRequest:
     prompt_text: str | None = None
     model_id: str = "lif-fake-deepseek"
     max_turns: int = 1
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -740,6 +741,23 @@ class GrokAcpSession:
                         "payload": {"message": str(error_msg)[:500], "source": "acp_session_update"},
                         "redaction": "metadata_only",
                     })
+            elif update_type == "tool_result":
+                if on_acp_event:
+                    result_info = update.get("tool_result", {}) if isinstance(update.get("tool_result"), dict) else {}
+                    status = "error" if result_info.get("is_error") else "success"
+                    tool_name = result_info.get("title", result_info.get("name", ""))
+                    on_acp_event({
+                        "event_type": "tool_completed", "timestamp": utc_now(),
+                        "payload": {
+                            "tool_name": tool_name,
+                            "status": status,
+                            "output_sha256": sha256_bytes(
+                                json.dumps(result_info, ensure_ascii=False, sort_keys=True,
+                                           separators=(",", ":"), allow_nan=False).encode("utf-8")
+                            ) if result_info else "",
+                        },
+                        "redaction": "metadata_only",
+                    })
             elif update_type == "turn_completed":
                 self.turn_count += 1
                 self.stop_reason = update.get("stop_reason", self.stop_reason)
@@ -823,7 +841,8 @@ class GrokAcpSession:
         self.protocol_version = init_result.get("protocolVersion", 0)
 
         session_result = self._acp_request("acp-session-1", "session/new", {
-            "cwd": str(self._request.workspace_path.resolve()), "mcpServers": [],
+            "cwd": str(self._request.workspace_path.resolve()),
+            "mcpServers": self._request.mcp_servers,
         })
         self.session_id = session_result.get("sessionId", self.session_id)
         return self
