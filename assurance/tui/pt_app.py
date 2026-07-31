@@ -119,11 +119,6 @@ def create_pt_application(
         tui_app.handle_key("enter")
         event.app.invalidate()
 
-    @kb.add("s-enter")
-    def _s_enter(event: Any) -> None:
-        tui_app.handle_key("s-enter")
-        event.app.invalidate()
-
     # -- dialog toggle (d) — only when address bar is NOT focused ---------
     @kb.add("d")
     def _dialog(event: Any) -> None:

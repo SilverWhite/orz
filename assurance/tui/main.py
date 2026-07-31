@@ -341,6 +341,19 @@ def _run_demo(app: object, width: int, height: int) -> int:
     Falls back to the raw stdin loop (with a warning) if prompt_toolkit
     is not importable.
     """
+    # Ensure Windows console uses UTF-8 so box-drawing characters
+    # (╭─╮│╰╯ etc.) and CJK text render correctly.  Without this,
+    # legacy code pages (CP437/CP936) map these codepoints to
+    # missing-glyph placeholders or garbled output.
+    import sys as _sys
+    if _sys.platform == "win32":
+        try:
+            import ctypes as _ctypes
+            _ctypes.windll.kernel32.SetConsoleCP(65001)        # UTF-8 input
+            _ctypes.windll.kernel32.SetConsoleOutputCP(65001)  # UTF-8 output
+        except Exception:
+            pass  # Best-effort — prompt_toolkit has its own fallback
+
     try:
         from .pt_app import run_tui_demo  # noqa: PLC0415
     except ImportError:
