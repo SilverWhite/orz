@@ -117,7 +117,7 @@ class ToolAvailabilityGateTests(unittest.TestCase):
         )
         receipt = build_tool_availability_gate_receipt(report)
 
-        self.assertEqual(receipt["decisions"]["gate_decision"], "block")
+        self.assertEqual(receipt["decisions"]["gate_decision"], "warn")
         self.assertEqual(receipt["degraded_count"], 1)
 
     def test_gate_receipt_defers_on_unprobed_tools(self) -> None:

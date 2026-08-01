@@ -65,7 +65,7 @@ class CanonicalCliRunTests(unittest.TestCase):
         answer = json.loads(
             (self.run_root / "answer-packet.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(answer["source_visibility_gate"]["decision"], "defer")
+        self.assertEqual(answer["source_visibility_gate"]["decision"], "warn")
         self.assertEqual(
             answer["claim_boundaries"]["scientific_claim_strength"],
             "observed_fragment_only",

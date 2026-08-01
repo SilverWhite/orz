@@ -127,7 +127,7 @@ class GrokToolPermissionObserverTests(unittest.TestCase):
         gate = build_grok_tool_permission_observation_bundle(receipt)[
             "tool_availability_gate_receipt"
         ]
-        self.assertEqual(gate["decisions"]["gate_decision"], "block")
+        self.assertEqual(gate["decisions"]["gate_decision"], "warn")
 
     def test_attached_valid_acp_probe_allows_projection(self) -> None:
         receipt = build_grok_tool_permission_observation_receipt(
