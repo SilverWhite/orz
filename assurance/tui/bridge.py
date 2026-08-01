@@ -218,6 +218,7 @@ def build_grok_acp_live_run_fn(
     retrieval_mode: str = "off",
     retrieval_mode_explicit: bool = False,
     interactive: bool = False,
+    fake_provider: bool = False,
     mcp_servers: list[dict[str, Any]] | None = None,
 ) -> (
     Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]
@@ -244,6 +245,7 @@ def build_grok_acp_live_run_fn(
 
     def _run(on_event: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         import json as _json
+        _live_emitted_types: set[str] = set()
 
         # ── P4.1: Known-safe Grok tool names (inline gate) ──────────────
         _KNOWN_TOOLS: frozenset[str] = frozenset({
@@ -264,6 +266,7 @@ def build_grok_acp_live_run_fn(
             return "allow" if tool_name in _KNOWN_TOOLS else "defer"
 
         def _acp_event_handler(event: dict[str, Any]) -> str | None:
+            _live_emitted_types.add(str(event.get("event_type", "")))
             # ── P4.1: Inline tool availability gate ──
             if event["event_type"] == "tool_proposal":
                 payload = event.get("payload", {})
@@ -300,6 +303,7 @@ def build_grok_acp_live_run_fn(
             model_id=model_id,
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
+            fake_provider=fake_provider,
             mcp_servers=mcp_servers or [],
         )
 
@@ -309,7 +313,7 @@ def build_grok_acp_live_run_fn(
 
             # D1.10: Multi-prompt loop — wait for follow-up prompts from
             # the TUI.  A ``None`` sentinel in the queue ends the session.
-            while True:
+            while interactive:
                 try:
                     next_prompt = _prompt_queue.get(timeout=0.5)
                 except queue.Empty:
@@ -353,13 +357,50 @@ def build_grok_acp_live_run_fn(
                 for line in handle:
                     if line.strip():
                         evt = _json.loads(line)
-                        if evt.get("event_type") not in _LIVE_EMITTED:
+                        event_type = str(evt.get("event_type", ""))
+                        if (
+                            event_type not in _LIVE_EMITTED
+                            or event_type not in _live_emitted_types
+                        ):
                             on_event(evt)
         return receipt
 
     if interactive:
         assert _permission_queue is not None
         return _run, _permission_queue, _prompt_queue
+    return _run
+
+
+def build_deepseek_live_run_fn(
+    *,
+    run_root: str,
+    run_id: str | None = None,
+    prompt_text: str,
+    credential_target: str = "FEP-Agent/DeepSeek",
+    timeout_seconds: int = 60,
+) -> Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]:
+    """Build a direct DeepSeek run function for the TUI event source."""
+    from pathlib import Path
+
+    from assurance.deepseek_runtime_adapter import run_deepseek_direct_smoke
+
+    _run_root = Path(run_root)
+
+    def _run(on_event: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+        receipt = run_deepseek_direct_smoke(
+            run_root=_run_root,
+            prompt_text=prompt_text,
+            credential_target=credential_target,
+            run_id=run_id,
+            timeout_seconds=timeout_seconds,
+        )
+        events_path = Path(str(receipt["artifacts"]["events_path"]))
+        with events_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    on_event(json.loads(line))
+        return receipt
+
     return _run
 
 

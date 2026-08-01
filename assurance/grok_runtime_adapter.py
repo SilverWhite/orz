@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import Any, Callable
 import uuid
@@ -41,6 +42,10 @@ RECEIPT_SCHEMA = "grok-runtime-receipt-v0.1.schema.json"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SUPPORTED_RETRIEVAL_MODES = ("local_browser", "framework_fallback", "off")
 DEFAULT_RETRIEVAL_MODE = "off"
+NO_TOOL_DISALLOWED_TOOLS = (
+    "run_terminal_cmd,grep,read_file,search_replace,list_dir,"
+    "web_search,web_fetch,todo_write,task,Agent"
+)
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,10 @@ class GrokRunRequest:
     max_turns: int = 1
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     terminal_visibility: TerminalVisibility = TerminalVisibility.POPOUT
+    fake_provider: bool = False
+    provider_environment: dict[str, str] = field(default_factory=dict, repr=False)
+    model_config_toml: str | None = None
+    disable_builtin_tools: bool = False
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -210,7 +219,12 @@ def validate_grok_retrieval_mode(mode: str) -> str:
     return mode
 
 
-def _clean_environment(profile: Path, temp: Path) -> dict[str, str]:
+def _clean_environment(
+    profile: Path,
+    temp: Path,
+    *,
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
     keep = (
         "SystemRoot",
         "WINDIR",
@@ -222,14 +236,16 @@ def _clean_environment(profile: Path, temp: Path) -> dict[str, str]:
         "NUMBER_OF_PROCESSORS",
     )
     environment = {key: os.environ[key] for key in keep if key in os.environ}
+    profile_path = str(profile.resolve())
+    temp_path = str(temp.resolve())
     environment.update(
         {
-            "HOME": str(profile),
-            "USERPROFILE": str(profile),
-            "APPDATA": str(profile),
-            "LOCALAPPDATA": str(profile),
-            "TEMP": str(temp),
-            "TMP": str(temp),
+            "HOME": profile_path,
+            "USERPROFILE": profile_path,
+            "APPDATA": profile_path,
+            "LOCALAPPDATA": profile_path,
+            "TEMP": temp_path,
+            "TMP": temp_path,
             "GROK_MEMORY": "0",
             "GROK_WEB_FETCH": "0",
             "HTTP_PROXY": "http://127.0.0.1:1",
@@ -238,7 +254,149 @@ def _clean_environment(profile: Path, temp: Path) -> dict[str, str]:
             "NO_PROXY": "127.0.0.1,localhost",
         }
     )
+    if extra:
+        environment.update(extra)
     return environment
+
+
+def _write_loopback_fake_provider_config(profile: Path, *, port: int) -> Path:
+    config_dir = profile.resolve() / ".grok"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.toml"
+    config = f"""
+[features]
+telemetry = false
+feedback = false
+lsp_tools = false
+codebase_indexing = false
+remote_fetch = false
+
+[session]
+load_envrc = false
+
+[models]
+default = "lif-fake-deepseek"
+default_reasoning_effort = "high"
+
+[model.lif-fake-deepseek]
+model = "deepseek-v4-pro"
+base_url = "http://127.0.0.1:{port}"
+name = "LIF Fake DeepSeek Loopback"
+env_key = "LIF_FAKE_DEEPSEEK_KEY"
+api_backend = "chat_completions"
+max_completion_tokens = 256
+context_window = 4096
+
+[permission]
+rules = [
+  {{ action = "deny", tool = "edit" }},
+  {{ action = "deny", tool = "bash" }},
+  {{ action = "deny", tool = "grep" }},
+  {{ action = "deny", tool = "mcp" }},
+  {{ action = "deny", tool = "webfetch" }},
+  {{ action = "deny", tool = "websearch" }},
+]
+"""
+    config_path.write_text(config.strip() + "\n", encoding="utf-8")
+    return config_path
+
+
+def _write_grok_model_config(profile: Path, config_toml: str) -> Path:
+    config_dir = profile.resolve() / ".grok"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.toml"
+    config_path.write_text(config_toml.strip() + "\n", encoding="utf-8")
+    return config_path
+
+
+def _grok_acp_command(binary_path: Path, request: GrokRunRequest) -> list[str]:
+    command = [str(binary_path)]
+    if request.disable_builtin_tools:
+        command.extend(
+            [
+                "--disable-web-search",
+                "--no-subagents",
+                "--tools",
+                "",
+                "--disallowed-tools",
+                NO_TOOL_DISALLOWED_TOOLS,
+            ]
+        )
+    command.extend(["agent", "--model", request.model_id])
+    if request.disable_builtin_tools:
+        command.extend(["--reasoning-effort", "none"])
+    command.append("stdio")
+    return command
+
+
+def _stderr_contains_provider_api_error(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    return (
+        "chat/completions API error" in text
+        or "invalid_request_error" in text
+        or "400 Bad Request" in text
+    )
+
+
+def _start_loopback_fake_provider(
+    *,
+    run_root: Path,
+    timeout_seconds: int,
+) -> tuple[subprocess.Popen[Any], dict[str, Any], Path, Path]:
+    provider_root = run_root / "fake-provider"
+    provider_script = ROOT / "scripts" / "fake_deepseek_provider.py"
+    stdout_path = provider_root.with_name("fake-provider.stdout.log")
+    stderr_path = provider_root.with_name("fake-provider.stderr.log")
+    stdout_handle = stdout_path.open("wb")
+    stderr_handle = stderr_path.open("wb")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(provider_script),
+            "--output-directory",
+            str(provider_root),
+            "--timeout-seconds",
+            str(timeout_seconds),
+            "--scenario",
+            "single",
+        ],
+        cwd=ROOT,
+        stdout=stdout_handle,
+        stderr=stderr_handle,
+        stdin=subprocess.DEVNULL,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    ready_path = provider_root / "ready.json"
+    deadline = time.monotonic() + min(max(timeout_seconds, 1), 30)
+    ready: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        if ready_path.is_file():
+            candidate = load_json(ready_path)
+            if (
+                candidate.get("ready") is True
+                and candidate.get("host") == "127.0.0.1"
+                and candidate.get("external_bind") is False
+                and isinstance(candidate.get("port"), int)
+            ):
+                ready = candidate
+                break
+        if process.poll() is not None:
+            break
+        time.sleep(0.05)
+    stdout_handle.close()
+    stderr_handle.close()
+    if ready is None:
+        try:
+            process.kill()
+        finally:
+            process.wait(timeout=5)
+        raise AssuranceError("loopback fake provider did not become ready")
+    return process, ready, provider_root, ready_path
 
 
 def _ensure_empty_run_root(path: Path) -> None:
@@ -605,6 +763,8 @@ class GrokAcpSession:
             raise AssuranceError(f"GrokAcpSession requires mode 'acp_smoke', got {request.mode}")
         if not request.prompt_text:
             raise AssuranceError("prompt_text is required for acp_smoke")
+        if request.fake_provider and request.model_config_toml:
+            raise AssuranceError("fake_provider and model_config_toml are mutually exclusive")
 
         cfg = config or GrokRuntimeConfig()
         self._cfg = cfg
@@ -631,6 +791,12 @@ class GrokAcpSession:
         temp = request.run_root / "temp"
         profile.mkdir()
         temp.mkdir()
+        self._fake_provider_process: subprocess.Popen[Any] | None = None
+        self._fake_provider_ready: dict[str, Any] | None = None
+        self._fake_provider_root: Path | None = None
+        self._fake_provider_ready_path: Path | None = None
+        self._fake_provider_config_path: Path | None = None
+        self._model_config_path: Path | None = None
 
         from .finding_registry import FindingRegistry, record_permission_decision
         self._finding_registry = FindingRegistry()
@@ -667,12 +833,34 @@ class GrokAcpSession:
         except AssuranceError:
             raise
 
+        extra_environment: dict[str, str] = dict(request.provider_environment)
+        if request.model_config_toml:
+            self._model_config_path = _write_grok_model_config(
+                profile,
+                request.model_config_toml,
+            )
+        if request.fake_provider:
+            (
+                self._fake_provider_process,
+                self._fake_provider_ready,
+                self._fake_provider_root,
+                self._fake_provider_ready_path,
+            ) = _start_loopback_fake_provider(
+                run_root=request.run_root,
+                timeout_seconds=cfg.timeout_seconds,
+            )
+            self._fake_provider_config_path = _write_loopback_fake_provider_config(
+                profile,
+                port=int(self._fake_provider_ready["port"]),
+            )
+            extra_environment["LIF_FAKE_DEEPSEEK_KEY"] = "loopback-fixture-not-a-secret"
+
         # ── Spawn grok agent stdio ──────────────────────────────────────
         self._stderr_handle = self._stderr_path.open("wb")
         self._process = popen_factory(
-            [str(self._binary_path), "agent", "--model", request.model_id, "stdio"],
+            _grok_acp_command(self._binary_path, request),
             cwd=request.workspace_path,
-            env=_clean_environment(profile, temp),
+            env=_clean_environment(profile, temp, extra=extra_environment),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._stderr_handle,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
             creationflags=CREATE_NO_WINDOW | CREATE_SUSPENDED,
@@ -693,6 +881,8 @@ class GrokAcpSession:
         self.turn_count: int = 0
         self.stop_reason: str = ""
         self.prompt_count: int = 0
+        self._last_response_text: str = ""
+        self._last_response_finish_reason: str = ""
         self._closed: bool = False
         self._last_streamed_text_len: int = 0  # P1.3: track cumulative text for delta emission
         self._last_streamed_text: str = ""
@@ -796,7 +986,7 @@ class GrokAcpSession:
                     })
             return
 
-        if method == "session/update":
+        if method in ("session/update", "_x.ai/session/update"):
             update = params.get("update", {}) if isinstance(params.get("update"), dict) else {}
             update_type = update.get("sessionUpdate", "")
             if update_type == "tool_call":
@@ -829,23 +1019,35 @@ class GrokAcpSession:
                         },
                         "redaction": "metadata_only",
                     })
-            elif update_type in ("assistant_message", "message", "user_message"):
+            elif update_type in (
+                "assistant_message",
+                "agent_message",
+                "agent_message_chunk",
+                "message",
+                "user_message",
+                "user_message_chunk",
+            ):
                 text = ""
                 if isinstance(update.get("content"), list):
                     for block in update["content"]:
                         if isinstance(block, dict) and block.get("type") == "text":
                             text += block.get("text", "")
+                elif isinstance(update.get("content"), dict):
+                    content = update["content"]
+                    if content.get("type") == "text":
+                        text = content.get("text", "")
                 elif isinstance(update.get("text"), str):
                     text = update["text"]
                 elif isinstance(update.get("message"), dict):
                     text = update["message"].get("content", "")
-                if text and on_acp_event:
-                    if update_type == "user_message":
-                        on_acp_event({
-                            "event_type": "user_message", "timestamp": utc_now(),
-                            "payload": {"text": text, "turn": self.turn_count},
-                            "redaction": "metadata_only",
-                        })
+                if text:
+                    if update_type in ("user_message", "user_message_chunk"):
+                        if on_acp_event:
+                            on_acp_event({
+                                "event_type": "user_message", "timestamp": utc_now(),
+                                "payload": {"text": text, "turn": self.turn_count},
+                                "redaction": "metadata_only",
+                            })
                         return
                     # Emit only the incremental portion as text_delta (P1.3).
                     is_cumulative_update = len(text) >= self._last_streamed_text_len and (
@@ -857,11 +1059,12 @@ class GrokAcpSession:
                     else:
                         new_text = text
                     if new_text:
-                        on_acp_event({
-                            "event_type": "text_delta", "timestamp": utc_now(),
-                            "payload": {"text": new_text, "turn": self.turn_count},
-                            "redaction": "metadata_only",
-                        })
+                        if on_acp_event:
+                            on_acp_event({
+                                "event_type": "text_delta", "timestamp": utc_now(),
+                                "payload": {"text": new_text, "turn": self.turn_count},
+                                "redaction": "metadata_only",
+                            })
                         if is_cumulative_update:
                             self._last_streamed_text = text
                             self._last_streamed_text_len = len(text)
@@ -870,6 +1073,7 @@ class GrokAcpSession:
                                 getattr(self, "_last_streamed_text", "") + new_text
                             )
                             self._last_streamed_text_len = len(self._last_streamed_text)
+                        self._last_response_text = self._last_streamed_text
             elif update_type == "error":
                 if on_acp_event:
                     error_msg = update.get("message", update.get("error", "unknown ACP error"))
@@ -975,18 +1179,22 @@ class GrokAcpSession:
 
     def __enter__(self) -> GrokAcpSession:
         """ACP initialize + session/new handshake."""
-        init_result = self._acp_request("acp-init-1", "initialize", {
-            "protocolVersion": 1, "clientCapabilities": {},
-            "clientInfo": {"name": "gsa-acp-adapter", "title": "GSA ACP Adapter", "version": "0.1.0"},
-        })
-        self.protocol_version = init_result.get("protocolVersion", 0)
+        try:
+            init_result = self._acp_request("acp-init-1", "initialize", {
+                "protocolVersion": 1, "clientCapabilities": {},
+                "clientInfo": {"name": "gsa-acp-adapter", "title": "GSA ACP Adapter", "version": "0.1.0"},
+            })
+            self.protocol_version = init_result.get("protocolVersion", 0)
 
-        session_result = self._acp_request("acp-session-1", "session/new", {
-            "cwd": str(self._request.workspace_path.resolve()),
-            "mcpServers": self._request.mcp_servers,
-        })
-        self.session_id = session_result.get("sessionId", self.session_id)
-        return self
+            session_result = self._acp_request("acp-session-1", "session/new", {
+                "cwd": str(self._request.workspace_path.resolve()),
+                "mcpServers": self._request.mcp_servers,
+            })
+            self.session_id = session_result.get("sessionId", self.session_id)
+            return self
+        except Exception:
+            self.close()
+            raise
 
     def __exit__(self, *_: Any) -> None:
         self.close()
@@ -1045,7 +1253,8 @@ class GrokAcpSession:
         _stop_reason = prompt_result.get("stopReason", "")
         if _stop_reason:
             self.stop_reason = _stop_reason
-        if on_acp_event and prompt_result:
+            self._last_response_finish_reason = _stop_reason
+        if prompt_result:
             _final_text = ""
             if isinstance(prompt_result.get("message"), dict):
                 _msg = prompt_result["message"]
@@ -1056,21 +1265,26 @@ class GrokAcpSession:
                 elif isinstance(_msg.get("content"), str):
                     _final_text = _msg["content"]
             if _final_text:
-                on_acp_event({
-                    "event_type": "model_output", "timestamp": utc_now(),
-                    "payload": {
-                        "text": _final_text, "turn": self.turn_count,
-                        "stop_reason": self.stop_reason, "structured_output_valid": True,
-                    },
-                    "redaction": "metadata_only",
-                })
+                self._last_response_text = _final_text
+                if on_acp_event:
+                    on_acp_event({
+                        "event_type": "model_output", "timestamp": utc_now(),
+                        "payload": {
+                            "text": _final_text, "turn": self.turn_count,
+                            "stop_reason": self.stop_reason, "structured_output_valid": True,
+                        },
+                        "redaction": "metadata_only",
+                    })
 
         # Drain remaining notifications.
         drain_deadline = time.monotonic() + 5.0
         while time.monotonic() < drain_deadline and self._process.poll() is None:
             assert self._process.stdout is not None
             import select as _sel
-            ready, _, _ = _sel.select([self._process.stdout], [], [], 0.5)
+            try:
+                ready, _, _ = _sel.select([self._process.stdout], [], [], 0.5)
+            except (OSError, TypeError, ValueError):
+                break
             if not ready:
                 break
             line = self._process.stdout.readline()
@@ -1104,6 +1318,12 @@ class GrokAcpSession:
             self._process.wait(timeout=5)
         finally:
             self._stderr_handle.close()
+            if self._fake_provider_process is not None:
+                try:
+                    self._fake_provider_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._fake_provider_process.kill()
+                    self._fake_provider_process.wait(timeout=5)
             if self._supervisor is not None:
                 self._supervisor.close()
 
@@ -1124,19 +1344,43 @@ class GrokAcpSession:
         # ── Build receipt ───────────────────────────────────────────────
         from .utils import sha256_file as _sha256_file, sha256_bytes as _sha256_bytes
         root_process_exited = self._process.poll() is not None
+        no_residue_observed = root_process_exited
+        version_output = str(
+            self._inspection.get("observed", {}).get("version_output", "")
+        )
+        response_text = self._last_response_text
+        provider_api_error_observed = bool(
+            self._request.model_config_toml
+            and _stderr_contains_provider_api_error(self._stderr_path)
+        )
         checks = {
             "binary_inspection_valid": self._inspection.get("valid") is True,
             "workspace_trust_valid": self._trust.get("valid") is True,
             "workspace_trust_granted": self._trust_launch_permitted,
             "root_process_exited": root_process_exited,
-            "no_residue_observed": root_process_exited,
+            "no_residue_observed": no_residue_observed,
             "exit_code_zero": self._process.returncode == 0,
             "acp_initialize_ok": self.protocol_version >= 1,
             "acp_session_created": bool(self.session_id),
             "acp_prompt_completed": self.prompt_count > 0,
+            "acp_response_received": bool(response_text.strip()),
             "adapter_containment_available": self._containment_diag["containment_available"],
             "adapter_containment_provided": self._containment_diag["job_object_assigned"],
+            "provider_api_errors_absent": not provider_api_error_observed,
         }
+        limitations = [
+            "ACP session guarantees are bounded by the Grok process lifecycle and Job Object containment.",
+            "Transcript records direction and message digest only — raw content is not persisted.",
+            "Multi-prompt sessions accumulate state in the Grok process; no cross-session isolation beyond sessionId.",
+        ]
+        if self._request.fake_provider:
+            limitations.append(
+                "Loopback fake provider mode uses a fixed local SSE fixture and does not prove real DeepSeek compatibility or non-loopback firewall isolation."
+            )
+        elif self._request.model_config_toml:
+            limitations.append(
+                "Real provider mode permits external network only through the explicitly injected Grok model configuration and child-process environment."
+            )
         receipt = {
             "schema_version": "0.1.0",
             "receipt_kind": "grok_runtime_adapter_receipt",
@@ -1150,6 +1394,8 @@ class GrokAcpSession:
                 "retrieval_mode_explicit": self._request.retrieval_mode_explicit,
                 "workspace_path": str(self._request.workspace_path.resolve()),
                 "run_root": str(self._request.run_root.resolve()),
+                "fake_provider": self._request.fake_provider,
+                "disable_builtin_tools": self._request.disable_builtin_tools,
             },
             "retrieval": {
                 "mode": self._retrieval_mode,
@@ -1163,7 +1409,7 @@ class GrokAcpSession:
             "binary": {
                 "inspection_path": str(self._inspection_path.resolve()),
                 "binary_path": str(self._binary_path.resolve()),
-                "version_output": "",
+                "version_output": version_output,
                 "sha256": self._inspection["observed"]["sha256"],
                 "valid": self._inspection.get("valid") is True,
             },
@@ -1183,9 +1429,36 @@ class GrokAcpSession:
                 "stdout_sha256": _sha256_file(self._acp_transcript_path) if self._acp_transcript_path.exists() else "",
                 "stderr_sha256": _sha256_file(self._stderr_path),
             },
+            "fake_provider": (
+                {
+                    "enabled": True,
+                    "ready_path": str(self._fake_provider_ready_path.resolve())
+                    if self._fake_provider_ready_path else "",
+                    "result_path": str((self._fake_provider_root / "provider-result.json").resolve())
+                    if self._fake_provider_root else "",
+                    "config_path": str(self._fake_provider_config_path.resolve())
+                    if self._fake_provider_config_path else "",
+                    "host": str((self._fake_provider_ready or {}).get("host", "")),
+                    "port": int((self._fake_provider_ready or {}).get("port", 0)),
+                    "real_model_invoked": False,
+                }
+                if self._request.fake_provider
+                else None
+            ),
+            "prompt": {
+                "prompt_sha256": _sha256_bytes((self._request.prompt_text or "").encode("utf-8")),
+                "prompt_bytes": len(self._request.prompt_text or ""),
+                "model_id": self._request.model_id,
+                "max_turns": self._request.max_turns,
+                "response_summary": response_text[:200] if response_text else "",
+                "response_sha256": _sha256_bytes(response_text.encode("utf-8")),
+                "response_finish_reason": self._last_response_finish_reason or self.stop_reason,
+                "response_token_count": 0,
+                "output_format": "acp_json_rpc",
+            },
             "acp": {
                 "protocol_version": self.protocol_version,
-                "session_id_hash": _sha256_bytes(self.session_id.encode("utf-8")) if self.session_id else "",
+                "session_id_hash": _sha256_bytes(self.session_id.encode("utf-8")),
                 "tool_call_count": self.tool_call_count,
                 "permission_requests_count": self.permission_requests_count,
                 "permission_outcomes": list(self.permission_outcomes),
@@ -1194,13 +1467,21 @@ class GrokAcpSession:
                 "event_count": len(self.acp_events),
                 "prompt_count": self.prompt_count,
             },
-            "prompt": {
-                "prompt_sha256": _sha256_bytes((self._request.prompt_text or "").encode("utf-8")),
-                "response_received": self.prompt_count > 0,
-                "stop_reason": self.stop_reason,
-                "multi_prompt": self.prompt_count > 1,
+            "containment": {
+                "no_residue_required": True,
+                "no_residue_observed": no_residue_observed,
+                "root_process_exited": root_process_exited,
+                "external_cleanup_required": False,
+                "residue_scan_scope": (
+                    "job_object_contained"
+                    if self._containment_diag["job_object_assigned"]
+                    else "root_process_only"
+                ),
+                "job_object_created": self._containment_diag["job_object_created"],
+                "job_object_assigned": self._containment_diag["job_object_assigned"],
+                "containment_provider": self._containment_diag["containment_provider"],
+                "containment_available": self._containment_diag["containment_available"],
             },
-            "containment": dict(self._containment_diag),
             "artifacts": {
                 "receipt_path": str(self._receipt_path.resolve()),
                 "events_path": str(self._events_path.resolve()),
@@ -1209,13 +1490,13 @@ class GrokAcpSession:
                 "binary_inspection_path": str(self._inspection_path.resolve()),
                 "workspace_trust_path": str(self._trust_path.resolve()),
                 "permission_records_path": str(self._permission_records_path.resolve()),
+                "fake_provider_ready_path": str(self._fake_provider_ready_path.resolve())
+                if self._fake_provider_ready_path else "",
+                "fake_provider_result_path": str((self._fake_provider_root / "provider-result.json").resolve())
+                if self._fake_provider_root else "",
             },
             "checks": checks,
-            "limitations": [
-                "ACP session guarantees are bounded by the Grok process lifecycle and Job Object containment.",
-                "Transcript records direction and message digest only — raw content is not persisted.",
-                "Multi-prompt sessions accumulate state in the Grok process; no cross-session isolation beyond sessionId.",
-            ],
+            "limitations": limitations,
         }
         validate_contract(receipt, RECEIPT_SCHEMA, label="grok runtime receipt")
         events = normalize_grok_runtime_receipt(receipt, created_at=self._created_at)

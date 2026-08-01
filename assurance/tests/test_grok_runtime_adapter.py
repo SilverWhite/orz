@@ -11,8 +11,10 @@ from unittest.mock import Mock, patch
 from assurance.errors import AssuranceError
 from assurance.grok_runtime_adapter import (
     GrokAcpSession,
+    NO_TOOL_DISALLOWED_TOOLS,
     GrokRunRequest,
     GrokRuntimeConfig,
+    run_grok_acp_once,
     run_grok_headless_once,
     validate_grok_retrieval_mode,
 )
@@ -78,6 +80,94 @@ class _FakeSupervisor:
 
     def __exit__(self, *args: object) -> None:  # type: ignore[override]
         pass
+
+
+class _FakeAcpStdin:
+    def __init__(self) -> None:
+        self.closed = False
+        self.writes: list[str] = []
+
+    def write(self, text: str) -> int:
+        self.writes.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeAcpStdout:
+    def __init__(self) -> None:
+        self._lines = [
+            json_line({
+                "jsonrpc": "2.0",
+                "id": "acp-init-1",
+                "result": {"protocolVersion": 1},
+            }),
+            json_line({
+                "jsonrpc": "2.0",
+                "id": "acp-session-1",
+                "result": {"sessionId": "S-FAKE-ACP-001"},
+            }),
+            json_line({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "Hello from ACP."},
+                    }
+                },
+            }),
+            json_line({
+                "jsonrpc": "2.0",
+                "method": "_x.ai/session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "turn_completed",
+                        "stop_reason": "end_turn",
+                    }
+                },
+            }),
+            json_line({
+                "jsonrpc": "2.0",
+                "id": "acp-prompt-1",
+                "result": {
+                    "stopReason": "end_turn",
+                },
+            }),
+        ]
+
+    def readline(self) -> str:
+        if self._lines:
+            return self._lines.pop(0)
+        return ""
+
+
+class _FakeAcpProcess:
+    def __init__(self, args: list[str], **kwargs: Any) -> None:
+        self.args = args
+        self.pid = os.getpid()
+        self.returncode: int | None = None
+        self.stdin = _FakeAcpStdin()
+        self.stdout = _FakeAcpStdout()
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self, timeout: int | None = None) -> int:
+        self.returncode = 0
+        return 0
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+def json_line(value: dict[str, Any]) -> str:
+    import json
+    return json.dumps(value, separators=(",", ":")) + "\n"
 
 
 def _inspection(binary: Path) -> dict[str, object]:
@@ -239,13 +329,152 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
         with self.assertRaises(AssuranceError):
             validate_grok_retrieval_mode("implicit_runtime_search")
 
+    def test_acp_smoke_writes_schema_valid_receipt_and_events(self) -> None:
+        run_root = self.root / "run-acp"
+
+        fake_provider_root = run_root / "fake-provider"
+        fake_provider_ready_path = fake_provider_root / "ready.json"
+        fake_provider_ready = {
+            "schema_version": "0.1.0",
+            "ready": True,
+            "host": "127.0.0.1",
+            "port": 45678,
+            "external_bind": False,
+            "authorization_value_recorded": False,
+        }
+
+        with patch(
+            "assurance.grok_runtime_adapter.inspect_grok_runtime",
+            return_value=_inspection(self.binary),
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ), patch("assurance.grok_runtime_adapter._resume_main_thread"), patch(
+            "assurance.grok_runtime_adapter._start_loopback_fake_provider",
+            return_value=(
+                _FakeAcpProcess(["fake-provider"]),
+                fake_provider_ready,
+                fake_provider_root,
+                fake_provider_ready_path,
+            ),
+        ):
+            receipt = run_grok_acp_once(
+                GrokRunRequest(
+                    run_root=run_root,
+                    workspace_path=self.workspace,
+                    run_id="RUN-GROK-ACP-TEST-001",
+                    mode="acp_smoke",
+                    prompt_text="Say hello.",
+                    fake_provider=True,
+                ),
+                config=self.config,
+                popen_factory=lambda args, **kwargs: _FakeAcpProcess(args, **kwargs),
+            )
+
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["request"]["mode"], "acp_smoke")
+        self.assertEqual(receipt["execution"]["command_kind"], "grok_acp")
+        self.assertEqual(receipt["prompt"]["output_format"], "acp_json_rpc")
+        self.assertEqual(receipt["prompt"]["response_summary"], "Hello from ACP.")
+        self.assertTrue(receipt["containment"]["job_object_assigned"])
+        self.assertTrue(receipt["checks"]["acp_response_received"])
+        self.assertEqual(receipt["acp"]["prompt_count"], 1)
+        self.assertTrue(receipt["request"]["fake_provider"])
+        self.assertEqual(receipt["fake_provider"]["host"], "127.0.0.1")
+        self.assertEqual(receipt["fake_provider"]["port"], 45678)
+        self.assertFalse(receipt["fake_provider"]["real_model_invoked"])
+        self.assertTrue(
+            (run_root / "profile" / ".grok" / "config.toml").read_text(
+                encoding="utf-8"
+            ).find("http://127.0.0.1:45678") >= 0
+        )
+        self.assertTrue((run_root / "grok-runtime-receipt.json").is_file())
+        self.assertTrue((run_root / "events.jsonl").is_file())
+        self.assertTrue((run_root / "acp_transcript.jsonl").is_file())
+
+    def test_acp_smoke_disable_builtin_tools_passes_grok_tool_filter_flags(self) -> None:
+        run_root = self.root / "run-acp-no-tools"
+        launched_args: list[str] = []
+
+        def popen_factory(args, **kwargs):
+            launched_args.extend(args)
+            return _FakeAcpProcess(args, **kwargs)
+
+        with patch(
+            "assurance.grok_runtime_adapter.inspect_grok_runtime",
+            return_value=_inspection(self.binary),
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ), patch("assurance.grok_runtime_adapter._resume_main_thread"):
+            receipt = run_grok_acp_once(
+                GrokRunRequest(
+                    run_root=run_root,
+                    workspace_path=self.workspace,
+                    run_id="RUN-GROK-ACP-NO-TOOLS-TEST-001",
+                    mode="acp_smoke",
+                    prompt_text="Say hello.",
+                    model_config_toml="[models]\ndefault = \"custom\"\n",
+                    disable_builtin_tools=True,
+                ),
+                config=self.config,
+                popen_factory=popen_factory,
+            )
+
+        self.assertTrue(receipt["valid"])
+        self.assertTrue(receipt["request"]["disable_builtin_tools"])
+        self.assertIn("--disable-web-search", launched_args)
+        self.assertIn("--no-subagents", launched_args)
+        self.assertIn("--tools", launched_args)
+        self.assertIn("", launched_args)
+        self.assertIn("--disallowed-tools", launched_args)
+        self.assertIn(NO_TOOL_DISALLOWED_TOOLS, launched_args)
+        self.assertIn("--reasoning-effort", launched_args)
+        self.assertIn("none", launched_args)
+        self.assertLess(launched_args.index("--tools"), launched_args.index("agent"))
+        self.assertLess(launched_args.index("--disallowed-tools"), launched_args.index("agent"))
+
+    def test_real_provider_acp_smoke_marks_receipt_invalid_on_provider_api_error_stderr(self) -> None:
+        run_root = self.root / "run-acp-provider-error"
+
+        def popen_factory(args, **kwargs):
+            kwargs["stderr"].write(b"ERROR chat/completions API error 400 Bad Request")
+            kwargs["stderr"].flush()
+            return _FakeAcpProcess(args, **kwargs)
+
+        with patch(
+            "assurance.grok_runtime_adapter.inspect_grok_runtime",
+            return_value=_inspection(self.binary),
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ), patch("assurance.grok_runtime_adapter._resume_main_thread"):
+            receipt = run_grok_acp_once(
+                GrokRunRequest(
+                    run_root=run_root,
+                    workspace_path=self.workspace,
+                    run_id="RUN-GROK-ACP-PROVIDER-ERROR-TEST-001",
+                    mode="acp_smoke",
+                    prompt_text="Say hello.",
+                    model_config_toml="[models]\ndefault = \"custom\"\n",
+                    disable_builtin_tools=True,
+                ),
+                config=self.config,
+                popen_factory=popen_factory,
+            )
+
+        self.assertFalse(receipt["valid"])
+        self.assertFalse(receipt["checks"]["provider_api_errors_absent"])
+
 
 class GrokAcpNotificationMappingTests(unittest.TestCase):
     def _session(self) -> GrokAcpSession:
         session = GrokAcpSession.__new__(GrokAcpSession)
         session._last_streamed_text_len = 0
         session._last_streamed_text = ""
+        session._last_response_text = ""
         session.turn_count = 0
+        session.stop_reason = ""
         session.tool_call_count = 0
         return session
 
@@ -290,6 +519,39 @@ class GrokAcpNotificationMappingTests(unittest.TestCase):
             session, {"sessionUpdate": "assistant_message", "text": "lo"}
         )
         self.assertEqual([event["payload"]["text"] for event in first + second], ["Hel", "lo"])
+
+    def test_agent_message_chunk_content_dict_sets_response_text(self) -> None:
+        session = self._session()
+        events = self._collect(
+            session,
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "LIF_FAKE_PROVIDER_OK"},
+            },
+        )
+        self.assertEqual(events[0]["event_type"], "text_delta")
+        self.assertEqual(events[0]["payload"]["text"], "LIF_FAKE_PROVIDER_OK")
+        self.assertEqual(session._last_response_text, "LIF_FAKE_PROVIDER_OK")
+
+    def test_xai_session_update_turn_completed_sets_stop_reason(self) -> None:
+        session = self._session()
+        events: list[dict[str, Any]] = []
+        msg = {
+            "jsonrpc": "2.0",
+            "method": "_x.ai/session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "turn_completed",
+                    "stop_reason": "end_turn",
+                }
+            },
+        }
+        GrokAcpSession._handle_acp_notification(
+            session, msg, on_acp_event=lambda event: events.append(event) or None
+        )
+        self.assertEqual(events, [])
+        self.assertEqual(session.turn_count, 1)
+        self.assertEqual(session.stop_reason, "end_turn")
 
     def test_warning_notification_preserves_severity(self) -> None:
         session = self._session()

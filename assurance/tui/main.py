@@ -170,13 +170,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--runtime", type=str, default="canonical",
-        choices=["canonical", "grok"],
+        choices=["canonical", "grok", "deepseek"],
         help="Runtime for --run (default: canonical)",
     )
     parser.add_argument(
         "--real", action="store_true",
         help="Use the real DeepSeek adapter for --run (requires API key "
              "in Windows Credential Manager)",
+    )
+    parser.add_argument(
+        "--fake-provider", action="store_true",
+        help="For --runtime grok ACP runs, use the local loopback fake provider fixture.",
     )
     parser.add_argument(
         "--credential-target", type=str, default="FEP-Agent/DeepSeek",
@@ -248,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.live_retrieval:
         handler = build_retrieval_handler()
         app.retrieval_handler = handler
+    app.set_grok_provider_mode(bool(args.fake_provider))
 
     # ── --replay: replay events from a journal file ──────────────────────
     if args.replay:
@@ -270,9 +275,17 @@ def main(argv: list[str] | None = None) -> int:
         run_root = Path(args.run_root) if args.run_root else Path(
             tempfile.mkdtemp(prefix="gsa-run-")
         )
-        from .bridge import build_grok_acp_live_run_fn, build_grok_live_run_fn, build_live_run_fn
+        from .bridge import (
+            build_deepseek_live_run_fn,
+            build_grok_acp_live_run_fn,
+            build_grok_live_run_fn,
+            build_live_run_fn,
+        )
         from .event_source import LiveRunEventSource
         extra_kwargs: dict[str, Any] = {}
+        console_available = _interactive_console_available()
+        permission_queue = None
+        prompt_queue = None
         if args.runtime == "grok":
             if args.real:
                 print("--real is only valid with --runtime canonical", file=sys.stderr)
@@ -294,16 +307,33 @@ def main(argv: list[str] | None = None) -> int:
                     prompt_text=args.run,
                     retrieval_mode=args.retrieval_mode or "off",
                     retrieval_mode_explicit=args.retrieval_mode is not None,
-                    interactive=True,
+                    interactive=console_available,
+                    fake_provider=args.fake_provider,
                     mcp_servers=mcp_servers,
                 )
                 if isinstance(result, tuple):
                     run_fn, permission_queue, prompt_queue = result
                 else:
                     run_fn = result
-                    permission_queue = None
-                    prompt_queue = None
+        elif args.runtime == "deepseek":
+            if not args.real:
+                print("--runtime deepseek requires --real", file=sys.stderr)
+                return 2
+            if args.fake_provider:
+                print("--fake-provider is only valid with --runtime grok", file=sys.stderr)
+                return 2
+            if args.retrieval_mode is not None:
+                print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)
+                return 2
+            run_fn = build_deepseek_live_run_fn(
+                run_root=str(run_root),
+                prompt_text=args.run,
+                credential_target=args.credential_target,
+            )
         else:
+            if args.fake_provider:
+                print("--fake-provider is only valid with --runtime grok", file=sys.stderr)
+                return 2
             if args.retrieval_mode is not None:
                 print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)
                 return 2
@@ -317,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         source = LiveRunEventSource(run_fn=run_fn, permission_queue=permission_queue, prompt_queue=prompt_queue)
         app = TuiPrototype.with_event_source(source)
+        app.set_grok_provider_mode(bool(args.fake_provider))
         if args.with_dialog:
             app.dialog.visible = True
         if args.with_properties:
@@ -324,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.live_retrieval:
             handler = build_retrieval_handler()
             app.retrieval_handler = handler
+        if not console_available:
+            return _run_static_live(app, source, args.width, args.height)
         source.start()
         return _run_demo(app, args.width, args.height)
 
@@ -368,8 +401,70 @@ def _run_demo(app: object, width: int, height: int, banner: bool = True) -> int:
         print("Keys: f6=cycle focus, alt+letter=menu, d=dialog, p=properties, q=quit")
         print("=" * min(width, 80))
 
-    run_tui_demo(app, width=width, height=height)
+    try:
+        run_tui_demo(app, width=width, height=height)
+    except Exception as exc:
+        if not _is_no_console_error(exc):
+            raise
+        print(
+            "[GSA] WARNING: no Windows console screen buffer was found. "
+            "Rendering a static TUI snapshot instead.\n",
+        )
+        _poll_once(app)
+        print(app.render(width, height))
     return 0
+
+
+def _interactive_console_available() -> bool:
+    """Return whether prompt_toolkit can attach to the current console."""
+    import sys
+
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        stdout_handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        buffer_info = ctypes.create_string_buffer(22)
+        return bool(kernel32.GetConsoleScreenBufferInfo(stdout_handle, ctypes.byref(buffer_info)))
+    except Exception:
+        return False
+
+
+def _is_no_console_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if current.__class__.__name__ == "NoConsoleScreenBufferError":
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _poll_once(app: object) -> None:
+    poll_events = getattr(app, "poll_events", None)
+    if callable(poll_events):
+        poll_events()
+
+
+def _run_static_live(app: object, source: object, width: int, height: int) -> int:
+    """Run a live source to completion and render once without full-screen TUI."""
+    import time
+
+    print(
+        "[GSA] WARNING: interactive TUI requires a real Windows console. "
+        "Running in static output mode.\n",
+    )
+    source.start()
+    try:
+        while source.is_active():
+            _poll_once(app)
+            time.sleep(0.05)
+        _poll_once(app)
+        print(app.render(width, height))
+        return 0
+    finally:
+        source.close()
 
 
 def _run_raw_demo(app: object, width: int, height: int) -> int:

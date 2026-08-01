@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any, Sequence
+import uuid
 
 from .canonical_cli import (
     run_canonical_guarded_cli,
@@ -80,6 +81,7 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
             "run_fake": "python gsa.py run --ask <q> --source-ledger <path> --run-root <path>",
             "run_real": "python gsa.py run --mode real --ask <q> --source-ledger <path> --run-root <path>",
             "run_grok_gate": "python gsa.py run --runtime grok --ask <q> --run-root <path>",
+            "alpha_smoke": "python gsa.py alpha smoke",
             "verify": "python gsa.py verify --run-root <path>",
         },
         "runtime_boundaries": {
@@ -87,13 +89,13 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
             "default_credential_use": "disabled",
             "canonical_run_fake": "offline_no_network",
             "canonical_run_real": "deepseek_api_exactly_one_request",
-            "grok_run_prompt_tool_gate": "explicit_fail_closed_no_prompt_or_tool_execution",
+            "grok_run_prompt_tool_gate": "explicit_fail_closed_execute_only_after_allow",
         },
         "limitations": [
             "doctor verifies repository mechanics and CLI wiring, not scientific correctness.",
             "canonical run supports fake (offline) and real (DeepSeek API) adapter modes.",
             "real adapter reads credentials from Windows Credential Manager and never persists them.",
-            "gsa run --runtime grok emits a promotion gate receipt only; it does not launch prompt/tool execution.",
+            "gsa run --runtime grok emits a promotion gate receipt by default; --grok-execute runs only after an allow decision.",
             "GSA-CORE review and evaluation bridges exist but have not been connected to a live runtime.",
         ],
     }
@@ -154,8 +156,10 @@ def _run_source_gate(args: argparse.Namespace) -> int:
 def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
     from .grok_prompt_tool_gate import (
         DEFAULT_RETRIEVAL_MODE,
+        build_grok_prompt_tool_promotion_gate_receipt,
         write_grok_prompt_tool_promotion_gate_receipt,
     )
+    from .utils import atomic_write_json, load_json as _load_json
 
     if args.source_ledger or args.instruction_context or args.task:
         raise AssuranceError(
@@ -172,16 +176,100 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
         if args.run_id == "RUN-CANONICAL-CLI-FAKE-001"
         else args.run_id
     )
-    receipt = write_grok_prompt_tool_promotion_gate_receipt(
-        run_root=args.run_root,
-        ask=args.ask,
-        retrieval_mode=retrieval_mode,
-        retrieval_mode_explicit=retrieval_mode_explicit,
-        run_id=run_id,
-        timeout_gate_path=args.grok_timeout_gate,
-        tool_availability_gate_path=args.grok_tool_availability_gate,
-        adapter_receipt_path=args.grok_adapter_receipt,
-    )
+    auto_evidence = bool(getattr(args, "grok_alpha_auto_evidence", False))
+    if auto_evidence:
+        if not getattr(args, "grok_execute", False):
+            raise AssuranceError("--grok-alpha-auto-evidence requires --grok-execute")
+        if getattr(args, "grok_mode", "acp-smoke") != "acp-smoke":
+            raise AssuranceError("--grok-alpha-auto-evidence supports only --grok-mode acp-smoke")
+        if retrieval_mode != "off":
+            raise AssuranceError("--grok-alpha-auto-evidence supports only --retrieval-mode off")
+
+    if getattr(args, "grok_fake_provider", False) and getattr(args, "grok_mode", "acp-smoke") != "acp-smoke":
+        raise AssuranceError("--grok-fake-provider supports only --grok-mode acp-smoke")
+
+    if getattr(args, "grok_execute", False):
+        if args.run_root.exists() and any(args.run_root.iterdir()):
+            raise AssuranceError(f"run_root must be empty or absent: {args.run_root}")
+        args.run_root.mkdir(parents=True, exist_ok=True)
+        timeout_gate_receipt = (
+            _load_json(args.grok_timeout_gate)
+            if args.grok_timeout_gate else None
+        )
+        tool_availability_gate_receipt = (
+            _load_json(args.grok_tool_availability_gate)
+            if args.grok_tool_availability_gate else None
+        )
+        adapter_receipt = (
+            _load_json(args.grok_adapter_receipt)
+            if args.grok_adapter_receipt else None
+        )
+
+        if auto_evidence:
+            evidence_root = args.run_root / "evidence"
+            evidence_root.mkdir()
+            if tool_availability_gate_receipt is None:
+                from .tool_availability_gate import (
+                    build_tool_availability_gate_receipt,
+                    probe_tool_availability,
+                )
+
+                tool_report = probe_tool_availability(
+                    tool_specs=[],
+                    runtime_id="GROK-ALPHA-NO-TOOL-ACP-001",
+                    probe_registry={},
+                )
+                tool_availability_gate_receipt = build_tool_availability_gate_receipt(
+                    tool_report
+                )
+                atomic_write_json(
+                    evidence_root / "alpha-tool-availability-report.json",
+                    tool_report,
+                )
+                atomic_write_json(
+                    evidence_root / "alpha-tool-availability-gate.json",
+                    tool_availability_gate_receipt,
+                )
+            if adapter_receipt is None:
+                from .grok_runtime_adapter import run_grok_version_smoke
+
+                adapter_receipt = run_grok_version_smoke(
+                    run_root=evidence_root / "adapter-containment",
+                    workspace_path=evidence_root / "adapter-containment" / "workspace",
+                    run_id=f"RUN-GROK-ALPHA-EVIDENCE-{uuid.uuid4().hex[:8].upper()}",
+                    retrieval_mode="off",
+                    retrieval_mode_explicit=False,
+                )
+
+        receipt = build_grok_prompt_tool_promotion_gate_receipt(
+            run_root=args.run_root,
+            ask=args.ask,
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
+            run_id=run_id,
+            timeout_gate_receipt=timeout_gate_receipt,
+            tool_availability_gate_receipt=tool_availability_gate_receipt,
+            adapter_receipt=adapter_receipt,
+        )
+        if auto_evidence:
+            receipt["limitations"].append(
+                "Alpha auto evidence declares an empty tool set and is valid only for no-tool loopback ACP smoke; it does not prove general Grok tool availability."
+            )
+        atomic_write_json(
+            args.run_root / "grok-prompt-tool-promotion-gate.json",
+            receipt,
+        )
+    else:
+        receipt = write_grok_prompt_tool_promotion_gate_receipt(
+            run_root=args.run_root,
+            ask=args.ask,
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
+            run_id=run_id,
+            timeout_gate_path=args.grok_timeout_gate,
+            tool_availability_gate_path=args.grok_tool_availability_gate,
+            adapter_receipt_path=args.grok_adapter_receipt,
+        )
 
     # If gate allows and --grok-execute is set, run the selected Grok mode.
     executed = False
@@ -197,13 +285,15 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
             run_grok_acp_once,
         )
         adapter_mode = "acp_smoke" if grok_mode == "acp-smoke" else "prompt_smoke"
+        execution_root = args.run_root / "grok-execution"
         adapter_request = GrokRunRequest(
-            run_root=args.run_root,
-            workspace_path=args.run_root / "workspace",
+            run_root=execution_root,
+            workspace_path=execution_root / "workspace",
             mode=adapter_mode,
             prompt_text=args.ask,
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
+            fake_provider=bool(getattr(args, "grok_fake_provider", False) or auto_evidence),
         )
         if adapter_mode == "acp_smoke":
             adapter_receipt = run_grok_acp_once(adapter_request)
@@ -211,42 +301,28 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
             adapter_receipt = run_grok_headless_once(adapter_request)
         executed = True
         # Rebuild the gate receipt with execution outcome attached.
-        from .grok_prompt_tool_gate import (
-            build_grok_prompt_tool_promotion_gate_receipt,
-        )
-        from .utils import load_json as _load_json
         receipt = build_grok_prompt_tool_promotion_gate_receipt(
             run_root=args.run_root,
             ask=args.ask,
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
             run_id=run_id,
-            timeout_gate_receipt=(
-                _load_json(args.grok_timeout_gate)
-                if args.grok_timeout_gate else None
-            ),
-            tool_availability_gate_receipt=(
-                _load_json(args.grok_tool_availability_gate)
-                if args.grok_tool_availability_gate else None
-            ),
-            adapter_receipt=(
-                _load_json(args.grok_adapter_receipt)
-                if args.grok_adapter_receipt else None
-            ),
+            timeout_gate_receipt=timeout_gate_receipt,
+            tool_availability_gate_receipt=tool_availability_gate_receipt,
+            adapter_receipt=adapter_receipt,
             execution_outcome={
                 "outcome": (
                     "completed" if adapter_receipt.get("valid") else "failed"
                 ),
                 "mode": adapter_mode,
-                "receipt_path": str(
-                    (args.run_root / "grok-runtime-receipt.json").resolve()
-                ),
-                "events_path": str(
-                    (args.run_root / "events.jsonl").resolve()
-                ),
+                "receipt_path": str(adapter_receipt["artifacts"]["receipt_path"]),
+                "events_path": str(adapter_receipt["artifacts"]["events_path"]),
             },
         )
-        from .utils import atomic_write_json
+        if auto_evidence:
+            receipt["limitations"].append(
+                "Alpha auto evidence declares an empty tool set and is valid only for no-tool loopback ACP smoke; it does not prove general Grok tool availability."
+            )
         atomic_write_json(
             args.run_root / "grok-prompt-tool-promotion-gate.json",
             receipt,
@@ -271,6 +347,16 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
 def _run_canonical(args: argparse.Namespace) -> int:
     if args.runtime == "grok":
         return _run_grok_prompt_tool_gate(args)
+    if args.runtime == "deepseek":
+        if args.mode != "real":
+            raise AssuranceError("--runtime deepseek requires --mode real")
+        if args.source_ledger or args.instruction_context or args.task:
+            raise AssuranceError(
+                "--source-ledger, --instruction-context, and --task are "
+                "canonical-only for gsa run; direct DeepSeek runtime accepts "
+                "only --ask"
+            )
+        return _run_deepseek(args)
     if args.retrieval_mode or args.grok_timeout_gate or args.grok_tool_availability_gate or args.grok_adapter_receipt:
         raise AssuranceError(
             "--retrieval-mode, --grok-timeout-gate, "
@@ -341,24 +427,36 @@ def _run_grok_doctor(args: argparse.Namespace) -> int:
                 "python gsa.py grok run --mode version-smoke "
                 "--run-root <path>"
             ),
+            "acp_smoke": (
+                "python gsa.py grok run --mode acp-smoke "
+                "--fake-provider --ask <prompt> --run-root <path>"
+            ),
             "tui_version_smoke": (
                 "python gsa.py tui --runtime grok --run version-smoke "
+                "--run-root <path>"
+            ),
+            "tui_acp_smoke": (
+                "python gsa.py tui --runtime grok --fake-provider --run <prompt> "
                 "--run-root <path>"
             ),
         },
         "runtime_boundaries": {
             "supported_mode": "version-smoke",
+            "supported_modes": ["version-smoke", "acp-smoke"],
             "retrieval_modes": list(SUPPORTED_RETRIEVAL_MODES),
             "default_retrieval_mode": "off",
             "network": "disabled",
-            "prompt_submission": "not_supported_in_this_slice",
-            "tool_execution": "not_supported_in_this_slice",
+            "prompt_submission": "explicit_acp_smoke_supported_not_default",
+            "tool_execution": "runtime_owned_in_explicit_acp_smoke_not_default_promoted",
+            "fake_provider": "explicit_loopback_fixture_available_for_acp_smoke",
             "no_residue_required": True,
-            "residue_scan_scope": "root_process_only_for_version_smoke",
+            "residue_scan_scope": "job_object_contained_for_adapter_launches",
         },
         "limitations": [
-            "Grok CLI wiring currently supports only locked-binary doctor and version-smoke execution.",
-            "Prompt and tool modes remain blocked until stronger Windows child-tree containment is wired.",
+            "Grok CLI wiring supports locked-binary doctor, version-smoke, and explicit ACP smoke.",
+            "The canonical gsa run path remains default; Grok prompt/tool execution is opt-in and not globally promoted.",
+            "Use --fake-provider for no-credential loopback ACP smoke; it is a fixed fixture and not real DeepSeek.",
+            "DeepSeek via Grok requires explicit Grok custom-model configuration and credentials; it is not auto-selected.",
         ],
     }
     observed = inspection.get("observed", {}) if isinstance(inspection, dict) else {}
@@ -367,38 +465,164 @@ def _run_grok_doctor(args: argparse.Namespace) -> int:
         f"binary: {inspection.get('binary_path', '')}",
         f"version: {observed.get('version_output', '')}",
         f"sha256 match: {inspection.get('checks', {}).get('sha256_match')}",
-        "supported run mode: version-smoke",
+        "supported run modes: version-smoke, acp-smoke",
         "retrieval modes: local_browser, framework_fallback, off",
+        "fake provider: explicit --fake-provider for acp-smoke",
         "no-residue required: true",
     ]
     _print_or_json(report, json_output=args.json, human_lines=human_lines)
     return 0 if report["valid"] else 1
 
 
-def _run_grok(args: argparse.Namespace) -> int:
-    from .grok_runtime_adapter import DEFAULT_RETRIEVAL_MODE, run_grok_version_smoke
+def _grok_real_deepseek_model_config() -> str:
+    return """
+[features]
+telemetry = false
+feedback = false
+lsp_tools = false
+codebase_indexing = false
+remote_fetch = false
 
-    if args.mode != "version-smoke":
+[session]
+load_envrc = false
+
+[models]
+default = "lif-deepseek-v4-pro"
+web_search = "lif-deepseek-v4-pro"
+default_reasoning_effort = "none"
+stream_tool_calls = false
+
+[model.lif-deepseek-v4-pro]
+model = "deepseek-v4-pro"
+base_url = "https://api.deepseek.com"
+name = "LIF DeepSeek V4 Pro"
+env_key = "LIF_DEEPSEEK_API_KEY"
+api_backend = "chat_completions"
+max_completion_tokens = 128
+context_window = 128000
+stream_tool_calls = false
+thinking = { type = "disabled" }
+extra_body = { thinking = { type = "disabled" } }
+
+[model."grok-4.5"]
+model = "deepseek-v4-pro"
+base_url = "https://api.deepseek.com"
+name = "LIF DeepSeek V4 Pro (builtin-default override)"
+env_key = "LIF_DEEPSEEK_API_KEY"
+api_backend = "chat_completions"
+max_completion_tokens = 128
+context_window = 128000
+stream_tool_calls = false
+thinking = { type = "disabled" }
+extra_body = { thinking = { type = "disabled" } }
+
+[permission]
+rules = [
+  { action = "deny", tool = "edit" },
+  { action = "deny", tool = "bash" },
+  { action = "deny", tool = "grep" },
+  { action = "deny", tool = "mcp" },
+  { action = "deny", tool = "webfetch" },
+  { action = "deny", tool = "websearch" },
+]
+"""
+
+
+def _run_grok(args: argparse.Namespace) -> int:
+    from .grok_runtime_adapter import (
+        DEFAULT_RETRIEVAL_MODE,
+        GrokRunRequest,
+        run_grok_acp_once,
+        run_grok_version_smoke,
+    )
+
+    if args.mode not in ("version-smoke", "acp-smoke"):
         raise AssuranceError(f"unsupported Grok run mode: {args.mode}")
+    if args.fake_provider and args.mode != "acp-smoke":
+        raise AssuranceError("--fake-provider is only valid with --mode acp-smoke")
+    if args.real_deepseek and args.mode != "acp-smoke":
+        raise AssuranceError("--real-deepseek is only valid with --mode acp-smoke")
+    if args.fake_provider and args.real_deepseek:
+        raise AssuranceError("--fake-provider and --real-deepseek are mutually exclusive")
     retrieval_mode_explicit = args.retrieval_mode is not None
     retrieval_mode = args.retrieval_mode or DEFAULT_RETRIEVAL_MODE
-    receipt = run_grok_version_smoke(
-        run_root=args.run_root,
-        workspace_path=args.workspace,
-        run_id=args.run_id,
-        retrieval_mode=retrieval_mode,
-        retrieval_mode_explicit=retrieval_mode_explicit,
-    )
+    if args.mode == "version-smoke":
+        receipt = run_grok_version_smoke(
+            run_root=args.run_root,
+            workspace_path=args.workspace,
+            run_id=args.run_id,
+            retrieval_mode=retrieval_mode,
+            retrieval_mode_explicit=retrieval_mode_explicit,
+        )
+    else:
+        if not args.ask:
+            raise AssuranceError("--ask is required for --mode acp-smoke")
+        model_id = "lif-fake-deepseek"
+        provider_environment: dict[str, str] = {}
+        model_config_toml: str | None = None
+        if args.real_deepseek:
+            from .deepseek_adapter import _read_windows_credential
+
+            api_key = _read_windows_credential(args.credential_target)
+            model_id = "lif-deepseek-v4-pro"
+            provider_environment = {
+                "LIF_DEEPSEEK_API_KEY": api_key,
+                "HTTP_PROXY": "",
+                "HTTPS_PROXY": "",
+                "ALL_PROXY": "",
+                "NO_PROXY": "",
+            }
+            model_config_toml = _grok_real_deepseek_model_config()
+        receipt = run_grok_acp_once(
+            GrokRunRequest(
+                run_root=args.run_root,
+                workspace_path=args.workspace or (args.run_root / "workspace"),
+                run_id=args.run_id or "RUN-GROK-ACP-SMOKE-001",
+                mode="acp_smoke",
+                prompt_text=args.ask,
+                model_id=model_id,
+                retrieval_mode=retrieval_mode,
+                retrieval_mode_explicit=retrieval_mode_explicit,
+                fake_provider=args.fake_provider,
+                provider_environment=provider_environment,
+                model_config_toml=model_config_toml,
+                disable_builtin_tools=bool(args.real_deepseek),
+            )
+        )
     containment = receipt.get("containment", {})
     human_lines = [
-        f"grok run [version-smoke]: {'valid' if receipt['valid'] else 'invalid'}",
+        f"grok run [{args.mode}]: {'valid' if receipt['valid'] else 'invalid'}",
         f"run_id: {receipt['run_id']}",
         f"run_root: {receipt['request']['run_root']}",
-        f"version: {receipt['binary']['version_output']}",
+        f"version: {receipt['binary'].get('version_output', '')}",
         f"retrieval mode: {receipt['retrieval']['mode']}",
         f"no residue observed: {containment.get('no_residue_observed')}",
         f"external cleanup required: {containment.get('external_cleanup_required')}",
         f"events: {receipt['artifacts']['events_path']}",
+    ]
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["valid"] else 1
+
+
+def _run_deepseek(args: argparse.Namespace) -> int:
+    from .deepseek_runtime_adapter import run_deepseek_direct_smoke
+
+    if not args.ask:
+        raise AssuranceError("--ask is required for deepseek run")
+    receipt = run_deepseek_direct_smoke(
+        run_root=args.run_root,
+        prompt_text=args.ask,
+        credential_target=args.credential_target,
+        run_id=args.run_id,
+        timeout_seconds=args.api_timeout,
+    )
+    human_lines = [
+        f"deepseek run: {'valid' if receipt['valid'] else 'invalid'}",
+        f"run_id: {receipt['run_id']}",
+        f"run_root: {receipt['request']['run_root']}",
+        f"http status: {receipt['execution']['http_status_code']}",
+        f"events: {receipt['artifacts']['events_path']}",
+        f"receipt: {receipt['artifacts']['receipt_path']}",
     ]
     _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
     return 0 if receipt["valid"] else 1
@@ -432,6 +656,733 @@ def _run_grok_observe_tools(args: argparse.Namespace) -> int:
         )
     payload = bundle if args.include_tool_availability else receipt
     _print_or_json(payload, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["valid"] else 1
+
+
+def _default_alpha_smoke_run_root() -> Path:
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return ROOT / ".gsa" / "alpha-smoke" / f"{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _run_alpha_smoke(args: argparse.Namespace) -> int:
+    from .grok_runtime_adapter import (
+        DEFAULT_RETRIEVAL_MODE,
+        GrokRunRequest,
+        run_grok_acp_once,
+    )
+
+    run_root = args.run_root or _default_alpha_smoke_run_root()
+    prompt_text = args.ask or "Return the fixed loopback fixture marker only."
+    receipt = run_grok_acp_once(
+        GrokRunRequest(
+            run_root=run_root,
+            workspace_path=args.workspace or (run_root / "workspace"),
+            run_id=args.run_id or f"RUN-GSA-ALPHA-SMOKE-{uuid.uuid4().hex[:8].upper()}",
+            mode="acp_smoke",
+            prompt_text=prompt_text,
+            retrieval_mode=DEFAULT_RETRIEVAL_MODE,
+            retrieval_mode_explicit=False,
+            fake_provider=True,
+            disable_builtin_tools=True,
+        )
+    )
+    containment = receipt.get("containment", {})
+    artifacts = receipt.get("artifacts", {})
+    human_lines = [
+        f"gsa alpha smoke: {'valid' if receipt['valid'] else 'invalid'}",
+        "runtime: grok acp-smoke",
+        "provider: loopback fake-provider (no credentials, no external network)",
+        f"run_id: {receipt['run_id']}",
+        f"run_root: {receipt['request']['run_root']}",
+        f"version: {receipt['binary'].get('version_output', '')}",
+        f"no residue observed: {containment.get('no_residue_observed')}",
+        f"events: {artifacts.get('events_path', '')}",
+        f"receipt: {artifacts.get('receipt_path', '')}",
+    ]
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["valid"] else 1
+
+
+def _default_alpha_ui_check_run_root() -> Path:
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return ROOT / ".gsa" / "alpha-ui-check" / f"{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _run_alpha_ui_check(args: argparse.Namespace) -> int:
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    from .utils import atomic_write_json, sha256_bytes, utc_now
+
+    run_root = args.run_root or _default_alpha_ui_check_run_root()
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    from .tui.app import TuiPrototype
+    from .tui.event_source import FakeEventSource, LiveRunEventSource, build_gate_chain_demo
+    from .tui.main import _interactive_console_available, _run_static_live
+
+    checks: dict[str, bool] = {}
+    artifacts: dict[str, str] = {}
+    details: dict[str, Any] = {}
+
+    sample_app = TuiPrototype.with_sample_data()
+    sample_output = sample_app.render(args.width, args.height)
+    checks["self_ui_static_rendered"] = "Traceback" not in sample_output
+    checks["self_ui_frame_present"] = "当前任务" in sample_output and "文件" in sample_output
+    checks["self_ui_terminal_bounds_accepted"] = not sample_output.startswith("Viewport too small")
+    details["self_ui_static_render_sha256"] = sha256_bytes(sample_output.encode("utf-8"))
+
+    source = FakeEventSource(preload=build_gate_chain_demo())
+    event_app = TuiPrototype.with_event_source(source)
+    event_app.poll_events()
+    event_output = event_app.render(args.width, args.height)
+    checks["self_ui_event_projection_drained"] = bool(getattr(event_app, "_event_log", []))
+    checks["self_ui_event_projection_rendered"] = "Traceback" not in event_output
+    details["self_ui_event_render_sha256"] = sha256_bytes(event_output.encode("utf-8"))
+
+    console_available = _interactive_console_available()
+    checks["non_console_static_fallback_available"] = True
+    details["interactive_console_available"] = console_available
+
+    grok_report: dict[str, Any]
+    try:
+        from .grok_runtime_adapter import inspect_grok_runtime
+
+        grok_report = inspect_grok_runtime()
+        checks["grok_fallback_binary_valid"] = grok_report.get("valid") is True
+        checks["grok_fallback_version_observed"] = bool(
+            grok_report.get("observed", {}).get("version_output")
+        )
+    except Exception as exc:
+        grok_report = {"valid": False, "error": str(exc)}
+        checks["grok_fallback_binary_valid"] = False
+        checks["grok_fallback_version_observed"] = False
+
+    live_smoke: dict[str, Any] = {
+        "requested": bool(args.run_live_smoke),
+        "status": "skipped",
+    }
+    if args.run_live_smoke:
+        from .tui.bridge import build_grok_acp_live_run_fn
+
+        live_run_root = run_root / "live-static-acp"
+        run_fn = build_grok_acp_live_run_fn(
+            run_root=str(live_run_root),
+            workspace=str(live_run_root / "workspace"),
+            prompt_text=args.ask or "Return the fixed loopback fixture marker only.",
+            run_id=args.run_id or f"RUN-GSA-ALPHA-UI-{uuid.uuid4().hex[:8].upper()}",
+            interactive=False,
+            fake_provider=True,
+        )
+        live_source = LiveRunEventSource(run_fn=run_fn)
+        live_app = TuiPrototype.with_event_source(live_source)
+        live_app.set_grok_provider_mode(True)
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = _run_static_live(live_app, live_source, args.width, args.height)
+        rendered = output.getvalue()
+        live_receipt = live_source.receipt or {}
+        checks["live_static_acp_exit_zero"] = exit_code == 0
+        checks["live_static_acp_receipt_valid"] = live_receipt.get("valid") is True
+        checks["live_static_acp_marker_rendered"] = "LIF_FAKE_PROVIDER_OK" in rendered
+        checks["live_static_acp_no_traceback"] = "Traceback" not in rendered
+        live_output_path = run_root / "live-static-tui-output.txt"
+        live_output_path.write_text(rendered, encoding="utf-8")
+        artifacts["live_static_tui_output_path"] = str(live_output_path)
+        live_smoke = {
+            "requested": True,
+            "status": "completed" if all(
+                checks[name]
+                for name in (
+                    "live_static_acp_exit_zero",
+                    "live_static_acp_receipt_valid",
+                    "live_static_acp_marker_rendered",
+                    "live_static_acp_no_traceback",
+                )
+            ) else "failed",
+            "run_root": str(live_run_root),
+            "render_sha256": sha256_bytes(rendered.encode("utf-8")),
+            "receipt_path": live_receipt.get("artifacts", {}).get("receipt_path", ""),
+        }
+
+    receipt = {
+        "schema_version": "0.1.0-draft",
+        "receipt_kind": "alpha_ui_usability_check_receipt",
+        "created_at": utc_now(),
+        "valid": all(checks.values()),
+        "run_root": str(run_root),
+        "ui_strategy": {
+            "primary": "gsa_tui",
+            "fallback": "grok_native_ui",
+            "primary_scope": "daily assurance view, event projection, gate visibility",
+            "fallback_scope": "runtime-owned interactive UI when GSA TUI is unavailable",
+            "beta_deferred": ["real terminal keyboard smoke", "human UX timing study"],
+        },
+        "checks": checks,
+        "details": details,
+        "grok_fallback": {
+            "valid": grok_report.get("valid") is True,
+            "binary_path": grok_report.get("binary_path", ""),
+            "version_output": grok_report.get("observed", {}).get("version_output", ""),
+            "launch_hint": "grok",
+        },
+        "live_smoke": live_smoke,
+        "artifacts": artifacts,
+        "limitations": [
+            "This check validates deterministic render/projection/static live paths; it does not prove keyboard interaction in a real terminal.",
+            "The Grok fallback check verifies the locked binary and launch hint, not a full native UI session.",
+            "Live static smoke uses the loopback fake provider and does not prove real model/tool execution.",
+        ],
+    }
+    receipt_path = run_root / "alpha-ui-check.json"
+    receipt["artifacts"]["receipt_path"] = str(receipt_path)
+    atomic_write_json(receipt_path, receipt, overwrite=args.overwrite)
+
+    human_lines = [
+        f"gsa alpha ui-check: {'valid' if receipt['valid'] else 'invalid'}",
+        f"run_root: {run_root}",
+        f"primary UI: {receipt['ui_strategy']['primary']}",
+        f"fallback UI: {receipt['ui_strategy']['fallback']}",
+        f"interactive console available: {console_available}",
+        f"live static smoke: {live_smoke['status']}",
+        f"receipt: {receipt_path}",
+    ]
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["valid"] else 1
+
+
+def _default_alpha_tool_check_run_root() -> Path:
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return ROOT / ".gsa" / "alpha-tool-check" / f"{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _default_alpha_acp_verification_paths() -> list[Path]:
+    base = ROOT / "candidate-gates" / "grok-0.2.112-live-gates-admin-r3"
+    return [
+        base / "fake-tool-allow" / "verification.json",
+        base / "fake-tool-cancel" / "verification.json",
+    ]
+
+
+def _enrich_alpha_acp_verification(path: Path, output_dir: Path) -> dict[str, Any]:
+    from .utils import atomic_write_json, load_json
+
+    verification = load_json(path)
+    if not isinstance(verification, dict):
+        raise AssuranceError(f"ACP verification is not a JSON object: {path}")
+    result_path = path.parent / "result.json"
+    result = load_json(result_path) if result_path.exists() else {}
+    if not isinstance(result, dict):
+        result = {}
+    acp = result.get("acp", {}) if isinstance(result.get("acp"), dict) else {}
+    provider = (
+        result.get("provider", {}) if isinstance(result.get("provider"), dict) else {}
+    )
+    enriched = dict(verification)
+    if "scenario" not in enriched and isinstance(result.get("scenario"), str):
+        enriched["scenario"] = result["scenario"]
+    if "permission_outcome" not in enriched and isinstance(
+        acp.get("permission_outcome"), str
+    ):
+        enriched["permission_outcome"] = acp["permission_outcome"]
+    if "provider_scenario" not in enriched and isinstance(provider.get("scenario"), str):
+        enriched["provider_scenario"] = provider["scenario"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{path.parent.name}-verification.enriched.json"
+    atomic_write_json(output_path, enriched, overwrite=True)
+    return {
+        "source_path": str(path),
+        "result_path": str(result_path) if result_path.exists() else "",
+        "enriched_path": str(output_path),
+        "scenario": enriched.get("scenario", ""),
+        "permission_outcome": enriched.get("permission_outcome", ""),
+        "provider_scenario": enriched.get("provider_scenario", ""),
+        "valid": enriched.get("valid") is True,
+    }
+
+
+def _run_alpha_tool_check(args: argparse.Namespace) -> int:
+    from .grok_tool_permission_observer import (
+        build_grok_tool_permission_observation_bundle,
+        observe_grok_tool_permission_surfaces,
+    )
+    from .utils import atomic_write_json, utc_now
+
+    run_root = args.run_root or _default_alpha_tool_check_run_root()
+    run_root.mkdir(parents=True, exist_ok=True)
+    verification_paths = args.acp_verification or _default_alpha_acp_verification_paths()
+    missing_paths = [str(path) for path in verification_paths if not path.exists()]
+    enriched_records: list[dict[str, Any]] = []
+    enriched_paths: list[Path] = []
+    if not missing_paths:
+        enriched_dir = run_root / "enriched-acp-verifications"
+        for path in verification_paths:
+            record = _enrich_alpha_acp_verification(path, enriched_dir)
+            enriched_records.append(record)
+            enriched_paths.append(Path(record["enriched_path"]))
+
+    negative_observation = observe_grok_tool_permission_surfaces(
+        acp_verification_paths=()
+    )
+    negative_bundle = build_grok_tool_permission_observation_bundle(
+        negative_observation
+    )
+    atomic_write_json(
+        run_root / "negative-tool-observation-bundle.json",
+        negative_bundle,
+        overwrite=args.overwrite,
+    )
+
+    positive_bundle: dict[str, Any] | None = None
+    if not missing_paths:
+        positive_observation = observe_grok_tool_permission_surfaces(
+            acp_verification_paths=enriched_paths
+        )
+        positive_bundle = build_grok_tool_permission_observation_bundle(
+            positive_observation
+        )
+        atomic_write_json(
+            run_root / "positive-tool-observation-bundle.json",
+            positive_bundle,
+            overwrite=args.overwrite,
+        )
+
+    negative_gate_decision = negative_bundle["tool_availability_gate_receipt"][
+        "decisions"
+    ]["gate_decision"]
+    negative_degraded_ids = [
+        item["tool_id"]
+        for item in negative_bundle["tool_availability_report"].get("degraded", [])
+        if isinstance(item, dict)
+    ]
+    positive_gate_decision = (
+        positive_bundle["tool_availability_gate_receipt"]["decisions"]["gate_decision"]
+        if positive_bundle is not None
+        else "missing"
+    )
+    positive_acp = (
+        positive_bundle["observation_receipt"]["acp_permission_observation"]
+        if positive_bundle is not None
+        else {}
+    )
+    positive_status_lists = (
+        positive_bundle["tool_availability_report"] if positive_bundle is not None else {}
+    )
+
+    checks = {
+        "verification_paths_present": not missing_paths,
+        "negative_without_acp_probe_blocks": negative_gate_decision == "block",
+        "negative_permission_probe_degraded": (
+            "grok_acp_permission_probe" in negative_degraded_ids
+        ),
+        "negative_no_model_invoked": negative_bundle["observation_receipt"]["checks"][
+            "no_model_invoked"
+        ],
+        "negative_no_network_requested": negative_bundle["observation_receipt"][
+            "checks"
+        ]["no_network_requested"],
+        "positive_dual_acp_required_scenarios_verified": (
+            positive_acp.get("required_scenarios_verified") is True
+        ),
+        "positive_covers_allow_and_cancel": set(
+            positive_acp.get("covered_scenarios", [])
+        )
+        == {"allow_once", "cancel_permission"},
+        "positive_permission_outcomes_observed": set(
+            positive_acp.get("permission_outcomes", [])
+        )
+        == {"allow_once", "cancelled"},
+        "positive_tool_availability_allows": positive_gate_decision == "allow",
+        "positive_no_degraded_tools": (
+            positive_bundle is not None
+            and positive_status_lists.get("degraded") == []
+        ),
+        "positive_no_unavailable_tools": (
+            positive_bundle is not None
+            and positive_status_lists.get("unavailable") == []
+        ),
+        "positive_no_unprobed_tools": (
+            positive_bundle is not None
+            and positive_status_lists.get("unprobed") == []
+        ),
+        "positive_no_model_invoked": (
+            positive_bundle is not None
+            and positive_bundle["observation_receipt"]["checks"]["no_model_invoked"]
+        ),
+        "positive_no_network_requested": (
+            positive_bundle is not None
+            and positive_bundle["observation_receipt"]["checks"][
+                "no_network_requested"
+            ]
+        ),
+    }
+    receipt = {
+        "schema_version": "0.1.0-draft",
+        "receipt_kind": "alpha_tool_check_receipt",
+        "created_at": utc_now(),
+        "valid": all(checks.values()),
+        "run_root": str(run_root),
+        "verification_inputs": {
+            "paths": [str(path) for path in verification_paths],
+            "missing_paths": missing_paths,
+            "enriched": enriched_records,
+        },
+        "checks": checks,
+        "negative_case": {
+            "description": "No ACP permission verification is attached; tool availability must block.",
+            "observation_decision": negative_bundle["observation_receipt"]["decision"],
+            "gate_decision": negative_gate_decision,
+            "degraded_tool_ids": negative_degraded_ids,
+            "bundle_path": str(run_root / "negative-tool-observation-bundle.json"),
+        },
+        "positive_case": (
+            {
+                "description": "allow_once and cancel_permission ACP verifications are attached; tool availability may allow.",
+                "observation_decision": positive_bundle["observation_receipt"][
+                    "decision"
+                ],
+                "gate_decision": positive_gate_decision,
+                "covered_scenarios": positive_acp.get("covered_scenarios", []),
+                "permission_outcomes": positive_acp.get("permission_outcomes", []),
+                "available_count": positive_bundle[
+                    "tool_availability_gate_receipt"
+                ]["available_count"],
+                "bundle_path": str(run_root / "positive-tool-observation-bundle.json"),
+            }
+            if positive_bundle is not None
+            else {
+                "description": "Positive case skipped because verification paths were missing.",
+                "gate_decision": "missing",
+            }
+        ),
+        "limitations": [
+            "This check hardens Grok tool availability and ACP fake-tool permission semantics; it does not call a real external tool.",
+            "The attached fake-tool verifications prove allow/cancel ACP permission paths, not arbitrary MCP or web tools.",
+            "Tool availability is a hard structured return; model-facing text is not the enforcement layer.",
+        ],
+    }
+    receipt_path = run_root / "alpha-tool-check.json"
+    receipt["artifacts"] = {
+        "receipt_path": str(receipt_path),
+        "negative_bundle_path": str(run_root / "negative-tool-observation-bundle.json"),
+        "positive_bundle_path": (
+            str(run_root / "positive-tool-observation-bundle.json")
+            if positive_bundle is not None
+            else ""
+        ),
+    }
+    atomic_write_json(receipt_path, receipt, overwrite=args.overwrite)
+    human_lines = [
+        f"gsa alpha tool-check: {'valid' if receipt['valid'] else 'invalid'}",
+        f"run_root: {run_root}",
+        f"negative gate: {negative_gate_decision}",
+        f"positive gate: {positive_gate_decision}",
+        f"missing verification paths: {len(missing_paths)}",
+        f"receipt: {receipt_path}",
+    ]
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
+    return 0 if receipt["valid"] else 1
+
+
+def _default_alpha_real_call_run_root() -> Path:
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return ROOT / ".gsa" / "alpha-real-call" / f"{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _run_alpha_real_call(args: argparse.Namespace) -> int:
+    from .grok_runtime_adapter import DEFAULT_RETRIEVAL_MODE
+    from .utils import atomic_write_json, sha256_bytes, utc_now
+
+    run_root = args.run_root or _default_alpha_real_call_run_root()
+    run_root.mkdir(parents=True, exist_ok=True)
+    adapter_run_root = run_root / "grok-real-acp"
+    workspace_path = args.workspace or (adapter_run_root / "workspace")
+    prompt_text = args.ask or "Return exactly: GSA_ALPHA_REAL_CALL_OK"
+    run_id = args.run_id or f"RUN-GSA-ALPHA-REAL-{uuid.uuid4().hex[:8].upper()}"
+
+    credential_error = ""
+    api_key = ""
+    try:
+        from .deepseek_adapter import _read_windows_credential
+
+        api_key = _read_windows_credential(args.credential_target)
+    except Exception as exc:
+        credential_error = f"{type(exc).__name__}: {exc}"
+
+    adapter_receipt: dict[str, Any] = {}
+    adapter_error = ""
+    direct_receipt: dict[str, Any] = {}
+    direct_error = ""
+    request_shape = {
+        "transport": args.transport,
+        "mode": "acp_smoke" if args.transport == "grok-acp" else "chat_completions",
+        "run_root": str(adapter_run_root),
+        "workspace_path": str(workspace_path),
+        "run_id": run_id,
+        "model_id": "lif-deepseek-v4-pro",
+        "retrieval_mode": DEFAULT_RETRIEVAL_MODE,
+        "retrieval_mode_explicit": False,
+        "fake_provider": False,
+        "disable_builtin_tools": True,
+        "provider_environment_keys": [
+            "LIF_DEEPSEEK_API_KEY",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+        ],
+        "model_config_env_key": "LIF_DEEPSEEK_API_KEY",
+    }
+    if api_key and args.transport == "grok-acp":
+        from .grok_runtime_adapter import GrokRunRequest, run_grok_acp_once
+
+        try:
+            adapter_receipt = run_grok_acp_once(
+                GrokRunRequest(
+                    run_root=adapter_run_root,
+                    workspace_path=workspace_path,
+                    run_id=run_id,
+                    mode="acp_smoke",
+                    prompt_text=prompt_text,
+                    model_id="lif-deepseek-v4-pro",
+                    retrieval_mode=DEFAULT_RETRIEVAL_MODE,
+                    retrieval_mode_explicit=False,
+                    fake_provider=False,
+                    provider_environment={
+                        "LIF_DEEPSEEK_API_KEY": api_key,
+                        "HTTP_PROXY": "",
+                        "HTTPS_PROXY": "",
+                        "ALL_PROXY": "",
+                        "NO_PROXY": "",
+                    },
+                    model_config_toml=_grok_real_deepseek_model_config(),
+                    disable_builtin_tools=True,
+                )
+            )
+        except Exception as exc:
+            adapter_error = f"{type(exc).__name__}: {exc}"
+    elif api_key and args.transport == "direct-deepseek":
+        from .deepseek_runtime_adapter import (
+            DeepSeekRunRequest,
+            run_deepseek_direct_once,
+        )
+
+        try:
+            direct_receipt = run_deepseek_direct_once(
+                DeepSeekRunRequest(
+                    run_root=adapter_run_root,
+                    run_id=run_id,
+                    prompt_text=prompt_text,
+                    credential_target=args.credential_target,
+                    timeout_seconds=args.api_timeout,
+                ),
+                credential_reader=lambda _target: api_key,
+            )
+        except Exception as exc:
+            direct_error = f"{type(exc).__name__}: {exc}"
+
+    adapter_request = (
+        adapter_receipt.get("request", {}) if isinstance(adapter_receipt, dict) else {}
+    )
+    adapter_retrieval = (
+        adapter_receipt.get("retrieval", {}) if isinstance(adapter_receipt, dict) else {}
+    )
+    adapter_checks = (
+        adapter_receipt.get("checks", {}) if isinstance(adapter_receipt, dict) else {}
+    )
+    adapter_prompt = (
+        adapter_receipt.get("prompt", {}) if isinstance(adapter_receipt, dict) else {}
+    )
+    adapter_artifacts = (
+        adapter_receipt.get("artifacts", {}) if isinstance(adapter_receipt, dict) else {}
+    )
+
+    common_checks = {
+        "credential_read_attempted": True,
+        "credential_read_succeeded": bool(api_key) and not credential_error,
+        "fake_provider_disabled": request_shape["fake_provider"] is False
+        and adapter_request.get("fake_provider", False) is False,
+        "real_provider_model_configured": request_shape["model_id"] == "lif-deepseek-v4-pro",
+        "builtin_tools_disabled": request_shape["disable_builtin_tools"] is True
+        and adapter_request.get("disable_builtin_tools", True) is True,
+        "retrieval_off": request_shape["retrieval_mode"] == "off"
+        and adapter_retrieval.get("mode", "off") == "off",
+    }
+    if args.transport == "grok-acp":
+        checks = {
+            **common_checks,
+            "adapter_receipt_valid": adapter_receipt.get("valid") is True,
+            "acp_prompt_completed": adapter_checks.get("acp_prompt_completed") is True,
+            "acp_response_received": adapter_checks.get("acp_response_received") is True,
+            "provider_api_errors_absent": adapter_checks.get(
+                "provider_api_errors_absent"
+            )
+            is True,
+            "no_residue_observed": (
+                adapter_receipt.get("containment", {}).get("no_residue_observed")
+                is True
+                if isinstance(adapter_receipt.get("containment", {}), dict)
+                else False
+            ),
+        }
+    else:
+        direct_prompt = (
+            direct_receipt.get("prompt", {})
+            if isinstance(direct_receipt.get("prompt", {}), dict)
+            else {}
+        )
+        direct_execution = (
+            direct_receipt.get("execution", {})
+            if isinstance(direct_receipt.get("execution", {}), dict)
+            else {}
+        )
+        checks = {
+            **common_checks,
+            "direct_adapter_receipt_valid": direct_receipt.get("valid") is True,
+            "direct_http_status_ok": direct_execution.get("http_status_code") == 200,
+            "direct_response_received": bool(direct_prompt.get("response_sha256")),
+            "direct_finish_reason_observed": bool(
+                direct_prompt.get("response_finish_reason")
+            ),
+            "direct_no_provider_error": direct_error == "",
+            "no_child_process_started": True,
+        }
+
+    receipt = {
+        "schema_version": "0.1.0-draft",
+        "receipt_kind": "alpha_real_call_receipt",
+        "created_at": utc_now(),
+        "run_root": str(run_root),
+        "run_id": run_id,
+        "provider": {
+            "runtime_owner": "grok" if args.transport == "grok-acp" else "deepseek",
+            "model_id": "lif-deepseek-v4-pro",
+            "credential_target": args.credential_target,
+            "credential_error": credential_error,
+            "external_network_expected": True,
+            "fake_provider": False,
+        },
+        "request": request_shape,
+        "prompt": {
+            "prompt_sha256": sha256_bytes(prompt_text.encode("utf-8")),
+            "prompt_bytes": len(prompt_text.encode("utf-8")),
+            "response_sha256": (
+                adapter_prompt.get("response_sha256", "")
+                if args.transport == "grok-acp"
+                else direct_receipt.get("prompt", {}).get("response_sha256", "")
+                if isinstance(direct_receipt.get("prompt", {}), dict)
+                else ""
+            ),
+            "response_bytes_observed": (
+                bool(adapter_prompt.get("response_sha256"))
+                if args.transport == "grok-acp"
+                else bool(
+                    direct_receipt.get("prompt", {}).get("response_sha256", "")
+                    if isinstance(direct_receipt.get("prompt", {}), dict)
+                    else ""
+                )
+            ),
+        },
+        "adapter": {
+            "valid": adapter_receipt.get("valid") is True,
+            "error": adapter_error,
+            "receipt_path": adapter_artifacts.get("receipt_path", ""),
+            "events_path": adapter_artifacts.get("events_path", ""),
+            "binary_version": adapter_receipt.get("binary", {}).get(
+                "version_output", ""
+            )
+            if isinstance(adapter_receipt.get("binary", {}), dict)
+            else "",
+            "selected_checks": {
+                key: adapter_checks.get(key)
+                for key in (
+                    "binary_inspection_valid",
+                    "workspace_trust_valid",
+                    "workspace_trust_granted",
+                    "acp_initialize_ok",
+                    "acp_session_created",
+                    "acp_prompt_completed",
+                    "acp_response_received",
+                    "provider_api_errors_absent",
+                    "no_residue_observed",
+                )
+            },
+        },
+        "direct_provider": {
+            "valid": direct_receipt.get("valid") is True and direct_error == "",
+            "error": direct_error,
+            "receipt_path": direct_receipt.get("artifacts", {}).get(
+                "receipt_path", ""
+            )
+            if isinstance(direct_receipt.get("artifacts", {}), dict)
+            else "",
+            "events_path": direct_receipt.get("artifacts", {}).get("events_path", "")
+            if isinstance(direct_receipt.get("artifacts", {}), dict)
+            else "",
+            "http_status_code": direct_receipt.get("execution", {}).get(
+                "http_status_code"
+            )
+            if isinstance(direct_receipt.get("execution", {}), dict)
+            else None,
+            "finish_reason": direct_receipt.get("prompt", {}).get(
+                "response_finish_reason", ""
+            )
+            if isinstance(direct_receipt.get("prompt", {}), dict)
+            else "",
+            "model": direct_receipt.get("prompt", {}).get("model_id", "")
+            if isinstance(direct_receipt.get("prompt", {}), dict)
+            else "",
+            "usage": direct_receipt.get("prompt", {}).get("usage", {})
+            if isinstance(direct_receipt.get("prompt", {}), dict)
+            else {},
+            "private_reasoning_content_sha256": direct_receipt.get("prompt", {}).get(
+                "private_reasoning_content_sha256"
+            )
+            if isinstance(direct_receipt.get("prompt", {}), dict)
+            else None,
+        },
+        "checks": checks,
+        "limitations": [
+            (
+                "The default grok-acp transport performs a real Grok ACP model call through DeepSeek when credentials are available."
+                if args.transport == "grok-acp"
+                else "The direct-deepseek transport performs a fixed prompt Chat Completions control call without project source context."
+            ),
+            (
+                "It disables Grok built-in tool surfaces and keeps retrieval mode off; it does not exercise external tools."
+                if args.transport == "grok-acp"
+                else "It bypasses Grok entirely and therefore proves provider/API availability, not Grok ACP compatibility."
+            ),
+            "The alpha receipt stores hashes and selected adapter status only; API key material is not serialized.",
+        ],
+    }
+    checks["no_secret_serialized"] = (not api_key) or api_key not in _json_dump(receipt)
+    receipt["valid"] = all(checks.values())
+    receipt_path = run_root / "alpha-real-call.json"
+    receipt["artifacts"] = {
+        "receipt_path": str(receipt_path),
+        "adapter_run_root": str(adapter_run_root),
+    }
+    atomic_write_json(receipt_path, receipt, overwrite=args.overwrite)
+
+    human_lines = [
+        f"gsa alpha real-call: {'valid' if receipt['valid'] else 'invalid'}",
+        f"run_root: {run_root}",
+        f"transport: {args.transport}",
+        f"credential read: {'ok' if checks['credential_read_succeeded'] else 'failed'}",
+        f"adapter valid: {receipt['adapter']['valid']}",
+        f"direct provider valid: {receipt['direct_provider']['valid']}",
+        f"receipt: {receipt_path}",
+    ]
+    _print_or_json(receipt, json_output=args.json, human_lines=human_lines)
     return 0 if receipt["valid"] else 1
 
 
@@ -473,6 +1424,12 @@ def _run_tui(args: argparse.Namespace) -> int:
     if args.grok_retrieval_mode and args.runtime != "grok":
         print("--retrieval-mode is only valid with --runtime grok", file=sys.stderr)
         return 2
+    if getattr(args, "fake_provider", False) and args.runtime != "grok":
+        print("--fake-provider is only valid with --runtime grok", file=sys.stderr)
+        return 2
+    if args.runtime == "deepseek" and not args.real:
+        print("--runtime deepseek requires --real", file=sys.stderr)
+        return 2
 
     tui_args: list[str] = [
         "--width",
@@ -498,6 +1455,8 @@ def _run_tui(args: argparse.Namespace) -> int:
         tui_args.extend(["--run", args.tui_run])
     if args.real:
         tui_args.append("--real")
+    if getattr(args, "fake_provider", False):
+        tui_args.append("--fake-provider")
     if args.credential_target:
         tui_args.extend(["--credential-target", args.credential_target])
     if args.tui_run_root:
@@ -590,11 +1549,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--run-root", type=Path, required=True)
     run.add_argument(
         "--runtime",
-        choices=["canonical", "grok"],
+        choices=["canonical", "grok", "deepseek"],
         default="canonical",
         help=(
             "Runtime path. canonical is the default; grok emits an explicit "
-            "fail-closed prompt/tool promotion gate receipt."
+            "fail-closed prompt/tool promotion gate receipt; deepseek runs "
+            "the direct provider adapter."
         ),
     )
     run.add_argument("--source-ledger", type=Path)
@@ -665,6 +1625,23 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        "--grok-alpha-auto-evidence",
+        action="store_true",
+        help=(
+            "With --grok-execute, generate local alpha-only no-tool and "
+            "adapter-containment evidence before running ACP smoke. This "
+            "does not promote the general Grok prompt/tool path."
+        ),
+    )
+    run.add_argument(
+        "--grok-fake-provider",
+        action="store_true",
+        help=(
+            "For --grok-execute --grok-mode acp-smoke, use the local "
+            "loopback fake provider instead of external model credentials."
+        ),
+    )
+    run.add_argument(
         "--grok-mode",
         choices=["prompt-smoke", "acp-smoke"],
         default="acp-smoke",
@@ -715,9 +1692,34 @@ def _parser() -> argparse.ArgumentParser:
     )
     grok_run.add_argument(
         "--mode",
-        choices=["version-smoke"],
+        choices=["version-smoke", "acp-smoke"],
         default="version-smoke",
-        help="Grok adapter mode. Only version-smoke is currently promoted.",
+        help="Grok adapter mode. acp-smoke is explicit/opt-in and does not change the default runtime.",
+    )
+    grok_run.add_argument(
+        "--ask",
+        help="Prompt text for --mode acp-smoke.",
+    )
+    grok_run.add_argument(
+        "--fake-provider",
+        action="store_true",
+        help=(
+            "For --mode acp-smoke, run against the local loopback fake "
+            "DeepSeek fixture instead of requiring a real provider."
+        ),
+    )
+    grok_run.add_argument(
+        "--real-deepseek",
+        action="store_true",
+        help=(
+            "For --mode acp-smoke, run one controlled real Grok ACP turn "
+            "against DeepSeek using Windows Credential Manager."
+        ),
+    )
+    grok_run.add_argument(
+        "--credential-target",
+        default="FEP-Agent/DeepSeek",
+        help="Windows Credential Manager target for --real-deepseek.",
     )
     grok_run.add_argument(
         "--retrieval-mode",
@@ -754,6 +1756,149 @@ def _parser() -> argparse.ArgumentParser:
     )
     grok_observe_tools.add_argument("--json", action="store_true")
     grok_observe_tools.set_defaults(handler=_run_grok_observe_tools)
+
+    deepseek = subparsers.add_parser(
+        "deepseek",
+        help="Direct DeepSeek runtime adapter commands.",
+    )
+    deepseek_subparsers = deepseek.add_subparsers(
+        dest="deepseek_command", required=True
+    )
+    deepseek_run = deepseek_subparsers.add_parser(
+        "run",
+        help="Run one direct DeepSeek Chat Completions smoke and emit runtime events.",
+    )
+    deepseek_run.add_argument("--run-root", type=Path, required=True)
+    deepseek_run.add_argument("--ask", required=True)
+    deepseek_run.add_argument("--run-id")
+    deepseek_run.add_argument(
+        "--credential-target",
+        default="FEP-Agent/DeepSeek",
+        help="Windows Credential Manager target name for the DeepSeek API key.",
+    )
+    deepseek_run.add_argument(
+        "--api-timeout",
+        type=int,
+        default=60,
+        help="Timeout in seconds for the DeepSeek API call.",
+    )
+    deepseek_run.add_argument("--json", action="store_true")
+    deepseek_run.set_defaults(handler=_run_deepseek)
+
+    alpha = subparsers.add_parser("alpha", help="Alpha readiness entrypoints.")
+    alpha_subparsers = alpha.add_subparsers(dest="alpha_command", required=True)
+    alpha_smoke = alpha_subparsers.add_parser(
+        "smoke",
+        help="Run the fixed no-credential Grok ACP loopback smoke.",
+    )
+    alpha_smoke.add_argument(
+        "--run-root",
+        type=Path,
+        help="Run root directory (default: .gsa/alpha-smoke/<timestamp-id>).",
+    )
+    alpha_smoke.add_argument(
+        "--workspace",
+        type=Path,
+        help="Workspace directory (default: isolated directory under run root).",
+    )
+    alpha_smoke.add_argument(
+        "--ask",
+        help="Prompt text for the loopback ACP smoke fixture.",
+    )
+    alpha_smoke.add_argument("--run-id")
+    alpha_smoke.add_argument("--json", action="store_true")
+    alpha_smoke.set_defaults(handler=_run_alpha_smoke)
+    alpha_ui = alpha_subparsers.add_parser(
+        "ui-check",
+        help="Run deterministic alpha UI usability checks.",
+    )
+    alpha_ui.add_argument(
+        "--run-root",
+        type=Path,
+        help="Run root directory (default: .gsa/alpha-ui-check/<timestamp-id>).",
+    )
+    alpha_ui.add_argument("--width", type=int, default=100)
+    alpha_ui.add_argument("--height", type=int, default=35)
+    alpha_ui.add_argument(
+        "--run-live-smoke",
+        action="store_true",
+        help="Also run a loopback Grok ACP static TUI smoke without full-screen interaction.",
+    )
+    alpha_ui.add_argument("--ask", help="Prompt text for --run-live-smoke.")
+    alpha_ui.add_argument("--run-id")
+    alpha_ui.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing alpha-ui-check receipt in the run root.",
+    )
+    alpha_ui.add_argument("--json", action="store_true")
+    alpha_ui.set_defaults(handler=_run_alpha_ui_check)
+    alpha_tool = alpha_subparsers.add_parser(
+        "tool-check",
+        help="Run alpha hard checks for Grok tool availability and ACP permission probes.",
+    )
+    alpha_tool.add_argument(
+        "--run-root",
+        type=Path,
+        help="Run root directory (default: .gsa/alpha-tool-check/<timestamp-id>).",
+    )
+    alpha_tool.add_argument(
+        "--acp-verification",
+        type=Path,
+        action="append",
+        default=[],
+        help="Attach a grok ACP fake-tool verification receipt; repeat for allow/cancel.",
+    )
+    alpha_tool.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing alpha tool-check artifacts in the run root.",
+    )
+    alpha_tool.add_argument("--json", action="store_true")
+    alpha_tool.set_defaults(handler=_run_alpha_tool_check)
+    alpha_real = alpha_subparsers.add_parser(
+        "real-call",
+        help="Run an alpha real-provider Grok ACP call through DeepSeek.",
+    )
+    alpha_real.add_argument(
+        "--run-root",
+        type=Path,
+        help="Run root directory (default: .gsa/alpha-real-call/<timestamp-id>).",
+    )
+    alpha_real.add_argument(
+        "--workspace",
+        type=Path,
+        help="Workspace directory (default: isolated directory under the adapter run root).",
+    )
+    alpha_real.add_argument(
+        "--ask",
+        help="Prompt text for the real-provider ACP call.",
+    )
+    alpha_real.add_argument(
+        "--transport",
+        choices=["grok-acp", "direct-deepseek"],
+        default="grok-acp",
+        help="Real-call transport to verify (default: grok-acp).",
+    )
+    alpha_real.add_argument("--run-id")
+    alpha_real.add_argument(
+        "--credential-target",
+        default="FEP-Agent/DeepSeek",
+        help="Windows Credential Manager target containing the DeepSeek API key.",
+    )
+    alpha_real.add_argument(
+        "--api-timeout",
+        type=int,
+        default=60,
+        help="Timeout in seconds for the direct DeepSeek API call.",
+    )
+    alpha_real.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing alpha-real-call receipt in the run root.",
+    )
+    alpha_real.add_argument("--json", action="store_true")
+    alpha_real.set_defaults(handler=_run_alpha_real_call)
 
     review = subparsers.add_parser("review", help="Review-mode utilities.")
     review_subparsers = review.add_subparsers(dest="review_command", required=True)
@@ -830,7 +1975,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     tui.add_argument(
         "--runtime",
-        choices=["canonical", "grok"],
+        choices=["canonical", "grok", "deepseek"],
         default="canonical",
         help="Runtime to use for --run.",
     )
@@ -838,6 +1983,11 @@ def _parser() -> argparse.ArgumentParser:
         "--real",
         action="store_true",
         help="Use the real DeepSeek adapter for --run.",
+    )
+    tui.add_argument(
+        "--fake-provider",
+        action="store_true",
+        help="For --runtime grok ACP runs, use the local loopback fake provider fixture.",
     )
     tui.add_argument(
         "--credential-target",
