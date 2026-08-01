@@ -509,6 +509,44 @@ def _run_tui(args: argparse.Namespace) -> int:
     return tui_main(tui_args)
 
 
+def _run_tui_default(args: argparse.Namespace) -> int:
+    """Launch TUI interactively — ``gsa`` with no subcommand.
+
+    Detects the Grok binary (non-fatal), builds a TUI with sample data,
+    and opens the address dialog so the user can type a command
+    immediately.  Use ``/run <prompt>`` to start a Grok ACP session.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    from .tui.main import _run_demo
+    from .tui.app import TuiPrototype
+
+    # ── Grok check (non-fatal — TUI still works in demo mode) ──────────
+    grok_ok = False
+    try:
+        from .grok_runtime_adapter import GrokRuntimeConfig, inspect_grok_runtime
+        cfg = GrokRuntimeConfig()
+        inspection = inspect_grok_runtime(cfg)
+        grok_ok = inspection.get("valid", False)
+        if not grok_ok:
+            msg = inspection.get("error", "unknown")
+            print(f"gsa: Grok binary check: {msg}", file=_sys.stderr)
+            print("  TUI starts in demo mode.  Use /run <prompt> to start a session.",
+                  file=_sys.stderr)
+    except Exception as exc:
+        print(f"gsa: Grok not detected — {exc}", file=_sys.stderr)
+        print("  TUI starts in demo mode.", file=_sys.stderr)
+
+    # ── Build TUI ──────────────────────────────────────────────────────
+    app = TuiPrototype.with_sample_data()
+    # Open address dialog so the user can type immediately.
+    app.address_dialog.open_dialog("")
+    app.status_bar.update_item("Grok", grok_ok)
+    if grok_ok:
+        app.status_bar.update_item("就绪", True)
+    return _run_demo(app, 100, 30)
+
+
 def _run_eval(args: argparse.Namespace) -> int:
     """Run a frozen evaluation from CLI."""
     from .evaluation_runner import run_evaluation_cli
@@ -526,7 +564,8 @@ def _parser() -> argparse.ArgumentParser:
         prog="gsa",
         description="General Scientific Assurance CLI dispatcher.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.set_defaults(handler=_run_tui_default)
+    subparsers = parser.add_subparsers(dest="command", required=False)
 
     doctor = subparsers.add_parser("doctor", help="Check local CLI readiness.")
     doctor.add_argument("--json", action="store_true", help="Emit JSON report.")
