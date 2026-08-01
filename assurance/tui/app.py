@@ -35,6 +35,7 @@ from .widgets import (
     AddressBar,
     AddressDialog,
     AnnouncementStrip,
+    ChatInput,
     ChatMessage,
     CommandPalette,
     ContentMarker,
@@ -93,6 +94,7 @@ class TuiPrototype:
     find_dialog: FindDialog = field(default_factory=FindDialog)
     address_dialog: AddressDialog = field(default_factory=AddressDialog)
     announcement_strip: AnnouncementStrip = field(default_factory=AnnouncementStrip)
+    chat_input: ChatInput = field(default_factory=lambda: ChatInput(focused=True))
 
     # ── sidebar visibility (GAK-UI-001 P2) ──
     show_explorer: bool = True
@@ -127,7 +129,7 @@ class TuiPrototype:
 
     # ── focus ──
     _focusable_panes: tuple[str, ...] = (
-        "explorer", "checklist", "content", "marker",
+        "explorer", "checklist", "content", "marker", "chat",
     )
     _active_pane_index: int = 0
     _last_esc_time: float = field(default=0.0)  # P3.4: double-Esc session list
@@ -224,6 +226,11 @@ class TuiPrototype:
             bot_seps.append("─" * marker_w)
         bot_sep = "├" + "".join(bot_seps) + "┤"
         lines.append(bot_sep)
+
+        # ── Chat input (between ContentPane and StatusBar) ──
+        chat = self.chat_input.render(inner_w, 1)
+        lines.append("│" + chat[0] + "│")
+        lines.append(box_t_junction(width))
 
         # ── StatusBar ──
         if self.status_bar.items and self.status_bar.items[-1][0] in ("空闲", "运行中", "IDLE", "RUNNING"):
@@ -441,6 +448,21 @@ class TuiPrototype:
         if key == "f6":
             return self._cycle_focus()
 
+        # ── Chat input (P4) ──────────────────────────────────────────────
+        if self.active_pane == "chat":
+            result = self.chat_input.handle_key(key)
+            if result is not None:
+                # Enter pressed with text → send as prompt.
+                self.content_pane.add_user_message(result)
+                if self.event_source is not None and hasattr(self.event_source, "send_prompt"):
+                    self.event_source.send_prompt(result)
+                    self.status_bar.update_item("Prompt", True)
+                    return f"发送: {result[:60]}"
+                else:
+                    self._start_run(result)
+                    return f"运行: {result[:60]}"
+            return None
+
         # ── toolbar button keyboard shortcuts ──
         if key == "a-left":
             return self._trigger_toolbar("后退")
@@ -489,6 +511,7 @@ class TuiPrototype:
         mapping = {
             "explorer": self.explorer_pane,
             "checklist": self.announcement_strip,
+            "chat": self.chat_input,
             "content": self.content_pane,
             "marker": self.content_marker,
             "address": self.address_bar,
@@ -567,20 +590,9 @@ class TuiPrototype:
         if text.startswith("/"):
             return f"已激活: {text}"
 
-        # D1.10: Non-command text (no / prefix).
-        # If a Grok ACP session is active → send as follow-up prompt.
-        # If no session is active → auto-start one with this as first prompt.
-        if self.event_source is not None and hasattr(self.event_source, "send_prompt"):
-            self.content_pane.add_user_message(text)
-            self.event_source.send_prompt(text)
-            self.status_bar.update_item("Prompt", True)
-            return f"发送: {text[:60]}{'...' if len(text) > 60 else ''}"
-
-        # No active session — auto-start one.
-        if text.strip():
-            self._start_run(text)
-            return f"运行: {text[:60]}"
-
+        # D1.10: Non-command text in AddressBar falls through.
+        # The ChatInput widget is the primary prompt entry point.
+        # AddressBar is for command:// URIs and slash commands only.
         return None
 
     def _show_retrieval_dialog(self, mode: str, target: str) -> None:

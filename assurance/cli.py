@@ -540,8 +540,6 @@ def _run_tui_default(args: argparse.Namespace) -> int:
 
     # ── Build TUI ──────────────────────────────────────────────────────
     app = TuiPrototype.with_sample_data()
-    # Open address dialog so the user can type immediately.
-    app.address_dialog.open_dialog("")
     app.status_bar.update_item("Grok", grok_ok)
     if grok_ok:
         app.status_bar.update_item("就绪", True)

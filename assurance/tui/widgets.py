@@ -2132,6 +2132,72 @@ def _highlight_python(text: str) -> str:
     return "".join(parts)
 
 
+# ── chat input (P4 — prompt entry at the bottom of ContentPane) ──────────────
+
+
+@dataclass
+class ChatInput(Widget):
+    """Single-line prompt input with a cursor and Enter-to-send.
+
+    Lives between ContentPane and StatusBar.  Not a modal — always
+    visible while a session is active or ready to start.
+    """
+
+    buffer: str = ""
+    prompt: str = "> "
+    focusable: bool = True
+    _cursor: int = 0
+
+    def handle_key(self, key: str) -> str | None:
+        if key == "enter" and self.buffer.strip():
+            text = self.buffer
+            self.buffer = ""
+            self._cursor = 0
+            return text
+        if key == "backspace" and self._cursor > 0:
+            self.buffer = self.buffer[:self._cursor - 1] + self.buffer[self._cursor:]
+            self._cursor = max(0, self._cursor - 1)
+            return None
+        if key == "left" and self._cursor > 0:
+            self._cursor -= 1
+            return None
+        if key == "right" and self._cursor < len(self.buffer):
+            self._cursor += 1
+            return None
+        if key == "home":
+            self._cursor = 0
+            return None
+        if key == "end":
+            self._cursor = len(self.buffer)
+            return None
+        if len(key) == 1 and key.isprintable():
+            self.buffer = self.buffer[:self._cursor] + key + self.buffer[self._cursor:]
+            self._cursor += 1
+            return None
+        if key == "space":
+            self.buffer = self.buffer[:self._cursor] + " " + self.buffer[self._cursor:]
+            self._cursor += 1
+            return None
+        return None
+
+    def render(self, width: int, height: int) -> list[str]:
+        if height < 1:
+            return []
+        # *width* is already the inner content width (borders added by caller).
+        text = self.prompt + self.buffer
+        if self.focused:
+            cur_pos = len(self.prompt) + self._cursor
+            before = text[:cur_pos]
+            at = text[cur_pos:cur_pos + 1] if cur_pos < len(text) else " "
+            after = text[cur_pos + 1:]
+            line = before + "\x1b[7m" + at + "\x1b[0m" + after
+        else:
+            line = text
+        if len(self.buffer) == 0 and not self.focused:
+            line = self.prompt + "\x1b[2m输入消息...\x1b[0m"
+        return [pad_to_width(line, width)]
+
+
 # ── address dialog (B4 — modal overlay for full command/address input) ────────
 
 

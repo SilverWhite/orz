@@ -625,7 +625,7 @@ class KeyboardNavigationTests(unittest.TestCase):
         self.app = TuiPrototype.with_sample_data()
 
     def test_f6_cycles_focus(self) -> None:
-        """P3.1: address/find folded into toolbar — 4 panes now."""
+        """P4: 5 panes — explorer/checklist/content/marker/chat."""
         self.assertEqual(self.app.active_pane, "explorer")
         result = self.app.handle_key("f6")
         self.assertIn("checklist", result)
@@ -636,6 +636,9 @@ class KeyboardNavigationTests(unittest.TestCase):
         result = self.app.handle_key("f6")
         self.assertIn("marker", result)
         self.assertEqual(self.app.active_pane, "marker")
+        result = self.app.handle_key("f6")
+        self.assertIn("chat", result)
+        self.assertEqual(self.app.active_pane, "chat")
         result = self.app.handle_key("f6")
         self.assertEqual(self.app.active_pane, "explorer")
 
