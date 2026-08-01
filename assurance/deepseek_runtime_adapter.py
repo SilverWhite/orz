@@ -346,16 +346,101 @@ def run_deepseek_direct_smoke(
 
 # ── ask-mode retrieval constants ──
 
+# Retrieval tools that may appear in the tool availability context block.
+_RETRIEVAL_TOOL_IDS = {"search", "subagent", "web_fetch"}
+
 ASK_RETRIEVAL_MODES = ("off", "subagent")
 
-_NO_RETRIEVAL_SYSTEM_PROMPT = """\
-You are answering WITHOUT any retrieval or web search. Your answer comes from your training data only — no real-time sources have been consulted for this response.
 
-CRITICAL: You MUST begin every answer with exactly this disclaimer line:
+def _build_tool_availability_context_for_ask(
+    retrieval_mode: str,
+) -> str:
+    """Build a ``[TOOL_AVAILABILITY]`` context block for the ask command.
 
-[未经检索验证] 以下回答基于训练语料，未进行实时检索查证。内容可能过时或不准确。
+    This follows the exact same format as
+    :func:`assurance.tool_availability_gate._build_context_block` so the
+    model receives tool status through the proper gate channel, not an
+    ad-hoc system-prompt instruction.
+    """
+    from .tool_availability_gate import (
+        CONTEXT_BLOCK_PREFIX,
+        CONTEXT_BLOCK_SUFFIX,
+    )
 
-Do not skip this line. Do not rephrase it."""
+    if retrieval_mode == "subagent":
+        available = ["search", "file_read"]
+        unavailable = ["web_fetch"]
+        unprobed: list[str] = []
+        degraded: list[str] = []
+        reason = "subagent_active"
+    else:  # off — user explicitly disabled retrieval
+        available = []
+        unavailable = sorted(_RETRIEVAL_TOOL_IDS)
+        unprobed = []
+        degraded = []
+        reason = "user_disabled_retrieval"
+
+    lines = [CONTEXT_BLOCK_PREFIX]
+    if available:
+        lines.append("AVAILABLE: " + ", ".join(sorted(available)))
+    if unavailable:
+        lines.append("UNAVAILABLE: " + ", ".join(sorted(unavailable)))
+    if degraded:
+        lines.append("DEGRADED: " + ", ".join(sorted(degraded)))
+    if unprobed:
+        lines.append("UNPROBED: " + ", ".join(sorted(unprobed)))
+    lines.append("")
+    lines.append("GATE: runtime_probe_authoritative")
+    lines.append(f"RETRIEVAL_MODE: {retrieval_mode} ({reason})")
+    lines.append(
+        "ENFORCEMENT: tool calls, provider errors, and capability claims are "
+        "checked by runtime gates and observers outside this text block."
+    )
+    lines.append(CONTEXT_BLOCK_SUFFIX)
+    return "\n".join(lines)
+
+
+def _build_ask_system_prompt(
+    retrieval_mode: str,
+    retrieval_context: str = "",
+) -> str:
+    """Build the system prompt for an ask invocation.
+
+    The tool availability context block is the primary channel through
+    which the model learns whether retrieval is available.  The
+    surrounding text is minimal — it only explains what the context
+    block means and how to behave.
+    """
+    tool_ctx = _build_tool_availability_context_for_ask(retrieval_mode)
+
+    if retrieval_mode == "off":
+        instruction = (
+            "The tool availability block above shows that NO retrieval tools "
+            "are available — they were explicitly disabled by the user.  "
+            "You MUST answer from your training data only.  "
+            "You MUST begin your answer with:\n"
+            "[未经检索验证] 以下回答基于训练语料，未进行实时检索查证。内容可能过时或不准确。"
+        )
+    else:  # subagent
+        if retrieval_context:
+            instruction = (
+                "The tool availability block above shows retrieval tools available "
+                "via the GSA subagent path.  Below are the retrieved sources.  "
+                "Cite specific sources when making factual claims.  "
+                "If the retrieved sources do not cover part of the question, "
+                "explicitly state that those parts are unverified.\n\n"
+                "RETRIEVED SOURCES:\n"
+                f"{retrieval_context}"
+            )
+        else:
+            instruction = (
+                "The tool availability block above shows retrieval tools available "
+                "but no sources were retrieved (subagent returned empty).  "
+                "You MUST answer from your training data only and begin with:\n"
+                "[未经检索验证] 子代理未返回结果，以下回答基于训练语料，未进行实时检索查证。"
+            )
+
+    return f"{tool_ctx}\n\n{instruction}"
 
 
 def _build_ask_messages(
@@ -364,27 +449,13 @@ def _build_ask_messages(
     retrieval_mode: str,
     retrieval_context: str = "",
 ) -> list[dict[str, str]]:
-    if retrieval_mode == "off":
-        return [
-            {"role": "system", "content": _NO_RETRIEVAL_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt_text},
-        ]
-    if retrieval_mode == "subagent" and retrieval_context:
-        system = (
-            "You are answering with the following retrieved sources as your grounding. "
-            "Cite specific sources when making factual claims. "
-            "If the retrieved sources do not cover part of the question, "
-            "explicitly state that those parts are unverified.\n\n"
-            "RETRIEVED SOURCES:\n"
-            f"{retrieval_context}"
-        )
-        return [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt_text},
-        ]
-    # Fallback: subagent mode but no context — treat as off with note
     return [
-        {"role": "system", "content": _NO_RETRIEVAL_SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": _build_ask_system_prompt(
+                retrieval_mode, retrieval_context
+            ),
+        },
         {"role": "user", "content": prompt_text},
     ]
 
@@ -397,7 +468,7 @@ def run_deepseek_ask(
     run_id: str | None = None,
     max_tokens: int = 4096,
     timeout_seconds: int = 120,
-    retrieval_mode: str = "off",
+    retrieval_mode: str,
     project_root: Path | None = None,
     search_results: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], str]:
@@ -552,6 +623,12 @@ def run_deepseek_ask(
             "subagent_sessions": subagent_sessions,
             "retrieval_artifacts": retrieval_artifacts,
             "retrieval_context_bytes": len(retrieval_context.encode("utf-8")),
+            "tool_availability_context_block": messages[0]["content"]
+            if messages and messages[0]["role"] == "system"
+            else "",
+            "tool_availability_context_sha256": sha256_bytes(
+                messages[0]["content"].encode("utf-8")
+            ) if messages and messages[0]["role"] == "system" else "",
         },
         "execution": {
             "command_kind": "deepseek_chat_completions",

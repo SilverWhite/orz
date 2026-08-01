@@ -76,7 +76,7 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
         "git": git,
         "repository_check": repository_check,
         "entrypoints": {
-            "ask": "python gsa.py ask <question>",
+            "ask": "python gsa.py ask --retrieval off|subagent <question>",
             "doctor": "python gsa.py doctor",
             "source_gate": "python gsa.py source gate --ledger <path>",
             "run_fake": "python gsa.py run --ask <q> --source-ledger <path> --run-root <path>",
@@ -1591,8 +1591,8 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument(
         "--retrieval",
         choices=["off", "subagent"],
-        default="off",
-        help="Retrieval mode: off (training data only, marked unverified) or subagent (GSA retrieval subagents).",
+        required=True,
+        help="Retrieval mode (required): off (no retrieval, training data only — tool availability gate communicates UNAVAILABLE) or subagent (GSA retrieval subagents).",
     )
     ask.add_argument("--json", action="store_true", help="Emit full receipt as JSON.")
     ask.set_defaults(handler=_run_ask)
