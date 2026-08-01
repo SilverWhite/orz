@@ -76,6 +76,7 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
         "git": git,
         "repository_check": repository_check,
         "entrypoints": {
+            "ask": "python gsa.py ask <question>",
             "doctor": "python gsa.py doctor",
             "source_gate": "python gsa.py source gate --ledger <path>",
             "run_fake": "python gsa.py run --ask <q> --source-ledger <path> --run-root <path>",
@@ -108,6 +109,44 @@ def _print_or_json(value: dict[str, Any], *, json_output: bool, human_lines: lis
         return
     for line in human_lines:
         print(line)
+
+
+def _run_ask(args: argparse.Namespace) -> int:
+    from datetime import datetime, timezone
+
+    from .deepseek_runtime_adapter import run_deepseek_ask
+
+    if args.run_root:
+        run_root = args.run_root
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        run_root = ROOT / ".gsa" / "runs" / f"ask-{stamp}-{uuid.uuid4().hex[:8]}"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    receipt, response_text = run_deepseek_ask(
+        run_root=run_root,
+        prompt_text=args.question,
+        credential_target=args.credential_target,
+        max_tokens=args.max_tokens,
+        timeout_seconds=args.timeout,
+    )
+
+    if args.json:
+        print(_json_dump(receipt))
+    else:
+        if response_text.strip():
+            print(response_text)
+        else:
+            print(
+                f"gsa ask: no response text (http {receipt['execution']['http_status_code']}, "
+                f"finish: {receipt['prompt']['response_finish_reason']})"
+            )
+        print()
+        print(f"── run_root: {receipt['request']['run_root']}")
+        print(f"   receipt:  {receipt['artifacts']['receipt_path']}")
+        print(f"   events:   {receipt['artifacts']['events_path']}")
+
+    return 0 if receipt["valid"] else 1
 
 
 def _run_doctor(args: argparse.Namespace) -> int:
@@ -1533,6 +1572,19 @@ def _parser() -> argparse.ArgumentParser:
         help="Skip repository contract check for a fast wiring check.",
     )
     doctor.set_defaults(handler=_run_doctor)
+
+    ask = subparsers.add_parser("ask", help="Ask a question using the DeepSeek API.")
+    ask.add_argument("question", help="The question to ask (natural language).")
+    ask.add_argument(
+        "--credential-target",
+        default="FEP-Agent/DeepSeek",
+        help="Windows Credential Manager target for the API key.",
+    )
+    ask.add_argument("--max-tokens", type=int, default=4096)
+    ask.add_argument("--timeout", type=int, default=120)
+    ask.add_argument("--run-root", type=Path, default=None)
+    ask.add_argument("--json", action="store_true", help="Emit full receipt as JSON.")
+    ask.set_defaults(handler=_run_ask)
 
     source = subparsers.add_parser("source", help="Source-related gates.")
     source_subparsers = source.add_subparsers(dest="source_command", required=True)

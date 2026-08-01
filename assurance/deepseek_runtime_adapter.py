@@ -315,6 +315,11 @@ def run_deepseek_direct_once(
     receipt["valid"] = all(checks.values())
     events = normalize_deepseek_runtime_receipt(receipt, created_at=created_at)
     _write_events_jsonl(events_path, events)
+    response_path = run_root / "response.txt"
+    from .utils import atomic_write_bytes
+
+    atomic_write_bytes(response_path, response_text.encode("utf-8"))
+    receipt["artifacts"]["response_path"] = str(response_path.resolve())
     atomic_write_json(receipt_path, receipt)
     return receipt
 
@@ -337,3 +342,28 @@ def run_deepseek_direct_smoke(
             timeout_seconds=timeout_seconds,
         )
     )
+
+
+def run_deepseek_ask(
+    *,
+    run_root: Path,
+    prompt_text: str,
+    credential_target: str = DEFAULT_CREDENTIAL_TARGET,
+    run_id: str | None = None,
+    max_tokens: int = 4096,
+    timeout_seconds: int = 120,
+) -> tuple[dict[str, Any], str]:
+    chosen_run_id = run_id or f"RUN-GSA-ASK-{uuid.uuid4().hex[:8].upper()}"
+    receipt = run_deepseek_direct_once(
+        DeepSeekRunRequest(
+            run_root=run_root,
+            run_id=chosen_run_id,
+            prompt_text=prompt_text,
+            credential_target=credential_target,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+    response_path = Path(receipt["artifacts"]["response_path"])
+    response_text = response_path.read_text(encoding="utf-8") if response_path.exists() else ""
+    return receipt, response_text
