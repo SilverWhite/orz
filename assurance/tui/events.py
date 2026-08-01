@@ -34,6 +34,7 @@ class TuiEventKind(str, Enum):
     RUN_STARTED = "run_started"
     GATE_DECISION = "gate_decision"
     MODEL_REQUEST = "model_request"
+    USER_MESSAGE = "user_message"
     MODEL_OUTPUT = "model_output"
     TOOL_PROPOSAL = "tool_proposal"
     PERMISSION_REQUESTED = "permission_requested"
@@ -185,6 +186,15 @@ class ModelOutputEvent(TuiEvent):
 
 
 @dataclass
+class UserMessageEvent(TuiEvent):
+    """Emitted when the runtime echoes or records a user message."""
+
+    kind: TuiEventKind = field(default=TuiEventKind.USER_MESSAGE, init=False)
+    text: str = ""
+    turn: int = 0
+
+
+@dataclass
 class TextDeltaEvent(TuiEvent):
     """Emitted for each incremental text chunk during streaming model output.
 
@@ -289,6 +299,7 @@ class ErrorEvent(TuiEvent):
     kind: TuiEventKind = field(default=TuiEventKind.ERROR_EVENT, init=False)
     message: str = ""
     source: str = ""          # "network" | "gate" | "adapter" | "sandbox" | "unknown"
+    severity: str = "error"   # "error" | "warning"
 
 
 @dataclass

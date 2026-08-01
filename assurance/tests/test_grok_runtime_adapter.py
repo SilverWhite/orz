@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from assurance.errors import AssuranceError
 from assurance.grok_runtime_adapter import (
+    GrokAcpSession,
     GrokRunRequest,
     GrokRuntimeConfig,
     run_grok_headless_once,
@@ -237,6 +238,73 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(validate_grok_retrieval_mode("framework_fallback"), "framework_fallback")
         with self.assertRaises(AssuranceError):
             validate_grok_retrieval_mode("implicit_runtime_search")
+
+
+class GrokAcpNotificationMappingTests(unittest.TestCase):
+    def _session(self) -> GrokAcpSession:
+        session = GrokAcpSession.__new__(GrokAcpSession)
+        session._last_streamed_text_len = 0
+        session._last_streamed_text = ""
+        session.turn_count = 0
+        session.tool_call_count = 0
+        return session
+
+    def _collect(self, session: GrokAcpSession, update: dict[str, Any]) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        msg = {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {"update": update},
+        }
+        GrokAcpSession._handle_acp_notification(
+            session, msg, on_acp_event=lambda event: events.append(event) or None
+        )
+        return events
+
+    def test_user_message_maps_to_user_message_not_text_delta(self) -> None:
+        session = self._session()
+        events = self._collect(
+            session,
+            {"sessionUpdate": "user_message", "text": "hello from user"},
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "user_message")
+        self.assertEqual(events[0]["payload"]["text"], "hello from user")
+
+    def test_assistant_message_cumulative_text_emits_only_new_suffix(self) -> None:
+        session = self._session()
+        first = self._collect(
+            session, {"sessionUpdate": "assistant_message", "text": "Hel"}
+        )
+        second = self._collect(
+            session, {"sessionUpdate": "assistant_message", "text": "Hello"}
+        )
+        self.assertEqual([event["payload"]["text"] for event in first + second], ["Hel", "lo"])
+
+    def test_assistant_message_delta_chunks_are_not_dropped(self) -> None:
+        session = self._session()
+        first = self._collect(
+            session, {"sessionUpdate": "assistant_message", "text": "Hel"}
+        )
+        second = self._collect(
+            session, {"sessionUpdate": "assistant_message", "text": "lo"}
+        )
+        self.assertEqual([event["payload"]["text"] for event in first + second], ["Hel", "lo"])
+
+    def test_warning_notification_preserves_severity(self) -> None:
+        session = self._session()
+        events: list[dict[str, Any]] = []
+        msg = {
+            "jsonrpc": "2.0",
+            "method": "notification",
+            "params": {"type": "warning", "message": "heads up"},
+        }
+        GrokAcpSession._handle_acp_notification(
+            session, msg, on_acp_event=lambda event: events.append(event) or None
+        )
+        self.assertEqual(events[0]["event_type"], "error_event")
+        self.assertEqual(events[0]["payload"]["source"], "acp_warning")
+        self.assertEqual(events[0]["payload"]["severity"], "warning")
 
 
 if __name__ == "__main__":

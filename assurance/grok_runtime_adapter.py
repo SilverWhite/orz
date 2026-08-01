@@ -695,6 +695,7 @@ class GrokAcpSession:
         self.prompt_count: int = 0
         self._closed: bool = False
         self._last_streamed_text_len: int = 0  # P1.3: track cumulative text for delta emission
+        self._last_streamed_text: str = ""
         self.receipt: dict[str, Any] | None = None
 
     # ── ACP wire helpers ──────────────────────────────────────────────────
@@ -778,6 +779,7 @@ class GrokAcpSession:
                         "payload": {
                             "message": str(err_msg)[:500],
                             "source": f"acp_{notif_type}",
+                            "severity": "warning" if notif_type == "warning" else "error",
                         },
                         "redaction": "metadata_only",
                     })
@@ -838,21 +840,46 @@ class GrokAcpSession:
                 elif isinstance(update.get("message"), dict):
                     text = update["message"].get("content", "")
                 if text and on_acp_event:
+                    if update_type == "user_message":
+                        on_acp_event({
+                            "event_type": "user_message", "timestamp": utc_now(),
+                            "payload": {"text": text, "turn": self.turn_count},
+                            "redaction": "metadata_only",
+                        })
+                        return
                     # Emit only the incremental portion as text_delta (P1.3).
-                    new_text = text[self._last_streamed_text_len:]
+                    is_cumulative_update = len(text) >= self._last_streamed_text_len and (
+                        self._last_streamed_text_len == 0
+                        or text.startswith(getattr(self, "_last_streamed_text", ""))
+                    )
+                    if is_cumulative_update:
+                        new_text = text[self._last_streamed_text_len:]
+                    else:
+                        new_text = text
                     if new_text:
                         on_acp_event({
                             "event_type": "text_delta", "timestamp": utc_now(),
                             "payload": {"text": new_text, "turn": self.turn_count},
                             "redaction": "metadata_only",
                         })
-                        self._last_streamed_text_len = len(text)
+                        if is_cumulative_update:
+                            self._last_streamed_text = text
+                            self._last_streamed_text_len = len(text)
+                        else:
+                            self._last_streamed_text = (
+                                getattr(self, "_last_streamed_text", "") + new_text
+                            )
+                            self._last_streamed_text_len = len(self._last_streamed_text)
             elif update_type == "error":
                 if on_acp_event:
                     error_msg = update.get("message", update.get("error", "unknown ACP error"))
                     on_acp_event({
                         "event_type": "error_event", "timestamp": utc_now(),
-                        "payload": {"message": str(error_msg)[:500], "source": "acp_session_update"},
+                        "payload": {
+                            "message": str(error_msg)[:500],
+                            "source": "acp_session_update",
+                            "severity": "error",
+                        },
                         "redaction": "metadata_only",
                     })
             elif update_type == "tool_result":
@@ -979,6 +1006,7 @@ class GrokAcpSession:
             raise AssuranceError("GrokAcpSession is closed")
         self.prompt_count += 1
         self._last_streamed_text_len = 0  # P1.3: reset per-turn text tracker
+        self._last_streamed_text = ""
         is_first = self.prompt_count == 1
 
         if is_first and on_acp_event:

@@ -47,6 +47,7 @@ from .events import (
     ToolStartedEvent,
     TuiEvent,
     TuiEventKind,
+    UserMessageEvent,
     UsageSampleEvent,
     is_terminal,
 )
@@ -286,6 +287,14 @@ def _on_model_output(app: Any, event: ModelOutputEvent) -> list[str]:
     return [f"Model output received (turn {event.turn})"]
 
 
+@_register(TuiEventKind.USER_MESSAGE)
+def _on_user_message(app: Any, event: UserMessageEvent) -> list[str]:
+    if event.text:
+        app.content_pane.add_user_message(event.text)
+    app.explorer_pane.add_event_entry("Run", f"user message (turn {event.turn})")
+    return [f"User message received (turn {event.turn})"]
+
+
 @_register(TuiEventKind.TEXT_DELTA)
 def _on_text_delta(app: Any, event: TextDeltaEvent) -> list[str]:
     """Append streaming text chunk to the current model message card.
@@ -436,15 +445,19 @@ def _on_artifact(app: Any, event: ArtifactRegisteredEvent) -> list[str]:
 
 @_register(TuiEventKind.ERROR_EVENT)
 def _on_error(app: Any, event: ErrorEvent) -> list[str]:
-    app.status_bar.update_item("错误", False)
+    is_warning = getattr(event, "severity", "error") == "warning"
+    app.status_bar.update_item("警告" if is_warning else "错误", not is_warning)
     app.explorer_pane.add_event_entry(
-        "Errors", f"[{event.source}] {event.message}"
+        "Warnings" if is_warning else "Errors",
+        f"[{event.source}] {event.message}",
     )
     app.content_pane.add_message(
-        "错误", f"[{event.source}] {event.message}",
-        warning=True,   # errors are never collapsed
+        "警告" if is_warning else "错误",
+        f"[{event.source}] {event.message}",
+        warning=True,   # warnings/errors are never collapsed
     )
-    return [f"Error [{event.source}]: {event.message}"]
+    label = "Warning" if is_warning else "Error"
+    return [f"{label} [{event.source}]: {event.message}"]
 
 
 @_register(TuiEventKind.STATUS_UPDATE)

@@ -52,6 +52,7 @@ from .events import (
     ToolProposalEvent,
     TuiEvent,
     TuiEventKind,
+    UserMessageEvent,
     UsageSampleEvent,
 )
 
@@ -493,6 +494,14 @@ def _make_model_output(payload: dict[str, Any], timestamp: str) -> ModelOutputEv
     )
 
 
+def _make_user_message(payload: dict[str, Any], timestamp: str) -> UserMessageEvent:
+    return UserMessageEvent(
+        timestamp=timestamp,
+        text=payload.get("text", ""),
+        turn=payload.get("turn", 0),
+    )
+
+
 def _make_text_delta(payload: dict[str, Any], timestamp: str) -> TextDeltaEvent:
     return TextDeltaEvent(
         timestamp=timestamp,
@@ -528,6 +537,7 @@ def _make_error_event(payload: dict[str, Any], timestamp: str) -> ErrorEvent:
         timestamp=timestamp,
         message=payload.get("message", payload.get("status", "")),
         source=payload.get("source", "unknown"),
+        severity=payload.get("severity", "error"),
     )
 
 
@@ -624,6 +634,7 @@ def _make_tool_proposal(payload: dict[str, Any], timestamp: str) -> ToolProposal
         timestamp=timestamp,
         tool_name=payload.get("tool_name", ""),
         tool_call_id=payload.get("tool_call_id", ""),
+        input_summary=payload.get("input_summary", ""),
     )
 
 
@@ -665,6 +676,7 @@ _EVENT_FACTORY: dict[str, Callable[[dict[str, Any], str], TuiEvent | list[TuiEve
     "run_started": _make_run_started,
     "gate_decision": _make_source_vis_events,
     "model_request": _make_model_request,
+    "user_message": _make_user_message,
     "model_output": _make_model_output,
     "artifact_registered": _make_artifact_registered,
     "run_finished": _make_run_finished,
@@ -696,6 +708,7 @@ _KIND_MAP: dict[str, TuiEventKind] = {
     "run_started": TuiEventKind.RUN_STARTED,
     "gate_decision": TuiEventKind.GATE_DECISION,
     "model_request": TuiEventKind.MODEL_REQUEST,
+    "user_message": TuiEventKind.USER_MESSAGE,
     "model_output": TuiEventKind.MODEL_OUTPUT,
     "artifact_registered": TuiEventKind.ARTIFACT_REGISTERED,
     "run_finished": TuiEventKind.RUN_FINISHED,

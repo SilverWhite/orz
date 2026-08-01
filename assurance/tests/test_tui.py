@@ -1585,6 +1585,24 @@ class ProjectorUnitTests(unittest.TestCase):
         labels = [it[0] for it in self.app.status_bar.items]
         self.assertIn("错误", labels)
 
+    def test_user_message_event_adds_user_chat_card(self) -> None:
+        from assurance.tui.events import UserMessageEvent
+        msgs = self.apply(self.app, UserMessageEvent(text="hello user", turn=2))
+        self.assertEqual(msgs, ["User message received (turn 2)"])
+        self.assertEqual(self.app.content_pane._items[-1].content, "hello user")
+        groups = [g.label for g in self.app.explorer_pane.event_groups]
+        self.assertIn("Run", groups)
+
+    def test_warning_event_uses_warning_bucket(self) -> None:
+        from assurance.tui.events import ErrorEvent
+        msgs = self.apply(
+            self.app,
+            ErrorEvent(message="heads up", source="acp_warning", severity="warning"),
+        )
+        self.assertEqual(msgs, ["Warning [acp_warning]: heads up"])
+        groups = [g.label for g in self.app.explorer_pane.event_groups]
+        self.assertIn("Warnings", groups)
+
     def test_status_update_event_direct_to_status_bar(self) -> None:
         from assurance.tui.events import StatusUpdateEvent
         self.apply(self.app, StatusUpdateEvent(label="CUSTOM", ok=False))
@@ -2040,6 +2058,51 @@ class BridgeEventFactoryTests(unittest.TestCase):
         self.assertIsInstance(evt, ModelRequestEvent)
         self.assertEqual(evt.provider, "deepseek")
         self.assertEqual(evt.model_id, "deepseek-v4-pro")
+
+    def test_build_user_message(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import UserMessageEvent
+        line = {
+            "event_type": "user_message",
+            "payload": {"text": "hello", "turn": 2},
+            "timestamp": "2026-07-29T00:00:02Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, UserMessageEvent)
+        self.assertEqual(evt.text, "hello")
+        self.assertEqual(evt.turn, 2)
+
+    def test_build_tool_proposal_preserves_input_summary(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import ToolProposalEvent
+        line = {
+            "event_type": "tool_proposal",
+            "payload": {
+                "tool_name": "read_file",
+                "tool_call_id": "tc-1",
+                "input_summary": "assurance/cli.py",
+            },
+            "timestamp": "2026-07-29T00:00:02Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, ToolProposalEvent)
+        self.assertEqual(evt.input_summary, "assurance/cli.py")
+
+    def test_build_error_event_preserves_warning_severity(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import ErrorEvent
+        line = {
+            "event_type": "error_event",
+            "payload": {
+                "message": "heads up",
+                "source": "acp_warning",
+                "severity": "warning",
+            },
+            "timestamp": "2026-07-29T00:00:02Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, ErrorEvent)
+        self.assertEqual(evt.severity, "warning")
 
     def test_unknown_event_type_produces_bare_event(self) -> None:
         from assurance.tui.bridge import build_event_from_jsonl_line
