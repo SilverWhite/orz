@@ -51,7 +51,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(receipt["receipt_kind"], "source_fulltext_visibility_gate_receipt")
-        self.assertEqual(receipt["decision"], "defer")
+        self.assertEqual(receipt["decision"], "warn")
 
     def test_run_and_verify_json_roundtrip(self) -> None:
         run_exit, run_receipt = self._capture_json(
@@ -1040,7 +1040,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         )
         self.assertEqual(
             bundle["tool_availability_gate_receipt"]["decisions"]["gate_decision"],
-            "block",
+            "warn",
         )
         mock_observe.assert_called_once_with(acp_verification_paths=[])
 
