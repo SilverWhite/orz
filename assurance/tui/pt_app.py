@@ -239,27 +239,36 @@ def create_pt_application(
             tui_app.handle_key("f6")
         event.app.invalidate()
 
-    # ── mouse support ───────────────────────────────────────────────────────
+    # ── mouse support ─────────────────────────────────────────────────────
+    # prompt_toolkit 3.x uses Window.mouse_handler, not KeyBindings, for
+    # mouse events.  The handler receives a MouseEvent with .position
+    # (Point: .x/.y, 0-indexed) and .button (MouseButton.LEFT/RIGHT/...).
 
-    @kb.add("<mouse_1>")
-    def _mouse_click(event: Any) -> None:
-        """Handle left-click: map coordinates to clickable regions.
-
-        prompt_toolkit provides mouse position in event.data as (x, y)
-        where x is 1-indexed character column and y is 1-indexed line.
-        """
-        pos = getattr(event, "data", None) if hasattr(event, "data") else None
+    def _mouse_handler(mouse_event: Any) -> None:
+        """Route mouse clicks to TuiPrototype clickable-region mapper."""
+        # Only handle left clicks.
+        if getattr(mouse_event, "button", None) is not None:
+            try:
+                from prompt_toolkit.mouse import MouseButton
+                if mouse_event.button != MouseButton.LEFT:
+                    return
+            except ImportError:
+                pass
+        pos = getattr(mouse_event, "position", None)
         if pos is None:
             return
-        mx, my = pos
-        result = tui_app.handle_mouse_click(mx - 1, my - 1)
+        mx, my = pos.x, pos.y
+        result = tui_app.handle_mouse_click(mx, my)
         if result:
             tui_app._status_messages.append(result)
-        event.app.invalidate()
 
     # ── layout ────────────────────────────────────────────────────────────
 
-    window = Window(content=content_control, always_hide_cursor=False)
+    window = Window(
+        content=content_control,
+        always_hide_cursor=False,
+        mouse_handler=_mouse_handler,
+    )
     layout = Layout(window)
 
     # ── application ───────────────────────────────────────────────────────

@@ -544,7 +544,7 @@ def _run_tui_default(args: argparse.Namespace) -> int:
     app.status_bar.update_item("Grok", grok_ok)
     if grok_ok:
         app.status_bar.update_item("就绪", True)
-    return _run_demo(app, 100, 30)
+    return _run_demo(app, 100, 30, banner=False)
 
 
 def _run_eval(args: argparse.Namespace) -> int:

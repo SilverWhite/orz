@@ -13,15 +13,15 @@
   "binary_release": {
     "status": "verified-local",
     "channel": "stable",
-    "version": "0.2.112",
-    "build_id": "9bbd559437",
-    "artifact_url": "https://x.ai/cli/grok-0.2.112-windows-x86_64.exe",
-    "bytes": 138771784,
-    "md5": "18e949c2df51318e21cc6d3bf7168e59",
-    "sha256": "2469bd182af212c7fcb84f2981999e4e8a6a7a2e4172bad3ae7f787a1f11407c",
-    "authenticode_status": "Valid",
+    "version": "0.2.118",
+    "build_id": "1e1687c1cf",
+    "artifact_url": "https://x.ai/cli/grok-0.2.118-windows-x86_64.exe",
+    "bytes": 0,
+    "md5": "pending-re-verification",
+    "sha256": "pending-re-verification",
+    "authenticode_status": "pending-recheck",
     "signer_common_name": "X.AI LLC",
-    "installed_path": ".tools/grok/0.2.112/grok.exe",
+    "installed_path": ".tools/grok/0.2.118/grok.exe",
     "source_correspondence": "unverified"
   },
   "ownership": {

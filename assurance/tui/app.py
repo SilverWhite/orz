@@ -576,16 +576,21 @@ class TuiPrototype:
         if text.startswith("/"):
             return f"已激活: {text}"
 
-        # D1.10: Non-command text during a live Grok ACP session → send as
-        # a new prompt on the existing session (multi-prompt loop).
+        # D1.10: Non-command text (no / prefix).
+        # If a Grok ACP session is active → send as follow-up prompt.
+        # If no session is active → auto-start one with this as first prompt.
         if self.event_source is not None and hasattr(self.event_source, "send_prompt"):
-            self.content_pane.add_message("用户", text, collapsible=True)
+            self.content_pane.add_user_message(text)
             self.event_source.send_prompt(text)
             self.status_bar.update_item("Prompt", True)
             return f"发送: {text[:60]}{'...' if len(text) > 60 else ''}"
 
-        # URI navigation fallback
-        return f"导航至: {text}"
+        # No active session — auto-start one.
+        if text.strip():
+            self._start_run(text)
+            return f"运行: {text[:60]}"
+
+        return None
 
     def _show_retrieval_dialog(self, mode: str, target: str) -> None:
         """Show a permission dialog for browser retrieval."""

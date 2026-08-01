@@ -335,24 +335,22 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _run_demo(app: object, width: int, height: int) -> int:
-    """Run the interactive full-screen demo via prompt_toolkit.
+def _run_demo(app: object, width: int, height: int, banner: bool = True) -> int:
+    """Run the interactive full-screen TUI via prompt_toolkit.
 
-    Falls back to the raw stdin loop (with a warning) if prompt_toolkit
-    is not importable.
+    Set *banner* to False to skip the startup message (production entry).
     """
     # Ensure Windows console uses UTF-8 so box-drawing characters
-    # (╭─╮│╰╯ etc.) and CJK text render correctly.  Without this,
-    # legacy code pages (CP437/CP936) map these codepoints to
-    # missing-glyph placeholders or garbled output.
+    # render correctly.  Without this, legacy code pages (CP437/CP936)
+    # map these codepoints to missing-glyph placeholders.
     import sys as _sys
     if _sys.platform == "win32":
         try:
             import ctypes as _ctypes
-            _ctypes.windll.kernel32.SetConsoleCP(65001)        # UTF-8 input
-            _ctypes.windll.kernel32.SetConsoleOutputCP(65001)  # UTF-8 output
+            _ctypes.windll.kernel32.SetConsoleCP(65001)
+            _ctypes.windll.kernel32.SetConsoleOutputCP(65001)
         except Exception:
-            pass  # Best-effort — prompt_toolkit has its own fallback
+            pass
 
     try:
         from .pt_app import run_tui_demo  # noqa: PLC0415
@@ -364,10 +362,11 @@ def _run_demo(app: object, width: int, height: int) -> int:
         )
         return _run_raw_demo(app, width, height)
 
-    print("GAK-UI-001 TUI Prototype — Interactive Demo")
-    print(f"Viewport: {width}×{height}")
-    print("Keys: f6=cycle focus, alt+letter=menu, d=dialog, p=properties, q=quit")
-    print("=" * min(width, 80))
+    if banner:
+        print("GSA TUI")
+        print(f"Viewport: {width}x{height}")
+        print("Keys: f6=cycle focus, alt+letter=menu, d=dialog, p=properties, q=quit")
+        print("=" * min(width, 80))
 
     run_tui_demo(app, width=width, height=height)
     return 0
