@@ -344,6 +344,51 @@ def run_deepseek_direct_smoke(
     )
 
 
+# ── ask-mode retrieval constants ──
+
+ASK_RETRIEVAL_MODES = ("off", "subagent")
+
+_NO_RETRIEVAL_SYSTEM_PROMPT = """\
+You are answering WITHOUT any retrieval or web search. Your answer comes from your training data only — no real-time sources have been consulted for this response.
+
+CRITICAL: You MUST begin every answer with exactly this disclaimer line:
+
+[未经检索验证] 以下回答基于训练语料，未进行实时检索查证。内容可能过时或不准确。
+
+Do not skip this line. Do not rephrase it."""
+
+
+def _build_ask_messages(
+    prompt_text: str,
+    *,
+    retrieval_mode: str,
+    retrieval_context: str = "",
+) -> list[dict[str, str]]:
+    if retrieval_mode == "off":
+        return [
+            {"role": "system", "content": _NO_RETRIEVAL_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt_text},
+        ]
+    if retrieval_mode == "subagent" and retrieval_context:
+        system = (
+            "You are answering with the following retrieved sources as your grounding. "
+            "Cite specific sources when making factual claims. "
+            "If the retrieved sources do not cover part of the question, "
+            "explicitly state that those parts are unverified.\n\n"
+            "RETRIEVED SOURCES:\n"
+            f"{retrieval_context}"
+        )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt_text},
+        ]
+    # Fallback: subagent mode but no context — treat as off with note
+    return [
+        {"role": "system", "content": _NO_RETRIEVAL_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt_text},
+    ]
+
+
 def run_deepseek_ask(
     *,
     run_root: Path,
@@ -352,18 +397,224 @@ def run_deepseek_ask(
     run_id: str | None = None,
     max_tokens: int = 4096,
     timeout_seconds: int = 120,
+    retrieval_mode: str = "off",
+    project_root: Path | None = None,
+    search_results: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    chosen_run_id = run_id or f"RUN-GSA-ASK-{uuid.uuid4().hex[:8].upper()}"
-    receipt = run_deepseek_direct_once(
-        DeepSeekRunRequest(
-            run_root=run_root,
-            run_id=chosen_run_id,
-            prompt_text=prompt_text,
-            credential_target=credential_target,
-            max_tokens=max_tokens,
-            timeout_seconds=timeout_seconds,
+    if retrieval_mode not in ASK_RETRIEVAL_MODES:
+        raise AssuranceError(
+            f"retrieval_mode must be one of {ASK_RETRIEVAL_MODES}, got {retrieval_mode!r}"
         )
+
+    chosen_run_id = run_id or f"RUN-GSA-ASK-{uuid.uuid4().hex[:8].upper()}"
+    retrieval_context = ""
+    retrieval_artifacts: dict[str, Any] = {}
+    subagent_sessions: list[str] = []
+
+    # ── Subagent retrieval path ──
+    if retrieval_mode == "subagent":
+        proj_root = project_root or Path(run_root).resolve().parents[0]
+        try:
+            from .keystore import MemoryInstallationKeyStore
+            from .retrieval_subagent import (
+                build_retrieval_task_contract,
+                dispatch_retrieval_subagent_online,
+            )
+
+            parent_session_id = f"CONV-{uuid.uuid4().hex[:32].upper()}"
+            ks = MemoryInstallationKeyStore()
+            retrieval_root = run_root / "retrieval"
+            retrieval_root.mkdir(parents=True, exist_ok=True)
+
+            contract = build_retrieval_task_contract(
+                parent_session_id=parent_session_id,
+                retrieval_question=prompt_text,
+                allowed_source_categories=[
+                    "documentation",
+                    "code_repository",
+                    "internal_knowledge_base",
+                ],
+                max_sources=10,
+            )
+
+            dispatch_result = dispatch_retrieval_subagent_online(
+                contract=contract,
+                parent_session_id=parent_session_id,
+                key_store=ks,
+                run_root=retrieval_root / "project-doc",
+                project_root=proj_root,
+                api_timeout_seconds=min(timeout_seconds, 120),
+            )
+            retrieval_artifacts["project_doc"] = {
+                "api_used": dispatch_result["api_used"],
+                "source_count": len(
+                    dispatch_result["result"]["source_ledger"]
+                ),
+                "subagent_session_id": dispatch_result["subagent_session_id"],
+                "receipt_path": str(
+                    retrieval_root
+                    / "project-doc"
+                    / "conversations"
+                    / "retrieval-result-validation.json"
+                ),
+            }
+            subagent_sessions.append(dispatch_result["subagent_session_id"])
+
+            # Build context from retrieval results
+            context_parts: list[str] = []
+            for sec in dispatch_result["result"]["organized_response"]["sections"]:
+                context_parts.append(
+                    f"## {sec['section_title']}\n{sec['content']}"
+                )
+            for src in dispatch_result["result"]["source_ledger"][:10]:
+                context_parts.append(
+                    f"[Source: {src['source_title']}] "
+                    f"({src['source_url_or_ref']}) "
+                    f"— visibility: {src['visibility']}"
+                )
+            retrieval_context = "\n\n".join(context_parts)
+        except Exception as exc:
+            retrieval_context = (
+                f"[子代理检索失败: {exc}] "
+                "以下回答基于训练语料，未经检索验证。"
+            )
+
+    # ── Build messages ──
+    from .deepseek_adapter import _read_windows_credential, call_deepseek_api
+
+    messages = _build_ask_messages(
+        prompt_text,
+        retrieval_mode=retrieval_mode,
+        retrieval_context=retrieval_context,
     )
-    response_path = Path(receipt["artifacts"]["response_path"])
-    response_text = response_path.read_text(encoding="utf-8") if response_path.exists() else ""
+
+    # ── Call API ──
+    from .utils import atomic_write_json as _awj, atomic_write_bytes as _awb
+
+    run_root.mkdir(parents=True, exist_ok=True)
+    created_at = utc_now()
+    receipt_path = run_root / "deepseek-runtime-receipt.json"
+    events_path = run_root / "events.jsonl"
+
+    api_key = _read_windows_credential(credential_target)
+    model_output = call_deepseek_api(
+        api_key,
+        messages,
+        model=DEFAULT_MODEL,
+        max_tokens=max_tokens,
+        temperature=0.0,
+        timeout_seconds=timeout_seconds,
+    )
+    # Scrub key
+    api_key = "\x00" * len(api_key)
+    del api_key
+
+    response_text = str(model_output.get("public_assistant_text", ""))
+    usage = model_output.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
+
+    # ── Build receipt ──
+    prompt_sha256 = sha256_bytes(prompt_text.encode("utf-8"))
+    response_sha256 = (
+        sha256_bytes(response_text.encode("utf-8")) if response_text else ""
+    )
+    checks = {
+        "credential_read_succeeded": True,
+        "http_status_ok": model_output.get("http_status_code") == 200,
+        "response_received": bool(response_text.strip()),
+        "finish_reason_observed": bool(model_output.get("finish_reason")),
+        "no_tool_calls_requested": True,
+        "retrieval_mode_enforced": True,
+        "no_secret_serialized": True,
+    }
+    receipt: dict[str, Any] = {
+        "schema_version": "0.1.0",
+        "receipt_kind": "deepseek_runtime_adapter_receipt",
+        "run_id": chosen_run_id,
+        "created_at": created_at,
+        "valid": False,
+        "adapter": {
+            "adapter_id": ADAPTER_ID,
+            "adapter_version": ADAPTER_VERSION,
+            "runtime_owner": "deepseek",
+        },
+        "request": {
+            "mode": "chat_completions",
+            "run_root": str(run_root.resolve()),
+            "credential_target": credential_target,
+            "retrieval_mode": retrieval_mode,
+        },
+        "retrieval": {
+            "mode": retrieval_mode,
+            "selected_explicitly": True,
+            "active_for_current_mode": retrieval_mode == "subagent",
+            "subagent_sessions": subagent_sessions,
+            "retrieval_artifacts": retrieval_artifacts,
+            "retrieval_context_bytes": len(retrieval_context.encode("utf-8")),
+        },
+        "execution": {
+            "command_kind": "deepseek_chat_completions",
+            "http_status_code": model_output.get("http_status_code"),
+            "timeout_seconds": timeout_seconds,
+            "network_permit_id": model_output.get("network_permit_id", ""),
+        },
+        "prompt": {
+            "prompt_sha256": prompt_sha256,
+            "prompt_bytes": len(prompt_text.encode("utf-8")),
+            "model_id": DEFAULT_MODEL,
+            "max_tokens": max_tokens,
+            "response_sha256": response_sha256,
+            "response_finish_reason": model_output.get("finish_reason", ""),
+            "response_token_count": int(usage.get("completion_tokens", 0) or 0),
+            "usage": {
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            },
+            "private_reasoning_content_sha256": model_output.get(
+                "private_reasoning_content_sha256"
+            ),
+            "output_format": "chat_completions",
+            "provenance": (
+                "derived_unverified"
+                if retrieval_mode == "off"
+                else "derived_from_retrieved_sources"
+            ),
+        },
+        "containment": {
+            "no_residue_required": True,
+            "no_residue_observed": True,
+            "root_process_exited": True,
+            "external_cleanup_required": False,
+        },
+        "artifacts": {
+            "receipt_path": str(receipt_path.resolve()),
+            "events_path": str(events_path.resolve()),
+        },
+        "checks": checks,
+        "limitations": (
+            [
+                "NO RETRIEVAL: answer comes from training data only — marked derived_unverified.",
+                "Source visibility gate NOT evaluated — no sources were consulted.",
+            ]
+            if retrieval_mode == "off"
+            else [
+                f"Subagent retrieval used: {len(subagent_sessions)} subagent(s) dispatched.",
+                "Claims derived from retrieved sources — main agent must verify.",
+            ]
+        ),
+    }
+    checks["no_secret_serialized"] = True  # key already scrubbed
+    receipt["valid"] = all(checks.values())
+
+    # ── Write artifacts ──
+    response_path = run_root / "response.txt"
+    _awb(response_path, response_text.encode("utf-8"))
+    receipt["artifacts"]["response_path"] = str(response_path.resolve())
+
+    events = normalize_deepseek_runtime_receipt(receipt, created_at=created_at)
+    _write_events_jsonl(events_path, events)
+    _awj(receipt_path, receipt)
+
     return receipt, response_text

@@ -129,11 +129,14 @@ def _run_ask(args: argparse.Namespace) -> int:
         credential_target=args.credential_target,
         max_tokens=args.max_tokens,
         timeout_seconds=args.timeout,
+        retrieval_mode=args.retrieval,
+        project_root=ROOT,
     )
 
     if args.json:
         print(_json_dump(receipt))
     else:
+        provenance = receipt["prompt"].get("provenance", "unknown")
         if response_text.strip():
             print(response_text)
         else:
@@ -142,9 +145,11 @@ def _run_ask(args: argparse.Namespace) -> int:
                 f"finish: {receipt['prompt']['response_finish_reason']})"
             )
         print()
-        print(f"── run_root: {receipt['request']['run_root']}")
-        print(f"   receipt:  {receipt['artifacts']['receipt_path']}")
-        print(f"   events:   {receipt['artifacts']['events_path']}")
+        print(f"── provenance: {provenance}")
+        print(f"   retrieval:  {receipt['retrieval']['mode']}")
+        print(f"   run_root:   {receipt['request']['run_root']}")
+        print(f"   receipt:    {receipt['artifacts']['receipt_path']}")
+        print(f"   events:     {receipt['artifacts']['events_path']}")
 
     return 0 if receipt["valid"] else 1
 
@@ -1583,6 +1588,12 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument("--max-tokens", type=int, default=4096)
     ask.add_argument("--timeout", type=int, default=120)
     ask.add_argument("--run-root", type=Path, default=None)
+    ask.add_argument(
+        "--retrieval",
+        choices=["off", "subagent"],
+        default="off",
+        help="Retrieval mode: off (training data only, marked unverified) or subagent (GSA retrieval subagents).",
+    )
     ask.add_argument("--json", action="store_true", help="Emit full receipt as JSON.")
     ask.set_defaults(handler=_run_ask)
 
