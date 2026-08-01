@@ -78,13 +78,6 @@ _BUILTIN_COMMANDS: list[CommandDef] = [
         uri="command://context/compact",
     ),
     CommandDef(
-        slash="/run",
-        name_zh="当前运行",
-        description_zh="查看当前/最近一次 guarded run 的状态和回执",
-        category="运行时",
-        uri="command://run/status",
-    ),
-    CommandDef(
         slash="/kill",
         name_zh="强制终止",
         description_zh="立即终止当前运行的 agent 进程及其子进程树",
@@ -178,7 +171,7 @@ _DEFAULT_SLASHES: list[str] = [
     "/history",
     "/context",
     "/compact",
-    "/run",
+    "/status",
     "/kill",
 ]
 

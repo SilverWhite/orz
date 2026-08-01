@@ -768,7 +768,7 @@ class CommandRegistryTests(unittest.TestCase):
         self.registry = CommandRegistry.with_builtins()
 
     def test_seventeen_commands_registered(self) -> None:
-        self.assertEqual(len(self.registry), 17)
+        self.assertEqual(len(self.registry), 16)  # /run removed — Grok-owned
 
     def test_defaults_are_six(self) -> None:
         defaults = self.registry.get_defaults()
@@ -779,12 +779,12 @@ class CommandRegistryTests(unittest.TestCase):
         slashes = [c.slash for c in defaults]
         non_default = [
             "/help", "/diff", "/verify", "/sources", "/plan",
-            "/rewind", "/model", "/status", "/export",
+            "/rewind", "/model", "/export",
         ]
         for s in non_default:
             self.assertNotIn(s, slashes, f"{s} should not be in defaults")
         self.assertIn("/new", slashes)
-        self.assertIn("/run", slashes)
+        self.assertIn("/status", slashes)
         self.assertIn("/kill", slashes)
 
     def test_search_slash_alone_returns_defaults(self) -> None:
@@ -833,7 +833,7 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.get("/status").category, "系统")
 
     def test_search_second_priority_commands(self) -> None:
-        self.assertEqual(len(self.registry.search("/r")), 3)  # /run + /rewind + /retrieve
+        self.assertEqual(len(self.registry.search("/r")), 2)  # /rewind + /retrieve (/run removed)
         self.assertTrue(any(c.slash == "/rewind" for c in self.registry.search("/re")))
         self.assertEqual(len(self.registry.search("/m")), 1)   # /model
         self.assertEqual(len(self.registry.search("/st")), 1)  # /status

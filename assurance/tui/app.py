@@ -526,7 +526,7 @@ class TuiPrototype:
             if self.announcement_strip.items:
                 self.announcement_strip.l2_expanded = True
                 return "Plan 展开"
-            return "Plan: 无活跃计划。使用 /run <任务> 开始。"
+            return "Plan: 无活跃计划。直接输入任务开始。"
 
         # /verify — trigger verification on current content
         if text == "/verify":

@@ -104,7 +104,9 @@ Semantic split:
 - Find searches content.
 - Scope limits the search range.
 
-Direct commands such as `/run`, `/kill`, `/verify`, `/open`, and `/back` should map to explicit `command://...` addresses. They should not be mixed into the search scope selector.
+Direct commands such as `/kill`, `/verify`, `/open`, and `/back` should map to explicit `command://...` addresses. They should not be mixed into the search scope selector.
+
+**2026-08-01 `/run` removed**: `/run` is a native Grok slash command for process/task control. To avoid naming conflicts and reduce complexity, GSA does not implement its own `/run` command. Users start Grok ACP sessions by typing plain text (no slash prefix) in the AddressBar; plain text auto-starts a session when none is active.
 
 Recommended search scopes:
 
