@@ -202,7 +202,7 @@ class ShadowRecoveryStoreTests(unittest.TestCase):
         objects_dir = self.store._repo / ".git" / "objects"
         for obj_root, _dirs, files in os.walk(objects_dir):
             for fname in files:
-                obj_path = obj_root / fname
+                obj_path = Path(obj_root) / fname
                 obj_path.chmod(0o644)
                 obj_path.write_bytes(b"corrupted git object")
                 break
