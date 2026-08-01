@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -199,7 +200,7 @@ class ShadowRecoveryStoreTests(unittest.TestCase):
         # Corrupt a blob object in the Git object store.
         # Git object files are read-only on Windows, so chmod first.
         objects_dir = self.store._repo / ".git" / "objects"
-        for obj_root, _dirs, files in objects_dir.walk():
+        for obj_root, _dirs, files in os.walk(objects_dir):
             for fname in files:
                 obj_path = obj_root / fname
                 obj_path.chmod(0o644)

@@ -613,11 +613,27 @@ class GsaCliDispatcherTests(unittest.TestCase):
             },
         ]
 
+        # Create mock ACP verification files so the default path lookup succeeds
+        (self.run_root / "acp-allow").mkdir(parents=True, exist_ok=True)
+        (self.run_root / "acp-allow" / "verification.json").write_text(
+            '{"verification_id": "fake-allow", "valid": true}'
+        )
+        (self.run_root / "acp-allow" / "result.json").write_text('{}')
+        (self.run_root / "acp-cancel").mkdir(parents=True, exist_ok=True)
+        (self.run_root / "acp-cancel" / "verification.json").write_text(
+            '{"verification_id": "fake-cancel", "valid": true}'
+        )
+        (self.run_root / "acp-cancel" / "result.json").write_text('{}')
+
         exit_code, receipt = self._capture_json(
             [
                 "alpha",
                 "tool-check",
                 "--run-root", str(self.run_root),
+                "--acp-verification",
+                str(self.run_root / "acp-allow" / "verification.json"),
+                "--acp-verification",
+                str(self.run_root / "acp-cancel" / "verification.json"),
                 "--json",
             ]
         )
