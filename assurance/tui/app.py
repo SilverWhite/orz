@@ -48,6 +48,7 @@ from .widgets import (
     PropertiesSheet,
     StatusBar,
     Toolbar,
+    ToolTraceLine,
     box_bottom,
     box_horizontal,
     box_t_junction,
@@ -375,14 +376,22 @@ class TuiPrototype:
         if key == "c-f":
             self._wire_find_callback()
             self.find_dialog.visible = not self.find_dialog.visible
+            if self.find_dialog.visible:
+                self.toolbar.highlighted.add("查找...")
+            else:
+                self.toolbar.highlighted.discard("查找...")
             return "查找" if self.find_dialog.visible else None
 
         if key == "c-l":
             current = self.address_bar.uri or ""
             self.address_dialog.open_dialog(current)
+            self.toolbar.highlighted.add("命令...")
             return "命令…"
 
         if key == "esc":
+            # Clear toolbar highlights when dialogs close.
+            self.toolbar.highlighted.discard("命令...")
+            self.toolbar.highlighted.discard("查找...")
             # 1. If help is visible, close it
             if self.help_overlay.visible:
                 self.help_overlay.visible = False
@@ -811,28 +820,72 @@ class TuiPrototype:
         return None
 
     def _find_button_position(self, name: str) -> int | None:
-        """Return the starting x-position of a toolbar button, or None."""
-        all_buttons = list(self.toolbar.buttons) + list(self.toolbar.right_buttons)
-        x = 1  # inside left border
+        """Return the starting x-position of a toolbar button, or None.
+
+        Left-group buttons start at column 1 (inside border) and grow right.
+        Right-group buttons are right-aligned within the toolbar width.
+        """
         sep = "  "
-        found_left = False
-        for btn in all_buttons:
+        # Check left group.
+        x = 1
+        for btn in self.toolbar.buttons:
             if btn == name:
                 return x
             x += len(btn) + len(sep)
-            if not found_left and btn == self.toolbar.buttons[-1] if self.toolbar.buttons else False:
-                # After left group, right-align right_buttons
-                found_left = True
+        # Check right group — need approximate toolbar width.
+        # The TUI renders at a known width; use 100 as a reasonable default
+        # (mouse click coordinates come from the actual terminal width).
+        left_text = sep.join(self.toolbar.buttons) if self.toolbar.buttons else ""
+        right_text = sep.join(self.toolbar.right_buttons)
+        # Right-aligned: gap = width - left_width - right_width.
+        # We don't know the exact terminal width here, so approximate
+        # using a conservative value and the rightmost positions.
+        approx_width = 100
+        left_w = sum(len(b) for b in self.toolbar.buttons) + len(sep) * max(0, len(self.toolbar.buttons) - 1)
+        right_w = sum(len(b) for b in self.toolbar.right_buttons) + len(sep) * max(0, len(self.toolbar.right_buttons) - 1)
+        r_start = approx_width - right_w - 1  # -1 for right border
+        rx = r_start
+        for btn in self.toolbar.right_buttons:
+            if btn == name:
+                return rx
+            rx += len(btn) + len(sep)
         return None
 
     def _handle_content_click(self, col: int, row: int) -> str | None:
-        """Handle click in ContentPane area — check tool expand/collapse."""
+        """Handle click in ContentPane area.
+
+        Maps *row* to a specific tool trace line and toggles its
+        expand/collapse state.  Each tool line in the conversation
+        occupies one row.
+        """
         cp = self.content_pane
         names = cp.tool_trace_names()
-        if names:
-            cp.toggle_tool_expand(names[-1])
-            return f"切换: {names[-1]}"
-        return None
+        if not names:
+            return None
+
+        # Determine which tool trace row was clicked.
+        # The conversation layout is (starting from row 3 in the terminal):
+        #   row 3: source visibility compact bar (if present)
+        #   row 4+: conversation items
+        base_row = 4 if cp.source_table else 3
+        item_idx = row - base_row
+        # Account for expanded tool (pin-to-top, takes extra rows).
+        for i, item in enumerate(cp._items):
+            if isinstance(item, ToolTraceLine) and item.expanded:
+                expanded_rows = 2 + len(item.entries)  # header + entries
+                if row < base_row + expanded_rows:
+                    # Click within expanded area — toggle to collapse.
+                    cp.toggle_tool_expand(item.tool_name)
+                    return f"关闭: {item.tool_name}"
+                base_row += expanded_rows
+                break
+
+        if 0 <= item_idx < len(names):
+            cp.toggle_tool_expand(names[item_idx])
+            return f"切换: {names[item_idx]}"
+        # Fallback: toggle the last tool trace.
+        cp.toggle_tool_expand(names[-1])
+        return f"切换: {names[-1]}"
 
     # ── toolbar actions (P4) ──────────────────────────────────────────────
 
@@ -867,9 +920,15 @@ class TuiPrototype:
             return "属性"
         elif action == "命令...":
             self.address_dialog.open_dialog("")
+            self.toolbar.highlighted.add("命令...")
             return "命令..."
         elif action == "查找...":
-            self.find_dialog.visible = True
+            self._wire_find_callback()
+            self.find_dialog.visible = not self.find_dialog.visible
+            if self.find_dialog.visible:
+                self.toolbar.highlighted.add("查找...")
+            else:
+                self.toolbar.highlighted.discard("查找...")
             return "查找..."
         return f"未知操作: {action}"
 

@@ -509,6 +509,18 @@ def _run_tui(args: argparse.Namespace) -> int:
     return tui_main(tui_args)
 
 
+def _run_eval(args: argparse.Namespace) -> int:
+    """Run a frozen evaluation from CLI."""
+    from .evaluation_runner import run_evaluation_cli
+    return run_evaluation_cli(
+        scenario_path=args.scenario_bundle,
+        oracle_path=args.oracle_bundle,
+        output_dir=args.output_dir,
+        model_id=args.model_id,
+        seed=args.seed,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gsa",
@@ -822,6 +834,20 @@ def _parser() -> argparse.ArgumentParser:
         help="How terminal commands are executed (default: popout).",
     )
     tui.set_defaults(handler=_run_tui)
+
+    # ── eval ─────────────────────────────────────────────────────────────
+    eval_cmd = subparsers.add_parser("eval", help="Run frozen evaluation.")
+    eval_cmd.add_argument("--scenario-bundle", type=Path, required=True,
+                          help="Path to scenario bundle JSON.")
+    eval_cmd.add_argument("--oracle-bundle", type=Path, required=True,
+                          help="Path to oracle bundle JSON.")
+    eval_cmd.add_argument("--output-dir", type=Path, required=True,
+                          help="Directory for evaluation output.")
+    eval_cmd.add_argument("--model-id", default="deepseek-chat",
+                          help="Model ID for frozen profile.")
+    eval_cmd.add_argument("--seed", type=int, default=42,
+                          help="Random seed for frozen profile.")
+    eval_cmd.set_defaults(handler=_run_eval)
 
     return parser
 

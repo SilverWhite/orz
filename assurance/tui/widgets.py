@@ -229,21 +229,26 @@ class Toolbar(Widget):
     buttons: list[str] = field(default_factory=list)
     right_buttons: list[str] = field(default_factory=list)
     focusable: bool = True
+    highlighted: set[str] = field(default_factory=set)
 
     def render(self, width: int, height: int) -> list[str]:
         if height < 1:
             return []
         sep = "  "
+
+        def _fmt(btn: str) -> str:
+            """Wrap highlighted buttons in brackets for visual pop."""
+            return f"[{btn}]" if btn in self.highlighted else btn
+
         if self.right_buttons:
-            # Left buttons + gap + right-aligned buttons.
-            left = sep.join(self.buttons) if self.buttons else ""
-            right = sep.join(self.right_buttons)
+            left = sep.join(_fmt(b) for b in self.buttons) if self.buttons else ""
+            right = sep.join(_fmt(b) for b in self.right_buttons)
             left_w = display_width(left)
             right_w = display_width(right)
             gap = max(1, width - left_w - right_w)
             line = left + " " * gap + right
         elif self.buttons:
-            line = sep.join(self.buttons)
+            line = sep.join(_fmt(b) for b in self.buttons)
         else:
             line = " " * width
         return [pad_to_width(line, width)]
@@ -1127,29 +1132,29 @@ class ContentPane(Widget):
     def _render_code_block(
         code_lines: list[str], lang: str, width: int,
     ) -> list[str]:
-        """Render a fenced code block inside a message card.
+        """Render a fenced code block with line numbers and optional syntax
+        highlighting.
 
-        Uses indentation with line numbers — no nested border (the card
-        already provides the outer frame).
-
-        Format::
-
-             1  from __future__ import annotations
-             2  import argparse
+        When *lang* is ``python`` / ``py``, applies terminal ANSI colour
+        escapes for keywords, strings, comments, numbers, and decorators.
+        Other languages render as plain text with line numbers.
         """
         if not code_lines:
             return []
         result: list[str] = []
         n = len(code_lines)
         num_w = len(str(n))
-        # Optional language label line.
+        highlight = lang.lower() in ("python", "py")
         if lang:
             result.append(f"  [{lang}]")
         for i, cl in enumerate(code_lines, 1):
             prefix = f"  {i:>{num_w}d}  "
             prefix_w = display_width(prefix)
             available = max(0, width - prefix_w)
-            display = cl[:available] if len(cl) > available else cl
+            # Truncate raw text (before highlighting) so colours don't
+            # break width calculations.
+            raw = cl[:available] if len(cl) > available else cl
+            display = _highlight_python(raw) if highlight else raw
             result.append(prefix + display)
         return result
 
@@ -2022,6 +2027,109 @@ _SRC_SYMBOL: dict[str, str] = {
     "defer": "~",
     "block": "✗",
 }
+
+
+# ── syntax highlighting (ANSI terminal colours) ────────────────────────────────
+
+# Minimal, no-dependency Python highlighter.  Uses ANSI SGR escape codes.
+# Colour blind-safe palette — avoids pure red/green on dark backgrounds.
+
+_ANSI = {
+    "keyword": "\x1b[38;5;75m",    # light blue
+    "string":  "\x1b[38;5;114m",   # muted green
+    "comment": "\x1b[38;5;245m",   # gray
+    "number":  "\x1b[38;5;221m",   # gold
+    "decorator":"\x1b[38;5;177m",  # mauve
+    "builtin": "\x1b[38;5;81m",    # cyan
+    "reset":   "\x1b[0m",
+}
+
+_PY_KEYWORDS: frozenset[str] = frozenset({
+    "False", "None", "True", "and", "as", "assert", "async", "await",
+    "break", "class", "continue", "def", "del", "elif", "else", "except",
+    "finally", "for", "from", "global", "if", "import", "in", "is",
+    "lambda", "nonlocal", "not", "or", "pass", "raise", "return",
+    "try", "while", "with", "yield",
+})
+
+_PY_BUILTINS: frozenset[str] = frozenset({
+    "self", "cls", "True", "False", "None", "str", "int", "float", "bool",
+    "list", "dict", "set", "tuple", "frozenset", "Path", "Any", "Optional",
+    "Union", "TypeVar", "dataclass", "field", "Enum",
+})
+
+import re as _re
+
+# Token patterns — ordered so longer patterns match first.
+_PY_PATTERNS: list[tuple[str, str]] = [
+    # triple-quoted strings (multiline, but we only colour within one line)
+    ("string",  r'"""'),
+    ("string",  r"'''"),
+    # decorators
+    ("decorator", r'@\w+'),
+    # f-strings / regular strings
+    ("string",  r'f"(?:\\.|[^"\\])*"'),
+    ("string",  r"f'(?:\\.|[^'\\])*'"),
+    ("string",  r'b?"(?:\\.|[^"\\])*"'),
+    ("string",  r"b?'(?:\\.|[^'\\])*'"),
+    # comments
+    ("comment", r'#.*$'),
+    # numbers
+    ("number",  r'\b0[xX][0-9a-fA-F]+'),
+    ("number",  r'\b\d+\.?\d*(?:[eE][+-]?\d+)?\b'),
+    # identifiers (keywords / builtins / plain)
+    ("keyword", r'\b(?:' + "|".join(sorted(_PY_KEYWORDS, key=len, reverse=True)) + r')\b'),
+    ("builtin", r'\b(?:' + "|".join(sorted(_PY_BUILTINS, key=len, reverse=True)) + r')\b'),
+]
+
+
+def _highlight_python(text: str) -> str:
+    """Apply terminal ANSI colour escapes to *text* (Python source).
+
+    Each token class gets its own colour; unmatched spans are returned
+    uncoloured.  ANSI escapes have zero display width so they do not
+    affect column alignment.
+    """
+    # Build a set of positions already consumed by a longer match.
+    consumed: list[int] = [0] * (len(text) + 1)
+
+    # Work from a list of (start, end, kind) matches, longest-first.
+    matches: list[tuple[int, int, str]] = []
+    for kind, pat in _PY_PATTERNS:
+        for m in _re.finditer(pat, text):
+            s, e = m.start(), m.end()
+            matches.append((s, e, kind))
+
+    # Sort by start, then by length descending (longer match wins tie).
+    matches.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+
+    # Build coloured output.
+    parts: list[str] = []
+    pos = 0
+    for s, e, kind in matches:
+        if s < pos:
+            continue  # already consumed by an earlier (longer) match
+        # Check no interior position is consumed.
+        if any(consumed[i] for i in range(s, e)):
+            continue
+        # Emit plain text before this match.
+        if s > pos:
+            parts.append(text[pos:s])
+        # Emit coloured token.
+        colour = _ANSI.get(kind, "")
+        if colour:
+            parts.append(f"{colour}{text[s:e]}{_ANSI['reset']}")
+        else:
+            parts.append(text[s:e])
+        # Mark consumed.
+        for i in range(s, e):
+            consumed[i] = 1
+        pos = e
+
+    # Trailing plain text.
+    if pos < len(text):
+        parts.append(text[pos:])
+    return "".join(parts)
 
 
 # ── address dialog (B4 — modal overlay for full command/address input) ────────

@@ -256,6 +256,10 @@ class EvaluationRunner:
         return self._attempt_id
 
     @property
+    def completed_at(self) -> str:
+        return self._completed_at
+
+    @property
     def profile(self) -> FrozenSystemProfile:
         return self._profile
 
@@ -732,3 +736,121 @@ def build_evaluation_oracle_bundle(
             # these are in the scenario bundle only.
         })
     return oracles
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def run_evaluation_cli(
+    scenario_path: Path,
+    oracle_path: Path,
+    output_dir: Path,
+    *,
+    model_id: str = "deepseek-chat",
+    seed: int = 42,
+) -> int:
+    """Validate and run an evaluation from CLI.
+
+    Loads scenario and oracle bundles from JSON files, creates a frozen
+    profile, verifies oracle isolation, and produces an integrity block.
+    Does NOT execute an agent — the caller feeds responses separately.
+    """
+    import sys as _sys
+
+    # ── load bundles ───────────────────────────────────────────────────────
+    if not scenario_path.is_file():
+        print(f"Scenario bundle not found: {scenario_path}", file=_sys.stderr)
+        return 1
+    if not oracle_path.is_file():
+        print(f"Oracle bundle not found: {oracle_path}", file=_sys.stderr)
+        return 1
+
+    try:
+        scenarios = json.loads(scenario_path.read_text(encoding="utf-8"))
+        oracles = json.loads(oracle_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON: {exc}", file=_sys.stderr)
+        return 1
+
+    if not isinstance(scenarios, list):
+        print("Scenario bundle must be a JSON array", file=_sys.stderr)
+        return 1
+    if not isinstance(oracles, list):
+        print("Oracle bundle must be a JSON array", file=_sys.stderr)
+        return 1
+
+    # ── build frozen profile ──────────────────────────────────────────────
+    profile = FrozenSystemProfile(
+        model_id=model_id,
+        model_parameters={"temperature": 0.0},
+        prompt_digest="eval-cli-dry-run",
+        tool_allowlist=["read_file", "search"],
+        network_policy="none",
+        budget_seconds=300,
+        mode="guarded",
+        seed=seed,
+    )
+
+    # ── run evaluation ────────────────────────────────────────────────────
+    output_dir.mkdir(parents=True, exist_ok=True)
+    runner = EvaluationRunner(
+        profile=profile,
+        scenario_bundle=scenarios,
+        oracle_bundle=oracles,
+        output_dir=output_dir,
+    )
+
+    print(f"Evaluation ID:   {runner.evaluation_id}")
+    print(f"Attempt ID:      {runner.attempt_id}")
+    print(f"Scenarios:       {len(scenarios)}")
+    print(f"Oracles:         {len(oracles)}")
+    print(f"Oracle isolated: PASS")
+    print(f"Output dir:      {output_dir}")
+
+    # Print scenario list (no agent execution — dry-run only).
+    for i, scenario in enumerate(runner.scenario_feed(), 1):
+        case_id = scenario.get("case_id", f"case-{i}")
+        title = scenario.get("title", "")
+        print(f"  [{i:>3}] {case_id}  {title[:60]}")
+
+    # Finalize: produce integrity block.
+    # Since we haven't recorded any agent responses, scoring is incomplete.
+    result = runner.finalize()
+    print(f"\nStatus:          {result.get('status', '?')}")
+    print(f"Completed at:    {runner.completed_at}")
+
+    # Write integrity block.
+    integrity_path = output_dir / "integrity-block.json"
+    integrity = {
+        "evaluation_id": runner.evaluation_id,
+        "attempt_id": runner.attempt_id,
+        "scenario_count": len(scenarios),
+        "oracle_count": len(oracles),
+        "status": "integrity-only (no agent responses)",
+        "completed_at": runner.completed_at,
+    }
+    atomic_write_json(integrity_path, integrity)
+    print(f"Integrity block: {integrity_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    import argparse
+    _parser = argparse.ArgumentParser(prog="gsa-eval", description="Run a frozen evaluation.")
+    _parser.add_argument("--scenario-bundle", type=Path, required=True,
+                        help="Path to scenario bundle JSON file.")
+    _parser.add_argument("--oracle-bundle", type=Path, required=True,
+                        help="Path to oracle bundle JSON file.")
+    _parser.add_argument("--output-dir", type=Path, required=True,
+                        help="Directory for evaluation output.")
+    _parser.add_argument("--model-id", default="deepseek-chat",
+                        help="Model ID for the frozen profile.")
+    _parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for the frozen profile.")
+    _args = _parser.parse_args()
+    raise SystemExit(run_evaluation_cli(
+        _args.scenario_bundle, _args.oracle_bundle, _args.output_dir,
+        model_id=_args.model_id, seed=_args.seed,
+    ))
