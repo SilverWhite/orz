@@ -279,6 +279,30 @@ class NetworkPermitGatewayTests(unittest.TestCase):
                 allowed_categories={"llm_provider", "web_fetch"},
             )
 
+    def test_endpoint_allowlist_blocks_already_canonical_disallowed_endpoint(self) -> None:
+        with self.assertRaises(NetworkPermitBlockedError):
+            evaluate_network_permit(
+                endpoint="https://evil.example/api",
+                category="llm_provider",
+                conversation_id=CONV_ID,
+                attempt=1,
+                turn=1,
+                allowed_categories={"llm_provider"},
+                allowed_endpoints={"api.deepseek.com"},
+            )
+
+    def test_endpoint_denylist_blocks_even_when_category_allowed(self) -> None:
+        with self.assertRaises(NetworkPermitBlockedError):
+            evaluate_network_permit(
+                endpoint="https://api.deepseek.com/chat/completions",
+                category="llm_provider",
+                conversation_id=CONV_ID,
+                attempt=1,
+                turn=1,
+                allowed_categories={"llm_provider"},
+                denied_endpoints={"api.deepseek.com"},
+            )
+
     def test_policy_builder_modes(self) -> None:
         strict = build_network_permit_policy(mode="strict")
         self.assertIn("llm_provider", strict["allowed_categories"])
@@ -302,6 +326,56 @@ class NetworkPermitGatewayTests(unittest.TestCase):
         )
         verified = verify_network_permit_receipt(receipt)
         self.assertTrue(verified["valid"], verified["errors"])
+
+    def test_verifier_detects_policy_endpoint_allowlist_mismatch(self) -> None:
+        receipt = evaluate_network_permit(
+            endpoint="https://api.deepseek.com/chat/completions",
+            category="llm_provider",
+            conversation_id=CONV_ID,
+            attempt=1,
+            turn=1,
+        )
+        policy = build_network_permit_policy(
+            mode="strict",
+            allowed_endpoints={"other.example"},
+        )
+        verified = verify_network_permit_receipt(receipt, policy=policy)
+        self.assertFalse(verified["valid"])
+        self.assertIn("not in policy allowed set", "\n".join(verified["errors"]))
+
+    def test_verifier_detects_policy_endpoint_denylist_mismatch(self) -> None:
+        receipt = evaluate_network_permit(
+            endpoint="https://api.deepseek.com/chat/completions",
+            category="llm_provider",
+            conversation_id=CONV_ID,
+            attempt=1,
+            turn=1,
+        )
+        policy = build_network_permit_policy(
+            mode="strict",
+            denied_endpoints={"api.deepseek.com"},
+        )
+        verified = verify_network_permit_receipt(receipt, policy=policy)
+        self.assertFalse(verified["valid"])
+        self.assertIn("policy denied set", "\n".join(verified["errors"]))
+
+    def test_verifier_detects_policy_attempt_budget_mismatch(self) -> None:
+        receipt = evaluate_network_permit(
+            endpoint="https://api.deepseek.com/chat/completions",
+            category="llm_provider",
+            conversation_id=CONV_ID,
+            attempt=4,
+            turn=1,
+            previous_http_status=503,
+            max_attempts_per_turn=10,
+        )
+        policy = build_network_permit_policy(
+            mode="strict",
+            max_attempts_per_turn=3,
+        )
+        verified = verify_network_permit_receipt(receipt, policy=policy)
+        self.assertFalse(verified["valid"])
+        self.assertIn("exceeds policy max", "\n".join(verified["errors"]))
 
 
 class EndToEndTrustAndPermitTests(unittest.TestCase):

@@ -20,6 +20,7 @@ SUPPORTED_EVENT_TYPES = {
     "run_failed",
     "prompt_submitted",
     "model_response_received",
+    "model_output",
     "acp_initialize",
     "acp_session_created",
     "tool_proposal",
@@ -97,6 +98,18 @@ def normalize_grok_runtime_receipt(
     timestamp = created_at or str(receipt.get("created_at") or utc_now())
     is_prompt = receipt["request"]["mode"] == "prompt_smoke"
     is_acp = receipt["request"]["mode"] == "acp_smoke"
+    prompt_block = receipt.get("prompt")
+    model_id = (
+        str(prompt_block.get("model_id"))
+        if isinstance(prompt_block, dict) and prompt_block.get("model_id")
+        else "grok-runtime"
+    )
+    fake_provider = bool(receipt["request"].get("fake_provider", False))
+    real_network_allowed = bool(
+        (is_prompt or is_acp)
+        and not fake_provider
+        and model_id != "lif-fake-deepseek"
+    )
     manifest = {
         "schema_version": "0.1.0-draft",
         "manifest_kind": "grok_runtime_adapter_projection",
@@ -124,8 +137,8 @@ def normalize_grok_runtime_receipt(
             {
                 "adapter_id": receipt["adapter"]["adapter_id"],
                 "provider": "grok",
-                "model_id": "grok-runtime",
-                "real_network_allowed": False,
+                "model_id": model_id,
+                "real_network_allowed": real_network_allowed,
                 "binary_valid": receipt["binary"]["valid"],
                 "workspace_trust_granted": receipt["workspace_trust"]["trust_granted"],
                 "retrieval_mode": receipt["retrieval"]["mode"],
@@ -203,12 +216,16 @@ def normalize_grok_runtime_receipt(
                     "permission_outcomes": acp_block["permission_outcomes"],
                 },
             ))
+        prompt_block = receipt.get("prompt") if isinstance(receipt.get("prompt"), dict) else {}
         # D1.10: Emit a model_output summary event when ACP produced text.
-        if acp_block.get("turn_count", 0) > 0:
+        # Grok may deliver final text before a turn_completed notification is
+        # drainable on Windows stdio, so response_sha256 is the stronger signal.
+        if prompt_block.get("response_sha256"):
             specs.append((
                 "model_output",
                 {
                     "turn_count": acp_block["turn_count"],
+                    "response_sha256": prompt_block["response_sha256"],
                     "tool_call_count": acp_block.get("tool_call_count", 0),
                     "stop_reason": acp_block.get("stop_reason", ""),
                     "structured_output_valid": True,

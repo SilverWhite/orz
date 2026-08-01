@@ -63,11 +63,11 @@ def _build_context_block(
             "UNPROBED: " + ", ".join(sorted(unprobed_ids))
         )
     lines.append("")
+    lines.append("GATE: runtime_probe_authoritative")
+    lines.append("STATUS: descriptive_projection_only")
     lines.append(
-        "You MUST NOT guess whether an unavailable tool exists or what it would return. "
-        "You MUST NOT fabricate tool call results or search results when the tool is unavailable. "
-        "If a tool is listed as UNAVAILABLE, explicitly state that it is unavailable and "
-        "suggest the user enable it or proceed with available tools only."
+        "ENFORCEMENT: tool calls, provider errors, and capability claims are "
+        "checked by runtime gates and observers outside this text block."
     )
     lines.append(CONTEXT_BLOCK_SUFFIX)
     return "\n".join(lines)
@@ -148,8 +148,8 @@ def probe_tool_availability(
         "context_block": context_block,
         "notes": [
             "Tool availability is determined by mechanical probe, not model inference.",
-            "Unprobed tools cannot be assumed available or unavailable.",
-            "The context block MUST be injected into the model's system context before the first turn.",
+            "Unprobed tools remain an explicit observed status.",
+            "The context block is a descriptive projection; runtime gates enforce availability.",
         ],
     }
     validate_contract(report, REPORT_SCHEMA, label="tool availability report")
@@ -189,7 +189,7 @@ def build_tool_availability_gate_receipt(report: dict[str, Any]) -> dict[str, An
         },
         "limitations": [
             "This gate uses declared probe results; it does not dynamically discover tools at runtime.",
-            "Unprobed tools should not be assumed available by the model.",
+            "Unprobed tools are represented as unprobed; model-facing text is not the enforcement layer.",
             "Probe registry must be maintained by the runtime adapter.",
         ],
     }

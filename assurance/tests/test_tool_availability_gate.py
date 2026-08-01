@@ -103,7 +103,8 @@ class ToolAvailabilityGateTests(unittest.TestCase):
         self.assertIn("file_read", context)
         self.assertIn("UNAVAILABLE:", context)
         self.assertIn("file_write", context)
-        self.assertIn("You MUST NOT guess", context)
+        self.assertIn("STATUS: descriptive_projection_only", context)
+        self.assertIn("ENFORCEMENT:", context)
         self.assertIn("[/TOOL_AVAILABILITY]", context)
 
     def test_gate_receipt_blocks_on_degraded_tools(self) -> None:

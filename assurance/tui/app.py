@@ -126,12 +126,13 @@ class TuiPrototype:
     # ── runtime state ──
     running: bool = False       # True while agent is executing a run
     _last_sent: str = ""        # preserved when run is cancelled (refill bar)
+    grok_fake_provider: bool = False
 
     # ── focus ──
     _focusable_panes: tuple[str, ...] = (
-        "explorer", "checklist", "content", "marker", "chat",
+        "explorer", "checklist", "content", "marker", "address", "chat",
     )
-    _active_pane_index: int = 4  # default: chat input
+    _active_pane_index: int = 5  # default: chat input
     _last_esc_time: float = field(default=0.0)  # P3.4: double-Esc session list
 
     # ── public API ──────────────────────────────────────────────────────────
@@ -532,6 +533,23 @@ class TuiPrototype:
             self.help_overlay.visible = not self.help_overlay.visible
             return "帮助" if self.help_overlay.visible else None
 
+        if text == "/status":
+            state = "运行中" if self.running else "空闲"
+            provider = "假端点" if self.grok_fake_provider else "真实端点"
+            return f"状态: {state}；Grok ACP: {provider}"
+
+        if text == "/provider":
+            provider = "假端点" if self.grok_fake_provider else "真实端点"
+            return f"Grok ACP 端点: {provider}；用法: /provider fake 或 /provider real"
+
+        if text.startswith("/provider "):
+            mode = text[len("/provider "):].strip().lower()
+            if mode in ("fake", "fixture", "mock", "local"):
+                return self.set_grok_provider_mode(True)
+            if mode in ("real", "grok"):
+                return self.set_grok_provider_mode(False)
+            return "用法: /provider fake 或 /provider real"
+
         # /search <query> — browser-based web search
         if text.startswith("/search "):
             query = text[len("/search "):].strip()
@@ -743,22 +761,24 @@ class TuiPrototype:
     def _start_run(self, prompt_text: str) -> None:
         """Start a new Grok ACP session with *prompt_text*.
 
-        Creates a temporary run root, builds the live run function via the
-        bridge, and attaches it as the active event source.
+        Creates a Grok-owned run root under ``.gsa/runs/``, builds the live
+        run function via the bridge, and attaches it as the active event source.
         """
-        import tempfile
         from pathlib import Path as _Path
-        run_root = _Path(tempfile.mkdtemp(prefix="gsa-run-"))
+        run_root = _new_session_run_root()
         workspace = run_root / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
 
         try:
             from .bridge import build_grok_acp_live_run_fn
+            run_id = "RUN-GROK-ACP-TUI-" + run_root.name.replace("S-", "").upper()
             result = build_grok_acp_live_run_fn(
                 run_root=str(run_root),
                 workspace=str(workspace),
+                run_id=run_id,
                 prompt_text=prompt_text,
                 interactive=True,
+                fake_provider=self.grok_fake_provider,
             )
         except Exception as exc:
             self._status_messages.append(f"运行失败: {exc}")
@@ -778,8 +798,25 @@ class TuiPrototype:
         self.event_source = source
         source.start()
         self.running = True
+        self._update_grok_provider_status()
         self.status_bar.update_item("运行中", True)
         self._status_messages.append(f"已开始: {prompt_text[:60]}")
+
+    def set_grok_provider_mode(self, fake_provider: bool) -> str:
+        self.grok_fake_provider = fake_provider
+        self._update_grok_provider_status()
+        provider = "假端点" if fake_provider else "真实端点"
+        return f"Grok ACP 端点: {provider}"
+
+    def _update_grok_provider_status(self) -> None:
+        self.status_bar.items = [
+            item for item in self.status_bar.items
+            if item[0] not in ("端点:假", "端点:真")
+        ]
+        self.status_bar.update_item(
+            "端点:假" if self.grok_fake_provider else "端点:真",
+            True,
+        )
 
     def update_terminal_title(self, status: str) -> None:
         """Set terminal window/tab title via OSC escape sequence.
@@ -1006,7 +1043,7 @@ class TuiPrototype:
             sid = pane.selected_session_id()
             if sid:
                 pane.toggle_session_mode()
-                return f"会话: {sid}"
+                return f"会话: {sid}；恢复: grok session resume {sid}"
         return None
 
     @staticmethod
@@ -1198,11 +1235,8 @@ def _restore_terminal_title(title: str = "") -> None:
 
 def pad_to_width(text: str, width: int) -> str:
     """Pad *text* to exactly *width* display cells."""
-    from .widgets import display_width
-    current = display_width(text)
-    if current >= width:
-        return text[:width]
-    return text + " " * (width - current)
+    from .widgets import pad_to_width as _pad_to_width
+    return _pad_to_width(text, width)
 
 
 # ── session discovery (P3.4) ────────────────────────────────────────────────
@@ -1212,7 +1246,7 @@ def _discover_sessions() -> list[dict[str, object]]:
     """Scan ``.gsa/runs/`` for Grok ACP session directories.
 
     Each session directory contains Grok artifacts (``events.jsonl``,
-    ``acp_transcript.jsonl``) and optionally a ``session.json`` summary
+    ``acp_transcript.jsonl``) and a thin ``session.json`` summary marker
     written by the bridge.
 
     Returns a list of session summary dicts, newest first.  This is a
@@ -1249,6 +1283,32 @@ def _discover_sessions() -> list[dict[str, object]]:
             except (_json.JSONDecodeError, OSError):
                 pass
     return sessions
+
+
+def _new_session_run_root():
+    """Create a new Grok ACP run root under ``.gsa/runs/``.
+
+    The directory name doubles as the TUI-visible session id.  It is a
+    discovery marker for Grok-owned session artifacts, not a separate
+    session store or recovery mechanism.
+    """
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+    from pathlib import Path as _Path
+    import uuid as _uuid
+
+    runs_dir = _Path(".gsa/runs")
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = _datetime.now(_UTC).strftime("%Y%m%d")
+    for _ in range(8):
+        session_id = f"S-{stamp}-{_uuid.uuid4().hex[:8]}"
+        run_root = runs_dir / session_id
+        try:
+            run_root.mkdir()
+            return run_root
+        except FileExistsError:
+            continue
+    raise FileExistsError("unable to allocate unique Grok session run root")
 
 
 # ── convenience entry point ─────────────────────────────────────────────────

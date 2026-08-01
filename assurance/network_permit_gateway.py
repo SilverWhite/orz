@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from .contracts import validate_contract
 from .errors import AssuranceError
@@ -33,6 +34,7 @@ def evaluate_network_permit(
     request_body_sha256: str | None = None,
     allowed_categories: set[str] | None = None,
     allowed_endpoints: set[str] | None = None,
+    denied_endpoints: set[str] | None = None,
     max_attempts_per_turn: int = 3,
 ) -> dict[str, Any]:
     """Evaluate a single network permit request.
@@ -90,17 +92,35 @@ def evaluate_network_permit(
     else:
         checks["category_allowed"] = True
 
+    canonical_host = urlparse(canonical).hostname or ""
+
     # Endpoint allowlist
-    if allowed_endpoints is not None and canonical != endpoint:
-        # Check if the canonical endpoint or any prefix matches
+    if allowed_endpoints is not None:
         endpoint_allowed = any(
-            canonical.startswith(allowed) for allowed in allowed_endpoints
+            canonical == allowed
+            or canonical.startswith(f"{allowed.rstrip('/')}/")
+            or canonical_host == allowed
+            for allowed in allowed_endpoints
         )
         checks["endpoint_allowed"] = endpoint_allowed
         if not endpoint_allowed:
             errors.append(f"endpoint '{canonical}' not in allowed set")
     else:
         checks["endpoint_allowed"] = True
+
+    # Endpoint denylist
+    if denied_endpoints is not None:
+        endpoint_denied = any(
+            canonical == denied
+            or canonical.startswith(f"{denied.rstrip('/')}/")
+            or canonical_host == denied
+            for denied in denied_endpoints
+        )
+        checks["endpoint_not_denied"] = not endpoint_denied
+        if endpoint_denied:
+            errors.append(f"endpoint '{canonical}' is in denied set")
+    else:
+        checks["endpoint_not_denied"] = True
 
     permit_granted = not errors
     decision = "allow" if permit_granted else "block"
@@ -206,16 +226,59 @@ def verify_network_permit_receipt(
         receipt, "network-permit-receipt-v0.1.schema.json", label="network permit receipt"
     )
 
+    if receipt["permit_granted"] and receipt["errors"]:
+        errors.append("permit granted but errors recorded")
     if not receipt["permit_granted"] and not receipt["errors"]:
         errors.append("permit denied but no errors recorded")
 
-    if receipt["request"]["attempt"] == 1 and receipt["request"]["previous_http_status"] is not None:
+    request = receipt["request"]
+    attempt = request["attempt"]
+    previous_http_status = request["previous_http_status"]
+
+    if attempt == 1 and previous_http_status is not None:
         errors.append("first attempt has previous HTTP status")
+    if attempt > 1 and previous_http_status is None:
+        errors.append("retry attempt has no previous HTTP status")
 
     if policy is not None:
-        category = receipt["request"]["category"]
+        category = request["category"]
         if category not in policy.get("allowed_categories", []):
             errors.append(f"category '{category}' not in policy allowed set")
+
+        max_attempts = policy.get("max_attempts_per_turn", 3)
+        if attempt > max_attempts:
+            errors.append(f"attempt {attempt} exceeds policy max {max_attempts} per turn")
+
+        try:
+            from .endpoint_canonicalizer import canonicalize_network_endpoint
+
+            canonical_endpoint = canonicalize_network_endpoint(request["endpoint"])
+        except AssuranceError as exc:
+            errors.append(f"endpoint canonicalization failed: {exc}")
+            canonical_endpoint = request["endpoint"]
+
+        canonical_host = urlparse(canonical_endpoint).hostname or ""
+        allowed_endpoints = policy.get("allowed_endpoints", [])
+        if allowed_endpoints:
+            endpoint_allowed = any(
+                canonical_endpoint == allowed
+                or canonical_endpoint.startswith(f"{allowed.rstrip('/')}/")
+                or canonical_host == allowed
+                for allowed in allowed_endpoints
+            )
+            if not endpoint_allowed:
+                errors.append(f"endpoint '{canonical_endpoint}' not in policy allowed set")
+
+        denied_endpoints = policy.get("denied_endpoints", [])
+        if denied_endpoints:
+            endpoint_denied = any(
+                canonical_endpoint == denied
+                or canonical_endpoint.startswith(f"{denied.rstrip('/')}/")
+                or canonical_host == denied
+                for denied in denied_endpoints
+            )
+            if endpoint_denied:
+                errors.append(f"endpoint '{canonical_endpoint}' is in policy denied set")
 
     return {
         "valid": not errors,

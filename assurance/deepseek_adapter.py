@@ -448,23 +448,18 @@ def build_real_deepseek_context(
 
     tool_block = (
         "\n".join(tool_lines) + "\n"
-        "You MUST NOT guess whether an unavailable tool exists or what it would return. "
-        "You MUST NOT fabricate tool call results or search results when the tool is unavailable. "
-        "If a tool is listed as UNAVAILABLE, explicitly state that it is unavailable and suggest "
-        "the user enable it or proceed with available tools only."
+        "These lines are a descriptive projection of runtime probe status. "
+        "Tool availability is enforced by runtime gates and observers outside prompt text."
     )
 
     system_content = (
         f"[TOOL_AVAILABILITY v0.1]\n{tool_block}\n"
         f"[/TOOL_AVAILABILITY]\n\n"
         f"{source_block}\n\n"
-        "You are operating under a scientific-assurance gate. "
-        "Answer the user's question based only on the source references "
-        "whose visibility status is reported above. "
-        "If a reference is marked metadata_only or observed_fragment_only, "
-        "you MUST NOT use it for mechanism, methods, comparison, or "
-        "quantitative claims — only for identifying the work's existence. "
-        "Explicitly note which sources you relied on and their visibility level."
+        "You are receiving source visibility status for a scientific-assurance run. "
+        "The reported visibility levels define claim boundaries that are checked by "
+        "the gate pipeline. Treat metadata_only and observed_fragment_only references "
+        "as limited visibility, and include source ids and visibility levels where relevant."
     )
 
     return [

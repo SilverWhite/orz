@@ -1022,28 +1022,27 @@ def _build_retrieval_system_prompt(
             f"{doc['excerpt']}"
         )
 
-    return f"""You are a project-internal document retrieval subagent for the GSA (General Scientific Assurance) project.
+    return f"""Role: project-internal document retrieval subagent for the GSA (General Scientific Assurance) project.
 
-Your task: answer the retrieval question using ONLY the provided document excerpts below.
-Do NOT use external knowledge. Do NOT make claims beyond what the excerpts contain.
-All output must be marked as derived from project documents, not as original claims.
+Task: answer the retrieval question from the provided project document excerpts.
+Grounding: treat these excerpts as the available evidence for this retrieval pass; mark the response as derived from project documents rather than as an original claim.
 
 Retrieval question:
 {question}
 
-Required return sections (you must address each one):
+Requested return sections:
 {sections_str}
 
-Forbidden topics (do NOT discuss these):
+Out-of-scope topics from the retrieval contract:
 {forbidden_str}
 
 Project document excerpts:
 {''.join(excerpts_lines)}
 
-Please structure your response as a JSON object with the following keys:
+Response shape: JSON object with the following keys:
 - "sections": a list of {{"section_title": str, "content": str}} for each required section
 - "source_ids_used": a list of document paths you referenced
-Do NOT include any text outside the JSON object."""
+Keep the response to that JSON object."""
 
 
 def dispatch_retrieval_subagent(
@@ -1512,12 +1511,7 @@ def _build_external_retrieval_system_prompt(
     return_sections: list[str],
     forbidden_topics: list[str],
 ) -> str:
-    """Build the system prompt for the external web-search retrieval call.
-
-    The prompt includes the actual web search result excerpts and
-    **explicitly forbids** the model from using training knowledge.
-    Every claim must be grounded in a specific search result.
-    """
+    """Build the system prompt for the external web-search retrieval call."""
     sections_str = "\n".join(f"  - {s}" for s in return_sections)
     forbidden_str = (
         "\n".join(f"  - {t}" for t in forbidden_topics)
@@ -1537,33 +1531,28 @@ def _build_external_retrieval_system_prompt(
             f"```\n{result['snippet']}\n```"
         )
 
-    return f"""You are a web search result processing subagent for the GSA (General Scientific Assurance) project.
+    return f"""Role: web search result processing subagent for the GSA (General Scientific Assurance) project.
 
-Your ONLY job: read the provided web search result excerpts below and structure them into a coherent answer. You are a search-result summariser, NOT a knowledge model.
-
-CRITICAL — VIOLATING THESE RULES IS A HARD FAILURE:
-1. ONLY use the provided search result excerpts.  Do NOT use any training knowledge, prior knowledge, or external facts.
-2. If the search results do not contain enough information to answer the question, state "Insufficient search results to answer this question" in the relevant section — do NOT fabricate or infer missing information.
-3. Every factual statement MUST cite the specific search result number(s) it comes from (e.g. "see results 1, 3").
-4. Do NOT evaluate the quality, truthfulness, or credibility of search results.  Just report what they say.
-5. Do NOT discuss forbidden topics.
+Task: structure the provided web search result excerpts into a coherent retrieval answer.
+Grounding: the excerpts are the available evidence for this retrieval pass. When coverage is insufficient, use "Insufficient search results to answer this question" in the relevant section. Cite the search result number(s) attached to each factual statement, such as "see results 1, 3".
+Evaluation boundary: report what the search results say without adding a truthfulness or credibility evaluation.
 
 Retrieval question:
 {question}
 
-Required return sections (you must address each one):
+Requested return sections:
 {sections_str}
 
-Forbidden topics (do NOT discuss these):
+Out-of-scope topics from the retrieval contract:
 {forbidden_str}
 
 Web search result excerpts:
 {''.join(excerpts_lines)}
 
-Return format — a JSON object with exactly these keys:
+Response shape: JSON object with these keys:
 - "sections": a list of {{"section_title": str, "content": str, "cited_results": [int]}} for each required section
 - "insufficient_coverage": bool — true if the search results are insufficient to answer the question
-Do NOT include any text outside the JSON object."""
+Keep the response to that JSON object."""
 
 
 def dispatch_external_retrieval_subagent(

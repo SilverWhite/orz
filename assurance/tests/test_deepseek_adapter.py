@@ -194,7 +194,8 @@ class BuildRealDeepSeekContextTests(unittest.TestCase):
         self.assertIn("search", system)
         self.assertIn("UNAVAILABLE tools:", system)
         self.assertIn("bash_exec", system)
-        self.assertIn("MUST NOT guess", system)
+        self.assertIn("descriptive projection of runtime probe status", system)
+        self.assertIn("enforced by runtime gates", system)
 
     def test_system_message_contains_source_visibility_summary(self) -> None:
         messages = build_real_deepseek_context(
@@ -243,16 +244,17 @@ class BuildRealDeepSeekContextTests(unittest.TestCase):
         )
         self.assertIn("AVAILABLE tools: none", messages[0]["content"])
 
-    def test_system_message_includes_assurance_gate_instructions(self) -> None:
+    def test_system_message_includes_gate_status_projection(self) -> None:
         messages = build_real_deepseek_context(
             task_contract=_make_task_contract(),
             source_gate_receipt=_make_source_gate_receipt(),
             tool_availability_report=_make_tool_availability_report(),
         )
         system = messages[0]["content"]
-        self.assertIn("scientific-assurance gate", system)
+        self.assertIn("scientific-assurance run", system)
+        self.assertIn("claim boundaries", system)
         self.assertIn("metadata_only", system)
-        self.assertIn("mechanism", system)
+        self.assertIn("gate pipeline", system)
 
 
 # ---------------------------------------------------------------------------

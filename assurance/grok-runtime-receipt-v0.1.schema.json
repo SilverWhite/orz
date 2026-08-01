@@ -46,7 +46,9 @@
         "retrieval_mode": { "$ref": "#/$defs/retrieval_mode" },
         "retrieval_mode_explicit": { "type": "boolean" },
         "workspace_path": { "type": "string", "minLength": 1 },
-        "run_root": { "type": "string", "minLength": 1 }
+        "run_root": { "type": "string", "minLength": 1 },
+        "fake_provider": { "type": "boolean" },
+        "disable_builtin_tools": { "type": "boolean" }
       }
     },
     "retrieval": {
@@ -148,7 +150,63 @@
             "response_sha256": { "$ref": "#/$defs/sha256" },
             "response_finish_reason": { "type": "string" },
             "response_token_count": { "type": "integer", "minimum": 0 },
-            "output_format": { "const": "streaming_json" }
+            "output_format": { "enum": ["streaming_json", "acp_json_rpc"] }
+          }
+        }
+      ]
+    },
+    "acp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "session_id_hash",
+        "tool_call_count",
+        "permission_requests_count",
+        "permission_outcomes",
+        "turn_count",
+        "stop_reason",
+        "event_count",
+        "prompt_count"
+      ],
+      "properties": {
+        "protocol_version": { "type": "integer", "minimum": 0 },
+        "session_id_hash": { "$ref": "#/$defs/sha256" },
+        "tool_call_count": { "type": "integer", "minimum": 0 },
+        "permission_requests_count": { "type": "integer", "minimum": 0 },
+        "permission_outcomes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "turn_count": { "type": "integer", "minimum": 0 },
+        "stop_reason": { "type": "string" },
+        "event_count": { "type": "integer", "minimum": 0 },
+        "prompt_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "fake_provider": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "ready_path",
+            "result_path",
+            "config_path",
+            "host",
+            "port",
+            "real_model_invoked"
+          ],
+          "properties": {
+            "enabled": { "const": true },
+            "ready_path": { "type": "string", "minLength": 1 },
+            "result_path": { "type": "string", "minLength": 1 },
+            "config_path": { "type": "string", "minLength": 1 },
+            "host": { "const": "127.0.0.1" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "real_model_invoked": { "const": false }
           }
         }
       ]
@@ -185,7 +243,14 @@
       "required": ["receipt_path", "events_path"],
       "properties": {
         "receipt_path": { "type": "string", "minLength": 1 },
-        "events_path": { "type": "string", "minLength": 1 }
+        "events_path": { "type": "string", "minLength": 1 },
+        "acp_transcript_path": { "type": "string", "minLength": 1 },
+        "stderr_path": { "type": "string", "minLength": 1 },
+        "binary_inspection_path": { "type": "string", "minLength": 1 },
+        "workspace_trust_path": { "type": "string", "minLength": 1 },
+        "permission_records_path": { "type": "string", "minLength": 1 },
+        "fake_provider_ready_path": { "type": "string" },
+        "fake_provider_result_path": { "type": "string" }
       }
     },
     "checks": {

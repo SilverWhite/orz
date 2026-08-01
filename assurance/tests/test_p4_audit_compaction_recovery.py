@@ -408,6 +408,7 @@ class P4AuditCompactionRecoveryTests(unittest.TestCase):
             target = Path(tmp) / "restored_checkpoint.bin"
             receipt = executor.execute(
                 candidate, auth, snapshot_data, str(target), self.key_store,
+                execution_root=self.root / "executions",
             )
             self.assertEqual(receipt.outcome, "restored")
             self.assertTrue(receipt.audit_events_preserved)

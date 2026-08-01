@@ -776,6 +776,7 @@ class RecoveryExecutor:
         base_root: Path | None = None,
         dry_run: bool = False,
         shadow_commit_sha: str | None = None,
+        execution_root: Path | None = None,
     ) -> ExecutionReceipt:
         """Execute a recovery — write *snapshot_bytes* to *target_path*.
 
@@ -800,6 +801,10 @@ class RecoveryExecutor:
         shadow_commit_sha:
             Git commit SHA of the source entry in the shadow repository.
             ``None`` if the snapshot did not come from a Git-backed store.
+        execution_root:
+            Optional directory for execution receipts.  Defaults to the
+            repository-level shadow executions directory; tests can pass an
+            isolated temp directory.
 
         Returns
         -------
@@ -986,8 +991,9 @@ class RecoveryExecutor:
         signed = _sign_body(body, key_store=key_store)
 
         # Persist execution receipt
+        executions_root = execution_root or SHADOW_EXECUTIONS
         exec_dir = (
-            SHADOW_EXECUTIONS
+            executions_root
             / f"{_timestamp()[:19].replace(':', '')}-{receipt_id[-8:]}"
         )
         exec_dir.mkdir(parents=True, exist_ok=True)

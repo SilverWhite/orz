@@ -43,14 +43,28 @@ def cell_width(char: str) -> int:
 
 def display_width(text: str) -> int:
     """Return the display width of *text* in terminal cells."""
-    return sum(cell_width(ch) for ch in text)
+    width = 0
+    i = 0
+    while i < len(text):
+        if text[i] == "\x1b" and i + 1 < len(text) and text[i + 1] == "[":
+            end = i + 2
+            while end < len(text) and text[end] not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz":
+                end += 1
+            if end < len(text):
+                i = end + 1
+                continue
+        width += cell_width(text[i])
+        i += 1
+    return width
 
 
 def pad_to_width(text: str, width: int, align: str = "left") -> str:
     """Pad *text* to exactly *width* display cells."""
     current = display_width(text)
-    if current >= width:
-        return text[:width]  # truncation; caller should avoid this
+    if current == width:
+        return text
+    if current > width:
+        return truncate_to_width(text, width)
     gap = width - current
     if align == "right":
         return " " * gap + text
@@ -59,6 +73,29 @@ def pad_to_width(text: str, width: int, align: str = "left") -> str:
         right = gap - left
         return " " * left + text + " " * right
     return text + " " * gap
+
+
+def truncate_to_width(text: str, width: int) -> str:
+    """Truncate *text* to at most *width* display cells, preserving ANSI SGR."""
+    result: list[str] = []
+    current = 0
+    i = 0
+    while i < len(text) and current < width:
+        if text[i] == "\x1b" and i + 1 < len(text) and text[i + 1] == "[":
+            end = i + 2
+            while end < len(text) and text[end] not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz":
+                end += 1
+            if end < len(text):
+                result.append(text[i:end + 1])
+                i = end + 1
+                continue
+        ch_width = cell_width(text[i])
+        if current + ch_width > width:
+            break
+        result.append(text[i])
+        current += ch_width
+        i += 1
+    return "".join(result)
 
 
 # ── box-drawing helpers ─────────────────────────────────────────────────────
@@ -686,8 +723,12 @@ class ExplorerPane(Widget):
         groups: dict[str, list[dict]] = OrderedDict()
         for s in self._sessions:
             created = s.get("created_at", "")[:10]  # "2026-08-01"
-            if created:
-                groups.setdefault(created, []).append(s)
+            sid = str(s.get("session_id", ""))
+            if not created and sid.startswith("S-") and len(sid) >= 10:
+                raw_date = sid[2:10]
+                if raw_date.isdigit():
+                    created = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+            groups.setdefault(created or "unknown", []).append(s)
 
         idx = 0
         for date, group in groups.items():
@@ -996,7 +1037,6 @@ class ContentPane(Widget):
             lines.append("")  # separator
 
         # Render remaining items (skip the expanded one — already pinned).
-        remaining_height = height - len(lines)
         for i, item in enumerate(self._items):
             if i == expanded_tool_index:
                 continue  # already rendered at top
@@ -1005,9 +1045,10 @@ class ContentPane(Widget):
             elif isinstance(item, ToolTraceLine):
                 lines.append(self._render_tool_collapsed(item, width))
 
-        # Pad.
-        if len(lines) < remaining_height:
-            lines += [""] * (remaining_height - len(lines))
+        # Pad to the requested pane height even when source rows or a pinned
+        # expanded tool consumed rows before the conversation stream.
+        if len(lines) < height:
+            lines += [""] * (height - len(lines))
         return lines[:height]
 
     # ── card renderers ─────────────────────────────────────────────────────

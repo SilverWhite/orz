@@ -160,8 +160,8 @@ installed_path: C:\Users\1\.grok\bin\grok.exe
 
 ### F-2026-08-01-003: Session 审查口径已从自建 store 改为 Grok-owned
 
-**严重度**: 中  
-**状态**: 需更新旧清单  
+**严重度**: 中
+**状态**: 已处理（L4 审查完成）
 **涉及文件**:
 
 - `architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md`
@@ -333,38 +333,38 @@ timeout after 120s
 
 ### L3. TUI ContentPane
 
-- [ ] 对照 `CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md` 审查视觉规则。
-- [ ] 补 `text_delta` 到 ContentPane 的直接单测。
-- [ ] 补 Markdown / code block / width wrapping 测试。
-- [ ] 补工具行折叠、展开、pin-to-top、run finish collapse 测试。
-- [ ] 审查 ANSI 颜色与 display width 的相互影响。
+- [x] 对照 `CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md` 审查视觉规则。已完成第一切片，见 L3 审查结果。
+- [x] 补 `text_delta` 到 ContentPane 的直接单测。已覆盖同一卡片追加与最终 `model_output` 不重复。
+- [x] 补 Markdown / code block / width wrapping 测试。已覆盖 Python code block 高亮与 display width。
+- [x] 补工具行折叠、展开、pin-to-top、run finish collapse 测试。已覆盖 pin-to-top；run finish collapse 由既有 projector 路径与 L2/L3 窄集复核覆盖。
+- [x] 审查 ANSI 颜色与 display width 的相互影响。已修复 `widgets.py` 与 `app.py` 双入口宽度规则分叉。
 
 ### L4. Session / Layout
 
-- [ ] 按 2026-08-01 所有权修正审查 session 列表。
-- [ ] 确认 `session.json` marker 是薄发现层，不构成独立 session store。
-- [ ] 确认 UI 不实现自有恢复，只提示或委托 Grok。
-- [ ] 更新旧清单中 `gsa session list/resume` 的错误缺口描述。
+- [x] 按 2026-08-01 所有权修正审查 session 列表。已完成，见 L4 审查结果。
+- [x] 确认 `session.json` marker 是薄发现层，不构成独立 session store。已覆盖 `.gsa/runs/*/session.json` 扫描，不创建 `.gsa/sessions/index.jsonl`。
+- [x] 确认 UI 不实现自有恢复，只提示或委托 Grok。Enter 返回 `grok session resume <session_id>` 提示，不执行恢复。
+- [x] 更新旧清单中 `gsa session list/resume` 的错误缺口描述。已重分类为历史 GAP，不再作为本仓库自有 CLI 目标。
 
 ### L5. P0-P5 / Gate / Security 抽样复核
 
-- [ ] 抽样验证 P1/P4 archive 文档与代码接口仍一致。
-- [ ] 抽样验证 retrieval subagent registry 与 completion check 仍满足“两子代理”约束。
-- [ ] 抽样验证 network permit、child capability、workspace trust 仍覆盖当前入口。
-- [ ] 判断 ACP inline gate hook 是否仍只是增强项，还是已成为生产路径阻断项。
+- [x] 抽样验证 P1/P4 archive 文档与代码接口仍一致。P1/P4 窄集 64 passed；修复 RecoveryExecutor 测试隔离。
+- [x] 抽样验证 retrieval subagent registry 与 completion check 仍满足“两子代理”约束。registry 检查通过，仍为 project-doc + external 两类。
+- [x] 抽样验证 network permit、child capability、workspace trust 仍覆盖当前入口。修复 endpoint allow/denylist 与 Adapter Gate network permit 阻断语义。
+- [x] 判断 ACP inline gate hook 是否仍只是增强项，还是已成为生产路径阻断项。当前 CLI doctor 仍声明 Grok prompt/tool promotion gate fail-closed；TUI inline tool availability gate 是附加投影，不替代 production promotion gate。
 
 ### L6. Schema 与 Repository Check
 
-- [ ] 修复 `scripts/check_repository.py` 暴露的 schema/lock 错误。
-- [ ] 跑 `python gsa.py doctor --json`，要求 `valid: true`。
-- [ ] 跑 schema validation 相关测试，确认没有因 lock 漂移产生连带失败。
+- [x] 修复 `scripts/check_repository.py` 暴露的 schema/lock 错误。独立运行 `scripts/check_repository.py` 通过，`valid: true` / `error_count: 0`。
+- [x] 跑 `python gsa.py doctor --json`，要求 `valid: true`。已通过，doctor repository check `valid: true` / `error_count: 0`。
+- [x] 跑 schema validation 相关测试，确认没有因 lock 漂移产生连带失败。Adapter / canonical / network permit 相邻测试通过，见 L6 记录。
 
 ### L7. 测试策略
 
-- [ ] 先跑窄集：global review、CLI dispatcher、Grok adapter、TUI wiring、TUI ContentPane。
-- [ ] 窄集修绿后跑 `assurance/tests` 全量。
-- [ ] 最后跑 runtime / integration / scripts 相关测试。
-- [ ] 对需要真实 Grok、网络、管理员权限或 Windows 特性的测试单独记录前置条件，不和普通离线测试混为一类。
+- [x] 先跑窄集：global review、CLI dispatcher、Grok adapter、TUI wiring、TUI ContentPane。L7 narrow set 78 passed。
+- [x] 窄集修绿后跑 `assurance/tests` 全量。修复 shadow recovery 测试隔离与 TUI address focus 后，1524 passed / 14 skipped。
+- [x] 最后跑 runtime / integration / scripts 相关测试。runtime / integration 明确集合 79 passed；doctor 与 repository check 均 `valid: true`。
+- [x] 对需要真实 Grok、网络、管理员权限或 Windows 特性的测试单独记录前置条件，不和普通离线测试混为一类。14 skipped 已按原因记录在 L7。
 
 ### L8. 文档修订
 
@@ -733,18 +733,542 @@ L2 中最容易回归的是 event mapping 层，而当前通过的 48 个 Grok/a
 
 ---
 
-## 8. 当前优先级建议
+## 8. L3 审查结果: TUI ContentPane
+
+**审查日期**: 2026-08-01
+**判定**: 已处理并通过 L3 窄集复核
+**通过面**: `text_delta` 追加到同一模型消息卡片、最终 `model_output` 不重复生成卡片、工具展开 pin-to-top、来源条/展开工具存在时仍按请求高度渲染、Python code block 高亮不破坏宽度。
+**核心结论**: ContentPane 主体设计已基本符合 `CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md` 的分层规则；本轮发现并修复了两个 L3 渲染不变量缺口，剩余风险主要在完整 `test_tui.py` 后段耗时导致全文件未在本轮跑完。
+
+### L3-001: ANSI 高亮被当作可见宽度，导致 code block 错误折行
+
+**严重度**: 中
+**状态**: 已处理
+**涉及文件**:
+
+- `assurance/tui/widgets.py`
+- `assurance/tui/app.py`
+- `assurance/tests/test_tui.py`
+
+**证据**:
+
+本轮探针用 Python fenced code block 渲染：
+
+```text
+def add(x):
+    return x + 1
+```
+
+修复前，`return x + 1` 被错误拆成两行，根因是 `display_width()` 把 ANSI SGR 转义序列计入可见宽度；同时 `pad_to_width()` 在宽度相等时仍按字符切片，可能截断 ANSI reset。`app.py` 内另有一份本地 `pad_to_width()`，会在 ChatInput 反色光标路径复现同类问题。
+
+**影响**:
+
+违反 ContentPane 设计中“Markdown / code block / syntax highlighting 宽度不破坏渲染”的要求。实际终端里可能出现代码行误折、ANSI reset 被截断、整屏行宽计算虚假通过但视觉不满宽。
+
+**处理结果**:
+
+- `widgets.display_width()` 已跳过 ANSI SGR 转义序列。
+- `widgets.pad_to_width()` 已在可见宽度相等时保留原字符串，并通过 `truncate_to_width()` 做 display-cell aware 截断。
+- `app.pad_to_width()` 已委托到 `widgets.pad_to_width()`，避免宽度规则分叉。
+- 新增 `ContentPaneRenderTests::test_python_code_block_highlight_does_not_force_extra_wrap` 覆盖 Python code block 高亮与整行 display width。
+
+### L3-002: Source bar / expanded tool 存在时 ContentPane 未填满请求高度
+
+**严重度**: 中
+**状态**: 已处理
+**涉及文件**:
+
+- `assurance/tui/widgets.py`
+- `assurance/tests/test_tui.py`
+
+**证据**:
+
+修复前探针显示：
+
+```text
+height 10 actual 8
+height 20 actual 18
+expanded actual 9
+```
+
+根因是 `_render_items()` 在 source compact bar 或 pinned expanded tool 已经占用行数后，用 `remaining_height` 作为最终补齐目标，导致返回行数少于调用方请求的 `height`。
+
+**影响**:
+
+违反 widget render “填满 width × height”的基础约定。组合到三栏布局时，后续 row composition 需要额外兜底，容易造成 ContentPane 下方空洞、状态栏附近行宽错位，且 expanded tool pin-to-top 场景最容易触发。
+
+**处理结果**:
+
+- `_render_items()` 现在始终补齐到请求的 `height`。
+- 新增测试覆盖 source compact bar + conversation、expanded tool pin-to-top 两个场景。
+
+### L3-003: `text_delta` / tool trace / Markdown 直接测试覆盖不足
+
+**严重度**: 中
+**状态**: 已处理第一切片
+**涉及文件**:
+
+- `assurance/tests/test_tui.py`
+
+**证据**:
+
+L2 已补 bridge / projector 的事件映射测试，但 L3 设计面仍缺少直接断言：
+
+- 首个 `text_delta` 创建模型卡片，后续 chunk 追加同一卡片。
+- 最终 `model_output` 不重复创建卡片。
+- 展开工具行固定在 ContentPane 顶部。
+- Markdown fenced code block 与 ANSI 高亮不破坏 display width。
+
+**处理结果**:
+
+已新增直接测试：
+
+- `ContentPaneRenderTests::test_conversation_with_source_bar_fills_requested_height`
+- `ContentPaneRenderTests::test_expanded_tool_is_pinned_and_fills_requested_height`
+- `ContentPaneRenderTests::test_python_code_block_highlight_does_not_force_extra_wrap`
+- `ProjectorUnitTests::test_text_delta_appends_to_one_model_card_and_output_does_not_duplicate`
+
+### L3 测试记录
+
+| 命令 | 结果 |
+|------|------|
+| `python -m pytest -p no:cacheprovider assurance/tests/test_tui.py::ContentPaneRenderTests assurance/tests/test_tui.py::ProjectorUnitTests assurance/tests/test_tui.py::BridgeEventFactoryTests -q` | 38 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_grok_tui_wiring.py assurance/tests/test_tui.py::ContentPaneRenderTests assurance/tests/test_tui.py::ProjectorUnitTests assurance/tests/test_tui.py::BridgeEventFactoryTests -q` | 39 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_tui.py::FullScreenRenderTests::test_lines_are_consistent_width assurance/tests/test_tui.py::ContentPaneRenderTests assurance/tests/test_tui.py::ProjectorUnitTests assurance/tests/test_tui.py::BridgeEventFactoryTests -q` | 39 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_tui.py::DisplayWidthTests assurance/tests/test_tui.py::PadToWidthTests assurance/tests/test_tui.py::FullScreenRenderTests::test_lines_are_consistent_width assurance/tests/test_tui.py::ContentPaneRenderTests assurance/tests/test_tui.py::ProjectorUnitTests assurance/tests/test_tui.py::BridgeEventFactoryTests -q` | 50 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_tui.py -x -q` | timed out after 180s；超时前无失败，进度约 31%+ |
+| `python gsa.py doctor --json` | passed, `valid: true`, repository errors = 0 |
+
+### L3 下一步
+
+1. L3-001 至 L3-003 已处理并通过窄集复核。
+2. 仍建议后续拆分或标记 `test_tui.py` 后段慢测试，以便全文件 TUI 回归能在常规审查窗口内完成。
+3. 后续若增加 rich markdown、更多语言高亮或真实终端截图测试，应继续复用同一 display-width 工具，避免 `app.py` / `widgets.py` 宽度规则再次分叉。
+
+---
+
+## 9. L4 审查结果: Session / Layout
+
+**审查日期**: 2026-08-01
+**判定**: 已处理并通过 L4 窄集复核
+**通过面**: Address / Find 折叠至 Toolbar 的既有布局路径保持；session 持久化与恢复所有权已按 2026-08-01 裁决归 Grok；TUI 会话列表只读扫描 `.gsa/runs/*/session.json` 薄 marker；UI 不执行本仓库自有恢复。
+**核心结论**: L4 的主要问题不是继续实现 `gsa session list/resume`，而是确保 TUI 产生的 Grok ACP run root 能被只读 session list 发现，并且 UI 只给出 Grok 原生命令提示。本轮已修复 run root 位置与恢复提示缺口。
+
+### L4-001: TUI 新 ACP run root 不在 `.gsa/runs/`，会话列表发现链断裂
+
+**严重度**: 中
+**状态**: 已处理
+**涉及文件**:
+
+- `assurance/tui/app.py`
+- `assurance/tui/bridge.py`
+- `assurance/tests/test_tui.py`
+
+**证据**:
+
+`architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` 要求 TUI 只读扫描 `.gsa/runs/<session_id>/session.json`。但修复前 `TuiPrototype._start_run()` 使用 `tempfile.mkdtemp(prefix="gsa-run-")` 创建系统临时 run root；bridge 虽会在该 run root 写 `session.json`，但 `_discover_sessions()` 只扫描 `.gsa/runs`，因此 TUI 自己启动的 ACP session 不会出现在 session list 中。
+
+**影响**:
+
+会话列表 UI 与实际 ACP run 产物脱节。用户双 Esc 进入 session list 时，可能看不到刚刚由 TUI 创建的 Grok ACP 会话，从而误判 session persistence 未工作。
+
+**处理结果**:
+
+- `_start_run()` 现在创建 `.gsa/runs/S-YYYYMMDD-<8-hex>/workspace`。
+- `run_id` 显式传给 `build_grok_acp_live_run_fn()`，与 run root 目录名一致。
+- 新增 `_new_session_run_root()`，只负责分配发现用 run root，不引入独立 session store。
+- 新增 `SessionListOwnershipTests::test_start_run_allocates_gsa_runs_session_id_and_passes_it_to_bridge`。
+
+### L4-002: Session list Enter 只返回 session id，未明确 Grok 原生恢复命令
+
+**严重度**: 中
+**状态**: 已处理
+**涉及文件**:
+
+- `assurance/tui/app.py`
+- `assurance/tests/test_tui.py`
+
+**证据**:
+
+设计要求选中会话后显示 session ID，并说明完整恢复使用：
+
+```text
+grok session resume <session_id>
+```
+
+修复前 `_navigate_session_list("enter")` 仅返回：
+
+```text
+会话: <session_id>
+```
+
+**影响**:
+
+UI 没有明确恢复所有权，容易被误读为本仓库即将或已经实现自有恢复逻辑，也不利于用户按正确命令恢复 Grok session。
+
+**处理结果**:
+
+Enter 现在返回：
+
+```text
+会话: <session_id>；恢复: grok session resume <session_id>
+```
+
+新增 `SessionListOwnershipTests::test_enter_on_session_reports_grok_resume_command` 覆盖该行为。
+
+### L4-003: `session.json` marker 边界缺少直接测试
+
+**严重度**: 中
+**状态**: 已处理第一切片
+**涉及文件**:
+
+- `assurance/tui/app.py`
+- `assurance/tui/widgets.py`
+- `assurance/tests/test_tui.py`
+
+**证据**:
+
+L4 清单要求确认 `session.json` 是薄发现层，不构成独立 session store。修复前没有直接测试证明：
+
+- `_discover_sessions()` 只读扫描 `.gsa/runs/*/session.json`。
+- 不创建或依赖 `.gsa/sessions/index.jsonl`。
+- 缺少 `created_at` 时，session list 仍可从 `S-YYYYMMDD-...` session id 回退出日期分组。
+
+**处理结果**:
+
+- 新增 `SessionListOwnershipTests::test_discover_sessions_reads_only_session_markers_under_gsa_runs`。
+- 新增 `SessionListOwnershipTests::test_session_list_uses_session_id_date_when_marker_timestamp_is_empty`。
+- `ExplorerPane._render_session_list()` 已在 marker 时间戳为空时从 session id 推导日期分组。
+- 只读扫描仍不写 index，不实现自有 resume/archive/delete。
+
+### L4 测试记录
+
+| 命令 | 结果 |
+|------|------|
+| `python -m pytest -p no:cacheprovider assurance/tests/test_tui.py::SessionListOwnershipTests assurance/tests/test_tui.py::FullScreenRenderTests::test_lines_are_consistent_width -q` | 5 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_tui.py::SessionListOwnershipTests assurance/tests/test_tui.py::DisplayWidthTests assurance/tests/test_tui.py::PadToWidthTests assurance/tests/test_tui.py::FullScreenRenderTests::test_lines_are_consistent_width assurance/tests/test_tui.py::ContentPaneRenderTests assurance/tests/test_tui.py::ProjectorUnitTests assurance/tests/test_tui.py::BridgeEventFactoryTests -q` | 54 passed |
+| `python gsa.py doctor --json` | passed, `valid: true`, repository errors = 0 |
+
+### L4 下一步
+
+1. L4-001 至 L4-003 已处理并通过窄集复核。
+2. 2026-07-31 checklist 中 `gsa session list/resume` 相关 GAP 已重分类为历史 GAP，不再作为本仓库自有 CLI 目标。
+3. 下一层审查可进入 L5 P0-P5 / Gate / Security 抽样复核。
+
+---
+
+## 10. L5 审查结果: P0-P5 / Gate / Security 抽样复核
+
+**审查日期**: 2026-08-01
+**判定**: 已处理并通过 L5 窄集复核
+**通过面**: P1/P4 archive / audit / recovery 抽样测试通过；retrieval subagent registry 仍强制两类默认子代理；workspace trust entry-point auditor 通过；child capability / network permit / DeepSeek adapter permit 测试通过；Grok prompt/tool promotion 仍是 fail-closed gate，TUI ACP inline tool availability 只是附加投影。
+**核心结论**: L5 抽样确认大部分安全链路仍保持现有设计分类；本轮修复了 network permit endpoint allowlist 的边界漏洞、Adapter Gate network policy 只记录不阻断的歧义，以及 P4 recovery executor 在测试中依赖仓库级 execution receipt 目录的问题。
+
+### L5-001: Network permit endpoint allowlist 对已 canonical endpoint 未必生效
+
+**严重度**: 高
+**状态**: 已处理
+**涉及文件**:
+
+- `assurance/network_permit_gateway.py`
+- `assurance/tests/test_trust_child_network.py`
+
+**证据**:
+
+修复前，`evaluate_network_permit()` 只有在 `allowed_endpoints is not None and canonical != endpoint` 时才检查 endpoint allowlist。若输入 endpoint 本身已经是 canonical 形式，例如：
+
+```text
+https://evil.example/api
+```
+
+则 `canonical == endpoint`，代码进入 `else` 并把 `endpoint_allowed` 置为 true，即使 `allowed_endpoints={"api.deepseek.com"}`。
+
+**影响**:
+
+类别 allowlist 仍然有效，但 endpoint allowlist 对已规范化的恶意或错误 endpoint 可能被绕过。这直接影响 `DeepSeek` / adapter gate 的“允许固定 provider endpoint”语义。
+
+**处理结果**:
+
+- endpoint allowlist 现在始终在 `allowed_endpoints` 存在时执行。
+- 支持 host allowlist（如 `api.deepseek.com`）、完整 canonical endpoint、以及 canonical prefix。
+- 新增 denylist 检查，`denied_endpoints` 命中时即使 category allow 也 block。
+- 新增测试：
+  - `NetworkPermitGatewayTests::test_endpoint_allowlist_blocks_already_canonical_disallowed_endpoint`
+  - `NetworkPermitGatewayTests::test_endpoint_denylist_blocks_even_when_category_allowed`
+
+### L5-002: Adapter Gate network policy 只写 receipt 字段，不阻断 adapter call
+
+**严重度**: 高
+**状态**: 已处理
+**涉及文件**:
+
+- `assurance/adapter_gate.py`
+- `assurance/tests/test_adapter_gate_bypass.py`
+
+**证据**:
+
+修复前，`enforce_adapter_call()` 会计算：
+
+```text
+network_permit_required = true
+network_permit_granted = false
+```
+
+但 `adapter_call_allowed` 只取决于 IPG receipt 是否有效且 decision 是否为 allow。也就是说，当 `AdapterGateContext` 携带 require-all network policy 时，receipt 可能显示 permit 未授予，但 adapter call 仍会被执行。DeepSeek adapter 自身会在 HTTP 前再调用 `evaluate_network_permit()`，但 Adapter Gate receipt 语义仍不一致，且非 DeepSeek adapter 可能没有下层兜底。
+
+**影响**:
+
+破坏“Adapter Gate 是模型实际调用前最后一道机械门禁”的审计语义。对真实 adapter 扩展来说，调用方可能误以为只要把 network policy 放进 `AdapterGateContext` 就完成了硬阻断。
+
+**处理结果**:
+
+- `enforce_adapter_call()` 现在在 `network_policy.require_permit_for_all` 为 true 时，先调用 `evaluate_network_permit()`。
+- 缺少 endpoint/category metadata 或 permit 被拒时，`adapter_call_allowed=false`，并抛出 `AdapterGateBlockedError`，adapter call 不执行。
+- enforcement receipt 中 `network_permit_required` / `network_permit_granted` 现在与实际执行一致。
+- 新增测试：
+  - `AdapterGateEnforcementTests::test_network_policy_permit_allows_adapter_call`
+  - `AdapterGateEnforcementTests::test_network_policy_permit_blocks_adapter_call`
+
+### L5-003: P4 RecoveryExecutor 测试依赖仓库级 shadow executions 目录
+
+**严重度**: 中
+**状态**: 已处理
+**涉及文件**:
+
+- `assurance/shadow_recovery.py`
+- `assurance/tests/test_p4_audit_compaction_recovery.py`
+
+**证据**:
+
+P1/P4 抽样复核时，`test_shadow_store_and_execute_cycle` 失败：
+
+```text
+PermissionError: [WinError 5] 拒绝访问:
+D:\CLI\.gsa_shadow_recovery\executions\...
+```
+
+测试已把 `ShadowRecoveryStore(repo_root=self.root)` 隔离到临时目录，但 `RecoveryExecutor.execute()` 固定把 execution receipt 写入模块级 `SHADOW_EXECUTIONS`，也就是仓库根下 `.gsa_shadow_recovery/executions`。
+
+**影响**:
+
+测试隔离不完整；在受限 workspace 或权限异常的仓库级 shadow dir 中，P4 recovery executor 测试会失败。更重要的是，恢复执行 receipt 的落点无法由调用方隔离，削弱了 conformance / disposable-run 场景的可复现性。
+
+**处理结果**:
+
+- `RecoveryExecutor.execute()` 新增可选 `execution_root` 参数，默认仍使用 `SHADOW_EXECUTIONS`。
+- P4 测试显式传入 `execution_root=self.root / "executions"`。
+- P1/P4 抽样集合复跑通过。
+
+### L5-004: ACP inline tool availability gate 仍是附加投影，不替代 production promotion gate
+
+**严重度**: 中
+**状态**: 已重分类 / 无代码修改
+**涉及文件**:
+
+- `assurance/tui/bridge.py`
+- `assurance/cli.py`
+- `assurance/grok_prompt_tool_gate.py`
+
+**证据**:
+
+TUI ACP bridge 在 `tool_proposal` 事件旁边追加 inline `gate_decision`，用于 UI 可见性和运行中提示。但 CLI doctor 仍声明：
+
+```text
+gsa run --runtime grok emits a promotion gate receipt only; it does not launch prompt/tool execution.
+```
+
+`gsa run --runtime grok` 仍走 `grok_prompt_tool_gate` fail-closed promotion receipt；只有显式 `--grok-execute` 且 gate allow 时才进入 Grok smoke 路径。
+
+**判定**:
+
+ACP inline hook 是增强项 / runtime projection，不是替代 `grok_prompt_tool_gate` 的 production 阻断项。后续若要提升为生产阻断，需要单独审查 schema、receipt、terminal outcome 和 fake-tool permission verification，不应从 TUI bridge 的 inline projection 直接推断。
+
+**2026-08-01 后续处理**:
+
+- `gsa grok run` 新增显式 `--mode acp-smoke --ask <prompt>` 入口，用于直接运行 Grok ACP adapter smoke；这不改变 `gsa run` 默认 canonical 路径，也不替代 `gsa run --runtime grok` promotion gate。
+- `grok_runtime_adapter.py` 的 ACP receipt 已补齐 schema 合规的 prompt / acp / containment / artifact 字段；`runtime/run-event-v0.1.schema.json` 已登记 `prompt_submitted`、`model_response_received`、`acp_initialize`、`acp_session_created`、`permission_requested` 等 Grok normalized event 类型。
+- ACP drain 对不支持 `select()` 的 stdout 流 fail-soft 退出，避免 Windows / fake stream 在会话结束阶段破坏 receipt 写入。
+- `gsa.py tui --runtime grok --fake-provider --run <prompt>` 已接入 TUI bridge；loopback ACP smoke 会实时投影 `text_delta`，并从 normalized events 回放最终 `model_output`。该路径仍是固定 fixture，不代表真实 DeepSeek 自动接入。
+
+### L5 测试记录
+
+| 命令 | 结果 |
+|------|------|
+| `python -m pytest -p no:cacheprovider assurance/tests/test_adapter_gate_bypass.py::AdapterGateEnforcementTests assurance/tests/test_trust_child_network.py::NetworkPermitGatewayTests assurance/tests/test_trust_child_network.py::AdapterGateContextTrustTests assurance/tests/test_trust_child_network.py::DeepSeekNetworkPermitTests -q` | 26 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_retrieval_subagent.py::RetrievalSubagentRegistryTests assurance/tests/test_trust_child_network.py::EntryPointAuditorTests -q` | 10 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_p1_identity_and_retention.py assurance/tests/test_session_namespace.py assurance/tests/test_archive_controller.py assurance/tests/test_archive_recovery.py assurance/tests/test_p4_audit_compaction_recovery.py assurance/tests/test_audit_integration.py -q` | initial 63 passed / 1 failed; after fix 64 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_adapter_gate_bypass.py::AdapterGateEnforcementTests assurance/tests/test_trust_child_network.py::NetworkPermitGatewayTests assurance/tests/test_trust_child_network.py::AdapterGateContextTrustTests assurance/tests/test_trust_child_network.py::DeepSeekNetworkPermitTests assurance/tests/test_retrieval_subagent.py::RetrievalSubagentRegistryTests assurance/tests/test_trust_child_network.py::EntryPointAuditorTests -q` | 36 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_adapter_integration.py assurance/tests/test_endpoint_canonicalizer.py assurance/tests/test_deepseek_adapter.py assurance/tests/test_canonical_cli.py -q` | 119 passed, 1 skipped |
+| `python gsa.py doctor --json` | passed, `valid: true`, repository errors = 0 |
+
+### L5 下一步
+
+1. L5-001 至 L5-003 已处理并通过窄集复核；L5-004 已重分类。
+2. 后续可继续 L6 Schema 与 Repository Check；当前 doctor 已为 `valid: true`，但 L6 仍应单独关注 schema drift、receipt schema 是否需要补字段，以及 repository check 的覆盖盲区。
+3. 若后续要把 ACP inline hook 提升为生产阻断项，需新增独立 promotion receipt / verifier，而不是复用 TUI projection。
+
+---
+
+## 11. L6 审查结果: Schema 与 Repository Check
+
+**审查日期**: 2026-08-01
+**判定**: 已处理并通过 L6 repository / schema 复核
+**通过面**: `scripts/check_repository.py` 独立通过；`python gsa.py doctor --json` 通过；P0 contract、Adapter Gate、Network Permit、Adapter Integration、Endpoint Canonicalizer、DeepSeek Adapter、Canonical CLI 相邻测试通过。
+
+### L6-001: Adapter Gate verifier 未把 network permit 状态纳入允许条件
+
+**状态**: 已修复
+**位置**: `assurance/adapter_gate.py`
+
+L5 已将 `network_policy.require_permit_for_all` 接入 `enforce_adapter_call()`，执行路径会在 `gate_decision == "allow"` 之外继续要求 `network_permit_granted`。但 `verify_adapter_gate_enforcement()` 的独立复核仍只按 `gate_valid && gate_decision == "allow"` 计算 `adapter_call_allowed`，会把 “IPG allow 但 network permit 未授予且 adapter_call_allowed=false” 的合法阻断收据误判为不一致，也会降低对伪造允许收据的语义约束。
+
+修复后 verifier 的期望允许条件为：
+
+```text
+gate_valid && gate_decision == "allow" && (!network_permit_required || network_permit_granted)
+```
+
+新增 `test_verifier_accounts_for_network_permit_state` 覆盖两类情况：
+
+1. `network_permit_required=true` 且 `network_permit_granted=false` 时，`adapter_call_allowed=false` 是一致状态。
+2. 同一状态下伪造 `adapter_call_allowed=true` 会被 verifier 判 invalid。
+
+### L6-002: Network Permit verifier 未按 policy 重放 endpoint 与 attempt 约束
+
+**状态**: 已修复
+**位置**: `assurance/network_permit_gateway.py`
+
+`evaluate_network_permit()` 已支持 category allowlist、endpoint allowlist、endpoint denylist、attempt budget、retry previous status 等执行时约束；但 `verify_network_permit_receipt()` 只复核 category，导致结构合法的收据在不同 policy 下可能被误判为 valid。
+
+修复后 verifier 会独立复核：
+
+1. `permit_granted` 与 `errors` 的一致性。
+2. first attempt / retry previous status 语义。
+3. `policy.allowed_categories`。
+4. `policy.max_attempts_per_turn`。
+5. canonical endpoint against `policy.allowed_endpoints`。
+6. canonical endpoint against `policy.denied_endpoints`。
+
+新增测试覆盖 policy endpoint allowlist mismatch、denylist mismatch、attempt budget mismatch。
+
+### L6-003: Repository / schema lock 状态
+
+**状态**: 通过
+
+| 命令 | 结果 |
+|------|------|
+| `python .\scripts\check_repository.py` | passed, `valid: true`, `error_count: 0`, schemas = 182 |
+| `python gsa.py doctor --json` | passed, `valid: true`, repository errors = 0 |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_adapter_gate_bypass.py::AdapterGateEnforcementTests assurance/tests/test_trust_child_network.py::NetworkPermitGatewayTests -q` | 25 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_p0_contracts.py assurance/tests/test_adapter_gate_bypass.py assurance/tests/test_trust_child_network.py -q` | 70 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_adapter_integration.py assurance/tests/test_endpoint_canonicalizer.py assurance/tests/test_deepseek_adapter.py assurance/tests/test_canonical_cli.py -q` | 119 passed, 1 skipped |
+
+### L6 下一步
+
+1. L6 已完成；当前未发现需要新增 receipt schema 字段，现有 schema 已允许 `network_permit_required` / `network_permit_granted` / `network_endpoint` 与 network receipt `checks.endpoint_not_denied`。
+2. 下一阶段进入 L7 测试策略：先跑窄集，再视时间与风险跑 `assurance/tests` 全量。
+3. 若后续新增 promotion receipt 或 ACP inline hook 阻断项，需要同步新增 schema 与 verifier，而不能只改 UI projection。
+
+---
+
+## 12. L7 审查结果: 测试策略
+
+**审查日期**: 2026-08-01
+**判定**: 已处理并通过 L7 测试策略复核
+**通过面**: 窄集、全量 `assurance/tests`、runtime / integration 明确集合、doctor、repository check 均通过；跳过项均有明确环境前置条件。
+
+### L7-001: `test_shadow_recovery.py` 仍有多处执行收据写入仓库级 shadow executions
+
+**状态**: 已修复
+**位置**: `assurance/tests/test_shadow_recovery.py`
+
+L5 已给 `RecoveryExecutor.execute()` 增加 `execution_root` 参数，并修复了 P4 抽样中的一个隔离调用点。L7 全量测试暴露同类缺口仍存在于 `test_shadow_recovery.py`：7 个恢复执行测试仍使用默认仓库级 `.gsa_shadow_recovery/executions`，在受限 workspace 中触发 `PermissionError: [WinError 5]`。
+
+处理结果：
+
+1. `RecoveryExecutorTests.setUp()` 与 `EndToEndRecoveryTests.setUp()` 新增临时 `self.execution_root`。
+2. 所有会产生 execution receipt 的 `self.executor.execute()` 测试调用显式传入 `execution_root=self.execution_root`。
+3. `test_execution_receipt_verification` 改为从临时 execution root 查找持久化 receipt。
+4. 生产默认路径保持不变，测试隔离不改变 runtime 行为。
+
+### L7-002: TUI focus cycle 缺少 `address` pane，导致 slash-command / cancel-run 测试无限循环
+
+**状态**: 已修复
+**位置**: `assurance/tui/app.py` / `assurance/tests/test_tui.py`
+
+`SlashCommandIntegrationTests` 与 `EscCancelRunTests` 多处通过 F6 循环到 address bar；`TuiPrototype._cancel_run()` 内部也会把焦点切回 address bar。但 `_focusable_panes` 当前只包含 `explorer / checklist / content / marker / chat`，不含 `address`，导致测试循环和真实 cancel-run refocus 路径都有无限循环风险。
+
+处理结果：
+
+1. `_focusable_panes` 重新纳入 `address`，顺序为 `explorer -> checklist -> content -> marker -> address -> chat`。
+2. 默认 `_active_pane_index` 调整为 `chat` 对应的新 index，保留默认输入焦点。
+3. `KeyboardNavigationTests::test_f6_cycles_focus` 更新为 6-pane cycle，保留默认 chat 下 F6 进入 explorer 的既有手感。
+4. `TuiEventDataclassTests::test_all_event_kinds_recognised` 的事件数量更新为 29，匹配已存在的 `TEXT_DELTA` 事件类型。
+
+### L7 测试记录
+
+| 命令 | 结果 |
+|------|------|
+| `python -m pytest -p no:cacheprovider assurance/tests/test_global_review_mode.py assurance/tests/test_cli_dispatcher.py assurance/tests/test_grok_runtime_adapter.py assurance/tests/test_grok_tui_wiring.py assurance/tests/test_tui.py::ContentPaneRenderTests assurance/tests/test_tui.py::ProjectorUnitTests assurance/tests/test_tui.py::SessionListOwnershipTests assurance/tests/test_tui.py::BridgeEventFactoryTests assurance/tests/test_tui.py::ProjectorTypedGateHandlerTests -q` | 78 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_shadow_recovery.py -q` | 24 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_tui.py -q` | 236 passed |
+| `python -m pytest -p no:cacheprovider assurance/tests -q` | 1524 passed, 14 skipped |
+| `python -m pytest -p no:cacheprovider assurance/tests -q -rs` | 1524 passed, 14 skipped; skip reasons recorded below |
+| `python -m pytest -p no:cacheprovider assurance/tests/test_grok_runtime_adapter.py assurance/tests/test_grok_tui_wiring.py assurance/tests/test_adapter_integration.py assurance/tests/test_canonical_cli.py assurance/tests/test_cli_dispatcher.py -q` | 79 passed |
+| `python gsa.py doctor --json` | passed, `valid: true`, repository errors = 0 |
+| `python .\scripts\check_repository.py` | passed, `valid: true`, `error_count: 0`, schemas = 182 |
+
+### L7 skip 前置条件记录
+
+| 跳过范围 | 数量 | 原因 |
+|------|------:|------|
+| `test_browser_retrieval.py` live browser | 4 | 需要 `GSA_RUN_LIVE_BROWSER_TESTS=1` 与 Chrome/Edge |
+| `test_browser_retrieval_e2e.py` live browser E2E | 6 | 需要 `GSA_RUN_LIVE_BROWSER_TESTS=1` 与 Chrome/Edge |
+| `test_deepseek_adapter.py` non-Windows path | 1 | 当前为 Windows 环境，该用例覆盖非 Windows 分支 |
+| `test_job_object_supervisor.py` non-Windows only | 1 | 当前为 Windows 环境，该用例只覆盖非 Windows 分支 |
+| `test_windows_race_escape.py` Windows attribute-list probe | 1 | `InitializeProcThreadAttributeList failed: 122`，环境探针前置条件未满足 |
+| `test_windows_sandbox.py` AppContainer probe | 1 | 当前环境无法创建 AppContainer probe process，缺少对应系统可执行路径/能力 |
+
+### L7 下一步
+
+1. L7 已完成；当前测试状态可作为 L1-L7 闭合后的基线。
+2. 后续优先更新 `CLI_PROJECT_INDEX.md` 或新增 2026-08-01 checklist，将 L1-L7 已闭合状态回填。
+3. 若需要正式收尾，可产出“2026-08-01 全局审查结论”，并明确 loopback Grok ACP transcript 已观察，真实 DeepSeek Grok ACP transcript 仍是外部证据待回填项。
+
+---
+
+## 13. 索引回填结果: CLI_PROJECT_INDEX
+
+**审查日期**: 2026-08-01
+**判定**: 已完成索引回填
+**位置**: `CLI_PROJECT_INDEX.md`
+
+处理结果：
+
+1. 顶部更新时间更新为 2026-08-01，摘要写入 L1-L7 闭合状态。
+2. A0 新增 `2026-08-01 Global Review L1-L7 Closure` 短索引入口，指向本审计文档。
+3. Network Permit Gate / Adapter Gate / Grok Build / CLI UI Interaction Model 条目补入 2026-08-01 复核状态与关键边界。
+4. 附A审计文档速查新增 2026-08-01 全局审查 L1-L7 闭合入口。
+
+### 索引回填下一步
+
+1. 可产出正式“2026-08-01 全局审查结论”。
+2. loopback Grok ACP transcript 已观察；真实 DeepSeek Grok ACP transcript 仍为外部证据待回填项，不应在结论中写成已观察。
+
+---
+
+## 14. 当前优先级建议
 
 第一优先级：
 
-1. 将 2026-07-31 全局审查清单中过期的 TUI / session GAP 做重分类。
-2. 开始 L3 TUI ContentPane 审查，重点复核 `text_delta` / ContentPane / tool trace 的直接测试与视觉规则。
-3. 若后续拿到真实 Grok ACP transcript，回填 runtime adapter streaming shape 证据。
+1. 将 2026-07-31 全局审查清单中过期的 TUI / session GAP 做重分类。L3/L4 第一切片已完成，L6/L7 已完成。
+2. 产出正式“2026-08-01 全局审查结论”。
+3. 若后续拿到真实 DeepSeek Grok ACP transcript，回填 runtime adapter streaming shape 证据。
 
 第二优先级：
 
 1. 继续抽样复核 P0-P5 / Gate / Security 与当前实现的一致性。
-2. 更新 `CLI_PROJECT_INDEX.md` 或新增 2026-08-01 checklist，将 L1 已闭合状态回填。
+2. 如需进一步细化，可新增单独 2026-08-01 checklist，但当前 `CLI_PROJECT_INDEX.md` 已完成主索引回填。
 
 第三优先级：
 

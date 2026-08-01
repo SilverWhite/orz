@@ -129,6 +129,13 @@ _BUILTIN_COMMANDS: list[CommandDef] = [
         uri="command://model/switch",
     ),
     CommandDef(
+        slash="/provider",
+        name_zh="端点模式",
+        description_zh="查看或切换 Grok ACP 使用真实端点还是本地假端点",
+        category="系统",
+        uri="command://provider/mode",
+    ),
+    CommandDef(
         slash="/status",
         name_zh="系统状态",
         description_zh="显示沙箱状态、网络许可、Gate 链路完整性和活跃 agent 进程",

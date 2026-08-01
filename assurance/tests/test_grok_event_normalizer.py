@@ -110,6 +110,8 @@ class GrokEventNormalizerTests(unittest.TestCase):
             ["run_preflight", "run_started", "artifact_registered", "run_finished"],
         )
         self.assertEqual(events[0]["payload"]["retrieval_mode"], "local_browser")
+        self.assertEqual(events[0]["payload"]["model_id"], "grok-runtime")
+        self.assertFalse(events[0]["payload"]["real_network_allowed"])
         self.assertFalse(events[0]["payload"]["retrieval_active_for_current_mode"])
         self.assertTrue(events[0]["payload"]["retrieval_mode_explicit"])
         self.assertTrue(events[-1]["payload"]["no_residue_observed"])
@@ -120,6 +122,74 @@ class GrokEventNormalizerTests(unittest.TestCase):
         )
         self.assertEqual(events[-1]["event_type"], "run_failed")
         self.assertFalse(events[-1]["payload"]["no_residue_observed"])
+
+    def test_acp_response_projects_model_output_even_without_turn_count(self) -> None:
+        receipt = _receipt()
+        receipt["request"]["mode"] = "acp_smoke"
+        receipt["execution"]["command_kind"] = "grok_acp"
+        receipt["prompt"] = {
+            "prompt_sha256": "e" * 64,
+            "prompt_bytes": 31,
+            "model_id": "lif-fake-deepseek",
+            "max_turns": 1,
+            "response_summary": "LIF_FAKE_PROVIDER_OK",
+            "response_sha256": "f" * 64,
+            "response_finish_reason": "end_turn",
+            "response_token_count": 0,
+            "output_format": "acp_json_rpc",
+        }
+        receipt["acp"] = {
+            "protocol_version": 1,
+            "session_id_hash": "1" * 64,
+            "prompt_count": 1,
+            "turn_count": 0,
+            "tool_call_count": 0,
+            "permission_requests_count": 0,
+            "permission_outcomes": [],
+            "stop_reason": "end_turn",
+        }
+        events = normalize_grok_runtime_receipt(
+            receipt, created_at="2026-07-30T00:00:00Z"
+        )
+        model_output = [event for event in events if event["event_type"] == "model_output"]
+        self.assertEqual(len(model_output), 1)
+        self.assertFalse(events[0]["payload"]["real_network_allowed"])
+        self.assertEqual(model_output[0]["payload"]["response_sha256"], "f" * 64)
+        self.assertEqual(model_output[0]["payload"]["turn_count"], 0)
+
+    def test_real_acp_response_projects_real_network_boundary(self) -> None:
+        receipt = _receipt()
+        receipt["request"]["mode"] = "acp_smoke"
+        receipt["request"]["fake_provider"] = False
+        receipt["execution"]["command_kind"] = "grok_acp"
+        receipt["prompt"] = {
+            "prompt_sha256": "e" * 64,
+            "prompt_bytes": 31,
+            "model_id": "lif-deepseek-v4-pro",
+            "max_turns": 1,
+            "response_summary": "LIF_GROK_REAL_ACP_OK",
+            "response_sha256": "f" * 64,
+            "response_finish_reason": "end_turn",
+            "response_token_count": 0,
+            "output_format": "acp_json_rpc",
+        }
+        receipt["acp"] = {
+            "protocol_version": 1,
+            "session_id_hash": "1" * 64,
+            "prompt_count": 1,
+            "turn_count": 0,
+            "tool_call_count": 0,
+            "permission_requests_count": 0,
+            "permission_outcomes": [],
+            "stop_reason": "end_turn",
+        }
+
+        events = normalize_grok_runtime_receipt(
+            receipt, created_at="2026-07-30T00:00:00Z"
+        )
+
+        self.assertEqual(events[0]["payload"]["model_id"], "lif-deepseek-v4-pro")
+        self.assertTrue(events[0]["payload"]["real_network_allowed"])
 
     def test_write_jsonl_and_tui_projection_are_metadata_only(self) -> None:
         events = normalize_grok_runtime_receipt(

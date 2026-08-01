@@ -156,14 +156,59 @@ def enforce_adapter_call(
             )
             errors.append(bypass_details)
 
-    adapter_call_allowed = ipg_receipt_valid and gate_context.gate_decision == "allow"
-
     # Network permit policy check
     network_permit_required = (
         gate_context.network_policy is not None
         and gate_context.network_policy.get("require_permit_for_all", False)
     )
     network_permit_granted = not network_permit_required  # defaults True if not required
+    if network_permit_required:
+        if not gate_context.network_endpoint or not gate_context.network_endpoint_category:
+            errors.append("network permit policy requires endpoint and category")
+            bypass_attempted = True
+            bypass_details = "adapter call attempted without network permit endpoint metadata"
+        else:
+            try:
+                from .network_permit_gateway import evaluate_network_permit
+
+                policy_categories = set(
+                    gate_context.network_policy.get("allowed_categories", [])
+                )
+                policy_endpoints = set(
+                    gate_context.network_policy.get("allowed_endpoints", [])
+                )
+                policy_denied = set(
+                    gate_context.network_policy.get("denied_endpoints", [])
+                )
+                permit_receipt = evaluate_network_permit(
+                    endpoint=gate_context.network_endpoint,
+                    category=gate_context.network_endpoint_category,
+                    conversation_id=gate_context.conversation_id,
+                    attempt=gate_context.network_attempt,
+                    turn=gate_context.network_turn,
+                    allowed_categories=(
+                        gate_context.allowed_categories or policy_categories or None
+                    ),
+                    allowed_endpoints=(
+                        gate_context.allowed_endpoints or policy_endpoints or None
+                    ),
+                    denied_endpoints=(policy_denied or None),
+                    max_attempts_per_turn=gate_context.network_policy.get(
+                        "max_attempts_per_turn", 3,
+                    ),
+                )
+                network_permit_granted = permit_receipt.get("permit_granted", False)
+            except AssuranceError as exc:
+                network_permit_granted = False
+                errors.append(f"network permit denied: {exc}")
+                bypass_attempted = True
+                bypass_details = f"adapter call attempted without network permit: {exc}"
+
+    adapter_call_allowed = (
+        ipg_receipt_valid
+        and gate_context.gate_decision == "allow"
+        and (not network_permit_required or network_permit_granted)
+    )
 
     enforcement_receipt = {
         "schema_version": "0.1.0-draft",
@@ -187,7 +232,10 @@ def enforce_adapter_call(
         "network_permit_granted": network_permit_granted,
         "network_allowed_categories": (
             sorted(gate_context.allowed_categories)
-            if gate_context.allowed_categories else []
+            if gate_context.allowed_categories
+            else list(gate_context.network_policy.get("allowed_categories", []))
+            if gate_context.network_policy
+            else []
         ),
         "network_endpoint": gate_context.network_endpoint or "",
         "checks": {
@@ -274,12 +322,17 @@ def verify_adapter_gate_enforcement(
     if enforcement_receipt["gate_decision"] != ipg_receipt["gate_decision"]:
         errors.append("gate decision mismatch between enforcement and IPG receipt")
 
+    network_ok = (
+        not enforcement_receipt.get("network_permit_required", False)
+        or enforcement_receipt.get("network_permit_granted", False)
+    )
     expected_allowed = (
         enforcement_receipt["gate_valid"]
         and enforcement_receipt["gate_decision"] == "allow"
+        and network_ok
     )
     if enforcement_receipt["adapter_call_allowed"] != expected_allowed:
-        errors.append("adapter_call_allowed inconsistent with gate state")
+        errors.append("adapter_call_allowed inconsistent with gate and network permit state")
 
     if enforcement_receipt["bypass_attempted"] and enforcement_receipt["adapter_call_allowed"]:
         errors.append("bypass attempted but call was allowed")

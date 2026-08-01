@@ -15,12 +15,23 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 NON_REPOSITORY_PARTS = {
     ".git",
+    ".gsa",
     ".observed-runs",
     ".pytest_cache",
     ".tools",
     "__pycache__",
     "candidate-gates",
 }
+NON_REPOSITORY_PREFIXES = ("tmp",)
+
+
+def _is_non_repository_path(path: Path) -> bool:
+    relative_path = path.relative_to(ROOT)
+    return any(
+        part in NON_REPOSITORY_PARTS
+        or any(part.startswith(prefix) for prefix in NON_REPOSITORY_PREFIXES)
+        for part in relative_path.parts
+    )
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -594,8 +605,7 @@ def _check_markdown_links() -> list[str]:
     errors: list[str] = []
     pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
     for path in sorted(ROOT.rglob("*.md")):
-        relative_path = path.relative_to(ROOT)
-        if any(part in NON_REPOSITORY_PARTS for part in relative_path.parts):
+        if _is_non_repository_path(path):
             continue
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             for match in pattern.finditer(line):
@@ -614,7 +624,10 @@ def check_repository() -> dict[str, Any]:
     errors: list[str] = []
     counts: dict[str, int] = {}
 
-    schema_paths = sorted(ROOT.rglob("*.schema.json"))
+    schema_paths = sorted(
+        path for path in ROOT.rglob("*.schema.json")
+        if not _is_non_repository_path(path)
+    )
     counts["schemas"] = len(schema_paths)
     for schema_path in schema_paths:
         try:
@@ -1698,7 +1711,7 @@ def check_repository() -> dict[str, Any]:
         "grok_timeout_gate",
         "grok_tool_availability_gate",
         "_run_grok_prompt_tool_gate",
-        "explicit_fail_closed_no_prompt_or_tool_execution",
+        "explicit_fail_closed_execute_only_after_allow",
     ):
         if marker not in gsa_cli_source:
             errors.append(f"gsa run Grok gate wiring is missing marker: {marker}")

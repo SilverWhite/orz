@@ -19,6 +19,7 @@ from assurance.instruction_provenance_gate import (
     evaluate_instruction_provenance_gate,
     evaluate_instruction_provenance_gate_with_canonicalizer,
 )
+from assurance.network_permit_gateway import build_network_permit_policy
 from assurance.utils import sha256_bytes, load_json
 
 
@@ -69,6 +70,104 @@ class AdapterGateEnforcementTests(unittest.TestCase):
         self.assertTrue(result["checks"]["ipg_receipt_valid"])
         self.assertTrue(result["checks"]["gate_decision_respected"])
         self.assertEqual(result["adapter_result"], "model-output")
+
+    def test_network_policy_permit_allows_adapter_call(self) -> None:
+        ctx, receipt = _build_valid_ipg()
+        policy = build_network_permit_policy(
+            mode="strict",
+            allowed_endpoints={"api.deepseek.com"},
+        )
+        gate_ctx = AdapterGateContext(
+            ipg_receipt=receipt,
+            ipg_context=ctx,
+            adapter_id=ADAPTER_ID,
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            network_policy=policy,
+            network_endpoint="https://api.deepseek.com/chat/completions",
+            network_endpoint_category="llm_provider",
+        )
+        result = enforce_adapter_call(
+            gate_context=gate_ctx,
+            adapter_call=lambda: "model-output",
+        )
+        self.assertTrue(result["adapter_call_allowed"])
+        self.assertTrue(result["network_permit_required"])
+        self.assertTrue(result["network_permit_granted"])
+        self.assertEqual(result["adapter_result"], "model-output")
+
+    def test_network_policy_permit_blocks_adapter_call(self) -> None:
+        ctx, receipt = _build_valid_ipg()
+        policy = build_network_permit_policy(
+            mode="strict",
+            allowed_endpoints={"api.deepseek.com"},
+        )
+        called = False
+
+        def _adapter_call() -> str:
+            nonlocal called
+            called = True
+            return "should-not-reach"
+
+        gate_ctx = AdapterGateContext(
+            ipg_receipt=receipt,
+            ipg_context=ctx,
+            adapter_id=ADAPTER_ID,
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            network_policy=policy,
+            network_endpoint="https://evil.example/chat/completions",
+            network_endpoint_category="llm_provider",
+        )
+        with self.assertRaises(AdapterGateBlockedError) as cm:
+            enforce_adapter_call(
+                gate_context=gate_ctx,
+                adapter_call=_adapter_call,
+            )
+        self.assertFalse(called)
+        self.assertIn("network permit", str(cm.exception))
+
+    def test_verifier_accounts_for_network_permit_state(self) -> None:
+        ctx, receipt = _build_valid_ipg()
+        policy = build_network_permit_policy(
+            mode="strict",
+            allowed_endpoints={"api.deepseek.com"},
+        )
+        gate_ctx = AdapterGateContext(
+            ipg_receipt=receipt,
+            ipg_context=ctx,
+            adapter_id=ADAPTER_ID,
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            network_policy=policy,
+            network_endpoint="https://api.deepseek.com/chat/completions",
+            network_endpoint_category="llm_provider",
+        )
+        result = enforce_adapter_call(
+            gate_context=gate_ctx,
+            adapter_call=lambda: "model-output",
+        )
+        enforcement = {k: v for k, v in result.items() if k != "adapter_result"}
+
+        denied_network = dict(enforcement)
+        denied_network["network_permit_granted"] = False
+        denied_network["adapter_call_allowed"] = False
+        verified = verify_adapter_gate_enforcement(
+            enforcement_receipt=denied_network,
+            ipg_context=ctx,
+            ipg_receipt=receipt,
+        )
+        self.assertTrue(verified["valid"], verified["errors"])
+
+        inconsistent = dict(denied_network)
+        inconsistent["adapter_call_allowed"] = True
+        verified2 = verify_adapter_gate_enforcement(
+            enforcement_receipt=inconsistent,
+            ipg_context=ctx,
+            ipg_receipt=receipt,
+        )
+        self.assertFalse(verified2["valid"])
+        self.assertIn("network permit", "\n".join(verified2["errors"]))
 
     def test_tampered_receipt_blocks_adapter(self) -> None:
         ctx, receipt = _build_valid_ipg()

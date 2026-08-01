@@ -342,6 +342,7 @@ class RecoveryExecutorTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.key_store = MemoryInstallationKeyStore()
+        self.execution_root = self.root / "executions"
         self.executor = RecoveryExecutor()
 
     def tearDown(self) -> None:
@@ -357,6 +358,7 @@ class RecoveryExecutorTests(unittest.TestCase):
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
             shadow_commit_sha="a" * 40,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "restored")
         self.assertEqual(receipt.bytes_written, len(snapshot))
@@ -375,14 +377,13 @@ class RecoveryExecutorTests(unittest.TestCase):
 
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "restored")
         self.assertIsNone(receipt.shadow_commit_sha)
 
     def test_execution_receipt_verification(self) -> None:
         """Execution receipt can be independently verified."""
-        from assurance.shadow_recovery import SHADOW_EXECUTIONS
-
         target = self.root / "verify_target.txt"
         snapshot = b"verifiable execution\n"
         candidate = _make_candidate("RCV-VEXEC-001")
@@ -391,10 +392,11 @@ class RecoveryExecutorTests(unittest.TestCase):
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
             shadow_commit_sha="b" * 40,
+            execution_root=self.execution_root,
         )
 
         # Read the persisted receipt
-        exec_dirs = list(SHADOW_EXECUTIONS.iterdir())
+        exec_dirs = list(self.execution_root.iterdir())
         self.assertGreater(len(exec_dirs), 0)
 
         import json
@@ -420,6 +422,7 @@ class RecoveryExecutorTests(unittest.TestCase):
 
         receipt = self.executor.execute(
             candidate, None, snapshot, str(target), self.key_store,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "rejected")
         self.assertFalse(target.exists())
@@ -433,6 +436,7 @@ class RecoveryExecutorTests(unittest.TestCase):
 
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "rejected")
         self.assertFalse(target.exists())
@@ -448,6 +452,7 @@ class RecoveryExecutorTests(unittest.TestCase):
 
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "rejected")
         self.assertFalse(target.exists())
@@ -464,6 +469,7 @@ class RecoveryExecutorTests(unittest.TestCase):
 
         receipt = self.executor.execute(
             candidate, auth, new_content, str(target), self.key_store,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "restored")
         self.assertEqual(receipt.pre_existing_sha256, sha256_bytes(old_content))
@@ -481,6 +487,7 @@ class RecoveryExecutorTests(unittest.TestCase):
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
             dry_run=True,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "rejected")
         self.assertEqual(receipt.bytes_written, 0)
@@ -501,6 +508,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.key_store = MemoryInstallationKeyStore()
         self.store = ShadowRecoveryStore(repo_root=self.root)
+        self.execution_root = self.root / "executions"
         self.executor = RecoveryExecutor()
 
     def tearDown(self) -> None:
@@ -525,6 +533,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
             shadow_commit_sha=entry.commit_sha,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "restored")
         self.assertEqual(receipt.shadow_commit_sha, entry.commit_sha)
@@ -558,6 +567,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
         # Execute
         receipt = self.executor.execute(
             candidate, auth, snapshot, str(target), self.key_store,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "restored")
         self.assertEqual(target.read_bytes(), snapshot)
@@ -595,6 +605,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
             _make_candidate(id_b),
             _make_authorization(id_b),
             snap_b, str(target), self.key_store,
+            execution_root=self.execution_root,
         )
         self.assertEqual(receipt.outcome, "restored")
         self.assertEqual(target.read_bytes(), snap_b)

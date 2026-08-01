@@ -8,10 +8,14 @@ navigation works, and overlays render correctly.
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
+import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 # Verify tui/ module is importable
 from assurance.tui.app import TuiPrototype, render_screen
@@ -169,6 +173,9 @@ class DisplayWidthTests(unittest.TestCase):
     def test_box_drawing_is_1_wide(self) -> None:
         self.assertEqual(display_width("╭─╮"), 3)
 
+    def test_ansi_sgr_sequences_are_zero_width(self) -> None:
+        self.assertEqual(display_width("\x1b[38;5;75mdef\x1b[0m"), 3)
+
 
 # ── pad_to_width ────────────────────────────────────────────────────────────
 
@@ -191,6 +198,11 @@ class PadToWidthTests(unittest.TestCase):
     def test_truncation(self) -> None:
         result = pad_to_width("hello world", 5)
         self.assertEqual(len(result), 5)
+
+    def test_ansi_padding_preserves_visible_width(self) -> None:
+        result = pad_to_width("\x1b[7m \x1b[0m", 5)
+        self.assertEqual(display_width(result), 5)
+        self.assertIn("\x1b[0m", result)
 
 
 # ── widget rendering (individual) ───────────────────────────────────────────
@@ -322,6 +334,43 @@ class ContentPaneRenderTests(unittest.TestCase):
         text = "\n".join(result)
         self.assertIn("Action one", text)
         self.assertIn("Action two", text)
+
+    def test_conversation_with_source_bar_fills_requested_height(self) -> None:
+        from assurance.tui.view_models import SourceVisibilityRow
+        pane = ContentPane(
+            title="Task",
+            source_table=[SourceVisibilityRow("ref.md", "FULL", "FULL", "ALLOW", "full_text")],
+        )
+        pane.add_user_message("hello")
+        self.assertEqual(len(pane.render(60, 20)), 20)
+
+    def test_expanded_tool_is_pinned_and_fills_requested_height(self) -> None:
+        pane = ContentPane(title="Task")
+        pane.add_user_message("before")
+        pane.add_or_update_tool_trace("read_file", "cli.py", "120 lines")
+        pane.toggle_tool_expand("read_file")
+        result = pane.render(60, 12)
+        text = "\n".join(result[:3])
+        self.assertEqual(len(result), 12)
+        self.assertIn("[read_file] ▸ [关闭]", text)
+        self.assertIn("cli.py · 120 lines", text)
+        self.assertNotIn("before", text)
+
+    def test_python_code_block_highlight_does_not_force_extra_wrap(self) -> None:
+        pane = ContentPane(title="Task")
+        pane.add_model_message(
+            "```python\n"
+            "def add(x):\n"
+            "    return x + 1\n"
+            "```",
+            turn=1,
+        )
+        result = pane.render(50, 20)
+        stripped = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in result]
+        code_lines = [line for line in stripped if "return" in line or "x + 1" in line]
+        self.assertEqual(len(code_lines), 1)
+        self.assertIn("return x + 1", code_lines[0])
+        self.assertTrue(all(display_width(line) == 50 for line in result))
 
 
 class StatusBarRenderTests(unittest.TestCase):
@@ -625,7 +674,7 @@ class KeyboardNavigationTests(unittest.TestCase):
         self.app = TuiPrototype.with_sample_data()
 
     def test_f6_cycles_focus(self) -> None:
-        """P4: 5 panes — default focus is chat, cycles through all 5."""
+        """P4: default focus is chat, cycles through all focusable panes."""
         self.assertEqual(self.app.active_pane, "chat")
         result = self.app.handle_key("f6")
         self.assertIn("explorer", result)
@@ -639,6 +688,9 @@ class KeyboardNavigationTests(unittest.TestCase):
         result = self.app.handle_key("f6")
         self.assertIn("marker", result)
         self.assertEqual(self.app.active_pane, "marker")
+        result = self.app.handle_key("f6")
+        self.assertIn("address", result)
+        self.assertEqual(self.app.active_pane, "address")
         result = self.app.handle_key("f6")
         self.assertEqual(self.app.active_pane, "chat")
 
@@ -771,7 +823,7 @@ class CommandRegistryTests(unittest.TestCase):
         self.registry = CommandRegistry.with_builtins()
 
     def test_seventeen_commands_registered(self) -> None:
-        self.assertEqual(len(self.registry), 16)  # /run removed — Grok-owned
+        self.assertEqual(len(self.registry), 17)  # /run removed — Grok-owned
 
     def test_defaults_are_six(self) -> None:
         defaults = self.registry.get_defaults()
@@ -782,7 +834,7 @@ class CommandRegistryTests(unittest.TestCase):
         slashes = [c.slash for c in defaults]
         non_default = [
             "/help", "/diff", "/verify", "/sources", "/plan",
-            "/rewind", "/model", "/export",
+            "/rewind", "/model", "/provider", "/export",
         ]
         for s in non_default:
             self.assertNotIn(s, slashes, f"{s} should not be in defaults")
@@ -833,12 +885,14 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.get("/plan").category, "工作流")
         self.assertEqual(self.registry.get("/rewind").category, "恢复")
         self.assertEqual(self.registry.get("/model").category, "系统")
+        self.assertEqual(self.registry.get("/provider").category, "系统")
         self.assertEqual(self.registry.get("/status").category, "系统")
 
     def test_search_second_priority_commands(self) -> None:
         self.assertEqual(len(self.registry.search("/r")), 2)  # /rewind + /retrieve (/run removed)
         self.assertTrue(any(c.slash == "/rewind" for c in self.registry.search("/re")))
         self.assertEqual(len(self.registry.search("/m")), 1)   # /model
+        self.assertEqual(len(self.registry.search("/pr")), 1)  # /provider
         self.assertEqual(len(self.registry.search("/st")), 1)  # /status
 
     def test_every_command_has_chinese_name_and_description(self) -> None:
@@ -1189,6 +1243,23 @@ class SlashCommandIntegrationTests(unittest.TestCase):
         self.assertIn("指令", output)  # palette present
         self.assertNotIn("Permission Required", output)  # dialog suppressed
 
+    def test_provider_command_switches_grok_fake_provider_mode(self) -> None:
+        self.assertFalse(self.app.grok_fake_provider)
+        result = self.app._dispatch_command("/provider fake")
+        self.assertTrue(self.app.grok_fake_provider)
+        self.assertEqual(result, "Grok ACP 端点: 假端点")
+        self.assertIn(("端点:假", True), self.app.status_bar.items)
+        result = self.app._dispatch_command("/provider real")
+        self.assertFalse(self.app.grok_fake_provider)
+        self.assertEqual(result, "Grok ACP 端点: 真实端点")
+        self.assertIn(("端点:真", True), self.app.status_bar.items)
+        self.assertNotIn(("端点:假", True), self.app.status_bar.items)
+
+    def test_status_command_reports_provider_mode(self) -> None:
+        self.app.set_grok_provider_mode(True)
+        result = self.app._dispatch_command("/status")
+        self.assertEqual(result, "状态: 空闲；Grok ACP: 假端点")
+
 
 class EscCancelRunTests(unittest.TestCase):
     """GAK-UI-001: Esc during active run cancels the run (retract sent input)."""
@@ -1325,7 +1396,7 @@ class TuiEventDataclassTests(unittest.TestCase):
 
     def test_all_event_kinds_recognised(self) -> None:
         from assurance.tui.events import TuiEventKind
-        self.assertEqual(len(TuiEventKind), 28)
+        self.assertEqual(len(TuiEventKind), 29)
         self.assertEqual(TuiEventKind.RUN_PREFLIGHT.value, "run_preflight")
         self.assertEqual(TuiEventKind.RUN_FINISHED.value, "run_finished")
         self.assertEqual(TuiEventKind.GATE_DECISION.value, "gate_decision")
@@ -1593,6 +1664,17 @@ class ProjectorUnitTests(unittest.TestCase):
         groups = [g.label for g in self.app.explorer_pane.event_groups]
         self.assertIn("Run", groups)
 
+    def test_text_delta_appends_to_one_model_card_and_output_does_not_duplicate(self) -> None:
+        from assurance.tui.events import ModelOutputEvent, TextDeltaEvent
+        self.app.content_pane._items.clear()
+        self.apply(self.app, TextDeltaEvent(text="Hel", turn=1))
+        self.apply(self.app, TextDeltaEvent(text="lo", turn=1))
+        self.assertEqual(len(self.app.content_pane._items), 1)
+        self.assertEqual(self.app.content_pane._items[0].content, "Hello")
+        self.apply(self.app, ModelOutputEvent(text="Hello", turn=1))
+        self.assertEqual(len(self.app.content_pane._items), 1)
+        self.assertEqual(self.app.content_pane._current_model_msg_index, -1)
+
     def test_warning_event_uses_warning_bucket(self) -> None:
         from assurance.tui.events import ErrorEvent
         msgs = self.apply(
@@ -1747,6 +1829,86 @@ class WidgetMutationMethodTests(unittest.TestCase):
         self.assertEqual(len(marker.markers), 1)
         self.assertEqual(marker.markers[0].kind, "input")
         self.assertEqual(marker.markers[0].line, 5)
+
+
+class SessionListOwnershipTests(unittest.TestCase):
+    """L4: Grok owns session persistence; TUI only exposes a read-only view."""
+
+    def test_discover_sessions_reads_only_session_markers_under_gsa_runs(self) -> None:
+        from assurance.tui.app import _discover_sessions
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                run_dir = Path(".gsa/runs/S-20260801-a1b2c3d4")
+                run_dir.mkdir(parents=True)
+                (run_dir / "events.jsonl").write_text("{}", encoding="utf-8")
+                (run_dir / "session.json").write_text(json.dumps({
+                    "created_at": "2026-08-01T01:02:03Z",
+                    "first_prompt": "审查 session 列表",
+                    "turn_count": 3,
+                }, ensure_ascii=False), encoding="utf-8")
+                events_only = Path(".gsa/runs/S-20260801-deadbeef")
+                events_only.mkdir(parents=True)
+                (events_only / "events.jsonl").write_text("{}", encoding="utf-8")
+
+                sessions = _discover_sessions()
+                self.assertEqual([s["session_id"] for s in sessions], ["S-20260801-a1b2c3d4"])
+                self.assertFalse(Path(".gsa/sessions/index.jsonl").exists())
+            finally:
+                os.chdir(cwd)
+
+    def test_start_run_allocates_gsa_runs_session_id_and_passes_it_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                app = TuiPrototype.with_sample_data()
+                app.grok_fake_provider = True
+                with patch("assurance.tui.bridge.build_grok_acp_live_run_fn") as build_run:
+                    with patch("assurance.tui.event_source.LiveRunEventSource") as source_cls:
+                        source_cls.return_value.start.return_value = None
+                        build_run.return_value = lambda on_event: {}
+                        app._start_run("hello session")
+                        kwargs = build_run.call_args.kwargs
+                        run_root = Path(kwargs["run_root"])
+                        self.assertEqual(run_root.parent, Path(".gsa/runs"))
+                        self.assertRegex(run_root.name, r"^S-\d{8}-[0-9a-f]{8}$")
+                        self.assertRegex(kwargs["run_id"], r"^RUN-GROK-ACP-TUI-\d{8}-[0-9A-F]{8}$")
+                        self.assertEqual(Path(kwargs["workspace"]), run_root / "workspace")
+                        self.assertTrue(kwargs["fake_provider"])
+            finally:
+                os.chdir(cwd)
+
+    def test_enter_on_session_reports_grok_resume_command(self) -> None:
+        app = TuiPrototype.with_sample_data()
+        app.explorer_pane.load_sessions([{
+            "session_id": "S-20260801-a1b2c3d4",
+            "created_at": "2026-08-01T01:02:03Z",
+            "prompt_preview": "继续审查",
+            "turn_count": 2,
+        }])
+        app.explorer_pane.toggle_session_mode()
+        result = app._navigate_session_list("enter")
+        self.assertEqual(
+            result,
+            "会话: S-20260801-a1b2c3d4；恢复: grok session resume S-20260801-a1b2c3d4",
+        )
+        self.assertFalse(app.explorer_pane.in_session_mode)
+
+    def test_session_list_uses_session_id_date_when_marker_timestamp_is_empty(self) -> None:
+        from assurance.tui.widgets import ExplorerPane
+        pane = ExplorerPane()
+        pane.load_sessions([{
+            "session_id": "S-20260801-a1b2c3d4",
+            "created_at": "",
+            "prompt_preview": "无时间戳 marker",
+            "turn_count": 1,
+        }])
+        pane.toggle_session_mode()
+        text = "\n".join(pane.render(60, 8))
+        self.assertIn("2026-08-01", text)
+        self.assertIn("无时间戳 marker", text)
 
 
 class TuiPrototypeEventIntegrationTests(unittest.TestCase):
