@@ -26,7 +26,7 @@
     "valid": { "type": "boolean" },
     "context_id": { "type": "string", "pattern": "^IPG-CTX-[A-Z0-9._-]+$" },
     "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
-    "gate_decision": { "enum": ["allow", "defer", "block"] },
+    "gate_decision": { "enum": ["allow", "warn", "defer", "block", "not_applicable"] },
     "source_summary": {
       "type": "object",
       "additionalProperties": false,
@@ -134,7 +134,7 @@
           ]
         },
         "indicator": { "$ref": "#/$defs/nonempty" },
-        "severity": { "enum": ["block", "defer", "record"] }
+        "severity": { "enum": ["block", "defer", "warn", "record"] }
       }
     }
   }

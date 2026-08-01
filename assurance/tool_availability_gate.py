@@ -175,7 +175,12 @@ def build_tool_availability_gate_receipt(report: dict[str, Any]) -> dict[str, An
         "degraded_count": len(report["degraded"]),
         "context_block_sha256": sha256_bytes(report["context_block"].encode("utf-8")),
         "decisions": {
-            "gate_decision": "block" if len(report["degraded"]) > 0 else ("defer" if not all_probed else "allow"),
+            "gate_decision": (
+                "block" if len(report["unavailable"]) > 0
+                else "warn" if len(report["degraded"]) > 0
+                else "defer" if not all_probed
+                else "allow"
+            ),
             "context_injected": True,
             "model_must_not_guess": True,
         },

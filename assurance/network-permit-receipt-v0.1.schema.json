@@ -29,7 +29,7 @@
         "request_body_sha256": { "type": "string" }
       }
     },
-    "decision": { "enum": ["allow", "block"] },
+    "decision": { "enum": ["allow", "warn", "defer", "block", "not_applicable"] },
     "permit_granted": { "type": "boolean" },
     "one_shot": { "const": true },
     "checks": { "type": "object", "additionalProperties": { "type": "boolean" } },

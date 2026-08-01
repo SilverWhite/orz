@@ -338,6 +338,9 @@ def _run_grok_prompt_tool_gate(args: argparse.Namespace) -> int:
             retrieval_mode=retrieval_mode,
             retrieval_mode_explicit=retrieval_mode_explicit,
             fake_provider=bool(getattr(args, "grok_fake_provider", False) or auto_evidence),
+            # GAK-03: auto_evidence/fake-provider paths have tools disabled
+            # or use a fake provider — auto-allow is safe for smoke.
+            acp_permission_mode="auto_allow_once",
         )
         if adapter_mode == "acp_smoke":
             adapter_receipt = run_grok_acp_once(adapter_request)
@@ -730,6 +733,7 @@ def _run_alpha_smoke(args: argparse.Namespace) -> int:
             retrieval_mode_explicit=False,
             fake_provider=True,
             disable_builtin_tools=True,
+            acp_permission_mode="auto_allow_once",
         )
     )
     containment = receipt.get("containment", {})

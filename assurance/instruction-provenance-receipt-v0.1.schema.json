@@ -88,6 +88,11 @@
               "type": "array",
               "uniqueItems": true,
               "items": { "$ref": "#/$defs/capability" }
+            },
+            "idempotency_key": {
+              "description": "GAK-04: required for sensitive / external_side_effect actions.",
+              "type": "string",
+              "pattern": "^IDEM-[a-f0-9]{32,64}$"
             }
           }
         }

@@ -54,8 +54,9 @@ def _action(
     *,
     capability: str = "network.request",
     risk: str = "external_side_effect",
+    idempotency_key: str | None = None,
 ) -> dict:
-    return {
+    action: dict = {
         "action_id": "ACT-P3-TEST",
         "action_type": "network.request",
         "risk_class": risk,
@@ -63,6 +64,14 @@ def _action(
         "parameters_sha256": "3" * 64,
         "requested_capabilities": [capability],
     }
+    # GAK-04: sensitive/external_side_effect actions require idempotency_key
+    if risk in ("sensitive", "external_side_effect"):
+        action["idempotency_key"] = (
+            idempotency_key
+            if idempotency_key is not None
+            else f"IDEM-{'4' * 48}"
+        )
+    return action
 
 
 class P3InstructionAndCapabilityTests(unittest.TestCase):

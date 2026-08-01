@@ -24,7 +24,7 @@
     "receipt_kind": { "const": "source_fulltext_visibility_gate_receipt" },
     "request_id": { "$ref": "#/$defs/id" },
     "ledger_id": { "$ref": "#/$defs/id" },
-    "decision": { "enum": ["allow", "defer", "block"] },
+    "decision": { "enum": ["allow", "warn", "defer", "block", "not_applicable"] },
     "must_report_visibility_status": { "const": true },
     "retrieval_policy": {
       "type": "object",
@@ -84,7 +84,7 @@
               "metadata_only"
             ]
           },
-          "decision": { "enum": ["allow", "defer", "block"] },
+          "decision": { "enum": ["allow", "warn", "defer", "block", "not_applicable"] },
           "claim_allowed": {
             "enum": [
               "full_text_claim",

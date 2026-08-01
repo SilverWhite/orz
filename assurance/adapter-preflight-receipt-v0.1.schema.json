@@ -36,7 +36,9 @@
         "gate_chain_complete",
         "ipg_receipt_valid",
         "adapter_capabilities_match_manifest",
-        "output_schema_known"
+        "output_schema_known",
+        "model_id_not_deprecated",
+        "thinking_sampling_exclusive"
       ],
       "properties": {
         "endpoint_canonicalized": { "type": "boolean" },
@@ -45,7 +47,10 @@
         "gate_chain_complete": { "type": "boolean" },
         "ipg_receipt_valid": { "type": "boolean" },
         "adapter_capabilities_match_manifest": { "type": "boolean" },
-        "output_schema_known": { "type": "boolean" }
+        "output_schema_known": { "type": "boolean" },
+        "model_id_not_deprecated": { "type": "boolean" },
+        "thinking_sampling_exclusive": { "type": "boolean" },
+        "model_id_known_by_provider": { "type": "boolean" }
       }
     },
     "manifest_checks": {

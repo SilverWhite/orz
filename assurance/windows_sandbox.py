@@ -182,8 +182,12 @@ $result_path = Join-Path $ws "_p2_probe_result.json"
 
 CREATE_SUSPENDED_FLAG = 0x00000004
 CREATE_NO_WINDOW_FLAG = 0x08000000
+CREATE_NEW_PROCESS_GROUP_FLAG = 0x00000200
 TOKEN_QUERY = 0x0008
 TokenIsAppContainer = 29
+CTRL_BREAK_EVENT = 1
+# GAK-06: grace period between CTRL_BREAK and job close (seconds)
+CANCEL_GRACE_SECONDS = 5
 
 
 def _load_windows_native_profile(path: Path | None = None) -> dict[str, Any]:
@@ -912,10 +916,13 @@ def run_windows_native_sandbox_probe(
         cmd_line = ctypes.create_unicode_buffer(command_line)
         # CREATE_SUSPENDED: assign Job Object and verify AppContainer token
         # before the probe script runs (narrows GAK-WIN-001 race window).
+        # GAK-06: CREATE_NEW_PROCESS_GROUP enables CTRL_BREAK_EVENT
+        # delivery to the process group on timeout.
         creation_flags = (
             EXTENDED_STARTUPINFO_PRESENT_FLAG
             | CREATE_SUSPENDED_FLAG
             | CREATE_NO_WINDOW_FLAG
+            | CREATE_NEW_PROCESS_GROUP_FLAG
         )
         success = kernel32.CreateProcessW(
             ps_exe,
@@ -1001,17 +1008,68 @@ def run_windows_native_sandbox_probe(
         timeout_ms = wintypes.DWORD(int(timeout_seconds * 1000))
         wait_result = kernel32.WaitForSingleObject(process_handle, timeout_ms)
 
+        # GAK-06: staged cancellation per WIN-PROC-003
+        cancellation_method: str | None = None
+        ctrl_break_sent = False
+        ctrl_break_effective = False
+
         if wait_result == 0x00000102:
-            if job and job_assigned:
-                _close_handle(job)
-                job = None
-            else:
-                kernel32.TerminateProcess.argtypes = [
-                    wintypes.HANDLE,
-                    wintypes.UINT,
-                ]
-                kernel32.TerminateProcess.restype = wintypes.BOOL
-                kernel32.TerminateProcess(process_handle, 1)
+            # Stage 1: send CTRL_BREAK_EVENT to the process group
+            cancellation_method = "timeout"
+            kernel32.GenerateConsoleCtrlEvent.argtypes = [
+                wintypes.DWORD,
+                wintypes.DWORD,
+            ]
+            kernel32.GenerateConsoleCtrlEvent.restype = wintypes.BOOL
+            ctrl_break_sent = kernel32.GenerateConsoleCtrlEvent(
+                wintypes.DWORD(CTRL_BREAK_EVENT),
+                wintypes.DWORD(process_pid),
+            )
+            probe_diags.append(
+                f"CTRL_BREAK_EVENT sent={ctrl_break_sent} to pid={process_pid}"
+            )
+
+            # Stage 2: wait for the grace period
+            if ctrl_break_sent:
+                grace_ms = wintypes.DWORD(int(CANCEL_GRACE_SECONDS * 1000))
+                grace_result = kernel32.WaitForSingleObject(
+                    process_handle, grace_ms,
+                )
+                ctrl_break_effective = grace_result == 0  # WAIT_OBJECT_0
+                if ctrl_break_effective:
+                    cancellation_method = "ctrl_break"
+                    probe_diags.append(
+                        "CTRL_BREAK_EVENT effective — process exited during grace"
+                    )
+                else:
+                    probe_diags.append(
+                        "CTRL_BREAK_EVENT did not terminate process within grace"
+                    )
+
+            # Stage 3: if still running, use Job Object kill-on-close
+            # as the primary containment termination
+            if not ctrl_break_effective:
+                if job and job_assigned:
+                    cancellation_method = "job_close"
+                    _close_handle(job)
+                    job = None
+                    probe_diags.append(
+                        "job closed (kill-on-close) after CTRL_BREAK"
+                    )
+                else:
+                    # Stage 4: fallback — direct TerminateProcess
+                    cancellation_method = "terminate_process"
+                    kernel32.TerminateProcess.argtypes = [
+                        wintypes.HANDLE,
+                        wintypes.UINT,
+                    ]
+                    kernel32.TerminateProcess.restype = wintypes.BOOL
+                    kernel32.TerminateProcess(process_handle, 1)
+                    probe_diags.append(
+                        "TerminateProcess used — Job Object unavailable"
+                    )
+
+            # Final drain: wait for process exit
             kernel32.WaitForSingleObject(process_handle, wintypes.DWORD(5000))
 
         kernel32.GetExitCodeProcess.restype = wintypes.BOOL
@@ -1101,6 +1159,14 @@ def run_windows_native_sandbox_probe(
             "pid": process_pid,
             "exit_code": exit_code if exit_code is not None else -1,
             "shell_used": False,
+            "create_new_process_group": True,
+        },
+        "cancellation": {
+            "timeout_seconds": timeout_seconds,
+            "cancellation_method": cancellation_method,
+            "ctrl_break_sent": ctrl_break_sent,
+            "ctrl_break_effective": ctrl_break_effective,
+            "grace_period_seconds": CANCEL_GRACE_SECONDS if wait_result == 0x00000102 else 0,
         },
         "checks": {
             "non_admin": bool(checks.get("non_admin", False)),

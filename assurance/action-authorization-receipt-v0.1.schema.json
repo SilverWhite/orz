@@ -55,7 +55,11 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/capability" }
         },
-        "attempt": { "type": "integer", "minimum": 1 }
+        "attempt": { "type": "integer", "minimum": 1 },
+        "idempotency_key": {
+          "description": "Stable idempotency identifier. Required for sensitive/external_side_effect actions. Absence triggers ACT-IDEMPOTENCY-001.",
+          "type": "string", "pattern": "^IDEM-[a-f0-9]{32,64}$"
+        }
       }
     },
     "permit_consumption_sha256": {

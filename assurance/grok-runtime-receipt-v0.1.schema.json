@@ -181,7 +181,10 @@
         "turn_count": { "type": "integer", "minimum": 0 },
         "stop_reason": { "type": "string" },
         "event_count": { "type": "integer", "minimum": 0 },
-        "prompt_count": { "type": "integer", "minimum": 0 }
+        "prompt_count": { "type": "integer", "minimum": 0 },
+        "acp_permission_mode": {
+          "enum": ["deny_by_default", "auto_allow_once", "interactive"]
+        }
       }
     },
     "fake_provider": {

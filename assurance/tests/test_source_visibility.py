@@ -25,12 +25,12 @@ class SourceVisibilityGateTests(unittest.TestCase):
     ) -> None:
         receipt = evaluate_source_visibility_gate(_load_fixture())
 
-        self.assertEqual(receipt["decision"], "defer")
+        self.assertEqual(receipt["decision"], "warn")
         self.assertTrue(receipt["must_report_visibility_status"])
         decisions = {item["ref_id"]: item for item in receipt["reference_decisions"]}
         self.assertEqual(decisions["S1"]["decision"], "allow")
         self.assertEqual(decisions["S1"]["claim_allowed"], "metadata_only")
-        self.assertEqual(decisions["S2"]["decision"], "defer")
+        self.assertEqual(decisions["S2"]["decision"], "warn")
         self.assertEqual(decisions["S2"]["required_visibility"], "full_text_observed")
         self.assertIn(
             "SOURCE-VISIBILITY-FULLTEXT-REQUIRED",
@@ -138,7 +138,7 @@ class SourceVisibilityGateTests(unittest.TestCase):
         receipt = json.loads(output.getvalue())
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(receipt["decision"], "defer")
+        self.assertEqual(receipt["decision"], "warn")
 
     def test_schema_rejects_fulltext_without_full_body_scope(self) -> None:
         ledger = _load_fixture()

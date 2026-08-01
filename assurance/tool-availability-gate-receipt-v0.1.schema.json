@@ -40,7 +40,7 @@
         "model_must_not_guess"
       ],
       "properties": {
-        "gate_decision": { "enum": ["allow", "defer", "block"] },
+        "gate_decision": { "enum": ["allow", "warn", "defer", "block", "not_applicable"] },
         "context_injected": { "type": "boolean" },
         "model_must_not_guess": { "const": true }
       }

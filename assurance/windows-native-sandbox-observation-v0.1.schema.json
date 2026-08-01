@@ -14,6 +14,7 @@
     "appcontainer",
     "job_object",
     "process",
+    "cancellation",
     "firewall",
     "checks",
     "outcome",
@@ -74,7 +75,23 @@
       "properties": {
         "pid": { "type": "integer", "minimum": 0 },
         "exit_code": { "type": "integer" },
-        "shell_used": { "const": false }
+        "shell_used": { "const": false },
+        "create_new_process_group": { "type": "boolean" }
+      }
+    },
+    "cancellation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeout_seconds", "ctrl_break_sent", "grace_period_seconds"],
+      "properties": {
+        "timeout_seconds": { "type": "integer", "minimum": 0 },
+        "cancellation_method": {
+          "type": ["string", "null"],
+          "enum": ["timeout", "ctrl_break", "job_close", "terminate_process", null]
+        },
+        "ctrl_break_sent": { "type": "boolean" },
+        "ctrl_break_effective": { "type": "boolean" },
+        "grace_period_seconds": { "type": "integer", "minimum": 0 }
       }
     },
     "firewall": {

@@ -25,7 +25,7 @@
     "receipt_kind": { "const": "grok_tool_permission_observation_receipt" },
     "receipt_id": { "type": "string", "pattern": "^GROK-TOOL-PERM-[A-F0-9]{16}$" },
     "valid": { "type": "boolean" },
-    "decision": { "type": "string", "enum": ["allow", "defer", "block"] },
+    "decision": { "type": "string", "enum": ["allow", "warn", "defer", "block", "not_applicable"] },
     "observed_at": { "type": "string", "format": "date-time" },
     "runtime_owner": { "const": "grok" },
     "runtime_id": { "type": "string", "pattern": "^GROK-[0-9][A-Za-z0-9._-]*$" },

@@ -94,6 +94,14 @@ class WindowsNativeObservationSchemaTests(unittest.TestCase):
                 "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+                "create_new_process_group": True,
+            },
+            "cancellation": {
+                "timeout_seconds": 30,
+                "cancellation_method": None,
+                "ctrl_break_sent": False,
+                "ctrl_break_effective": False,
+                "grace_period_seconds": 0,
             },
             "firewall": {
                 "outbound_block_rule_created": True,
@@ -144,6 +152,14 @@ class WindowsNativeObservationSchemaTests(unittest.TestCase):
                 "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+                "create_new_process_group": True,
+            },
+            "cancellation": {
+                "timeout_seconds": 30,
+                "cancellation_method": None,
+                "ctrl_break_sent": False,
+                "ctrl_break_effective": False,
+                "grace_period_seconds": 0,
             },
             "firewall": {
                 "outbound_block_rule_created": False,
@@ -196,6 +212,14 @@ class WindowsNativeObservationVerifierTests(unittest.TestCase):
                 "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+                "create_new_process_group": True,
+            },
+            "cancellation": {
+                "timeout_seconds": 30,
+                "cancellation_method": None,
+                "ctrl_break_sent": False,
+                "ctrl_break_effective": False,
+                "grace_period_seconds": 0,
             },
             "firewall": {
                 "outbound_block_rule_created": True,
@@ -334,6 +358,14 @@ class WindowsNativeCandidateTests(unittest.TestCase):
                 "pid": 0,
                 "exit_code": 0,
                 "shell_used": False,
+                "create_new_process_group": True,
+            },
+            "cancellation": {
+                "timeout_seconds": 30,
+                "cancellation_method": None,
+                "ctrl_break_sent": False,
+                "ctrl_break_effective": False,
+                "grace_period_seconds": 0,
             },
             "firewall": {
                 "outbound_block_rule_created": True,
@@ -385,6 +417,14 @@ class WindowsNativeCandidateTests(unittest.TestCase):
                 "pid": 0,
                 "exit_code": 7,
                 "shell_used": False,
+                "create_new_process_group": True,
+            },
+            "cancellation": {
+                "timeout_seconds": 30,
+                "cancellation_method": None,
+                "ctrl_break_sent": False,
+                "ctrl_break_effective": False,
+                "grace_period_seconds": 0,
             },
             "firewall": {
                 "outbound_block_rule_created": False,
@@ -445,7 +485,12 @@ class WindowsNativeCandidateTests(unittest.TestCase):
                 "kill_on_close": True,
                 "memory_limit_bytes": 268435456,
             },
-            "process": {"pid": 0, "exit_code": 0, "shell_used": False},
+            "process": {"pid": 0, "exit_code": 0, "shell_used": False, "create_new_process_group": True},
+            "cancellation": {
+                "timeout_seconds": 30, "cancellation_method": None,
+                "ctrl_break_sent": False, "ctrl_break_effective": False,
+                "grace_period_seconds": 0,
+            },
             "firewall": {
                 "outbound_block_rule_created": False,
                 "rule_name": "",

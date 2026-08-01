@@ -75,6 +75,11 @@ class GrokRunRequest:
     provider_environment: dict[str, str] = field(default_factory=dict, repr=False)
     model_config_toml: str | None = None
     disable_builtin_tools: bool = False
+    # GAK-03: ACP permission handling mode.
+    #   "deny_by_default"  — cancel all permissions when no user callback (safe default)
+    #   "auto_allow_once"  — auto-approve allow_once when no callback (smoke/dev only)
+    #   "interactive"      — require on_acp_event callback; fail if missing
+    acp_permission_mode: str = "deny_by_default"
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -765,6 +770,15 @@ class GrokAcpSession:
             raise AssuranceError("prompt_text is required for acp_smoke")
         if request.fake_provider and request.model_config_toml:
             raise AssuranceError("fake_provider and model_config_toml are mutually exclusive")
+        # GAK-03: validate acp_permission_mode
+        _VALID_PERMISSION_MODES = frozenset({
+            "deny_by_default", "auto_allow_once", "interactive",
+        })
+        if request.acp_permission_mode not in _VALID_PERMISSION_MODES:
+            raise AssuranceError(
+                f"acp_permission_mode must be one of {sorted(_VALID_PERMISSION_MODES)}, "
+                f"got {request.acp_permission_mode!r}"
+            )
 
         cfg = config or GrokRuntimeConfig()
         self._cfg = cfg
@@ -1139,14 +1153,29 @@ class GrokAcpSession:
                                 "result": {"outcome": {"outcome": "cancelled"}}})
                 self.permission_outcomes.append(user_decision)
             elif allow_id is not None:
-                self._acp_send({"jsonrpc": "2.0", "id": msg["id"],
-                                "result": {"outcome": {"outcome": "selected", "optionId": allow_id}}})
-                self.permission_outcomes.append("allow_once")
+                # GAK-03: no user callback — decision depends on acp_permission_mode
+                if self._request.acp_permission_mode == "auto_allow_once":
+                    self._acp_send({"jsonrpc": "2.0", "id": msg["id"],
+                                    "result": {"outcome": {"outcome": "selected", "optionId": allow_id}}})
+                    self.permission_outcomes.append("allow_once")
+                elif self._request.acp_permission_mode == "interactive":
+                    raise AssuranceError(
+                        "ACP permission requested but no on_acp_event callback "
+                        "is attached and acp_permission_mode is 'interactive'"
+                    )
+                else:
+                    # deny_by_default: fail closed
+                    self._acp_send({"jsonrpc": "2.0", "id": msg["id"],
+                                    "result": {"outcome": {"outcome": "cancelled"}}})
+                    self.permission_outcomes.append("cancelled")
             else:
                 self._acp_send({"jsonrpc": "2.0", "id": msg["id"],
                                 "result": {"outcome": {"outcome": "cancelled"}}})
                 self.permission_outcomes.append("cancelled")
-            decision_source = "user" if user_decision else "adapter"
+            decision_source = "user" if user_decision else (
+                "adapter" if self._request.acp_permission_mode == "auto_allow_once"
+                else "adapter-deny-by-default"
+            )
             final_decision = self.permission_outcomes[-1] if self.permission_outcomes else "cancelled"
             try:
                 from .finding_registry import record_permission_decision
@@ -1462,6 +1491,7 @@ class GrokAcpSession:
                 "tool_call_count": self.tool_call_count,
                 "permission_requests_count": self.permission_requests_count,
                 "permission_outcomes": list(self.permission_outcomes),
+                "acp_permission_mode": self._request.acp_permission_mode,
                 "turn_count": self.turn_count,
                 "stop_reason": self.stop_reason,
                 "event_count": len(self.acp_events),

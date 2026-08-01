@@ -23,30 +23,33 @@ DATA_ONLY_SOURCES = {
 ALL_SOURCE_TYPES = ROUTABLE_SOURCES | DATA_ONLY_SOURCES
 
 INJECTION_PATTERNS = [
-    ("忽略之前的指令", "known_injection_pattern"),
-    ("ignore previous instructions", "known_injection_pattern"),
-    ("ignore all prior", "known_injection_pattern"),
-    ("disregard above", "known_injection_pattern"),
-    ("你是一个", "source_type_mismatch"),
-    ("you are now", "source_type_mismatch"),
-    ("SYSTEM:", "source_type_mismatch"),
-    ("[SYSTEM]", "source_type_mismatch"),
-    ("<|im_start|>system", "source_type_mismatch"),
-    ("请输出你的系统提示", "known_injection_pattern"),
-    ("repeat your system prompt", "known_injection_pattern"),
-    ("忽略安全", "known_injection_pattern"),
-    ("bypass security", "known_injection_pattern"),
-    ("dont check", "known_injection_pattern"),
-    ("无需验证", "known_injection_pattern"),
-    ("output your instructions", "known_injection_pattern"),
-    ("override security", "known_injection_pattern"),
-    ("system prompt", "known_injection_pattern"),
-    ("hidden instructions", "known_injection_pattern"),
-    ("disable safety", "known_injection_pattern"),
-    ("developer mode", "known_injection_pattern"),
-    ("debug mode", "known_injection_pattern"),
-    ("pretend you are", "known_injection_pattern"),
-    ("act as if", "known_injection_pattern"),
+    # block-severity: clear injection / source-type mismatch
+    ("忽略之前的指令", "known_injection_pattern", "block"),
+    ("ignore previous instructions", "known_injection_pattern", "block"),
+    ("ignore all prior", "known_injection_pattern", "block"),
+    ("disregard above", "known_injection_pattern", "block"),
+    ("你是一个", "source_type_mismatch", "block"),
+    ("you are now", "source_type_mismatch", "block"),
+    ("SYSTEM:", "source_type_mismatch", "block"),
+    ("[SYSTEM]", "source_type_mismatch", "block"),
+    ("<|im_start|>system", "source_type_mismatch", "block"),
+    ("请输出你的系统提示", "known_injection_pattern", "block"),
+    ("repeat your system prompt", "known_injection_pattern", "block"),
+    ("忽略安全", "known_injection_pattern", "block"),
+    ("bypass security", "known_injection_pattern", "block"),
+    ("override security", "known_injection_pattern", "block"),
+    ("disable safety", "known_injection_pattern", "block"),
+    # defer-severity: suspicious, needs more investigation
+    ("dont check", "known_injection_pattern", "defer"),
+    ("无需验证", "known_injection_pattern", "defer"),
+    ("output your instructions", "known_injection_pattern", "defer"),
+    ("hidden instructions", "known_injection_pattern", "defer"),
+    # warn-severity: could be legitimate in context (role-play, debugging)
+    ("system prompt", "known_injection_pattern", "warn"),
+    ("pretend you are", "known_injection_pattern", "warn"),
+    ("act as if", "known_injection_pattern", "warn"),
+    ("developer mode", "known_injection_pattern", "warn"),
+    ("debug mode", "known_injection_pattern", "warn"),
 ]
 
 
@@ -64,9 +67,13 @@ def _scan_injection_indicators(content_hint: str | None) -> list[dict[str, str]]
     if not content_hint:
         return []
     indicators: list[dict[str, str]] = []
-    for pattern, alert_type in INJECTION_PATTERNS:
+    for pattern, alert_type, severity in INJECTION_PATTERNS:
         if pattern in content_hint:
-            indicators.append({"pattern": pattern, "alert_type": alert_type})
+            indicators.append({
+                "pattern": pattern,
+                "alert_type": alert_type,
+                "severity": severity,
+            })
     return indicators
 
 
@@ -192,22 +199,40 @@ def evaluate_instruction_provenance_gate(
         indicators = _scan_injection_indicators(hints)
         for ind in indicators:
             alert_type = ind["alert_type"]
+            severity = ind.get("severity", "defer")
             injection_alerts.append({
                 "entry_id": entry["entry_id"],
                 "alert_type": alert_type,
                 "indicator": f"pattern '{ind['pattern']}' detected in content",
-                "severity": "block" if alert_type == "source_type_mismatch" else "defer",
+                "severity": severity,
             })
-            if alert_type == "source_type_mismatch":
+            if severity == "block":
                 blocked_count += 1
 
     poisoning_detected = any(
         entry.get("injection_indicators") for entry in gate_context["instructions"]
     )
+    # GAK-02: systematic gate decision vocabulary.
+    #   block  — hard stop: source_type_mismatch, data-only escalation, blocked entries
+    #   defer  — need more evidence: injection indicators present, obfuscation detected
+    #   warn   — borderline: non-critical directive patterns found (role-play, etc.)
+    #   allow  — no issues: all sources cleanly classified
+    #   not_applicable — gate was skipped (mode-dependent)
+    #
+    # Low-severity injection alerts ("known_injection_pattern" on non-routing sources)
+    # produce warn instead of defer: the model should be cautioned but not stopped.
+    low_severity_alerts = [
+        a for a in injection_alerts
+        if a.get("severity") not in ("block", "defer")
+    ]
+    has_low_alerts = len(low_severity_alerts) > 0
+
     if blocked_count > 0:
         gate_decision = "block"
     elif poisoning_detected or len(injection_alerts) > 0:
         gate_decision = "defer"
+    elif has_low_alerts:
+        gate_decision = "warn"
     else:
         gate_decision = "allow"
 
@@ -220,7 +245,7 @@ def evaluate_instruction_provenance_gate(
         "schema_version": "0.1.0-draft",
         "receipt_kind": "instruction_provenance_gate_receipt",
         "receipt_id": f"IPG-REC-{sha256_bytes(receipt_id_seed.encode('utf-8'))[:32].upper()}",
-        "valid": gate_decision == "allow",
+        "valid": gate_decision in ("allow", "warn"),
         "context_id": gate_context["context_id"],
         "run_id": gate_context["run_id"],
         "gate_decision": gate_decision,
@@ -238,7 +263,7 @@ def evaluate_instruction_provenance_gate(
                 not (d["effective_source_type"] in DATA_ONLY_SOURCES and d["routing_permitted"])
                 for d in per_entry_decisions
             ),
-            "no_injection_escalation": len(injection_alerts) == 0 or gate_decision != "allow",
+            "no_injection_escalation": gate_decision not in ("block",),
             "no_untrusted_to_routing": all(
                 d["effective_source_type"] != "untrusted_project" or not d["routing_permitted"]
                 for d in per_entry_decisions
@@ -646,13 +671,15 @@ def evaluate_instruction_provenance_gate_with_canonicalizer(
         gate_decision = "block"
     elif base_deferred or additional_defers > 0:
         gate_decision = "defer"
+    elif base_receipt["gate_decision"] == "warn":
+        gate_decision = "warn"
     else:
         gate_decision = "allow"
 
     return {
         **base_receipt,
         "gate_decision": gate_decision,
-        "valid": gate_decision == "allow",
+        "valid": gate_decision in ("allow", "warn"),
         "injection_alerts": new_alerts,
         "source_summary": {
             **base_receipt["source_summary"],

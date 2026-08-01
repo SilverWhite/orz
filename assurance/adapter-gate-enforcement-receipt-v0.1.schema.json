@@ -28,7 +28,7 @@
     "run_id": { "type": "string" },
     "created_at": { "type": "string", "format": "date-time" },
     "gate_valid": { "type": "boolean" },
-    "gate_decision": { "enum": ["allow", "defer", "block"] },
+    "gate_decision": { "enum": ["allow", "warn", "defer", "block", "not_applicable"] },
     "ipg_receipt_sha256": { "$ref": "#/$defs/sha256" },
     "ipg_context_sha256": { "$ref": "#/$defs/sha256" },
     "adapter_id": { "type": "string", "minLength": 1 },

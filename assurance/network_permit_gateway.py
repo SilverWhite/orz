@@ -123,7 +123,18 @@ def evaluate_network_permit(
         checks["endpoint_not_denied"] = True
 
     permit_granted = not errors
-    decision = "allow" if permit_granted else "block"
+    # GAK-02: systematic decision vocabulary.
+    #   allow — permitted request with known category
+    #   warn  — permitted but unusual (e.g. category "other")
+    #   defer — need more info (unknown category, ambiguous endpoint)
+    #   block — denied (explicit denylist, invalid category, etc.)
+    if permit_granted:
+        decision = "warn" if category == "other" else "allow"
+    else:
+        has_categorical_error = any(
+            "category" in e.lower() or "unknown" in e.lower() for e in errors
+        )
+        decision = "defer" if has_categorical_error and errors else "block"
 
     receipt = {
         "schema_version": "0.1.0-draft",

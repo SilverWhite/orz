@@ -184,6 +184,194 @@ class AdapterPreflightTests(unittest.TestCase):
         verified2 = verify_adapter_preflight(receipt)
         self.assertFalse(verified2["valid"])
 
+    # ── GAK-07: deprecated model aliases ──
+
+    def test_preflight_rejects_deprecated_deepseek_chat(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-chat",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+        )
+        self.assertFalse(receipt["preflight_passed"])
+        self.assertFalse(receipt["checks"]["model_id_not_deprecated"])
+        self.assertTrue(any("deprecated" in e for e in receipt["errors"]))
+
+    def test_preflight_rejects_deprecated_deepseek_reasoner(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-reasoner",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+        )
+        self.assertFalse(receipt["preflight_passed"])
+        self.assertFalse(receipt["checks"]["model_id_not_deprecated"])
+
+    def test_preflight_accepts_current_deepseek_models(self) -> None:
+        for model_id in ("deepseek-v4-pro", "deepseek-v4-flash"):
+            with self.subTest(model_id=model_id):
+                receipt = run_adapter_preflight(
+                    adapter_id=ADAPTER_ID,
+                    provider="deepseek",
+                    model_id=model_id,
+                    endpoint="https://api.deepseek.com/chat/completions",
+                    conversation_id=CONV_ID,
+                    run_id=RUN_ID,
+                )
+                self.assertTrue(
+                    receipt["checks"]["model_id_not_deprecated"],
+                    f"{model_id} was rejected as deprecated",
+                )
+
+    def test_preflight_deprecated_check_case_insensitive(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="DeepSeek-Chat",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+        )
+        self.assertFalse(receipt["checks"]["model_id_not_deprecated"])
+
+    # ── GAK-08: thinking / sampling mutual exclusion ──
+
+    def test_preflight_rejects_thinking_with_temperature(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            thinking_mode=True,
+            sampling_params=["temperature", "top_p"],
+        )
+        self.assertFalse(receipt["preflight_passed"])
+        self.assertFalse(receipt["checks"]["thinking_sampling_exclusive"])
+        self.assertTrue(any("thinking" in e.lower() for e in receipt["errors"]))
+
+    def test_preflight_allows_thinking_without_sampling_params(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            thinking_mode=True,
+            sampling_params=None,
+        )
+        self.assertTrue(receipt["checks"]["thinking_sampling_exclusive"])
+
+    def test_preflight_rejects_thinking_with_presence_penalty(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            thinking_mode=True,
+            sampling_params=["presence_penalty", "frequency_penalty"],
+        )
+        self.assertFalse(receipt["preflight_passed"])
+        self.assertFalse(receipt["checks"]["thinking_sampling_exclusive"])
+
+    def test_preflight_thinking_exclusive_ignores_unknown_params(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            thinking_mode=True,
+            sampling_params=["max_tokens", "stop"],
+        )
+        self.assertTrue(receipt["checks"]["thinking_sampling_exclusive"])
+
+    # ── GAK-09: /models capability discovery ──
+
+    def test_preflight_model_probed_available(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            probed_model_available=True,
+        )
+        self.assertTrue(receipt["checks"]["model_id_known_by_provider"])
+
+    def test_preflight_model_probed_unavailable_fails(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="nonexistent-model-xyz",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            probed_model_available=False,
+        )
+        self.assertFalse(receipt["preflight_passed"])
+        self.assertFalse(receipt["checks"]["model_id_known_by_provider"])
+        self.assertTrue(any("not found" in e for e in receipt["errors"]))
+
+    def test_preflight_model_not_probed_key_absent(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            probed_model_available=None,
+        )
+        self.assertNotIn("model_id_known_by_provider", receipt["checks"])
+
+    # ── verifier cross-checks for new fields ──
+
+    def test_verifier_rejects_deprecated_model_with_pass(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            ipg_receipt_valid=True,
+            gate_chain_complete=True,
+            output_schema_known=True,
+        )
+        # Tamper: flip deprecated check but keep passed
+        receipt["checks"]["model_id_not_deprecated"] = False
+        receipt["preflight_passed"] = True
+        verified = verify_adapter_preflight(receipt)
+        self.assertFalse(verified["valid"])
+        self.assertTrue(any("deprecated" in e for e in verified["errors"]))
+
+    def test_verifier_rejects_thinking_conflict_with_pass(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-pro",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+        )
+        # Tamper: flip thinking check but keep passed
+        receipt["checks"]["thinking_sampling_exclusive"] = False
+        receipt["preflight_passed"] = True
+        verified = verify_adapter_preflight(receipt)
+        self.assertFalse(verified["valid"])
+        self.assertTrue(any("thinking" in e for e in verified["errors"]))
+
 
 class AdapterOutputValidatorTests(unittest.TestCase):
     """Tests for structured output validation."""

@@ -98,7 +98,10 @@ def _effective_source(
 def _normalize_action(value: dict[str, Any] | None) -> dict[str, Any] | None:
     if value is None:
         return None
-    expected = {
+    # idempotency_key is optional for normal risk, required for sensitive+.
+    # Schema: IDEM-<32-64 hex chars>
+    _IDEM_KEY_PATTERN = re.compile(r"^IDEM-[a-f0-9]{32,64}$")
+    base_fields = {
         "action_id",
         "action_type",
         "risk_class",
@@ -106,8 +109,14 @@ def _normalize_action(value: dict[str, Any] | None) -> dict[str, Any] | None:
         "parameters_sha256",
         "requested_capabilities",
     }
-    if set(value) != expected:
-        raise AssuranceError("structured action has an invalid field set")
+    allowed_with_optional = base_fields | {"idempotency_key"}
+    # Accept exactly base_fields, or base_fields + idempotency_key
+    keys = set(value)
+    if keys != base_fields and keys != allowed_with_optional:
+        raise AssuranceError(
+            f"structured action has an invalid field set; "
+            f"expected {base_fields} with optional idempotency_key, got {sorted(keys)}"
+        )
     if not isinstance(value["action_id"], str) or not ACTION_ID_PATTERN.fullmatch(
         value["action_id"]
     ):
@@ -137,10 +146,26 @@ def _normalize_action(value: dict[str, Any] | None) -> dict[str, Any] | None:
         )
     ):
         raise AssuranceError("structured action capabilities are invalid")
-    return {
+    # GAK-04: validate idempotency_key if present
+    idem_key = value.get("idempotency_key")
+    if idem_key is not None:
+        if not isinstance(idem_key, str) or not _IDEM_KEY_PATTERN.fullmatch(idem_key):
+            raise AssuranceError(
+                f"idempotency_key must match IDEM-<32-64 hex chars>, got {idem_key!r}"
+            )
+    # GAK-04: idempotency_key is required for sensitive and external_side_effect
+    if value["risk_class"] in {"sensitive", "external_side_effect"} and idem_key is None:
+        raise AssuranceError(
+            f"action {value['action_id']!r} has risk_class {value['risk_class']!r} "
+            "but no idempotency_key; provide IDEM-<sha256_prefix>"
+        )
+    result = {
         **deepcopy(value),
         "requested_capabilities": sorted(capabilities),
     }
+    if idem_key is not None:
+        result["idempotency_key"] = idem_key
+    return result
 
 
 def _instruction_decision(
@@ -625,6 +650,13 @@ def authorize_action_candidate(
         outcome = "allow"
         authority = "envelope"
         reasons = ["ENVELOPE_CAPABILITY_AUTHORIZED"]
+    elif action.get("idempotency_key") is None:
+        # GAK-04: defense-in-depth — _normalize_action should have already
+        # rejected a high-risk action without idempotency_key, but this
+        # gate catches any bypass.
+        outcome = "deny"
+        authority = "none"
+        reasons = ["ACT-IDEMPOTENCY-001"]
     elif issued_permit is None:
         outcome = "deny"
         authority = "none"
@@ -832,3 +864,24 @@ def verify_action_authorization(
     if receipt["permit_consumption_sha256"] != expected_permit_sha:
         errors.append("action authorization permit digest mismatch")
     return {"valid": not errors, "errors": errors}
+
+
+# ── GAK-04: idempotency key builder ──
+
+
+def build_idempotency_key(
+    *,
+    action_type: str,
+    parameters_sha256: str,
+    run_id: str,
+) -> str:
+    """Derive a stable idempotency key from the action identity.
+
+    Format: ``IDEM-<hex>`` where hex is ``sha256(action_type:params:run_id)[:48]``.
+
+    The same (action_type, parameters, run_id) triple always produces the same
+    key, so retries are distinguishable from new independent actions.
+    """
+    seed = f"{action_type}:{parameters_sha256}:{run_id}"
+    digest = sha256_bytes(seed.encode("utf-8"))
+    return f"IDEM-{digest[:48]}"

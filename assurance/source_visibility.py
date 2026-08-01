@@ -43,11 +43,17 @@ CLAIM_ALLOWED_BY_VISIBILITY = {
 
 
 def _overall_decision(reference_decisions: list[dict[str, Any]]) -> str:
+    """Aggregate per-reference decisions into a single gate decision.
+
+    Priority (highest first): block > defer > warn > allow > not_applicable
+    """
     decisions = {item["decision"] for item in reference_decisions}
     if "block" in decisions:
         return "block"
     if "defer" in decisions:
         return "defer"
+    if "warn" in decisions:
+        return "warn"
     return "allow"
 
 
@@ -195,6 +201,12 @@ def evaluate_source_visibility_gate(ledger: dict[str, Any]) -> dict[str, Any]:
             reason_codes.append("SOURCE-VISIBILITY-OK")
         elif observed_visibility == "unavailable":
             decision = "block"
+        elif observed_visibility == "partial_text_observed":
+            # GAK-02: partial text is useful evidence — warn, don't defer
+            decision = "warn"
+            reason_codes.append("SOURCE-VISIBILITY-FULLTEXT-REQUIRED")
+            if not missing_scope:
+                missing_scope.append("full text was not observed; partial text is available")
         else:
             decision = "defer"
             reason_codes.append("SOURCE-VISIBILITY-FULLTEXT-REQUIRED")

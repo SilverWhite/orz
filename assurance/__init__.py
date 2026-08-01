@@ -19,7 +19,13 @@ from .adapter_failure_classifier import (
     classify_adapter_error,
 )
 from .adapter_output_validator import validate_adapter_output
-from .adapter_preflight import run_adapter_preflight, verify_adapter_preflight
+from .adapter_preflight import probe_model_availability, run_adapter_preflight, verify_adapter_preflight
+from .action_kernel_result import verify_action_kernel
+from .instruction_gate import build_idempotency_key
+from .deepseek_thinking_continuity import (
+    build_thinking_continuity_result,
+    verify_thinking_continuity,
+)
 from .archive import ArchiveController, resume_archived_conversation
 from .archive_journal import (
     ArchiveJournalWriter,
@@ -638,6 +644,11 @@ __all__ = [
     "render_visibility_summary",
     "run_disposable_reproduction",
     "run_adapter_gate_bypass_fixture",
+    "verify_action_kernel",
+    "build_idempotency_key",
+    "build_thinking_continuity_result",
+    "verify_thinking_continuity",
+    "probe_model_availability",
     "run_adapter_preflight",
     "run_canonical_guarded_cli",
     "run_canonical_guarded_cli_real",
