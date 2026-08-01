@@ -264,11 +264,7 @@ def create_pt_application(
 
     # ── layout ────────────────────────────────────────────────────────────
 
-    window = Window(
-        content=content_control,
-        always_hide_cursor=False,
-        mouse_handler=_mouse_handler,
-    )
+    window = Window(content=content_control, always_hide_cursor=False)
     layout = Layout(window)
 
     # ── application ───────────────────────────────────────────────────────

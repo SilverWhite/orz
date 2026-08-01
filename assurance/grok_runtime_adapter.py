@@ -122,6 +122,32 @@ def launch_popout_terminal(command: str, *, cwd: str | None = None) -> subproces
     return popen
 
 
+def _detect_grok_binary() -> tuple[str | None, str | None]:
+    """Find the Grok binary on PATH and return (path, version).
+
+    Returns (None, None) if Grok is not available.  This is a
+    lightweight Python-only fallback for the PowerShell inspect script.
+    """
+    import shutil as _shutil
+    grok_path = _shutil.which("grok")
+    if not grok_path:
+        return None, None
+    try:
+        result = subprocess.run(
+            [grok_path, "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return grok_path, None
+        # Parse "grok 0.2.118 (1e1687c1cf)" from stdout or stderr.
+        import re as _re
+        match = _re.search(r"grok\s+(\S+)", result.stdout or result.stderr or "")
+        version = match.group(1) if match else None
+        return grok_path, version
+    except (subprocess.TimeoutExpired, OSError):
+        return grok_path, None
+
+
 def inspect_grok_runtime(config: GrokRuntimeConfig | None = None) -> dict[str, Any]:
     cfg = config or GrokRuntimeConfig()
     return _run_json_command(

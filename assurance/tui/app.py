@@ -521,15 +521,6 @@ class TuiPrototype:
             self._show_retrieval_dialog("retrieve", url)
             return f"获取: {url}"
 
-        # /run — start a new Grok ACP session via address dialog
-        if text == "/run" or text.startswith("/run "):
-            prompt = text[len("/run "):].strip() if text.startswith("/run ") else ""
-            if prompt:
-                self._start_run(prompt)
-                return f"运行: {prompt[:60]}"
-            self.address_dialog.open_dialog("")
-            return "运行（输入任务）"
-
         # /plan — show plan state or enter plan mode
         if text == "/plan":
             if self.announcement_strip.items:

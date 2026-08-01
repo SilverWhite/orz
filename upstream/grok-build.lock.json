@@ -21,7 +21,7 @@
     "sha256": "pending-re-verification",
     "authenticode_status": "pending-recheck",
     "signer_common_name": "X.AI LLC",
-    "installed_path": ".tools/grok/0.2.118/grok.exe",
+    "installed_path": "C:\\Users\\1\\.grok\\bin\\grok.exe",
     "source_correspondence": "unverified"
   },
   "ownership": {

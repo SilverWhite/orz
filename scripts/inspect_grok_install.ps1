@@ -41,8 +41,16 @@ $report = [ordered]@{
 }
 
 if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
-    $report | ConvertTo-Json -Depth 8
-    exit 2
+    # Fallback: try PATH.
+    $fromPath = (Get-Command grok -ErrorAction SilentlyContinue).Source
+    if ($fromPath) {
+        $BinaryPath = $fromPath
+    } else {
+        $report.valid = $false
+        $report.error = "Binary not found at $BinaryPath and grok not on PATH"
+        $report | ConvertTo-Json -Depth 8
+        exit 2
+    }
 }
 
 $resolved = (Resolve-Path -LiteralPath $BinaryPath).Path

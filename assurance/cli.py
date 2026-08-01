@@ -524,17 +524,18 @@ def _run_tui_default(args: argparse.Namespace) -> int:
     # ── Grok check (non-fatal — TUI still works in demo mode) ──────────
     grok_ok = False
     try:
-        from .grok_runtime_adapter import GrokRuntimeConfig, inspect_grok_runtime
-        cfg = GrokRuntimeConfig()
-        inspection = inspect_grok_runtime(cfg)
-        grok_ok = inspection.get("valid", False)
-        if not grok_ok:
-            msg = inspection.get("error", "unknown")
-            print(f"gsa: Grok binary check: {msg}", file=_sys.stderr)
-            print("  TUI starts in demo mode.  Use /run <prompt> to start a session.",
+        from .grok_runtime_adapter import _detect_grok_binary
+        grok_path, grok_ver = _detect_grok_binary()
+        if grok_path:
+            grok_ok = True
+            ver_str = f" ({grok_ver})" if grok_ver else ""
+            print(f"gsa: Grok detected{ver_str}", file=_sys.stderr)
+        else:
+            print("gsa: Grok not found on PATH", file=_sys.stderr)
+            print("  TUI starts in demo mode. Type a message to start a session.",
                   file=_sys.stderr)
     except Exception as exc:
-        print(f"gsa: Grok not detected — {exc}", file=_sys.stderr)
+        print(f"gsa: Grok check failed — {exc}", file=_sys.stderr)
         print("  TUI starts in demo mode.", file=_sys.stderr)
 
     # ── Build TUI ──────────────────────────────────────────────────────
