@@ -30,7 +30,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install repository packages
-        run: python -m pip install -e ".[tui]"
+        run: python -m pip install -e ".[tui,scripts]"
 
       - name: Check repository contracts
         run: python scripts/check_repository.py
