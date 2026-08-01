@@ -131,7 +131,7 @@ class TuiPrototype:
     _focusable_panes: tuple[str, ...] = (
         "explorer", "checklist", "content", "marker", "chat",
     )
-    _active_pane_index: int = 0
+    _active_pane_index: int = 4  # default: chat input
     _last_esc_time: float = field(default=0.0)  # P3.4: double-Esc session list
 
     # ── public API ──────────────────────────────────────────────────────────
@@ -188,17 +188,21 @@ class TuiPrototype:
         sep_line = "├" + "".join(seps) + "┤"
         lines.append(sep_line)
 
-        # ── Body ──
+        # ── Body (3-column with ChatInput below ContentPane) ──
         # Dynamic: menu(1) + toolbar(1) + status(1) + top(1)/bottom(1) border + 2 internal junctions
         fixed = 1 + 1 + 1 + 1 + 1 + 2
         if self.announcement_strip.items:
-            fixed += 1 + chk_extra + 1  # strip row(s) + junction
+            fixed += 1 + chk_extra + 1
         body_height = height - fixed
-        if body_height < 3:
-            body_height = 3
+        if body_height < 4:
+            body_height = 4  # need at least 3 for content + 1 for chat input
+
+        chat_height = 1
+        content_height = body_height - chat_height
 
         explorer_inner = self._render_pane_inner(self.explorer_pane, exp_w, body_height) if se else []
-        content_inner = self._render_pane_inner(self.content_pane, content_w, body_height)
+        content_inner = self._render_pane_inner(self.content_pane, content_w, content_height)
+        chat_inner = self.chat_input.render(content_w, chat_height)
         marker_inner = self._render_pane_inner(self.content_marker, marker_w, body_height) if sm else []
 
         for i in range(body_height):
@@ -206,8 +210,13 @@ class TuiPrototype:
             if se:
                 el = explorer_inner[i] if i < len(explorer_inner) else " " * exp_w
                 row_parts.append(pad_to_width(el, exp_w) + "│")
-            cl = content_inner[i] if i < len(content_inner) else " " * content_w
-            row_parts.append(pad_to_width(cl, content_w))
+            if i < content_height:
+                cl = content_inner[i] if i < len(content_inner) else " " * content_w
+                row_parts.append(pad_to_width(cl, content_w))
+            else:
+                # ChatInput row — aligned under ContentPane
+                ci = chat_inner[i - content_height] if (i - content_height) < len(chat_inner) else " " * content_w
+                row_parts.append(pad_to_width(ci, content_w))
             if sm:
                 row_parts.append("│")
                 ml = marker_inner[i] if i < len(marker_inner) else " " * marker_w
@@ -226,11 +235,6 @@ class TuiPrototype:
             bot_seps.append("─" * marker_w)
         bot_sep = "├" + "".join(bot_seps) + "┤"
         lines.append(bot_sep)
-
-        # ── Chat input (between ContentPane and StatusBar) ──
-        chat = self.chat_input.render(inner_w, 1)
-        lines.append("│" + chat[0] + "│")
-        lines.append(box_t_junction(width))
 
         # ── StatusBar ──
         if self.status_bar.items and self.status_bar.items[-1][0] in ("空闲", "运行中", "IDLE", "RUNNING"):

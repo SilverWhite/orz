@@ -625,7 +625,10 @@ class KeyboardNavigationTests(unittest.TestCase):
         self.app = TuiPrototype.with_sample_data()
 
     def test_f6_cycles_focus(self) -> None:
-        """P4: 5 panes — explorer/checklist/content/marker/chat."""
+        """P4: 5 panes — default focus is chat, cycles through all 5."""
+        self.assertEqual(self.app.active_pane, "chat")
+        result = self.app.handle_key("f6")
+        self.assertIn("explorer", result)
         self.assertEqual(self.app.active_pane, "explorer")
         result = self.app.handle_key("f6")
         self.assertIn("checklist", result)
@@ -637,10 +640,7 @@ class KeyboardNavigationTests(unittest.TestCase):
         self.assertIn("marker", result)
         self.assertEqual(self.app.active_pane, "marker")
         result = self.app.handle_key("f6")
-        self.assertIn("chat", result)
         self.assertEqual(self.app.active_pane, "chat")
-        result = self.app.handle_key("f6")
-        self.assertEqual(self.app.active_pane, "explorer")
 
     def test_alt_key_activates_menu(self) -> None:
         self.app.handle_key("alt+f")
@@ -655,7 +655,7 @@ class KeyboardNavigationTests(unittest.TestCase):
         self.app.dialog.visible = True
         result = self.app.handle_key("f6")
         # Focus should NOT change while dialog is visible
-        self.assertEqual(self.app.active_pane, "explorer")
+        self.assertEqual(self.app.active_pane, "chat")
         self.assertIsNone(result)
 
     def test_esc_dismisses_dialog(self) -> None:
