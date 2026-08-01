@@ -76,7 +76,7 @@
       ],
       "properties": {
         "receipt_sha256": { "$ref": "#/$defs/sha256" },
-        "decision": { "enum": ["allow", "defer", "block"] },
+        "decision": { "enum": ["allow", "defer", "block", "warn"] },
         "must_report_visibility_status": { "const": true },
         "reference_decision_count": { "type": "integer", "minimum": 1 }
       }
@@ -92,7 +92,7 @@
       ],
       "properties": {
         "receipt_sha256": { "$ref": "#/$defs/sha256" },
-        "decision": { "enum": ["allow", "defer", "block"] },
+        "decision": { "enum": ["allow", "defer", "block", "warn"] },
         "all_sources_classified": { "type": "boolean" },
         "no_injection_escalation": { "type": "boolean" }
       }
@@ -109,7 +109,7 @@
       ],
       "properties": {
         "receipt_sha256": { "$ref": "#/$defs/sha256" },
-        "decision": { "enum": ["allow", "defer", "block"] },
+        "decision": { "enum": ["allow", "defer", "block", "warn"] },
         "available_count": { "type": "integer", "minimum": 0 },
         "unavailable_count": { "type": "integer", "minimum": 0 },
         "context_injected": { "type": "boolean" }
@@ -152,7 +152,7 @@
                   "unregistered"
                 ]
               },
-              "decision": { "enum": ["allow", "defer", "block"] },
+              "decision": { "enum": ["allow", "defer", "block", "warn"] },
               "claim_allowed": {
                 "enum": [
                   "full_text_claim",
