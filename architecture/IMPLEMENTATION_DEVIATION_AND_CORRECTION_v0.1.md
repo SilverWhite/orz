@@ -108,8 +108,16 @@ conformance fixture（`canonical_cli.py` 文件头注释："不是 production ag
 
 ## 4. 当前遗留的技术债务
 
-1. **Architecture**: sidecar 模式 vs 用户预期的 fork 模式（待决定方向）
+1. **Architecture**: sidecar → fork 迁移（已决策，待执行）
 2. **Orientation 触发层**: checkpoint 格式和验证正确，触发/注入需重写为事件驱动
 3. **Gate 覆盖**: `gsa ask` 和 `gsa chat` 两条用户入口只跑部分 gate
-4. **Thinking proxy daemon**: sidecar 模式下的外部 workaround。若转向 fork，应在源码 HTTP 请求构造层修复
+4. **Thinking proxy daemon**: sidecar 模式下的外部 workaround。fork 后在 HTTP 传输层源码解决
 5. **命名歧义**: `GrokAcpSession`（实际是 GSA 的 ACP 会话管理器）、`grok_runtime_adapter`（实际是 GSA runtime controller）
+
+## 5. 架构决策：转向 fork 模式
+
+**2026-08-02 已决策。** 不再深化 sidecar。以 Grok 源码为模板，将 GSA assurance 层注入到源码中，
+编译为 GSA 二进制。详见
+[`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.1.md`](FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.1.md)。
+
+迁移分 4 个 Phase，Python 项目保留为 reference spec + conformance test suite。
