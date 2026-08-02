@@ -129,25 +129,30 @@ cargo check --workspace
 
 | 组件 | 位置 | 备注 |
 |------|------|------|
-| Rust GNU 1.97.1（pinned） | `B:\.rustup\toolchains\1.97.1-x86_64-pc-windows-gnu` | `rust-toolchain.toml`: `channel = "1.97.1-x86_64-pc-windows-gnu"` |
-| Rust MSVC 1.97.1 | `B:\.rustup\toolchains\1.97.1-x86_64-pc-windows-msvc` | 已安装 llvm-tools（rust-lld），待 SDK 就绪后切换 |
-| Rust stable GNU | `B:\.rustup\toolchains\stable-x86_64-pc-windows-gnu` | 备用（旧 default） |
-| MinGW (WinLibs POSIX UCRT) | `%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_*\mingw64` | GNU 链接器（ld.exe, dlltool.exe） |
-| protoc 35.1 | `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Google.Protobuf_*\bin` | Windows 原生二进制。COPY 到 `B:\orz\bin\protoc.exe` |
+| **Rust MSVC 1.97.1（pinned，激活）** | `B:\.rustup\toolchains\1.97.1-x86_64-pc-windows-msvc` | `rust-toolchain.toml`: `channel = "1.97.1"` |
+| Rust GNU 1.97.1 | `B:\.rustup\toolchains\1.97.1-x86_64-pc-windows-gnu` | 备用（Phase 1 初期使用，已弃用） |
+| VS BuildTools | `B:\VS\BuildTools\` | MSVC 链接器 + LIB + 头文件 |
+| Windows SDK | `C:\Program Files (x86)\Windows Kits\10\` | `kernel32.lib` 等系统库 |
+| protoc 35.1 | `B:\orz\bin\protoc.exe` | Protocol Buffers 编译器（从 winget 安装后复制） |
 
-**已知工具链问题**：
-- **MSVC 未就绪**：Windows SDK 安装介质在 `B:\SDK\` 但未完成安装（缺少 .lib 文件）。
-  SDK 安装完成后，将 `rust-toolchain.toml` 改为 `1.97.1`（MSVC host），移除 MinGW PATH 依赖
-- **GNU + protoc**：`xai-proto-build` 的 `emit_rerun_if_changed` 在 Windows 上跳过（`#[cfg(not(windows))]`），
-  因其硬编码了 `/dev/stdout`。Phase 2 可修复为 tempfile 方案
-- **rustup 版本+target 组合支持**：`1.97.1-x86_64-pc-windows-gnu` 在 toolchain.toml 中可正常解析（已验证）。
-  此前失败是因为未预先 `rustup toolchain install` 该 toolchain
+**链接器**：`rust-lld`（Rust 内置 LLVM 链接器，配置在 `.cargo/config.toml`）。不依赖外部 `link.exe`。
+
+**构建命令**：
+```powershell
+$env:CARGO_HOME = "B:\.cargo"
+$env:RUSTUP_HOME = "B:\.rustup"
+$env:PROTOC = "B:\orz\bin\protoc.exe"
+$env:Path = "B:\.cargo\bin;B:\VS\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64;C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64;" + $env:Path
+cargo build -p orz-bin
+# or: cargo build -p orz-bin -p orz-assurance -p orz-tui
+```
 
 ## 5.1 Phase 1 收尾修正记录（2026-08-02）
 
 | 修正项 | 来源 | 状态 |
 |--------|------|------|
-| `rust-toolchain.toml` 版本固定 | 审查 §3.2-A | ✅ `1.97.1-x86_64-pc-windows-gnu` |
+| `rust-toolchain.toml` 版本固定 + 目标 | 审查 §3.2-A | ✅ `1.97.1` (MSVC)，已验证编译通过 |
+| 切换到 MSVC 工具链 | SDK 就绪后 | ✅ `1.97.1-x86_64-pc-windows-msvc`，rust-lld linker |
 | `.gitignore` 添加辅助脚本 + protoc 二进制 | 审查 §3.2-C | ✅ |
 | 删除 tracked helper 文件 | 同上 | ✅ |
 | `orz-tui/Cargo.toml` 移除空 `[dependencies]` | 审查 §3.2-D | ✅ |
