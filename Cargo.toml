@@ -17,6 +17,7 @@ members = [
     "crates/codegen/xai-fsnotify",
     "crates/codegen/xai-gix-status",
     "crates/codegen/orz-agent",
+    "crates/codegen/orz-auth",
     "crates/codegen/orz-config",
     "crates/codegen/orz-config-types",
     "crates/codegen/orz-env",
@@ -33,6 +34,9 @@ members = [
     "crates/codegen/xai-grok-pager-render",
     "crates/codegen/orz-paths",
     "crates/codegen/orz-sampling-types",
+    "crates/codegen/orz-telemetry",
+    "crates/codegen/orz-sampler",
+    "crates/codegen/orz-chat-state",
     "crates/codegen/orz-sandbox",
     "crates/codegen/orz-shared",
     "crates/codegen/orz-shell",
@@ -268,6 +272,7 @@ xai-computer-hub-core = { path = "crates/common/xai-computer-hub-core" }
 xai-computer-hub-sdk = { path = "crates/common/xai-computer-hub-sdk" }
 xai-gix-status = { path = "crates/codegen/xai-gix-status" }
 orz-agent = { path = "crates/codegen/orz-agent" }
+orz-auth = { path = "crates/codegen/orz-auth" }
 orz-config = { path = "crates/codegen/orz-config" }
 orz-config-types = { path = "crates/codegen/orz-config-types" }
 orz-env = { path = "crates/codegen/orz-env" }
@@ -300,6 +305,9 @@ xai-tracing = { path = "crates/common/xai-tracing" }
 xai-tty-utils = { path = "crates/codegen/xai-tty-utils" }
 orz-hooks = { path = "crates/codegen/orz-hooks" }
 orz-paths = { path = "crates/codegen/orz-paths" }
+orz-telemetry = { path = "crates/codegen/orz-telemetry" }
+orz-sampler = { path = "crates/codegen/orz-sampler" }
+orz-chat-state = { path = "crates/codegen/orz-chat-state" }
 orz-sampling-types = { path = "crates/codegen/orz-sampling-types" }
 orz-sandbox = { path = "crates/codegen/orz-sandbox" }
 orz-compaction = { path = "crates/common/orz-compaction" }

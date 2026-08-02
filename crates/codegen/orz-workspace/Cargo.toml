@@ -45,6 +45,7 @@ orz-workspace-client = { path = "../orz-workspace-client" }
 orz-workspace-types = { path = "../orz-workspace-types" }
 orz-config = { workspace = true }
 # Leaf config value types (RemoteSettings, BoolFlag) for the folder-trust decision.
+orz-telemetry = { path = "../orz-telemetry" }
 orz-config-types = { workspace = true }
 toml = { workspace = true, features = ["preserve_order"] }
 dashmap = { workspace = true }

@@ -12,6 +12,7 @@ base64.workspace = true
 dunce = { workspace = true }
 xai-circuit-breaker = { workspace = true }
 orz-version = { workspace = true }
+orz-auth = { path = "../orz-auth", features = ["middleware"] }
 aws-sdk-s3 = { version = "1", default-features = false, features = [
     "rt-tokio",
 ] }

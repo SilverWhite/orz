@@ -1,0 +1,17 @@
+﻿[package]
+license = "Apache-2.0"
+name = "orz-telemetry"
+version = "0.1.0"
+edition.workspace = true
+description = "orz telemetry compatibility shim — Phase 2 no-op stubs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json", "time"] }
+uuid = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
