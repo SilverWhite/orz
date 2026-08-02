@@ -180,7 +180,7 @@ pub(crate) fn tasks_block_text(agent: &AgentView) -> String {
 /// `/usage` body — per-session token and cost totals, scoped to the ledger's
 /// lifetime: since session start, or since the last `/resume`.
 pub(crate) fn session_usage_block_text(
-    usage: &xai_grok_shell::extensions::notification::PromptUsage,
+    usage: &orz_shell::extensions::notification::PromptUsage,
 ) -> String {
     let t = &usage.totals;
     if t.model_calls == 0 && usage.model_usage.is_empty() {
@@ -237,8 +237,8 @@ pub(crate) fn session_usage_block_text(
 }
 
 /// Cost cell. Ticks are 1e10 per USD; partial sums are scrubbed to absent.
-fn format_cost(m: &xai_grok_shell::extensions::notification::PromptUsageModel) -> String {
-    use xai_grok_shell::extensions::notification::ticks_to_usd;
+fn format_cost(m: &orz_shell::extensions::notification::PromptUsageModel) -> String {
+    use orz_shell::extensions::notification::ticks_to_usd;
     match m.cost_usd_ticks {
         Some(ticks) => format!("${:.4}", ticks_to_usd(ticks)),
         None if m.cost_is_partial => "not available (not reported for some calls)".to_string(),
@@ -281,7 +281,7 @@ fn join_header_rows(header: String, rows: Vec<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xai_grok_shell::extensions::notification::{PromptUsage, PromptUsageModel};
+    use orz_shell::extensions::notification::{PromptUsage, PromptUsageModel};
 
     fn model_row(input: u64, output: u64, ticks: Option<i64>) -> PromptUsageModel {
         PromptUsageModel {

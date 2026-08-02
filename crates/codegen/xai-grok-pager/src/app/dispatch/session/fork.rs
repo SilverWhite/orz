@@ -95,8 +95,8 @@ pub(in crate::app::dispatch) fn apply_persist_worktree_mode(
 /// Build the two persistence options shared by the fork and new-session
 /// worktree question modals ("Always worktree" / "Never worktree").
 pub(super) fn worktree_persist_options()
--> [xai_grok_tools::implementations::grok_build::ask_user_question::QuestionOption; 2] {
-    use xai_grok_tools::implementations::grok_build::ask_user_question::QuestionOption;
+-> [orz_tools::implementations::grok_build::ask_user_question::QuestionOption; 2] {
+    use orz_tools::implementations::grok_build::ask_user_question::QuestionOption;
     [
         QuestionOption {
             label: "Always worktree".into(),
@@ -117,7 +117,7 @@ pub(super) fn worktree_persist_options()
 /// instead -- the modal-collision protocol.
 fn open_fork_question(app: &mut AppView, directive: Option<String>) -> Vec<Effect> {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let ActiveView::Agent(id) = app.active_view else {
@@ -509,7 +509,7 @@ pub(in crate::app::dispatch) fn handle_worktree_forked(
     session_cwd: std::path::PathBuf,
     code_restored: bool,
     restore_summary: Option<String>,
-    restore_degree: Option<xai_grok_workspace::session::git::RestoreDegree>,
+    restore_degree: Option<orz_workspace::session::git::RestoreDegree>,
 ) -> Vec<Effect> {
     let session_id_str = session_id.0.to_string();
     let pending_entry = std::mem::take(&mut app.deferred_startup.pending_chat);

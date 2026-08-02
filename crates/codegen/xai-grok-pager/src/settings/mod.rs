@@ -17,7 +17,7 @@
 //! - **Writes** are typed `Action::SetX(value)` variants dispatched
 //!   directly by the modal — no `compute()` indirection, no `Vec<Action>`
 //!   factories. Persistence goes through `Effect::PersistSetting`, which
-//!   routes to `xai_grok_shell::util::config::set_<field>(value).await`.
+//!   routes to `orz_shell::util::config::set_<field>(value).await`.
 //!
 //! The registry is built once in `main` and threaded through
 //! `AppView::settings_registry: Arc<SettingsRegistry>` (mirroring the

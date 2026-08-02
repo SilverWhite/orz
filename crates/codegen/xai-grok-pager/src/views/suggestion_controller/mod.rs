@@ -338,9 +338,9 @@ impl SuggestionController {
             generation: 0,
             last_request_text: String::new(),
             tab_pending: None,
-            enabled: xai_grok_config::env_bool("GROK_SUGGESTIONS").unwrap_or(false),
+            enabled: orz_config::env_bool("GROK_SUGGESTIONS").unwrap_or(false),
             dropdown: CompletionDropdownState::default(),
-            ai_enabled: xai_grok_config::env_bool("GROK_SUGGESTIONS_AI").unwrap_or(false),
+            ai_enabled: orz_config::env_bool("GROK_SUGGESTIONS_AI").unwrap_or(false),
             ai_model: std::env::var("GROK_SUGGESTIONS_AI_MODEL")
                 .ok()
                 .filter(|s| !s.is_empty()),

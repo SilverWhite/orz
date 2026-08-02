@@ -103,8 +103,8 @@ mod tests {
 
     /// Build a representative agent-side roster entry with every field set to
     /// a non-default value so the round-trip exercises name/case mapping.
-    fn agent_entry() -> xai_grok_shell::agent::roster::RosterEntry {
-        use xai_grok_shell::agent::roster as agent;
+    fn agent_entry() -> orz_shell::agent::roster::RosterEntry {
+        use orz_shell::agent::roster as agent;
         agent::RosterEntry {
             session_id: "sess-abc".to_string(),
             title: Some("Fix the roster".to_string()),
@@ -134,8 +134,8 @@ mod tests {
     /// `result` first and PASSES.
     #[test]
     fn roster_list_response_survives_result_envelope() {
-        use xai_grok_shell::agent::roster as agent;
-        use xai_grok_shell::session::ExtMethodResult;
+        use orz_shell::agent::roster as agent;
+        use orz_shell::session::ExtMethodResult;
 
         let agent_resp = agent::RosterListResponse {
             sessions: vec![agent_entry()],
@@ -197,7 +197,7 @@ mod tests {
     /// the broadcast path's wire shape.
     #[test]
     fn roster_changed_round_trips() {
-        use xai_grok_shell::agent::roster as agent;
+        use orz_shell::agent::roster as agent;
 
         let agent_changed = agent::RosterChanged {
             upserted: vec![agent_entry()],

@@ -20,7 +20,7 @@ bench = ["dep:tempfile"]
 # SQLite metadata DB for worktree tracking. On Linux, serde/serde_json are
 # already pulled in unconditionally (overlay metadata), so this feature
 # effectively only gates rusqlite there.
-metadata = ["dep:rusqlite", "dep:serde", "dep:serde_json", "dep:xai-sqlite-journal"]
+metadata = ["dep:rusqlite", "dep:serde", "dep:serde_json", ]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -44,7 +44,6 @@ tokio-util = { workspace = true }
 tempfile = { workspace = true, optional = true }
 tracing = { workspace = true }
 xai-gix-status = { workspace = true }
-xai-sqlite-journal = { workspace = true, optional = true }
 xai-tty-utils = { workspace = true }
 tracing-subscriber = { workspace = true }
 

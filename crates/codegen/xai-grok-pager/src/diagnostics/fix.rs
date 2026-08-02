@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use xai_grok_config::managed_text::{
+use orz_config::managed_text::{
     CommentSyntax, ManagedConfig, ManagedConfigOutcome, ManagedConfigPlan, ManagedConfigRequest,
     ManagedConfigStatus, ManagedItem, ManagedItemState, SyntaxValidator,
 };
@@ -297,8 +297,8 @@ pub enum FixError {
     ByobuConfigUnavailable,
     UnsafeDirectory { label: &'static str, path: PathBuf },
     ExistingCustomization { path: PathBuf, detail: String },
-    Managed(xai_grok_config::managed_text::ManagedConfigError),
-    TmuxManaged(xai_grok_config::managed_text::ManagedConfigError),
+    Managed(orz_config::managed_text::ManagedConfigError),
+    TmuxManaged(orz_config::managed_text::ManagedConfigError),
     PostconditionFailed,
     TmuxPostconditionFailed,
 }
@@ -373,8 +373,8 @@ impl std::error::Error for FixError {
     }
 }
 
-impl From<xai_grok_config::managed_text::ManagedConfigError> for FixError {
-    fn from(error: xai_grok_config::managed_text::ManagedConfigError) -> Self {
+impl From<orz_config::managed_text::ManagedConfigError> for FixError {
+    fn from(error: orz_config::managed_text::ManagedConfigError) -> Self {
         Self::Managed(error)
     }
 }

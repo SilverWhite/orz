@@ -1128,7 +1128,7 @@ impl AgentView {
         self.handle_question_key(key)
     }
     fn submit_question_answers(&mut self, skipped: bool) -> InputOutcome {
-        use xai_grok_tools::implementations::grok_build::ask_user_question::AskUserQuestionExtResponse;
+        use orz_tools::implementations::grok_build::ask_user_question::AskUserQuestionExtResponse;
         self.swap_question_freeform();
         let Some(mut qv) = self.question_view.take() else {
             return InputOutcome::Changed;
@@ -1165,7 +1165,7 @@ impl AgentView {
         } else {
             "interview_submit"
         };
-        xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::PlanSubmit {
+        orz_telemetry::session_ctx::log_event(orz_telemetry::events::PlanSubmit {
             action: action.to_string(),
         });
         InputOutcome::Changed
@@ -1595,7 +1595,7 @@ mod permission_scope_key_tests {
             ),
         ];
         perm.bash_highlights = Some(
-            xai_grok_workspace::permission::bash_command_splitting::BashCommandHighlights {
+            orz_workspace::permission::bash_command_splitting::BashCommandHighlights {
                 prefix: vec![],
                 highlighted_words: vec!["cargo".into(), "test".into(), "--workspace".into()],
                 suffix: vec![],
@@ -1674,7 +1674,7 @@ mod question_no_freeform_tests {
     };
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     /// Fixed options, single-select — shaped like the free-usage upsell.

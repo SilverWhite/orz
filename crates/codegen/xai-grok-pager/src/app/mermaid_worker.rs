@@ -18,7 +18,7 @@
 //! # Crash isolation under `panic = "abort"` — out of process
 //!
 //! The shipped CLI profiles build with `panic = "abort"`, so the `catch_unwind`
-//! inside [`xai_grok_mermaid::render_checked`] is a no-op there: a panic in the
+//! inside [`orz_mermaid::render_checked`] is a no-op there: a panic in the
 //! layout engine over untrusted model output would abort the whole pager, and a
 //! synchronous in-process render could not be killed on timeout. The render
 //! therefore runs **out of process**, in a short-lived child:
@@ -29,12 +29,12 @@
 //!    and the theme/width/height from argv, renders source → SVG → PNG, writes
 //!    the PNG atomically to the out-path, and exits 0; any error exits non-zero.
 //! 2. The worker spawns that child with a wall-clock budget ([`RENDER_TIMEOUT`])
-//!    via [`xai_grok_mermaid::run_with_timeout`], which **kills and reaps** the
+//!    via [`orz_mermaid::run_with_timeout`], which **kills and reaps** the
 //!    child (real process kill, not a soft signal) on timeout. A child panic
 //!    (abort), non-zero exit, or timeout is contained to the child and surfaces
 //!    as `Failed` → the existing code-block fallback; the pager survives.
 //! 3. The child applies the same caps as in-process would: the source-size limit
-//!    ([`xai_grok_mermaid::RenderLimits`]) and the raster megapixel/height caps
+//!    ([`orz_mermaid::RenderLimits`]) and the raster megapixel/height caps
 //!    (see `xai-grok-mermaid`). The parent also rejects obviously-oversized
 //!    source before spawning, to avoid launching a doomed child.
 //!
@@ -49,7 +49,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
-use xai_grok_mermaid::{
+use orz_mermaid::{
     MermaidTheme, RenderLimits, RenderParams, RenderedDiagram, SubprocessError, default_engine,
     render_checked, run_with_timeout,
 };
@@ -703,7 +703,7 @@ fn render_source_to_png(
     theme_dark: bool,
     target_width_px: u32,
     quality: MermaidRenderQuality,
-) -> Result<RenderedDiagram, xai_grok_mermaid::MermaidError> {
+) -> Result<RenderedDiagram, orz_mermaid::MermaidError> {
     let params = render_params_for(theme_dark, target_width_px, quality);
     render_checked(
         default_engine().as_ref(),

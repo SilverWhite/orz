@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::StatefulWidget;
-use xai_grok_workspace::permission::mcp_titleize_segment;
+use orz_workspace::permission::mcp_titleize_segment;
 
 use crate::clipboard::SystemClipboard;
 use crate::render::scrollbar::SCROLLBAR_TOTAL_COLS;

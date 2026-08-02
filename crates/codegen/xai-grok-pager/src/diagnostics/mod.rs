@@ -51,10 +51,10 @@ pub use view::{DiagnosticSnapshot, view};
 /// The TUI passes true only while voice mode is enabled; standalone doctor uses
 /// the same finding whenever this build supports capture and the probe is missing.
 pub fn apply_voice_probe(report: &mut DiagnosticReport, emit_missing_issue: bool) {
-    if !xai_grok_voice::AUDIO_SUPPORTED {
+    if !orz_voice::AUDIO_SUPPORTED {
         return;
     }
-    match xai_grok_voice::input_device_info() {
+    match orz_voice::input_device_info() {
         Ok(device) => {
             report.facts.voice = Some(VoiceFacts::Device {
                 name: device.name,
@@ -63,7 +63,7 @@ pub fn apply_voice_probe(report: &mut DiagnosticReport, emit_missing_issue: bool
         }
         Err(err) => {
             let error = match err {
-                xai_grok_voice::VoiceError::Config(message) => message,
+                orz_voice::VoiceError::Config(message) => message,
                 other => other.to_string(),
             };
             report.facts.voice = Some(VoiceFacts::Missing {
@@ -418,7 +418,7 @@ pub(crate) fn wezterm_kitty_keyboard_warning_from(
 }
 
 pub fn sandbox_profile_conflict_warning(workspace: &Path) -> Option<TerminalWarning> {
-    sandbox_profile_conflict_warning_from(xai_grok_sandbox::sandbox_profile_conflicts(workspace))
+    sandbox_profile_conflict_warning_from(orz_sandbox::sandbox_profile_conflicts(workspace))
 }
 
 fn sandbox_profile_conflict_warning_from(conflicts: Vec<String>) -> Option<TerminalWarning> {

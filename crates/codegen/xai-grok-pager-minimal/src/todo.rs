@@ -14,7 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use xai_grok_pager::theme::Theme;
-use xai_grok_shell::tools::TodoStatus;
+use orz_shell::tools::TodoStatus;
 
 /// Default cap on visible todo rows (the last becomes a `+N more` overflow row);
 /// `Ctrl+T` expands past it.
@@ -157,7 +157,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use xai_grok_pager::minimal_api;
-    use xai_grok_shell::tools::{TodoItem, TodoPriority};
+    use orz_shell::tools::{TodoItem, TodoPriority};
 
     fn agent() -> xai_grok_pager::app::agent_view::AgentView {
         minimal_api::test_agent_view(Some("s1"), std::path::PathBuf::from("/tmp"))

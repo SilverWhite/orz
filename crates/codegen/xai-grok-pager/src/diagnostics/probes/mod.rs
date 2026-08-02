@@ -102,7 +102,7 @@ pub fn collect_startup_tui<'a>(
 ) -> ProbeSnapshot<'a> {
     let is_wayland = crate::host::DisplayServer::current() == crate::host::DisplayServer::Wayland;
     let native_tool = startup_native_tool(is_wayland, || {
-        xai_grok_shell::util::clipboard::native_tool_name()
+        orz_shell::util::clipboard::native_tool_name()
     });
     collect_common(
         terminal,
@@ -120,7 +120,7 @@ pub fn collect_doctor_tui<'a>(
     tmux: &dyn TmuxOptionQuery,
 ) -> DoctorProbeSnapshot<'a> {
     let is_wayland = crate::host::DisplayServer::current() == crate::host::DisplayServer::Wayland;
-    let native_tool = xai_grok_shell::util::clipboard::native_tool_name();
+    let native_tool = orz_shell::util::clipboard::native_tool_name();
     DoctorProbeSnapshot {
         common: collect_common(terminal, runtime, None, tmux, is_wayland, Some(native_tool)),
         clipboard: ClipboardProbeFacts {
@@ -130,7 +130,7 @@ pub fn collect_doctor_tui<'a>(
         },
         host_os: crate::host::HostOs::current(),
         display_server: crate::host::DisplayServer::current(),
-        container_no_display: xai_grok_shell::util::clipboard::is_containerized_without_display(),
+        container_no_display: orz_shell::util::clipboard::is_containerized_without_display(),
         color_level: crate::theme::color_support::get(),
     }
 }
@@ -198,9 +198,9 @@ fn collect_standalone_with_tmux<'a>(
     let host_os = crate::host::HostOs::current();
     let display_server = crate::host::DisplayServer::current();
     let is_wayland = display_server == crate::host::DisplayServer::Wayland;
-    let native_tool = xai_grok_shell::util::clipboard::native_tool_name();
+    let native_tool = orz_shell::util::clipboard::native_tool_name();
     let data_control = standalone_data_control(is_wayland);
-    let container_no_display = xai_grok_shell::util::clipboard::is_containerized_without_display();
+    let container_no_display = orz_shell::util::clipboard::is_containerized_without_display();
     collect_standalone_from(
         terminal,
         tmux,
@@ -274,14 +274,14 @@ fn standalone_data_control(is_wayland: bool) -> TmuxProbeResult<bool> {
     if !is_wayland {
         return TmuxProbeResult::Unavailable;
     }
-    match xai_grok_shell::util::clipboard::probe_wayland_data_control() {
-        xai_grok_shell::util::clipboard::WaylandDataControlProbe::Available(value) => {
+    match orz_shell::util::clipboard::probe_wayland_data_control() {
+        orz_shell::util::clipboard::WaylandDataControlProbe::Available(value) => {
             TmuxProbeResult::Available(value)
         }
-        xai_grok_shell::util::clipboard::WaylandDataControlProbe::Unavailable => {
+        orz_shell::util::clipboard::WaylandDataControlProbe::Unavailable => {
             TmuxProbeResult::Unavailable
         }
-        xai_grok_shell::util::clipboard::WaylandDataControlProbe::Error(error) => {
+        orz_shell::util::clipboard::WaylandDataControlProbe::Error(error) => {
             TmuxProbeResult::Error(error)
         }
     }
@@ -296,7 +296,7 @@ fn collect_common<'a>(
     native_tool: Option<&str>,
 ) -> ProbeSnapshot<'a> {
     let data_control =
-        is_wayland && xai_grok_shell::util::clipboard::wayland_data_control_supported();
+        is_wayland && orz_shell::util::clipboard::wayland_data_control_supported();
     ProbeSnapshot {
         terminal,
         tmux: collect_tmux(terminal, control_mode, tmux),

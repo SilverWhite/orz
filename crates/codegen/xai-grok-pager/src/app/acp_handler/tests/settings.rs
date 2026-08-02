@@ -160,7 +160,7 @@
                 .slash_controller
                 .registry_mut()
                 .set_available_tools(
-                    [xai_grok_tools::implementations::grok_build::SCHEDULER_CREATE_TOOL_NAME]
+                    [orz_tools::implementations::grok_build::SCHEDULER_CREATE_TOOL_NAME]
                         .into_iter()
                         .map(str::to_string)
                         .collect(),
@@ -189,7 +189,7 @@
     #[test]
     fn loop_fire_mode_follows_session_not_later_settings_push() {
         use crate::app::actions::{Action, TaskResult};
-        use xai_grok_tools::implementations::grok_build::{
+        use orz_tools::implementations::grok_build::{
             LoopFireMode, loop_schedule_instruction,
         };
 
@@ -224,7 +224,7 @@
     #[test]
     fn loop_fire_mode_adopts_the_loaded_session_value() {
         use crate::app::actions::{Action, TaskResult};
-        use xai_grok_tools::implementations::grok_build::{
+        use orz_tools::implementations::grok_build::{
             LoopFireMode, loop_schedule_instruction,
         };
 
@@ -267,15 +267,15 @@
         // Expected values come from the same chain the handler resolves, so the
         // test holds regardless of host config/env (a local `[ui]` or env
         // override legitimately beats the remote tier on both legs).
-        let requirements = xai_grok_shell::config::load_merged_requirements();
-        let user_config = xai_grok_shell::config::load_from_disk().ok();
-        let managed_config = xai_grok_shell::config::load_managed_config().ok();
+        let requirements = orz_shell::config::load_merged_requirements();
+        let user_config = orz_shell::config::load_from_disk().ok();
+        let managed_config = orz_shell::config::load_managed_config().ok();
         let resolve = |remote_val: Option<bool>| {
-            let remote = xai_grok_shell::util::config::RemoteSettings {
+            let remote = orz_shell::util::config::RemoteSettings {
                 group_tool_verbs: remote_val,
                 ..Default::default()
             };
-            xai_grok_shell::util::config::resolve_group_tool_verbs(
+            orz_shell::util::config::resolve_group_tool_verbs(
                 requirements.as_ref(),
                 user_config.as_ref(),
                 managed_config.as_ref(),
@@ -322,15 +322,15 @@
         // Expected values come from the same chain the handler resolves, so the
         // test holds regardless of host config/env (a local `[ui]` or env
         // override legitimately beats the remote tier on both legs).
-        let requirements = xai_grok_shell::config::load_merged_requirements();
-        let user_config = xai_grok_shell::config::load_from_disk().ok();
-        let managed_config = xai_grok_shell::config::load_managed_config().ok();
+        let requirements = orz_shell::config::load_merged_requirements();
+        let user_config = orz_shell::config::load_from_disk().ok();
+        let managed_config = orz_shell::config::load_managed_config().ok();
         let resolve = |remote_val: Option<bool>| {
-            let remote = xai_grok_shell::util::config::RemoteSettings {
+            let remote = orz_shell::util::config::RemoteSettings {
                 collapsed_edit_blocks: remote_val,
                 ..Default::default()
             };
-            xai_grok_shell::util::config::resolve_collapsed_edit_blocks(
+            orz_shell::util::config::resolve_collapsed_edit_blocks(
                 requirements.as_ref(),
                 user_config.as_ref(),
                 managed_config.as_ref(),

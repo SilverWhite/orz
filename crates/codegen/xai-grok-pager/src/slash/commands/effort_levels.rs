@@ -1,6 +1,6 @@
 //! Shared reasoning-effort dropdown levels for `/model` and `/effort`.
 
-use xai_grok_shell::sampling::types::{ReasoningEffort, ReasoningEffortOption};
+use orz_shell::sampling::types::{ReasoningEffort, ReasoningEffortOption};
 
 use crate::slash::command::ArgItem;
 

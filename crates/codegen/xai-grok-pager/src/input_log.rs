@@ -161,7 +161,7 @@ pub struct InputDump {
     pub dumped_at: String,
     pub session_id: Option<String>,
     pub pager_version: &'static str,
-    pub terminal: xai_grok_telemetry::events::TerminalTelemetry,
+    pub terminal: orz_telemetry::events::TerminalTelemetry,
     pub active_pane: String,
     pub textarea_cursor: usize,
     pub textarea_text_len: usize,

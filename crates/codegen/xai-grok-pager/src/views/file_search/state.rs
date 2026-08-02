@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use xai_grok_workspace::file_system::{
+use orz_workspace::file_system::{
     FuzzyFileMatcher, FuzzyFileMatcherDaemon, FuzzyMatchResult, FuzzyMatcherDaemonResults,
 };
 

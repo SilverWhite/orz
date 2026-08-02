@@ -965,7 +965,7 @@ mod tests {
     #[test]
     fn prompt_info_renders_model_context_and_queued() {
         let mut a = agent();
-        a.context_state = Some(xai_grok_shell::session::ContextInfo {
+        a.context_state = Some(orz_shell::session::ContextInfo {
             used: 276_000,
             total: 2_000_000,
             ..Default::default()
@@ -991,7 +991,7 @@ mod tests {
         use xai_grok_pager::app::agent_view::PromptInputMode;
         let mut a = agent();
         a.prompt_input_mode = PromptInputMode::Bash;
-        a.context_state = Some(xai_grok_shell::session::ContextInfo {
+        a.context_state = Some(orz_shell::session::ContextInfo {
             used: 276_000,
             total: 2_000_000,
             ..Default::default()

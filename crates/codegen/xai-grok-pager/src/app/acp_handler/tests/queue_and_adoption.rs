@@ -324,7 +324,7 @@
     fn queue_changed_adopts_running_prompt_id_only_when_unset() {
         // Shell and pager share the xai-prompt-queue type, so serializing the payload as the
         // shell emits it pins the wire shape the handler consumes, not cross-crate compat.
-        let shell_payload = xai_grok_shell::session::prompt_queue::QueueChanged {
+        let shell_payload = orz_shell::session::prompt_queue::QueueChanged {
             session_id: "sess-1".to_string(),
             entries: Vec::new(),
             running_prompt_id: Some("prompt-running".to_string()),
@@ -1481,9 +1481,9 @@
     #[test]
     fn bash_kind_round_trips_and_adoption_sets_bash_turn() {
         // Shell and pager share the xai-prompt-queue type; pin kind through a serde cycle.
-        let shell = xai_grok_shell::session::prompt_queue::QueueChanged {
+        let shell = orz_shell::session::prompt_queue::QueueChanged {
             session_id: "sess-1".to_string(),
-            entries: vec![xai_grok_shell::session::prompt_queue::QueueEntryWire {
+            entries: vec![orz_shell::session::prompt_queue::QueueEntryWire {
                 id: "b1".to_string(),
                 version: 0,
                 owner: None,

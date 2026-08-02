@@ -164,12 +164,12 @@ pub(super) fn drain_prompt_state_to_last_queued(agent: &mut AgentView) {
 
 /// Prepend `<system-reminder>` framing to a cron prompt for the model.
 ///
-/// Delegates to the shared implementation in `xai_grok_tools::reminders`.
+/// Delegates to the shared implementation in `orz_tools::reminders`.
 /// The UI shows the raw `prompt` text via `RenderBlock::cron_prompt`; this
 /// wrapped version is only sent to the model via `Effect::SendPrompt` so
 /// the model knows the message is a scheduled task execution, not a human.
 fn format_cron_prompt(prompt: &str, task_id: &str, human_schedule: &str) -> String {
-    xai_grok_tools::reminders::format_scheduled_task_prompt(prompt, task_id, human_schedule)
+    orz_tools::reminders::format_scheduled_task_prompt(prompt, task_id, human_schedule)
 }
 
 /// Try to send the next queued entry (prompt, command, bash, or cron) if the agent is idle.
@@ -1194,7 +1194,7 @@ mod tests {
         assert_eq!(sb.selected(), Some(sb.len() - 1));
 
         crate::appearance::cache::set_page_flip_on_send(
-            xai_grok_shell::agent::config::UiConfig::PAGE_FLIP_ON_SEND_DEFAULT,
+            orz_shell::agent::config::UiConfig::PAGE_FLIP_ON_SEND_DEFAULT,
         );
     }
 

@@ -1,5 +1,5 @@
 use agent_client_protocol as acp;
-use xai_grok_tools::implementations::grok_build::{
+use orz_tools::implementations::grok_build::{
     IMAGE_GEN_TOOL_NAME, IMAGINE_COMMAND_NAME, imagine_instruction, imagine_usage_message,
 };
 

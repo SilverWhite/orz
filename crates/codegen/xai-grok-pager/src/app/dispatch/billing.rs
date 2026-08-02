@@ -7,8 +7,8 @@ use crate::app::agent_view::AgentView;
 use crate::app::app_view::AppView;
 use crate::scrollback::block::RenderBlock;
 use std::time::Duration;
-use xai_grok_telemetry::events::{SuperGrokUpsell, SuperGrokUpsellClicked};
-use xai_grok_telemetry::session_ctx::log_event;
+use orz_telemetry::events::{SuperGrokUpsell, SuperGrokUpsellClicked};
+use orz_telemetry::session_ctx::log_event;
 
 /// How long the pager auto-checks subscription status before stopping.
 /// After this, the user can still manually check via the [Refresh] button.
@@ -113,7 +113,7 @@ pub(super) fn open_credit_limit_upsell(
         &str,
         &str,
         CreditLimitCardAction,
-        xai_grok_telemetry::events::CreditLimitChoice,
+        orz_telemetry::events::CreditLimitChoice,
         bool,
     ) = match mode {
         CreditLimitUpsellMode::UnifiedCredits => (
@@ -122,7 +122,7 @@ pub(super) fn open_credit_limit_upsell(
             "Buy more credits",
             "Purchase credits to keep using Grok Build",
             CreditLimitCardAction::PurchaseCredits,
-            xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits,
+            orz_telemetry::events::CreditLimitChoice::PurchaseCredits,
             false,
         ),
         CreditLimitUpsellMode::LegacyPayg { enabled: true } => (
@@ -131,7 +131,7 @@ pub(super) fn open_credit_limit_upsell(
             "Increase limit",
             "Raise your pay-as-you-go spending cap",
             CreditLimitCardAction::IncreasePaygLimit,
-            xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo,
+            orz_telemetry::events::CreditLimitChoice::PayAsYouGo,
             true,
         ),
         CreditLimitUpsellMode::LegacyPayg { enabled: false } => (
@@ -140,7 +140,7 @@ pub(super) fn open_credit_limit_upsell(
             "Pay as you go",
             "Enable pay-as-you-go credits for on-demand usage",
             CreditLimitCardAction::EnablePayg,
-            xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo,
+            orz_telemetry::events::CreditLimitChoice::PayAsYouGo,
             false,
         ),
     };
@@ -149,8 +149,8 @@ pub(super) fn open_credit_limit_upsell(
     // ── Max tier: inline scrollback card ─────────────────────────
     if max_tier {
         use crate::scrollback::block::RenderBlock;
-        log_event(xai_grok_telemetry::events::CreditLimitUpsellShown {
-            surface: xai_grok_telemetry::events::CreditLimitUpsellSurface::InlineCard,
+        log_event(orz_telemetry::events::CreditLimitUpsellShown {
+            surface: orz_telemetry::events::CreditLimitUpsellSurface::InlineCard,
             max_tier: true,
             pay_as_you_go: payg_telemetry,
             unified_billing,
@@ -163,8 +163,8 @@ pub(super) fn open_credit_limit_upsell(
         return;
     }
 
-    log_event(xai_grok_telemetry::events::CreditLimitUpsellShown {
-        surface: xai_grok_telemetry::events::CreditLimitUpsellSurface::QuestionModal,
+    log_event(orz_telemetry::events::CreditLimitUpsellShown {
+        surface: orz_telemetry::events::CreditLimitUpsellSurface::QuestionModal,
         max_tier: false,
         pay_as_you_go: payg_telemetry,
         unified_billing,
@@ -172,7 +172,7 @@ pub(super) fn open_credit_limit_upsell(
 
     // ── Default: Q&A question modal with two options ────────────────
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
 
@@ -208,7 +208,7 @@ pub(super) fn open_credit_limit_upsell(
     )
     .with_local_kind(LocalQuestionKind::CreditLimitUpsell {
         choices: vec![
-            xai_grok_telemetry::events::CreditLimitChoice::UpgradeTier,
+            orz_telemetry::events::CreditLimitChoice::UpgradeTier,
             second_choice,
         ],
     })
@@ -260,7 +260,7 @@ fn open_supergrok_upsell(
     auth_method: Option<String>,
 ) -> bool {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
 
@@ -283,7 +283,7 @@ fn open_supergrok_upsell(
         ),
     };
 
-    log_event(xai_grok_telemetry::events::SuperGrokUpsellShown {
+    log_event(orz_telemetry::events::SuperGrokUpsellShown {
         source,
         auth_method,
     });
@@ -389,7 +389,7 @@ pub(super) fn handle_billing_fetched(
 
 pub(super) fn handle_gate_refreshed(
     app: &mut AppView,
-    settings: Option<xai_grok_shell::util::config::RemoteSettings>,
+    settings: Option<orz_shell::util::config::RemoteSettings>,
 ) -> Vec<Effect> {
     let Some(rs) = settings else {
         return vec![];
@@ -416,7 +416,7 @@ pub(super) fn handle_check_subscription_complete(
     let was_blocked = !app.has_access();
     let applied = match meta {
         Some(meta_val) => {
-            match serde_json::from_value::<xai_grok_shell::auth::AuthMeta>(meta_val) {
+            match serde_json::from_value::<orz_shell::auth::AuthMeta>(meta_val) {
                 Ok(auth_meta) => {
                     app.apply_auth_meta(&auth_meta);
                     true
@@ -485,7 +485,7 @@ pub(super) fn handle_credit_limit_recheck_complete(
 ) -> Vec<Effect> {
     let old_tier = app.subscription_tier.clone();
     if let Some(meta_val) = meta
-        && let Ok(auth_meta) = serde_json::from_value::<xai_grok_shell::auth::AuthMeta>(meta_val)
+        && let Ok(auth_meta) = serde_json::from_value::<orz_shell::auth::AuthMeta>(meta_val)
     {
         app.apply_auth_meta(&auth_meta);
     }

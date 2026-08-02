@@ -19,7 +19,7 @@ use super::quote_bar::QuoteBarStrip;
 pub(crate) const MARKDOWN_BODY_RANGE: u16 = 0;
 use crate::syntax::get_syntect;
 use crate::theme::{ThemeKind, cache as theme_cache, md_style};
-use xai_grok_markdown::StreamingMarkdownRenderer;
+use orz_markdown::StreamingMarkdownRenderer;
 
 /// Mutable rendering state behind a single `RefCell`.
 ///
@@ -234,7 +234,7 @@ impl MarkdownContent {
     /// Access the pre-wrap hyperlink targets via a closure, avoiding allocation.
     pub fn with_hyperlinks<R>(
         &self,
-        f: impl FnOnce(&[xai_grok_markdown::HyperlinkTarget]) -> R,
+        f: impl FnOnce(&[orz_markdown::HyperlinkTarget]) -> R,
     ) -> R {
         let state = self.state.borrow();
         f(state.renderer.view().hyperlinks)

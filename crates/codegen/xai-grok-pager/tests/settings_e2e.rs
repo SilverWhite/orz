@@ -19,7 +19,7 @@ use xai_grok_pager::views::settings_modal::{
     RowEntry, SettingsKeyOutcome, SettingsModalMode, SettingsModalState, handle_settings_key,
     handle_settings_mouse,
 };
-use xai_grok_shell::agent::config::UiConfig;
+use orz_shell::agent::config::UiConfig;
 
 // ---------------------------------------------------------------------------
 // Compile-time exhaustive matrix
@@ -3979,7 +3979,7 @@ fn restart_pill_visible_when_expanded() {
 #[test]
 fn restart_pill_hidden_when_edited_but_collapsed() {
     use xai_grok_pager::settings::{PagerLocalSnapshot, SettingsRegistry};
-    use xai_grok_shell::agent::config::UiConfig;
+    use orz_shell::agent::config::UiConfig;
 
     // Construct a state where `show_tips` is NOT at its registered
     // default of `true`.
@@ -4160,7 +4160,7 @@ fn reset_confirm_overlay_renders_prompt_with_setting_label_and_default() {
 fn reset_confirm_prompt_helper_builds_well_formed_string_for_every_setting() {
     use xai_grok_pager::settings::{PagerLocalSnapshot, SettingsRegistry};
     use xai_grok_pager::views::modal::{ActiveModal, ModalConfirmation, reset_confirm_prompt};
-    use xai_grok_shell::agent::config::UiConfig;
+    use orz_shell::agent::config::UiConfig;
     let reg = SettingsRegistry::defaults();
     for meta in reg.all() {
         let state = Box::new(SettingsModalState::new(

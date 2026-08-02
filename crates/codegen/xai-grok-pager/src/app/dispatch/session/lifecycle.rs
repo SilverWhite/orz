@@ -23,7 +23,7 @@ use crate::scrollback::blocks::SessionEvent;
 use crate::scrollback::state::ScrollbackState;
 use agent_client_protocol as acp;
 use std::time::Instant;
-use xai_grok_shell::sampling::types::ReasoningEffort;
+use orz_shell::sampling::types::ReasoningEffort;
 /// A deferred model switch to apply once the session exists, plus any effort
 /// error to surface. `switch` is still populated when a `-m` model was stashed
 /// even if the effort token failed, so an invalid effort never drops the CLI
@@ -154,7 +154,7 @@ pub(in crate::app::dispatch) fn dispatch_new_session(app: &mut AppView) -> Vec<E
 /// [`dispatch_new_worktree_session`].
 pub(in crate::app::dispatch) fn open_new_session_question(app: &mut AppView) -> Vec<Effect> {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let ActiveView::Agent(id) = app.active_view else {
@@ -209,11 +209,11 @@ pub(in crate::app::dispatch) fn open_new_session_question(app: &mut AppView) -> 
 pub(in crate::app::dispatch) fn open_agent_type_mismatch_question(
     app: &mut AppView,
     model_id: acp::ModelId,
-    effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
+    effort: Option<orz_shell::sampling::types::ReasoningEffort>,
     model_name: &str,
 ) -> Vec<Effect> {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let ActiveView::Agent(id) = app.active_view else {
@@ -399,7 +399,7 @@ pub(in crate::app::dispatch) fn open_delete_current_session_question(
     app: &mut AppView,
 ) -> Vec<Effect> {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let ActiveView::Agent(id) = app.active_view else {
@@ -501,7 +501,7 @@ pub(in crate::app::dispatch) fn dispatch_delete_current_session_answered(
 /// then replay any deferred session startup (only if auth is also done).
 pub(in crate::app::dispatch) fn dispatch_trust_folder(app: &mut AppView) -> Vec<Effect> {
     if let TrustState::Pending { workspace } = &app.trust_state {
-        xai_grok_workspace::folder_trust::grant_folder_trust(workspace);
+        orz_workspace::folder_trust::grant_folder_trust(workspace);
     }
     finish_trust(app)
 }

@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub use xai_grok_config::grok_home;
+pub use orz_config::grok_home;
 
 /// Path to `$GROK_HOME/pager.toml`.
 pub fn pager_toml_path() -> PathBuf {
@@ -13,14 +13,14 @@ pub fn pager_toml_path() -> PathBuf {
 
 /// User-facing label for the user grok directory (``~/.grok`` or ``$GROK_HOME``).
 ///
-/// Derived from resolved [`grok_home()`] vs `xai_grok_config::default_grok_home()`,
+/// Derived from resolved [`grok_home()`] vs `orz_config::default_grok_home()`,
 /// not from whether `GROK_HOME` is set in the environment.
 pub fn display_grok_home_prefix() -> String {
     display_grok_home_prefix_for(&grok_home())
 }
 
 fn display_grok_home_prefix_for(home: &Path) -> String {
-    if home == xai_grok_config::default_grok_home() {
+    if home == orz_config::default_grok_home() {
         "~/.grok".to_string()
     } else {
         "$GROK_HOME".to_string()

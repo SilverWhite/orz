@@ -93,7 +93,7 @@ impl AgentView {
     pub(super) fn push_promo_cta_link_span(
         &self,
         link_spans_out: &mut Vec<xai_ratatui_inline::LinkSpan>,
-        banner_announcements: &[xai_grok_announcements::RemoteAnnouncement],
+        banner_announcements: &[orz_announcements::RemoteAnnouncement],
         hidden_announcement_ids: &std::collections::BTreeSet<String>,
     ) {
         if let Some((_, url)) = crate::views::announcements::promo_cta_target(
@@ -109,7 +109,7 @@ impl AgentView {
     pub(super) fn push_upgrade_cta_link_span(
         &self,
         link_spans_out: &mut Vec<xai_ratatui_inline::LinkSpan>,
-        banner_announcements: &[xai_grok_announcements::RemoteAnnouncement],
+        banner_announcements: &[orz_announcements::RemoteAnnouncement],
         hidden_announcement_ids: &std::collections::BTreeSet<String>,
     ) {
         if let Some((_, url)) = crate::views::announcements::promo_cta_target(
@@ -480,7 +480,7 @@ mod link_click_tests {
     fn draw_banner_frame(
         agent: &mut AgentView,
         reg: &ActionRegistry,
-        announcements: &[xai_grok_announcements::RemoteAnnouncement],
+        announcements: &[orz_announcements::RemoteAnnouncement],
         banner_height: u16,
     ) {
         draw_frame_sized(agent, reg, announcements, banner_height, 80);
@@ -488,7 +488,7 @@ mod link_click_tests {
     fn draw_frame_sized(
         agent: &mut AgentView,
         reg: &ActionRegistry,
-        announcements: &[xai_grok_announcements::RemoteAnnouncement],
+        announcements: &[orz_announcements::RemoteAnnouncement],
         banner_height: u16,
         cols: u16,
     ) -> Buffer {
@@ -497,7 +497,7 @@ mod link_click_tests {
     fn draw_frame_privacy(
         agent: &mut AgentView,
         reg: &ActionRegistry,
-        announcements: &[xai_grok_announcements::RemoteAnnouncement],
+        announcements: &[orz_announcements::RemoteAnnouncement],
         banner_height: u16,
         cols: u16,
         privacy_banner: bool,
@@ -537,7 +537,7 @@ mod link_click_tests {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (80, 30);
-        let critical = [xai_grok_announcements::RemoteAnnouncement {
+        let critical = [orz_announcements::RemoteAnnouncement {
             severity: Some("critical".into()),
             title: Some("ZZCRIT".into()),
             message: Some("outage".into()),
@@ -581,7 +581,7 @@ mod link_click_tests {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (80, 30);
-        let critical = [xai_grok_announcements::RemoteAnnouncement {
+        let critical = [orz_announcements::RemoteAnnouncement {
             severity: Some("critical".into()),
             title: Some("ZZCRIT".into()),
             message: Some("outage".into()),
@@ -661,11 +661,11 @@ mod link_click_tests {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (80, 30);
-        let promo = [xai_grok_announcements::RemoteAnnouncement {
+        let promo = [orz_announcements::RemoteAnnouncement {
             id: Some("promo-1".into()),
             severity: Some("promo".into()),
             message: Some("ZZPROMO".into()),
-            cta: Some(xai_grok_announcements::AnnouncementCta {
+            cta: Some(orz_announcements::AnnouncementCta {
                 label: Some("Go".into()),
                 url: Some("https://x.ai/promo".into()),
                 caption: None,
@@ -852,12 +852,12 @@ mod link_click_tests {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (120, 30);
-        let promo = [xai_grok_announcements::RemoteAnnouncement {
+        let promo = [orz_announcements::RemoteAnnouncement {
             id: Some("promo-pin".into()),
             severity: Some("promo".into()),
             message: Some("ZZPROMO".into()),
             dismissible: Some(false),
-            cta: Some(xai_grok_announcements::AnnouncementCta {
+            cta: Some(orz_announcements::AnnouncementCta {
                 label: Some("Upgrade Account".into()),
                 url: Some("https://x.ai/promo".into()),
                 caption: None,
@@ -968,11 +968,11 @@ mod link_click_tests {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (120, 30);
-        let promo = [xai_grok_announcements::RemoteAnnouncement {
+        let promo = [orz_announcements::RemoteAnnouncement {
             id: Some("promo-1".into()),
             severity: Some("promo".into()),
             message: Some("ZZPROMO".into()),
-            cta: Some(xai_grok_announcements::AnnouncementCta {
+            cta: Some(orz_announcements::AnnouncementCta {
                 label: Some("Go".into()),
                 url: Some("https://x.ai/promo".into()),
                 caption: None,
@@ -999,10 +999,10 @@ mod link_click_tests {
     #[test]
     fn header_upgrade_cta_rect_and_ctrl_o_override() {
         use crate::actions::ActionId;
-        use xai_grok_telemetry::events::AnnouncementCtaSurface;
+        use orz_telemetry::events::AnnouncementCtaSurface;
         let reg = ActionRegistry::defaults();
         let cta = || {
-            Some(xai_grok_announcements::AnnouncementCta {
+            Some(orz_announcements::AnnouncementCta {
                 label: Some("Upgrade Account".into()),
                 url: Some("https://x.ai/promo".into()),
                 caption: None,
@@ -1010,7 +1010,7 @@ mod link_click_tests {
         };
         let mut agent = make_agent();
         agent.last_terminal_size = (120, 30);
-        let pinned = [xai_grok_announcements::RemoteAnnouncement {
+        let pinned = [orz_announcements::RemoteAnnouncement {
             id: Some("promo-pin".into()),
             severity: Some("promo".into()),
             message: Some("ZZPROMO".into()),
@@ -1057,7 +1057,7 @@ mod link_click_tests {
         );
         let mut agent = make_agent();
         agent.last_terminal_size = (120, 30);
-        let dismissible = [xai_grok_announcements::RemoteAnnouncement {
+        let dismissible = [orz_announcements::RemoteAnnouncement {
             id: Some("promo-dis".into()),
             severity: Some("promo".into()),
             message: Some("ZZPROMO".into()),
@@ -1100,12 +1100,12 @@ mod link_click_tests {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (80, 30);
-        let promo = [xai_grok_announcements::RemoteAnnouncement {
+        let promo = [orz_announcements::RemoteAnnouncement {
             id: Some("promo-pin".into()),
             severity: Some("promo".into()),
             message: Some("ZZPROMO".into()),
             dismissible: Some(false),
-            cta: Some(xai_grok_announcements::AnnouncementCta {
+            cta: Some(orz_announcements::AnnouncementCta {
                 label: Some("Go".into()),
                 url: Some("https://x.ai/promo".into()),
                 caption: None,
@@ -1135,11 +1135,11 @@ mod link_click_tests {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (80, 30);
-        let promo = [xai_grok_announcements::RemoteAnnouncement {
+        let promo = [orz_announcements::RemoteAnnouncement {
             id: Some("promo-1".into()),
             severity: Some("promo".into()),
             message: Some("ZZPROMO".into()),
-            cta: Some(xai_grok_announcements::AnnouncementCta {
+            cta: Some(orz_announcements::AnnouncementCta {
                 label: Some("Go".into()),
                 url: Some("https://x.ai/promo".into()),
                 caption: None,
@@ -2392,7 +2392,7 @@ mod link_click_tests {
             &mut HashMap::new(),
         );
         assert!(agent.ephemeral_tip.is_active());
-        let critical = [xai_grok_announcements::RemoteAnnouncement {
+        let critical = [orz_announcements::RemoteAnnouncement {
             severity: Some("critical".into()),
             message: Some("ZZCRITZZ outage".into()),
             ..Default::default()

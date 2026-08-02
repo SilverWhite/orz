@@ -16,12 +16,12 @@ use ratatui::style::{Modifier, Style};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
-use xai_grok_agent::config::{AgentDefinition, AgentScope, BuiltinAgentName};
-use xai_grok_shell::agent::config::AgentSelectionConfig;
-use xai_grok_tools::implementations::skills::discovery::extract_first_paragraph;
-use xai_grok_tools::registry::types::ToolServerConfig;
-use xai_grok_tools::types::template_renderer::TemplateRenderer;
-use xai_grok_tools::types::tool::ToolKind;
+use orz_agent::config::{AgentDefinition, AgentScope, BuiltinAgentName};
+use orz_shell::agent::config::AgentSelectionConfig;
+use orz_tools::implementations::skills::discovery::extract_first_paragraph;
+use orz_tools::registry::types::ToolServerConfig;
+use orz_tools::types::template_renderer::TemplateRenderer;
+use orz_tools::types::tool::ToolKind;
 /// Which tab is active in the agents modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentsTab {
@@ -400,7 +400,7 @@ pub fn build_agent_list(cwd: &Path, toggle: &HashMap<String, bool>) -> Vec<Agent
         .iter()
         .map(|b| b.definition().name)
         .collect();
-    let discovered = xai_grok_agent::discovery::discover(cwd);
+    let discovered = orz_agent::discovery::discover(cwd);
     fn scope_priority(scope: AgentScope) -> usize {
         match scope {
             AgentScope::Project => 3,
@@ -474,7 +474,7 @@ pub fn merge_persona_lists(bundle: &BundleState, cwd: &Path) -> Vec<PersonaDetai
     let mut list = personas_from_bundle(bundle);
     let mut names: std::collections::HashSet<String> =
         list.iter().map(|p| p.name.clone()).collect();
-    let grok_home = xai_grok_config::grok_home();
+    let grok_home = orz_config::grok_home();
     let bundled_dir = grok_home.join("bundled").join("personas");
     for persona in &mut list {
         if persona.source_path.is_none() {
@@ -564,7 +564,7 @@ fn persona_detail_from_local_file(
 }
 /// Load the `[subagents.toggle]` map from config.toml.
 pub fn load_agent_toggle() -> HashMap<String, bool> {
-    let root = match xai_grok_shell::config::load_effective_config() {
+    let root = match orz_shell::config::load_effective_config() {
         Ok(r) => r,
         Err(_) => return HashMap::new(),
     };
@@ -602,7 +602,7 @@ pub fn sanitize_config_name(name: &str) -> Result<String, String> {
 }
 fn personas_dir_for_scope(scope: ConfigFileScope, cwd: &Path) -> PathBuf {
     match scope {
-        ConfigFileScope::User => xai_grok_config::grok_home().join("personas"),
+        ConfigFileScope::User => orz_config::grok_home().join("personas"),
         ConfigFileScope::Project => cwd.join(".grok").join("personas"),
     }
 }
@@ -656,7 +656,7 @@ fn config_path_is_user_or_project(path: &Path, subdir: &str) -> bool {
     {
         return false;
     }
-    let grok_home = xai_grok_config::grok_home();
+    let grok_home = orz_config::grok_home();
     let in_user = dunce::canonicalize(grok_home.join(subdir))
         .ok()
         .is_some_and(|d| canonical.starts_with(&d));
@@ -694,9 +694,9 @@ pub fn delete_persona_file(path: &Path) -> Result<(), String> {
 }
 /// Load `[agent]` from effective config (merged shell + pager config layers).
 fn load_agent_selection_config() -> AgentSelectionConfig {
-    xai_grok_shell::config::load_effective_config()
+    orz_shell::config::load_effective_config()
         .ok()
-        .and_then(|root| xai_grok_shell::agent::config::Config::new_from_toml_cfg(&root).ok())
+        .and_then(|root| orz_shell::agent::config::Config::new_from_toml_cfg(&root).ok())
         .map(|cfg| cfg.agent)
         .unwrap_or_default()
 }
@@ -708,7 +708,7 @@ fn load_config_agent_name() -> Option<String> {
 /// `MvpAgent::resolve_agent_definition` in xai-grok-shell.
 pub fn resolve_default_agent_name(cwd: &Path, model_agent_type: Option<&str>) -> String {
     let agent_config = load_agent_selection_config();
-    xai_grok_shell::agent::mvp_agent::MvpAgent::resolve_agent_definition(
+    orz_shell::agent::mvp_agent::MvpAgent::resolve_agent_definition(
         cwd,
         None,
         &agent_config,
@@ -725,7 +725,7 @@ fn refresh_default_agent(state: &mut AgentsModalState) {
 ///
 /// Pass `Some(name)` to set, `None` to clear (remove the key).
 pub fn set_default_agent(name: Option<&str>) -> Result<(), String> {
-    let config_path = xai_grok_config::grok_home().join("config.toml");
+    let config_path = orz_config::grok_home().join("config.toml");
     if let Some(parent) = config_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -749,7 +749,7 @@ pub fn set_default_agent(name: Option<&str>) -> Result<(), String> {
 }
 /// Toggle an agent's enabled state via `[subagents.toggle]` in config.toml.
 pub fn toggle_agent(name: &str, enabled: bool) -> Result<(), String> {
-    let config_path = xai_grok_config::grok_home().join("config.toml");
+    let config_path = orz_config::grok_home().join("config.toml");
     if let Some(parent) = config_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -779,8 +779,8 @@ pub fn format_agent_detail(entry: &AgentListEntry) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!("  Model: {}", def.model));
     let mode_label = match def.prompt_mode {
-        xai_grok_agent::config::PromptMode::Extend => "extend",
-        xai_grok_agent::config::PromptMode::Full => "full",
+        orz_agent::config::PromptMode::Extend => "extend",
+        orz_agent::config::PromptMode::Full => "full",
     };
     lines.push(format!("  Prompt mode: {mode_label}"));
     let tools = &def.tool_config.tools;
@@ -2515,7 +2515,7 @@ pub fn handle_agents_mouse(state: &mut AgentsModalState, mouse: &MouseEvent) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xai_grok_shell::agent::config::DEFAULT_AGENT_TYPE;
+    use orz_shell::agent::config::DEFAULT_AGENT_TYPE;
     #[test]
     fn agents_tab_next_cycles() {
         assert_eq!(AgentsTab::Agents.next(), AgentsTab::Personas);

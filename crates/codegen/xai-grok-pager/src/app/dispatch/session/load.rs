@@ -316,10 +316,10 @@ pub(in crate::app::dispatch) fn dispatch_pick_session(
         return dispatch_load_session(app, session_id, None, true);
     }
     let local_cwd = app.cwd.to_string_lossy().to_string();
-    if xai_grok_shell::session::resolve_local_session(&session_id, &local_cwd).is_some() {
+    if orz_shell::session::resolve_local_session(&session_id, &local_cwd).is_some() {
         return dispatch_load_session(app, session_id, None, false);
     }
-    if let Some(original_cwd) = xai_grok_shell::session::resolve_local_session_any_cwd(&session_id)
+    if let Some(original_cwd) = orz_shell::session::resolve_local_session_any_cwd(&session_id)
     {
         return dispatch_load_session(
             app,
@@ -763,10 +763,10 @@ pub(in crate::app::dispatch) fn dispatch_pick_content_session(
         return dispatch_load_session(app, session_id, None, true);
     }
     let local_cwd = app.cwd.to_string_lossy().to_string();
-    if xai_grok_shell::session::resolve_local_session(&session_id, &local_cwd).is_some() {
+    if orz_shell::session::resolve_local_session(&session_id, &local_cwd).is_some() {
         return dispatch_load_session(app, session_id, None, false);
     }
-    if let Some(original_cwd) = xai_grok_shell::session::resolve_local_session_any_cwd(&session_id)
+    if let Some(original_cwd) = orz_shell::session::resolve_local_session_any_cwd(&session_id)
     {
         return dispatch_load_session(
             app,
@@ -890,7 +890,7 @@ pub(in crate::app::dispatch) fn handle_session_loaded(
     new_models: Option<acp::SessionModelState>,
     code_restored: bool,
     restore_summary: Option<String>,
-    restore_degree: Option<xai_grok_workspace::session::git::RestoreDegree>,
+    restore_degree: Option<orz_workspace::session::git::RestoreDegree>,
     running_prompt_id: Option<String>,
     scheduler_background_loops: Option<bool>,
 ) -> Vec<Effect> {
@@ -1186,7 +1186,7 @@ pub(in crate::app::dispatch) fn handle_session_restore_failed(
 }
 pub(in crate::app::dispatch) fn handle_deep_search_results(
     app: &mut AppView,
-    results: Vec<xai_grok_shell::extensions::session_search::SearchSessionHit>,
+    results: Vec<orz_shell::extensions::session_search::SearchSessionHit>,
     seq: u64,
 ) -> Vec<Effect> {
     use crate::views::modal::ActiveModal;

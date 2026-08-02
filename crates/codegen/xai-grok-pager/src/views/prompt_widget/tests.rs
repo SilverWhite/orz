@@ -3345,8 +3345,8 @@
     // ── File search Right Arrow (drill-down) ────────────────────────────
 
     /// Build a `FuzzyMatchResult` for use in test fixtures.
-    fn fuzzy_result(path: &str, is_dir: bool) -> xai_grok_workspace::file_system::FuzzyMatchResult {
-        xai_grok_workspace::file_system::FuzzyMatchResult {
+    fn fuzzy_result(path: &str, is_dir: bool) -> orz_workspace::file_system::FuzzyMatchResult {
+        orz_workspace::file_system::FuzzyMatchResult {
             path: nucleo::Utf32String::from(path),
             score: 100,
             indices: Vec::new(),

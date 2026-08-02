@@ -16,7 +16,7 @@ use crate::settings::{
     SettingKind, SettingMeta, SettingOwner, SettingValue, SettingsRegistry, StringValidator,
 };
 use crate::theme::Theme;
-use xai_grok_shell::agent::config::UiConfig;
+use orz_shell::agent::config::UiConfig;
 
 fn make_state() -> SettingsModalState {
     SettingsModalState::new(

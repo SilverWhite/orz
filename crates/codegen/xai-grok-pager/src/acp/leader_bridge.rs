@@ -17,8 +17,8 @@ use agent_client_protocol as acp;
 use xai_acp_lib::{
     AcpClientChannel, AcpGatewayReceiver, AcpGatewaySender, LineBufferedRead, acp_channels,
 };
-pub use xai_grok_shell::leader::ConnectionStatus;
-use xai_grok_shell::leader::{LeaderConnection, LeaderReconnector, ReconnectPolicy};
+pub use orz_shell::leader::ConnectionStatus;
+use orz_shell::leader::{LeaderConnection, LeaderReconnector, ReconnectPolicy};
 
 const MAX_BUF: usize = 8 * 1024 * 1024;
 

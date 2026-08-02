@@ -5,7 +5,7 @@ use super::super::task_result::{
     wrap_host_image_request_eligible,
 };
 use super::*;
-use xai_grok_shell::session::unified_list::ListScope;
+use orz_shell::session::unified_list::ListScope;
 
 fn doctor_target(app: &AppView, id: AgentId) -> crate::app::actions::DoctorFixTarget {
     let agent = &app.agents[&id];
@@ -354,9 +354,9 @@ fn stale_workflows_result_does_not_repaint_replaced_session_modal() {
 }
 
 fn foreign_resume_hint(
-    tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool,
-) -> xai_grok_workspace::foreign_sessions::RecentForeignSession {
-    xai_grok_workspace::foreign_sessions::RecentForeignSession {
+    tool: orz_workspace::foreign_sessions::ForeignSessionTool,
+) -> orz_workspace::foreign_sessions::RecentForeignSession {
+    orz_workspace::foreign_sessions::RecentForeignSession {
         tool,
         native_id: "native-session".into(),
         age: std::time::Duration::from_secs(30),
@@ -367,7 +367,7 @@ fn foreign_resume_hint(
 fn foreign_resume_results_require_launch_token_and_canonical_cwd() {
     let mut launch = test_app();
     launch.foreign_session_compat =
-        xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources {
+        orz_workspace::foreign_sessions::EnabledForeignSessionSources {
             cursor: true,
             ..Default::default()
         };
@@ -404,14 +404,14 @@ fn foreign_resume_results_require_launch_token_and_canonical_cwd() {
             canonical_cwd: canonical_cwd.clone(),
             launch_token,
             hint: Some(foreign_resume_hint(
-                xai_grok_workspace::foreign_sessions::ForeignSessionTool::Cursor,
+                orz_workspace::foreign_sessions::ForeignSessionTool::Cursor,
             )),
         }),
         &mut launch,
     );
     assert_eq!(
         launch.foreign_resume_hint().map(|hint| hint.tool),
-        Some(xai_grok_workspace::foreign_sessions::ForeignSessionTool::Cursor)
+        Some(orz_workspace::foreign_sessions::ForeignSessionTool::Cursor)
     );
 
     let mut stale = test_app();
@@ -429,7 +429,7 @@ fn foreign_resume_results_require_launch_token_and_canonical_cwd() {
             canonical_cwd: canonical_cwd.clone(),
             launch_token: launch_token + 1,
             hint: Some(foreign_resume_hint(
-                xai_grok_workspace::foreign_sessions::ForeignSessionTool::Codex,
+                orz_workspace::foreign_sessions::ForeignSessionTool::Codex,
             )),
         }),
         &mut stale,
@@ -452,7 +452,7 @@ fn foreign_resume_results_require_launch_token_and_canonical_cwd() {
 fn foreign_resume_result_rejects_startup_conflict_before_completion() {
     let mut app = test_app();
     app.foreign_session_compat =
-        xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources {
+        orz_workspace::foreign_sessions::EnabledForeignSessionSources {
             cursor: true,
             ..Default::default()
         };
@@ -476,7 +476,7 @@ fn foreign_resume_result_rejects_startup_conflict_before_completion() {
             canonical_cwd,
             launch_token,
             hint: Some(foreign_resume_hint(
-                xai_grok_workspace::foreign_sessions::ForeignSessionTool::Cursor,
+                orz_workspace::foreign_sessions::ForeignSessionTool::Cursor,
             )),
         }),
         &mut app,
@@ -1078,7 +1078,7 @@ fn switch_model_complete_skips_message_and_persist_when_unchanged() {
 
 #[test]
 fn switch_model_complete_persists_resolved_effort_from_catalog_meta() {
-    use xai_grok_shell::sampling::types::ReasoningEffort;
+    use orz_shell::sampling::types::ReasoningEffort;
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     let model_id = acp::ModelId::new(std::sync::Arc::from("byok-model-47"));
@@ -1145,7 +1145,7 @@ fn switch_model_complete_persists_resolved_effort_from_catalog_meta() {
 
 #[test]
 fn switch_to_non_reasoning_model_clears_persisted_effort() {
-    use xai_grok_shell::sampling::types::ReasoningEffort;
+    use orz_shell::sampling::types::ReasoningEffort;
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     let model_id = acp::ModelId::new(std::sync::Arc::from("grok-4.5"));
@@ -1252,7 +1252,7 @@ fn switch_model_incompatible_agent_shows_question_modal() {
         .model_switch_pending = true;
     let initial_scrollback = app.agents[&id].scrollback.len();
 
-    let err = xai_grok_shell::agent::config::ModelSwitchIncompatibleAgentError {
+    let err = orz_shell::agent::config::ModelSwitchIncompatibleAgentError {
         code: "MODEL_SWITCH_INCOMPATIBLE_AGENT".into(),
         active_agent_type: "grok-build".into(),
         required_agent_type: "cursor".into(),
@@ -1315,7 +1315,7 @@ fn incompatible_agent_rollback_restores_previous_model() {
 
     assert_eq!(agent.session.models.current, Some(new_model.clone()));
 
-    let err = xai_grok_shell::agent::config::ModelSwitchIncompatibleAgentError {
+    let err = orz_shell::agent::config::ModelSwitchIncompatibleAgentError {
         code: "MODEL_SWITCH_INCOMPATIBLE_AGENT".into(),
         active_agent_type: "grok-build".into(),
         required_agent_type: "cursor".into(),
@@ -1361,7 +1361,7 @@ fn incompatible_agent_closes_active_modal() {
     });
     agent.session.model_switch_pending = true;
 
-    let err = xai_grok_shell::agent::config::ModelSwitchIncompatibleAgentError {
+    let err = orz_shell::agent::config::ModelSwitchIncompatibleAgentError {
         code: "MODEL_SWITCH_INCOMPATIBLE_AGENT".into(),
         active_agent_type: "grok-build".into(),
         required_agent_type: "cursor".into(),
@@ -1753,7 +1753,7 @@ fn delete_both_session_clears_modal_and_welcome_content_hits() {
     let mut foreign = make_picker_entry("shared", "/r");
     foreign.source = "codex".into();
     open_session_picker_with(&mut app, vec![both.clone(), foreign.clone()]);
-    let hit = xai_grok_shell::extensions::session_search::SearchSessionHit {
+    let hit = orz_shell::extensions::session_search::SearchSessionHit {
         session_id: "shared".into(),
         summary: "shared".into(),
         cwd: "/r".into(),
@@ -1855,7 +1855,7 @@ fn delete_remote_session_clears_modal_and_welcome_content_hits() {
     let mut remote = make_picker_entry("remote-only", "/r");
     remote.source = "remote".into();
     open_session_picker_with(&mut app, vec![remote.clone()]);
-    let hit = xai_grok_shell::extensions::session_search::SearchSessionHit {
+    let hit = orz_shell::extensions::session_search::SearchSessionHit {
         session_id: "remote-only".into(),
         summary: "remote-only".into(),
         cwd: "/r".into(),
@@ -1989,7 +1989,7 @@ fn rename_session_failed_keeps_local_display_name_and_pushes_system_block() {
 fn gate_refreshed_emits_check_subscription_on_gate_lift() {
     let mut app = test_app();
     // User starts gated (no subscription).
-    app.gate = Some(xai_grok_shell::auth::GateInfo {
+    app.gate = Some(orz_shell::auth::GateInfo {
         message: "SuperGrok subscription required".into(),
         url: Some("https://grok.com/supergrok".into()),
         label: Some("Subscribe".into()),
@@ -1997,7 +1997,7 @@ fn gate_refreshed_emits_check_subscription_on_gate_lift() {
     assert!(!app.has_access());
 
     // Server-side settings now show no gate (user purchased subscription).
-    let settings = xai_grok_shell::util::config::RemoteSettings::default();
+    let settings = orz_shell::util::config::RemoteSettings::default();
     let effects = dispatch_task_result(
         TaskResult::GateRefreshed {
             settings: Some(settings),
@@ -2023,13 +2023,13 @@ fn gate_refreshed_emits_check_subscription_on_gate_lift() {
 #[test]
 fn gate_refreshed_no_effect_when_still_gated() {
     let mut app = test_app();
-    app.gate = Some(xai_grok_shell::auth::GateInfo {
+    app.gate = Some(orz_shell::auth::GateInfo {
         message: "Subscribe".into(),
         url: None,
         label: None,
     });
 
-    let settings = xai_grok_shell::util::config::RemoteSettings {
+    let settings = orz_shell::util::config::RemoteSettings {
         gate_message: Some("Subscribe".into()),
         ..Default::default()
     };
@@ -2050,7 +2050,7 @@ fn gate_refreshed_no_effect_when_already_unblocked() {
     let mut app = test_app();
     assert!(app.has_access()); // no gate
 
-    let settings = xai_grok_shell::util::config::RemoteSettings::default();
+    let settings = orz_shell::util::config::RemoteSettings::default();
     let effects = dispatch_task_result(
         TaskResult::GateRefreshed {
             settings: Some(settings),
@@ -2070,7 +2070,7 @@ fn gate_refreshed_newly_blocked_defers_gate_for_verification() {
     let mut app = test_app();
     assert!(app.has_access()); // ungated
 
-    let settings = xai_grok_shell::util::config::RemoteSettings {
+    let settings = orz_shell::util::config::RemoteSettings {
         gate_message: Some("Subscribe".into()),
         ..Default::default()
     };
@@ -2102,8 +2102,8 @@ fn gate_refreshed_newly_blocked_defers_gate_for_verification() {
 
 // ── Stale-gate verification resolution ──────────────────────────
 
-fn test_gate() -> xai_grok_shell::auth::GateInfo {
-    xai_grok_shell::auth::GateInfo {
+fn test_gate() -> orz_shell::auth::GateInfo {
+    orz_shell::auth::GateInfo {
         message: "Subscribe".into(),
         url: None,
         label: None,
@@ -2118,7 +2118,7 @@ fn verify_check_with_meta_resolves_pending_gate() {
     let _effs = app.impose_gate(test_gate());
     assert!(app.has_access());
 
-    let meta = serde_json::to_value(xai_grok_shell::auth::AuthMeta::default()).unwrap();
+    let meta = serde_json::to_value(orz_shell::auth::AuthMeta::default()).unwrap();
     dispatch_task_result(
         TaskResult::CheckSubscriptionComplete {
             verify: Some(app.gate_verify_gen),
@@ -2138,7 +2138,7 @@ fn verify_check_with_gated_meta_shows_gate() {
     let mut app = test_app();
     let _effs = app.impose_gate(test_gate());
 
-    let meta = serde_json::to_value(xai_grok_shell::auth::AuthMeta {
+    let meta = serde_json::to_value(orz_shell::auth::AuthMeta {
         gate: Some(test_gate()),
         ..Default::default()
     })
@@ -2286,7 +2286,7 @@ fn gate_verify_timeout_noop_when_already_resolved() {
     let _effs = app.impose_gate(test_gate());
     let generation = app.gate_verify_gen;
     // Live check resolved first (access confirmed).
-    let meta = serde_json::to_value(xai_grok_shell::auth::AuthMeta::default()).unwrap();
+    let meta = serde_json::to_value(orz_shell::auth::AuthMeta::default()).unwrap();
     dispatch_task_result(
         TaskResult::CheckSubscriptionComplete {
             verify: None,
@@ -2310,7 +2310,7 @@ fn gate_verify_timeout_stale_generation_is_ignored() {
     // First deferral resolves (access confirmed) ...
     let _effs = app.impose_gate(test_gate());
     let stale_gen = app.gate_verify_gen;
-    let meta = serde_json::to_value(xai_grok_shell::auth::AuthMeta::default()).unwrap();
+    let meta = serde_json::to_value(orz_shell::auth::AuthMeta::default()).unwrap();
     dispatch_task_result(
         TaskResult::CheckSubscriptionComplete {
             verify: None,
@@ -2350,7 +2350,7 @@ fn verified_gate_via_check_complete_starts_paywall_chain() {
     let mut app = test_app();
     let _effs = app.impose_gate(test_gate());
 
-    let meta = serde_json::to_value(xai_grok_shell::auth::AuthMeta {
+    let meta = serde_json::to_value(orz_shell::auth::AuthMeta {
         gate: Some(test_gate()),
         ..Default::default()
     })
@@ -2377,7 +2377,7 @@ fn verified_gate_via_check_complete_starts_paywall_chain() {
 
     // Steady-state paywall-poller responses (already gated) must NOT fan
     // out extra timers.
-    let meta = serde_json::to_value(xai_grok_shell::auth::AuthMeta {
+    let meta = serde_json::to_value(orz_shell::auth::AuthMeta {
         gate: Some(test_gate()),
         ..Default::default()
     })
@@ -2406,7 +2406,7 @@ fn gate_refreshed_without_gate_clears_pending_verification() {
     let _effs = app.impose_gate(test_gate());
     let generation = app.gate_verify_gen;
 
-    let settings = xai_grok_shell::util::config::RemoteSettings::default();
+    let settings = orz_shell::util::config::RemoteSettings::default();
     let effects = dispatch_task_result(
         TaskResult::GateRefreshed {
             settings: Some(settings),

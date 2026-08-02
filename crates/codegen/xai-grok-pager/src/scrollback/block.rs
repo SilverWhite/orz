@@ -769,7 +769,7 @@ impl RenderBlock {
     /// rebuilds its styled output on every redraw, so theme switches take
     /// effect without re-running `/context`.
     pub fn context_info(
-        snapshot: xai_grok_shell::session::ContextInfo,
+        snapshot: orz_shell::session::ContextInfo,
         model: impl Into<String>,
     ) -> Self {
         RenderBlock::ContextInfo(ContextInfoBlock::new(snapshot, model))
@@ -1197,7 +1197,7 @@ impl RenderBlock {
     /// reach screen coordinates.
     pub fn with_hyperlinks<R>(
         &self,
-        f: impl FnOnce(&[xai_grok_markdown::HyperlinkTarget]) -> R,
+        f: impl FnOnce(&[orz_markdown::HyperlinkTarget]) -> R,
     ) -> R {
         match self {
             RenderBlock::AgentMessage(b) => b.content().with_hyperlinks(f),
@@ -1470,7 +1470,7 @@ mod searchable_text_tests {
     use crate::scrollback::blocks::tool::memory_search::{MemoryResult, MemorySearchToolCallBlock};
     use crate::scrollback::blocks::tool::{LifecycleEventBlock, WebSearchToolCallBlock};
     use std::time::Duration;
-    use xai_grok_shell::session::ContextInfo;
+    use orz_shell::session::ContextInfo;
 
     #[test]
     fn system_indexes_message_text() {

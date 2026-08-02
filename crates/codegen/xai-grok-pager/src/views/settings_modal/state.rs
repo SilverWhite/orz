@@ -13,7 +13,7 @@ use crate::settings::{
 };
 use crate::views::modal_window::ModalWindowState;
 
-use xai_grok_shell::agent::config::UiConfig;
+use orz_shell::agent::config::UiConfig;
 
 // ---------------------------------------------------------------------------
 // Public constants

@@ -15,7 +15,7 @@ use xai_acp_lib::{
     AcpAgentChannel, AcpClientChannel, AcpClientTx, AcpGatewayReceiver, AcpGatewaySender,
     acp_channels,
 };
-use xai_grok_shell::{
+use orz_shell::{
     agent::{
         MvpAgent, activity::SESSION_FLUSH_GRACE, config::Config as AgentConfig,
         models::RefreshStrategy,
@@ -173,7 +173,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 pub async fn spawn_grok_shell(
     agent_config: AgentConfig,
     cancel: &CancellationToken,
-    memory_config: Option<xai_grok_shell::config::MemoryConfig>,
+    memory_config: Option<orz_shell::config::MemoryConfig>,
 ) -> Result<SpawnedAgent> {
     let auth_manager = std::sync::Arc::new(AuthManager::new(
         &grok_home(),
@@ -190,17 +190,17 @@ pub async fn spawn_grok_shell(
 
     // Both embedded-agent paths (`--no-leader` and leader fallback) converge
     // here, so the agent's external-OTEL gate is applied exactly once, before boot.
-    xai_grok_shell::agent::app::apply_otel_config(&auth_manager, &agent_config.grok_com_config);
+    orz_shell::agent::app::apply_otel_config(&auth_manager, &agent_config.grok_com_config);
 
     // Best-effort refresh of managed policy before bootstrap reads it (repairs a wrong-identity/missing
     // cache). Never errors — the OS-protected system/MDM layers still apply, and every network step
     // inside is bounded (SESSION_START_AUTH_DEADLINE / SyncBudget::SessionStart).
-    xai_grok_shell::managed_config::ensure_managed_policy_present(&auth_manager).await;
+    orz_shell::managed_config::ensure_managed_policy_present(&auth_manager).await;
 
     // Run the full bootstrap sequence: config resolution, process-level
     // singletons, and model catalog construction.
     let (agent_config, models_manager) =
-        xai_grok_shell::agent::init::bootstrap(&agent_config, &auth_manager, None)
+        orz_shell::agent::init::bootstrap(&agent_config, &auth_manager, None)
             .map_err(|e| anyhow::anyhow!(e))?;
     models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -272,8 +272,8 @@ fn spawn_agent_thread_direct(
                 let _skills_watcher = {
                     let cwd = std::env::current_dir().unwrap_or_default();
                     let workspace_user_dir =
-                        xai_grok_agent::prompt::workspace_user::optional_workspace_user_dir();
-                    xai_grok_shell::config::watcher::SkillsFileWatcher::start(
+                        orz_agent::prompt::workspace_user::optional_workspace_user_dir();
+                    orz_shell::config::watcher::SkillsFileWatcher::start(
                         Some(cwd.as_path()),
                         workspace_user_dir.as_deref(),
                         &skills_paths,
@@ -284,7 +284,7 @@ fn spawn_agent_thread_direct(
                             while let Some(change) = skills_rx.recv().await {
                                 let created_discovery_dir = watcher.refresh_new_discovery_dirs();
                                 match change {
-                                    xai_grok_shell::config::watcher::DiscoveryChange::Skills => {
+                                    orz_shell::config::watcher::DiscoveryChange::Skills => {
                                         tracing::info!(
                                             "skill directory changed on disk; reloading skills for all sessions"
                                         );
@@ -293,7 +293,7 @@ fn spawn_agent_thread_direct(
                                             agent.advertise_commands_all_sessions();
                                         }
                                     }
-                                    xai_grok_shell::config::watcher::DiscoveryChange::Workflows => {
+                                    orz_shell::config::watcher::DiscoveryChange::Workflows => {
                                         tracing::info!(
                                             "workflow directory changed on disk; re-advertising commands for all sessions"
                                         );

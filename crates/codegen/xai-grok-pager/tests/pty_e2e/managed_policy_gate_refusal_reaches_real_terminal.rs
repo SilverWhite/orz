@@ -7,7 +7,7 @@ use super::common::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "PTY e2e; run the owning pty_e2e_* Cargo test with --ignored (see Cargo.toml)"]
 async fn managed_policy_gate_refusal_reaches_real_terminal() {
-    let sandbox = xai_grok_test_support::TestSandbox::new();
+    let sandbox = orz_test_support::TestSandbox::new();
     let home_path = sandbox.grok_home();
     std::fs::write(
         home_path.join("config.toml"),

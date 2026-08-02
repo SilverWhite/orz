@@ -98,7 +98,7 @@ mod tests {
     use crate::slash::commands::effort_levels::EFFORT_LEVELS;
     use agent_client_protocol as acp;
     use std::sync::Arc;
-    use xai_grok_shell::sampling::types::ReasoningEffort;
+    use orz_shell::sampling::types::ReasoningEffort;
 
     fn model_with_reasoning(id: &str, name: &str) -> (acp::ModelId, acp::ModelInfo) {
         let id = acp::ModelId::new(Arc::from(id));

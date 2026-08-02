@@ -10,13 +10,13 @@ use crate::app::app_view::AppView;
 /// rendering shows the modal.
 pub(super) fn dispatch_import_claude(app: &mut AppView) -> Vec<Effect> {
     let cwd = app.cwd.clone();
-    let plan = xai_grok_shell::claude_import::scan_importable_settings(&cwd);
+    let plan = orz_shell::claude_import::scan_importable_settings(&cwd);
 
     if plan.is_empty() {
-        xai_grok_shell::claude_import_state::mark_dismissed(&cwd);
+        orz_shell::claude_import_state::mark_dismissed(&cwd);
         // Always write the [claude_compat] imported = true marker so the user's
         // opt-in is recorded even on an empty plan.
-        if let Err(e) = xai_grok_shell::claude_import::mark_claude_imported() {
+        if let Err(e) = orz_shell::claude_import::mark_claude_imported() {
             tracing::warn!(error = %e, "Failed to write Claude import marker");
         }
         app.has_claude_import = false;
@@ -52,7 +52,7 @@ pub(super) fn dispatch_import_claude_confirm(app: &mut AppView) -> Vec<Effect> {
     };
 
     if selected_count > 0 {
-        match xai_grok_shell::claude_import::apply_import(&filtered, &cwd) {
+        match orz_shell::claude_import::apply_import(&filtered, &cwd) {
             Ok(result) => {
                 summary.push_str(&format!(
                     "\nImported {} of {} setting(s).",
@@ -77,8 +77,8 @@ pub(super) fn dispatch_import_claude_confirm(app: &mut AppView) -> Vec<Effect> {
     // Mark current Claude state as seen so the startup warning won't re-fire
     // for the same content. Skipped items remain importable via re-running
     // the slash command.
-    xai_grok_shell::claude_import_state::mark_imported(&cwd);
-    if let Err(e) = xai_grok_shell::claude_import::mark_claude_imported() {
+    orz_shell::claude_import_state::mark_imported(&cwd);
+    if let Err(e) = orz_shell::claude_import::mark_claude_imported() {
         tracing::warn!(error = %e, "Failed to write Claude import marker");
     }
     app.has_claude_import = false;
@@ -105,12 +105,12 @@ pub(super) fn dispatch_dismiss_claude_import(app: &mut AppView) -> Vec<Effect> {
     let cwd = app.cwd.clone();
     // Record the current `.claude/` content hash so the welcome menu row
     // doesn't reappear next session unless the content actually changes.
-    xai_grok_shell::claude_import_state::mark_dismissed(&cwd);
+    orz_shell::claude_import_state::mark_dismissed(&cwd);
     // Also set the [claude_compat] imported = true marker so runtime
     // fallback paths (perms, env, MCP servers, hooks, plugins) stop
     // reading .claude/ and ~/.claude.json. Dismiss = "I've decided I want
     // nothing from .claude/", so don't keep silently reading it at runtime.
-    if let Err(e) = xai_grok_shell::claude_import::mark_claude_imported() {
+    if let Err(e) = orz_shell::claude_import::mark_claude_imported() {
         tracing::warn!(error = %e, "Failed to write Claude import marker on dismiss");
     }
     app.has_claude_import = false;

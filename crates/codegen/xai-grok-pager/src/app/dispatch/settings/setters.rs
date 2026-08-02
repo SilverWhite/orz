@@ -248,7 +248,7 @@ pub(super) fn set_voice_stt_language_inner(app: &mut AppView, canonical: &str) {
     // the pipeline's channel-close is not misreported as "pipeline ended".
     if language_changed && let Some(tx) = app.voice_cmd_tx.take() {
         app.voice_reset();
-        let _ = tx.try_send(xai_grok_voice::VoiceCommand::Shutdown);
+        let _ = tx.try_send(orz_voice::VoiceCommand::Shutdown);
     }
 }
 
@@ -268,7 +268,7 @@ pub(in crate::app::dispatch) fn set_voice_stt_language(
     }
     set_voice_stt_language_inner(app, canonical);
     refresh_open_settings_modals(app);
-    let effective = xai_grok_voice::language_for_api(canonical);
+    let effective = orz_voice::language_for_api(canonical);
     tracing::info!(
         target: "settings",
         key = "voice_stt_language",
@@ -276,10 +276,10 @@ pub(in crate::app::dispatch) fn set_voice_stt_language(
         effective,
         "setting changed"
     );
-    let toast = if canonical == xai_grok_voice::STT_LANGUAGE_AUTO {
+    let toast = if canonical == orz_voice::STT_LANGUAGE_AUTO {
         format!("\u{2713} Voice language: System ({effective})")
     } else {
-        let name = xai_grok_voice::stt_language_by_code(canonical).map_or(canonical, |l| l.name);
+        let name = orz_voice::stt_language_by_code(canonical).map_or(canonical, |l| l.name);
         format!("\u{2713} Voice language: {name}")
     };
     app.show_toast(&toast);
@@ -376,7 +376,7 @@ pub(in crate::app::dispatch) fn set_ask_user_question_timeout_enabled(
     app: &mut AppView,
     new: bool,
 ) -> Vec<Effect> {
-    use xai_grok_tools::implementations::grok_build::ask_user_question;
+    use orz_tools::implementations::grok_build::ask_user_question;
     let prev_state = app.ask_user_question_timeout_enabled;
     let prev_effective =
         prev_state.unwrap_or(ask_user_question::DEFAULT_ASK_USER_QUESTION_TIMEOUT_ENABLED);
@@ -1055,11 +1055,11 @@ pub(in crate::app::dispatch) fn set_simple_mode(app: &mut AppView, new: bool) ->
 /// fan the resolved gates out to `app` + every agent prompt.
 pub(super) fn set_contextual_hint_inner(
     app: &mut AppView,
-    write: fn(&mut xai_grok_shell::agent::config::ContextualHints, Option<bool>),
+    write: fn(&mut orz_shell::agent::config::ContextualHints, Option<bool>),
     new: bool,
 ) {
     write(&mut app.current_ui.contextual_hints, Some(new));
-    let resolved = xai_grok_shell::util::config::resolve_contextual_hints(
+    let resolved = orz_shell::util::config::resolve_contextual_hints(
         &app.current_ui.contextual_hints,
         app.remote_contextual_hints.as_ref(),
     );
@@ -1073,7 +1073,7 @@ fn set_contextual_hint(
     key: crate::settings::SettingKey,
     label: &str,
     prev: Option<bool>,
-    write: fn(&mut xai_grok_shell::agent::config::ContextualHints, Option<bool>),
+    write: fn(&mut orz_shell::agent::config::ContextualHints, Option<bool>),
     new: bool,
 ) -> Vec<Effect> {
     // Skip when the stored user-explicit value already matches (no-op toggle).
@@ -1706,7 +1706,7 @@ pub(in crate::app::dispatch) fn set_default_model(
     // Chat (`--chat` / GROK_CHAT_MODE) catalogs use opaque `/rest/modes`
     // slugs that must not become the global Build `default_model`.
     let mut effects: Vec<Effect> = Vec::new();
-    if !xai_grok_shell::agent::chat_modes::process_chat_mode_enabled() {
+    if !orz_shell::agent::chat_modes::process_chat_mode_enabled() {
         let new_id_str = new_id.0.to_string();
         let prev_id_str = prev_id
             .as_ref()
@@ -1891,9 +1891,9 @@ pub(in crate::app::dispatch) fn set_fork_secondary_model(
 
 /// Outer dispatcher for `Action::ClearForkSecondaryModel`. Resets
 /// the persisted override to the built-in baseline
-/// (`xai_grok_shell::models::default_model()`).
+/// (`orz_shell::models::default_model()`).
 pub(in crate::app::dispatch) fn clear_fork_secondary_model(app: &mut AppView) -> Vec<Effect> {
-    let baseline = xai_grok_shell::models::default_model().to_string();
+    let baseline = orz_shell::models::default_model().to_string();
     let prev_id_str = app.current_ui.fork_secondary_model.clone();
     if prev_id_str == baseline {
         // Idempotent: already at baseline.
@@ -1988,7 +1988,7 @@ pub(in crate::app::dispatch) fn set_max_thoughts_width(app: &mut AppView, new: i
 /// (`show_tips`, `auto_update`, ask_user_question timeout).
 /// Matches the consumer's `.unwrap_or(...)` fallback.
 pub(super) fn pr13_effective_default(key: &str) -> Option<bool> {
-    use xai_grok_tools::implementations::grok_build::ask_user_question;
+    use orz_tools::implementations::grok_build::ask_user_question;
     match key {
         "show_tips" => Some(true),
         "auto_update" => Some(true),

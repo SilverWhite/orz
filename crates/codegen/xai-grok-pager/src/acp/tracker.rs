@@ -25,9 +25,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::debug;
-use xai_grok_tools::types::output::{BashOutput, ToolOutput};
-use xai_grok_tools::types::output::{ReadFileOutput, SearchToolOutput, WebFetchOutput};
-use xai_grok_tools::util::strip_redundant_session_cd;
+use orz_tools::types::output::{BashOutput, ToolOutput};
+use orz_tools::types::output::{ReadFileOutput, SearchToolOutput, WebFetchOutput};
+use orz_tools::util::strip_redundant_session_cd;
 /// Convert a UTC millisecond timestamp to local time.
 fn utc_ms_to_local(ms: i64) -> DateTime<Local> {
     chrono::Utc
@@ -1353,7 +1353,7 @@ impl AcpUpdateTracker {
             crate::scrollback::blocks::UserPromptBlock::with_skill_tokens(text, skill_token_ranges)
         } else {
             let skill_display =
-                xai_grok_tools::implementations::skills::skill::extract_skill_display_text(&text);
+                orz_tools::implementations::skills::skill::extract_skill_display_text(&text);
             if let Some(display_text) = skill_display {
                 self.skip_next_skill_body = true;
                 crate::scrollback::blocks::UserPromptBlock::skill(display_text)
@@ -1462,7 +1462,7 @@ fn user_message_hidden_from_scrollback(
         return true;
     }
     if let Some(pid) = meta.prompt_id.as_deref()
-        && xai_grok_shell::session::PromptOrigin::from_prompt_id(pid)
+        && orz_shell::session::PromptOrigin::from_prompt_id(pid)
             .hide_user_echo_from_scrollback()
     {
         return true;
@@ -2317,7 +2317,7 @@ fn extract_raw_field(tc: &acp::ToolCall, field: &str) -> Option<String> {
 }
 /// Extract a short, user-friendly error label from a failed Edit tool call.
 fn extract_edit_error(tc: &acp::ToolCall) -> String {
-    use xai_grok_tools::types::output::SearchReplaceOutput;
+    use orz_tools::types::output::SearchReplaceOutput;
     if let Some(ref raw) = tc.raw_output
         && let Ok(ToolOutput::SearchReplace(sr)) = serde_json::from_value::<ToolOutput>(raw.clone())
     {
@@ -2433,7 +2433,7 @@ fn parse_file_paths_from_stdout(stdout: &str) -> Vec<String> {
 fn extract_listdir_content(raw: &Option<serde_json::Value>) -> Option<String> {
     let val = raw.as_ref()?;
     match serde_json::from_value::<ToolOutput>(val.clone()) {
-        Ok(ToolOutput::ListDir(xai_grok_tools::types::output::ListDirOutput::Content(c))) => {
+        Ok(ToolOutput::ListDir(orz_tools::types::output::ListDirOutput::Content(c))) => {
             Some(c.content)
         }
         _ => None,
@@ -2629,7 +2629,7 @@ fn extract_use_tool_output(raw: &Option<serde_json::Value>) -> Option<String> {
     if let Ok(output) = serde_json::from_value::<ToolOutput>(val.clone()) {
         let text = match output {
             ToolOutput::MCP(mcp) => {
-                use xai_grok_tools::types::output::MCPOutputDetails;
+                use orz_tools::types::output::MCPOutputDetails;
                 match mcp.output() {
                     MCPOutputDetails::OkayOutput(s) | MCPOutputDetails::Error(s) => s.clone(),
                 }
@@ -3450,7 +3450,7 @@ mod tests {
     }
     /// Helper: create a ToolCallUpdate with InProgress status and BashOutput raw_output.
     fn tool_update_in_progress(id: &str, output_bytes: &[u8]) -> acp::SessionUpdate {
-        use xai_grok_tools::types::output::{BashOutput, ToolOutput};
+        use orz_tools::types::output::{BashOutput, ToolOutput};
         let bash = BashOutput {
             output: output_bytes.to_vec(),
             output_for_prompt: String::new(),
@@ -3479,7 +3479,7 @@ mod tests {
         output_bytes: &[u8],
         exit_code: i32,
     ) -> acp::SessionUpdate {
-        use xai_grok_tools::types::output::{BashOutput, ToolOutput};
+        use orz_tools::types::output::{BashOutput, ToolOutput};
         let status = if exit_code == 0 {
             acp::ToolCallStatus::Completed
         } else {
@@ -3694,7 +3694,7 @@ mod tests {
     /// serde_json::from_value::<ToolOutput>(...).
     #[test]
     fn tool_output_bash_serde_roundtrip() {
-        use xai_grok_tools::types::output::{BashOutput, ToolOutput};
+        use orz_tools::types::output::{BashOutput, ToolOutput};
         let bash = BashOutput {
             output: b"hello world\n".to_vec(),
             output_for_prompt: String::new(),
@@ -3735,7 +3735,7 @@ mod tests {
     #[test]
     fn production_execute_sequence() {
         use serde_json::json;
-        use xai_grok_tools::types::output::{BashOutput, ToolOutput};
+        use orz_tools::types::output::{BashOutput, ToolOutput};
         let mut sb = ScrollbackState::new();
         let mut tracker = AcpUpdateTracker::new();
         let tc_id = "call_abc123";
@@ -3929,7 +3929,7 @@ mod tests {
     /// block rendered as "Other" with no search results.
     #[test]
     fn test_search_tool_call_flow() {
-        use xai_grok_tools::types::output::{GrepFileMatch, GrepLineMatch, GrepSearchOutput};
+        use orz_tools::types::output::{GrepFileMatch, GrepLineMatch, GrepSearchOutput};
         let mut tracker = AcpUpdateTracker::new();
         let mut scrollback = ScrollbackState::new();
         let tc_id: Arc<str> = Arc::from("toolu_search_001");
@@ -5845,7 +5845,7 @@ mod tests {
     }
     /// Helper: create an InProgress ToolCallUpdate with raw_input containing is_background.
     fn tool_update_in_progress_bg(id: &str, output_bytes: &[u8]) -> acp::SessionUpdate {
-        use xai_grok_tools::types::output::{BashOutput, ToolOutput};
+        use orz_tools::types::output::{BashOutput, ToolOutput};
         let bash = BashOutput {
             output: output_bytes.to_vec(),
             output_for_prompt: String::new(),
@@ -6043,7 +6043,7 @@ mod tests {
     /// arm), not drop it when the kind was never refined to Execute.
     #[test]
     fn completed_other_function_name_preserves_bash_output() {
-        use xai_grok_tools::types::output::{BashOutput, ToolOutput};
+        use orz_tools::types::output::{BashOutput, ToolOutput};
         let bash = BashOutput {
             output: b"hello from bg\n".to_vec(),
             output_for_prompt: String::new(),
@@ -6613,13 +6613,13 @@ mod tests {
         let cases: &[(&str, ToolOutput)] = &[
             (
                 "ImageToVideo",
-                ToolOutput::ImageToVideo(xai_grok_tools::types::output::MediaGenOutput::new(
+                ToolOutput::ImageToVideo(orz_tools::types::output::MediaGenOutput::new(
                     video_path.clone(),
                 )),
             ),
             (
                 "ReferenceToVideo",
-                ToolOutput::ReferenceToVideo(xai_grok_tools::types::output::MediaGenOutput::new(
+                ToolOutput::ReferenceToVideo(orz_tools::types::output::MediaGenOutput::new(
                     video_path.clone(),
                 )),
             ),
@@ -6653,7 +6653,7 @@ mod tests {
     #[test]
     fn media_gen_ref_skips_uploaded_only_video() {
         let output =
-            ToolOutput::ImageToVideo(xai_grok_tools::types::output::MediaGenOutput::uploaded(
+            ToolOutput::ImageToVideo(orz_tools::types::output::MediaGenOutput::uploaded(
                 "https://bucket.example/videos/x.mp4".into(),
             ));
         let tc = acp::ToolCall::new(
@@ -6679,7 +6679,7 @@ mod tests {
     fn tier_restricted_media_shows_upsell_text_not_error() {
         let upsell = "Image generation is a SuperGrok feature. Upgrade at \
              https://grok.com/supergrok?referrer=grok-build";
-        let output = ToolOutput::Text(xai_grok_tools::types::output::TextOutput::from(upsell));
+        let output = ToolOutput::Text(orz_tools::types::output::TextOutput::from(upsell));
         let tc = acp::ToolCall::new(
             acp::ToolCallId::new(Arc::from("tier-restricted-img")),
             "image_gen",

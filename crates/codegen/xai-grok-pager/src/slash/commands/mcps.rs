@@ -19,7 +19,7 @@ impl SlashCommand for McpsCommand {
     fn run(&self, _ctx: &mut CommandExecCtx, _args: &str) -> CommandResult {
         CommandResult::Action(Action::OpenExtensionsModal {
             tab: crate::views::extensions_modal::ExtensionsTab::McpServers,
-            trigger: xai_grok_telemetry::events::ExtensionsModalTrigger::SlashCommand,
+            trigger: orz_telemetry::events::ExtensionsModalTrigger::SlashCommand,
         })
     }
 }

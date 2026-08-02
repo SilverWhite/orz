@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::{DbStats, GcReport, RebuildReport};
 use xai_fast_worktree::WorktreeRecord;
-use xai_grok_shell::session::worktree::META_KEY_LABEL;
+use orz_shell::session::worktree::META_KEY_LABEL;
 
 /// Extract the label from a worktree record's metadata JSON.
 fn extract_label(rec: &WorktreeRecord) -> &str {

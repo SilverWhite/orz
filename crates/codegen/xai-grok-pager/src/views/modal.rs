@@ -218,7 +218,7 @@ pub enum ActiveModal {
         /// Shared modal window chrome state.
         window: ModalWindowState,
         /// Content-based (deep search) results from ACP session search.
-        content_results: Option<Vec<xai_grok_shell::extensions::session_search::SearchSessionHit>>,
+        content_results: Option<Vec<orz_shell::extensions::session_search::SearchSessionHit>>,
         /// Whether a deep search is currently in flight.
         content_loading: bool,
         /// Monotonically increasing sequence number for deep search requests.

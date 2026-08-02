@@ -59,7 +59,7 @@ fn probe_uncached() -> DisplayRefreshProbeResult {
 }
 
 fn probe_inner() -> (Option<u32>, DisplayRefreshSource, &'static str) {
-    let is_ssh = xai_grok_shared::clipboard::is_remote_session();
+    let is_ssh = orz_shared::clipboard::is_remote_session();
     let wsl = is_wsl();
     let os = HostOs::current();
     let display = DisplayServer::current();

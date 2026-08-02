@@ -651,7 +651,7 @@ fn tmux_stale_plan_and_idempotence_reuse_managed_writer_safety() {
     assert!(matches!(
         apply_fix(plan),
         Err(FixError::TmuxManaged(
-            xai_grok_config::managed_text::ManagedConfigError::StalePlan(_)
+            orz_config::managed_text::ManagedConfigError::StalePlan(_)
         ))
     ));
 
@@ -683,7 +683,7 @@ fn tmux_stale_plan_and_idempotence_reuse_managed_writer_safety() {
     assert!(matches!(
         apply_fix(stale),
         Err(FixError::TmuxManaged(
-            xai_grok_config::managed_text::ManagedConfigError::StalePlan(_)
+            orz_config::managed_text::ManagedConfigError::StalePlan(_)
         ))
     ));
 }
@@ -857,7 +857,7 @@ fn conflict_scan_uses_the_exact_validated_source_snapshot() {
     assert!(matches!(
         apply_fix(plan),
         Err(FixError::Managed(
-            xai_grok_config::managed_text::ManagedConfigError::StalePlan(_)
+            orz_config::managed_text::ManagedConfigError::StalePlan(_)
         ))
     ));
     assert_eq!(
@@ -874,7 +874,7 @@ fn non_utf8_source_fails_closed_before_conflict_policy() {
     assert!(matches!(
         plan_fix(request(temp.path(), "/bin/zsh"), &report(), &terminal()),
         Err(FixError::Managed(
-            xai_grok_config::managed_text::ManagedConfigError::UnsafePath { .. }
+            orz_config::managed_text::ManagedConfigError::UnsafePath { .. }
         ))
     ));
 }
@@ -962,7 +962,7 @@ fn stale_plan_is_rejected_and_apply_verifies_postcondition() {
     assert!(matches!(
         apply_fix(plan),
         Err(FixError::Managed(
-            xai_grok_config::managed_text::ManagedConfigError::StalePlan(_)
+            orz_config::managed_text::ManagedConfigError::StalePlan(_)
         ))
     ));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "export KEEP=2\n");

@@ -2,7 +2,7 @@
 //!
 //! The markdown renderer draws ` ```mermaid ` blocks inline as Unicode
 //! box-drawing art. This module detects those blocks in an agent message (via
-//! the generic [`CodeBlockSpan`](xai_grok_markdown::CodeBlockSpan) API) and
+//! the generic [`CodeBlockSpan`](orz_markdown::CodeBlockSpan) API) and
 //! exposes each diagram's clean source so a full-fidelity PNG can be rendered on
 //! demand. It never renders and tracks no per-diagram render state (rendering is
 //! lazy, driven by the affordance row on click). For `auto`/`on` a clickable
@@ -15,7 +15,7 @@ use std::ops::Range;
 
 use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
-use xai_grok_markdown::MarkdownRenderView;
+use orz_markdown::MarkdownRenderView;
 
 use crate::appearance::RenderMermaid;
 use crate::scrollback::types::{BlockLine, BlockOutput};
@@ -87,13 +87,13 @@ pub(crate) fn hash_source(source: &str) -> [u8; 32] {
 pub struct MermaidBlock {
     /// The clean diagram source — the fence body with container markers
     /// (blockquote `>`, list indentation) stripped and CRLF normalized, taken
-    /// from [`CodeBlockSpan::body`](xai_grok_markdown::CodeBlockSpan::body). For
+    /// from [`CodeBlockSpan::body`](orz_markdown::CodeBlockSpan::body). For
     /// a blockquoted or list-nested diagram this is the de-prefixed code, not
     /// the raw source slice.
     pub source: String,
     /// Range of pre-wrap rendered body lines this diagram occupies, as indices
     /// into [`MarkdownRenderView::lines`]. Mirrors
-    /// [`CodeBlockSpan::output_line_range`](xai_grok_markdown::CodeBlockSpan::output_line_range).
+    /// [`CodeBlockSpan::output_line_range`](orz_markdown::CodeBlockSpan::output_line_range).
     pub prewrap_line_range: Range<usize>,
 }
 
@@ -110,7 +110,7 @@ fn is_mermaid_info(info: &str) -> bool {
 /// The view's code-block spans that are Mermaid fences, in document order.
 fn mermaid_spans<'a>(
     view: &'a MarkdownRenderView,
-) -> impl Iterator<Item = &'a xai_grok_markdown::CodeBlockSpan> {
+) -> impl Iterator<Item = &'a orz_markdown::CodeBlockSpan> {
     view.code_blocks
         .iter()
         .filter(|span| is_mermaid_info(&span.info))
@@ -145,7 +145,7 @@ pub fn mermaid_block_ranges(view: &MarkdownRenderView) -> Vec<Range<usize>> {
 ///
 /// `GrokDay` is the only light theme; every other concrete theme (and the
 /// `GrokNight` default that `Auto` resolves to before it reaches the cache) is
-/// dark. The render worker maps this to `xai_grok_mermaid::MermaidTheme`; it
+/// dark. The render worker maps this to `orz_mermaid::MermaidTheme`; it
 /// lives here (rather than referencing the engine crate) so the
 /// always-compiled detection module stays independent of the optional
 /// `mermaid` feature.
@@ -473,7 +473,7 @@ mod tests {
     use crate::scrollback::types::Selectable;
     use crate::syntax::get_syntect;
     use crate::theme::md_style;
-    use xai_grok_markdown::StreamingMarkdownRenderer;
+    use orz_markdown::StreamingMarkdownRenderer;
 
     /// Render markdown to a view and collect the detected mermaid blocks.
     fn detect(src: &str, pretty: bool) -> Vec<MermaidBlock> {

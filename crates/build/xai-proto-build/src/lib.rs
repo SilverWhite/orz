@@ -215,12 +215,15 @@ impl XaiProtoBuilder {
         let protoc_include_dir = find_protoc_include_dir(protoc.as_deref());
 
         let mut builder = builder.emit_rerun_if_changed(false);
-        Self::emit_rerun_if_changed(
-            protoc.as_deref(),
-            protoc_include_dir.as_deref(),
-            protos.iter().map(|p| p.as_ref()),
-            includes.iter().map(|i| i.as_ref()),
-        )?;
+        // ORZ: skip emit_rerun_if_changed on Windows — /dev/stdout not available
+        if !cfg!(windows) {
+            Self::emit_rerun_if_changed(
+                protoc.as_deref(),
+                protoc_include_dir.as_deref(),
+                protos.iter().map(|p| p.as_ref()),
+                includes.iter().map(|i| i.as_ref()),
+            )?;
+        }
 
         let tempfile;
 

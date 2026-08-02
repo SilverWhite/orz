@@ -811,7 +811,7 @@
     #[test]
     fn blocked_wire_flag_maps_to_blocked_status() {
         use crate::scrollback::blocks::tool::HookRunStatus;
-        use xai_grok_shell::extensions::notification::{HookRunEntryDto, HookRunStatusDto};
+        use orz_shell::extensions::notification::{HookRunEntryDto, HookRunStatusDto};
 
         let mut app = make_app_with_agent("sess-blocked");
         {

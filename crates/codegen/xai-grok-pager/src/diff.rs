@@ -1,5 +1,5 @@
 use similar::{ChangeTag, TextDiff};
-use xai_grok_tools::types::output::SearchReplaceEditDetail;
+use orz_tools::types::output::SearchReplaceEditDetail;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiffLine {
@@ -309,7 +309,7 @@ fn stitch_hunk_pair(a: &DiffHunk, b: &DiffHunk) -> Option<DiffHunk> {
 ///
 /// Returns `(hunks, edit_count)`.
 pub fn extract_edit_hunks(tc: &agent_client_protocol::ToolCall) -> (Vec<DiffHunk>, usize) {
-    use xai_grok_tools::types::output::{
+    use orz_tools::types::output::{
         SearchReplaceEditContextInformation, SearchReplaceOutput, ToolOutput,
     };
 
@@ -1022,7 +1022,7 @@ mod tests {
     fn extract_edit_hunks_from_raw_output() {
         use agent_client_protocol as acp;
         use std::sync::Arc;
-        use xai_grok_tools::types::output::{
+        use orz_tools::types::output::{
             SearchReplaceEditContextInformation, SearchReplaceEditsApplied, SearchReplaceOutput,
             ToolOutput,
         };
@@ -1124,7 +1124,7 @@ mod tests {
         // (acp_conversion embeds SearchReplaceEditContextInformation).
         use agent_client_protocol as acp;
         use std::sync::Arc;
-        use xai_grok_tools::types::output::SearchReplaceEditContextInformation;
+        use orz_tools::types::output::SearchReplaceEditContextInformation;
 
         let edits = SearchReplaceEditContextInformation {
             details: vec![SearchReplaceEditDetail {

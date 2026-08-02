@@ -14,16 +14,16 @@ use tokio_util::sync::CancellationToken;
 
 use agent_client_protocol as acp;
 use xai_acp_lib::{AcpAgentTx, AcpClientMessageBox, AcpClientRx, acp_send};
-use xai_grok_shell::agent::auth_method::AuthMethodKind;
-use xai_grok_shell::agent::config::Config as AgentConfig;
-use xai_grok_shell::extensions::task::{CancelSubagentRequest, KillTaskRequest};
-use xai_grok_shell::sampling::error::{
+use orz_shell::agent::auth_method::AuthMethodKind;
+use orz_shell::agent::config::Config as AgentConfig;
+use orz_shell::extensions::task::{CancelSubagentRequest, KillTaskRequest};
+use orz_shell::sampling::error::{
     RATE_LIMITED_ERROR_CODE, error_detail_from_data, format_rate_limited_user_message,
 };
-use xai_grok_shell::sampling::types::{
+use orz_shell::sampling::types::{
     REASONING_EFFORT_META_KEY, parse_canonical_effort_token, reasoning_effort_meta_value,
 };
-use xai_grok_shell::util::config as cli_config;
+use orz_shell::util::config as cli_config;
 
 use crate::acp::model_state::{EffortTokenError, ModelState};
 use crate::acp::spawn::{AgentShutdownGuard, spawn_grok_shell};
@@ -212,7 +212,7 @@ fn parse_comma_list(s: Option<&str>) -> Option<Vec<String>> {
 pub fn parse_permission_rules_strict(
     allow: &[String],
     deny: &[String],
-) -> anyhow::Result<Vec<xai_grok_workspace::permission::types::PermissionRule>> {
+) -> anyhow::Result<Vec<orz_workspace::permission::types::PermissionRule>> {
     let (rules, errors) = parse_permission_rules_inner(allow, deny);
     if !errors.is_empty() {
         let msgs: Vec<String> = errors
@@ -227,7 +227,7 @@ pub fn parse_permission_rules_strict(
 pub fn parse_permission_rules_lenient(
     allow: &[String],
     deny: &[String],
-) -> Vec<xai_grok_workspace::permission::types::PermissionRule> {
+) -> Vec<orz_workspace::permission::types::PermissionRule> {
     let (rules, errors) = parse_permission_rules_inner(allow, deny);
     for (flag, rule, err) in errors {
         eprintln!("warning: {flag} \"{rule}\": {err}, skipping");
@@ -243,11 +243,11 @@ pub(crate) fn parse_permission_rules_inner(
     allow: &[String],
     deny: &[String],
 ) -> (
-    Vec<xai_grok_workspace::permission::types::PermissionRule>,
+    Vec<orz_workspace::permission::types::PermissionRule>,
     Vec<(&'static str, String, String)>,
 ) {
-    use xai_grok_workspace::permission::rules::parse_permission_rule;
-    use xai_grok_workspace::permission::types::RuleAction;
+    use orz_workspace::permission::rules::parse_permission_rule;
+    use orz_workspace::permission::types::RuleAction;
 
     let mut rules = Vec::new();
     let mut errors = Vec::new();
@@ -282,7 +282,7 @@ pub(crate) fn resolve_agent_arg(agent: &str) -> ResolvedAgent {
 
 fn parse_cli_agents(
     json: &str,
-) -> anyhow::Result<Vec<xai_grok_shell::agent::config::AgentDefinition>> {
+) -> anyhow::Result<Vec<orz_shell::agent::config::AgentDefinition>> {
     let map: std::collections::HashMap<String, serde_json::Value> =
         serde_json::from_str(json).map_err(|e| anyhow::anyhow!("--agents: invalid JSON: {e}"))?;
     let mut agents = Vec::with_capacity(map.len());
@@ -299,7 +299,7 @@ fn parse_cli_agents(
             obj.entry("description".to_string())
                 .or_insert_with(|| serde_json::Value::String(name.clone()));
         }
-        let mut def = xai_grok_shell::agent::config::AgentDefinition::from_json(&value)
+        let mut def = orz_shell::agent::config::AgentDefinition::from_json(&value)
             .map_err(|e| anyhow::anyhow!("--agents: failed to parse '{name}': {e}"))?;
         def.name = name;
         agents.push(def);
@@ -307,7 +307,7 @@ fn parse_cli_agents(
     Ok(agents)
 }
 
-fn apply_agent_flag(agent: &Option<String>, config: &mut xai_grok_shell::agent::config::Config) {
+fn apply_agent_flag(agent: &Option<String>, config: &mut orz_shell::agent::config::Config) {
     if let Some(agent) = agent {
         match resolve_agent_arg(agent) {
             ResolvedAgent::FilePath(path) => config.agent_profile_path = Some(path),
@@ -482,7 +482,7 @@ impl HeadlessEmitter {
 }
 
 fn attach_result_usage(result: &mut serde_json::Value, usage: &serde_json::Value) {
-    xai_grok_shell::extensions::notification::attach_result_usage_fail_closed(result, usage);
+    orz_shell::extensions::notification::attach_result_usage_fail_closed(result, usage);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -534,7 +534,7 @@ async fn authenticate(
         .ok_or_else(|| {
             use std::io::IsTerminal;
             let interactive = std::io::stdin().is_terminal()
-                && !xai_grok_shell::util::clipboard::is_remote_session();
+                && !orz_shell::util::clipboard::is_remote_session();
             anyhow::anyhow!("{}", auth_required_message(interactive))
         })?;
     let kind = AuthMethodKind::from_id(&method_id);
@@ -542,7 +542,7 @@ async fn authenticate(
     if kind.needs_interactive_login() {
         use std::io::IsTerminal;
         let interactive =
-            std::io::stdin().is_terminal() && !xai_grok_shell::util::clipboard::is_remote_session();
+            std::io::stdin().is_terminal() && !orz_shell::util::clipboard::is_remote_session();
         anyhow::bail!("{}", auth_required_message(interactive));
     }
     let is_api_key_auth = kind.is_api_key();
@@ -599,7 +599,7 @@ async fn open_session(
     // default (all-on) preserves existing behavior — the agent applies
     // the resolved config once the session is live.
     let mcp_servers =
-        cli_config::load_mcp_servers(cwd, &xai_grok_tools::types::compat::CompatConfig::default());
+        cli_config::load_mcp_servers(cwd, &orz_tools::types::compat::CompatConfig::default());
 
     if let Some(sid) = session_id_flag {
         let try_load: Result<acp::LoadSessionResponse, _> = acp_send(
@@ -644,7 +644,7 @@ async fn open_session_with_id(
     let cwd_str = cwd.to_string_lossy();
     crate::app::session_startup::ensure_session_id_available(session_id, &cwd_str)?;
     let mcp_servers =
-        cli_config::load_mcp_servers(cwd, &xai_grok_tools::types::compat::CompatConfig::default());
+        cli_config::load_mcp_servers(cwd, &orz_tools::types::compat::CompatConfig::default());
     let new_resp: acp::NewSessionResponse = acp_send(
         acp::NewSessionRequest::new(cwd.to_path_buf())
             .mcp_servers(mcp_servers)
@@ -836,7 +836,7 @@ pub async fn run_single_turn(
 ) -> Result<()> {
     // Stamp proxy requests as headless before the agent spawns and issues
     // its first request (auth enrichment, model list, etc.).
-    xai_grok_shell::http::set_process_client_mode_headless();
+    orz_shell::http::set_process_client_mode_headless();
 
     let cwd = match options.cwd {
         None => std::env::current_dir()?,
@@ -847,7 +847,7 @@ pub async fn run_single_turn(
 
     // Load config and spawn agent
     let t_spawn = Instant::now();
-    let raw_config = xai_grok_shell::config::load_effective_config()
+    let raw_config = orz_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
     let mut agent_config = AgentConfig::new_from_toml_cfg(&raw_config)
         .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
@@ -863,7 +863,7 @@ pub async fn run_single_turn(
         agent_config.default_model_override = Some(model.clone());
     }
 
-    agent_config.resolve_runtime_fields(&xai_grok_shell::agent::config::RuntimeResolutionContext {
+    agent_config.resolve_runtime_fields(&orz_shell::agent::config::RuntimeResolutionContext {
         raw_config: &raw_config,
         remote_settings: None,
         is_headless: true,
@@ -878,12 +878,12 @@ pub async fn run_single_turn(
         storage_mode: None,
     });
 
-    agent_config.mode = xai_grok_shell::agent::config::AgentMode::Headless;
+    agent_config.mode = orz_shell::agent::config::AgentMode::Headless;
     agent_config.default_yolo_mode = options.yolo;
     // Remote arg is None: the remote settings permission_mode soft-default is
     // TUI-only; headless runs must not change permission behavior on a
     // remote flag flip.
-    agent_config.default_auto_mode = xai_grok_shell::util::config::effective_auto_for_launch(
+    agent_config.default_auto_mode = orz_shell::util::config::effective_auto_for_launch(
         options.yolo,
         options.permission_mode_flag.as_deref(),
         None,
@@ -898,7 +898,7 @@ pub async fn run_single_turn(
         agent_config.cli_agents = parse_cli_agents(json)?;
     }
 
-    agent_config.cli_agent_overrides = xai_grok_shell::agent::config::CliAgentOverrides {
+    agent_config.cli_agent_overrides = orz_shell::agent::config::CliAgentOverrides {
         tools: parse_comma_list(options.cli_tools.as_deref()),
         disallowed_tools: parse_comma_list(options.cli_disallowed_tools.as_deref()),
         permission_rules: parse_permission_rules_strict(&options.allow_rules, &options.deny_rules)?,
@@ -915,7 +915,7 @@ pub async fn run_single_turn(
 
     // Persist an explicit --trust grant before the agent starts.
     if options.trust {
-        xai_grok_shell::agent::folder_trust::grant_folder_trust(&cwd);
+        orz_shell::agent::folder_trust::grant_folder_trust(&cwd);
     }
 
     let cancel = CancellationToken::new();
@@ -1053,8 +1053,8 @@ pub async fn run_single_turn(
     // Debug: track headless sessions in active_sessions.json when env var is set.
     let track_active = std::env::var("GROK_TRACK_HEADLESS").is_ok();
     if track_active {
-        let _ = xai_grok_shell::active_sessions::register(
-            xai_grok_shell::active_sessions::ActiveSession {
+        let _ = orz_shell::active_sessions::register(
+            orz_shell::active_sessions::ActiveSession {
                 session_id: session_id.clone(),
                 pid: std::process::id(),
                 cwd: cwd.display().to_string(),
@@ -1248,7 +1248,7 @@ pub async fn run_single_turn(
     // Handle result
     if track_active {
         // Non-blocking flock so a slow/network ~/.grok can't hang exit.
-        let _ = xai_grok_shell::active_sessions::try_unregister(&session_id);
+        let _ = orz_shell::active_sessions::try_unregister(&session_id);
     }
     // Agent cancel + join (SessionEnd flush) runs in AgentShutdownGuard::drop.
     match prompt_result {
@@ -1298,7 +1298,7 @@ pub async fn run_single_turn(
             } else {
                 err.to_string()
             };
-            if let Some(usage) = xai_grok_shell::sampling::error::prompt_usage_from_error(&err)
+            if let Some(usage) = orz_shell::sampling::error::prompt_usage_from_error(&err)
                 && let Ok(v) = serde_json::to_value(&usage)
             {
                 emitter.usage = Some(v);
@@ -1851,7 +1851,7 @@ mod tests {
     }
 
     use super::*;
-    use xai_grok_workspace::permission::types::{RuleAction, ToolFilter};
+    use orz_workspace::permission::types::{RuleAction, ToolFilter};
 
     fn s(v: &str) -> String {
         v.to_owned()
@@ -1945,7 +1945,7 @@ mod tests {
         assert!(matches!(rules[0].tool, ToolFilter::WebFetch));
         assert_eq!(
             rules[0].pattern_mode,
-            xai_grok_workspace::permission::types::PatternMode::Domain
+            orz_workspace::permission::types::PatternMode::Domain
         );
         assert_eq!(rules[0].pattern.as_deref(), Some("evil.com"));
     }

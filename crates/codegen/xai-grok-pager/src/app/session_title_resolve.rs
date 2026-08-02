@@ -8,7 +8,7 @@
 //! [`select_by_title`] as the authoritative error source (ambiguity /
 //! no-match) and as a fallback for callers that bypass pinning.
 
-use xai_grok_shell::session::persistence::Summary;
+use orz_shell::session::persistence::Summary;
 
 /// UUID-shaped resume args always take the id path, even when no such id
 /// exists and a session is titled with that exact UUID.
@@ -129,13 +129,13 @@ pub(crate) fn presandbox_resume_target(
     let Some(cwd) = cwd else {
         return Ok(PinnedResumeTarget::Unresolved);
     };
-    if let Some(local_id) = xai_grok_shell::session::resolve_local_session(arg, cwd) {
+    if let Some(local_id) = orz_shell::session::resolve_local_session(arg, cwd) {
         return Ok(PinnedResumeTarget::Id(local_id));
     }
-    if xai_grok_shell::session::resolve_local_session_any_cwd(arg).is_some() {
+    if orz_shell::session::resolve_local_session_any_cwd(arg).is_some() {
         return Ok(PinnedResumeTarget::Id(arg.to_string()));
     }
-    let summaries = xai_grok_shell::session::persistence::local_summaries_for_cwd_sync(cwd)
+    let summaries = orz_shell::session::persistence::local_summaries_for_cwd_sync(cwd)
         .map_err(|e| {
             anyhow::anyhow!("failed to list local sessions while resolving --resume {arg:?}: {e}")
         })?;

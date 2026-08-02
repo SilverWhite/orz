@@ -1,6 +1,6 @@
 //! Tests for session loading, restore, pickers, and deep search.
 use super::*;
-use xai_grok_shell::session::unified_list::ListScope;
+use orz_shell::session::unified_list::ListScope;
 #[test]
 fn follow_up_chip_bypasses_project_picker() {
     let mut app = test_app_with_agent();
@@ -62,7 +62,7 @@ fn session_loaded_with_restore_shows_summary_in_scrollback() {
             restore_summary: Some(
                 "checked out abc12345, staged: true, unstaged: false, untracked: 3".into(),
             ),
-            restore_degree: Some(xai_grok_workspace::session::git::RestoreDegree::Full),
+            restore_degree: Some(orz_workspace::session::git::RestoreDegree::Full),
             running_prompt_id: None,
             scheduler_background_loops: None,
         }),
@@ -91,7 +91,7 @@ fn session_loaded_with_restore_shows_summary_in_scrollback() {
     assert!(has_restore_msg, "expected restore summary in scrollback");
     assert_eq!(
         app.agents[&id].session.restore_degree,
-        Some(xai_grok_workspace::session::git::RestoreDegree::Full),
+        Some(orz_workspace::session::git::RestoreDegree::Full),
         "SessionLoaded must store restore_degree on the session"
     );
 }
@@ -493,7 +493,7 @@ fn session_loaded_without_restore_resets_restore_degree() {
             models: None,
             code_restored: true,
             restore_summary: Some("checked out abc".into()),
-            restore_degree: Some(xai_grok_workspace::session::git::RestoreDegree::Full),
+            restore_degree: Some(orz_workspace::session::git::RestoreDegree::Full),
             running_prompt_id: None,
             scheduler_background_loops: None,
         }),
@@ -501,7 +501,7 @@ fn session_loaded_without_restore_resets_restore_degree() {
     );
     assert_eq!(
         app.agents[&id].session.restore_degree,
-        Some(xai_grok_workspace::session::git::RestoreDegree::Full)
+        Some(orz_workspace::session::git::RestoreDegree::Full)
     );
     dispatch(
         Action::TaskComplete(TaskResult::SessionLoaded {
@@ -1273,7 +1273,7 @@ fn project_picker_skip_falls_back_to_original_cwd() {
 fn project_picker_freeform_path_used_when_no_option_selected() {
     use crate::views::prompt_widget::StashedPrompt;
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let q = Question {
@@ -1314,7 +1314,7 @@ fn project_picker_freeform_path_used_when_no_option_selected() {
 fn project_picker_freeform_overrides_dont_ask() {
     use crate::views::prompt_widget::StashedPrompt;
     use crate::views::question_view::{LocalQuestionKind, QuestionSelection, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let opt = |label: &str| QuestionOption {
@@ -1373,7 +1373,7 @@ fn needs_project_picker_false_when_disabled() {
 fn project_picker_dont_ask_again_sets_disable_flag() {
     use crate::views::prompt_widget::StashedPrompt;
     use crate::views::question_view::{LocalQuestionKind, QuestionSelection, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let opt = |label: &str| QuestionOption {
@@ -1413,7 +1413,7 @@ fn project_picker_dont_ask_again_sets_disable_flag() {
 fn project_picker_recent_project_selection_uses_that_path() {
     use crate::views::prompt_widget::StashedPrompt;
     use crate::views::question_view::{LocalQuestionKind, QuestionSelection, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let opt = |label: &str| QuestionOption {

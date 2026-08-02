@@ -20,11 +20,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use xai_grok_workspace::permission::bash_command_splitting::{
+use orz_workspace::permission::bash_command_splitting::{
     BashCommandHighlights, heredoc_payload_byte_ranges, range_fully_inside,
     soft_break_offsets_after_operators, split_physical_line_at_soft_breaks,
 };
-use xai_grok_workspace::permission::{
+use orz_workspace::permission::{
     BashCommandPermission, McpToolPermission, mcp_titleize_segment, mcp_tool_action,
     mcp_tool_display_name,
 };

@@ -68,7 +68,7 @@ use std::io::{self, Write};
 use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio_util::sync::CancellationToken;
-use xai_grok_shell::util::config;
+use orz_shell::util::config;
 /// Tracks the extra Kitty keyboard layer pushed while the `/gboom` game is
 /// open (see [`push_gboom_keyboard_flags`]). Kept separate from the base layer
 /// (`terminal::kitty_keyboard`) so teardown pops both, in LIFO order.
@@ -85,14 +85,14 @@ pub(crate) fn push_gboom_keyboard_flags() {
     let flags = event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
         | event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         let _ = execute!(stderr, event::PushKeyboardEnhancementFlags(flags));
     });
 }
 /// Pop the extra keyboard layer pushed by [`push_gboom_keyboard_flags`].
 pub(crate) fn pop_gboom_keyboard_flags() {
     if GBOOM_KEYBOARD_PUSHED.swap(false, Ordering::AcqRel) {
-        xai_grok_shell::util::with_locked_stderr(|stderr| {
+        orz_shell::util::with_locked_stderr(|stderr| {
             let _ = execute!(stderr, event::PopKeyboardEnhancementFlags);
         });
     }
@@ -194,7 +194,7 @@ pub fn set_voice_keybind_enabled_for_test(on: bool) {
 }
 /// `[features] voice_mode` from merged `requirements.toml`.
 pub(crate) fn voice_mode_requirement_pin() -> Option<bool> {
-    xai_grok_config::load_merged_requirements().and_then(|req| {
+    orz_config::load_merged_requirements().and_then(|req| {
         req.get("features")
             .and_then(|f| f.get("voice_mode"))
             .and_then(|v| v.as_bool())
@@ -202,7 +202,7 @@ pub(crate) fn voice_mode_requirement_pin() -> Option<bool> {
 }
 /// `[features] voice_mode` from effective config (user + managed).
 pub(crate) fn voice_mode_config_value() -> Option<bool> {
-    xai_grok_shell::config::load_effective_config()
+    orz_shell::config::load_effective_config()
         .ok()
         .and_then(|cfg| {
             cfg.get("features")
@@ -223,7 +223,7 @@ pub(crate) fn resolve_voice_mode_enabled(
     remote: Option<bool>,
     is_api_key: bool,
 ) -> bool {
-    use xai_grok_shell::agent::config::{BoolFlag, ConfigSource};
+    use orz_shell::agent::config::{BoolFlag, ConfigSource};
     let resolved = BoolFlag::env("GROK_VOICE_MODE")
         .requirement(requirement)
         .config(config)
@@ -405,7 +405,7 @@ pub fn resolve_leader_mode<'p>(
     leader_flag: bool,
     no_leader_flag: bool,
     raw_config: &toml::Value,
-    _remote_settings: Option<&xai_grok_shell::util::config::RemoteSettings>,
+    _remote_settings: Option<&orz_shell::util::config::RemoteSettings>,
     eligible: bool,
     requested_confinement: Option<&'p str>,
 ) -> LeaderMode<'p> {
@@ -460,7 +460,7 @@ pub fn resolve_use_leader(
     leader_flag: bool,
     no_leader_flag: bool,
     raw_config: &toml::Value,
-    remote_settings: Option<&xai_grok_shell::util::config::RemoteSettings>,
+    remote_settings: Option<&orz_shell::util::config::RemoteSettings>,
     eligible: bool,
     requested_confinement: Option<&str>,
 ) -> (bool, Option<&'static str>) {
@@ -484,7 +484,7 @@ const SANDBOX_NOTICE_LINGER: std::time::Duration = std::time::Duration::from_mil
 /// the line to be read on exit; `leader_disabled_by_sandbox` on the
 /// leader-mode decision log is the durable record.
 pub fn warn_leader_disabled_by_sandbox(profile: &str) {
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         print_leader_disabled_by_sandbox(profile, stderr)
     });
 }
@@ -506,8 +506,8 @@ fn print_leader_disabled_by_sandbox(profile: &str, w: &mut impl Write) {
 /// Remote settings come from the product settings API and contain `leader_mode`,
 /// announcements, etc.  Waits up to 2 s for the background thread.
 pub fn join_early_prefetch(
-    handle: Option<xai_grok_shell::agent::models::EarlyPrefetchHandle>,
-) -> Option<xai_grok_shell::util::config::RemoteSettings> {
+    handle: Option<orz_shell::agent::models::EarlyPrefetchHandle>,
+) -> Option<orz_shell::util::config::RemoteSettings> {
     let handle = handle?;
     if handle.is_finished() {
         return match handle.join() {
@@ -566,48 +566,48 @@ async fn bounded_connect(
 pub async fn run(
     args: PagerArgs,
     bg_update_rx: Option<
-        tokio::sync::oneshot::Receiver<Option<xai_grok_update::auto_update::UpdateAvailable>>,
+        tokio::sync::oneshot::Receiver<Option<orz_update::auto_update::UpdateAvailable>>,
     >,
 ) -> anyhow::Result<bool> {
     xai_tty_utils::redirect_native_stderr();
     let screen_mode_override = screen_mode_relaunch::take_screen_mode_env_override();
     let cancel = CancellationToken::new();
     let startup_start = std::time::Instant::now();
-    let raw_config = xai_grok_shell::config::load_effective_config()
+    let raw_config = orz_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-    let grok_com_config = match xai_grok_shell::agent::config::Config::new_from_toml_cfg(
+    let grok_com_config = match orz_shell::agent::config::Config::new_from_toml_cfg(
         &raw_config,
     ) {
         Ok(c) => c.grok_com_config,
         Err(e) => {
             tracing::warn!(error = %e, "failed to parse config for auth refresh, using defaults");
-            xai_grok_shell::auth::GrokComConfig::default()
+            orz_shell::auth::GrokComConfig::default()
         }
     };
     let refreshed_auth = tokio::time::timeout(
-        xai_grok_shell::http::STARTUP_AUTH_REFRESH_TIMEOUT,
-        xai_grok_shell::auth::try_ensure_fresh_auth(&grok_com_config),
+        orz_shell::http::STARTUP_AUTH_REFRESH_TIMEOUT,
+        orz_shell::auth::try_ensure_fresh_auth(&grok_com_config),
     )
     .await
     .unwrap_or(None);
     let early_prefetch = match refreshed_auth {
-        Some(auth) => xai_grok_shell::agent::models::start_early_prefetch_with_auth(Some(auth)),
-        None => xai_grok_shell::agent::models::start_early_prefetch(Some(grok_com_config.clone())),
+        Some(auth) => orz_shell::agent::models::start_early_prefetch_with_auth(Some(auth)),
+        None => orz_shell::agent::models::start_early_prefetch(Some(grok_com_config.clone())),
     };
-    xai_grok_shell::agent::mvp_agent::warm_async_http_client();
+    orz_shell::agent::mvp_agent::warm_async_http_client();
     tokio::task::spawn_blocking(|| {});
     if let Ok(cwd) = std::env::current_dir() {
         crate::git_info::populate_from_cwd_async(cwd);
     }
     let remote_settings = join_early_prefetch(early_prefetch);
-    xai_grok_shell::util::config::cache_remote_auto_mode(
+    orz_shell::util::config::cache_remote_auto_mode(
         remote_settings.as_ref().and_then(|s| s.auto_mode.clone()),
     );
-    xai_grok_shell::util::config::set_remote_campaigns_from_settings(remote_settings.as_ref());
-    let raw_config = xai_grok_shell::config::load_effective_config()
+    orz_shell::util::config::set_remote_campaigns_from_settings(remote_settings.as_ref());
+    let raw_config = orz_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
     let prefetch_elapsed = startup_start.elapsed();
-    let requested_confinement = xai_grok_sandbox::requested_confinement_profile();
+    let requested_confinement = orz_sandbox::requested_confinement_profile();
     let LeaderMode {
         use_leader,
         policy_disable_reason,
@@ -638,14 +638,14 @@ pub async fn run(
     }
     if args.trust {
         match std::env::current_dir() {
-            Ok(cwd) => xai_grok_shell::agent::folder_trust::grant_folder_trust(&cwd),
+            Ok(cwd) => orz_shell::agent::folder_trust::grant_folder_trust(&cwd),
             Err(e) => {
                 tracing::warn!(error = %e, "--trust: failed to resolve cwd; folder not trusted")
             }
         }
     }
     if let Some(reason) = policy_disable_reason {
-        tokio::spawn(xai_grok_shell::leader::kill_stale_reachable_leaders(reason));
+        tokio::spawn(orz_shell::leader::kill_stale_reachable_leaders(reason));
     }
     if let Some(err) =
         session_startup::chat_mode_flag_conflict(args.chat(), args.fork_session, args.restore_code)
@@ -692,7 +692,7 @@ pub async fn run(
         && !args.chat()
         && let Some(id) = title_lookup_id
     {
-        let summaries = xai_grok_shell::session::persistence::list_summaries(None).await?;
+        let summaries = orz_shell::session::persistence::list_summaries(None).await?;
         if let Some(s) = summaries.iter().find(|s| s.info.id.0.as_ref() == id)
             && let Some(title) = s.display_title_opt()
         {
@@ -720,12 +720,12 @@ pub async fn run(
     let remote_permission_mode = remote_settings
         .as_ref()
         .and_then(|s| s.permission_mode.as_deref());
-    let launch_yolo = xai_grok_shell::util::config::effective_yolo_for_launch(
+    let launch_yolo = orz_shell::util::config::effective_yolo_for_launch(
         args.yolo,
         args.permission_mode_flag.as_deref(),
         remote_permission_mode,
     );
-    let launch_auto = xai_grok_shell::util::config::effective_auto_for_launch(
+    let launch_auto = orz_shell::util::config::effective_auto_for_launch(
         args.yolo,
         args.permission_mode_flag.as_deref(),
         remote_permission_mode,
@@ -750,7 +750,7 @@ pub async fn run(
         reasoning_effort_override: args
             .reasoning_effort
             .as_deref()
-            .and_then(xai_grok_shell::sampling::types::parse_canonical_effort_token),
+            .and_then(orz_shell::sampling::types::parse_canonical_effort_token),
         permission_rules: crate::headless::parse_permission_rules_lenient(
             &args.allow_rules,
             &args.deny_rules,
@@ -1006,7 +1006,7 @@ fn print_relaunch_failure_hint(
 /// Best-effort: failures are silently ignored since this runs on teardown
 /// and panic paths where stderr may already be broken.
 fn disable_mouse_paste_raw() {
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         let _ = stderr.write_all(xai_crash_handler::terminal::MOUSE_PASTE_RESET);
         let _ = stderr.flush();
     });
@@ -1264,7 +1264,7 @@ fn init_terminal(
         drain_pending_events();
         set_terminal_title("");
         if want_minimal && clear_main_screen {
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 execute!(
                     stderr,
                     Clear(ClearType::All),
@@ -1274,7 +1274,7 @@ fn init_terminal(
             })?;
         }
         if mode.is_fullscreen() {
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 execute!(stderr, EnterAlternateScreen)
             })?;
         }
@@ -1282,7 +1282,7 @@ fn init_terminal(
         if want_minimal {
             win_native_selection::enable_native_selection();
         }
-        xai_grok_shell::util::with_locked_stderr(|stderr| {
+        orz_shell::util::with_locked_stderr(|stderr| {
             if !want_minimal {
                 execute!(stderr, event::EnableMouseCapture)?;
             } else if crate::terminal::terminal_context().mouse_reporting_leaks_as_raw_text() {
@@ -1340,7 +1340,7 @@ fn init_terminal(
                 "kitty keyboard protocol skipped"
             );
         } else {
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 let _ = execute!(stderr, event::PushKeyboardEnhancementFlags(flags));
             });
             tracing::info!(
@@ -1392,7 +1392,7 @@ fn init_terminal(
                 tracing::warn!(
                     "minimal: inline viewport probe failed; downgrading to full-height inline"
                 );
-                xai_grok_shell::util::with_locked_stderr(|stderr| {
+                orz_shell::util::with_locked_stderr(|stderr| {
                     execute!(stderr, event::EnableMouseCapture)
                 })?;
                 MOUSE_CAPTURE_ENABLED.store(true, Ordering::Release);
@@ -1411,7 +1411,7 @@ fn init_terminal(
             } else {
                 tracing::error!("inline viewport probe failed, using Viewport::Fixed");
             }
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 execute!(
                     stderr,
                     crossterm::terminal::ScrollUp(rows),
@@ -1461,33 +1461,33 @@ fn drain_writer_thread_before_teardown(
 /// `disable_raw_mode`. Callers should drain queued writer-thread frames
 /// first when possible; the panic hook can't (would deadlock).
 fn emit_terminal_teardown_sequences(mode: ScreenMode, inline_cursor_row: Option<u16>) {
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         let _ = stderr.write_all(crate::notifications::progress::OSC_CLEAR.as_bytes());
         let _ = stderr.flush();
     });
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         let _ = execute!(stderr, crossterm::terminal::EndSynchronizedUpdate);
     });
     crate::theme::reset_cursor_color();
     if MOUSE_CAPTURE_ENABLED.swap(false, Ordering::AcqRel) {
         disable_mouse_paste_raw();
         #[cfg(windows)]
-        xai_grok_shell::util::with_locked_stderr(|stderr| {
+        orz_shell::util::with_locked_stderr(|stderr| {
             let _ = execute!(stderr, event::DisableMouseCapture);
         });
     }
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         let _ = execute!(stderr, event::DisableFocusChange);
     });
     pop_gboom_keyboard_flags();
     if crate::terminal::take_kitty_flags_pushed() {
-        xai_grok_shell::util::with_locked_stderr(|stderr| {
+        orz_shell::util::with_locked_stderr(|stderr| {
             let _ = execute!(stderr, event::PopKeyboardEnhancementFlags);
         });
     }
     let restore_style = CURSOR_STYLE_FORCED.load(Ordering::Acquire);
     if mode.is_fullscreen() {
-        xai_grok_shell::util::with_locked_stderr(|stderr| {
+        orz_shell::util::with_locked_stderr(|stderr| {
             if restore_style {
                 let _ = execute!(stderr, SetCursorStyle::DefaultUserShape);
             }
@@ -1497,7 +1497,7 @@ fn emit_terminal_teardown_sequences(mode: ScreenMode, inline_cursor_row: Option<
         let rows = crossterm::terminal::size().map(|(_, r)| r).unwrap_or(24);
         let last = rows.saturating_sub(1);
         let target = inline_cursor_row.unwrap_or(last).min(last);
-        xai_grok_shell::util::with_locked_stderr(|stderr| {
+        orz_shell::util::with_locked_stderr(|stderr| {
             if restore_style {
                 let _ = execute!(stderr, SetCursorStyle::DefaultUserShape);
             }
@@ -1552,7 +1552,7 @@ fn restore_terminal(
 }
 pub(crate) fn set_terminal_title(title: &str) {
     let full = terminal_title_string(title);
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         let _ = execute!(stderr, SetTitle(full));
     });
 }
@@ -1893,7 +1893,7 @@ mod tests {
     #[cfg(feature = "release-dist")]
     #[test]
     fn remote_settings_leader_mode_true_enables_leader() {
-        let rs = xai_grok_shell::util::config::RemoteSettings {
+        let rs = orz_shell::util::config::RemoteSettings {
             leader_mode: Some(true),
             ..Default::default()
         };
@@ -1905,7 +1905,7 @@ mod tests {
     #[cfg(feature = "release-dist")]
     #[test]
     fn remote_settings_leader_mode_false_disables_leader() {
-        let rs = xai_grok_shell::util::config::RemoteSettings {
+        let rs = orz_shell::util::config::RemoteSettings {
             leader_mode: Some(false),
             ..Default::default()
         };
@@ -1917,7 +1917,7 @@ mod tests {
     #[cfg(feature = "release-dist")]
     #[test]
     fn remote_settings_unknown_leader_mode_is_not_policy_disable() {
-        let rs = xai_grok_shell::util::config::RemoteSettings {
+        let rs = orz_shell::util::config::RemoteSettings {
             leader_mode: None,
             ..Default::default()
         };
@@ -1929,7 +1929,7 @@ mod tests {
     #[cfg(feature = "release-dist")]
     #[test]
     fn config_toml_overrides_remote_settings() {
-        let rs = xai_grok_shell::util::config::RemoteSettings {
+        let rs = orz_shell::util::config::RemoteSettings {
             leader_mode: Some(true),
             ..Default::default()
         };

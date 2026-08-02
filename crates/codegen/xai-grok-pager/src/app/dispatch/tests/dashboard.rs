@@ -14,7 +14,7 @@ fn voice_final_appends_to_dashboard_dispatch() {
     };
     crate::voice::handle_voice_event(
         &mut app,
-        xai_grok_voice::VoiceEvent::UtteranceFinal {
+        orz_voice::VoiceEvent::UtteranceFinal {
             text: "the build".into(),
         },
     );
@@ -52,7 +52,7 @@ fn voice_final_appends_to_peek_reply_when_peek_open() {
     };
     crate::voice::handle_voice_event(
         &mut app,
-        xai_grok_voice::VoiceEvent::UtteranceFinal {
+        orz_voice::VoiceEvent::UtteranceFinal {
             text: "with voice".into(),
         },
     );
@@ -97,7 +97,7 @@ fn voice_final_discarded_when_peek_row_changed_after_stop() {
     app.dashboard.as_mut().unwrap().peek = Some(peek_for(DashboardRowId::TopLevel(AgentId(1))));
     crate::voice::handle_voice_event(
         &mut app,
-        xai_grok_voice::VoiceEvent::UtteranceFinal {
+        orz_voice::VoiceEvent::UtteranceFinal {
             text: "late words".into(),
         },
     );
@@ -129,11 +129,11 @@ fn voice_dashboard_dispatch_submit_tears_down_voice() {
     assert!(app.voice_interim().is_none());
     assert!(matches!(
         rx.try_recv(),
-        Ok(xai_grok_voice::VoiceCommand::PttRelease)
+        Ok(orz_voice::VoiceCommand::PttRelease)
     ));
     crate::voice::handle_voice_event(
         &mut app,
-        xai_grok_voice::VoiceEvent::UtteranceFinal {
+        orz_voice::VoiceEvent::UtteranceFinal {
             text: "late words".into(),
         },
     );
@@ -191,12 +191,12 @@ fn voice_dashboard_peek_reply_submit_tears_down_voice() {
     );
     assert!(matches!(
         rx.try_recv(),
-        Ok(xai_grok_voice::VoiceCommand::PttRelease)
+        Ok(orz_voice::VoiceCommand::PttRelease)
     ));
 }
 #[test]
 fn voice_target_bound_at_start_dispatch_vs_peek() {
-    if !xai_grok_voice::AUDIO_SUPPORTED {
+    if !orz_voice::AUDIO_SUPPORTED {
         return;
     }
     use crate::views::dashboard::DashboardRowId;
@@ -277,7 +277,7 @@ fn voice_auto_stops_when_peek_row_changes() {
 /// must not bind there: starting is a no-op and an active capture auto-stops.
 #[test]
 fn voice_suppressed_while_dashboard_popup_open() {
-    if !xai_grok_voice::AUDIO_SUPPORTED {
+    if !orz_voice::AUDIO_SUPPORTED {
         return;
     }
     let mut app = test_app_with_agent();
@@ -847,7 +847,7 @@ fn dashboard_confirm_worktree_applies_pending_model_and_plan() {
     if let Some(d) = app.dashboard.as_mut() {
         d.pending_model = Some(crate::views::dashboard::PendingDispatchModel {
             id: model_id.clone(),
-            effort: Some(xai_grok_shell::sampling::types::ReasoningEffort::High),
+            effort: Some(orz_shell::sampling::types::ReasoningEffort::High),
             display: "Grok 4.5".to_string(),
         });
         d.pending_mode = crate::views::dashboard::DashboardDispatchMode::Plan;
@@ -874,13 +874,13 @@ fn dashboard_confirm_worktree_applies_pending_model_and_plan() {
         agent.session.deferred_model_switch,
         Some((
             model_id,
-            Some(xai_grok_shell::sampling::types::ReasoningEffort::High)
+            Some(orz_shell::sampling::types::ReasoningEffort::High)
         )),
         "effort must be stashed for the shell",
     );
     assert_eq!(
         agent.deferred_session_mode,
-        Some(xai_grok_tools::types::SessionMode::Plan),
+        Some(orz_tools::types::SessionMode::Plan),
     );
     assert_eq!(agent.plan_mode_pending, Some(true));
 }
@@ -1629,7 +1629,7 @@ fn dashboard_plan_description_transforms_snapshot_and_chip_ranges() {
     );
     assert_eq!(
         agent.deferred_session_mode,
-        Some(xai_grok_tools::types::SessionMode::Plan)
+        Some(orz_tools::types::SessionMode::Plan)
     );
 }
 /// The sessions picker modal was removed; `/sessions` survives as an alias
@@ -1987,7 +1987,7 @@ fn dashboard_dispatch_applies_pending_model_and_plan() {
     if let Some(d) = app.dashboard.as_mut() {
         d.pending_model = Some(crate::views::dashboard::PendingDispatchModel {
             id: model_id.clone(),
-            effort: Some(xai_grok_shell::sampling::types::ReasoningEffort::High),
+            effort: Some(orz_shell::sampling::types::ReasoningEffort::High),
             display: "Grok 4.5".to_string(),
         });
         d.pending_mode = crate::views::dashboard::DashboardDispatchMode::Plan;
@@ -2004,13 +2004,13 @@ fn dashboard_dispatch_applies_pending_model_and_plan() {
         agent.session.deferred_model_switch,
         Some((
             model_id,
-            Some(xai_grok_shell::sampling::types::ReasoningEffort::High)
+            Some(orz_shell::sampling::types::ReasoningEffort::High)
         )),
         "effort must be stashed for the shell"
     );
     assert_eq!(
         agent.deferred_session_mode,
-        Some(xai_grok_tools::types::SessionMode::Plan),
+        Some(orz_tools::types::SessionMode::Plan),
     );
     assert_eq!(agent.plan_mode_pending, Some(true));
 }
@@ -2028,7 +2028,7 @@ fn dashboard_new_agent_button_applies_pending_model_and_plan() {
     if let Some(d) = app.dashboard.as_mut() {
         d.pending_model = Some(crate::views::dashboard::PendingDispatchModel {
             id: model_id.clone(),
-            effort: Some(xai_grok_shell::sampling::types::ReasoningEffort::High),
+            effort: Some(orz_shell::sampling::types::ReasoningEffort::High),
             display: "Grok 4.5".to_string(),
         });
         d.pending_mode = crate::views::dashboard::DashboardDispatchMode::Plan;
@@ -2045,13 +2045,13 @@ fn dashboard_new_agent_button_applies_pending_model_and_plan() {
         agent.session.deferred_model_switch,
         Some((
             model_id,
-            Some(xai_grok_shell::sampling::types::ReasoningEffort::High)
+            Some(orz_shell::sampling::types::ReasoningEffort::High)
         )),
         "effort must be stashed for the shell"
     );
     assert_eq!(
         agent.deferred_session_mode,
-        Some(xai_grok_tools::types::SessionMode::Plan),
+        Some(orz_tools::types::SessionMode::Plan),
     );
     assert_eq!(agent.plan_mode_pending, Some(true));
 }
@@ -2065,7 +2065,7 @@ fn dashboard_deferred_plan_mode_applied_on_session_created() {
     let session_id: acp::SessionId = "new-session".into();
     app.agents.get_mut(&id).unwrap().session.session_id = None;
     app.agents.get_mut(&id).unwrap().deferred_session_mode =
-        Some(xai_grok_tools::types::SessionMode::Plan);
+        Some(orz_tools::types::SessionMode::Plan);
     let effects = dispatch(
         Action::TaskComplete(TaskResult::SessionCreated {
             agent_id: id,
@@ -3743,7 +3743,7 @@ fn dashboard_upgrade_cta_paints_arms_rect_and_ctrl_o_override() {
     };
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use xai_grok_telemetry::events::AnnouncementCtaSurface;
+    use orz_telemetry::events::AnnouncementCtaSurface;
     let registry = ActionRegistry::defaults();
     let mut agents: indexmap::IndexMap<AgentId, crate::app::agent_view::AgentView> =
         indexmap::IndexMap::new();
@@ -4939,7 +4939,7 @@ fn dashboard_permission_followup_rejects_with_message() {
 fn dashboard_question_answer_sends_and_clears() {
     use crate::views::prompt_widget::StashedPrompt;
     use crate::views::question_view::QuestionViewState;
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         AskUserQuestionMode, Question, QuestionOption,
     };
     let mut app = test_app_with_agent();
@@ -4984,7 +4984,7 @@ fn dashboard_question_answer_walks_multiple_questions() {
     use crate::views::dashboard::peek::{PeekPanelState, compute_peek_fields};
     use crate::views::prompt_widget::StashedPrompt;
     use crate::views::question_view::QuestionViewState;
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         AskUserQuestionMode, Question, QuestionOption,
     };
     let mut app = test_app_with_agent();

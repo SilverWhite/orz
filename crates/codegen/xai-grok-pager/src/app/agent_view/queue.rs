@@ -58,9 +58,9 @@ impl AgentView {
         if matches!(outcome, InputOutcome::Action(_))
             && self.ephemeral_tip.current_key() == Some(crate::tips::send_now::SEND_NOW_TIP_KEY)
         {
-            xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::ContextualTip {
-                tip: xai_grok_telemetry::events::ContextualTipKind::SendNow,
-                action: xai_grok_telemetry::events::ContextualTipAction::Accepted,
+            orz_telemetry::session_ctx::log_event(orz_telemetry::events::ContextualTip {
+                tip: orz_telemetry::events::ContextualTipKind::SendNow,
+                action: orz_telemetry::events::ContextualTipAction::Accepted,
             });
             self.ephemeral_tip
                 .clear(crate::tips::send_now::SEND_NOW_TIP_KEY);

@@ -5,7 +5,7 @@
 //! hits disk; the lazy fallback seeds from `load_effective_config()`
 //! on first read as a safety net.
 //!
-//! Disk writes live in `xai_grok_shell::util::config::set_<field>()`.
+//! Disk writes live in `orz_shell::util::config::set_<field>()`.
 //! This module is a pager-side in-memory cache only.
 //!
 //! Default consts are hardcoded for `Cell::new` (`const` required) and
@@ -16,7 +16,7 @@
 
 use std::cell::Cell;
 
-use xai_grok_shared::ui_config::UiConfig;
+use orz_shared::ui_config::UiConfig;
 
 use super::render_mermaid::RenderMermaid;
 use super::scroll_mode::ScrollMode;
@@ -631,7 +631,7 @@ pub fn prime(ui: &UiConfig) {
 /// Read a `[ui].<key>` boolean from the shell's layered effective config
 /// (managed → user → defaults). Falls back to `default` on any error.
 fn load_bool_from_effective_config(key: &str, default: bool) -> bool {
-    let root = match xai_grok_config::load_effective_config_disk_only() {
+    let root = match orz_config::load_effective_config_disk_only() {
         Ok(r) => r,
         Err(_) => return default,
     };
@@ -672,7 +672,7 @@ fn text_selection_from_ui(ui: &UiConfig) -> TextSelection {
 }
 
 fn load_keep_text_selection_from_effective_config() -> TextSelection {
-    let root = match xai_grok_config::load_effective_config_disk_only() {
+    let root = match orz_config::load_effective_config_disk_only() {
         Ok(r) => r,
         Err(_) => return KEEP_TEXT_SELECTION_DEFAULT,
     };
@@ -687,7 +687,7 @@ fn load_keep_text_selection_from_effective_config() -> TextSelection {
 
 /// Read a `[ui].<key>` u8 from the shell's layered effective config.
 fn load_u8_from_effective_config(key: &str, default: u8) -> u8 {
-    let root = match xai_grok_config::load_effective_config_disk_only() {
+    let root = match orz_config::load_effective_config_disk_only() {
         Ok(r) => r,
         Err(_) => return default,
     };
@@ -701,7 +701,7 @@ fn load_u8_from_effective_config(key: &str, default: u8) -> u8 {
 /// Read a `[ui].<key>` string from the shell's layered effective config.
 /// `None` on any error or when the key is absent.
 fn load_str_from_effective_config(key: &str) -> Option<String> {
-    let root = xai_grok_config::load_effective_config_disk_only().ok()?;
+    let root = orz_config::load_effective_config_disk_only().ok()?;
     root.get("ui")
         .and_then(|ui| ui.get(key))
         .and_then(|v| v.as_str())

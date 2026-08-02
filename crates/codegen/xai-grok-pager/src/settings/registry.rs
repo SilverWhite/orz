@@ -3,8 +3,8 @@
 //! See the module-level docs in `mod.rs` for the architectural rationale.
 
 use agent_client_protocol as acp;
-use xai_grok_shell::agent::config::UiConfig;
-use xai_grok_tools::implementations::grok_build::ask_user_question;
+use orz_shell::agent::config::UiConfig;
+use orz_tools::implementations::grok_build::ask_user_question;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -327,7 +327,7 @@ impl Default for PagerLocalSnapshot {
             respect_manual_folds: crate::appearance::ScrollConfig::default().respect_manual_folds,
             auto_mode_gate: false,
             ask_user_question_timeout_enabled: None,
-            voice_stt_language: xai_grok_voice::STT_LANGUAGE_DEFAULT.to_string(),
+            voice_stt_language: orz_voice::STT_LANGUAGE_DEFAULT.to_string(),
             // Matches `resolve_scheduler_background_loops`'s default.
             scheduler_background_loops: true,
         }
@@ -347,11 +347,11 @@ pub fn canonical_voice_capture_mode(value: Option<&str>) -> &'static str {
 
 /// Canonicalize a raw voice STT language to a settings choice.
 ///
-/// Delegates to [`xai_grok_voice::canonicalize_stt_language`] so the pager and
+/// Delegates to [`orz_voice::canonicalize_stt_language`] so the pager and
 /// the STT client share one catalog (official Grok STT languages + client-only
 /// `auto`). Unknown/blank/`None` → `en`.
 pub fn canonical_voice_stt_language(value: Option<&str>) -> &'static str {
-    xai_grok_voice::canonicalize_stt_language(value)
+    orz_voice::canonicalize_stt_language(value)
 }
 
 /// Canonicalize a raw hunk-tracker mode to a registry choice. Case-insensitive
@@ -698,7 +698,7 @@ pub fn current_value_for(
         "auto_update" => Some(SettingValue::Bool(pager.auto_update.unwrap_or(true))),
         // fork_secondary_model: baseline value folds to empty string.
         "fork_secondary_model" => Some(SettingValue::String({
-            let baseline = xai_grok_shell::models::default_model();
+            let baseline = orz_shell::models::default_model();
             if ui.fork_secondary_model == baseline {
                 String::new()
             } else {
@@ -1163,7 +1163,7 @@ mod tests {
                     // Cross-check: the UiConfig field IS the built-in default.
                     assert_eq!(
                         ui.fork_secondary_model,
-                        xai_grok_shell::models::default_model(),
+                        orz_shell::models::default_model(),
                         "UiConfig::default().fork_secondary_model must equal \
                          models::default_model() — drift here breaks the empty-fold contract",
                     );
@@ -1307,7 +1307,7 @@ mod tests {
         );
     }
 
-    /// Spot-check the delegation to `xai_grok_voice::canonicalize_stt_language`
+    /// Spot-check the delegation to `orz_voice::canonicalize_stt_language`
     /// (exhaustive alias/locale coverage lives in the voice crate's tests).
     #[test]
     fn canonical_voice_stt_language_delegates_to_voice_crate() {
@@ -1348,7 +1348,7 @@ mod tests {
                 "duplicate settings language code {}",
                 c.canonical
             );
-            let lang = xai_grok_voice::stt_language_by_code(c.canonical)
+            let lang = orz_voice::stt_language_by_code(c.canonical)
                 .unwrap_or_else(|| panic!("settings offers unsupported STT code {}", c.canonical));
             assert_eq!(
                 c.display, lang.name,
@@ -1358,13 +1358,13 @@ mod tests {
         }
         assert!(saw_auto, "settings must offer System (auto)");
 
-        let crate_codes: HashSet<&str> = xai_grok_voice::STT_LANGUAGES
+        let crate_codes: HashSet<&str> = orz_voice::STT_LANGUAGES
             .iter()
             .map(|l| l.code)
             .collect();
         assert_eq!(
             setting_codes, crate_codes,
-            "settings concrete languages must match xai_grok_voice::STT_LANGUAGES exactly"
+            "settings concrete languages must match orz_voice::STT_LANGUAGES exactly"
         );
     }
 
@@ -1605,7 +1605,7 @@ mod tests {
         );
         // A user opt-out flips the read for that tip only.
         let ui = UiConfig {
-            contextual_hints: xai_grok_shell::agent::config::ContextualHints {
+            contextual_hints: orz_shell::agent::config::ContextualHints {
                 undo: Some(false),
                 ..Default::default()
             },

@@ -39,7 +39,7 @@ use ratatui::{
 
 use crate::render::line_utils::truncate_str;
 use crate::theme::Theme;
-use xai_grok_announcements::visible_announcements;
+use orz_announcements::visible_announcements;
 
 const HIDE_CTA: &str = "hide: /announcements hide";
 /// Clickable hide button, far right of the title row.
@@ -117,38 +117,38 @@ pub(crate) fn render_cta_button(
     Some(Rect::new(x, y, disp_w as u16, 1))
 }
 
-fn is_critical(a: &xai_grok_announcements::RemoteAnnouncement) -> bool {
+fn is_critical(a: &orz_announcements::RemoteAnnouncement) -> bool {
     a.severity.as_deref() == Some("critical")
 }
 
-fn is_promo(a: &xai_grok_announcements::RemoteAnnouncement) -> bool {
+fn is_promo(a: &orz_announcements::RemoteAnnouncement) -> bool {
     a.severity.as_deref() == Some("promo")
 }
 
 /// One definition of "live critical" (visible message + critical + not expired)
 /// shared by every predicate below so the meanings cannot drift.
 fn is_live_critical(
-    a: &xai_grok_announcements::RemoteAnnouncement,
+    a: &orz_announcements::RemoteAnnouncement,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    is_critical(a) && !xai_grok_announcements::is_expired_at(a, now)
+    is_critical(a) && !orz_announcements::is_expired_at(a, now)
 }
 
 /// Promo twin of [`is_live_critical`]. A CTA is NOT required: a promo without
 /// one is still a valid 1-line message row (the selection's visible-message
 /// guarantee already skips items with nothing to render).
 fn is_live_promo(
-    a: &xai_grok_announcements::RemoteAnnouncement,
+    a: &orz_announcements::RemoteAnnouncement,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    is_promo(a) && !xai_grok_announcements::is_expired_at(a, now)
+    is_promo(a) && !orz_announcements::is_expired_at(a, now)
 }
 
 /// The session-surfaced severities (critical or promo) — the one name the
 /// hide-key set and the slash-gate predicate share so the set of severities
 /// that open the in-session slot cannot drift between them.
 fn is_live_session_announcement(
-    a: &xai_grok_announcements::RemoteAnnouncement,
+    a: &orz_announcements::RemoteAnnouncement,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     is_live_critical(a, now) || is_live_promo(a, now)
@@ -158,7 +158,7 @@ fn is_live_session_announcement(
 /// (back-compat with every pre-flag announcement), only an explicit `false`
 /// pins the banner. Shared by the selection seam, both painters, and the
 /// hide dispatch so the meanings cannot drift.
-pub fn is_dismissible(a: &xai_grok_announcements::RemoteAnnouncement) -> bool {
+pub fn is_dismissible(a: &orz_announcements::RemoteAnnouncement) -> bool {
     a.dismissible != Some(false)
 }
 
@@ -167,10 +167,10 @@ pub fn is_dismissible(a: &xai_grok_announcements::RemoteAnnouncement) -> bool {
 /// with its hide key stored, so flipping the flag server-side resurrects a
 /// previously-hidden banner (the remote config stays source of truth).
 fn is_hidden(
-    a: &xai_grok_announcements::RemoteAnnouncement,
+    a: &orz_announcements::RemoteAnnouncement,
     hidden_ids: &BTreeSet<String>,
 ) -> bool {
-    is_dismissible(a) && hidden_ids.contains(&xai_grok_announcements::announcement_hide_key(a))
+    is_dismissible(a) && hidden_ids.contains(&orz_announcements::announcement_hide_key(a))
 }
 
 /// The promo's CTA when it is renderable: both label and url trimmed
@@ -182,7 +182,7 @@ fn is_hidden(
 /// terminal-native and would otherwise hand a raw remote URL (`file://`,
 /// custom schemes) past `open_url_if_safe` entirely; a non-https CTA renders
 /// as a plain message row instead of a dead or unsafe button.
-fn usable_cta(a: &xai_grok_announcements::RemoteAnnouncement) -> Option<(&str, &str)> {
+fn usable_cta(a: &orz_announcements::RemoteAnnouncement) -> Option<(&str, &str)> {
     let cta = a.cta.as_ref()?;
     let label = cta
         .label
@@ -207,7 +207,7 @@ fn usable_cta(a: &xai_grok_announcements::RemoteAnnouncement) -> Option<(&str, &
 /// Decorative only: deliberately independent of [`usable_cta`] so a caption can
 /// never gate, resurrect, or invalidate the button — surfaces AND this with
 /// their own pinned/chord gates, and no button painted means no caption shown.
-pub(crate) fn usable_cta_caption(a: &xai_grok_announcements::RemoteAnnouncement) -> Option<&str> {
+pub(crate) fn usable_cta_caption(a: &orz_announcements::RemoteAnnouncement) -> Option<&str> {
     let caption = a.cta.as_ref()?.caption.as_deref()?.trim();
     (!caption.is_empty()).then_some(caption)
 }
@@ -215,9 +215,9 @@ pub(crate) fn usable_cta_caption(a: &xai_grok_announcements::RemoteAnnouncement)
 /// Wall-clock [`first_critical_session_announcement_at`] — test convenience.
 #[cfg(test)]
 fn first_critical_session_announcement<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
-) -> Option<&'a xai_grok_announcements::RemoteAnnouncement> {
+) -> Option<&'a orz_announcements::RemoteAnnouncement> {
     first_critical_session_announcement_at(announcements, hidden_ids, chrono::Utc::now())
 }
 
@@ -232,10 +232,10 @@ fn first_critical_session_announcement<'a>(
 /// allocation-light and the gate runs at most a few times per frame over a
 /// tiny list, so no caching is needed.
 fn first_critical_session_announcement_at<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Option<&'a xai_grok_announcements::RemoteAnnouncement> {
+) -> Option<&'a orz_announcements::RemoteAnnouncement> {
     visible_announcements(announcements)
         .into_iter()
         .find(|a| is_live_critical(a, now) && !is_hidden(a, hidden_ids))
@@ -244,9 +244,9 @@ fn first_critical_session_announcement_at<'a>(
 /// Wall-clock [`first_promo_session_announcement_at`] — test convenience.
 #[cfg(test)]
 fn first_promo_session_announcement<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
-) -> Option<&'a xai_grok_announcements::RemoteAnnouncement> {
+) -> Option<&'a orz_announcements::RemoteAnnouncement> {
     first_promo_session_announcement_at(announcements, hidden_ids, chrono::Utc::now())
 }
 
@@ -255,10 +255,10 @@ fn first_promo_session_announcement<'a>(
 /// slot gate's `.or_else` leg consumes it, so nothing can bypass "critical
 /// wins" again.
 fn first_promo_session_announcement_at<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Option<&'a xai_grok_announcements::RemoteAnnouncement> {
+) -> Option<&'a orz_announcements::RemoteAnnouncement> {
     visible_announcements(announcements)
         .into_iter()
         .find(|a| is_live_promo(a, now) && !is_hidden(a, hidden_ids))
@@ -268,9 +268,9 @@ fn first_promo_session_announcement_at<'a>(
 /// (critical always wins the slot), else the promo selection. Per-frame
 /// derivation makes the swap automatic when a critical arrives mid-promo.
 pub fn first_session_announcement<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
-) -> Option<&'a xai_grok_announcements::RemoteAnnouncement> {
+) -> Option<&'a orz_announcements::RemoteAnnouncement> {
     first_session_announcement_at(announcements, hidden_ids, chrono::Utc::now())
 }
 
@@ -278,7 +278,7 @@ pub fn first_session_announcement<'a>(
 /// slot ranking: critical outranks the privacy upsell banner (an outage
 /// notice must not be hidden by a persistent nag), promo does not.
 pub fn has_critical_session_announcement(
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
+    announcements: &[orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
 ) -> bool {
     first_critical_session_announcement_at(announcements, hidden_ids, chrono::Utc::now()).is_some()
@@ -286,10 +286,10 @@ pub fn has_critical_session_announcement(
 
 /// [`first_session_announcement`] with an injectable clock.
 pub fn first_session_announcement_at<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Option<&'a xai_grok_announcements::RemoteAnnouncement> {
+) -> Option<&'a orz_announcements::RemoteAnnouncement> {
     first_critical_session_announcement_at(announcements, hidden_ids, now)
         .or_else(|| first_promo_session_announcement_at(announcements, hidden_ids, now))
 }
@@ -305,10 +305,10 @@ pub fn first_session_announcement_at<'a>(
 /// through a stale prior-frame rect (critical preempted the promo between
 /// draws) no-ops.
 pub(crate) fn promo_cta<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
 ) -> Option<(
-    &'a xai_grok_announcements::RemoteAnnouncement,
+    &'a orz_announcements::RemoteAnnouncement,
     &'a str,
     &'a str,
 )> {
@@ -321,9 +321,9 @@ pub(crate) fn promo_cta<'a>(
 /// url-only projection of [`promo_cta`] the click dispatch (url + announcement
 /// id for telemetry) and the OSC 8 emission share.
 pub fn promo_cta_target<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    announcements: &'a [orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
-) -> Option<(&'a xai_grok_announcements::RemoteAnnouncement, &'a str)> {
+) -> Option<(&'a orz_announcements::RemoteAnnouncement, &'a str)> {
     promo_cta(announcements, hidden_ids).map(|(owner, _label, url)| (owner, url))
 }
 
@@ -332,20 +332,20 @@ pub fn promo_cta_target<'a>(
 /// selection's meaning of visible; prune owns cleanup of keys for
 /// expired-but-still-listed items.
 pub fn session_announcement_hide_keys(
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
+    announcements: &[orz_announcements::RemoteAnnouncement],
 ) -> Vec<String> {
     session_announcement_hide_keys_at(announcements, chrono::Utc::now())
 }
 
 /// [`session_announcement_hide_keys`] with an injectable clock.
 pub fn session_announcement_hide_keys_at(
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
+    announcements: &[orz_announcements::RemoteAnnouncement],
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<String> {
     visible_announcements(announcements)
         .into_iter()
         .filter(|a| is_live_session_announcement(a, now))
-        .map(xai_grok_announcements::announcement_hide_key)
+        .map(orz_announcements::announcement_hide_key)
         .collect()
 }
 
@@ -354,7 +354,7 @@ pub fn session_announcement_hide_keys_at(
 /// selection above) so `/announcements show` stays reachable while
 /// everything is hidden.
 pub fn has_session_announcements(
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
+    announcements: &[orz_announcements::RemoteAnnouncement],
 ) -> bool {
     let now = chrono::Utc::now();
     visible_announcements(announcements)
@@ -367,7 +367,7 @@ pub fn has_session_announcements(
 /// Derived from [`first_session_announcement`] so slot precedence lives in
 /// exactly one function.
 pub fn session_banner_height(
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
+    announcements: &[orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
 ) -> u16 {
     match first_session_announcement(announcements, hidden_ids) {
@@ -441,7 +441,7 @@ fn paint_hide_button(
 pub fn render_banner(
     area: Rect,
     buf: &mut Buffer,
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
+    announcements: &[orz_announcements::RemoteAnnouncement],
     hidden_ids: &BTreeSet<String>,
     hide_hovered: bool,
     cta_hovered: bool,
@@ -468,7 +468,7 @@ pub fn render_banner(
 fn render_critical_rows(
     area: Rect,
     buf: &mut Buffer,
-    ann: &xai_grok_announcements::RemoteAnnouncement,
+    ann: &orz_announcements::RemoteAnnouncement,
     hide_hovered: bool,
 ) -> BannerHits {
     use unicode_width::UnicodeWidthStr;
@@ -602,7 +602,7 @@ fn render_critical_rows(
 fn render_promo_row(
     area: Rect,
     buf: &mut Buffer,
-    ann: &xai_grok_announcements::RemoteAnnouncement,
+    ann: &orz_announcements::RemoteAnnouncement,
     hide_hovered: bool,
     cta_hovered: bool,
     caption_allowed: bool,
@@ -687,7 +687,7 @@ fn render_promo_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xai_grok_announcements::RemoteAnnouncement;
+    use orz_announcements::RemoteAnnouncement;
 
     fn ann(severity: Option<&str>, message: Option<&str>) -> RemoteAnnouncement {
         RemoteAnnouncement {
@@ -706,7 +706,7 @@ mod tests {
             id: Some(id.into()),
             severity: Some("promo".into()),
             message: Some(message.into()),
-            cta: cta.map(|(label, url)| xai_grok_announcements::AnnouncementCta {
+            cta: cta.map(|(label, url)| orz_announcements::AnnouncementCta {
                 label: Some(label.into()),
                 url: Some(url.into()),
                 caption: None,
@@ -877,7 +877,7 @@ mod tests {
         assert_eq!(session_banner_height(&msg_only, &no_hidden()), 2);
         let hide_it: BTreeSet<String> = msg_only
             .iter()
-            .map(xai_grok_announcements::announcement_hide_key)
+            .map(orz_announcements::announcement_hide_key)
             .collect();
         assert_eq!(session_banner_height(&msg_only, &hide_it), 0);
 
@@ -1283,7 +1283,7 @@ mod tests {
         assert_eq!(url, "https://x.ai/promo");
 
         let mut label_only = promo("p", "msg", None);
-        label_only.cta = Some(xai_grok_announcements::AnnouncementCta {
+        label_only.cta = Some(orz_announcements::AnnouncementCta {
             label: Some("Go".into()),
             url: None,
             caption: None,
@@ -1317,7 +1317,7 @@ mod tests {
         // usable_cta's job alone)…
         let mut label_only = promo("q", &"M".repeat(60), None);
         label_only.dismissible = Some(false);
-        label_only.cta = Some(xai_grok_announcements::AnnouncementCta {
+        label_only.cta = Some(orz_announcements::AnnouncementCta {
             label: Some("Go".into()),
             url: None,
             caption: Some("or use Ctrl+O".into()),

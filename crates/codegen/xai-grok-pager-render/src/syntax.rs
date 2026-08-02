@@ -23,7 +23,7 @@
 
 use std::sync::OnceLock;
 
-pub use xai_grok_markdown::Syntect;
+pub use orz_markdown::Syntect;
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;

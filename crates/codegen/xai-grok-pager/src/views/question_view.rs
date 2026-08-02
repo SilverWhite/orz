@@ -17,8 +17,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use xai_acp_lib::AcpResult;
-use xai_grok_markdown::StreamingMarkdownRenderer;
-pub use xai_grok_tools::implementations::grok_build::ask_user_question::{
+use orz_markdown::StreamingMarkdownRenderer;
+pub use orz_tools::implementations::grok_build::ask_user_question::{
     AskUserQuestionMode, Question, QuestionOption,
 };
 
@@ -109,7 +109,7 @@ pub enum LocalQuestionKind {
     /// Options map to upsell URLs: upgrade tier or enable on-demand.
     /// `choices` maps each option index to a telemetry choice variant.
     CreditLimitUpsell {
-        choices: Vec<xai_grok_telemetry::events::CreditLimitChoice>,
+        choices: Vec<orz_telemetry::events::CreditLimitChoice>,
     },
     /// SuperGrok upsell modal: the free-usage paywall (429 +
     /// `subscription:free-usage-exhausted`) or a tier-restricted slash
@@ -118,14 +118,14 @@ pub enum LocalQuestionKind {
     FreeUsageUpsell {
         /// Telemetry source for `SuperGrokUpsellClicked` — distinguishes
         /// the paywall from the restricted-command upsell.
-        source: xai_grok_telemetry::events::SuperGrokUpsell,
+        source: orz_telemetry::events::SuperGrokUpsell,
     },
     /// Modal shown when the shell rejects a model switch due to agent
     /// type incompatibility. Carries the target model + effort so the
     /// answer handler can create a new session with it.
     AgentTypeMismatch {
         model_id: agent_client_protocol::ModelId,
-        effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
+        effort: Option<orz_shell::sampling::types::ReasoningEffort>,
     },
     DoctorFix {
         target: crate::app::actions::DoctorFixTarget,
@@ -832,11 +832,11 @@ impl QuestionViewState {
     /// - Notes included when freeform text is non-empty and selected.
     pub fn build_accepted_response(
         &self,
-    ) -> xai_grok_tools::implementations::grok_build::ask_user_question::AskUserQuestionExtResponse
+    ) -> orz_tools::implementations::grok_build::ask_user_question::AskUserQuestionExtResponse
     {
         use indexmap::IndexMap;
         use std::collections::HashMap;
-        use xai_grok_tools::implementations::grok_build::ask_user_question::{
+        use orz_tools::implementations::grok_build::ask_user_question::{
             AskUserQuestionExtResponse, QuestionAnnotation,
         };
 
@@ -919,7 +919,7 @@ impl QuestionViewState {
     /// double-send.
     pub fn send_ext_response(
         &mut self,
-        response: xai_grok_tools::implementations::grok_build::ask_user_question::AskUserQuestionExtResponse,
+        response: orz_tools::implementations::grok_build::ask_user_question::AskUserQuestionExtResponse,
     ) -> bool {
         let Some(tx) = self.response_tx.take() else {
             return false;

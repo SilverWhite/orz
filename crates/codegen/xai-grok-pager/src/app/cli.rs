@@ -638,7 +638,7 @@ pub struct PagerArgs {
         long = "permission-mode",
         value_name = "MODE",
         value_parser = clap::builder::PossibleValuesParser::new(
-            xai_grok_shell::agent::config::PermissionMode::VALID_VALUES
+            orz_shell::agent::config::PermissionMode::VALID_VALUES
         )
     )]
     pub permission_mode_flag: Option<String>,
@@ -937,13 +937,13 @@ impl PagerArgs {
         }
         match self.resume_target() {
             ResumeTarget::SessionId(id) => {
-                xai_grok_shell::session::persistence::resumed_session_sandbox_profile(
+                orz_shell::session::persistence::resumed_session_sandbox_profile(
                     Some(&id),
                     cwd,
                 )
             }
             ResumeTarget::MostRecentForCwd => {
-                xai_grok_shell::session::persistence::resumed_session_sandbox_profile(None, cwd)
+                orz_shell::session::persistence::resumed_session_sandbox_profile(None, cwd)
             }
             ResumeTarget::None => None,
         }
@@ -953,8 +953,8 @@ impl PagerArgs {
     fn resolve_startup_sandbox(explicit: Option<&str>, saved: Option<String>) -> SandboxStartup {
         match (explicit, saved) {
             (Some(x), Some(s))
-                if x.parse::<xai_grok_sandbox::ProfileName>().ok()
-                    != s.parse::<xai_grok_sandbox::ProfileName>().ok() =>
+                if x.parse::<orz_sandbox::ProfileName>().ok()
+                    != s.parse::<orz_sandbox::ProfileName>().ok() =>
             {
                 SandboxStartup::Conflict {
                     requested: x.to_owned(),

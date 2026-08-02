@@ -142,7 +142,7 @@ pub enum NewWorktreeDialogOutcome {
 /// neither per-command key is set.
 ///
 /// Startup resolution lives in
-/// [`xai_grok_shell::util::config::resolve_hints`]; this type is the pager's
+/// [`orz_shell::util::config::resolve_hints`]; this type is the pager's
 /// in-memory mirror.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorktreeMode {
@@ -153,9 +153,9 @@ pub enum WorktreeMode {
     /// Never create a worktree, skip the popup.
     Never,
 }
-impl From<xai_grok_shell::util::config::WorktreeHintMode> for WorktreeMode {
-    fn from(mode: xai_grok_shell::util::config::WorktreeHintMode) -> Self {
-        use xai_grok_shell::util::config::WorktreeHintMode;
+impl From<orz_shell::util::config::WorktreeHintMode> for WorktreeMode {
+    fn from(mode: orz_shell::util::config::WorktreeHintMode) -> Self {
+        use orz_shell::util::config::WorktreeHintMode;
         match mode {
             WorktreeHintMode::Ask => Self::Ask,
             WorktreeHintMode::Always => Self::Always,
@@ -167,7 +167,7 @@ impl WorktreeMode {
     /// Parse from a TOML string value. Unrecognised values fall back to
     /// [`WorktreeMode::Never`] with a debug-level log.
     pub fn from_config_str(s: &str) -> Self {
-        xai_grok_shell::util::config::WorktreeHintMode::from_config_str(s).into()
+        orz_shell::util::config::WorktreeHintMode::from_config_str(s).into()
     }
     /// Serialise to the TOML string representation.
     pub fn as_config_str(self) -> &'static str {
@@ -196,7 +196,7 @@ impl WorktreeMode {
     /// Same as [`Self::resolve_from_hints`], for merged effective config (`toml::Value`).
     pub fn resolve_from_hints_value(hints: Option<&toml::Value>) -> (Self, Self) {
         let (new_session, fork) =
-            xai_grok_shell::util::config::WorktreeHintMode::resolve_pair(hints);
+            orz_shell::util::config::WorktreeHintMode::resolve_pair(hints);
         (new_session.into(), fork.into())
     }
     fn resolve_from_hint_strings(get_str: impl Fn(&str) -> Option<Self>) -> (Self, Self) {
@@ -417,7 +417,7 @@ pub enum AuthMode {
 /// Mirrors [`AuthState`]: a welcome sub-state that drives the "Do you trust the
 /// contents of this directory?" question and gates session creation until it is
 /// answered. Seeded once before the first render from the pure
-/// [`xai_grok_workspace::folder_trust::decide`] verdict; when the feature flag
+/// [`orz_workspace::folder_trust::decide`] verdict; when the feature flag
 /// is off `decide` returns trusted, so this is always [`TrustState::Done`].
 #[derive(Debug)]
 pub enum TrustState {
@@ -559,14 +559,14 @@ pub(crate) const TIER_RESTRICTED_COMMANDS: &[&str] =
 /// is unrestricted (fail-open).
 ///
 /// The string classification is shared with the shell's capability
-/// (toolset) gate via [`xai_grok_shell::tier::is_restricted_tier_name`] so
+/// (toolset) gate via [`orz_shell::tier::is_restricted_tier_name`] so
 /// the two can't drift. The pager's *cosmetic* slash-command gate treats an
 /// absent tier (`None`) as restricted (it recovers live on the next settings
 /// update); the shell's capability gate treats absence as unrestricted.
 fn is_restricted_tier(tier: Option<&str>) -> bool {
     match tier {
         None => true,
-        Some(t) => xai_grok_shell::tier::is_restricted_tier_name(t),
+        Some(t) => orz_shell::tier::is_restricted_tier_name(t),
     }
 }
 /// True for API-key labels from shell/CCP: `"ApiKey"`, `"API Key"`, `"api_key"`.
@@ -606,12 +606,12 @@ pub struct AppView {
     /// In-memory snapshot of the effective `UiConfig`. Seeded once at
     /// startup; updated synchronously by `set_X_inner` so dispatch
     /// stays sans-IO.
-    pub current_ui: xai_grok_shell::agent::config::UiConfig,
+    pub current_ui: orz_shell::agent::config::UiConfig,
     /// Working directory.
     pub cwd: PathBuf,
     /// Whether the project picker question has already been shown this session.
     pub project_picker_shown: bool,
-    /// "Don't ask me again" opt-out from [`xai_grok_shell::util::config::resolve_hints`];
+    /// "Don't ask me again" opt-out from [`orz_shell::util::config::resolve_hints`];
     /// TUI writes to user `config.toml` only.
     pub project_picker_disabled: bool,
     /// Whether the cwd is inside a git repository (any ancestor has `.git`).
@@ -668,13 +668,13 @@ pub struct AppView {
     /// Release-safe FPS HUD (`/debug fps`; `GROK_FPS` env on release
     /// builds, where the dev overlay is compiled out) — see the module doc.
     pub fps_hud: crate::views::fps_hud::FpsHud,
-    pub active_announcements: Vec<xai_grok_announcements::RemoteAnnouncement>,
+    pub active_announcements: Vec<orz_announcements::RemoteAnnouncement>,
     /// Persisted hide keys, filtered at the banner selection gate — hiding one
     /// critical reveals the next unhidden one, and a NEW id re-arms the banner.
     pub hidden_announcement_ids: std::collections::BTreeSet<String>,
     pub announcements_last_gen: u64,
     /// Selected welcome announcement for this pager launch.
-    pub announcement: Option<xai_grok_announcements::RemoteAnnouncement>,
+    pub announcement: Option<orz_announcements::RemoteAnnouncement>,
     /// Cached changelog markdown (for `/release-notes`). Populated by
     /// `FetchChangelog` at startup; `None` until the fetch completes.
     pub changelog_markdown: Option<String>,
@@ -887,7 +887,7 @@ pub struct AppView {
     pub session_picker_relaxed_notified_for: Option<std::path::PathBuf>,
     /// Content-based (deep search) results from ACP session search.
     pub session_picker_content_results:
-        Option<Vec<xai_grok_shell::extensions::session_search::SearchSessionHit>>,
+        Option<Vec<orz_shell::extensions::session_search::SearchSessionHit>>,
     /// Whether a deep search is currently in flight.
     pub session_picker_content_loading: bool,
     /// Monotonically increasing sequence number for deep search requests.
@@ -901,7 +901,7 @@ pub struct AppView {
     pub session_picker_list_seq: u64,
     /// Resolved compat-session cells used before checking resume-skill paths.
     pub(crate) foreign_session_compat:
-        xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources,
+        orz_workspace::foreign_sessions::EnabledForeignSessionSources,
     /// Monotonic picker scan sequence, bumped on every open and close.
     pub(crate) foreign_session_scan_seq: u64,
     /// Coalesces obsolete foreign scans across welcome and modal pickers.
@@ -935,7 +935,7 @@ pub struct AppView {
     /// Whether the **auto** permission-mode feature gate is enabled (resolved at
     /// startup from env / `[auto_mode] enabled` / remote settings, default OFF). When
     /// `false`, the Shift+Tab cycle skips Auto. See
-    /// `xai_grok_shell::util::config::resolve_auto_permission_mode_enabled`.
+    /// `orz_shell::util::config::resolve_auto_permission_mode_enabled`.
     pub auto_mode_gate: bool,
     /// Managed-policy pin (set at startup); gates every runtime always-approve enable.
     pub yolo_policy_block: Option<&'static str>,
@@ -970,10 +970,10 @@ pub struct AppView {
     /// plan nudge, clipboard-image tip, send-now tip). Default all ON; resolved
     /// at startup and on settings toggles from `GROK_CONTEXTUAL_HINTS` (master)
     /// > `[ui.contextual_hints]` user config > remote tier > default.
-    pub contextual_hints: xai_grok_shell::util::config::ResolvedContextualHints,
+    pub contextual_hints: orz_shell::util::config::ResolvedContextualHints,
     /// Remote tier for the contextual hints, kept so a settings toggle can
     /// re-resolve the untouched tips against the same remote defaults.
-    pub remote_contextual_hints: Option<xai_grok_shell::util::config::ContextualHintsRemote>,
+    pub remote_contextual_hints: Option<orz_shell::util::config::ContextualHintsRemote>,
     /// Per-key seen counts that gate seen-capped ephemeral tips; the single
     /// copy of this state. Passed to `show_ephemeral_tip`, which increments the
     /// matching key in place. In-memory only and per-session — never persisted
@@ -1093,9 +1093,9 @@ pub struct AppView {
     /// `announcement_hide_key` (stable even for id-less items, unlike the
     /// event's `id`).
     pub announcement_cta_impressions_logged:
-        std::collections::BTreeSet<(String, xai_grok_telemetry::events::AnnouncementCtaSurface)>,
+        std::collections::BTreeSet<(String, orz_telemetry::events::AnnouncementCtaSurface)>,
     /// Access gate from `grok_build_access_gate`. `Some` = blocked.
-    pub gate: Option<xai_grok_shell::auth::GateInfo>,
+    pub gate: Option<orz_shell::auth::GateInfo>,
     /// User-friendly subscription tier name (e.g. "SuperGrok", "Free").
     pub subscription_tier: Option<String>,
     /// When the pager started auto-checking subscriptions (for 10-min timeout).
@@ -1107,7 +1107,7 @@ pub struct AppView {
     pub subscription_watch_interval_secs: Option<u64>,
     /// A stale-source gate held out of `gate` while a live check verifies
     /// it (see [`super::subscription`]).
-    pub pending_gate_verification: Option<xai_grok_shell::auth::GateInfo>,
+    pub pending_gate_verification: Option<orz_shell::auth::GateInfo>,
     /// Generation stamp of the current gate verification.
     pub gate_verify_gen: u64,
     /// Whether a leader reconnect is in progress (blocks prompt submission).
@@ -1171,12 +1171,12 @@ pub struct AppView {
     /// and capture may start. Cleared on exit or when the remote flag turns off.
     pub voice_ui_active: bool,
     /// Optional `[voice]` overrides from config (`api_base`, `language`, …).
-    pub voice_config: xai_grok_voice::VoiceConfig,
+    pub voice_config: orz_voice::VoiceConfig,
     /// Auth for STT (OAuth session via shell `AuthManager`, or `XAI_API_KEY`).
     /// `None` until the pipeline is first started (lazy on `/voice`).
-    pub voice_auth: Option<xai_grok_voice::SharedVoiceAuth>,
+    pub voice_auth: Option<orz_voice::SharedVoiceAuth>,
     /// Commands into the voice pipeline (start/stop capture — toggle, not hold).
-    pub voice_cmd_tx: Option<tokio::sync::mpsc::Sender<xai_grok_voice::VoiceCommand>>,
+    pub voice_cmd_tx: Option<tokio::sync::mpsc::Sender<orz_voice::VoiceCommand>>,
     /// The dictation lifecycle (idle / queued / recording / stopping), including
     /// the live interim transcript. One state at a time, so inconsistent
     /// combinations are unrepresentable; production mutates it only through the
@@ -1306,20 +1306,20 @@ impl AppView {
     }
     /// Extract `GateInfo` from `RemoteSettings`.
     pub fn gate_from_settings(
-        rs: &xai_grok_shell::util::config::RemoteSettings,
-    ) -> Option<xai_grok_shell::auth::GateInfo> {
+        rs: &orz_shell::util::config::RemoteSettings,
+    ) -> Option<orz_shell::auth::GateInfo> {
         let msg = rs.gate_message.as_ref()?;
         if msg.is_empty() {
             return None;
         }
-        Some(xai_grok_shell::auth::GateInfo {
+        Some(orz_shell::auth::GateInfo {
             message: msg.clone(),
             url: rs.gate_url.clone(),
             label: rs.gate_label.clone(),
         })
     }
     /// Apply typed auth metadata from the shell.
-    pub fn apply_auth_meta(&mut self, meta: &xai_grok_shell::auth::AuthMeta) {
+    pub fn apply_auth_meta(&mut self, meta: &orz_shell::auth::AuthMeta) {
         self.pending_gate_verification = None;
         let was_gated = self.gate.is_some();
         self.team_id = meta.team_id.clone();
@@ -1330,8 +1330,8 @@ impl AppView {
         self.gate = meta.gate.clone();
         if was_gated && self.gate.is_none() {
             self.paywall_check_started = None;
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::SubscriptionActivated {
+            orz_telemetry::session_ctx::log_event(
+                orz_telemetry::events::SubscriptionActivated {
                     auth_method: self.login_method_id.as_ref().map(|id| id.0.to_string()),
                     upsell_shown_this_session: self.access_gate_shown_logged,
                 },
@@ -1408,7 +1408,7 @@ impl AppView {
             models,
             registry: ActionRegistry::defaults(),
             settings_registry: Arc::new(crate::settings::SettingsRegistry::defaults()),
-            current_ui: xai_grok_shell::agent::config::UiConfig::default(),
+            current_ui: orz_shell::agent::config::UiConfig::default(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             project_picker_shown: false,
             project_picker_disabled: false,
@@ -1497,7 +1497,7 @@ impl AppView {
             cli_effort_token: None,
             default_yolo: false,
             permission_mode_from_soft_default: true,
-            auto_mode_gate: xai_grok_shell::util::config::auto_permission_mode_enabled_from_disk(),
+            auto_mode_gate: orz_shell::util::config::auto_permission_mode_enabled_from_disk(),
             yolo_policy_block: None,
             yolo_launch_block_notice: None,
             screen_mode_switch_hint: None,
@@ -1596,7 +1596,7 @@ impl AppView {
             keyboard_normalizer: KeyboardNormalizer::from_terminal_context(),
             voice_mode_enabled: false,
             voice_ui_active: false,
-            voice_config: xai_grok_voice::VoiceConfig::default(),
+            voice_config: orz_voice::VoiceConfig::default(),
             voice_auth: None,
             voice_cmd_tx: None,
             voice_state: VoiceState::Idle,
@@ -1611,7 +1611,7 @@ impl AppView {
         &self,
     ) -> Option<(
         acp::ModelId,
-        Option<xai_grok_shell::sampling::types::ReasoningEffort>,
+        Option<orz_shell::sampling::types::ReasoningEffort>,
     )> {
         Some((self.cli_model_override.clone()?, None))
     }
@@ -1628,7 +1628,7 @@ impl AppView {
     /// `/voice`). Gated on the voice gate + a build that compiled in audio
     /// capture. Free-tier upsell is separate ([`Self::is_voice_tier_restricted`]).
     pub fn voice_can_start_pipeline(&self) -> bool {
-        self.voice_mode_enabled && xai_grok_voice::AUDIO_SUPPORTED
+        self.voice_mode_enabled && orz_voice::AUDIO_SUPPORTED
     }
     /// Sync voice availability into slash surfaces, cheatsheet, and settings.
     /// Mirrors `apply_session_recap_available` for `/recap`.
@@ -1756,7 +1756,7 @@ impl AppView {
         self.voice_state.interim()
     }
     /// Best-effort one-shot command into the voice pipeline (no-op if it isn't up).
-    fn voice_send(&self, cmd: xai_grok_voice::VoiceCommand) {
+    fn voice_send(&self, cmd: orz_voice::VoiceCommand) {
         if let Some(tx) = &self.voice_cmd_tx
             && tx.try_send(cmd).is_err()
         {
@@ -1766,7 +1766,7 @@ impl AppView {
     /// Open the mic now (pipeline already up) and enter [`VoiceState::Recording`]
     /// bound to `target`. `hold` marks a Ctrl+Space hold-press start.
     pub(crate) fn voice_begin_recording(&mut self, target: VoiceTarget, hold: bool) {
-        self.voice_send(xai_grok_voice::VoiceCommand::PttPress);
+        self.voice_send(orz_voice::VoiceCommand::PttPress);
         self.voice_state = VoiceState::Recording {
             hold,
             target,
@@ -1806,14 +1806,14 @@ impl AppView {
         };
         let target = *target;
         let interim = interim.take();
-        self.voice_send(xai_grok_voice::VoiceCommand::PttRelease);
+        self.voice_send(orz_voice::VoiceCommand::PttRelease);
         self.voice_state = VoiceState::Stopping { target, interim };
     }
     /// Hard teardown (submit / error / kill-switch / navigate-away): release the
     /// mic and forget the session — no trailing final, no queued start.
     pub(crate) fn voice_reset(&mut self) {
         if self.voice_state.listening() {
-            self.voice_send(xai_grok_voice::VoiceCommand::PttRelease);
+            self.voice_send(orz_voice::VoiceCommand::PttRelease);
         }
         self.voice_state = VoiceState::Idle;
     }
@@ -3114,7 +3114,7 @@ struct WelcomeInputCtx<'a> {
     sp_loading: bool,
     sp_state: &'a mut crate::views::picker::PickerState,
     sp_content_results:
-        &'a Option<Vec<xai_grok_shell::extensions::session_search::SearchSessionHit>>,
+        &'a Option<Vec<orz_shell::extensions::session_search::SearchSessionHit>>,
     sp_content_loading: bool,
     /// The query `sp_entries` were server-fetched with (see
     /// [`crate::views::session_picker::effective_filter_query`]).
@@ -3502,7 +3502,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
         if matches!(ctx.auth_state, AuthState::Done) {
             if ctx.upgrade_cta_keyboard && key!('o', CONTROL).matches(key) {
                 return InputOutcome::Action(Action::AnnouncementsOpenCta(
-                    xai_grok_telemetry::events::AnnouncementCtaSurface::Keyboard,
+                    orz_telemetry::events::AnnouncementCtaSurface::Keyboard,
                 ));
             }
             if key!('w', CONTROL).matches(key) && ctx.cwd_has_git_ancestor {
@@ -3719,7 +3719,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                     && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 {
                     return InputOutcome::Action(Action::AnnouncementsOpenCta(
-                        xai_grok_telemetry::events::AnnouncementCtaSurface::Welcome,
+                        orz_telemetry::events::AnnouncementCtaSurface::Welcome,
                     ));
                 }
                 if let Some(rect) = ctx.privacy_banner_opt_in_rect
@@ -4163,7 +4163,7 @@ impl AppView {
                 .hyperlink_capabilities()
                 .osc22_cursor
             {
-                xai_grok_shell::util::with_locked_stderr(|stderr| {
+                orz_shell::util::with_locked_stderr(|stderr| {
                     let _ = crossterm::execute!(stderr, crate::terminal::SetDefaultCursor);
                 });
             }
@@ -4174,7 +4174,7 @@ impl AppView {
             && matches!(self.auth_state, AuthState::Authenticating { .. });
         if want_mouse_off && !self.auth_mouse_disabled {
             self.auth_mouse_disabled = true;
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 let _ = crossterm::execute!(stderr, crossterm::event::DisableMouseCapture);
             });
             #[cfg(windows)]
@@ -4182,7 +4182,7 @@ impl AppView {
             super::MOUSE_CAPTURE_ENABLED.store(false, std::sync::atomic::Ordering::Release);
         } else if !want_mouse_off && self.auth_mouse_disabled {
             self.auth_mouse_disabled = false;
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 let _ = crossterm::execute!(stderr, crossterm::event::EnableMouseCapture);
             });
             super::MOUSE_CAPTURE_ENABLED.store(true, std::sync::atomic::Ordering::Release);
@@ -4440,10 +4440,10 @@ impl AppView {
                         }
                         if !has_access && !self.access_gate_shown_logged {
                             self.access_gate_shown_logged = true;
-                            xai_grok_telemetry::session_ctx::log_event(
-                                xai_grok_telemetry::events::SuperGrokUpsellShown {
+                            orz_telemetry::session_ctx::log_event(
+                                orz_telemetry::events::SuperGrokUpsellShown {
                                     source:
-                                        xai_grok_telemetry::events::SuperGrokUpsell::WelcomeScreen,
+                                        orz_telemetry::events::SuperGrokUpsell::WelcomeScreen,
                                     auth_method: self
                                         .login_method_id
                                         .as_ref()
@@ -4789,7 +4789,7 @@ impl AppView {
         self.log_announcement_cta_impressions();
         self.maybe_evict_offscreen_caches();
     }
-    /// Log [`xai_grok_telemetry::events::AnnouncementCtaShown`] for each
+    /// Log [`orz_telemetry::events::AnnouncementCtaShown`] for each
     /// surface whose CTA button is painted this frame (armed hit rect, not
     /// covered by a frame occluder — the click/OSC 8 truth the impression
     /// pairs with), once per (announcement, surface) per pager process
@@ -4797,7 +4797,7 @@ impl AppView {
     /// the click dispatch, so a critical preempting the slot or a hidden
     /// promo emits nothing.
     pub(crate) fn log_announcement_cta_impressions(&mut self) {
-        use xai_grok_telemetry::events::AnnouncementCtaSurface;
+        use orz_telemetry::events::AnnouncementCtaSurface;
         let (banner, welcome, header, dashboard) = match self.active_view {
             ActiveView::Welcome => (false, self.welcome_upgrade_cta_rect.is_some(), false, false),
             ActiveView::Agent(agent_id) => match self.agents.get(&agent_id) {
@@ -4831,7 +4831,7 @@ impl AppView {
         ) else {
             return;
         };
-        let key = xai_grok_announcements::announcement_hide_key(owner);
+        let key = orz_announcements::announcement_hide_key(owner);
         let id = owner.id.clone();
         let surfaces = [
             (AnnouncementCtaSurface::Banner, banner),
@@ -4844,8 +4844,8 @@ impl AppView {
                 .announcement_cta_impressions_logged
                 .insert((key.clone(), surface))
             {
-                xai_grok_telemetry::session_ctx::log_event(
-                    xai_grok_telemetry::events::AnnouncementCtaShown {
+                orz_telemetry::session_ctx::log_event(
+                    orz_telemetry::events::AnnouncementCtaShown {
                         id: id.clone(),
                         source: surface,
                     },
@@ -4905,7 +4905,7 @@ impl AppView {
     /// settings live-apply path so a runtime toggle reaches existing agents.
     pub fn apply_contextual_hints(
         &mut self,
-        resolved: xai_grok_shell::util::config::ResolvedContextualHints,
+        resolved: orz_shell::util::config::ResolvedContextualHints,
     ) {
         self.contextual_hints = resolved;
         for agent in self.agents.values_mut() {
@@ -5066,9 +5066,9 @@ impl AppView {
             &mut self.tip_seen_counts,
         ) {
             self.clipboard_focus_tip.note_fired(&outcome, now);
-            xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::ContextualTip {
-                tip: xai_grok_telemetry::events::ContextualTipKind::ImageInput,
-                action: xai_grok_telemetry::events::ContextualTipAction::Shown,
+            orz_telemetry::session_ctx::log_event(orz_telemetry::events::ContextualTip {
+                tip: orz_telemetry::events::ContextualTipKind::ImageInput,
+                action: orz_telemetry::events::ContextualTipAction::Shown,
             });
             return true;
         }
@@ -5697,7 +5697,7 @@ pub(crate) mod tests {
             models: ModelState::default(),
             registry: ActionRegistry::defaults(),
             settings_registry: std::sync::Arc::new(crate::settings::SettingsRegistry::defaults()),
-            current_ui: xai_grok_shell::agent::config::UiConfig::default(),
+            current_ui: orz_shell::agent::config::UiConfig::default(),
             cwd: std::path::PathBuf::from("/tmp"),
             project_picker_shown: true,
             project_picker_disabled: false,
@@ -5887,7 +5887,7 @@ pub(crate) mod tests {
             keyboard_normalizer: KeyboardNormalizer::from_terminal_context(),
             voice_mode_enabled: false,
             voice_ui_active: false,
-            voice_config: xai_grok_voice::VoiceConfig::default(),
+            voice_config: orz_voice::VoiceConfig::default(),
             voice_auth: None,
             voice_cmd_tx: None,
             voice_state: VoiceState::Idle,
@@ -6432,7 +6432,7 @@ pub(crate) mod tests {
             .get_mut(&id)
             .unwrap()
             .set_has_session_announcements(true);
-        app.active_announcements = vec![xai_grok_announcements::RemoteAnnouncement {
+        app.active_announcements = vec![orz_announcements::RemoteAnnouncement {
             id: Some("expired".into()),
             message: Some("gone".into()),
             severity: Some("critical".into()),
@@ -6447,7 +6447,7 @@ pub(crate) mod tests {
                 .has_session_announcements(),
             "expired-only list must close the gate on the next frame"
         );
-        app.active_announcements = vec![xai_grok_announcements::RemoteAnnouncement {
+        app.active_announcements = vec![orz_announcements::RemoteAnnouncement {
             id: Some("live".into()),
             message: Some("new outage".into()),
             severity: Some("critical".into()),
@@ -6817,10 +6817,10 @@ pub(crate) mod tests {
             .get_mut(&id)
             .unwrap()
             .todo
-            .update_todos(vec![xai_grok_shell::tools::TodoItem {
+            .update_todos(vec![orz_shell::tools::TodoItem {
                 content: "do the thing".into(),
                 priority: Default::default(),
-                status: xai_grok_shell::tools::TodoStatus::InProgress,
+                status: orz_shell::tools::TodoStatus::InProgress,
                 meta: None,
             }]);
         assert!(
@@ -7052,7 +7052,7 @@ pub(crate) mod tests {
     fn apply_auth_meta_disables_billing_surface_for_team_users() {
         let mut app = test_app();
         assert!(app.usage_visible);
-        let meta = xai_grok_shell::auth::AuthMeta {
+        let meta = orz_shell::auth::AuthMeta {
             team_id: Some("team-uuid".into()),
             team_name: Some("Acme Corp".into()),
             ..Default::default()
@@ -7070,7 +7070,7 @@ pub(crate) mod tests {
     fn apply_auth_meta_enables_billing_surface_for_personal_users() {
         let mut app = test_app();
         app.usage_visible = false;
-        let meta = xai_grok_shell::auth::AuthMeta::default();
+        let meta = orz_shell::auth::AuthMeta::default();
         app.apply_auth_meta(&meta);
         assert!(app.usage_visible);
     }
@@ -7079,7 +7079,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.is_api_key_auth = true;
         app.usage_visible = false;
-        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
+        app.apply_auth_meta(&orz_shell::auth::AuthMeta::default());
         assert!(!app.is_api_key_auth);
         assert!(app.usage_visible);
     }
@@ -7088,7 +7088,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         advertise_media_tools(&mut app);
         assert!(!app.voice_mode_enabled);
-        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta {
+        app.apply_auth_meta(&orz_shell::auth::AuthMeta {
             auth_mode: Some("ApiKey".into()),
             subscription_tier: Some("API Key".into()),
             ..Default::default()
@@ -7100,14 +7100,14 @@ pub(crate) mod tests {
         assert!(!app.is_voice_tier_restricted());
         assert!(app.voice_mode_enabled);
         let mut app = test_app();
-        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta {
+        app.apply_auth_meta(&orz_shell::auth::AuthMeta {
             subscription_tier: Some("api_key".into()),
             ..Default::default()
         });
         assert!(app.is_api_key_auth);
         assert!(app.voice_mode_enabled);
         assert!(app.tier_restricted_commands.is_empty());
-        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta {
+        app.apply_auth_meta(&orz_shell::auth::AuthMeta {
             auth_mode: Some("Oidc".into()),
             subscription_tier: Some("Free".into()),
             ..Default::default()
@@ -7167,7 +7167,7 @@ pub(crate) mod tests {
     fn apply_auth_meta_restricts_usage_for_free_tier() {
         let mut app = test_app();
         advertise_media_tools(&mut app);
-        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
+        app.apply_auth_meta(&orz_shell::auth::AuthMeta::default());
         assert_eq!(
             app.tier_restricted_commands,
             expected_tier_restricted_commands()
@@ -7179,7 +7179,7 @@ pub(crate) mod tests {
     fn apply_auth_meta_restricts_usage_for_x_basic_tier() {
         let mut app = test_app();
         advertise_media_tools(&mut app);
-        let meta = xai_grok_shell::auth::AuthMeta {
+        let meta = orz_shell::auth::AuthMeta {
             subscription_tier: Some("X Basic".into()),
             ..Default::default()
         };
@@ -7194,7 +7194,7 @@ pub(crate) mod tests {
     fn apply_auth_meta_lifts_restrictions_for_paid_tiers_and_teams() {
         let mut app = test_app();
         advertise_media_tools(&mut app);
-        let meta = xai_grok_shell::auth::AuthMeta {
+        let meta = orz_shell::auth::AuthMeta {
             subscription_tier: Some("SuperGrok".into()),
             ..Default::default()
         };
@@ -7203,14 +7203,14 @@ pub(crate) mod tests {
         assert_tier_restricted_commands_present(&app);
         let mut app = test_app();
         advertise_media_tools(&mut app);
-        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
+        app.apply_auth_meta(&orz_shell::auth::AuthMeta::default());
         assert!(!app.tier_restricted_commands.is_empty());
         app.subscription_tier = Some("SuperGrok".into());
         app.apply_tier_restrictions();
         assert!(app.tier_restricted_commands.is_empty());
         assert_tier_restricted_commands_present(&app);
         let mut app = test_app();
-        let meta = xai_grok_shell::auth::AuthMeta {
+        let meta = orz_shell::auth::AuthMeta {
             team_id: Some("team-uuid".into()),
             team_name: Some("Acme Corp".into()),
             ..Default::default()
@@ -7238,10 +7238,10 @@ pub(crate) mod tests {
     #[test]
     fn is_voice_tier_restricted_tracks_tier() {
         let mut app = test_app();
-        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
+        app.apply_auth_meta(&orz_shell::auth::AuthMeta::default());
         assert!(app.is_voice_tier_restricted());
         let mut app = test_app();
-        let meta = xai_grok_shell::auth::AuthMeta {
+        let meta = orz_shell::auth::AuthMeta {
             subscription_tier: Some("SuperGrok".into()),
             ..Default::default()
         };
@@ -7251,13 +7251,13 @@ pub(crate) mod tests {
     #[test]
     fn apply_auth_meta_clears_gate_on_subscription() {
         let mut app = test_app();
-        app.gate = Some(xai_grok_shell::auth::GateInfo {
+        app.gate = Some(orz_shell::auth::GateInfo {
             message: "Subscribe to use Grok Build".into(),
             url: Some("https://grok.com/supergrok?referrer=grok-build".into()),
             label: None,
         });
         assert!(app.is_access_blocked());
-        let meta = xai_grok_shell::auth::AuthMeta::default();
+        let meta = orz_shell::auth::AuthMeta::default();
         app.apply_auth_meta(&meta);
         assert!(app.gate.is_none());
         assert!(app.has_access());
@@ -7265,13 +7265,13 @@ pub(crate) mod tests {
     #[test]
     fn apply_auth_meta_gate_unchanged_when_still_gated() {
         let mut app = test_app();
-        let gate = xai_grok_shell::auth::GateInfo {
+        let gate = orz_shell::auth::GateInfo {
             message: "Subscribe".into(),
             url: None,
             label: None,
         };
         app.gate = Some(gate.clone());
-        let meta = xai_grok_shell::auth::AuthMeta {
+        let meta = orz_shell::auth::AuthMeta {
             gate: Some(gate),
             ..Default::default()
         };
@@ -7298,7 +7298,7 @@ pub(crate) mod tests {
     fn welcome_ctrl_u_update_keeps_priority_over_foreign_resume() {
         let mut app = test_app();
         app.foreign_session_compat =
-            xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources {
+            orz_workspace::foreign_sessions::EnabledForeignSessionSources {
                 cursor: true,
                 ..Default::default()
             };
@@ -7318,8 +7318,8 @@ pub(crate) mod tests {
         app.apply_foreign_resume_detection(
             launch_token,
             &canonical_cwd,
-            Some(xai_grok_workspace::foreign_sessions::RecentForeignSession {
-                tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool::Cursor,
+            Some(orz_workspace::foreign_sessions::RecentForeignSession {
+                tool: orz_workspace::foreign_sessions::ForeignSessionTool::Cursor,
                 native_id: "cursor-session".into(),
                 age: std::time::Duration::from_secs(30),
             }),
@@ -8442,7 +8442,7 @@ pub(crate) mod tests {
         assert!(!app.esc_owned_before_agent());
         app.import_claude_modal = Some(
             crate::views::import_claude_modal::ImportClaudeModalState::new(
-                xai_grok_shell::claude_import::ImportPlan::default(),
+                orz_shell::claude_import::ImportPlan::default(),
                 std::path::PathBuf::from("/tmp"),
             ),
         );
@@ -10794,7 +10794,7 @@ pub(crate) mod tests {
                 crate::views::file_search::context::detect("@", 1).expect("@-context must parse");
             agent.prompt.file_search.set_test_state(
                 ctx,
-                vec![xai_grok_workspace::file_system::FuzzyMatchResult {
+                vec![orz_workspace::file_system::FuzzyMatchResult {
                     path: nucleo::Utf32String::from("src"),
                     score: 100,
                     indices: Vec::new(),
@@ -11023,7 +11023,7 @@ pub(crate) mod tests {
         n_questions: usize,
     ) {
         use crate::views::question_view::QuestionViewState;
-        use xai_grok_tools::implementations::grok_build::ask_user_question::{
+        use orz_tools::implementations::grok_build::ask_user_question::{
             Question, QuestionOption,
         };
         let questions: Vec<Question> = (0..n_questions)

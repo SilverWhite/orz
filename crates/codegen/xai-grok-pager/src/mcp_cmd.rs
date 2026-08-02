@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Subcommand, ValueEnum};
-use xai_grok_shell::util::config::{McpServerConfig, McpServerTransportConfig};
+use orz_shell::util::config::{McpServerConfig, McpServerTransportConfig};
 
 use crate::util::display_user_grok_path;
 
@@ -162,8 +162,8 @@ fn run_list(json: bool) -> Result<()> {
     // Include project-scoped servers (nearest definition wins), matching what
     // a session started in this directory would load from config.toml files.
     let cwd = current_dir_or_exit();
-    let servers = xai_grok_shell::util::config::load_mcp_server_configs_with_project(&cwd);
-    let disabled = xai_grok_shell::util::config::disabled_mcp_server_names(&cwd);
+    let servers = orz_shell::util::config::load_mcp_server_configs_with_project(&cwd);
+    let disabled = orz_shell::util::config::disabled_mcp_server_names(&cwd);
 
     if json {
         let payload: serde_json::Value = servers
@@ -262,7 +262,7 @@ async fn run_add(args: AddArgs) -> Result<()> {
     };
 
     let path = scope_target(args.scope);
-    xai_grok_shell::util::config::save_mcp_server_config_at(&path, name, &config).await?;
+    orz_shell::util::config::save_mcp_server_config_at(&path, name, &config).await?;
     println!("Added {summary} to {} config", args.scope.label());
     println!("File modified: {}", scope_display(args.scope, &path));
     Ok(())
@@ -477,9 +477,9 @@ fn current_dir_or_exit() -> PathBuf {
 /// Resolve the config file path for a scope.
 fn scope_target(scope: McpScope) -> PathBuf {
     match scope {
-        McpScope::User => xai_grok_shell::util::config::user_config_path(),
+        McpScope::User => orz_shell::util::config::user_config_path(),
         McpScope::Project => {
-            xai_grok_shell::util::config::project_config_path(&current_dir_or_exit())
+            orz_shell::util::config::project_config_path(&current_dir_or_exit())
         }
     }
 }
@@ -509,7 +509,7 @@ fn select_remove_site(
     project_site: Option<PathBuf>,
     scope: Option<McpScope>,
 ) -> Result<(McpScope, PathBuf), RemoveError> {
-    use xai_grok_shell::util::config::user_config_path;
+    use orz_shell::util::config::user_config_path;
 
     match scope {
         Some(McpScope::User) => user_defined
@@ -539,7 +539,7 @@ fn surviving_definition(
             user_defined.then(|| {
                 (
                     McpScope::User,
-                    xai_grok_shell::util::config::user_config_path(),
+                    orz_shell::util::config::user_config_path(),
                 )
             })
         })
@@ -550,11 +550,11 @@ fn mcp_server_is_known(name: &str, cwd: &Path) -> bool {
     if name.starts_with("grok_com_") {
         return true;
     }
-    xai_grok_shell::util::config::cli_known_mcp_server_names(cwd).contains(name)
+    orz_shell::util::config::cli_known_mcp_server_names(cwd).contains(name)
 }
 
 fn available_mcp_server_names(cwd: &Path) -> Vec<String> {
-    let mut names: Vec<String> = xai_grok_shell::util::config::cli_known_mcp_server_names(cwd)
+    let mut names: Vec<String> = orz_shell::util::config::cli_known_mcp_server_names(cwd)
         .into_iter()
         .collect();
     names.sort();
@@ -586,12 +586,12 @@ async fn run_set_enabled(name: &str, enabled: bool) -> Result<()> {
         std::process::exit(1);
     }
 
-    let was_disabled = xai_grok_shell::util::config::disabled_mcp_server_names(&cwd).contains(name);
+    let was_disabled = orz_shell::util::config::disabled_mcp_server_names(&cwd).contains(name);
 
     let modified =
-        xai_grok_shell::util::config::save_mcp_server_enabled_in(name, enabled, &cwd).await?;
+        orz_shell::util::config::save_mcp_server_enabled_in(name, enabled, &cwd).await?;
 
-    let now_disabled = xai_grok_shell::util::config::disabled_mcp_server_names(&cwd).contains(name);
+    let now_disabled = orz_shell::util::config::disabled_mcp_server_names(&cwd).contains(name);
     let now_enabled = !now_disabled;
 
     if enabled && now_disabled {
@@ -614,7 +614,7 @@ async fn run_set_enabled(name: &str, enabled: bool) -> Result<()> {
         println!("Disabled MCP server '{name}'.");
     }
 
-    let user_config = xai_grok_shell::util::config::user_config_path();
+    let user_config = orz_shell::util::config::user_config_path();
     for path in &modified {
         if path == &user_config {
             println!("File modified: {}", display_user_grok_path("config.toml"));
@@ -626,7 +626,7 @@ async fn run_set_enabled(name: &str, enabled: bool) -> Result<()> {
 }
 
 async fn run_remove(name: &str, requested_scope: Option<McpScope>) -> Result<()> {
-    use xai_grok_shell::util::config::{
+    use orz_shell::util::config::{
         delete_mcp_server_config_at, mcp_server_defined_at, user_config_path,
     };
 
@@ -634,7 +634,7 @@ async fn run_remove(name: &str, requested_scope: Option<McpScope>) -> Result<()>
 
     // Project configs from cwd up to the repo root, nearest first.
     let find_project_site = || {
-        xai_grok_shell::config::find_project_configs(&cwd)
+        orz_shell::config::find_project_configs(&cwd)
             .into_iter()
             .rev()
             .find(|path| mcp_server_defined_at(path, name))
@@ -685,7 +685,7 @@ async fn run_remove(name: &str, requested_scope: Option<McpScope>) -> Result<()>
 
 async fn run_doctor(json: bool, name: Option<String>) -> Result<()> {
     let cwd = current_dir_or_exit();
-    let report = xai_grok_shell::mcp_doctor::run_doctor(&cwd, name.as_deref()).await;
+    let report = orz_shell::mcp_doctor::run_doctor(&cwd, name.as_deref()).await;
 
     if let Some(ref filter) = name
         && report.servers.is_empty()
@@ -703,7 +703,7 @@ async fn run_doctor(json: bool, name: Option<String>) -> Result<()> {
             serde_json::to_string_pretty(&report).unwrap_or_default()
         );
     } else {
-        xai_grok_shell::mcp_doctor::print_report(&report);
+        orz_shell::mcp_doctor::print_report(&report);
     }
 
     if report.failing_count > 0 {
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn select_remove_site_covers_scope_presence_matrix() {
-        let user = xai_grok_shell::util::config::user_config_path();
+        let user = orz_shell::util::config::user_config_path();
         let project = PathBuf::from("/repo/.grok/config.toml");
 
         // No scope: single hits resolve, both scopes is ambiguous, neither is
@@ -1227,7 +1227,7 @@ mod tests {
 
     #[test]
     fn surviving_definition_prefers_project_then_user() {
-        let user = xai_grok_shell::util::config::user_config_path();
+        let user = orz_shell::util::config::user_config_path();
         let project = PathBuf::from("/repo/.grok/config.toml");
 
         // The mirror of the remove note: a user-scope delete with a project

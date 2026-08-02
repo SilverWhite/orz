@@ -7,7 +7,7 @@ use xai_fast_worktree::WorktreeRecord;
 
 use agent_client_protocol as acp;
 use xai_acp_lib::acp_send;
-use xai_grok_shell::agent::config::Config as AgentConfig;
+use orz_shell::agent::config::Config as AgentConfig;
 
 /// Local response types matching the ACP response shapes.
 #[derive(Debug, serde::Deserialize)]

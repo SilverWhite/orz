@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 use xai_acp_lib::AcpAgentTx;
-use xai_grok_shell::extensions::notification::GoalClassifierVerdict;
-use xai_grok_shell::sampling::types::ReasoningEffort;
+use orz_shell::extensions::notification::GoalClassifierVerdict;
+use orz_shell::sampling::types::ReasoningEffort;
 /// Unique local identifier for an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AgentId(pub usize);
@@ -648,7 +648,7 @@ pub struct AgentSession {
     /// [`crate::app::effects`]'s parser tests + the deserialise tests in
     /// `ResumeSessionInWorktreeResponse`. Adding a rendering consumer is
     /// out of scope for now.
-    pub restore_degree: Option<xai_grok_workspace::session::git::RestoreDegree>,
+    pub restore_degree: Option<orz_workspace::session::git::RestoreDegree>,
     /// Set when a rate-limit `RetryState::Exhausted` fires, so the subsequent
     /// `TurnFailed` from the RPC error path can be suppressed (the retry
     /// handler already displayed a user-friendly message). Cleared on `finish_turn`.

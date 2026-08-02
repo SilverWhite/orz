@@ -6,7 +6,7 @@
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Instant;
-use xai_grok_shell::session::storage::{ReplayEmission, stream_replay_updates_at};
+use orz_shell::session::storage::{ReplayEmission, stream_replay_updates_at};
 /// Enriched subagent tracking info.
 ///
 /// Keyed by `child_session_id` in `AgentView::subagent_sessions`.
@@ -113,7 +113,7 @@ struct SubagentMetaSlice {
 /// always-false branch ships in release.
 #[cfg(not(test))]
 fn effective_grok_home() -> std::path::PathBuf {
-    xai_grok_shell::util::grok_home::grok_home()
+    orz_shell::util::grok_home::grok_home()
 }
 #[cfg(test)]
 thread_local! {
@@ -130,7 +130,7 @@ fn effective_grok_home() -> std::path::PathBuf {
     if let Some(home) = REPLAY_GROK_HOME.with(|h| h.borrow().clone()) {
         return home;
     }
-    xai_grok_shell::util::grok_home::grok_home()
+    orz_shell::util::grok_home::grok_home()
 }
 /// Best-effort enrichment from the shell's on-disk `meta.json`.
 pub(crate) fn enrich_from_meta(

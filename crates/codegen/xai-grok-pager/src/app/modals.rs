@@ -823,7 +823,7 @@ impl AgentView {
                                 self.active_modal = None;
                                 InputOutcome::Action(Action::OpenExtensionsModal {
                                     tab,
-                                    trigger: xai_grok_telemetry::events::ExtensionsModalTrigger::CommandPalette,
+                                    trigger: orz_telemetry::events::ExtensionsModalTrigger::CommandPalette,
                                 })
                             }
                             PaletteCommand::OpenSettings => {
@@ -3077,7 +3077,7 @@ mod settings_memory_paste_routing_tests {
     use crate::views::modal::ActiveModal;
     use crate::views::settings_modal::SettingsModalState;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use xai_grok_shell::agent::config::UiConfig;
+    use orz_shell::agent::config::UiConfig;
 
     fn left() -> Event {
         Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))

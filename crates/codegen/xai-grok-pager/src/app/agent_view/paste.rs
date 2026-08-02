@@ -176,10 +176,10 @@ impl AgentView {
                         );
                     }
                     if ctx.source.tip_showing() {
-                        xai_grok_telemetry::session_ctx::log_event(
-                            xai_grok_telemetry::events::ContextualTip {
-                                tip: xai_grok_telemetry::events::ContextualTipKind::ImageInput,
-                                action: xai_grok_telemetry::events::ContextualTipAction::Accepted,
+                        orz_telemetry::session_ctx::log_event(
+                            orz_telemetry::events::ContextualTip {
+                                tip: orz_telemetry::events::ContextualTipKind::ImageInput,
+                                action: orz_telemetry::events::ContextualTipAction::Accepted,
                             },
                         );
                     }
@@ -1211,10 +1211,10 @@ pub(super) mod paste_key_tests {
     /// Build a `QuestionViewState` already in `InputMode` focus.
     pub(in crate::app::agent_view) fn make_question_view_state_in_input_mode()
     -> crate::views::question_view::QuestionViewState {
-        let question = xai_grok_tools::implementations::grok_build::ask_user_question::Question {
+        let question = orz_tools::implementations::grok_build::ask_user_question::Question {
             question: "Pick one?".to_string(),
             options: vec![
-                xai_grok_tools::implementations::grok_build::ask_user_question::QuestionOption {
+                orz_tools::implementations::grok_build::ask_user_question::QuestionOption {
                     label: "A".to_string(),
                     description: "Option A".to_string(),
                     preview: None,

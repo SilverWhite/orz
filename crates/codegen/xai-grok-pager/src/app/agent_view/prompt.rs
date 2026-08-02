@@ -393,9 +393,9 @@ impl AgentView {
                     // (the ghost only shows when the text is a prefix of it).
                     let (chars, words) =
                         crate::views::prompt_suggestion::suggestion_size(self.prompt.text());
-                    xai_grok_telemetry::session_ctx::log_event(
-                        xai_grok_telemetry::events::PromptSuggestion {
-                            action: xai_grok_telemetry::events::PromptSuggestionAction::Accepted,
+                    orz_telemetry::session_ctx::log_event(
+                        orz_telemetry::events::PromptSuggestion {
+                            action: orz_telemetry::events::PromptSuggestionAction::Accepted,
                             chars,
                             words,
                         },
@@ -412,9 +412,9 @@ impl AgentView {
                     self.prompt.prompt_suggestion_ghost().unwrap_or_default(),
                 );
                 self.prompt.prompt_suggestion.dismiss();
-                xai_grok_telemetry::session_ctx::log_event(
-                    xai_grok_telemetry::events::PromptSuggestion {
-                        action: xai_grok_telemetry::events::PromptSuggestionAction::Dismissed,
+                orz_telemetry::session_ctx::log_event(
+                    orz_telemetry::events::PromptSuggestion {
+                        action: orz_telemetry::events::PromptSuggestionAction::Dismissed,
                         chars,
                         words,
                     },
@@ -726,10 +726,10 @@ impl AgentView {
             match self.prompt.handle_key(key) {
                 PromptEvent::Edited => {
                     if undo_tip_accepted {
-                        xai_grok_telemetry::session_ctx::log_event(
-                            xai_grok_telemetry::events::ContextualTip {
-                                tip: xai_grok_telemetry::events::ContextualTipKind::Undo,
-                                action: xai_grok_telemetry::events::ContextualTipAction::Accepted,
+                        orz_telemetry::session_ctx::log_event(
+                            orz_telemetry::events::ContextualTip {
+                                tip: orz_telemetry::events::ContextualTipKind::Undo,
+                                action: orz_telemetry::events::ContextualTipAction::Accepted,
                             },
                         );
                         // Retire the hint on the restore that consumed it (its

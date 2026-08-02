@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
-use xai_grok_shell::agent::config::Config as AgentConfig;
-use xai_grok_shell::cli_models::{AuthStatus, list_models};
+use orz_shell::agent::config::Config as AgentConfig;
+use orz_shell::cli_models::{AuthStatus, list_models};
 
 use crate::client_identity::{PAGER_CLIENT_TYPE, PAGER_CLIENT_VERSION};
 

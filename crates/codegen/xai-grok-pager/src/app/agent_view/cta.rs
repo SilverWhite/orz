@@ -45,8 +45,8 @@ impl AgentView {
             return;
         }
         let (chars, words) = crate::views::prompt_suggestion::suggestion_size(&full);
-        xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::PromptSuggestion {
-            action: xai_grok_telemetry::events::PromptSuggestionAction::Shown,
+        orz_telemetry::session_ctx::log_event(orz_telemetry::events::PromptSuggestion {
+            action: orz_telemetry::events::PromptSuggestionAction::Shown,
             chars,
             words,
         });
@@ -575,8 +575,8 @@ impl AgentView {
             } => (plugin_relative_path.clone(), name.clone(), true),
             _ => return,
         };
-        xai_grok_telemetry::session_ctx::log_event(
-            xai_grok_telemetry::events::PluginCtaConnectClicked {
+        orz_telemetry::session_ctx::log_event(
+            orz_telemetry::events::PluginCtaConnectClicked {
                 plugin_name: name.clone(),
                 is_retry,
             },
@@ -606,7 +606,7 @@ impl AgentView {
             .push(super::actions::Effect::InstallPluginFromCta {
                 agent_id: self.session.id,
                 session_id,
-                source_url_or_path: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
+                source_url_or_path: orz_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
                     .to_string(),
                 plugin_relative_path,
             });
@@ -704,7 +704,7 @@ mod plugin_cta_notify_tests {
             } => {
                 assert_eq!(
                     source_url_or_path,
-                    xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
+                    orz_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
                 );
                 assert_eq!(plugin_relative_path.as_str(), "plugins/figma");
             }

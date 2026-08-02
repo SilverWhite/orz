@@ -53,7 +53,7 @@ pub struct ImageViewerState {
 pub fn decode_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     // Unrestricted: accepts any format `image` recognises so paste previews
     // don't fail for non-allow-listed types.
-    xai_grok_tools::util::image_validate::validate_image_bytes_unrestricted(bytes, false)
+    orz_tools::util::image_validate::validate_image_bytes_unrestricted(bytes, false)
         .ok()
         .map(|(w, h, _)| (w, h))
 }
@@ -102,7 +102,7 @@ impl ImageViewerState {
         let display_bytes = crate::terminal::image::prepare_overlay_image_bytes(&bytes)
             .unwrap_or_else(|| bytes.clone());
 
-        let mime_type = xai_grok_shared::clipboard::mime_from_bytes(&bytes).to_owned();
+        let mime_type = orz_shared::clipboard::mime_from_bytes(&bytes).to_owned();
         let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned());
 
         Some(Self {
@@ -214,7 +214,7 @@ pub fn load_image_data(path: &std::path::Path) -> ImageLoadResult {
     };
     let display_bytes = crate::terminal::image::prepare_overlay_image_bytes(&bytes)
         .unwrap_or_else(|| bytes.clone());
-    let mime_type = xai_grok_shared::clipboard::mime_from_bytes(&bytes).to_owned();
+    let mime_type = orz_shared::clipboard::mime_from_bytes(&bytes).to_owned();
 
     ImageLoadResult::Loaded(LoadedImageData {
         image_bytes: bytes,
@@ -564,7 +564,7 @@ pub struct InlineMediaInfo {
     pub alt_text: String,
 }
 
-use xai_grok_shared::clipboard::mime_to_extension;
+use orz_shared::clipboard::mime_to_extension;
 
 /// A single image pasted into the prompt.
 ///
@@ -779,7 +779,7 @@ pub fn display_text(display_number: usize) -> String {
 
 /// Derive a file extension from a MIME type.
 ///
-/// Delegates to [`xai_grok_shared::clipboard::mime_to_extension`].
+/// Delegates to [`orz_shared::clipboard::mime_to_extension`].
 pub fn extension_for_mime(mime: &str) -> &'static str {
     mime_to_extension(mime)
 }
@@ -962,7 +962,7 @@ fn read_image_at_path(path: &std::path::Path) -> Option<PastedImage> {
         return None;
     }
 
-    let mime_type = xai_grok_shared::clipboard::mime_from_bytes(&data);
+    let mime_type = orz_shared::clipboard::mime_from_bytes(&data);
     if mime_type == "application/octet-stream" {
         return None;
     }
@@ -1375,11 +1375,11 @@ pub fn session_images_dir(
     cwd: &std::path::Path,
 ) -> Option<PathBuf> {
     let sid = session_id?;
-    let info = xai_grok_shared::session::info::Info {
+    let info = orz_shared::session::info::Info {
         id: sid.clone(),
         cwd: cwd.to_string_lossy().into_owned(),
     };
-    Some(xai_grok_shared::session::session_dir(&info).join("images"))
+    Some(orz_shared::session::session_dir(&info).join("images"))
 }
 
 /// Derive the `mermaid/` cache directory for a session.
@@ -1393,11 +1393,11 @@ pub fn session_mermaid_dir(
     cwd: &std::path::Path,
 ) -> Option<PathBuf> {
     let sid = session_id?;
-    let info = xai_grok_shared::session::info::Info {
+    let info = orz_shared::session::info::Info {
         id: sid.clone(),
         cwd: cwd.to_string_lossy().into_owned(),
     };
-    Some(xai_grok_shared::session::session_dir(&info).join("mermaid"))
+    Some(orz_shared::session::session_dir(&info).join("mermaid"))
 }
 
 // -------------------------------------------------------------------------
@@ -1465,7 +1465,7 @@ pub fn load_for_send(img: &PastedImage) -> Option<(Vec<u8>, String)> {
 ///   `PastedImage` provides the bytes.
 /// - Otherwise, if `workspace_cwd` is `Some`, attempt to load the
 ///   placeholder's path via the shared
-///   [`xai_grok_shell::session::placeholder_images::load_placeholder_image`]
+///   [`orz_shell::session::placeholder_images::load_placeholder_image`]
 ///   helper. On success: attach a `ContentBlock::Image` and leave the
 ///   placeholder text in place. On failure: strip the placeholder from
 ///   the forwarded text and emit a `tracing::warn!` (no UI alert
@@ -1482,7 +1482,7 @@ pub fn build_content_blocks_with_workspace(
     workspace_cwd: Option<&std::path::Path>,
 ) -> Vec<agent_client_protocol::ContentBlock> {
     let allowed: Option<Vec<std::path::PathBuf>> =
-        workspace_cwd.map(xai_grok_shared::placeholder_images::default_allowed_prefixes);
+        workspace_cwd.map(orz_shared::placeholder_images::default_allowed_prefixes);
     build_content_blocks_with_prefixes(text, images, allowed.as_deref())
 }
 
@@ -1501,7 +1501,7 @@ pub fn build_content_blocks_with_prefixes(
         text,
         images,
         allowed_prefixes,
-        xai_grok_shared::placeholder_images::MAX_PLACEHOLDER_AGGREGATE_BYTES,
+        orz_shared::placeholder_images::MAX_PLACEHOLDER_AGGREGATE_BYTES,
     )
 }
 
@@ -1509,7 +1509,7 @@ pub fn build_content_blocks_with_prefixes(
 /// that takes an explicit aggregate-bytes cap.
 ///
 /// Mirrors the server-side
-/// [`xai_grok_shell::session::placeholder_images::recover_orphan_placeholders_with_prefixes_and_caps`].
+/// [`orz_shell::session::placeholder_images::recover_orphan_placeholders_with_prefixes_and_caps`].
 /// Aggregate-cap semantics match: `aggregate + image.len() > cap`
 /// triggers the loop break (inclusive boundary — a running total
 /// exactly equal to the cap is admitted).
@@ -1532,7 +1532,7 @@ pub fn build_content_blocks_with_prefixes_and_caps(
     // tempts the model into a redundant `Read` on its own
     // attachment.
     let rewritten_text =
-        xai_grok_shared::placeholder_images::strip_paths_from_image_placeholders(rewritten_text);
+        orz_shared::placeholder_images::strip_paths_from_image_placeholders(rewritten_text);
 
     let mut blocks = Vec::with_capacity(1 + images.len() + orphan_images.len());
     blocks.push(ContentBlock::Text(TextContent::new(rewritten_text)));
@@ -1561,7 +1561,7 @@ pub fn build_content_blocks_with_prefixes_and_caps(
                 // Record the `[Image #N]` display number so the server resolves
                 // the token by number, not list position. See `AttachedImages`.
                 .meta(Some(
-                    xai_grok_shared::placeholder_images::display_number_meta(img.display_number),
+                    orz_shared::placeholder_images::display_number_meta(img.display_number),
                 )),
         ));
     }
@@ -1603,7 +1603,7 @@ fn resolve_orphan_placeholders(
     let attached_numbers: std::collections::HashSet<usize> =
         images.iter().map(|i| i.display_number).collect();
 
-    let placeholders = xai_grok_shared::placeholder_images::extract_placeholders(&text);
+    let placeholders = orz_shared::placeholder_images::extract_placeholders(&text);
     if placeholders.is_empty() {
         return (text, Vec::new());
     }
@@ -1618,7 +1618,7 @@ fn resolve_orphan_placeholders(
         if attached_numbers.contains(&ph.display_number) {
             continue; // PastedImage already supplies these bytes.
         }
-        match xai_grok_shared::placeholder_images::load_placeholder_image(&ph.path, allowed) {
+        match orz_shared::placeholder_images::load_placeholder_image(&ph.path, allowed) {
             Ok(loaded) => {
                 let next_total = aggregate_bytes.saturating_add(loaded.data.len());
                 if next_total > aggregate_max {
@@ -1641,7 +1641,7 @@ fn resolve_orphan_placeholders(
                         .uri(uri)
                         // Same `[Image #N]` → number mapping as inline images.
                         .meta(Some(
-                            xai_grok_shared::placeholder_images::display_number_meta(
+                            orz_shared::placeholder_images::display_number_meta(
                                 ph.display_number,
                             ),
                         )),
@@ -4086,7 +4086,7 @@ mod tests {
             panic!("expected Image block");
         };
         assert_eq!(
-            xai_grok_shared::placeholder_images::display_number_from_meta(ic.meta.as_ref()),
+            orz_shared::placeholder_images::display_number_from_meta(ic.meta.as_ref()),
             Some(3),
             "image block _meta must carry the real display number for token resolution"
         );

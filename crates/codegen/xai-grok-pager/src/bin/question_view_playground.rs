@@ -15,7 +15,7 @@ use xai_grok_pager::views::prompt_widget::StashedPrompt;
 use xai_grok_pager::views::question_view::{
     QUESTION_VIEW_HPAD, QuestionViewState, question_view_height, render_question_view,
 };
-use xai_grok_tools::implementations::grok_build::ask_user_question::{Question, QuestionOption};
+use orz_tools::implementations::grok_build::ask_user_question::{Question, QuestionOption};
 
 /// Hardcoded example question sets for UI playground scenarios.
 fn example_scenarios() -> Vec<(&'static str, Vec<Question>)> {

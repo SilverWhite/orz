@@ -1,0 +1,3 @@
+#!/bin/bash
+# Wrapper for protoc under MSYS2/MinGW to fix /dev/stdout issues
+exec "/c/Users/1/AppData/Local/Microsoft/WinGet/Packages/Google.Protobuf_Microsoft.Winget.Source_8wekyb3d8bbwe/bin/protoc.exe" "$@" 2>&1

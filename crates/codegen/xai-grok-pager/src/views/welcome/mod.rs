@@ -170,7 +170,7 @@ struct WelcomeLayoutInput<'a> {
     compact: bool,
     /// Horizontal-inset compaction (appearance setting) for the stacked slot.
     prompt_compact: bool,
-    announcement: Option<&'a xai_grok_announcements::RemoteAnnouncement>,
+    announcement: Option<&'a orz_announcements::RemoteAnnouncement>,
     /// Whether a long announcement is expanded inline (vs. collapsed to 2 lines).
     expanded: bool,
     /// Whether the info slot reserves a promo upgrade CTA (spacer + button).
@@ -438,7 +438,7 @@ pub(super) fn render_version_badge(
         spans.push(sep);
     }
 
-    let channel = xai_grok_update::channel_label();
+    let channel = orz_update::channel_label();
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(
@@ -448,7 +448,7 @@ pub(super) fn render_version_badge(
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::styled(
-                format!("{}{}", xai_grok_version::VERSION, channel),
+                format!("{}{}", orz_version::VERSION, channel),
                 Style::default().fg(theme.gray),
             ));
             spans.push(Span::styled(
@@ -477,7 +477,7 @@ pub(super) fn render_version_badge(
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::styled(
-                xai_grok_version::VERSION,
+                orz_version::VERSION,
                 Style::default().fg(theme.gray),
             ));
         }
@@ -598,7 +598,7 @@ pub struct WelcomeRenderParams<'a> {
     pub auth_code_cursor_byte: usize,
     pub clipboard_delivery: Option<crate::clipboard::ClipboardDelivery>,
     pub show_raw_url: bool,
-    pub announcement: Option<&'a xai_grok_announcements::RemoteAnnouncement>,
+    pub announcement: Option<&'a orz_announcements::RemoteAnnouncement>,
     pub tip: Option<&'a str>,
     pub model_name: &'a str,
     pub flags: &'a [PromptFlag<'a>],
@@ -615,16 +615,16 @@ pub struct WelcomeRenderParams<'a> {
     pub startup_warnings: &'a [StartupWarning],
     pub pending_update_version: Option<&'a str>,
     /// Recent foreign session offered on ctrl+u, suppressed by a pending update.
-    pub foreign_resume_hint: Option<&'a xai_grok_workspace::foreign_sessions::RecentForeignSession>,
+    pub foreign_resume_hint: Option<&'a orz_workspace::foreign_sessions::RecentForeignSession>,
     pub is_api_key_auth: bool,
     pub session_picker_content_results:
-        Option<&'a [xai_grok_shell::extensions::session_search::SearchSessionHit]>,
+        Option<&'a [orz_shell::extensions::session_search::SearchSessionHit]>,
     pub session_picker_content_loading: bool,
     /// The query the picker entries were server-fetched with (see
     /// [`crate::views::session_picker::effective_filter_query`]).
     pub session_picker_entries_query: Option<&'a str>,
     pub welcome_tick: u64,
-    pub gate: Option<&'a xai_grok_shell::auth::GateInfo>,
+    pub gate: Option<&'a orz_shell::auth::GateInfo>,
     pub subscription_tier: Option<&'a str>,
     pub session_picker_grouped: bool,
     /// Source filter for the session picker.
@@ -1650,7 +1650,7 @@ fn render_announcement_section(
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
-    announcement: &xai_grok_announcements::RemoteAnnouncement,
+    announcement: &orz_announcements::RemoteAnnouncement,
     min_width_hint: u16,
     content_height: u16,
     expanded: bool,
@@ -2240,7 +2240,7 @@ pub(crate) struct SessionPickerRenderCtx<'a> {
     pub(crate) pending_hint: Option<crate::views::shortcuts_bar::PendingHint>,
     pub(crate) shortcuts_area: Option<Rect>,
     pub(crate) content_results:
-        Option<&'a [xai_grok_shell::extensions::session_search::SearchSessionHit]>,
+        Option<&'a [orz_shell::extensions::session_search::SearchSessionHit]>,
     pub(crate) content_loading: bool,
     /// The query `sessions` were server-fetched with (see
     /// [`crate::views::session_picker::effective_filter_query`]).
@@ -2811,7 +2811,7 @@ mod tests {
 
     #[test]
     fn foreign_resume_tip_names_each_tool_and_age() {
-        use xai_grok_workspace::foreign_sessions::ForeignSessionTool;
+        use orz_workspace::foreign_sessions::ForeignSessionTool;
 
         let auth = AuthState::Done;
         let trust = TrustState::Done;
@@ -2820,7 +2820,7 @@ mod tests {
             (ForeignSessionTool::Codex, "Codex"),
             (ForeignSessionTool::Cursor, "Cursor"),
         ] {
-            let hint = xai_grok_workspace::foreign_sessions::RecentForeignSession {
+            let hint = orz_workspace::foreign_sessions::RecentForeignSession {
                 tool,
                 native_id: "native-id".into(),
                 age: std::time::Duration::from_secs(125),
@@ -2838,8 +2838,8 @@ mod tests {
     fn pending_update_suppresses_foreign_resume_tip() {
         let auth = AuthState::Done;
         let trust = TrustState::Done;
-        let hint = xai_grok_workspace::foreign_sessions::RecentForeignSession {
-            tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool::Cursor,
+        let hint = orz_workspace::foreign_sessions::RecentForeignSession {
+            tool: orz_workspace::foreign_sessions::ForeignSessionTool::Cursor,
             native_id: "native-id".into(),
             age: std::time::Duration::from_secs(30),
         };
@@ -3957,8 +3957,8 @@ mod tests {
         );
     }
 
-    fn long_ann() -> xai_grok_announcements::RemoteAnnouncement {
-        xai_grok_announcements::RemoteAnnouncement {
+    fn long_ann() -> orz_announcements::RemoteAnnouncement {
+        orz_announcements::RemoteAnnouncement {
             title: Some("Security policy".into()),
             message: Some(
                 "Report security incidents to the security team promptly through \
@@ -4001,7 +4001,7 @@ the usual channels. "
     #[test]
     fn announcement_equal_for_short_message() {
         let area = Rect::new(0, 0, 120, 60);
-        let a = xai_grok_announcements::RemoteAnnouncement {
+        let a = orz_announcements::RemoteAnnouncement {
             title: Some("FYI".into()),
             message: Some("All good.".into()),
             ..Default::default()

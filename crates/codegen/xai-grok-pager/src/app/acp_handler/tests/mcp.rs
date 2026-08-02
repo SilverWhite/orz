@@ -32,7 +32,7 @@
     fn server_status_routes_to_owning_agent() {
         use crate::views::extensions_modal::TabDataState;
         use crate::views::mcps_modal::McpServerDisplayStatus;
-        use xai_grok_shell::extensions::mcp::McpServerStatus;
+        use orz_shell::extensions::mcp::McpServerStatus;
 
         // Agent 0 owns sess-owner; Agent 1 is foregrounded.
         let mut app = make_app_two_agents();
@@ -332,7 +332,7 @@
 
     #[test]
     fn server_status_handler_noop_when_modal_closed_background() {
-        use xai_grok_shell::extensions::mcp::McpServerStatus;
+        use orz_shell::extensions::mcp::McpServerStatus;
         let mut app = make_app_two_agents();
         // Owner is background and has NO modal open. server_status
         // must be a silent no-op (no Effect scheduling, no redraw).
@@ -358,7 +358,7 @@
     /// of how the cheap path is gated on `is_active`.
     #[test]
     fn server_status_handler_noop_when_modal_closed_foreground() {
-        use xai_grok_shell::extensions::mcp::McpServerStatus;
+        use orz_shell::extensions::mcp::McpServerStatus;
         let mut app = make_app_two_agents();
         // Foreground = agent 1 (sess-active). Send a push targeting
         // the foregrounded agent, no modal open.
@@ -380,7 +380,7 @@
     #[test]
     fn server_status_handler_noop_when_modal_data_still_loading() {
         use crate::views::extensions_modal::{ExtensionsModalState, ExtensionsTab, TabDataState};
-        use xai_grok_shell::extensions::mcp::McpServerStatus;
+        use orz_shell::extensions::mcp::McpServerStatus;
         let mut app = make_app_two_agents();
         {
             let owner = app.agents.get_mut(&AgentId(0)).unwrap();
@@ -441,7 +441,7 @@
     fn server_status_lenient_tools_decoding_still_applies_status() {
         use crate::views::extensions_modal::TabDataState;
         use crate::views::mcps_modal::McpServerDisplayStatus;
-        use xai_grok_shell::extensions::mcp::McpServerStatus;
+        use orz_shell::extensions::mcp::McpServerStatus;
         let mut app = make_app_two_agents();
         seed_owner_agent_with_open_modal(&mut app);
 
@@ -480,7 +480,7 @@
     /// `serde_json::to_string` of the shell type itself.
     #[test]
     fn server_status_round_trips_shell_canonical_type() {
-        use xai_grok_shell::extensions::mcp::{
+        use orz_shell::extensions::mcp::{
             McpServerSource, McpServerStatus, McpServerStatusPayload, McpServerStatusReason,
         };
         let payload = McpServerStatusPayload {

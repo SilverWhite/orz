@@ -1,5 +1,5 @@
 use agent_client_protocol as acp;
-use xai_grok_tools::implementations::grok_build::{
+use orz_tools::implementations::grok_build::{
     LoopFireMode, SCHEDULER_CREATE_TOOL_NAME, loop_schedule_instruction, loop_usage_message,
 };
 

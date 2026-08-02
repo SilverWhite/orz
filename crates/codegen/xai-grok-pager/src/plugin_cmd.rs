@@ -4,7 +4,7 @@
 //! clap args and handler logic co-located in a dedicated module. The pager's
 //! `main.rs` dispatches here with a one-liner.
 //!
-//! Business logic lives in `xai_grok_shell::plugin` (shared orchestration)
+//! Business logic lives in `orz_shell::plugin` (shared orchestration)
 //! and lower crates (`xai-grok-agent`, `xai-grok-plugin-marketplace`). This
 //! module is a thin CLI wrapper: parse args, call ops, format output, emit
 //! telemetry.
@@ -15,11 +15,11 @@ use anyhow::{Result, bail};
 use clap::Subcommand;
 use serde::Serialize;
 
-use xai_grok_agent::plugins::install_registry::{InstallKind, InstallRegistry};
-use xai_grok_agent::plugins::manifest::{ManifestLoadResult, PluginManifest, load_manifest};
-use xai_grok_plugin_marketplace::SourceKind;
-use xai_grok_plugin_marketplace::git::SourceCacheLease;
-use xai_grok_shell::plugin::{self, RepoUpdateOutcome, UninstallError};
+use orz_agent::plugins::install_registry::{InstallKind, InstallRegistry};
+use orz_agent::plugins::manifest::{ManifestLoadResult, PluginManifest, load_manifest};
+use orz_plugin_marketplace::SourceKind;
+use orz_plugin_marketplace::git::SourceCacheLease;
+use orz_shell::plugin::{self, RepoUpdateOutcome, UninstallError};
 
 // ── JSON output types ───────────────────────────────────────────────
 
@@ -297,7 +297,7 @@ fn cmd_list(json: bool, available: bool) -> Result<()> {
 fn installed_plugins(
     repos: &[(
         &str,
-        &xai_grok_agent::plugins::install_registry::InstalledRepo,
+        &orz_agent::plugins::install_registry::InstalledRepo,
     )],
 ) -> Vec<PluginEntry> {
     repos
@@ -326,11 +326,11 @@ fn installed_plugins(
 }
 
 fn available_plugins(registry: &InstallRegistry) -> Vec<PluginEntry> {
-    let config = xai_grok_shell::config::load_effective_config()
+    let config = orz_shell::config::load_effective_config()
         .ok()
         .unwrap_or(toml::Value::Table(toml::map::Map::new()));
-    let mut sources = xai_grok_plugin_marketplace::load_sources(&config);
-    sources.extend(xai_grok_plugin_marketplace::load_extra_sources_from_settings(&sources));
+    let mut sources = orz_plugin_marketplace::load_sources(&config);
+    sources.extend(orz_plugin_marketplace::load_extra_sources_from_settings(&sources));
 
     let mut entries = Vec::new();
     for source in &sources {
@@ -338,9 +338,9 @@ fn available_plugins(registry: &InstallRegistry) -> Vec<PluginEntry> {
         let root = resolve_marketplace_root(source);
         let Some((root, lease)) = root else { continue };
 
-        for plugin in xai_grok_plugin_marketplace::scan_marketplace(&root).entries {
+        for plugin in orz_plugin_marketplace::scan_marketplace(&root).entries {
             let already_installed =
-                xai_grok_plugin_marketplace::installer::find_installed_marketplace_plugin(
+                orz_plugin_marketplace::installer::find_installed_marketplace_plugin(
                     registry,
                     &identity,
                     &plugin.relative_path,
@@ -366,7 +366,7 @@ fn available_plugins(registry: &InstallRegistry) -> Vec<PluginEntry> {
     entries
 }
 
-fn source_identity(source: &xai_grok_plugin_marketplace::MarketplaceSource) -> String {
+fn source_identity(source: &orz_plugin_marketplace::MarketplaceSource) -> String {
     match &source.kind {
         SourceKind::Git { url, .. } => url.clone(),
         SourceKind::Local { path } => path.display().to_string(),
@@ -374,17 +374,17 @@ fn source_identity(source: &xai_grok_plugin_marketplace::MarketplaceSource) -> S
 }
 
 fn resolve_marketplace_root(
-    source: &xai_grok_plugin_marketplace::MarketplaceSource,
+    source: &orz_plugin_marketplace::MarketplaceSource,
 ) -> Option<(std::path::PathBuf, Option<SourceCacheLease>)> {
     match &source.kind {
         SourceKind::Local { path } if path.is_dir() => Some((path.clone(), None)),
         SourceKind::Git { url, branch } => {
-            let cache = xai_grok_plugin_marketplace::git::default_cache_root();
-            xai_grok_plugin_marketplace::git::sync_source_cache_with_mode(
+            let cache = orz_plugin_marketplace::git::default_cache_root();
+            orz_plugin_marketplace::git::sync_source_cache_with_mode(
                 url,
                 branch.as_deref(),
                 &cache,
-                xai_grok_plugin_marketplace::git::SyncMode::UseTtl,
+                orz_plugin_marketplace::git::SyncMode::UseTtl,
             )
             .map(|lease| (lease.path.clone(), Some(lease)))
             .map_err(|e| tracing::warn!("failed to sync marketplace {url}: {e}"))
@@ -394,20 +394,20 @@ fn resolve_marketplace_root(
     }
 }
 
-fn install_kind(is_git: bool) -> xai_grok_telemetry::events::InstallKind {
+fn install_kind(is_git: bool) -> orz_telemetry::events::InstallKind {
     if is_git {
-        xai_grok_telemetry::events::InstallKind::Git
+        orz_telemetry::events::InstallKind::Git
     } else {
-        xai_grok_telemetry::events::InstallKind::Local
+        orz_telemetry::events::InstallKind::Local
     }
 }
 
 fn log_plugin_installed(
-    install_kind: xai_grok_telemetry::events::InstallKind,
+    install_kind: orz_telemetry::events::InstallKind,
     success: bool,
     error_category: Option<String>,
 ) {
-    xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::PluginInstalled {
+    orz_telemetry::session_ctx::log_event(orz_telemetry::events::PluginInstalled {
         install_kind,
         success,
         trust: true,
@@ -416,7 +416,7 @@ fn log_plugin_installed(
 }
 
 fn cmd_install(source: &str, trust: bool) -> Result<()> {
-    if let Some(mref) = xai_grok_plugin_marketplace::install_resolve::parse_marketplace_ref(source)
+    if let Some(mref) = orz_plugin_marketplace::install_resolve::parse_marketplace_ref(source)
     {
         return cmd_install_marketplace(source, &mref, trust);
     }
@@ -424,7 +424,7 @@ fn cmd_install(source: &str, trust: bool) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_default();
 
     if !trust {
-        use xai_grok_agent::plugins::git_install::{self, InstallSource};
+        use orz_agent::plugins::git_install::{self, InstallSource};
         let subject = match git_install::parse_install_source(source, &cwd) {
             InstallSource::Git { url, .. } => format!("from git repo {url}"),
             InstallSource::Local { path, .. } => format!("from directory {}", path.display()),
@@ -450,7 +450,7 @@ fn cmd_install(source: &str, trust: bool) -> Result<()> {
             let cat = plugin::classify_install_error(&e);
             // On failure we don't know the kind; default to Git (matches canonical).
             log_plugin_installed(
-                xai_grok_telemetry::events::InstallKind::Git,
+                orz_telemetry::events::InstallKind::Git,
                 false,
                 Some(cat),
             );
@@ -461,7 +461,7 @@ fn cmd_install(source: &str, trust: bool) -> Result<()> {
 
 fn cmd_install_marketplace(
     source: &str,
-    mref: &xai_grok_plugin_marketplace::install_resolve::MarketplaceRef,
+    mref: &orz_plugin_marketplace::install_resolve::MarketplaceRef,
     trust: bool,
 ) -> Result<()> {
     if !trust {
@@ -518,7 +518,7 @@ fn cmd_install_marketplace(
         Err(e) => {
             // On failure we don't know the kind; default to Git (matches canonical).
             log_plugin_installed(
-                xai_grok_telemetry::events::InstallKind::Git,
+                orz_telemetry::events::InstallKind::Git,
                 false,
                 Some(e.category()),
             );
@@ -530,8 +530,8 @@ fn cmd_install_marketplace(
 fn cmd_uninstall(name: &str, confirm: bool, keep_data: bool) -> Result<()> {
     match plugin::uninstall_plugin(name, confirm, keep_data) {
         Ok(outcome) => {
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::PluginUninstalled {
+            orz_telemetry::session_ctx::log_event(
+                orz_telemetry::events::PluginUninstalled {
                     confirmed: true,
                     success: true,
                 },
@@ -610,10 +610,10 @@ fn cmd_enable(name: &str) -> Result<()> {
                Run `grok plugin list` to see installed plugins."
         );
     }
-    if let Err(e) = xai_grok_shell::config::remove_disabled_plugin(name) {
+    if let Err(e) = orz_shell::config::remove_disabled_plugin(name) {
         tracing::warn!("failed to remove from disabled list: {e}");
     }
-    xai_grok_shell::config::add_enabled_plugin(name)
+    orz_shell::config::add_enabled_plugin(name)
         .map_err(|e| anyhow::anyhow!("Failed to enable plugin: {e}"))?;
     println!("Enabled plugin: {name}");
     Ok(())
@@ -627,10 +627,10 @@ fn cmd_disable(name: &str) -> Result<()> {
                Run `grok plugin list` to see installed plugins."
         );
     }
-    if let Err(e) = xai_grok_shell::config::remove_enabled_plugin(name) {
+    if let Err(e) = orz_shell::config::remove_enabled_plugin(name) {
         tracing::warn!("failed to remove from enabled list: {e}");
     }
-    xai_grok_shell::config::add_disabled_plugin(name)
+    orz_shell::config::add_disabled_plugin(name)
         .map_err(|e| anyhow::anyhow!("Failed to disable plugin: {e}"))?;
     println!("Disabled plugin: {name}");
     Ok(())
@@ -789,11 +789,11 @@ fn cmd_tag(path: &str, push: bool, force: bool, dry_run: bool) -> Result<()> {
 // ── Marketplace subcommands ─────────────────────────────────────────
 
 async fn run_marketplace(cmd: MarketplaceCommand) -> Result<()> {
-    let config = xai_grok_shell::config::load_effective_config()
+    let config = orz_shell::config::load_effective_config()
         .ok()
         .unwrap_or(toml::Value::Table(toml::map::Map::new()));
-    let mut sources = xai_grok_plugin_marketplace::load_sources(&config);
-    sources.extend(xai_grok_plugin_marketplace::load_extra_sources_from_settings(&sources));
+    let mut sources = orz_plugin_marketplace::load_sources(&config);
+    sources.extend(orz_plugin_marketplace::load_extra_sources_from_settings(&sources));
 
     match cmd {
         MarketplaceCommand::List { json } => marketplace_list(&sources, json),
@@ -804,7 +804,7 @@ async fn run_marketplace(cmd: MarketplaceCommand) -> Result<()> {
 }
 
 fn marketplace_list(
-    sources: &[xai_grok_plugin_marketplace::MarketplaceSource],
+    sources: &[orz_plugin_marketplace::MarketplaceSource],
     json: bool,
 ) -> Result<()> {
     if json {
@@ -846,11 +846,11 @@ fn marketplace_list(
 }
 
 fn marketplace_add(
-    sources: &[xai_grok_plugin_marketplace::MarketplaceSource],
+    sources: &[orz_plugin_marketplace::MarketplaceSource],
     url: &str,
     force: bool,
 ) -> Result<()> {
-    use xai_grok_shell::plugin::MarketplaceAddInput;
+    use orz_shell::plugin::MarketplaceAddInput;
 
     let url = url.trim();
     if url.is_empty() {
@@ -879,7 +879,7 @@ fn marketplace_add(
     // Local paths never match the git-URL allowlist, so a restricted
     // strictKnownMarketplaces policy blocks them — intentionally fail-closed.
     let allowlist =
-        &xai_grok_workspace::permission::resolution::managed_settings().marketplace_allowlist;
+        &orz_workspace::permission::resolution::managed_settings().marketplace_allowlist;
     if allowlist.is_restricted() && !allowlist.is_url_allowed(&identity) {
         bail!("Marketplace source blocked: {}", allowlist.block_reason());
     }
@@ -901,7 +901,7 @@ fn marketplace_add(
     }
 
     if !force && let MarketplaceAddInput::GitUrl(git_url) = &input {
-        xai_grok_plugin_marketplace::git::probe_git_remote(git_url).map_err(|e| {
+        orz_plugin_marketplace::git::probe_git_remote(git_url).map_err(|e| {
             anyhow::anyhow!(
                 "{e}\nNot adding \"{url}\": it doesn't look like a reachable git repository. \
                  Re-run with --force to add it anyway (e.g. a host only reachable on VPN)."
@@ -913,7 +913,7 @@ fn marketplace_add(
         MarketplaceAddInput::GitUrl(u) => plugin::name_from_url(u),
         MarketplaceAddInput::LocalPath(p) => plugin::name_from_path(p),
     };
-    let config_path = xai_grok_config::grok_home().join("config.toml");
+    let config_path = orz_config::grok_home().join("config.toml");
 
     let content = std::fs::read_to_string(&config_path).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = content
@@ -953,10 +953,10 @@ fn marketplace_add(
 /// Resolve `remove` input to a source: exact name match first, then the same
 /// URL/path matching `marketplace add` uses.
 fn find_removal_source<'a>(
-    sources: &'a [xai_grok_plugin_marketplace::MarketplaceSource],
+    sources: &'a [orz_plugin_marketplace::MarketplaceSource],
     input: &str,
     cwd: &Path,
-) -> Result<&'a xai_grok_plugin_marketplace::MarketplaceSource, String> {
+) -> Result<&'a orz_plugin_marketplace::MarketplaceSource, String> {
     let mut by_name = sources.iter().filter(|s| s.name == input);
     if let Some(first) = by_name.next() {
         if by_name.next().is_some() {
@@ -979,7 +979,7 @@ fn find_removal_source<'a>(
     // Loaded local sources carry expanded paths, so expand `~`/relative inputs
     // the same way `marketplace add` does before comparing.
     let local_input = match plugin::classify_marketplace_add_input(input, cwd) {
-        xai_grok_shell::plugin::MarketplaceAddInput::LocalPath(p) => Some(p),
+        orz_shell::plugin::MarketplaceAddInput::LocalPath(p) => Some(p),
         _ => None,
     };
 
@@ -1009,7 +1009,7 @@ fn find_removal_source<'a>(
 }
 
 fn marketplace_remove(
-    sources: &[xai_grok_plugin_marketplace::MarketplaceSource],
+    sources: &[orz_plugin_marketplace::MarketplaceSource],
     name_or_url: &str,
 ) -> Result<()> {
     let input = name_or_url.trim();
@@ -1023,7 +1023,7 @@ fn marketplace_remove(
 
     let uninstalled = plugin::uninstall_marketplace_source_plugins(&identity);
 
-    let config_path = xai_grok_config::grok_home().join("config.toml");
+    let config_path = orz_config::grok_home().join("config.toml");
     let mut removed_from_config = false;
     if let Ok(content) = std::fs::read_to_string(&config_path)
         && let Some(new) = plugin::remove_toml_marketplace_block(&content, &identity)
@@ -1056,18 +1056,18 @@ fn marketplace_remove(
 }
 
 fn marketplace_update(
-    sources: &[xai_grok_plugin_marketplace::MarketplaceSource],
+    sources: &[orz_plugin_marketplace::MarketplaceSource],
     name: Option<&str>,
 ) -> Result<()> {
     marketplace_update_with_cache_root(
         sources,
         name,
-        &xai_grok_plugin_marketplace::git::default_cache_root(),
+        &orz_plugin_marketplace::git::default_cache_root(),
     )
 }
 
 fn marketplace_update_with_cache_root(
-    sources: &[xai_grok_plugin_marketplace::MarketplaceSource],
+    sources: &[orz_plugin_marketplace::MarketplaceSource],
     name: Option<&str>,
     cache_root: &Path,
 ) -> Result<()> {
@@ -1083,7 +1083,7 @@ fn marketplace_update_with_cache_root(
             name_matched = true;
         }
         if let SourceKind::Git { url, branch } = &source.kind {
-            match xai_grok_plugin_marketplace::git::force_sync_source_cache(
+            match orz_plugin_marketplace::git::force_sync_source_cache(
                 url,
                 branch.as_deref(),
                 cache_root,
@@ -1123,7 +1123,7 @@ fn marketplace_update_with_cache_root(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xai_grok_plugin_marketplace::MarketplaceSource;
+    use orz_plugin_marketplace::MarketplaceSource;
 
     fn removal_fixture() -> Vec<MarketplaceSource> {
         vec![
@@ -1259,7 +1259,7 @@ mod tests {
             },
         };
 
-        let cache_dir = xai_grok_plugin_marketplace::git::sync_source_cache(
+        let cache_dir = orz_plugin_marketplace::git::sync_source_cache(
             &url,
             Some("main"),
             cache_root.path(),
@@ -1286,7 +1286,7 @@ mod tests {
     }
 
     fn current_head(repo: &Path) -> String {
-        let output = xai_grok_plugin_marketplace::git::git_command()
+        let output = orz_plugin_marketplace::git::git_command()
             .current_dir(repo)
             .args(["rev-parse", "HEAD"])
             .output()

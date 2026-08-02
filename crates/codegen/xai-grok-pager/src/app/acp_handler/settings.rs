@@ -65,11 +65,11 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // dismissal and the leader re-nudges every new session. Idempotent in
     // embedded mode, where the in-process agent seeds the same cache.
     if let Some(campaigns) = update.campaigns.clone() {
-        let rs = xai_grok_shell::util::config::RemoteSettings {
+        let rs = orz_shell::util::config::RemoteSettings {
             campaigns,
             ..Default::default()
         };
-        xai_grok_shell::util::config::set_remote_campaigns_from_settings(Some(&rs));
+        orz_shell::util::config::set_remote_campaigns_from_settings(Some(&rs));
     }
 
     if let Some(v) = update.auto_permission_mode_enabled {
@@ -78,8 +78,8 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
         // its own copy). Refresh the startup snapshot so the Shift+Tab cycle and
         // the settings modal both reflect a remote-only enablement/kill-switch
         // without a restart.
-        xai_grok_shell::util::config::cache_remote_auto_permission_mode_enabled(Some(v));
-        app.auto_mode_gate = xai_grok_shell::util::config::auto_permission_mode_enabled_from_disk();
+        orz_shell::util::config::cache_remote_auto_permission_mode_enabled(Some(v));
+        app.auto_mode_gate = orz_shell::util::config::auto_permission_mode_enabled_from_disk();
         // Mid-session kill switch: when the gate just went off, drop displayed
         // Auto to Ask + clear every agent's per-session flag (shared with the
         // startup reconcile), AND tell live sessions to leave Auto. Clearing only
@@ -110,7 +110,7 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
         && app.permission_mode_from_soft_default
     {
         // One config read at the I/O boundary; the applier is deterministic.
-        let root = xai_grok_shell::config::load_effective_config().ok();
+        let root = orz_shell::config::load_effective_config().ok();
         apply_soft_default_permission_mode(
             app,
             root.as_ref().and_then(|r| r.get("ui")),
@@ -135,7 +135,7 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // moments after launch.
     if let Some(v) = update.privacy_notice_rollout {
         app.privacy_notice_rollout =
-            xai_grok_config::env_bool("GROK_PRIVACY_NOTICE_ROLLOUT").unwrap_or(v);
+            orz_config::env_bool("GROK_PRIVACY_NOTICE_ROLLOUT").unwrap_or(v);
     }
     if let Some(v) = update.privacy_banner_reshow_days {
         app.privacy_banner_reshow_days = Some(
@@ -164,7 +164,7 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
             && app
                 .subscription_tier
                 .as_deref()
-                .is_some_and(xai_grok_shell::tier::is_restricted_tier_name)
+                .is_some_and(orz_shell::tier::is_restricted_tier_name)
         {
             app.voice_reset();
             app.voice_ui_active = false;
@@ -192,7 +192,7 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
                 _ => None,
             })
             .or_else(|| {
-                xai_grok_shell::config::load_effective_config()
+                orz_shell::config::load_effective_config()
                     .ok()
                     .and_then(|cfg| cfg.get("cli")?.get("session_picker_grouped")?.as_bool())
             })
@@ -218,7 +218,7 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     {
         // (An empty gate_message would only clear the gate message text, NOT
         // access, so it intentionally does not touch the gate here.)
-        let effs = app.impose_gate(xai_grok_shell::auth::GateInfo {
+        let effs = app.impose_gate(orz_shell::auth::GateInfo {
             message: msg.clone(),
             url: update.gate_url.clone(),
             label: update.gate_label.clone(),
@@ -231,9 +231,9 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // re-resolve on every update (see below), and updates are rare (post-auth
     // refresh, `/new`), so three small TOML reads are fine.
     let (requirements, user_config, managed_config) = (
-        xai_grok_shell::config::load_merged_requirements(),
-        xai_grok_shell::config::load_from_disk().ok(),
-        xai_grok_shell::config::load_managed_config().ok(),
+        orz_shell::config::load_merged_requirements(),
+        orz_shell::config::load_from_disk().ok(),
+        orz_shell::config::load_managed_config().ok(),
     );
 
     // Local layers may beat remote — re-resolve the full chain into the render
@@ -244,11 +244,11 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // correct, and it reverts a previously cached remote enable back to the
     // local/default (off) resolution instead of leaving Some(true) stuck
     // until restart.
-    let remote = xai_grok_shell::util::config::RemoteSettings {
+    let remote = orz_shell::util::config::RemoteSettings {
         group_tool_verbs: update.group_tool_verbs,
         ..Default::default()
     };
-    let resolved = xai_grok_shell::util::config::resolve_group_tool_verbs(
+    let resolved = orz_shell::util::config::resolve_group_tool_verbs(
         requirements.as_ref(),
         user_config.as_ref(),
         managed_config.as_ref(),
@@ -275,11 +275,11 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // Same None-reverts contract as group_tool_verbs above: re-resolve the
     // full local chain with the pushed remote tier so a cleared remote settings
     // field falls back to local/default instead of staying latched.
-    let remote = xai_grok_shell::util::config::RemoteSettings {
+    let remote = orz_shell::util::config::RemoteSettings {
         collapsed_edit_blocks: update.collapsed_edit_blocks,
         ..Default::default()
     };
-    let resolved = xai_grok_shell::util::config::resolve_collapsed_edit_blocks(
+    let resolved = orz_shell::util::config::resolve_collapsed_edit_blocks(
         requirements.as_ref(),
         user_config.as_ref(),
         managed_config.as_ref(),
@@ -313,7 +313,7 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
 
     // Re-resolve tips from config layers + the updated remote tips.
     if let Some(remote_tips) = update.tips {
-        use xai_grok_shell::util::config::resolve_tips;
+        use orz_shell::util::config::resolve_tips;
 
         app.tips = resolve_tips(
             requirements.as_ref(),
@@ -322,8 +322,8 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
             Some(&remote_tips),
         );
         if !app.tips.is_empty() {
-            let grok_home = xai_grok_tools::util::grok_home::grok_home();
-            app.tip = xai_grok_shell::util::tips::pick_and_advance(&app.tips, &grok_home);
+            let grok_home = orz_tools::util::grok_home::grok_home();
+            app.tip = orz_shell::util::tips::pick_and_advance(&app.tips, &grok_home);
         } else {
             app.tip = None;
         }
@@ -334,8 +334,8 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // absent (older shell) → keep the tags resolved at startup. Env + local
     // [slash_command_tags] always apply via resolve_slash_command_tags.
     if let Some(remote_tags) = update.slash_command_tags.as_ref() {
-        use xai_grok_shell::util::config::resolve_slash_command_tags;
-        let effective_config = xai_grok_shell::config::load_effective_config().ok();
+        use orz_shell::util::config::resolve_slash_command_tags;
+        let effective_config = orz_shell::config::load_effective_config().ok();
         let empty_toml = toml::Value::Table(Default::default());
         let tags_config = effective_config.as_ref().unwrap_or(&empty_toml);
         *app.command_tags.borrow_mut() =
@@ -357,7 +357,7 @@ pub(super) fn apply_soft_default_permission_mode(
     effective_ui: Option<&toml::Value>,
     remote: Option<&str>,
 ) {
-    let mode = xai_grok_shell::util::config::resolve_permission_mode(effective_ui, remote);
+    let mode = orz_shell::util::config::resolve_permission_mode(effective_ui, remote);
     app.default_yolo = mode.is_always_approve() && app.yolo_policy_block.is_none();
     let auto = mode.is_auto() && app.auto_mode_gate && !app.default_yolo;
     app.current_ui.permission_mode = Some(if auto {
@@ -365,7 +365,7 @@ pub(super) fn apply_soft_default_permission_mode(
     } else if app.default_yolo {
         "always-approve".to_string()
     } else {
-        xai_grok_shell::util::config::resolved_display_permission_mode(effective_ui, remote)
+        orz_shell::util::config::resolved_display_permission_mode(effective_ui, remote)
             .to_string()
     });
 }
@@ -421,7 +421,7 @@ pub(super) fn handle_sessions_changed(notif: &acp::ExtNotification, app: &mut Ap
 
 pub(super) fn handle_announcements_update(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
     let Ok(parsed) =
-        serde_json::from_str::<xai_grok_announcements::AnnouncementsRefreshed>(notif.params.get())
+        serde_json::from_str::<orz_announcements::AnnouncementsRefreshed>(notif.params.get())
     else {
         return false;
     };
@@ -435,9 +435,9 @@ pub(super) fn handle_announcements_update(notif: &acp::ExtNotification, app: &mu
     // replace would drop requirements/user/managed announcements and let the
     // prune erase their persisted hide keys. Same disk reads the settings
     // branch performed; pushes are rare.
-    let requirements = xai_grok_shell::config::load_merged_requirements();
-    let user_config = xai_grok_shell::config::load_from_disk().ok();
-    let managed_config = xai_grok_shell::config::load_managed_config().ok();
+    let requirements = orz_shell::config::load_merged_requirements();
+    let user_config = orz_shell::config::load_from_disk().ok();
+    let managed_config = orz_shell::config::load_managed_config().ok();
     apply_announcements_update(
         app,
         parsed.r#gen,
@@ -456,18 +456,18 @@ pub(super) fn handle_announcements_update(notif: &acp::ExtNotification, app: &mu
 pub(super) fn apply_announcements_update(
     app: &mut AppView,
     next_gen: u64,
-    remote: &[xai_grok_announcements::RemoteAnnouncement],
+    remote: &[orz_announcements::RemoteAnnouncement],
     requirements: Option<&toml::Value>,
     user_config: Option<&toml::Value>,
     managed_config: Option<&toml::Value>,
 ) {
-    let merged = xai_grok_shell::util::config::resolve_announcements(
+    let merged = orz_shell::util::config::resolve_announcements(
         requirements,
         user_config,
         managed_config,
         Some(remote),
     );
-    let announcements = xai_grok_announcements::filter_expired(merged);
+    let announcements = orz_announcements::filter_expired(merged);
 
     app.announcement = match app.announcement.as_ref() {
         Some(current) => announcements
@@ -480,7 +480,7 @@ pub(super) fn apply_announcements_update(
     app.active_announcements = announcements;
     app.announcements_last_gen = next_gen;
     // Opportunistic per-ID prune on a real update (never per frame) so the hidden set cannot grow unboundedly.
-    if xai_grok_announcements::prune_hidden_announcement_ids(
+    if orz_announcements::prune_hidden_announcement_ids(
         &mut app.hidden_announcement_ids,
         &app.active_announcements,
     ) {
@@ -493,8 +493,8 @@ pub(super) fn apply_announcements_update(
 }
 
 pub(super) fn pick_random_announcement(
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
-) -> Option<xai_grok_announcements::RemoteAnnouncement> {
+    announcements: &[orz_announcements::RemoteAnnouncement],
+) -> Option<orz_announcements::RemoteAnnouncement> {
     if announcements.is_empty() {
         return None;
     }
@@ -548,7 +548,7 @@ pub(super) struct PagerSettingsUpdate {
     /// (empty = campaigns withdrawn); `None`/omitted (settings-less push,
     /// older shell) must leave this process's campaign cache untouched.
     #[serde(default)]
-    campaigns: Option<Vec<xai_grok_shell::util::config::CampaignOverride>>,
+    campaigns: Option<Vec<orz_shell::util::config::CampaignOverride>>,
     #[serde(default)]
     gate_message: Option<String>,
     #[serde(default)]

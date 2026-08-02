@@ -25,7 +25,7 @@ linkify = { workspace = true }
 tui-scrollbar = { workspace = true }
 
 # Markdown / syntax highlighting
-xai-grok-markdown = { workspace = true }
+orz-markdown = { workspace = true }
 syntect = { workspace = true }
 anstyle = { workspace = true }
 supports-color = { workspace = true }
@@ -62,12 +62,11 @@ xai-ratatui-inline = { workspace = true }
 
 # ACP
 agent-client-protocol = { workspace = true }
-xai-grok-config = { workspace = true }
-xai-grok-shared = { workspace = true }
-xai-grok-workspace = { workspace = true }
-xai-grok-telemetry = { workspace = true }
-xai-grok-tools = { workspace = true }
-xai-grok-paths = { path = "../xai-grok-paths" }
+orz-config = { workspace = true }
+orz-shared = { workspace = true }
+orz-workspace = { workspace = true }
+orz-tools = { workspace = true }
+orz-paths = { path = "../orz-paths" }
 
 # Base64 encoding for image data
 base64 = { workspace = true }

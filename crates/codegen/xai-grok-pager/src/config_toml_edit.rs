@@ -31,7 +31,7 @@ pub(crate) fn read_config_document_for_edit(path: &Path) -> Option<toml_edit::Do
 /// no-ops when the existing file is non-empty but unparseable (so a malformed
 /// config is never clobbered). Performs blocking I/O.
 pub(crate) fn set_hint(key: &str, value: impl Into<toml_edit::Value>) -> std::io::Result<()> {
-    let path = xai_grok_tools::util::grok_home::grok_home().join("config.toml");
+    let path = orz_tools::util::grok_home::grok_home().join("config.toml");
     set_hint_at(&path, key, value)
 }
 

@@ -44,7 +44,7 @@ pub struct ForkArgs {
 /// - `--worktree` and `--no-worktree` cannot both appear.
 /// - `--at <turn>` returns a friendly "not supported in this version"
 ///   message: the shell already supports the underlying parameter (see
-///   `xai_grok_shell::session::fork::ForkSessionRequest::target_prompt_index`)
+///   `orz_shell::session::fork::ForkSessionRequest::target_prompt_index`)
 ///   and a turn-picker UI is planned; this version deliberately rejects
 ///   the flag so users discover the deferral cleanly.
 pub fn parse_fork_args(args: &str) -> Result<ForkArgs, String> {

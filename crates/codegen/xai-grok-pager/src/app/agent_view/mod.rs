@@ -302,7 +302,7 @@ impl PrivacyBannerState {
 pub struct BannerSlotParams<'a> {
     /// Reserved slot height (0 = no slot this frame).
     pub(crate) height: u16,
-    pub(crate) announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    pub(crate) announcements: &'a [orz_announcements::RemoteAnnouncement],
     pub(crate) hidden_ids: &'a std::collections::BTreeSet<String>,
     /// Privacy upsell banner owns the slot (highest banner precedence
     /// below critical announcements; gated by the caller).
@@ -870,7 +870,7 @@ pub struct AgentView {
     /// Currently hovered modal button key (for highlight).
     pub(crate) modal_hovered_key: Option<char>,
     /// Cached server-reported context state.
-    pub context_state: Option<xai_grok_shell::session::ContextInfo>,
+    pub context_state: Option<orz_shell::session::ContextInfo>,
     /// Gateway light-frontend session (`kind: "chat"` / `--chat` / conversation
     /// resume). Suppresses Build credits / local sampler context telemetry so the
     /// status bar and prompt never imply remote usage from wrong metrics.
@@ -1283,7 +1283,7 @@ pub struct AgentView {
     /// session does not exist yet, so the mode can't be sent immediately).
     /// Consumed in the `SessionCreated` / `WorktreeSessionCreated` handlers,
     /// mirroring `AgentSession.deferred_model_switch`.
-    pub(crate) deferred_session_mode: Option<xai_grok_tools::types::SessionMode>,
+    pub(crate) deferred_session_mode: Option<orz_tools::types::SessionMode>,
     pub(crate) pending_extensions_fetch: bool,
     /// Whether this view was last rendered inside the dashboard's session
     /// overlay. Updated every frame by `draw`; read when building the
@@ -1694,10 +1694,10 @@ fn translate_local_submit(
             let choice = choices
                 .get(*idx)
                 .copied()
-                .unwrap_or(xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo);
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::CreditLimitUpsellClicked {
-                    surface: xai_grok_telemetry::events::CreditLimitUpsellSurface::QuestionModal,
+                .unwrap_or(orz_telemetry::events::CreditLimitChoice::PayAsYouGo);
+            orz_telemetry::session_ctx::log_event(
+                orz_telemetry::events::CreditLimitUpsellClicked {
+                    surface: orz_telemetry::events::CreditLimitUpsellSurface::QuestionModal,
                     choice,
                 },
             );
@@ -1710,8 +1710,8 @@ fn translate_local_submit(
                 .and_then(|q| q.options.get(*idx))
                 .and_then(|o| o.id.as_deref())
                 .unwrap_or(super::dispatch::UPSELL_URL_UPGRADE);
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::SuperGrokUpsellClicked {
+            orz_telemetry::session_ctx::log_event(
+                orz_telemetry::events::SuperGrokUpsellClicked {
                     source,
                     auth_method: None,
                 },
@@ -1750,10 +1750,10 @@ fn translate_project_select(
     skipped: bool,
 ) -> InputOutcome {
     use crate::views::question_view::QuestionSelection;
-    use xai_grok_telemetry::events::{ProjectPickerOutcome, ProjectPickerSelected};
+    use orz_telemetry::events::{ProjectPickerOutcome, ProjectPickerSelected};
     let project_dir_options = resolved_paths.len().saturating_sub(1);
     let emit = |outcome: ProjectPickerOutcome| {
-        xai_grok_telemetry::session_ctx::log_event(ProjectPickerSelected {
+        orz_telemetry::session_ctx::log_event(ProjectPickerSelected {
             outcome,
             picked_project: outcome.picked_project(),
             project_dir_options,
@@ -2034,7 +2034,7 @@ fn is_hash_key(key: &KeyEvent) -> bool {
 }
 /// Check `[features] remember_mode` in config.toml. Defaults to `false`.
 fn remember_mode_enabled() -> bool {
-    let path = xai_grok_tools::util::grok_home::grok_home().join("config.toml");
+    let path = orz_tools::util::grok_home::grok_home().join("config.toml");
     let Some(doc) = crate::config_toml_edit::read_config_document_for_edit(&path) else {
         return false;
     };
@@ -2147,7 +2147,7 @@ fn resolve_action(action_id: Option<ActionId>) -> Option<InputOutcome> {
 fn question_visible_h(
     scroll_region: Option<(u16, u16)>,
     prompt_height: u16,
-    question: &xai_grok_tools::implementations::grok_build::ask_user_question::Question,
+    question: &orz_tools::implementations::grok_build::ask_user_question::Question,
     content_w: usize,
     preview: Option<&str>,
     fullscreen: bool,

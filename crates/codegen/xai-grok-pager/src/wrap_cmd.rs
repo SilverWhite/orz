@@ -41,7 +41,7 @@ pub fn run(args: &WrapArgs) -> Result<()> {
     #[cfg(unix)]
     let (wrapped, fallback) = {
         let shell = user_shell();
-        let in_path = xai_grok_config::shell::is_command_available(program);
+        let in_path = orz_config::shell::is_command_available(program);
         (
             derive_spawn(&args.command, &shell, in_path, ShellMode::Interactive),
             derive_spawn(&args.command, &shell, in_path, ShellMode::Plain),
@@ -164,7 +164,7 @@ fn quote_word(word: &str) -> String {
 /// The user's shell from `$SHELL` when it points at an existing file,
 /// otherwise `/bin/sh`. `$SHELL` is preferred because the user typed the
 /// wrapped command in their own shell's dialect (aliases live there);
-/// deliberately not `xai_grok_config::shell::unix_shell_path`, which coerces
+/// deliberately not `orz_config::shell::unix_shell_path`, which coerces
 /// to bash/zsh and would drop fish/other-shell aliases.
 #[cfg(unix)]
 fn user_shell() -> String {

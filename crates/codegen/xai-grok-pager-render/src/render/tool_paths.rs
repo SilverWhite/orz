@@ -90,10 +90,10 @@ fn resolve_tool_path_with_home(
     let target = resolve_tool_path_target_with_home(Path::new(path), cwd, home);
     let display_path = target
         .as_deref()
-        .map(xai_grok_paths::normalize_lexically)
+        .map(orz_paths::normalize_lexically)
         .unwrap_or_else(|| PathBuf::from(path));
     let relative_to_cwd = target.as_ref().and_then(|_| {
-        let cwd = xai_grok_paths::normalize_lexically(cwd?);
+        let cwd = orz_paths::normalize_lexically(cwd?);
         display_path.strip_prefix(cwd).ok().and_then(non_empty_rel)
     });
     ResolvedToolPath {
@@ -398,7 +398,7 @@ mod tests {
         );
         assert_eq!(
             resolve_tool_path("~/project/../notes.md", None).display_path,
-            xai_grok_paths::normalize_lexically(&home.join("notes.md"))
+            orz_paths::normalize_lexically(&home.join("notes.md"))
         );
     }
 

@@ -571,7 +571,7 @@ pub(in crate::app::dispatch) fn dispatch_toggle_mouse_capture(app: &mut AppView)
             "active_view": format!("{:?}", app.active_view),
         })),
     );
-    xai_grok_shell::util::with_locked_stderr(|stderr| {
+    orz_shell::util::with_locked_stderr(|stderr| {
         let _ = if enable {
             crossterm::execute!(stderr, crossterm::event::EnableMouseCapture)
         } else {
@@ -1197,7 +1197,7 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
         // fork_secondary_model: empty rollback restores baseline default.
         ("fork_secondary_model", SettingValue::String(s)) => {
             let restored = if s.is_empty() {
-                xai_grok_shell::models::default_model().to_string()
+                orz_shell::models::default_model().to_string()
             } else {
                 s.clone()
             };

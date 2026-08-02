@@ -7,7 +7,7 @@
 //!   static defaults in prod.
 //! - **`cache`**: thread-local in-memory caches for the user-facing UI bool
 //!   settings (`compact_mode`, `show_timestamps`, `simple_mode`). Disk
-//!   writes happen in `xai_grok_shell::util::config::set_<field>()` via
+//!   writes happen in `orz_shell::util::config::set_<field>()` via
 //!   `Effect::PersistSetting`, NOT here — this is a read-cache only.
 //! - **`permission_cursor`**: the `default_selected_permission` value type
 //!   plus the caches and resolution logic for which row a permission prompt

@@ -105,7 +105,7 @@ pub fn open_url(url: &str) -> bool {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    xai_grok_tools::util::detach_std_command(&mut command);
+    orz_tools::util::detach_std_command(&mut command);
     match command.spawn() {
         Ok(_) => true,
         Err(e) => {

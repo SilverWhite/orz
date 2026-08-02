@@ -230,7 +230,7 @@ fn shutdown_with_terminal_restore(exit_code: i32) -> ! {
     TERMINAL_OWNED.store(false, Ordering::Release);
     // Best-effort unregister (non-blocking flock to avoid hanging).
     if let Some(ref sid) = *CURRENT_SESSION_ID.lock() {
-        let _ = xai_grok_shell::active_sessions::try_unregister(sid);
+        let _ = orz_shell::active_sessions::try_unregister(sid);
     }
     flush_telemetry_and_exit(exit_code);
 }
@@ -244,10 +244,10 @@ fn flush_telemetry_and_exit(exit_code: i32) -> ! {
     xai_tty_utils::global_process_scope().kill_all();
     // Restore fd 2 so Sentry/OTEL flushes reach the terminal.
     xai_tty_utils::restore_native_stderr();
-    xai_grok_telemetry::sentry::flush_on_shutdown();
-    xai_grok_telemetry::otel_layer::shutdown_otel();
+    orz_telemetry::sentry::flush_on_shutdown();
+    orz_telemetry::otel_layer::shutdown_otel();
     // Flush the --debug firehose on TUI signal exit (this path bypasses main's flush).
-    xai_grok_telemetry::debug_log::flush();
+    orz_telemetry::debug_log::flush();
     std::process::exit(exit_code);
 }
 

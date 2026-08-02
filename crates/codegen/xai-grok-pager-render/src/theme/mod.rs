@@ -629,7 +629,7 @@ pub fn apply_cursor_color() {
     let Some((r, g, b)) = crate::render::color::resolve_to_rgb(theme.accent_user) else {
         return;
     };
-    xai_grok_shared::stderr::with_locked_stderr(|stderr| {
+    orz_shared::stderr::with_locked_stderr(|stderr| {
         let _ = write!(stderr, "\x1b]12;rgb:{r:02x}/{g:02x}/{b:02x}\x07");
         let _ = stderr.flush();
     });
@@ -640,7 +640,7 @@ pub fn apply_cursor_color() {
 /// Called on shutdown to restore the user's original cursor appearance.
 pub fn reset_cursor_color() {
     use std::io::Write;
-    xai_grok_shared::stderr::with_locked_stderr(|stderr| {
+    orz_shared::stderr::with_locked_stderr(|stderr| {
         let _ = write!(stderr, "\x1b]112\x07");
         let _ = stderr.flush();
     });

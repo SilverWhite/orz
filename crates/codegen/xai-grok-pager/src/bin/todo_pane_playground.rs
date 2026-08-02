@@ -20,7 +20,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use xai_grok_pager::appearance::LayoutConfig;
 use xai_grok_pager::views::todo_pane::TodoPane;
-use xai_grok_shell::tools::{TodoItem, TodoPriority, TodoStatus};
+use orz_shell::tools::{TodoItem, TodoPriority, TodoStatus};
 
 type Scenario = (&'static str, &'static str, Vec<TodoItem>);
 

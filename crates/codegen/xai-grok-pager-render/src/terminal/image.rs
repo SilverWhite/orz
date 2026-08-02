@@ -211,7 +211,7 @@ impl KittyImageFormat {
 
 /// Detect the Kitty graphics format code for encoded image bytes.
 pub fn kitty_format_from_bytes(image_data: &[u8]) -> Option<KittyImageFormat> {
-    match xai_grok_shared::clipboard::mime_from_bytes(image_data) {
+    match orz_shared::clipboard::mime_from_bytes(image_data) {
         "image/png" => Some(KittyImageFormat::Png),
         _ => None,
     }

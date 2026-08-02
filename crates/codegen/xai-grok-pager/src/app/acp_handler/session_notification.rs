@@ -1,5 +1,5 @@
 use super::*;
-use xai_grok_shell::sampling::error::format_rate_limited_user_message;
+use orz_shell::sampling::error::format_rate_limited_user_message;
 /// Stash a live stop/stop_failure batch under `stash_pid` for the turn marker
 /// to fold. `merge_same_name` merges a same-name repeat instead of standalone.
 pub(super) fn stash_live_stop_batch(
@@ -651,15 +651,15 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
                 .into_iter()
                 .map(|r| {
                     let status = match r.status {
-                        xai_grok_shell::extensions::notification::HookRunStatusDto::Success {
+                        orz_shell::extensions::notification::HookRunStatusDto::Success {
                             elapsed_ms,
                         } => HookRunStatus::Success {
                             elapsed: std::time::Duration::from_millis(elapsed_ms),
                         },
-                        xai_grok_shell::extensions::notification::HookRunStatusDto::Skipped => {
+                        orz_shell::extensions::notification::HookRunStatusDto::Skipped => {
                             HookRunStatus::Skipped
                         }
-                        xai_grok_shell::extensions::notification::HookRunStatusDto::Failed {
+                        orz_shell::extensions::notification::HookRunStatusDto::Failed {
                             error,
                             elapsed_ms,
                             blocked: true,
@@ -667,7 +667,7 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
                             detail: error,
                             elapsed: std::time::Duration::from_millis(elapsed_ms),
                         },
-                        xai_grok_shell::extensions::notification::HookRunStatusDto::Failed {
+                        orz_shell::extensions::notification::HookRunStatusDto::Failed {
                             error,
                             elapsed_ms,
                             blocked: false,
@@ -860,10 +860,10 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
                 );
                 return false;
             }
-            use xai_grok_shell::sampling::types::ReasoningEffort;
+            use orz_shell::sampling::types::ReasoningEffort;
             let new_model_id = acp::ModelId::new(model_id.clone());
             if !agent.session.models.available.contains_key(&new_model_id) {
-                if xai_grok_shell::agent::chat_modes::process_chat_mode_enabled() {
+                if orz_shell::agent::chat_modes::process_chat_mode_enabled() {
                     agent.session.models.available.insert(
                         new_model_id.clone(),
                         acp::ModelInfo::new(new_model_id.clone(), model_id.clone()),
@@ -1240,7 +1240,7 @@ pub(super) fn scrollback_has_recent_compaction_failed(
 /// warning (and is re-materialized on session replay).
 pub(super) fn apply_image_compressed(
     agent: &mut AgentView,
-    images: &[xai_grok_shell::extensions::notification::ImageCompressedEntry],
+    images: &[orz_shell::extensions::notification::ImageCompressedEntry],
     message: &str,
 ) -> bool {
     if images.is_empty() {
@@ -1254,14 +1254,14 @@ pub(super) fn apply_image_compressed(
     false
 }
 pub(super) fn apply_retry_state(
-    retry: &xai_grok_shell::extensions::notification::RetryState,
+    retry: &orz_shell::extensions::notification::RetryState,
     session: &mut AgentSession,
     scrollback: &mut crate::scrollback::state::ScrollbackState,
     is_api_key_auth: bool,
 ) {
     let mut is_credit_limit = false;
     let mut is_reauth = false;
-    use xai_grok_shell::extensions::notification::RetryState;
+    use orz_shell::extensions::notification::RetryState;
     match retry {
         RetryState::Retrying {
             attempt,
@@ -1282,8 +1282,8 @@ pub(super) fn apply_retry_state(
             session.set_retry_activity(None);
             session.rate_limited = *rate_limited;
             if *rate_limited {
-                xai_grok_telemetry::session_ctx::log_event(
-                    xai_grok_telemetry::events::RateLimitHit {
+                orz_telemetry::session_ctx::log_event(
+                    orz_telemetry::events::RateLimitHit {
                         model_id: session
                             .models
                             .current
@@ -1296,7 +1296,7 @@ pub(super) fn apply_retry_state(
             }
             is_credit_limit = super::super::dispatch::is_credit_limit_error(None, reason);
             let is_free_usage = *rate_limited
-                && xai_grok_shell::sampling::error::is_free_usage_exhausted_error(reason);
+                && orz_shell::sampling::error::is_free_usage_exhausted_error(reason);
             if is_credit_limit {
                 session.credit_limit_blocked = true;
             } else if is_free_usage {
@@ -1347,7 +1347,7 @@ pub(super) fn apply_retry_state(
         }
     }
     if is_credit_limit {
-        xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::CreditLimitHit {
+        orz_telemetry::session_ctx::log_event(orz_telemetry::events::CreditLimitHit {
             model_id: session
                 .models
                 .current
@@ -1375,7 +1375,7 @@ pub(super) fn apply_retry_state(
 /// caller can refresh open settings modals after the per-agent borrow
 /// releases.
 pub(super) fn detect_plan_mode_change(update: &acp::SessionUpdate, agent: &mut AgentView) -> bool {
-    use xai_grok_tools::types::SessionMode;
+    use orz_tools::types::SessionMode;
     let acp::SessionUpdate::CurrentModeUpdate(cmu) = update else {
         return false;
     };

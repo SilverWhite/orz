@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
-use xai_grok_shell::agent::config::Config as AgentConfig;
-use xai_grok_shell::session::share::{ShareSessionRequest, ShareSessionResponse};
+use orz_shell::agent::config::Config as AgentConfig;
+use orz_shell::session::share::{ShareSessionRequest, ShareSessionResponse};
 
 use agent_client_protocol as acp;
 use xai_acp_lib::acp_send;

@@ -14,7 +14,7 @@ use std::time::Instant;
 /// `cancel_subagents` for the cancel wire payload. `None` means prompt.
 fn effective_cancel_subagents_preference(
     agent_pref: Option<bool>,
-    ui: &xai_grok_shell::agent::config::UiConfig,
+    ui: &orz_shell::agent::config::UiConfig,
 ) -> Option<bool> {
     agent_pref.or(match ui.cancel_subagents_on_turn_cancel.as_deref() {
         Some("always_stop") => Some(true),
@@ -32,7 +32,7 @@ fn cancel_subagents_pref_canonical(stop: bool) -> &'static str {
 }
 
 fn cancel_subagents_pref_canonical_from_ui(
-    ui: &xai_grok_shell::agent::config::UiConfig,
+    ui: &orz_shell::agent::config::UiConfig,
 ) -> &'static str {
     match ui.cancel_subagents_on_turn_cancel.as_deref() {
         Some("always_stop") => "always_stop",
@@ -553,9 +553,9 @@ pub(super) fn handle_bg_task_killed(
     app: &mut AppView,
     session_id: String,
     task_id: String,
-    outcome: Option<xai_grok_tools::types::KillOutcome>,
+    outcome: Option<orz_tools::types::KillOutcome>,
 ) -> Vec<Effect> {
-    use xai_grok_tools::types::KillOutcome;
+    use orz_tools::types::KillOutcome;
     if let Some(agent) = find_agent_by_session_id(&mut app.agents, &session_id) {
         match outcome {
             Some(KillOutcome::Killed) => {

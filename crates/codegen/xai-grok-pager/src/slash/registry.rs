@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use xai_grok_tools::implementations::skills::types::SkillScope;
+use orz_tools::implementations::skills::types::SkillScope;
 
 use super::acp_command::AcpSlashCommand;
 use super::command::SlashCommand;

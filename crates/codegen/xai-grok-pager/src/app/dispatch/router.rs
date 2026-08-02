@@ -118,7 +118,7 @@ use crate::app::agent_view::ActivePane;
 use crate::app::app_view::{ActiveView, AppView, AuthState};
 use crate::scrollback::types::DisplayMode;
 use crate::views::session_picker::CONTENT_EXPAND_OFFSET;
-use xai_grok_telemetry::session_ctx::log_event;
+use orz_telemetry::session_ctx::log_event;
 pub(super) fn dispatch_copy_auth_url(
     app: &mut AppView,
     copy: impl FnOnce(&str) -> crate::clipboard::ClipboardDelivery,
@@ -151,7 +151,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
     let effects = match action {
         Action::Quit | Action::QuitConfirmed => {
             if let Some(tx) = &app.voice_cmd_tx {
-                let _ = tx.try_send(xai_grok_voice::VoiceCommand::Shutdown);
+                let _ = tx.try_send(orz_voice::VoiceCommand::Shutdown);
             }
             let mut effects = unregister_all_active_sessions(app);
             effects.push(Effect::Quit);
@@ -592,7 +592,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             if group_toggled {
                 return vec![];
             }
-            let mut credit_card: Option<(String, xai_grok_telemetry::events::CreditLimitChoice)> =
+            let mut credit_card: Option<(String, orz_telemetry::events::CreditLimitChoice)> =
                 None;
             with_scrollback(app, |s| {
                 if let Some(idx) = s.selected()
@@ -602,19 +602,19 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                     use crate::scrollback::blocks::CreditLimitCardAction;
                     let choice = match blk.action {
                         CreditLimitCardAction::PurchaseCredits => {
-                            xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits
+                            orz_telemetry::events::CreditLimitChoice::PurchaseCredits
                         }
                         CreditLimitCardAction::EnablePayg
                         | CreditLimitCardAction::IncreasePaygLimit => {
-                            xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo
+                            orz_telemetry::events::CreditLimitChoice::PayAsYouGo
                         }
                     };
                     credit_card = Some((blk.url.clone(), choice));
                 }
             });
             if let Some((url, choice)) = credit_card {
-                log_event(xai_grok_telemetry::events::CreditLimitUpsellClicked {
-                    surface: xai_grok_telemetry::events::CreditLimitUpsellSurface::InlineCard,
+                log_event(orz_telemetry::events::CreditLimitUpsellClicked {
+                    surface: orz_telemetry::events::CreditLimitUpsellSurface::InlineCard,
                     choice,
                 });
                 open_url_or_show(app, &url);
@@ -880,7 +880,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                 &app.hidden_announcement_ids,
             )
             .filter(|a| crate::views::announcements::is_dismissible(a))
-            .map(xai_grok_announcements::announcement_hide_key);
+            .map(orz_announcements::announcement_hide_key);
             if let Some(key) = shown_key
                 && app.hidden_announcement_ids.insert(key)
             {
@@ -913,7 +913,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             ) {
                 let url = url.to_owned();
                 let promo_id = promo.id.clone();
-                log_event(xai_grok_telemetry::events::AnnouncementCtaClicked {
+                log_event(orz_telemetry::events::AnnouncementCtaClicked {
                     id: promo_id,
                     source: surface,
                 });
@@ -957,7 +957,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SetCodingDataSharing { opted_in } => set_coding_data_sharing(
             app,
             opted_in,
-            xai_grok_telemetry::events::CodingDataConsentSource::Settings,
+            orz_telemetry::events::CodingDataConsentSource::Settings,
         ),
         Action::ToggleYolo => dispatch_toggle_yolo(app),
         Action::ToggleMultiline => dispatch_toggle_multiline(app),

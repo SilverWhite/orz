@@ -14,7 +14,7 @@ use crate::render::wrapping::word_wrap_lines;
 use crate::scrollback::block::BlockContent;
 use crate::scrollback::types::{AccentStyle, BlockContext, BlockLine, BlockOutput};
 use crate::theme::{Theme, quantize};
-use xai_grok_shell::session::{ContextInfo, count_detail};
+use orz_shell::session::{ContextInfo, count_detail};
 
 /// Block that renders a `/context` snapshot in scrollback.
 ///
@@ -657,7 +657,7 @@ impl BlockContent for ContextInfoBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xai_grok_shell::session::TokenUsageCategory;
+    use orz_shell::session::TokenUsageCategory;
 
     fn snapshot() -> ContextInfo {
         ContextInfo {

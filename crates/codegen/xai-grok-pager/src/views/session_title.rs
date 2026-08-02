@@ -31,7 +31,7 @@ pub fn entry_title(agent: &AgentView) -> String {
         let trimmed = title.trim();
         if !trimmed.is_empty() {
             let clean =
-                xai_grok_tools::implementations::skills::skill::extract_skill_display_text(trimmed);
+                orz_tools::implementations::skills::skill::extract_skill_display_text(trimmed);
             let text = clean.as_deref().unwrap_or(trimmed);
             return truncate_title(&sanitize_display_text(text));
         }
@@ -40,7 +40,7 @@ pub fn entry_title(agent: &AgentView) -> String {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
             let clean =
-                xai_grok_tools::implementations::skills::skill::extract_skill_display_text(trimmed);
+                orz_tools::implementations::skills::skill::extract_skill_display_text(trimmed);
             let display = clean.as_deref().unwrap_or(trimmed);
             return truncate_title(&sanitize_display_text(display));
         }

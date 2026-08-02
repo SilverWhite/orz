@@ -329,7 +329,7 @@ pub fn spawn_writer_thread() -> (
                     std::thread::sleep(delay);
                 }
                 let result = {
-                    let _guard = xai_grok_shared::stderr::stderr_lock();
+                    let _guard = orz_shared::stderr::stderr_lock();
                     write_payload(&mut writer, &payload, &thread_sync)
                 };
                 if let Err(error) = result {

@@ -36,8 +36,8 @@ xai-ratatui-inline = { workspace = true }
 # Misc used by the commit/live/full-view paths.
 chrono = { workspace = true }
 similar = { workspace = true }
-xai-grok-shell = { workspace = true }
-xai-grok-version = { workspace = true }
+orz-shell = { workspace = true }
+orz-version = { workspace = true }
 xai-token-estimation = { workspace = true }
 
 [dev-dependencies]

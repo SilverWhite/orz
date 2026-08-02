@@ -233,9 +233,9 @@ pub(crate) fn folder_is_trusted(content: &ContentController, repo: &std::path::P
     let store_path = content
         .home()
         .join(".grok")
-        .join(xai_grok_workspace::trust::TRUST_FILE_NAME);
-    let store = xai_grok_workspace::trust::TrustStore::load_from(store_path);
-    store.is_trusted(&xai_grok_workspace::trust::workspace_key(repo))
+        .join(orz_workspace::trust::TRUST_FILE_NAME);
+    let store = orz_workspace::trust::TrustStore::load_from(store_path);
+    store.is_trusted(&orz_workspace::trust::workspace_key(repo))
 }
 
 // ── Leader mode e2e ─────────────────────────────────────────────────────

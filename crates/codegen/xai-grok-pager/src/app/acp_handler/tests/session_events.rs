@@ -170,7 +170,7 @@
 
     #[test]
     fn retry_exhausted_rate_limited_empty_reason_uses_oauth_fallback() {
-        use xai_grok_shell::sampling::error::RATE_LIMITED_USER_MESSAGE_OAUTH;
+        use orz_shell::sampling::error::RATE_LIMITED_USER_MESSAGE_OAUTH;
 
         let empty = RetryState::Exhausted {
             attempts: 3,
@@ -215,7 +215,7 @@
 
     #[test]
     fn retry_exhausted_api_key_rewrites_consumer_subscription_upsell() {
-        use xai_grok_shell::sampling::error::RATE_LIMITED_USER_MESSAGE_API_KEY;
+        use orz_shell::sampling::error::RATE_LIMITED_USER_MESSAGE_API_KEY;
 
         let rpm = RetryState::Exhausted {
             attempts: 2,
@@ -775,7 +775,7 @@
             .subagent_sessions
             .insert(child_sid.into(), make_subagent_info(child_sid));
         let mut child_view = make_agent(Some(child_sid));
-        child_view.context_state = Some(xai_grok_shell::session::ContextInfo::from_notification(
+        child_view.context_state = Some(orz_shell::session::ContextInfo::from_notification(
             90_000, 131_072,
         ));
         agent
@@ -847,7 +847,7 @@
 
     #[test]
     fn retry_failed_encrypted_content_sets_model_incompatible() {
-        use xai_grok_shell::extensions::notification::RetryState;
+        use orz_shell::extensions::notification::RetryState;
         let mut session = make_session(Some("s1"));
         let mut scrollback = ScrollbackState::new();
 
@@ -867,7 +867,7 @@
 
     #[test]
     fn retry_failed_other_type_does_not_set_model_incompatible() {
-        use xai_grok_shell::extensions::notification::RetryState;
+        use orz_shell::extensions::notification::RetryState;
         let mut session = make_session(Some("s1"));
         let mut scrollback = ScrollbackState::new();
 

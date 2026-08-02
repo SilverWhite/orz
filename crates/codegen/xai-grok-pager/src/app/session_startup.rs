@@ -28,7 +28,7 @@ pub enum DeferredSessionStartup {
     },
     /// Fresh plain Grok session whose first prompt resumes a foreign tool session.
     ForeignResume {
-        tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool,
+        tool: orz_workspace::foreign_sessions::ForeignSessionTool,
         native_id: String,
     },
 }
@@ -64,7 +64,7 @@ pub fn fork_session_params(
     parent_is_worktree: bool,
 ) -> serde_json::Value {
     let parent_cwd_str = parent_cwd.to_string_lossy().into_owned();
-    let source_cwd = xai_grok_shell::session::resolve_local_session_any_cwd(parent_session_id)
+    let source_cwd = orz_shell::session::resolve_local_session_any_cwd(parent_session_id)
         .unwrap_or_else(|| parent_cwd_str.clone());
     let mut payload = serde_json::json!({
         "sourceSessionId": parent_session_id,
@@ -84,8 +84,8 @@ pub fn fork_session_params(
 /// Mirrors in-session `/fork` reading `agent.session.is_worktree`.
 pub fn parent_session_is_worktree(session_id: &str, cwd: &Path) -> bool {
     let cwd_str = cwd.to_string_lossy();
-    let sessions_root = xai_grok_shell::util::grok_home::grok_home().join("sessions");
-    let encoded = xai_grok_shell::util::grok_home::encode_cwd_dirname(&cwd_str);
+    let sessions_root = orz_shell::util::grok_home::grok_home().join("sessions");
+    let encoded = orz_shell::util::grok_home::encode_cwd_dirname(&cwd_str);
     let summary_path = sessions_root
         .join(encoded)
         .join(session_id)
@@ -318,7 +318,7 @@ pub fn valid_conversation_id_shape(id: &str) -> bool {
 /// false-refuse CLI resume / non-entry loads under `--chat`.
 pub fn local_build_session_on_disk(session_id: &str, cwd: &Path) -> bool {
     let cwd_str = cwd.to_string_lossy();
-    xai_grok_shell::session::resolve_local_session(session_id, &cwd_str).is_some()
+    orz_shell::session::resolve_local_session(session_id, &cwd_str).is_some()
 }
 /// Pure policy: process-wide `--chat` refuses a local Build disk row unless the
 /// caller marked an explicit conversation entry (picker `source == "conversation"`).
@@ -430,7 +430,7 @@ pub fn effective_fork_new_cwd(process_cwd: &str, parent_cwd: Option<&Path>) -> S
 }
 /// Resolve most-recent session id for cwd, or error.
 async fn most_recent_session_id(cwd: &str) -> anyhow::Result<(String, Option<String>)> {
-    let summaries = xai_grok_shell::session::persistence::list_summaries(Some(cwd)).await?;
+    let summaries = orz_shell::session::persistence::list_summaries(Some(cwd)).await?;
     let first = summaries.first().ok_or_else(|| {
         anyhow::anyhow!(
             "No session found for current directory. \
@@ -444,10 +444,10 @@ async fn most_recent_session_id(cwd: &str) -> anyhow::Result<(String, Option<Str
 /// auth-provider refresher before the first `auth()`: without it, environments
 /// that mint credentials via `auth_provider_command` report `NoOauth`.
 pub(crate) fn pre_acp_auth_manager(
-    agent_config: &xai_grok_shell::agent::config::Config,
-) -> std::sync::Arc<xai_grok_shell::auth::AuthManager> {
-    let auth = std::sync::Arc::new(xai_grok_shell::auth::AuthManager::new(
-        &xai_grok_shell::util::grok_home::grok_home(),
+    agent_config: &orz_shell::agent::config::Config,
+) -> std::sync::Arc<orz_shell::auth::AuthManager> {
+    let auth = std::sync::Arc::new(orz_shell::auth::AuthManager::new(
+        &orz_shell::util::grok_home::grok_home(),
         agent_config.grok_com_config.clone(),
     ));
     auth.configure_refresher(
@@ -464,7 +464,7 @@ pub fn ensure_session_id_available(session_id: &str, cwd: &str) -> anyhow::Resul
     if uuid::Uuid::try_parse(session_id).is_err() {
         anyhow::bail!("Error: --session-id must be a valid UUID (got '{session_id}').");
     }
-    if xai_grok_shell::session::persistence::session_exists_for_cwd(session_id, cwd) {
+    if orz_shell::session::persistence::session_exists_for_cwd(session_id, cwd) {
         anyhow::bail!("Error: Session ID {session_id} is already in use.");
     }
     Ok(())
@@ -603,7 +603,7 @@ async fn resolve_existing_session(
     session_id: &str,
     cwd: &str,
 ) -> anyhow::Result<ResolvedExisting> {
-    if let Some(local_id) = xai_grok_shell::session::resolve_local_session(session_id, cwd) {
+    if let Some(local_id) = orz_shell::session::resolve_local_session(session_id, cwd) {
         tracing::info!(session_id = %session_id, local_id = %local_id, "Session found locally");
         return Ok(ResolvedExisting {
             id: local_id,
@@ -612,7 +612,7 @@ async fn resolve_existing_session(
             deferred_local_miss: false,
         });
     }
-    if let Some(original_cwd) = xai_grok_shell::session::resolve_local_session_any_cwd(session_id) {
+    if let Some(original_cwd) = orz_shell::session::resolve_local_session_any_cwd(session_id) {
         tracing::info!(
             session_id = %session_id,
             original_cwd = %original_cwd,
@@ -678,10 +678,10 @@ async fn restore_session_from_remote(
     session_id: &str,
     cwd: &str,
 ) -> anyhow::Result<ResolvedExisting> {
-    let raw_config = xai_grok_shell::config::load_effective_config()
+    let raw_config = orz_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
     if let Some((false, source)) =
-        xai_grok_shell::util::config::session_registry_local_override_sourced(Some(&raw_config))
+        orz_shell::util::config::session_registry_local_override_sourced(Some(&raw_config))
     {
         anyhow::bail!(
             "Session does not exist locally (session registry is disabled by {})",
@@ -692,12 +692,12 @@ async fn restore_session_from_remote(
         "Session {:?} not found locally, restoring from remote...",
         session_id
     );
-    let agent_config = xai_grok_shell::agent::config::Config::new_from_toml_cfg(&raw_config)
+    let agent_config = orz_shell::agent::config::Config::new_from_toml_cfg(&raw_config)
         .map_err(|e| anyhow::anyhow!("Failed to create agent config: {}", e))?;
-    use xai_grok_shell::agent::session_registry_client::SessionRegistryClient;
-    use xai_grok_shell::auth::{AuthManager, ensure_authenticated_or_noninteractive};
-    use xai_grok_shell::session::restore::restore_session_with_storage;
-    use xai_grok_shell::util::grok_home::grok_home;
+    use orz_shell::agent::session_registry_client::SessionRegistryClient;
+    use orz_shell::auth::{AuthManager, ensure_authenticated_or_noninteractive};
+    use orz_shell::session::restore::restore_session_with_storage;
+    use orz_shell::util::grok_home::grok_home;
     let deployment_key = agent_config.endpoints.deployment_key.clone();
     ensure_authenticated_or_noninteractive(
         &agent_config.grok_com_config,
@@ -715,7 +715,7 @@ async fn restore_session_from_remote(
             .with_deployment_key(deployment_key.clone())
             .with_alpha_test_key(agent_config.endpoints.alpha_test_key.clone())
             .with_auth(auth_manager.clone());
-    let storage_client = xai_grok_shell::auth::credential_provider::build_storage_client_for_proxy(
+    let storage_client = orz_shell::auth::credential_provider::build_storage_client_for_proxy(
         &agent_config.endpoints.proxy_url(),
         deployment_key,
         agent_config.endpoints.alpha_test_key.clone(),
@@ -724,7 +724,7 @@ async fn restore_session_from_remote(
         None,
         "grok-pager",
     );
-    let progress: xai_grok_shell::session::restore::ProgressCallback =
+    let progress: orz_shell::session::restore::ProgressCallback =
         Box::new(|event| eprintln!("  {}", event.display_line()));
     let result = restore_session_with_storage(
         &registry_client,
@@ -759,7 +759,7 @@ async fn resolve_session_by_title(
     arg: &str,
     cwd: &str,
 ) -> anyhow::Result<Option<ResolvedExisting>> {
-    let summaries = xai_grok_shell::session::persistence::list_summaries(Some(cwd)).await?;
+    let summaries = orz_shell::session::persistence::list_summaries(Some(cwd)).await?;
     let Some(chosen) = super::session_title_resolve::select_by_title(arg, &summaries)? else {
         return Ok(None);
     };
@@ -784,7 +784,7 @@ mod tests {
     fn deferred_startup_owner_take_is_atomic() {
         let mut actions = DeferredStartupActions {
             session: Some(DeferredSessionStartup::ForeignResume {
-                tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool::Cursor,
+                tool: orz_workspace::foreign_sessions::ForeignSessionTool::Cursor,
                 native_id: "cursor-id".into(),
             }),
             prompt: Some("prompt".into()),
@@ -1142,8 +1142,8 @@ mod tests {
         let cwd = tempfile::tempdir().expect("cwd tempdir");
         let cwd_str = cwd.path().to_string_lossy().to_string();
         let id = "aaaaaaaa-1111-2222-3333-444444444444";
-        let encoded = xai_grok_shell::util::grok_home::encode_cwd_dirname(&cwd_str);
-        let sessions_cwd_dir = xai_grok_shell::util::grok_home::grok_home()
+        let encoded = orz_shell::util::grok_home::encode_cwd_dirname(&cwd_str);
+        let sessions_cwd_dir = orz_shell::util::grok_home::grok_home()
             .join("sessions")
             .join(&encoded);
         struct RmDirOnDrop(std::path::PathBuf);

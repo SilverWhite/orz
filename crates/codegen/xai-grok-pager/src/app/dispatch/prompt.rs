@@ -22,7 +22,7 @@ use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::SessionEvent;
 use crate::slash::command::DoctorRequest;
 use agent_client_protocol as acp;
-use xai_grok_telemetry::session_ctx::log_event;
+use orz_telemetry::session_ctx::log_event;
 
 /// Chat kind for the next create: CLI `--chat` (`app.chat_mode`) or one-shot
 /// `/chat` (`deferred_startup.pending_chat`, consumed here).
@@ -125,7 +125,7 @@ pub(super) fn open_doctor_fix_question(
     plan: Box<crate::diagnostics::FixPlan>,
 ) {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
 
@@ -227,9 +227,9 @@ pub(super) fn dispatch_show_undo_tip(app: &mut AppView) -> Vec<Effect> {
         crate::tips::clear_detector::undo_tip(),
         &mut app.tip_seen_counts,
     ) {
-        log_event(xai_grok_telemetry::events::ContextualTip {
-            tip: xai_grok_telemetry::events::ContextualTipKind::Undo,
-            action: xai_grok_telemetry::events::ContextualTipAction::Shown,
+        log_event(orz_telemetry::events::ContextualTip {
+            tip: orz_telemetry::events::ContextualTipKind::Undo,
+            action: orz_telemetry::events::ContextualTipAction::Shown,
         });
     }
     vec![]
@@ -258,9 +258,9 @@ pub(in crate::app) fn show_small_screen_tip(app: &mut AppView) {
         crate::tips::small_screen::small_screen_tip(),
         &mut app.tip_seen_counts,
     ) {
-        log_event(xai_grok_telemetry::events::ContextualTip {
-            tip: xai_grok_telemetry::events::ContextualTipKind::SmallScreen,
-            action: xai_grok_telemetry::events::ContextualTipAction::Shown,
+        log_event(orz_telemetry::events::ContextualTip {
+            tip: orz_telemetry::events::ContextualTipKind::SmallScreen,
+            action: orz_telemetry::events::ContextualTipAction::Shown,
         });
     }
 }
@@ -280,9 +280,9 @@ pub(in crate::app) fn show_ssh_wrap_tip(app: &mut AppView) {
         crate::tips::ssh_wrap::ssh_wrap_tip(),
         &mut app.tip_seen_counts,
     ) {
-        log_event(xai_grok_telemetry::events::ContextualTip {
-            tip: xai_grok_telemetry::events::ContextualTipKind::SshWrap,
-            action: xai_grok_telemetry::events::ContextualTipAction::Shown,
+        log_event(orz_telemetry::events::ContextualTip {
+            tip: orz_telemetry::events::ContextualTipKind::SshWrap,
+            action: orz_telemetry::events::ContextualTipAction::Shown,
         });
     }
 }
@@ -303,9 +303,9 @@ pub(super) fn dispatch_show_plan_nudge(app: &mut AppView) -> Vec<Effect> {
         crate::tips::plan_nudge::plan_nudge_tip(),
         &mut app.tip_seen_counts,
     ) {
-        log_event(xai_grok_telemetry::events::ContextualTip {
-            tip: xai_grok_telemetry::events::ContextualTipKind::PlanMode,
-            action: xai_grok_telemetry::events::ContextualTipAction::Shown,
+        log_event(orz_telemetry::events::ContextualTip {
+            tip: orz_telemetry::events::ContextualTipKind::PlanMode,
+            action: orz_telemetry::events::ContextualTipAction::Shown,
         });
     }
     vec![]
@@ -331,9 +331,9 @@ pub(super) fn dispatch_show_word_select_tip(app: &mut AppView) -> Vec<Effect> {
         crate::tips::word_select::word_select_tip(),
         &mut app.tip_seen_counts,
     ) {
-        log_event(xai_grok_telemetry::events::ContextualTip {
-            tip: xai_grok_telemetry::events::ContextualTipKind::WordSelect,
-            action: xai_grok_telemetry::events::ContextualTipAction::Shown,
+        log_event(orz_telemetry::events::ContextualTip {
+            tip: orz_telemetry::events::ContextualTipKind::WordSelect,
+            action: orz_telemetry::events::ContextualTipAction::Shown,
         });
     }
     // Snapshot the prompt as of this double-click (also on a same-key TTL
@@ -365,9 +365,9 @@ pub(super) fn dispatch_accept_word_select_tip(app: &mut AppView) -> Vec<Effect> 
         .ephemeral_tip
         .clear(crate::tips::word_select::WORD_SELECT_TIP_KEY);
     agent.word_select_tip_prompt_snapshot = None;
-    log_event(xai_grok_telemetry::events::ContextualTip {
-        tip: xai_grok_telemetry::events::ContextualTipKind::WordSelect,
-        action: xai_grok_telemetry::events::ContextualTipAction::Accepted,
+    log_event(orz_telemetry::events::ContextualTip {
+        tip: orz_telemetry::events::ContextualTipKind::WordSelect,
+        action: orz_telemetry::events::ContextualTipAction::Accepted,
     });
     super::settings::setters::set_keep_text_selection(
         app,
@@ -393,9 +393,9 @@ fn maybe_show_send_now_tip(app: &mut AppView) {
         crate::tips::send_now::send_now_tip(),
         &mut app.tip_seen_counts,
     ) {
-        log_event(xai_grok_telemetry::events::ContextualTip {
-            tip: xai_grok_telemetry::events::ContextualTipKind::SendNow,
-            action: xai_grok_telemetry::events::ContextualTipAction::Shown,
+        log_event(orz_telemetry::events::ContextualTip {
+            tip: orz_telemetry::events::ContextualTipKind::SendNow,
+            action: orz_telemetry::events::ContextualTipAction::Shown,
         });
     }
 }
@@ -594,8 +594,8 @@ pub(super) fn dispatch_send_prompt_inner(
                     (is_builtin, command)
                 };
                 {
-                    use xai_grok_telemetry::events::{PagerCommandSource, PagerSlashCommand};
-                    use xai_grok_telemetry::session_ctx::log_event;
+                    use orz_telemetry::events::{PagerCommandSource, PagerSlashCommand};
+                    use orz_telemetry::session_ctx::log_event;
                     let source = if is_builtin {
                         PagerCommandSource::Builtin
                     } else {
@@ -1227,7 +1227,7 @@ pub(super) fn handle_prompt_response(
             || result
                 .as_ref()
                 .err()
-                .is_some_and(|e| xai_grok_shell::sampling::error::is_free_usage_exhausted_error(e));
+                .is_some_and(|e| orz_shell::sampling::error::is_free_usage_exhausted_error(e));
         let model_incompatible = agent.session.model_incompatible;
         // Context overflow: the RetryState handler already pushed the actionable
         // block, so the generic TurnFailed + error toast are redundant. Derived

@@ -1056,7 +1056,7 @@ pub const DEFAULT_WORD_SEPARATORS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
 pub fn configured_word_separators() -> &'static str {
     static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHED.get_or_init(|| {
-        let root = match xai_grok_shell::config::load_effective_config() {
+        let root = match orz_shell::config::load_effective_config() {
             Ok(r) => r,
             Err(_) => return DEFAULT_WORD_SEPARATORS.to_owned(),
         };

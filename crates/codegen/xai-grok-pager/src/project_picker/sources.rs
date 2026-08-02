@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use xai_grok_shell::session::persistence::list_recent_summaries;
+use orz_shell::session::persistence::list_recent_summaries;
 
 pub async fn collect_recent_dirs(limit: usize) -> Vec<(PathBuf, DateTime<Utc>)> {
     let summaries = match list_recent_summaries(500).await {

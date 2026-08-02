@@ -15,9 +15,9 @@ use tokio_util::sync::CancellationToken;
 use crate::client_identity::{HEADLESS_CLIENT_TYPE, PAGER_CLIENT_TYPE, PAGER_CLIENT_VERSION};
 use agent_client_protocol as acp;
 use xai_acp_lib::{AcpAgentTx, AcpClientRx, acp_send};
-use xai_grok_shell::agent::auth_method::AuthMethodKind;
-use xai_grok_shell::agent::config::Config as AgentConfig;
-use xai_grok_shell::sampling::types::ReasoningEffort;
+use orz_shell::agent::auth_method::AuthMethodKind;
+use orz_shell::agent::config::Config as AgentConfig;
+use orz_shell::sampling::types::ReasoningEffort;
 
 pub use model_state::ModelState;
 
@@ -69,7 +69,7 @@ pub struct AcpConnection {
     pub available_commands: Vec<acp::AvailableCommand>,
     // NOTE: Startup announcements from InitializeResponse.meta are not yet supported.
     // Requires shell to include announcements in initialize metadata.
-    // When available, add field: startup_announcements: Option<Vec<xai_grok_announcements::RemoteAnnouncement>>
+    // When available, add field: startup_announcements: Option<Vec<orz_announcements::RemoteAnnouncement>>
     /// Whether interactive login is required (deferred auth for `grok.com`).
     pub needs_login: bool,
     /// Login button label from `AuthMethod.name` (e.g., "grok.com", "Acme Corp").
@@ -97,7 +97,7 @@ pub struct AcpConnection {
     /// In-process mode shares the agent's instance (single token cache); leader
     /// mode builds a dedicated one off the same local `auth.json`. Either way it
     /// resolves a fresh bearer per request via the refresh chain.
-    pub auth_manager: std::sync::Arc<xai_grok_shell::auth::AuthManager>,
+    pub auth_manager: std::sync::Arc<orz_shell::auth::AuthManager>,
 }
 
 /// CLI flags that affect agent configuration, threaded from PagerArgs.
@@ -131,7 +131,7 @@ pub struct ConnectFlags {
     /// Installer field for config.toml.
     pub installer: Option<String>,
     /// Remote settings from early prefetch (used for memory config resolution).
-    pub remote_settings: Option<xai_grok_shell::util::config::RemoteSettings>,
+    pub remote_settings: Option<orz_shell::util::config::RemoteSettings>,
     /// Override the entire system prompt.
     pub system_prompt_override: Option<String>,
     /// Extra rules appended to the system prompt (from `--rules`).
@@ -140,7 +140,7 @@ pub struct ConnectFlags {
     pub reasoning_effort_override: Option<ReasoningEffort>,
     /// CLI permission rules from --allow / --deny flags.
     /// Not supported in leader mode (agent config is set at leader startup).
-    pub permission_rules: Vec<xai_grok_workspace::permission::types::PermissionRule>,
+    pub permission_rules: Vec<orz_workspace::permission::types::PermissionRule>,
     /// Seed agent sessions with always-approve (YOLO) permission mode.
     pub default_yolo_mode: bool,
     /// Seed agent sessions with auto (classifier) permission mode.
@@ -154,12 +154,12 @@ pub struct ConnectFlags {
 /// After this returns, the agent is ready to create sessions and receive prompts.
 pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<AcpConnection> {
     // Load agent config from disk
-    let raw_config = xai_grok_shell::config::load_effective_config()
+    let raw_config = orz_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
     let mut agent_config = AgentConfig::new_from_toml_cfg(&raw_config)
         .map_err(|e| anyhow::anyhow!("Failed to create agent config: {}", e))?;
 
-    agent_config.resolve_runtime_fields(&xai_grok_shell::agent::config::RuntimeResolutionContext {
+    agent_config.resolve_runtime_fields(&orz_shell::agent::config::RuntimeResolutionContext {
         raw_config: &raw_config,
         remote_settings: flags.remote_settings.as_ref(),
         is_headless: false,
@@ -255,7 +255,7 @@ pub async fn connect_via_leader(
     flags: ConnectFlags,
     raw_config: &toml::Value,
 ) -> Result<AcpConnection> {
-    use xai_grok_shell::leader::{
+    use orz_shell::leader::{
         ClientCapabilities, ClientMode, LeaderReconnector, ReconnectPolicy, connect_or_spawn,
     };
 
@@ -274,7 +274,7 @@ pub async fn connect_via_leader(
         .client_identifier
         .as_deref()
         .unwrap_or(HEADLESS_CLIENT_TYPE);
-    let env_urls = xai_grok_shell::leader::LeaderEnvUrls::from(&agent_config.grok_com_config);
+    let env_urls = orz_shell::leader::LeaderEnvUrls::from(&agent_config.grok_com_config);
     let capabilities = ClientCapabilities {
         // Leader agent is pre-running; seed modes via capabilities → session meta.
         yolo_mode: flags.default_yolo_mode,
@@ -342,13 +342,13 @@ pub async fn connect_via_leader(
     // token. A second refresher would race rotation and could clear credentials
     // on failure. This one just reads the valid token, and on expiry adopts the
     // agent's disk-rotated token under the file lock (`try_adopt_disk_token`).
-    let auth_manager = std::sync::Arc::new(xai_grok_shell::auth::AuthManager::new(
-        &xai_grok_shell::util::grok_home::grok_home(),
+    let auth_manager = std::sync::Arc::new(orz_shell::auth::AuthManager::new(
+        &orz_shell::util::grok_home::grok_home(),
         agent_config.grok_com_config.clone(),
     ));
 
     // Leader has no in-process agent; init this process's product telemetry client.
-    xai_grok_shell::agent::init::update_telemetry_config(&agent_config, &auth_manager);
+    orz_shell::agent::init::update_telemetry_config(&agent_config, &auth_manager);
 
     Ok(AcpConnection {
         tx,
@@ -412,7 +412,7 @@ fn unsupported_leader_flags(flags: &ConnectFlags) -> Vec<&'static str> {
 /// Write config.toml fields based on CLI flags.
 fn apply_config_writes(flags: &ConnectFlags) {
     // Use toml_edit to preserve existing config structure
-    let config_path = xai_grok_shell::util::grok_home::grok_home().join("config.toml");
+    let config_path = orz_shell::util::grok_home::grok_home().join("config.toml");
     let content = std::fs::read_to_string(&config_path).unwrap_or_default();
     let mut doc = content
         .parse::<toml_edit::DocumentMut>()
@@ -729,7 +729,7 @@ async fn bounded_eager_auth(
     Option<serde_json::Value>,
 ) {
     match tokio::time::timeout(
-        xai_grok_shell::http::STARTUP_AUTH_REFRESH_TIMEOUT,
+        orz_shell::http::STARTUP_AUTH_REFRESH_TIMEOUT,
         eager_auth_or_login_fallback(
             tx,
             auth_methods,
@@ -953,7 +953,7 @@ mod tests {
     /// expected.
     #[test]
     fn shell_built_auth_methods_for_byok_user_skip_login_screen() {
-        use xai_grok_shell::agent::auth_method::{AuthMethodsBuildInputs, build_auth_methods};
+        use orz_shell::agent::auth_method::{AuthMethodsBuildInputs, build_auth_methods};
 
         let built = build_auth_methods(AuthMethodsBuildInputs {
             // enterprise-style: model has `env_key` set and the env var resolves,
@@ -993,7 +993,7 @@ mod tests {
     /// either passes or fails on a meaningful new code path.
     #[test]
     fn startup_auth_xai_api_key_not_first_still_requires_login() {
-        use xai_grok_shell::agent::auth_method::{GROK_COM_METHOD_ID, XAI_API_KEY_METHOD_ID};
+        use orz_shell::agent::auth_method::{GROK_COM_METHOD_ID, XAI_API_KEY_METHOD_ID};
 
         let methods = vec![
             make_auth_method(GROK_COM_METHOD_ID, "Grok", None),

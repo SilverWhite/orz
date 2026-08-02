@@ -6,7 +6,7 @@
 //! shell's layered effective config on first call.
 //!
 //! Disk writes are NOT performed here — they live in
-//! `xai_grok_shell::util::config::set_theme()` (and friends), invoked
+//! `orz_shell::util::config::set_theme()` (and friends), invoked
 //! via `Effect::PersistSetting` from the dispatcher. This module is a
 //! pager-side in-memory cache + resolution layer only.
 
@@ -117,12 +117,12 @@ pub fn set_terminal_native_lock(locked: bool) {
     // polarity accent map (default-fg grays + base ANSI hues). Without the
     // polarity-safe remap, night-theme pastels collapse to White and vanish
     // on light terminal profiles in minimal mode.
-    xai_grok_markdown::set_color_level_cap(if locked {
-        xai_grok_markdown::ColorLevel::Basic
+    orz_markdown::set_color_level_cap(if locked {
+        orz_markdown::ColorLevel::Basic
     } else {
-        xai_grok_markdown::ColorLevel::TrueColor
+        orz_markdown::ColorLevel::TrueColor
     });
-    xai_grok_markdown::set_polarity_safe_syntax(locked);
+    orz_markdown::set_polarity_safe_syntax(locked);
 }
 
 // -- Auto-mode ---------------------------------------------------------------
@@ -225,7 +225,7 @@ pub fn resolve_initial_theme_no_osc11() -> ThemeKind {
 
 // -- Disk reads --------------------------------------------------------------
 //
-// All writes go through `xai_grok_shell::util::config::set_theme()` (and
+// All writes go through `orz_shell::util::config::set_theme()` (and
 // friends) via `Effect::PersistSetting`. This module only READS from the
 // shell's layered effective config.
 
@@ -235,7 +235,7 @@ pub fn resolve_initial_theme_no_osc11() -> ThemeKind {
 /// Checks `[ui].theme` first (the canonical location), then falls back
 /// to a top-level `theme` key for backwards compatibility.
 fn load_from_disk() -> Option<ThemeKind> {
-    let root = xai_grok_config::load_effective_config_disk_only().ok()?;
+    let root = orz_config::load_effective_config_disk_only().ok()?;
     let table = root.as_table()?;
     // Canonical: [ui] section
     let value = table
@@ -252,7 +252,7 @@ fn load_from_disk() -> Option<ThemeKind> {
 /// Reads `[ui].auto_dark_theme` and `[ui].auto_light_theme`, parsing them
 /// as theme names. Filters out `Auto` to prevent circular reference.
 fn load_auto_theme_config() -> AutoThemeConfig {
-    let Ok(root) = xai_grok_config::load_effective_config_disk_only() else {
+    let Ok(root) = orz_config::load_effective_config_disk_only() else {
         return AutoThemeConfig::default();
     };
     let Some(table) = root.as_table() else {
@@ -392,14 +392,14 @@ mod tests {
     #[test]
     fn terminal_native_lock_enables_polarity_safe_syntax() {
         with_test_env(|| {
-            assert!(!xai_grok_markdown::polarity_safe_syntax());
+            assert!(!orz_markdown::polarity_safe_syntax());
             set_terminal_native_lock(true);
             assert!(
-                xai_grok_markdown::polarity_safe_syntax(),
+                orz_markdown::polarity_safe_syntax(),
                 "minimal must engage polarity-safe syntax remapping"
             );
             set_terminal_native_lock(false);
-            assert!(!xai_grok_markdown::polarity_safe_syntax());
+            assert!(!orz_markdown::polarity_safe_syntax());
         });
     }
 

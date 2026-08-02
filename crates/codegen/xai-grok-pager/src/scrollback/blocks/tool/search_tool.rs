@@ -2,7 +2,7 @@
 
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span, Text};
-use xai_grok_workspace::permission::mcp_titleize_segment;
+use orz_workspace::permission::mcp_titleize_segment;
 
 use super::TOOL_HEADER_RANGE;
 use crate::render::line_utils::truncate_str;

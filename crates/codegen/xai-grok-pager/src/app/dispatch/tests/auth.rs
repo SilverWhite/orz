@@ -311,7 +311,7 @@ fn e2e_compact_auth_failure_holds_prompt_and_resubmits_after_login() {
     use crate::app::agent::{AgentState, InFlightPrompt};
     use crate::scrollback::EntryId;
     use crate::scrollback::block::RenderBlock;
-    use xai_grok_shell::extensions::notification::{RetryState, SessionUpdate as XaiSessionUpdate};
+    use orz_shell::extensions::notification::{RetryState, SessionUpdate as XaiSessionUpdate};
 
     let mut app = test_app_with_agent();
     let id = AgentId(0);
@@ -804,7 +804,7 @@ fn auth_complete_preserves_show_resolved_model_when_absent() {
     dispatch(
         Action::TaskComplete(TaskResult::AuthComplete {
             request_seq: 1,
-            meta: Some(serde_json::to_value(xai_grok_shell::auth::AuthMeta::default()).unwrap()),
+            meta: Some(serde_json::to_value(orz_shell::auth::AuthMeta::default()).unwrap()),
         }),
         &mut app,
     );

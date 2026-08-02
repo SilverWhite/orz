@@ -12,7 +12,7 @@ pub(super) fn push_server_status_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        xai_grok_shell::util::config::resolve_mcp_push_server_status(
+        orz_shell::util::config::resolve_mcp_push_server_status(
             /* requirements */ None, /* user */ None, /* managed */ None,
         )
     })
@@ -55,7 +55,7 @@ pub(super) fn handle_mcp_init_progress(notif: &acp::ExtNotification, app: &mut A
 ///
 /// 1. Try `notif.params.sessionId`. All `tools_changed` emit
 ///    sites carry `sessionId` (the typed
-///    [`xai_grok_shell::extensions::mcp::McpToolsChanged`] struct), and
+///    [`orz_shell::extensions::mcp::McpToolsChanged`] struct), and
 ///    `mcp_initialized` already carried it. So the sessionId branch
 ///    is the primary path for current builds.
 ///
@@ -182,8 +182,8 @@ pub(super) fn agent_has_pending_mcps_fetch(app: &AppView, agent_id: AgentId) -> 
 ///   ([`patch_server_row`] silently returns).
 ///
 /// Re-uses the shell's canonical wire types
-/// ([`xai_grok_shell::extensions::mcp::McpServerStatusPayload`] +
-/// [`xai_grok_shell::extensions::mcp::McpServerStatus`]) instead of
+/// ([`orz_shell::extensions::mcp::McpServerStatusPayload`] +
+/// [`orz_shell::extensions::mcp::McpServerStatus`]) instead of
 /// re-declaring a parallel pager enum. Later variants (e.g.
 /// `RestartSucceeded` / `RestartFailed`) ride through automatically
 /// without a pager code change.
@@ -202,7 +202,7 @@ pub(super) fn agent_has_pending_mcps_fetch(app: &AppView, agent_id: AgentId) -> 
 pub(super) fn handle_mcp_server_status(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
     use crate::views::extensions_modal::TabDataState;
     use crate::views::mcps_modal::{McpServerDisplayStatus, McpToolDetail, patch_server_row};
-    use xai_grok_shell::extensions::mcp::{McpServerStatus, McpServerStatusPayload, McpToolEntry};
+    use orz_shell::extensions::mcp::{McpServerStatus, McpServerStatusPayload, McpToolEntry};
 
     let Ok(payload) = serde_json::from_str::<McpServerStatusPayload>(notif.params.get()) else {
         tracing::warn!(

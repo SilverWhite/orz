@@ -910,7 +910,7 @@ use super::types::BlockOutput;
 /// Also used by the `/btw` inline panel (no header offset — pure markdown body).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn map_hyperlinks_to_overlay(
-    hyperlinks: &[xai_grok_markdown::HyperlinkTarget],
+    hyperlinks: &[orz_markdown::HyperlinkTarget],
     block_output: &BlockOutput,
     content_skip: usize,
     first_visible_screen_y: u16,
@@ -2343,8 +2343,8 @@ mod tests {
         cols: std::ops::Range<usize>,
         url: &str,
         id: u32,
-    ) -> xai_grok_markdown::HyperlinkTarget {
-        xai_grok_markdown::HyperlinkTarget {
+    ) -> orz_markdown::HyperlinkTarget {
+        orz_markdown::HyperlinkTarget {
             line_index: line,
             column_range: cols,
             url: url.to_string(),
@@ -2553,7 +2553,7 @@ mod tests {
     #[test]
     fn overlay_empty_hyperlinks_produces_nothing() {
         let output = make_block_output(&[("text", None)]);
-        let links: &[xai_grok_markdown::HyperlinkTarget] = &[];
+        let links: &[orz_markdown::HyperlinkTarget] = &[];
         let mut overlay = LinkOverlay::new();
         map_hyperlinks_to_overlay(links, &output, 0, 0, 10, 0, 0, &[], &mut overlay);
 

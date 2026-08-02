@@ -316,10 +316,10 @@ fn config_editor_action_still_uses_typed_request() {
 }
 fn seed_foreign_resume_hint(
     app: &mut AppView,
-    tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool,
+    tool: orz_workspace::foreign_sessions::ForeignSessionTool,
 ) {
     app.foreign_session_compat =
-        xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources {
+        orz_workspace::foreign_sessions::EnabledForeignSessionSources {
             claude: true,
             codex: true,
             cursor: true,
@@ -340,7 +340,7 @@ fn seed_foreign_resume_hint(
     app.apply_foreign_resume_detection(
         launch_token,
         &canonical_cwd,
-        Some(xai_grok_workspace::foreign_sessions::RecentForeignSession {
+        Some(orz_workspace::foreign_sessions::RecentForeignSession {
             tool,
             native_id: "native-id".into(),
             age: std::time::Duration::from_secs(60),
@@ -389,7 +389,7 @@ fn quit_returns_quit_effect() {
 }
 #[test]
 fn resume_foreign_session_consumes_hint_and_uses_each_tools_prompt() {
-    use xai_grok_workspace::foreign_sessions::ForeignSessionTool;
+    use orz_workspace::foreign_sessions::ForeignSessionTool;
     for (tool, prompt) in [
         (ForeignSessionTool::Claude, "/resume-claude native-id"),
         (ForeignSessionTool::Codex, "/resume-codex native-id"),
@@ -424,7 +424,7 @@ fn resume_foreign_session_without_hint_is_noop() {
 }
 #[test]
 fn resume_foreign_session_stashes_prompt_behind_trust_and_auth() {
-    use xai_grok_workspace::foreign_sessions::ForeignSessionTool;
+    use orz_workspace::foreign_sessions::ForeignSessionTool;
     for (tool, prompt, auth_pending) in [
         (ForeignSessionTool::Codex, "/resume-codex native-id", false),
         (ForeignSessionTool::Cursor, "/resume-cursor native-id", true),
@@ -563,8 +563,8 @@ fn mark_turn_finished_clears_start_and_stamps_active() {
         "last_active_at must be stamped"
     );
 }
-fn critical_announcement(id: &str) -> xai_grok_announcements::RemoteAnnouncement {
-    xai_grok_announcements::RemoteAnnouncement {
+fn critical_announcement(id: &str) -> orz_announcements::RemoteAnnouncement {
+    orz_announcements::RemoteAnnouncement {
         id: Some(id.into()),
         title: Some(format!("{id} title")),
         message: Some(format!("{id} message")),
@@ -572,12 +572,12 @@ fn critical_announcement(id: &str) -> xai_grok_announcements::RemoteAnnouncement
         ..Default::default()
     }
 }
-fn promo_announcement(id: &str) -> xai_grok_announcements::RemoteAnnouncement {
-    xai_grok_announcements::RemoteAnnouncement {
+fn promo_announcement(id: &str) -> orz_announcements::RemoteAnnouncement {
+    orz_announcements::RemoteAnnouncement {
         id: Some(id.into()),
         message: Some(format!("{id} message")),
         severity: Some("promo".into()),
-        cta: Some(xai_grok_announcements::AnnouncementCta {
+        cta: Some(orz_announcements::AnnouncementCta {
             label: Some("Go".into()),
             url: Some(format!("https://x.ai/{id}")),
             caption: None,
@@ -600,7 +600,7 @@ fn shown_banner_id(app: &AppView) -> Option<String> {
 #[serial_test::serial(GROK_TEST_OPEN_URL_FILE)]
 #[test]
 fn announcements_open_cta_opens_promo_and_noops_under_critical() {
-    use xai_grok_telemetry::events::AnnouncementCtaSurface;
+    use orz_telemetry::events::AnnouncementCtaSurface;
     let url_file = std::env::temp_dir().join(format!("grok-cta-open-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&url_file);
     unsafe { std::env::set_var("GROK_TEST_OPEN_URL_FILE", &url_file) };
@@ -653,7 +653,7 @@ fn announcements_open_cta_opens_promo_and_noops_under_critical() {
 #[test]
 fn cta_impressions_latch_once_per_surface_and_reemit_for_new_id() {
     use crate::app::app_view::ActiveView;
-    use xai_grok_telemetry::events::AnnouncementCtaSurface;
+    use orz_telemetry::events::AnnouncementCtaSurface;
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     app.active_view = ActiveView::Agent(id);
@@ -724,7 +724,7 @@ fn cta_impressions_respect_slot_gate_and_paint() {
 #[test]
 fn cta_impressions_suppressed_while_rect_occluded() {
     use crate::app::app_view::ActiveView;
-    use xai_grok_telemetry::events::AnnouncementCtaSurface;
+    use orz_telemetry::events::AnnouncementCtaSurface;
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     app.active_view = ActiveView::Agent(id);
@@ -757,7 +757,7 @@ fn cta_impressions_suppressed_while_rect_occluded() {
 fn cta_impressions_cover_welcome_and_dashboard_surfaces() {
     use crate::app::app_view::ActiveView;
     use crate::views::dashboard::state::DashboardState;
-    use xai_grok_telemetry::events::AnnouncementCtaSurface;
+    use orz_telemetry::events::AnnouncementCtaSurface;
     let mut app = test_app();
     app.active_announcements = vec![promo_announcement("p")];
     let rect = Some(ratatui::layout::Rect::new(0, 0, 4, 1));
@@ -1024,7 +1024,7 @@ fn agent_type_mismatch_cancel_is_noop() {
 }
 #[test]
 fn agent_type_mismatch_with_effort_stashes_deferred_switch() {
-    use xai_grok_shell::sampling::types::ReasoningEffort;
+    use orz_shell::sampling::types::ReasoningEffort;
     let mut app = test_app_with_agent();
     let model_id = acp::ModelId::new(std::sync::Arc::from("cursor-reasoning"));
     let effort = Some(ReasoningEffort::High);
@@ -1690,7 +1690,7 @@ fn dispatch_fork_no_flag_always_reopens_modal_after_previous_answer() {
 #[test]
 fn translate_local_submit_skipped_returns_changed_with_no_action() {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let q = Question {
@@ -1721,7 +1721,7 @@ fn translate_local_submit_skipped_returns_changed_with_no_action() {
 #[test]
 fn translate_local_submit_no_selection_returns_changed_no_action() {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let q = Question {
@@ -1752,7 +1752,7 @@ fn translate_local_submit_no_selection_returns_changed_no_action() {
 #[test]
 fn translate_local_submit_out_of_range_index_returns_changed_no_action() {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let q = Question {
@@ -1784,7 +1784,7 @@ fn translate_local_submit_out_of_range_index_returns_changed_no_action() {
 #[test]
 fn handle_ask_user_question_does_not_push_system_block_when_displaced_acp_modal() {
     use crate::views::question_view::QuestionViewState;
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let mut app = fork_test_app();

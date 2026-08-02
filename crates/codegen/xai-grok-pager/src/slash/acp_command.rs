@@ -10,7 +10,7 @@
 //! pass through to the shell as before.
 
 use agent_client_protocol as acp;
-use xai_grok_tools::implementations::skills::types::SkillScope;
+use orz_tools::implementations::skills::types::SkillScope;
 
 use super::command::{CommandExecCtx, CommandResult, SlashCommand};
 

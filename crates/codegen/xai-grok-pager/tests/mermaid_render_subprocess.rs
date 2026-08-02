@@ -124,7 +124,7 @@ fn tight_timeout_kills_child_and_returns_err() {
     // and reap the child and return Err, then return promptly (not block on the
     // child finishing). That the kill actually terminates the child's process
     // group is asserted directly (and without the heavy binary) by the
-    // `xai_grok_mermaid::subprocess` `reap_terminates_the_process` unit test;
+    // `orz_mermaid::subprocess` `reap_terminates_the_process` unit test;
     // here the loose ceiling just guards against the parent blocking on a child
     // that outlived its budget, while tolerating slow-CI spawn of the real
     // binary.

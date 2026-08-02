@@ -17,9 +17,9 @@ fn plugin_cta_catalog_loaded_sanitizes_components_at_ingestion() {
     });
     let response = xai_hooks_plugins_types::MarketplaceListResponse {
         sources: vec![xai_hooks_plugins_types::MarketplaceScanResult {
-            source_name: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
+            source_name: orz_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
             source_kind: "git".into(),
-            source_url_or_path: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
+            source_url_or_path: orz_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
             plugins: vec![entry],
             error: None,
         }],
@@ -61,9 +61,9 @@ fn plugin_cta_catalog_keeps_official_not_installed_only() {
     let response = xai_hooks_plugins_types::MarketplaceListResponse {
         sources: vec![
             xai_hooks_plugins_types::MarketplaceScanResult {
-                source_name: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
+                source_name: orz_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
                 source_kind: "git".into(),
-                source_url_or_path: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
+                source_url_or_path: orz_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
                 plugins: vec![
                     cta_entry("keep-me", "not_installed"),
                     cta_entry("already-installed", "installed"),
@@ -147,9 +147,9 @@ fn plugin_cta_catalog_reload_empty_candidates_preserves_installed_checkmark() {
     }
     let response = xai_hooks_plugins_types::MarketplaceListResponse {
         sources: vec![xai_hooks_plugins_types::MarketplaceScanResult {
-            source_name: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
+            source_name: orz_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
             source_kind: "git".into(),
-            source_url_or_path: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
+            source_url_or_path: orz_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
             plugins: vec![cta_entry("figma", "installed")],
             error: None,
         }],
@@ -203,9 +203,9 @@ fn plugin_cta_catalog_load_recomputes_match_for_typed_draft() {
     entry.keywords = vec!["zzctaplugin".into()];
     let response = xai_hooks_plugins_types::MarketplaceListResponse {
         sources: vec![xai_hooks_plugins_types::MarketplaceScanResult {
-            source_name: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
+            source_name: orz_plugin_marketplace::OFFICIAL_SOURCE_NAME.into(),
             source_kind: "git".into(),
-            source_url_or_path: xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
+            source_url_or_path: orz_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.into(),
             plugins: vec![entry],
             error: None,
         }],
@@ -1419,7 +1419,7 @@ mod cta_e2e {
             ] => {
                 assert_eq!(
                     source_url_or_path,
-                    xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
+                    orz_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
                 );
                 assert_eq!(plugin_relative_path, "plugins/figma");
             }
@@ -1700,7 +1700,7 @@ mod cta_e2e {
         let config_path = tmp.path().join("config.toml");
         let candidates = vec![figma_candidate()];
 
-        let dismissed = xai_grok_shell::config::dismissed_plugin_ctas_in_file(&config_path);
+        let dismissed = orz_shell::config::dismissed_plugin_ctas_in_file(&config_path);
         let matched =
             plugin_cta_phase_for(true, true, &candidates, PROMPT, |id| dismissed.contains(id));
         assert_eq!(
@@ -1711,9 +1711,9 @@ mod cta_e2e {
             }
         );
 
-        xai_grok_shell::config::add_dismissed_plugin_cta_to_file("figma", &config_path)
+        orz_shell::config::add_dismissed_plugin_cta_to_file("figma", &config_path)
             .expect("persist dismissal");
-        let dismissed = xai_grok_shell::config::dismissed_plugin_ctas_in_file(&config_path);
+        let dismissed = orz_shell::config::dismissed_plugin_ctas_in_file(&config_path);
         assert!(dismissed.contains("figma"));
 
         let hidden =

@@ -8,7 +8,7 @@ use crate::app::app_view::{ActiveView, AppView};
 use crate::scrollback::block::{BlockContent, RenderBlock};
 use crate::scrollback::blocks::ToolCallBlock;
 use agent_client_protocol as acp;
-use xai_grok_telemetry::session_ctx::log_event;
+use orz_telemetry::session_ctx::log_event;
 
 /// Copy the selected block's content to the system clipboard.
 ///
@@ -450,7 +450,7 @@ pub(super) fn push_marketplace_fetch(
 pub(super) fn dispatch_open_extensions_modal(
     app: &mut AppView,
     tab: crate::views::extensions_modal::ExtensionsTab,
-    trigger: xai_grok_telemetry::events::ExtensionsModalTrigger,
+    trigger: orz_telemetry::events::ExtensionsModalTrigger,
 ) -> Vec<Effect> {
     use crate::views::extensions_modal::ExtensionsModalState;
 
@@ -466,7 +466,7 @@ pub(super) fn dispatch_open_extensions_modal(
     let mut modal = ExtensionsModalState::new(tab);
     modal.session_team_id = app.team_id.clone();
     agent.extensions_modal = Some(modal);
-    log_event(xai_grok_telemetry::events::ExtensionsModalOpened {
+    log_event(orz_telemetry::events::ExtensionsModalOpened {
         trigger,
         tab: tab.telemetry_tab(),
     });
@@ -609,7 +609,7 @@ pub(super) fn dispatch_dump_input_log(app: &mut AppView) -> Vec<Effect> {
         }
     };
 
-    let grok_home = xai_grok_tools::util::grok_home::grok_home();
+    let grok_home = orz_tools::util::grok_home::grok_home();
     let logs_dir = grok_home.join("logs");
     let _ = std::fs::create_dir_all(&logs_dir);
     let ts = now.format("%Y%m%d-%H%M%S");
@@ -796,7 +796,7 @@ pub(super) fn handle_marketplace_list_loaded(
 pub(super) fn handle_skills_toggle_done(
     app: &mut AppView,
     agent_id: AgentId,
-    result: Result<Vec<xai_grok_tools::implementations::skills::types::SkillInfo>, String>,
+    result: Result<Vec<orz_tools::implementations::skills::types::SkillInfo>, String>,
 ) -> Vec<Effect> {
     use crate::views::extensions_modal::TabDataState;
     if let Some(agent) = app.agents.get_mut(&agent_id)

@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use toml::Value as TomlValue;
-use xai_grok_shell::util::config::{
+use orz_shell::util::config::{
     DISPLAY_REFRESH_DEFAULT_CADENCE_MS, MotionCadence, RemoteSettings, resolve_display_refresh,
     resolve_motion_cadence,
 };
@@ -129,7 +129,7 @@ fn spawn_terminal_and_display_refresh_telemetry(tel: StartupTel) {
         )
         .entered();
         tracing::info!("terminal environment detected");
-        xai_grok_telemetry::session_ctx::log_event(t.clone());
+        orz_telemetry::session_ctx::log_event(t.clone());
 
         let (outcome, hz, source, skip_reason, duration_ms) = match tel.plan {
             ProbePlan::Disabled => ("skipped", None, "none".into(), "disabled".into(), 0_u64),
@@ -170,8 +170,8 @@ fn spawn_terminal_and_display_refresh_telemetry(tel: StartupTel) {
             auto_cadence_reason = c.reason,
             "display refresh probed"
         );
-        xai_grok_telemetry::session_ctx::log_event(
-            xai_grok_telemetry::events::DisplayRefreshProbe {
+        orz_telemetry::session_ctx::log_event(
+            orz_telemetry::events::DisplayRefreshProbe {
                 terminal: t,
                 outcome: outcome.to_string(),
                 hz: hz_i,

@@ -22,7 +22,7 @@ pub struct ExportArgs {
 pub fn run(args: ExportArgs) -> Result<()> {
     tracing::info!(session_id = %args.session_id, "export_cmd: starting session export");
 
-    let updates = xai_grok_shell::session::storage::load_updates_for_replay(&args.session_id)?
+    let updates = orz_shell::session::storage::load_updates_for_replay(&args.session_id)?
         .with_context(|| format!("Session '{}' not found.", args.session_id))?;
 
     let mut tracker = AcpUpdateTracker::new();

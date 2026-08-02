@@ -1,7 +1,7 @@
 // Per-test-case module for the `pty_e2e` integration test crate.
 #[allow(unused_imports)]
 use super::common::*;
-use xai_grok_workspace::trust::{TRUST_FILE_NAME, TrustStore};
+use orz_workspace::trust::{TRUST_FILE_NAME, TrustStore};
 
 /// Folder-trust home-is-a-git-repo (dotfiles-in-home), Case 1 — the reported bug.
 /// `$HOME` is itself a git repo; the session is launched in a SUBDIR

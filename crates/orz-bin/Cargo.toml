@@ -1,0 +1,14 @@
+[package]
+name = "orz-bin"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "orz — assurance-first CLI agent workbench (Phase 1 scaffold)"
+
+[[bin]]
+name = "orz"
+path = "src/main.rs"
+
+[dependencies]
+orz-assurance = { path = "../orz-assurance" }
+

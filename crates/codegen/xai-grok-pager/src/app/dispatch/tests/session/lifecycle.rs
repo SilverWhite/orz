@@ -3,11 +3,11 @@ use super::*;
 /// Simulate a release-stamped build so folder-trust is active (a local/dev
 /// build auto-trusts and persists nothing). Mirrors this module's raw env idiom.
 fn simulate_release_build() {
-    unsafe { std::env::set_var(xai_grok_version::TEST_VERSION_ENV, "0.0.0-sim") };
+    unsafe { std::env::set_var(orz_version::TEST_VERSION_ENV, "0.0.0-sim") };
 }
 #[test]
 fn voice_on_welcome_creates_session_and_records() {
-    if !xai_grok_voice::AUDIO_SUPPORTED {
+    if !orz_voice::AUDIO_SUPPORTED {
         return;
     }
     let mut app = test_app();
@@ -23,7 +23,7 @@ fn voice_on_welcome_creates_session_and_records() {
     assert_eq!(app.voice_recording_target(), Some(VoiceTarget::Agent(id)));
     assert!(matches!(
         rx.try_recv(),
-        Ok(xai_grok_voice::VoiceCommand::PttPress)
+        Ok(orz_voice::VoiceCommand::PttPress)
     ));
 }
 #[test]
@@ -41,7 +41,7 @@ fn voice_final_routes_to_recording_session_not_active_view() {
     };
     crate::voice::handle_voice_event(
         &mut app,
-        xai_grok_voice::VoiceEvent::UtteranceFinal {
+        orz_voice::VoiceEvent::UtteranceFinal {
             text: "hello".into(),
         },
     );
@@ -55,7 +55,7 @@ fn voice_final_dropped_after_recording_session_cleared() {
     app.voice_state = VoiceState::Idle;
     crate::voice::handle_voice_event(
         &mut app,
-        xai_grok_voice::VoiceEvent::UtteranceFinal {
+        orz_voice::VoiceEvent::UtteranceFinal {
             text: "late".into(),
         },
     );
@@ -86,7 +86,7 @@ fn voice_auto_stops_when_leaving_recording_session() {
     );
     assert!(matches!(
         rx.try_recv(),
-        Ok(xai_grok_voice::VoiceCommand::PttRelease)
+        Ok(orz_voice::VoiceCommand::PttRelease)
     ));
 }
 #[test]
@@ -1065,7 +1065,7 @@ fn finish_trust_resolves_and_replays_startup() {
 #[serial_test::serial(GROK_HOME)]
 #[test]
 fn trust_folder_grants_and_resolves() {
-    use xai_grok_workspace::trust::{TrustStore, workspace_key};
+    use orz_workspace::trust::{TrustStore, workspace_key};
     let home = tempfile::tempdir().expect("home tempdir");
     unsafe { std::env::set_var("GROK_HOME", home.path()) };
     simulate_release_build();
@@ -1598,7 +1598,7 @@ fn dispatch_new_session_has_empty_scrollback() {
 #[test]
 fn translate_local_submit_always_returns_persist_always_for_new_session() {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let q = Question {
@@ -1640,7 +1640,7 @@ fn translate_local_submit_always_returns_persist_always_for_new_session() {
 #[test]
 fn translate_local_submit_never_returns_persist_never_for_new_session() {
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+    use orz_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
     };
     let q = Question {
@@ -1864,7 +1864,7 @@ fn bg_task_killed_no_op_for_unknown_session() {
         Action::TaskComplete(TaskResult::BgTaskKilled {
             session_id: "nonexistent".into(),
             task_id: "task-B-1".into(),
-            outcome: Some(xai_grok_tools::types::KillOutcome::AlreadyExited),
+            outcome: Some(orz_tools::types::KillOutcome::AlreadyExited),
         }),
         &mut app,
     );
@@ -1936,7 +1936,7 @@ fn cycle_mode_pre_session_blocked_by_policy_pin() {
         let agent = app.agents.get_mut(&AgentId(0)).unwrap();
         agent.session.session_id = None;
         agent.plan_mode_pending = Some(true);
-        agent.deferred_session_mode = Some(xai_grok_tools::types::SessionMode::Plan);
+        agent.deferred_session_mode = Some(orz_tools::types::SessionMode::Plan);
     }
     let _ = dispatch(Action::CycleMode, &mut app);
     let agent = &app.agents[&AgentId(0)];
@@ -1967,7 +1967,7 @@ fn cycle_mode_pre_session_clears_stale_yolo_under_pin() {
         let agent = app.agents.get_mut(&AgentId(0)).unwrap();
         agent.session.session_id = None;
         agent.plan_mode_pending = Some(true);
-        agent.deferred_session_mode = Some(xai_grok_tools::types::SessionMode::Plan);
+        agent.deferred_session_mode = Some(orz_tools::types::SessionMode::Plan);
         agent.session.yolo_mode = true;
     }
     let _ = dispatch(Action::CycleMode, &mut app);
@@ -2002,7 +2002,7 @@ fn dispatch_cycle_mode_pre_session_cycles_locally_and_creates_session() {
     );
     assert_eq!(
         agent.deferred_session_mode,
-        Some(xai_grok_tools::types::SessionMode::Plan),
+        Some(orz_tools::types::SessionMode::Plan),
         "Plan must be deferred to SessionCreated"
     );
     assert!(

@@ -799,7 +799,7 @@ impl AgentView {
     ///
     /// No-op for gateway/chat-kind sessions — local GetSessionInfo / sampler
     /// breakdowns must not populate the context bar (remote owns context).
-    pub fn apply_full_context_info(&mut self, next: xai_grok_shell::session::ContextInfo) {
+    pub fn apply_full_context_info(&mut self, next: orz_shell::session::ContextInfo) {
         if self.chat_kind {
             self.context_state = None;
             return;
@@ -831,7 +831,7 @@ impl AgentView {
                 snap.free_tokens = xai_token_estimation::free_tokens(snap.total, used);
             }
             None => {
-                self.context_state = Some(xai_grok_shell::session::ContextInfo::from_notification(
+                self.context_state = Some(orz_shell::session::ContextInfo::from_notification(
                     used, total,
                 ));
             }
@@ -947,7 +947,7 @@ impl AgentView {
         billing_surface_visible: bool,
         chat_mode: bool,
         screen_mode: crate::app::ScreenMode,
-        announcements: &[xai_grok_announcements::RemoteAnnouncement],
+        announcements: &[orz_announcements::RemoteAnnouncement],
         restricted_commands: &[String],
     ) {
         self.set_sharing_enabled(sharing_enabled);

@@ -1177,7 +1177,7 @@ impl AgentView {
         {
             return InputOutcome::Action(Action::OpenExtensionsModal {
                 tab: crate::views::extensions_modal::ExtensionsTab::Plugins,
-                trigger: xai_grok_telemetry::events::ExtensionsModalTrigger::KeyboardShortcut,
+                trigger: orz_telemetry::events::ExtensionsModalTrigger::KeyboardShortcut,
             });
         }
         if let Event::Key(key) = ev
@@ -1291,7 +1291,7 @@ impl AgentView {
             ActionId::ToggleYolo => {
                 if self.pinned_upgrade_cta_live {
                     InputOutcome::Action(Action::AnnouncementsOpenCta(
-                        xai_grok_telemetry::events::AnnouncementCtaSurface::Keyboard,
+                        orz_telemetry::events::AnnouncementCtaSurface::Keyboard,
                     ))
                 } else {
                     InputOutcome::Action(Action::SetYoloMode(!self.session.is_yolo()))
@@ -1479,7 +1479,7 @@ mod background_and_tasks_shortcut_tests {
             .expect("file-search context");
         agent.prompt.file_search.set_test_state(
             context,
-            vec![xai_grok_workspace::file_system::FuzzyMatchResult {
+            vec![orz_workspace::file_system::FuzzyMatchResult {
                 path: nucleo::Utf32String::from("src/lib.rs"),
                 score: 100,
                 indices: Vec::new(),

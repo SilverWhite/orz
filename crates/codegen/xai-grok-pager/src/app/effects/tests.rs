@@ -1,6 +1,6 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 use super::*;
-use xai_grok_shell::extensions::billing::{BillingConfig, Cent, UsagePeriod};
+use orz_shell::extensions::billing::{BillingConfig, Cent, UsagePeriod};
 /// The invalid-params server detail survives `attach_prompt_usage`
 /// wrapping `error.data` as `{message, promptUsage}`.
 #[test]
@@ -18,7 +18,7 @@ fn format_acp_error_reads_detail_from_wrapped_data() {
 }
 #[test]
 fn format_acp_error_rate_limit_surfaces_detail_or_fallback() {
-    use xai_grok_shell::sampling::error::{
+    use orz_shell::sampling::error::{
         FREE_USAGE_USER_MESSAGE, RATE_LIMITED_ERROR_CODE,
         RATE_LIMITED_USER_MESSAGE_API_KEY, RATE_LIMITED_USER_MESSAGE_OAUTH,
     };
@@ -232,7 +232,7 @@ fn session_list_partial_absent_for_healthy_or_meta_less_responses() {
 /// a session resume.
 #[test]
 fn parse_kill_outcome_reads_result_envelope() {
-    use xai_grok_tools::types::KillOutcome;
+    use orz_tools::types::KillOutcome;
     let resp = r#"{"result":{"taskId":"t-1","outcome":"not_found"}}"#;
     assert_eq!(parse_kill_outcome(resp), Some(KillOutcome::NotFound));
     let resp = r#"{"result":{"taskId":"t-1","outcome":"killed"}}"#;
@@ -245,9 +245,9 @@ fn parse_kill_outcome_reads_result_envelope() {
 /// typed outcome (guards against the two sides drifting apart).
 #[test]
 fn parse_kill_outcome_round_trips_agent_serialization() {
-    use xai_grok_shell::extensions::task::KillTaskResponse;
-    use xai_grok_shell::session::result::ExtMethodResult;
-    use xai_grok_tools::types::KillOutcome;
+    use orz_shell::extensions::task::KillTaskResponse;
+    use orz_shell::session::result::ExtMethodResult;
+    use orz_tools::types::KillOutcome;
     let wire = serde_json::to_string(
             &ExtMethodResult::success(KillTaskResponse {
                 task_id: "t-1".into(),
@@ -330,7 +330,7 @@ fn parse_subagent_kill_outcome_unknown_kind_falls_back_to_legacy_bool() {
 /// against drifting apart.
 #[test]
 fn parse_subagent_kill_outcome_round_trips_agent_serialization() {
-    use xai_grok_shell::extensions::task::{
+    use orz_shell::extensions::task::{
         CancelSubagentResponse, SubagentCancelOutcomeDto,
     };
     let wire = serde_json::to_string(
@@ -646,7 +646,7 @@ fn credit_balance_effective_blends_budget_for_legacy_shape_under_100() {
 }
 #[test]
 fn parse_worktree_restore_payload_full() {
-    use xai_grok_workspace::session::git::RestoreDegree;
+    use orz_workspace::session::git::RestoreDegree;
     let value = serde_json::json!({
             "codeRestored": true,
             "restoreSummary": "checked out abc12345, staged: true, unstaged: false, untracked: 3",
@@ -659,7 +659,7 @@ fn parse_worktree_restore_payload_full() {
 }
 #[test]
 fn parse_worktree_restore_payload_head_only() {
-    use xai_grok_workspace::session::git::RestoreDegree;
+    use orz_workspace::session::git::RestoreDegree;
     let value = serde_json::json!({
             "codeRestored": true,
             "restoreSummary": "checked out abc (session registry disabled — staged/unstaged/untracked not restored)",
@@ -690,7 +690,7 @@ fn parse_worktree_restore_payload_rejects_unknown_degree() {
 }
 #[test]
 fn parse_session_load_restore_meta_full_shape() {
-    use xai_grok_workspace::session::git::RestoreDegree;
+    use orz_workspace::session::git::RestoreDegree;
     let meta = serde_json::json!({
             "codeRestore": {
                 "restored": true,
@@ -842,7 +842,7 @@ fn setup_grok_home_in_tempdir() -> tempfile::TempDir {
     tmp
 }
 fn register_session_in(root: &std::path::Path, id: &str) -> acp::SessionId {
-    use xai_grok_shell::active_sessions::{ActiveSession, register_in};
+    use orz_shell::active_sessions::{ActiveSession, register_in};
     let session_id = acp::SessionId::new(id);
     register_in(
             root,
@@ -863,7 +863,7 @@ fn unregister_best_effort_removes_entry_when_lock_free() {
     let sid = register_session_in(dir.path(), "s1");
     unregister_active_session_best_effort_in(dir.path(), &sid);
     assert!(
-            xai_grok_shell::active_sessions::list_in(dir.path())
+            orz_shell::active_sessions::list_in(dir.path())
                 .expect("list")
                 .is_empty(),
             "lock-free unregister must remove the entry",
@@ -902,7 +902,7 @@ fn unregister_best_effort_is_nonblocking_under_lock_contention() {
             "contended unregister blocked on the shared flock instead of skipping",
         );
     assert_eq!(
-            xai_grok_shell::active_sessions::list_in(dir.path())
+            orz_shell::active_sessions::list_in(dir.path())
                 .expect("list")
                 .len(),
             1,
@@ -1390,7 +1390,7 @@ async fn foreign_scan_task_echoes_sequence_without_enabled_sources() {
     execute(
         Effect::ScanForeignSessions {
             cwd: PathBuf::from("/path/that/must/not/be-read"),
-            compat: xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources::default(),
+            compat: orz_workspace::foreign_sessions::EnabledForeignSessionSources::default(),
             grok_home: PathBuf::from("/path/that/must/not/be-read"),
             coordinator: app_coordinator.clone(),
             seq: 41,
@@ -1443,7 +1443,7 @@ async fn foreign_resume_detection_runs_as_task_result() {
     let (quit, _) = execute(
         Effect::DetectForeignResumeHint {
             canonical_cwd: canonical_cwd.clone(),
-            compat: xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources::default(),
+            compat: orz_workspace::foreign_sessions::EnabledForeignSessionSources::default(),
             grok_home: PathBuf::from("/path/that/must/not-be-read"),
             launch_token: 8,
         },
@@ -1674,7 +1674,7 @@ async fn debounce_session_search_echoes_query_and_seq() {
 #[test]
 fn agent_profile_names_are_valid_builtins() {
     use std::str::FromStr;
-    use xai_grok_agent::config::BuiltinAgentName;
+    use orz_agent::config::BuiltinAgentName;
     let test_cases: &[(SessionFlags, &str)] = &[
         (
             SessionFlags {
@@ -2084,7 +2084,7 @@ fn to_meta_yolo_suppresses_auto_mode() {
 #[test]
 fn agent_profile_definitions_have_correct_names() {
     use std::str::FromStr;
-    use xai_grok_agent::config::BuiltinAgentName;
+    use orz_agent::config::BuiltinAgentName;
     for name in [
         "grok-build-plan",
         "grok-build-plan-no-subagents",
@@ -2103,9 +2103,9 @@ fn make_session_info(
     resolved: Option<&str>,
     used: u64,
     total: u64,
-) -> xai_grok_shell::session::SessionInfoResponse {
-    use xai_grok_shell::session::acp_types::{ContextInfo, SessionInfoData};
-    xai_grok_shell::session::SessionInfoResponse {
+) -> orz_shell::session::SessionInfoResponse {
+    use orz_shell::session::acp_types::{ContextInfo, SessionInfoData};
+    orz_shell::session::SessionInfoResponse {
         session_id: "test-session-id".into(),
         cwd: "/tmp/test".into(),
         data: SessionInfoData {
@@ -2240,7 +2240,7 @@ fn format_session_info_shows_model_hash_for_coding_slug_without_flag() {
 }
 #[test]
 fn session_picker_summary_strips_skill_xml() {
-    use xai_grok_tools::implementations::skills::skill::extract_skill_display_text;
+    use orz_tools::implementations::skills::skill::extract_skill_display_text;
     let summary = "<command-name>pr-babysit</command-name>\n\
                         <command-message>/pr-babysit</command-message>\n\
                         <command-args>check</command-args>"
@@ -2250,7 +2250,7 @@ fn session_picker_summary_strips_skill_xml() {
 }
 #[test]
 fn session_picker_summary_preserves_normal_text() {
-    use xai_grok_tools::implementations::skills::skill::extract_skill_display_text;
+    use orz_tools::implementations::skills::skill::extract_skill_display_text;
     let summary = "Fix authentication bug in login flow".to_string();
     let display = extract_skill_display_text(&summary).unwrap_or(summary);
     assert_eq!(display, "Fix authentication bug in login flow");

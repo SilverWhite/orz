@@ -21,7 +21,7 @@ impl AgentView {
         let cwd_str = self.session.cwd.to_string_lossy().into_owned();
         let encoded_cwd = urlencoding::encode(&cwd_str);
         Some(
-            xai_grok_shell::util::grok_home::grok_home()
+            orz_shell::util::grok_home::grok_home()
                 .join("sessions")
                 .join(encoded_cwd.as_ref())
                 .join(session_id.0.as_ref())
@@ -200,8 +200,8 @@ impl AgentView {
         self.casual_commenting_range = None;
         self.casual_editing_comment_id = None;
         {
-            use xai_grok_telemetry::events::PlanSubmit;
-            use xai_grok_telemetry::session_ctx::log_event;
+            use orz_telemetry::events::PlanSubmit;
+            use orz_telemetry::session_ctx::log_event;
             log_event(PlanSubmit {
                 action: "build".to_string(),
             });
@@ -227,8 +227,8 @@ impl AgentView {
         self.casual_commenting_range = None;
         self.casual_editing_comment_id = None;
         {
-            use xai_grok_telemetry::events::PlanSubmit;
-            use xai_grok_telemetry::session_ctx::log_event;
+            use orz_telemetry::events::PlanSubmit;
+            use orz_telemetry::session_ctx::log_event;
             log_event(PlanSubmit {
                 action: "abandon".to_string(),
             });
@@ -261,8 +261,8 @@ impl AgentView {
         self.prompt.textarea.cancel_undo_group();
         self.show_toast("Plan revision sent.");
         {
-            use xai_grok_telemetry::events::PlanSubmit;
-            use xai_grok_telemetry::session_ctx::log_event;
+            use orz_telemetry::events::PlanSubmit;
+            use orz_telemetry::session_ctx::log_event;
             log_event(PlanSubmit {
                 action: "revise".to_string(),
             });

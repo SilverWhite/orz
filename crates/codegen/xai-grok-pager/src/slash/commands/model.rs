@@ -3,7 +3,7 @@
 //! re-opens the dropdown into a `low|medium|high|xhigh` sub-menu.
 
 use agent_client_protocol as acp;
-use xai_grok_shell::sampling::types::supports_reasoning_effort_meta;
+use orz_shell::sampling::types::supports_reasoning_effort_meta;
 
 use crate::acp::model_state::ModelState;
 use crate::app::actions::Action;
@@ -204,7 +204,7 @@ fn build_effort_items(models: &ModelState, model_id: &acp::ModelId) -> Vec<ArgIt
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use xai_grok_shell::sampling::types::ReasoningEffort;
+    use orz_shell::sampling::types::ReasoningEffort;
 
     fn model_with_reasoning(id: &str, name: &str) -> (acp::ModelId, acp::ModelInfo) {
         let id = acp::ModelId::new(Arc::from(id));

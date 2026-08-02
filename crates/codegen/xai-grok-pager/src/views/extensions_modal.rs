@@ -16,7 +16,7 @@ use crate::views::modal_window::{
     self, ModalContentArea, ModalSizing, ModalWindowConfig, ModalWindowState, Shortcut,
 };
 use crate::views::picker;
-use xai_grok_tools::implementations::skills::types::SkillInfo;
+use orz_tools::implementations::skills::types::SkillInfo;
 
 /// Check if a name fuzzy-matches the search query.
 /// Empty query matches everything.
@@ -542,8 +542,8 @@ impl ExtensionsTab {
         }
     }
 
-    pub fn telemetry_tab(self) -> xai_grok_telemetry::events::ExtensionsModalTab {
-        use xai_grok_telemetry::events::ExtensionsModalTab;
+    pub fn telemetry_tab(self) -> orz_telemetry::events::ExtensionsModalTab {
+        use orz_telemetry::events::ExtensionsModalTab;
         match self {
             Self::Hooks => ExtensionsModalTab::Hooks,
             Self::Plugins => ExtensionsModalTab::Plugins,
@@ -619,7 +619,7 @@ pub enum ButtonAction {
     /// Add an MCP server (parsed from inline input).
     AddMcpServer {
         name: String,
-        config: Box<xai_grok_shell::util::config::McpServerConfig>,
+        config: Box<orz_shell::util::config::McpServerConfig>,
     },
     /// Remove the selected MCP server from config.toml.
     RemoveSelectedMcpServer,
@@ -1590,7 +1590,7 @@ fn derive_name_from_url(url: &str) -> String {
 /// The `url_or_cmd` field is split on whitespace to extract the command
 /// and any trailing args for stdio transport.
 fn parse_mcp_add_fields(name: &str, url_or_cmd: &str) -> Option<ButtonAction> {
-    use xai_grok_shell::util::config::{McpServerConfig, McpServerTransportConfig};
+    use orz_shell::util::config::{McpServerConfig, McpServerTransportConfig};
 
     let mut parts = url_or_cmd.split_whitespace();
     let command_or_url = parts.next()?;
@@ -2236,7 +2236,7 @@ pub(crate) fn mcp_section_children_hidden(
 /// Returns `(label, is_custom)` where `is_custom` means the source was added
 /// via hooks-paths and can be removed.
 pub fn derive_source_label(source_dir: &str) -> (String, bool) {
-    let grok = xai_grok_config::grok_home();
+    let grok = orz_config::grok_home();
     let source_path = std::path::Path::new(source_dir);
     // Plugin / installed-plugin dirs, under the user grok home (GROK_HOME-aware)
     // or a project-scoped `{cwd}/.grok/<subdir>/`. Returns the first path
@@ -2351,7 +2351,7 @@ fn filter_and_sort_skills(
 fn skill_source_str(skill: &SkillInfo) -> String {
     if let Some(ref cs) = skill.config_source {
         match cs {
-            xai_grok_tools::types::config_source::ConfigSource::User { path } => {
+            orz_tools::types::config_source::ConfigSource::User { path } => {
                 if crate::util::is_under_user_grok_home(path) {
                     crate::util::display_user_grok_path("skills")
                 } else if path.display().to_string().contains("/.claude/") {
@@ -2360,7 +2360,7 @@ fn skill_source_str(skill: &SkillInfo) -> String {
                     "user".into()
                 }
             }
-            xai_grok_tools::types::config_source::ConfigSource::Project { path } => {
+            orz_tools::types::config_source::ConfigSource::Project { path } => {
                 let s = path.display().to_string();
                 if s.contains("/.grok/") {
                     ".grok/skills".into()
@@ -2370,7 +2370,7 @@ fn skill_source_str(skill: &SkillInfo) -> String {
                     "project".into()
                 }
             }
-            xai_grok_tools::types::config_source::ConfigSource::Plugin { plugin_name, .. } => {
+            orz_tools::types::config_source::ConfigSource::Plugin { plugin_name, .. } => {
                 format!("plugin: {}", plugin_name)
             }
             _ => format!("{:?}", skill.scope).to_lowercase(),
@@ -4617,8 +4617,8 @@ mod tests {
     fn make_skill(
         name: &str,
         desc: &str,
-    ) -> xai_grok_tools::implementations::skills::types::SkillInfo {
-        xai_grok_tools::implementations::skills::types::SkillInfo {
+    ) -> orz_tools::implementations::skills::types::SkillInfo {
+        orz_tools::implementations::skills::types::SkillInfo {
             name: name.to_string(),
             display_name: None,
             description: desc.to_string(),
@@ -4630,7 +4630,7 @@ mod tests {
             compatibility: None,
             metadata: None,
             path: "test".to_string(),
-            scope: xai_grok_tools::implementations::skills::types::SkillScope::User,
+            scope: orz_tools::implementations::skills::types::SkillScope::User,
             config_source: None,
             plugin_name: None,
             plugin_version: None,
@@ -4741,11 +4741,11 @@ mod tests {
         name: &str,
         desc: &str,
         plugin: &str,
-    ) -> xai_grok_tools::implementations::skills::types::SkillInfo {
+    ) -> orz_tools::implementations::skills::types::SkillInfo {
         let mut skill = make_skill(name, desc);
         skill.plugin_name = Some(plugin.to_string());
-        skill.scope = xai_grok_tools::implementations::skills::types::SkillScope::Plugin;
-        skill.config_source = Some(xai_grok_tools::types::config_source::ConfigSource::Plugin {
+        skill.scope = orz_tools::implementations::skills::types::SkillScope::Plugin;
+        skill.config_source = Some(orz_tools::types::config_source::ConfigSource::Plugin {
             plugin_name: plugin.to_string(),
             path: std::path::PathBuf::from(format!("/plugins/{plugin}/skills/{name}/SKILL.md")),
         });
@@ -5251,7 +5251,7 @@ mod tests {
                 assert_eq!(name, "linear");
                 assert!(matches!(
                     config.transport,
-                    xai_grok_shell::util::config::McpServerTransportConfig::StreamableHttp { .. }
+                    orz_shell::util::config::McpServerTransportConfig::StreamableHttp { .. }
                 ));
             }
             other => panic!("expected AddMcpServer, got {other:?}"),
@@ -5278,7 +5278,7 @@ mod tests {
             Some(ButtonAction::AddMcpServer { name, config }) => {
                 assert_eq!(name, "srv");
                 match config.transport {
-                    xai_grok_shell::util::config::McpServerTransportConfig::Stdio {
+                    orz_shell::util::config::McpServerTransportConfig::Stdio {
                         command,
                         args,
                         ..

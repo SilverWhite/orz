@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Subcommand;
-use xai_grok_shell::session::memory::storage::MemoryStorage;
+use orz_shell::session::memory::storage::MemoryStorage;
 
 #[derive(Debug, clap::Args, Clone)]
 pub struct MemoryArgs {

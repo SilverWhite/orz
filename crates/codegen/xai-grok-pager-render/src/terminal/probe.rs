@@ -29,7 +29,7 @@ const LATE_REPLY_QUIET_MS: i32 = 25;
 pub(crate) fn write_query(query: &[u8]) -> bool {
     use std::io::IsTerminal;
 
-    let write_result: std::io::Result<()> = xai_grok_shared::stderr::with_locked_stderr(|stderr| {
+    let write_result: std::io::Result<()> = orz_shared::stderr::with_locked_stderr(|stderr| {
         // fd 2 is /dev/null-redirected; the TTY check must run on the
         // dup'd render fd inside the lock, not on std::io::stderr().
         if !stderr.is_terminal() {

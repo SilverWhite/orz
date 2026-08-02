@@ -741,7 +741,7 @@ impl DashboardDispatchMode {
 #[derive(Debug, Clone)]
 pub struct PendingDispatchModel {
     pub id: agent_client_protocol::ModelId,
-    pub effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
+    pub effort: Option<orz_shell::sampling::types::ReasoningEffort>,
     pub display: String,
 }
 
@@ -3058,7 +3058,7 @@ impl DashboardState {
         // so "which surface" stays orthogonal to "was it keyboard".
         if self.pinned_upgrade_cta_live && key!('o', CONTROL).matches(key) {
             return InputOutcome::Action(Action::AnnouncementsOpenCta(
-                xai_grok_telemetry::events::AnnouncementCtaSurface::Keyboard,
+                orz_telemetry::events::AnnouncementCtaSurface::Keyboard,
             ));
         }
 
@@ -3842,7 +3842,7 @@ impl DashboardState {
             // (resolved through the slot gate at dispatch time).
             if self.upgrade_cta_hit.contains(mouse.column, mouse.row) {
                 return InputOutcome::Action(Action::AnnouncementsOpenCta(
-                    xai_grok_telemetry::events::AnnouncementCtaSurface::Dashboard,
+                    orz_telemetry::events::AnnouncementCtaSurface::Dashboard,
                 ));
             }
 
@@ -4773,7 +4773,7 @@ fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn config_path() -> Option<PathBuf> {
-    let home = xai_grok_shell::util::grok_home::grok_home();
+    let home = orz_shell::util::grok_home::grok_home();
     Some(home.join("config.toml"))
 }
 

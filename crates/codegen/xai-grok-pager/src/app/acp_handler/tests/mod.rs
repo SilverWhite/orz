@@ -9,8 +9,8 @@ use crate::scrollback::state::ScrollbackState;
 use crate::views::permission_view::SubagentInfo;
 use std::path::PathBuf;
 use std::time::Instant;
-use xai_grok_shell::extensions::notification::RetryState;
-use xai_grok_shell::extensions::notification::SessionUpdate as XaiSessionUpdate;
+use orz_shell::extensions::notification::RetryState;
+use orz_shell::extensions::notification::SessionUpdate as XaiSessionUpdate;
 pub(super) fn make_session(session_id: Option<&str>) -> AgentSession {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     AgentSession {
@@ -157,8 +157,8 @@ fn workflow_catalog_projection_detects_same_name_metadata_changes() {
 }
 pub(super) fn compressed_entry(
     index: usize,
-) -> xai_grok_shell::extensions::notification::ImageCompressedEntry {
-    xai_grok_shell::extensions::notification::ImageCompressedEntry {
+) -> orz_shell::extensions::notification::ImageCompressedEntry {
+    orz_shell::extensions::notification::ImageCompressedEntry {
         index,
         original_bytes: 4_200_000,
         compressed_bytes: 780_000,
@@ -617,8 +617,8 @@ pub(super) fn make_app_two_agents() -> AppView {
 }
 pub(super) fn critical_announcement(
     id: &str,
-) -> xai_grok_announcements::RemoteAnnouncement {
-    xai_grok_announcements::RemoteAnnouncement {
+) -> orz_announcements::RemoteAnnouncement {
+    orz_announcements::RemoteAnnouncement {
         id: Some(id.into()),
         title: Some(format!("{id} title")),
         message: Some(format!("{id} message")),
@@ -628,7 +628,7 @@ pub(super) fn critical_announcement(
 }
 pub(super) fn announcements_update_notif(
     r#gen: u64,
-    announcements: &[xai_grok_announcements::RemoteAnnouncement],
+    announcements: &[orz_announcements::RemoteAnnouncement],
 ) -> acp::ExtNotification {
     acp::ExtNotification::new(
         "x.ai/announcements/update",
@@ -1023,7 +1023,7 @@ pub(super) fn xai_hook_execution_notif_for_prompt(
     prompt_id: Option<&str>,
     is_replay: bool,
 ) -> acp::ExtNotification {
-    use xai_grok_shell::extensions::notification::{HookRunEntryDto, HookRunStatusDto};
+    use orz_shell::extensions::notification::{HookRunEntryDto, HookRunStatusDto};
     xai_hook_execution_notif_with_runs(
         session_id,
         event_name,
@@ -1041,7 +1041,7 @@ pub(super) fn xai_hook_execution_notif_with_runs(
     event_name: &str,
     prompt_id: Option<&str>,
     is_replay: bool,
-    runs: Vec<xai_grok_shell::extensions::notification::HookRunEntryDto>,
+    runs: Vec<orz_shell::extensions::notification::HookRunEntryDto>,
 ) -> acp::ExtNotification {
     let payload = SessionNotification {
         session_id: acp::SessionId::new(session_id),
@@ -1638,7 +1638,7 @@ pub(super) fn make_git_head_changed_notif(
     is_worktree: bool,
     main_repo: Option<&str>,
 ) -> acp::ExtNotification {
-    let payload = xai_grok_workspace::session::git::GitHeadChanged {
+    let payload = orz_workspace::session::git::GitHeadChanged {
         session_id: session_id.into(),
         branch: branch.map(str::to_string),
         is_worktree,
@@ -1722,7 +1722,7 @@ pub(super) fn setup_pending_execute_tool(app: &mut AppView, tc_id: &str) {
 /// Send a late InProgress update with is_background=true to trigger late bg detection.
 pub(super) fn send_late_bg_detection(app: &mut AppView, tc_id: &str) {
     use serde_json::json;
-    use xai_grok_tools::types::output::{BashOutput, ToolOutput};
+    use orz_tools::types::output::{BashOutput, ToolOutput};
     let agent = app.agents.get_mut(&AgentId(0)).unwrap();
     let meta = crate::acp::meta::NotificationMeta::default();
     let bash = BashOutput {
@@ -1795,7 +1795,7 @@ pub(super) fn task_completed_notif(
     signal: Option<&str>,
     will_wake: bool,
 ) -> acp::ExtNotification {
-    use xai_grok_tools::types::TaskSnapshot;
+    use orz_tools::types::TaskSnapshot;
     let notif = SessionNotification {
         session_id: acp::SessionId::new(session_id),
         update: XaiSessionUpdate::TaskCompleted {
@@ -2006,10 +2006,10 @@ pub(super) fn seed_owner_agent_with_open_modal(app: &mut AppView) {
 pub(super) fn make_server_status_notif(
     session_id: &str,
     name: &str,
-    status: xai_grok_shell::extensions::mcp::McpServerStatus,
+    status: orz_shell::extensions::mcp::McpServerStatus,
     tools: Option<serde_json::Value>,
 ) -> acp::ExtNotification {
-    use xai_grok_shell::extensions::mcp::{
+    use orz_shell::extensions::mcp::{
         McpServerSource, McpServerStatusPayload, McpServerStatusReason,
     };
     let payload = McpServerStatusPayload {
@@ -2038,7 +2038,7 @@ pub(super) fn make_servers_updated_notif() -> acp::ExtNotification {
 pub(super) fn make_tools_changed_notif_post_h2(
     session_id: &str,
 ) -> acp::ExtNotification {
-    let payload = xai_grok_shell::extensions::mcp::McpToolsChanged {
+    let payload = orz_shell::extensions::mcp::McpToolsChanged {
         session_id: session_id.to_string(),
         server_name: "grok_com_linear".to_string(),
         tools: Vec::new(),

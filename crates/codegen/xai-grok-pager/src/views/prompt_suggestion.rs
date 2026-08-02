@@ -167,7 +167,7 @@ impl PromptSuggestionController {
 pub fn resolve_enabled() -> bool {
     static ENV_OVERRIDE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
     ENV_OVERRIDE
-        .get_or_init(|| xai_grok_config::env_bool(PROMPT_SUGGESTIONS_ENV))
+        .get_or_init(|| orz_config::env_bool(PROMPT_SUGGESTIONS_ENV))
         .unwrap_or_else(crate::appearance::cache::load_prompt_suggestions)
 }
 

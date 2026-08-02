@@ -1,0 +1,12 @@
+[package]
+name = "orz-tui"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "orz assurance workbench TUI"
+
+[dependencies]
+# ratatui = { workspace = true }
+# crossterm = { workspace = true }
+# tokio = { workspace = true }
+

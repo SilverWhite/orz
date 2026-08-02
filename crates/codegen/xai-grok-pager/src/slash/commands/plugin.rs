@@ -7,7 +7,7 @@
 use crate::app::actions::Action;
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
 use crate::views::extensions_modal::ExtensionsTab;
-use xai_grok_telemetry::events::ExtensionsModalTrigger;
+use orz_telemetry::events::ExtensionsModalTrigger;
 
 /// Open the hooks/plugins modal on the Hooks tab.
 pub struct HooksCommand;

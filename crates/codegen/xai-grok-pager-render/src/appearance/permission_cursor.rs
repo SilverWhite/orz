@@ -16,7 +16,7 @@
 use std::cell::Cell;
 
 use agent_client_protocol as acp;
-use xai_grok_workspace::permission::is_enable_always_approve_option;
+use orz_workspace::permission::is_enable_always_approve_option;
 
 /// Which row the approval-menu cursor preselects (the highlighted row).
 ///
@@ -245,7 +245,7 @@ pub fn resolve_initial_cursor(options: &[acp::PermissionOption]) -> usize {
 /// Read a `[ui].<key>` string from the shell's layered effective config.
 /// Returns `None` when the key is absent or not a string.
 fn load_string_from_effective_config(key: &str) -> Option<String> {
-    let root = xai_grok_config::load_effective_config_disk_only().ok()?;
+    let root = orz_config::load_effective_config_disk_only().ok()?;
     root.get("ui")?
         .get(key)?
         .as_str()
@@ -257,7 +257,7 @@ fn load_string_from_effective_config(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xai_grok_workspace::permission::ENABLE_ALWAYS_APPROVE_OPTION_ID;
+    use orz_workspace::permission::ENABLE_ALWAYS_APPROVE_OPTION_ID;
 
     fn opt(id: &str, kind: acp::PermissionOptionKind) -> acp::PermissionOption {
         acp::PermissionOption::new(acp::PermissionOptionId::new(id), id.to_owned(), kind)

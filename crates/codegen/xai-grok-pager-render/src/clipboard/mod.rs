@@ -24,13 +24,13 @@ pub const GROK_COPY_FILE_ENV: &str = "GROK_COPY_FILE";
 /// Cached result of the remote-session check (env vars don't change at runtime).
 fn is_remote() -> bool {
     static REMOTE: OnceLock<bool> = OnceLock::new();
-    *REMOTE.get_or_init(xai_grok_shared::clipboard::is_remote_session)
+    *REMOTE.get_or_init(orz_shared::clipboard::is_remote_session)
 }
 
 /// Cached result of the container-without-display check.
 fn is_container_no_display() -> bool {
     static CONTAINER: OnceLock<bool> = OnceLock::new();
-    *CONTAINER.get_or_init(xai_grok_shared::clipboard::is_containerized_without_display)
+    *CONTAINER.get_or_init(orz_shared::clipboard::is_containerized_without_display)
 }
 
 /// Cached result of the "an upstream OSC 52 sink is capturing our output" check.
@@ -84,7 +84,7 @@ pub fn clipboard_route() -> &'static ClipboardRoute {
 pub fn wayland_data_control_label() -> &'static str {
     match crate::host::DisplayServer::current() {
         crate::host::DisplayServer::Wayland => {
-            if xai_grok_shared::clipboard::wayland_data_control_supported() {
+            if orz_shared::clipboard::wayland_data_control_supported() {
                 "yes"
             } else {
                 "no"
@@ -180,7 +180,7 @@ fn write_tmux_buffer(text: &str) -> bool {
         // Spooled stdin (not a pipe): a wedged tmux server that stops draining
         // stdin would block the UI thread once the payload exceeds the pipe
         // buffer, and the bounded wait below needs stdin already closed.
-        let stdin = xai_grok_shared::clipboard::spool_for_stdin(text.as_bytes())?;
+        let stdin = orz_shared::clipboard::spool_for_stdin(text.as_bytes())?;
         let mut cmd = Command::new("tmux");
         cmd.args(["load-buffer", "-"])
             .stdin(Stdio::from(stdin))
@@ -189,7 +189,7 @@ fn write_tmux_buffer(text: &str) -> bool {
         xai_tty_utils::detach_std_command(&mut cmd);
         let mut child = cmd.spawn()?;
         // Bounded wait: a wedged tmux server must not freeze the UI thread.
-        let status = xai_grok_shared::clipboard::wait_with_deadline(
+        let status = orz_shared::clipboard::wait_with_deadline(
             &mut child,
             std::time::Duration::from_secs(2),
         )?;
@@ -206,7 +206,7 @@ fn write_tmux_buffer(text: &str) -> bool {
 
 /// System clipboard provider.
 ///
-/// Delegates to [`xai_grok_shared::clipboard`] which uses
+/// Delegates to [`orz_shared::clipboard`] which uses
 /// `pbcopy`/`pbpaste` on macOS (to avoid AppKit GPU overhead) and `arboard`
 /// on other platforms.
 ///
@@ -225,7 +225,7 @@ impl SystemClipboard {
 
 impl ClipboardProvider for SystemClipboard {
     fn get(&mut self) -> Option<String> {
-        xai_grok_shared::clipboard::get_text().ok().flatten()
+        orz_shared::clipboard::get_text().ok().flatten()
     }
 
     fn set(&mut self, text: &str) {
@@ -266,7 +266,7 @@ fn clipboard_write_with_route(text: &str, route: &ClipboardRoute) -> ClipboardWr
     };
 
     if route.native {
-        let outcome = xai_grok_shared::clipboard::set_text_with_outcome(text);
+        let outcome = orz_shared::clipboard::set_text_with_outcome(text);
         legs.cli_ok = outcome.cli_ok;
         legs.arboard_ok = outcome.arboard_ok;
         legs.data_control = outcome.data_control;
@@ -283,7 +283,7 @@ fn clipboard_write_with_route(text: &str, route: &ClipboardRoute) -> ClipboardWr
     }
 
     if route.osc52 {
-        match xai_grok_shared::clipboard::set_text_osc52(text, route.osc52_tmux_passthrough) {
+        match orz_shared::clipboard::set_text_osc52(text, route.osc52_tmux_passthrough) {
             Ok(()) => legs.osc52_ok = true,
             Err(e) => {
                 tracing::debug!("OSC 52 clipboard write failed (best-effort): {e}");
@@ -521,7 +521,7 @@ pub fn default_copy_fallback_path() -> Option<std::path::PathBuf> {
             ));
         }
     }
-    xai_grok_config::user_grok_home().map(|grok_home| grok_home.join("last-copy.txt"))
+    orz_config::user_grok_home().map(|grok_home| grok_home.join("last-copy.txt"))
 }
 
 /// Render a backup-file path for user-facing messages using the codebase-wide
@@ -672,10 +672,10 @@ fn log_clipboard_copy_event(
     toast_kind: &'static str,
     started: std::time::Instant,
 ) {
-    if !xai_grok_telemetry::client::is_enabled() {
+    if !orz_telemetry::client::is_enabled() {
         return;
     }
-    xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::ClipboardCopy {
+    orz_telemetry::session_ctx::log_event(orz_telemetry::events::ClipboardCopy {
         terminal: crate::terminal::terminal_context().telemetry_snapshot(),
         source: "copy_text",
         text_len: text.len() as u64,
@@ -724,7 +724,7 @@ pub fn system_clipboard_read_text() -> Result<Option<String>, ClipboardTextReadE
     if let Some(text) = test_support::hook_text_result() {
         return text;
     }
-    xai_grok_shared::clipboard::get_text().map_err(|error| {
+    orz_shared::clipboard::get_text().map_err(|error| {
         tracing::debug!("clipboard text read failed: {error}");
         ClipboardTextReadError
     })
@@ -748,10 +748,10 @@ pub fn system_primary_selection_get() -> Option<String> {
             .filter(|text| !text.is_empty());
     }
 
-    if !xai_grok_shared::clipboard::x11_display_env_present() {
+    if !orz_shared::clipboard::x11_display_env_present() {
         return None;
     }
-    xai_grok_shared::clipboard::get_primary_text()
+    orz_shared::clipboard::get_primary_text()
         .ok()
         .flatten()
         .filter(|text| !text.is_empty())
@@ -767,7 +767,7 @@ pub fn x11_primary_guidance_available() -> bool {
     #[cfg(target_os = "linux")]
     {
         is_native_x11(crate::host::DisplayServer::current())
-            && xai_grok_shared::clipboard::x11_display_env_present()
+            && orz_shared::clipboard::x11_display_env_present()
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -799,11 +799,11 @@ pub fn log_paste_key_empty_host_clipboard(surface: &str) {
         paste.surface = %surface,
         "paste_key_empty_host_clipboard"
     );
-    if !xai_grok_telemetry::client::is_enabled() {
+    if !orz_telemetry::client::is_enabled() {
         return;
     }
-    xai_grok_telemetry::session_ctx::log_event(
-        xai_grok_telemetry::events::PasteKeyEmptyHostClipboard {
+    orz_telemetry::session_ctx::log_event(
+        orz_telemetry::events::PasteKeyEmptyHostClipboard {
             terminal,
             surface: surface.to_owned(),
         },
@@ -1034,10 +1034,10 @@ fn log_clipboard_paste_event(
     image_mime: &str,
     started: std::time::Instant,
 ) {
-    if !xai_grok_telemetry::client::is_enabled() {
+    if !orz_telemetry::client::is_enabled() {
         return;
     }
-    xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::ClipboardImagePaste {
+    orz_telemetry::session_ctx::log_event(orz_telemetry::events::ClipboardImagePaste {
         terminal: crate::terminal::terminal_context().telemetry_snapshot(),
         probe: probe.to_owned(),
         outcome: outcome.to_owned(),
@@ -1051,7 +1051,7 @@ fn log_clipboard_paste_event(
 /// On non-macOS this composes separate arboard reads.
 fn system_clipboard_get_attachments() -> Result<AttachmentsProbeResult, ClipboardProbeError> {
     let started = std::time::Instant::now();
-    match xai_grok_shared::clipboard::get_attachments() {
+    match orz_shared::clipboard::get_attachments() {
         Ok(att) => {
             let (outcome, mime) = match (&att.image, &att.file_urls) {
                 (Some(img), _) => ("image", img.mime_type.as_str()),
@@ -1080,7 +1080,7 @@ struct AttachmentsProbeResult {
 }
 
 /// Re-export [`ImageData`] so pager code does not import the shell directly.
-pub use xai_grok_shared::clipboard::ImageData;
+pub use orz_shared::clipboard::ImageData;
 
 /// One pasteboard snapshot `(change_count, has_pasteable_image)` read in a
 /// single native pass (macOS native, sub-millisecond, no data read). `(None,
@@ -1090,7 +1090,7 @@ pub fn clipboard_image_snapshot() -> (Option<u64>, bool) {
     if let Some(snapshot) = test_support::hook_image_snapshot() {
         return snapshot;
     }
-    xai_grok_shared::clipboard::clipboard_image_snapshot()
+    orz_shared::clipboard::clipboard_image_snapshot()
 }
 
 /// Cheap pasteboard `changeCount` read (one native message, no type scan, no
@@ -1103,7 +1103,7 @@ pub fn clipboard_change_count() -> Option<u64> {
     if let Some((change_count, _)) = test_support::hook_image_snapshot() {
         return change_count;
     }
-    xai_grok_shared::clipboard::clipboard_change_count()
+    orz_shared::clipboard::clipboard_change_count()
 }
 
 /// Whether the fast image probe exists on this platform. Gates the
@@ -1113,7 +1113,7 @@ pub fn clipboard_image_probe_supported() -> bool {
     if let Some(supported) = test_support::hook_image_probe_supported() {
         return supported;
     }
-    xai_grok_shared::clipboard::clipboard_image_probe_supported()
+    orz_shared::clipboard::clipboard_image_probe_supported()
 }
 
 /// Prime the macOS AppKit `dlopen` ONCE on a detached background thread, so the
@@ -1128,14 +1128,14 @@ pub fn prewarm_image_probe() {
         return;
     }
     WARMED.call_once(|| {
-        std::thread::spawn(xai_grok_shared::clipboard::clipboard_prewarm);
+        std::thread::spawn(orz_shared::clipboard::clipboard_prewarm);
     });
 }
 
 /// Read an image while preserving an empty-versus-error distinction.
 fn system_clipboard_get_image_result() -> Result<Option<ImageData>, ClipboardProbeError> {
     let started = std::time::Instant::now();
-    match xai_grok_shared::clipboard::get_image() {
+    match orz_shared::clipboard::get_image() {
         Ok(img) => {
             let (outcome, mime) = match &img {
                 Some(img) => ("image", img.mime_type.as_str()),
@@ -2179,7 +2179,7 @@ mod tests {
         }
         let path = default_copy_fallback_path();
         // Test envs always resolve a home (or set GROK_HOME).
-        let expected = xai_grok_config::user_grok_home()
+        let expected = orz_config::user_grok_home()
             .expect("home resolves in tests")
             .join("last-copy.txt");
         assert_eq!(path, Some(expected));

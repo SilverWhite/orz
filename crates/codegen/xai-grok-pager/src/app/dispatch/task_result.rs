@@ -386,7 +386,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 vec![Effect::DetectForeignResumeHint {
                     canonical_cwd,
                     compat: app.foreign_session_compat,
-                    grok_home: xai_grok_tools::util::grok_home::grok_home(),
+                    grok_home: orz_tools::util::grok_home::grok_home(),
                     launch_token,
                 }]
             } else {
@@ -558,7 +558,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::ChangelogFetched { markdown, entries } => {
             app.changelog_markdown = markdown;
             app.changelog_bullets =
-                xai_grok_shell::util::changelog::bullets_from_entries(&entries, 3);
+                orz_shell::util::changelog::bullets_from_entries(&entries, 3);
             vec![]
         }
         TaskResult::ClipboardAttachmentProbed {
@@ -653,7 +653,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             vec![]
         }
         TaskResult::PromptHistoryLoaded { agent_id, prompts } => {
-            use xai_grok_tools::implementations::skills::skill::extract_skill_display_text;
+            use orz_tools::implementations::skills::skill::extract_skill_display_text;
             if let Some(agent) = app.agents.get_mut(&agent_id) {
                 agent.session.prompt_history_loading = false;
                 agent.session.prompt_history = prompts

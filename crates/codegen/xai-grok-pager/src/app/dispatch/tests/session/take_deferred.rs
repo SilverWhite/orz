@@ -2,7 +2,7 @@ use crate::acp::model_state::{EffortTokenError, ModelState};
 use crate::app::dispatch::session::lifecycle::{DeferredSwitchOutcome, take_deferred_model_switch};
 use agent_client_protocol as acp;
 use std::sync::Arc;
-use xai_grok_shell::sampling::types::ReasoningEffort;
+use orz_shell::sampling::types::ReasoningEffort;
 
 fn model_with_support(id: &str, supports: bool) -> (acp::ModelId, acp::ModelInfo) {
     let id = acp::ModelId::new(Arc::from(id));

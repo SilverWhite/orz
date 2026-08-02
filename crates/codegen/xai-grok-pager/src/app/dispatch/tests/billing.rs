@@ -1,7 +1,7 @@
 //! Tests for credit-limit upsells, paywall gating, and auto-topup.
 
 use super::*;
-use xai_grok_shell::sampling::error::is_free_usage_exhausted_error;
+use orz_shell::sampling::error::is_free_usage_exhausted_error;
 
 // ── Credit-limit upsell / max-tier tests ───────────────────────────
 
@@ -502,7 +502,7 @@ fn is_nonsilent_billing(effects: &[Effect]) -> bool {
 fn complete_session_usage(
     app: &mut AppView,
     session_id: &str,
-    usage: xai_grok_shell::extensions::notification::PromptUsage,
+    usage: orz_shell::extensions::notification::PromptUsage,
 ) -> Vec<Effect> {
     dispatch(
         Action::TaskComplete(TaskResult::SessionUsageComplete {
@@ -558,7 +558,7 @@ fn team_auth_disables_agent_billing_surface() {
         .get_mut(&AgentId(0))
         .unwrap()
         .billing_surface_visible = true;
-    app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta {
+    app.apply_auth_meta(&orz_shell::auth::AuthMeta {
         team_id: Some("team-uuid".into()),
         team_name: Some("Acme Corp".into()),
         ..Default::default()
@@ -592,8 +592,8 @@ fn manage_billing_gates_on_consumer_billing_surface() {
 fn session_usage_complete_pushes_block_and_chains_billing() {
     let mut app = test_app_with_agent();
     let before = agent_scrollback_len(&app);
-    let usage = xai_grok_shell::extensions::notification::PromptUsage {
-        totals: xai_grok_shell::extensions::notification::PromptUsageModel {
+    let usage = orz_shell::extensions::notification::PromptUsage {
+        totals: orz_shell::extensions::notification::PromptUsageModel {
             input_tokens: 1_000,
             output_tokens: 100,
             total_tokens: 1_100,
@@ -649,8 +649,8 @@ fn session_usage_complete_drops_stale_session() {
     let effects = complete_session_usage(
         &mut app,
         "old-session",
-        xai_grok_shell::extensions::notification::PromptUsage {
-            totals: xai_grok_shell::extensions::notification::PromptUsageModel {
+        orz_shell::extensions::notification::PromptUsage {
+            totals: orz_shell::extensions::notification::PromptUsageModel {
                 model_calls: 99,
                 cost_usd_ticks: Some(1_000_000_000_000),
                 ..Default::default()
@@ -1002,7 +1002,7 @@ fn free_usage_upsell_shows_two_options_with_exact_labels() {
         qv.local_kind,
         Some(
             crate::views::question_view::LocalQuestionKind::FreeUsageUpsell {
-                source: xai_grok_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
+                source: orz_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
             }
         )
     ));
@@ -1034,7 +1034,7 @@ fn free_usage_upsell_shows_two_options_with_exact_labels() {
 #[test]
 fn free_usage_failure_opens_paywall_modal() {
     use crate::app::acp_handler::apply_session_event_for_test;
-    use xai_grok_shell::extensions::notification::{RetryState, SessionUpdate};
+    use orz_shell::extensions::notification::{RetryState, SessionUpdate};
 
     let mut app = test_app_with_agent();
     let id = AgentId(0);
@@ -1102,7 +1102,7 @@ fn free_usage_translate_local_submit_maps_options() {
     open_free_usage_upsell(agent, None);
     let mut qv = agent.question_view.take().unwrap();
     let kind = || LocalQuestionKind::FreeUsageUpsell {
-        source: xai_grok_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
+        source: orz_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
     };
 
     for idx in [0, 1] {
@@ -1145,7 +1145,7 @@ fn restricted_command_submit_opens_two_option_upsell() {
         qv.local_kind,
         Some(
             crate::views::question_view::LocalQuestionKind::FreeUsageUpsell {
-                source: xai_grok_telemetry::events::SuperGrokUpsell::RestrictedCommand,
+                source: orz_telemetry::events::SuperGrokUpsell::RestrictedCommand,
             }
         )
     ));
@@ -1351,8 +1351,8 @@ fn credit_limit_upsell_submit_shows_url_when_browser_unavailable() {
     qv.selections[0] = QuestionSelection::Single(Some(1));
     let kind = LocalQuestionKind::CreditLimitUpsell {
         choices: vec![
-            xai_grok_telemetry::events::CreditLimitChoice::UpgradeTier,
-            xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits,
+            orz_telemetry::events::CreditLimitChoice::UpgradeTier,
+            orz_telemetry::events::CreditLimitChoice::PurchaseCredits,
         ],
     };
     let InputOutcome::Action(Action::OpenUrl(url)) =

@@ -5,7 +5,7 @@
 //! already quantized to the terminal's color capability level.
 
 use anstyle::{Ansi256Color, AnsiColor, Color, Style};
-use xai_grok_markdown::MarkdownStyle;
+use orz_markdown::MarkdownStyle;
 
 /// Convert `ratatui::style::Color` → `anstyle::Color` (type conversion only).
 ///

@@ -111,12 +111,12 @@ fn is_current_coding_data_write(app: &AppView, seq: u64, agent_id: AgentId) -> b
 }
 
 fn log_coding_data_consent_selected(
-    source: xai_grok_telemetry::events::CodingDataConsentSource,
+    source: orz_telemetry::events::CodingDataConsentSource,
     opted_in: bool,
     previous_opted_in: bool,
 ) {
-    use xai_grok_telemetry::events::{CodingDataConsentChoice, CodingDataConsentSelected};
-    xai_grok_telemetry::session_ctx::log_event(CodingDataConsentSelected {
+    use orz_telemetry::events::{CodingDataConsentChoice, CodingDataConsentSelected};
+    orz_telemetry::session_ctx::log_event(CodingDataConsentSelected {
         source,
         choice: CodingDataConsentChoice::from_opted_in(opted_in),
         previous_choice: CodingDataConsentChoice::from_opted_in(previous_opted_in),
@@ -129,7 +129,7 @@ fn log_coding_data_consent_selected(
 pub(super) fn set_coding_data_sharing(
     app: &mut AppView,
     opted_in: bool,
-    source: xai_grok_telemetry::events::CodingDataConsentSource,
+    source: orz_telemetry::events::CodingDataConsentSource,
 ) -> Vec<Effect> {
     // ── Guard 1: Enterprise ZDR ──────────────────────────────────────
     if app.is_zdr {
@@ -477,7 +477,7 @@ pub(in crate::app::dispatch) fn dispatch_privacy_banner_opt_in(app: &mut AppView
     let effects = set_coding_data_sharing(
         app,
         true,
-        xai_grok_telemetry::events::CodingDataConsentSource::PrivacyBanner,
+        orz_telemetry::events::CodingDataConsentSource::PrivacyBanner,
     );
     // should_show guarantees opted-out + unguarded, so effects is only empty
     // if a guard regresses; leaving inflight false keeps [Opt in] clickable.
@@ -501,7 +501,7 @@ pub(in crate::app::dispatch) fn dispatch_privacy_banner_opt_out(app: &mut AppVie
     }
     let previous_opted_in = !app.coding_data_retention_opt_out;
     log_coding_data_consent_selected(
-        xai_grok_telemetry::events::CodingDataConsentSource::PrivacyBanner,
+        orz_telemetry::events::CodingDataConsentSource::PrivacyBanner,
         false,
         previous_opted_in,
     );
@@ -520,7 +520,7 @@ pub(in crate::app::dispatch) fn dispatch_privacy_banner_opt_out(app: &mut AppVie
 pub(super) fn handle_context_info_complete(
     app: &mut AppView,
     agent_id: AgentId,
-    info: Box<xai_grok_shell::session::SessionInfoResponse>,
+    info: Box<orz_shell::session::SessionInfoResponse>,
 ) -> Vec<Effect> {
     if let Some(agent) = app.agents.get_mut(&agent_id) {
         let model = info.data.model.as_deref().unwrap_or("unknown").to_string();

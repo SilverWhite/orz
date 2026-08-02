@@ -9,7 +9,7 @@
 use super::agent::AgentId;
 use crate::scrollback::entry::EntryId;
 use agent_client_protocol as acp;
-use xai_grok_shell::sampling::types::ReasoningEffort;
+use orz_shell::sampling::types::ReasoningEffort;
 /// Typed error for model switch failures. Replaces the raw `String` in
 /// `TaskResult::SwitchModelComplete` so dispatch can match on the variant
 /// instead of parsing strings.
@@ -20,7 +20,7 @@ pub enum SwitchModelError {
     /// Deserialized from `ModelSwitchIncompatibleAgentError` in
     /// `acp::Error.data`.
     IncompatibleAgent {
-        error: xai_grok_shell::agent::config::ModelSwitchIncompatibleAgentError,
+        error: orz_shell::agent::config::ModelSwitchIncompatibleAgentError,
         /// The model that was active before the optimistic UI update
         /// (if any). Used to roll back `models.current` when the user
         /// declines to start a new session.
@@ -350,7 +350,7 @@ pub enum Action {
     /// Open the extensions modal dialog on a specific tab.
     OpenExtensionsModal {
         tab: crate::views::extensions_modal::ExtensionsTab,
-        trigger: xai_grok_telemetry::events::ExtensionsModalTrigger,
+        trigger: orz_telemetry::events::ExtensionsModalTrigger,
     },
     /// Open the agents modal (listing all agent definitions).
     /// Optionally opens directly on a specific tab.
@@ -376,7 +376,7 @@ pub enum Action {
     /// Add or update an MCP server via x.ai/mcp/upsert.
     UpsertMcpServer {
         name: String,
-        config: Box<xai_grok_shell::util::config::McpServerConfig>,
+        config: Box<orz_shell::util::config::McpServerConfig>,
     },
     /// Delete an MCP server via x.ai/mcp/delete.
     DeleteMcpServer {
@@ -430,7 +430,7 @@ pub enum Action {
     /// Open the promo CTA link (url resolved from current state at dispatch
     /// time, mirroring how `AnnouncementsHide` resolves its target). The
     /// payload records which surface activated it, for telemetry.
-    AnnouncementsOpenCta(xai_grok_telemetry::events::AnnouncementCtaSurface),
+    AnnouncementsOpenCta(orz_telemetry::events::AnnouncementCtaSurface),
     /// Cycle session mode (Shift+Tab): Normal → Plan → Always-Approve → Normal.
     /// Plan mode sends a signal to the shell; always-approve is local.
     CycleMode,
@@ -1443,7 +1443,7 @@ pub enum Effect {
     /// Scan enabled foreign session stores without delaying the native list.
     ScanForeignSessions {
         cwd: std::path::PathBuf,
-        compat: xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources,
+        compat: orz_workspace::foreign_sessions::EnabledForeignSessionSources,
         grok_home: std::path::PathBuf,
         coordinator: crate::app::ForeignScanCoordinator,
         seq: u64,
@@ -1456,7 +1456,7 @@ pub enum Effect {
     /// Detect the newest resumable foreign session without delaying first paint.
     DetectForeignResumeHint {
         canonical_cwd: std::path::PathBuf,
-        compat: xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources,
+        compat: orz_workspace::foreign_sessions::EnabledForeignSessionSources,
         grok_home: std::path::PathBuf,
         launch_token: u64,
     },
@@ -1859,7 +1859,7 @@ pub enum Effect {
         agent_id: AgentId,
         session_id: acp::SessionId,
         name: String,
-        config: Box<xai_grok_shell::util::config::McpServerConfig>,
+        config: Box<orz_shell::util::config::McpServerConfig>,
     },
     /// Delete an MCP server via x.ai/mcp/delete.
     DeleteMcpServer {
@@ -2214,7 +2214,7 @@ pub enum TaskResult {
         session_cwd: std::path::PathBuf,
         code_restored: bool,
         restore_summary: Option<String>,
-        restore_degree: Option<xai_grok_workspace::session::git::RestoreDegree>,
+        restore_degree: Option<orz_workspace::session::git::RestoreDegree>,
     },
     /// Worktree session creation failed.
     WorktreeSessionFailed {
@@ -2228,7 +2228,7 @@ pub enum TaskResult {
         models: Option<acp::SessionModelState>,
         code_restored: bool,
         restore_summary: Option<String>,
-        restore_degree: Option<xai_grok_workspace::session::git::RestoreDegree>,
+        restore_degree: Option<orz_workspace::session::git::RestoreDegree>,
         /// The session's in-flight running prompt id (from the load response
         /// `_meta["x.ai/runningPromptId"]`), present only when the session was
         /// loaded MID-turn (another client is driving). The loader adopts it to
@@ -2261,7 +2261,7 @@ pub enum TaskResult {
         /// as an actionable picker notice instead of a silent empty list.
         partial: Option<crate::app::effects::ConversationsPartial>,
         /// Directory scope `sessions` were drawn from (`x.ai/listScope`).
-        scope: xai_grok_shell::session::unified_list::ListScope,
+        scope: orz_shell::session::unified_list::ListScope,
         /// Echo of [`Effect::FetchSessionList::seq`]; stale results are dropped.
         seq: u64,
         /// Echo of [`Effect::FetchSessionList::query`]. `Some` marks the
@@ -2285,7 +2285,7 @@ pub enum TaskResult {
     ForeignResumeHintDetected {
         canonical_cwd: std::path::PathBuf,
         launch_token: u64,
-        hint: Option<xai_grok_workspace::foreign_sessions::RecentForeignSession>,
+        hint: Option<orz_workspace::foreign_sessions::RecentForeignSession>,
     },
     /// Session list fetch failed.
     SessionListFailed {
@@ -2393,7 +2393,7 @@ pub enum TaskResult {
     BgTaskKilled {
         session_id: String,
         task_id: String,
-        outcome: Option<xai_grok_tools::types::KillOutcome>,
+        outcome: Option<orz_tools::types::KillOutcome>,
     },
     /// Background task kill failed.
     BgTaskKillFailed {
@@ -2414,7 +2414,7 @@ pub enum TaskResult {
     /// Changelog fetched from CDN (both formats).
     ChangelogFetched {
         markdown: Option<String>,
-        entries: Vec<xai_grok_shell::util::changelog::ChangelogEntry>,
+        entries: Vec<orz_shell::util::changelog::ChangelogEntry>,
     },
     /// Announcements hidden state persisted.
     AnnouncementsHiddenPersisted {
@@ -2503,7 +2503,7 @@ pub enum TaskResult {
     /// Skills list loaded.
     SkillsListLoaded {
         agent_id: AgentId,
-        result: Result<Vec<xai_grok_tools::implementations::skills::types::SkillInfo>, String>,
+        result: Result<Vec<orz_tools::implementations::skills::types::SkillInfo>, String>,
     },
     WorkflowsListLoaded {
         agent_id: AgentId,
@@ -2513,7 +2513,7 @@ pub enum TaskResult {
     /// Skill toggle completed (enable/disable).
     SkillsToggleDone {
         agent_id: AgentId,
-        result: Result<Vec<xai_grok_tools::implementations::skills::types::SkillInfo>, String>,
+        result: Result<Vec<orz_tools::implementations::skills::types::SkillInfo>, String>,
     },
     /// Background marketplace auto-update completed.
     MarketplaceUpdatesAvailable {
@@ -2566,7 +2566,7 @@ pub enum TaskResult {
     /// Session info fetched successfully.
     SessionInfoComplete {
         agent_id: AgentId,
-        info: Box<xai_grok_shell::session::SessionInfoResponse>,
+        info: Box<orz_shell::session::SessionInfoResponse>,
         text: String,
     },
     /// Session info fetch failed.
@@ -2612,7 +2612,7 @@ pub enum TaskResult {
     /// Context info fetched successfully.
     ContextInfoComplete {
         agent_id: AgentId,
-        info: Box<xai_grok_shell::session::SessionInfoResponse>,
+        info: Box<orz_shell::session::SessionInfoResponse>,
     },
     /// Context info fetch failed.
     ContextInfoFailed {
@@ -2623,7 +2623,7 @@ pub enum TaskResult {
     SessionUsageComplete {
         agent_id: AgentId,
         session_id: acp::SessionId,
-        usage: Box<xai_grok_shell::extensions::notification::PromptUsage>,
+        usage: Box<orz_shell::extensions::notification::PromptUsage>,
     },
     /// `/usage` session ledger fetch failed. Drop if `session_id` no longer matches.
     SessionUsageFailed {
@@ -2745,7 +2745,7 @@ pub enum TaskResult {
         generation: u64,
     },
     DeepSearchResults {
-        results: Vec<xai_grok_shell::extensions::session_search::SearchSessionHit>,
+        results: Vec<orz_shell::extensions::session_search::SearchSessionHit>,
         seq: u64,
     },
     /// `x.ai/session/fork` completed (no-worktree path). The pager adopts
@@ -2805,7 +2805,7 @@ pub enum TaskResult {
         autotopup: crate::views::credit_bar::AutoTopupFetch,
     },
     GateRefreshed {
-        settings: Option<xai_grok_shell::util::config::RemoteSettings>,
+        settings: Option<orz_shell::util::config::RemoteSettings>,
     },
     /// Billing fetch failed with an error message.
     BillingError {

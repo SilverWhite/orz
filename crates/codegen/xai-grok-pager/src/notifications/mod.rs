@@ -112,8 +112,8 @@ impl NotificationService {
                 &event.body,
                 self.terminal_ctx,
             );
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::NotificationEmitted {
+            orz_telemetry::session_ctx::log_event(
+                orz_telemetry::events::NotificationEmitted {
                     protocol: self.protocol.as_str(),
                     event_kind: event.kind.as_str(),
                     was_focused: self.focus_tracker.is_focused(),
@@ -140,7 +140,7 @@ impl NotificationService {
         }
 
         if !buf.is_empty() {
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 use std::io::Write;
                 let _ = stderr.write_all(buf.as_bytes());
                 let _ = stderr.flush();
@@ -214,7 +214,7 @@ impl NotificationService {
         // Reset the tab title back to "grok" so it doesn't linger on the
         // last activity label after exit.
         let title_esc = self.title_manager.reset();
-        xai_grok_shell::util::with_locked_stderr(|stderr| {
+        orz_shell::util::with_locked_stderr(|stderr| {
             use std::io::Write as _;
             let _ = stderr.write_all(title_esc.as_bytes());
             let _ = stderr.flush();
@@ -223,7 +223,7 @@ impl NotificationService {
         let mut buf = String::new();
         self.clear_progress_into(&mut buf);
         if !buf.is_empty() {
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
+            orz_shell::util::with_locked_stderr(|stderr| {
                 use std::io::Write as _;
                 let _ = stderr.write_all(buf.as_bytes());
                 let _ = stderr.flush();

@@ -1,7 +1,7 @@
 pub const PAGER_CLIENT_TYPE: &str = "grok-pager";
 pub const HEADLESS_CLIENT_TYPE: &str = "grok-shell";
 
-pub const PAGER_CLIENT_VERSION: &str = xai_grok_version::VERSION;
+pub const PAGER_CLIENT_VERSION: &str = orz_version::VERSION;
 
 /// `User-Agent` for pager-owned direct-to-`api.x.ai` clients (voice STT).
 ///

@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use xai_grok_shell::agent::config::Config as AgentConfig;
-use xai_grok_shell::session::repo_changes::UploadMethod;
-use xai_grok_shell::util::grok_home::grok_home;
+use orz_shell::agent::config::Config as AgentConfig;
+use orz_shell::session::repo_changes::UploadMethod;
+use orz_shell::util::grok_home::grok_home;
 
 #[derive(Debug, clap::Args, Clone)]
 pub struct TraceArgs {
@@ -328,7 +328,7 @@ impl std::fmt::Display for UploadMethodDisplay<'_> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn find_session_dir(session_id: &str) -> Result<PathBuf> {
-    xai_grok_shell::session::persistence::find_session_dir_by_id(session_id).with_context(|| {
+    orz_shell::session::persistence::find_session_dir_by_id(session_id).with_context(|| {
         format!(
             "Session '{session_id}' not found under {}",
             crate::util::display_user_grok_path("sessions")
@@ -449,7 +449,7 @@ async fn run_upload(
     if bucket_url.is_none()
         && matches!(
             upload_method,
-            xai_grok_shell::session::repo_changes::UploadMethod::Direct { .. }
+            orz_shell::session::repo_changes::UploadMethod::Direct { .. }
         )
     {
         anyhow::bail!(
@@ -466,7 +466,7 @@ async fn run_upload(
     }
     .to_string();
 
-    let upload_config = xai_grok_shell::session::repo_changes::TraceExportConfig {
+    let upload_config = orz_shell::session::repo_changes::TraceExportConfig {
         bucket_url: bucket_url.clone(),
         service_account_key: None,
         prefix_dir: None,
@@ -609,7 +609,7 @@ impl UploadAttempt<'_> {
 const UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 async fn upload_with_retries(
-    config: &xai_grok_shell::session::repo_changes::TraceExportConfig,
+    config: &orz_shell::session::repo_changes::TraceExportConfig,
     object_path: &str,
     archive: &[u8],
 ) -> anyhow::Result<String> {
@@ -642,7 +642,7 @@ async fn upload_with_retries(
 
 pub async fn resolve_upload_method(agent_config: &AgentConfig) -> Option<UploadMethod> {
     // On login failure, fall back to ambient creds rather than erroring.
-    let auth_token = xai_grok_shell::auth::ensure_authenticated_or_noninteractive(
+    let auth_token = orz_shell::auth::ensure_authenticated_or_noninteractive(
         &agent_config.grok_com_config,
         agent_config.endpoints.has_noninteractive_upload_auth(),
         Some("Authentication required for trace upload."),
