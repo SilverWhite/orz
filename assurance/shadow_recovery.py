@@ -318,24 +318,20 @@ class ShadowRecoveryStore:
         if dot_git.is_dir():
             return
 
-        env = self._git_env()
         subprocess.run(
-            ["git", "init"],
+            ["git", "-C", str(self._repo), "init", "--initial-branch=main"],
             capture_output=True, text=True, check=True,
-            env=env,
             creationflags=CREATE_NO_WINDOW,
         )
         # Local config so commits succeed without a global identity set.
         subprocess.run(
-            ["git", "config", "user.name", "GSA Shadow Recovery"],
+            ["git", "-C", str(self._repo), "config", "user.name", "GSA Shadow Recovery"],
             capture_output=True, text=True, check=True,
-            env=env,
             creationflags=CREATE_NO_WINDOW,
         )
         subprocess.run(
-            ["git", "config", "user.email", "shadow-recovery@gsa.local"],
+            ["git", "-C", str(self._repo), "config", "user.email", "shadow-recovery@gsa.local"],
             capture_output=True, text=True, check=True,
-            env=env,
             creationflags=CREATE_NO_WINDOW,
         )
 
