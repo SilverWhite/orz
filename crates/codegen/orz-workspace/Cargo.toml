@@ -12,6 +12,7 @@ arc-swap = { workspace = true }
 # workspace version already used by the sibling preview proxy.
 axum = { workspace = true }
 dunce = { workspace = true }
+orz-auth = { path = "../orz-auth", features = ["middleware"] }
 orz-version = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }

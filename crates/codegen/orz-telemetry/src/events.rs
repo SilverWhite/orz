@@ -63,3 +63,8 @@ event_struct!(ProcessTreeExited);
 pub trait TelemetryEvent {
     fn event_name(&self) -> &'static str;
 }
+pub struct McpServerFailed { pub server_name: String, pub error_type: McpErrorType, pub duration_ms: u64, pub timeout_sec: u64 }
+pub struct McpToolCalled { pub server_name: String, pub tool_name: String, pub qualified_name: String, pub success: bool, pub duration_ms: u64 }
+#[derive(Debug, Clone)] pub enum McpErrorType { SpawnFailed, Timeout, ConnectionLost, ProtocolError, Unknown }
+impl TelemetryEvent for McpServerFailed { fn event_name(&self) -> &'static str { "mcp_server_failed" } }
+impl TelemetryEvent for McpToolCalled { fn event_name(&self) -> &'static str { "mcp_tool_called" } }

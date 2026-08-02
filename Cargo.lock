@@ -6653,6 +6653,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orz-announcements"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "orz-assurance"
 version = "0.1.0"
 dependencies = [
@@ -6723,6 +6732,7 @@ dependencies = [
  "blake3",
  "core-foundation",
  "dunce",
+ "orz-telemetry",
  "orz-version",
  "prod-mc-cli-chat-proxy-types",
  "ring",
@@ -6745,6 +6755,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "indexmap",
+ "orz-announcements",
  "orz-config",
  "orz-mcp",
  "serde",
@@ -6837,6 +6848,7 @@ dependencies = [
  "libc",
  "oauth2",
  "orz-config",
+ "orz-telemetry",
  "orz-tools",
  "orz-version",
  "orz-workspace-types",
@@ -7053,6 +7065,7 @@ dependencies = [
  "nucleo",
  "obfstr",
  "orz-agent",
+ "orz-announcements",
  "orz-chat-state",
  "orz-compaction",
  "orz-config",
@@ -7191,6 +7204,7 @@ dependencies = [
  "orz-config",
  "orz-env",
  "orz-sandbox",
+ "orz-telemetry",
  "orz-tools-api",
  "orz-version",
  "orz-workspace-types",
@@ -7296,6 +7310,7 @@ dependencies = [
  "nohash-hasher",
  "nucleo",
  "orz-agent",
+ "orz-auth",
  "orz-config",
  "orz-config-types",
  "orz-env",

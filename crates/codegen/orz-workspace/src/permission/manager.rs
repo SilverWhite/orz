@@ -127,6 +127,7 @@ fn permission_mode_artifact_str(mode: orz_telemetry::enums::PermissionMode) -> &
         PermissionMode::AlwaysApprove => "always-approve",
         PermissionMode::Auto => "auto",
         PermissionMode::Ask => "ask",
+        _ => "default",
     }
 }
 

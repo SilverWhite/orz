@@ -17,6 +17,7 @@ members = [
     "crates/codegen/xai-fsnotify",
     "crates/codegen/xai-gix-status",
     "crates/codegen/orz-agent",
+    "crates/codegen/orz-announcements",
     "crates/codegen/orz-auth",
     "crates/codegen/orz-config",
     "crates/codegen/orz-config-types",
@@ -272,6 +273,7 @@ xai-computer-hub-core = { path = "crates/common/xai-computer-hub-core" }
 xai-computer-hub-sdk = { path = "crates/common/xai-computer-hub-sdk" }
 xai-gix-status = { path = "crates/codegen/xai-gix-status" }
 orz-agent = { path = "crates/codegen/orz-agent" }
+orz-announcements = { path = "crates/codegen/orz-announcements" }
 orz-auth = { path = "crates/codegen/orz-auth" }
 orz-config = { path = "crates/codegen/orz-config" }
 orz-config-types = { path = "crates/codegen/orz-config-types" }

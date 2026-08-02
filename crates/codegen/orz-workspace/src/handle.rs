@@ -2353,13 +2353,13 @@ impl WorkspaceHandle {
     pub fn get_or_create_codebase_index(
         &self,
         cwd: std::path::PathBuf,
-    ) -> (Arc<xai_codebase_graph::IndexManagerHandle>, bool) {
+    ) -> (Arc<crate::file_system::codebase_graph_stub::IndexManagerHandle>, bool) {
         self.shared.codebase_indexes.lock().get_or_create(cwd)
     }
     pub fn get_codebase_index(
         &self,
         cwd: &std::path::Path,
-    ) -> Option<Arc<xai_codebase_graph::IndexManagerHandle>> {
+    ) -> Option<Arc<crate::file_system::codebase_graph_stub::IndexManagerHandle>> {
         self.shared.codebase_indexes.lock().get(cwd)
     }
     fn spawn_codebase_index_event_forwarder(&self) -> tokio::task::JoinHandle<()> {

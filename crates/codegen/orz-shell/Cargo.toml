@@ -130,6 +130,7 @@ xai-agent-lifecycle = { workspace = true }
 xai-interjection-core = { workspace = true }
 orz-sandbox = { path = "../orz-sandbox", default-features = false }
 orz-telemetry = { path = "../orz-telemetry" }
+orz-announcements = { path = "../orz-announcements" }
 orz-sampler = { path = "../orz-sampler" }
 orz-chat-state = { path = "../orz-chat-state" }
 orz-compaction = { path = "../../common/orz-compaction" }

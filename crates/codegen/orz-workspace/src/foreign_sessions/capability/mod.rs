@@ -6,7 +6,13 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use rusqlite::{Connection, OpenFlags};
-use xai_sqlite_journal::JournalMode;
+
+// Local stub for deleted xai_sqlite_journal::JournalMode
+#[derive(Debug, Clone, Copy)]
+enum JournalMode { Wal, Truncate }
+impl JournalMode {
+    fn for_db_path(_: &Path) -> Self { Self::Wal }
+}
 
 #[cfg(unix)]
 mod unix;

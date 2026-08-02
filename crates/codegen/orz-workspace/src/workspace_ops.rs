@@ -1022,7 +1022,7 @@ fn resolve_index_for_workspace(
     ws: &WorkspaceHandle,
     root: Option<&std::path::Path>,
 ) -> WorkspaceResult<(
-    std::sync::Arc<xai_codebase_graph::IndexManagerHandle>,
+    std::sync::Arc<crate::file_system::codebase_graph_stub::IndexManagerHandle>,
     std::path::PathBuf,
 )> {
     let index_root = index_root_for(ws, root)?;
@@ -1132,7 +1132,7 @@ impl WorkspaceOp for CodeIndexStatusReq {
     }
 }
 fn query_result_to_response(
-    result: Result<xai_codebase_graph::QueryResult, xai_codebase_graph::QueryError>,
+    result: Result<crate::file_system::codebase_graph_stub::QueryResult, crate::file_system::codebase_graph_stub::QueryError>,
 ) -> CodeNavResponse {
     match result {
         Ok(qr) => CodeNavResponse {
@@ -1150,7 +1150,7 @@ fn query_result_to_response(
     }
 }
 fn symbol_locations_to_response(
-    locations: Vec<xai_codebase_graph::SymbolLocation>,
+    locations: Vec<crate::file_system::codebase_graph_stub::SymbolLocation>,
 ) -> CodeNavResponse {
     CodeNavResponse {
         locations: locations
