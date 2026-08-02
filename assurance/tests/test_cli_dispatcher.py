@@ -1299,6 +1299,10 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertEqual(report["report_kind"], "gsa_cli_doctor_report")
 
     def test_grok_observe_tools_output_gate_receipt_writes_file(self) -> None:
+        from assurance.grok_tool_permission_observer import GrokToolPermissionObservationConfig
+
+        if not GrokToolPermissionObservationConfig().binary_path.exists():
+            self.skipTest("Grok binary not installed")
         temp_dir = Path(self.temporary.name)
         gate_path = temp_dir / "tool-gate.json"
         exit_code, _stdout = self._capture_json(
