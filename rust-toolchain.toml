@@ -1,11 +1,10 @@
 [toolchain]
-# orz toolchain — pinned to 1.97.1, x86_64-pc-windows-gnu (Phase 1).
+# orz toolchain — pinned to 1.97.1. Windows: MSVC (host default).
 # Linux targets: x86_64 + aarch64.
 #
-# Long-term: migrate to MSVC + Windows SDK on B:.
 # Bump policy: one minor version at a time, ≥2 weeks after upstream release.
 # Before bumping: cargo check --workspace && cargo clippy --workspace
-channel = "1.97.1-x86_64-pc-windows-gnu"
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]
 profile = "default"
 targets = [
