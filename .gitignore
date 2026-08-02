@@ -1,3 +1,15 @@
 /target
 **/*.rs.bk
 .DS_Store
+
+# Phase 1 helper scripts (one-time use, not for distribution)
+build.bat
+build.ps1
+fix_cargo.sh
+phase1.py
+
+# Binary files (protoc installed per-developer)
+bin/protoc
+bin/protoc.exe
+bin/protoc.bak
+bin/protoc.dotslash

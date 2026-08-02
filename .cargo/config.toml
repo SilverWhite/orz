@@ -1,3 +1,7 @@
+# orz build configuration.
+# Phase 1: x86_64-pc-windows-gnu (MSVC pending Windows SDK on B:\SDK).
+# Build with: cargo build --target x86_64-pc-windows-gnu -p orz-bin
+
 # link-arg
 # https://pyo3.rs/v0.17.1/building_and_distribution.html#macos
 

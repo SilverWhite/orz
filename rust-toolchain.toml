@@ -1,18 +1,14 @@
 [toolchain]
-# We use the latest stable, but bump it manually.
-# To avoid unnecessary churn and simplify regression detection
-# - bump one point version at a time
-# - wait at least a couple of weeks after the release before bumping
-# After bumping the version, run
-# ```
-# cargo check --all-targets --workspace
-# cargo clippy --all-targets --workspace
-# ```
-channel = "stable-x86_64-pc-windows-gnu"
+# orz toolchain — pinned to 1.97.1, x86_64-pc-windows-gnu (Phase 1).
+# Linux targets: x86_64 + aarch64.
+#
+# Long-term: migrate to MSVC + Windows SDK on B:.
+# Bump policy: one minor version at a time, ≥2 weeks after upstream release.
+# Before bumping: cargo check --workspace && cargo clippy --workspace
+channel = "1.97.1-x86_64-pc-windows-gnu"
 components = ["rustfmt", "clippy"]
 profile = "default"
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
 ]
-# force CI
