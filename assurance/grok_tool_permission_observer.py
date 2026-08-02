@@ -314,6 +314,9 @@ def build_grok_tool_permission_observation_receipt(
     valid = all(checks[name] for name in hard_check_names)
     if not valid:
         decision = "block"
+    elif not acp_observation["attached"]:
+        # No ACP permission probe attached — can't verify tool safety.
+        decision = "block"
     elif acp_observation["required_scenarios_verified"]:
         decision = "allow"
     else:
@@ -430,9 +433,14 @@ def build_grok_tool_availability_projection(
         "grok_project_retrieval_agents": checks["expected_project_agents_discovered"],
         "grok_permission_controls": checks["permission_controls_observed"],
         "grok_web_retrieval_controls": checks["web_disable_control_observed"],
-        "grok_acp_permission_probe": None
-        if not acp["attached"] or not acp["required_scenarios_verified"]
-        else acp["invalid_count"] == 0,
+        "grok_acp_permission_probe": (
+            # GAK-TAV-001: absent ACP probe → unavailable (block),
+            # not degraded (warn).  Without the ACP probe we cannot
+            # verify any permission surface at all.
+            False
+            if not acp["attached"] or not acp["required_scenarios_verified"]
+            else acp["invalid_count"] == 0
+        ),
     }
     return probe_tool_availability(
         tool_specs=tool_specs,

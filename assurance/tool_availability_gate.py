@@ -272,3 +272,23 @@ def evaluate_tool_belief_mismatch(
         ],
     }
     return report
+
+
+def build_grok_tool_specs() -> list[dict[str, Any]]:
+    """Return tool specs matching Grok's actual built-in tool surface.
+
+    These correspond to the tools Grok provides via ACP when
+    ``disable_builtin_tools`` is False — the alpha default.
+    """
+    return [
+        {"tool_id": "run_terminal_cmd", "tool_name": "Run Terminal Command", "capability": "bash_exec", "probe_method": "acp_tool_registry"},
+        {"tool_id": "read_file", "tool_name": "Read File", "capability": "file_read", "probe_method": "acp_tool_registry"},
+        {"tool_id": "grep", "tool_name": "Grep Search", "capability": "search", "probe_method": "acp_tool_registry"},
+        {"tool_id": "list_dir", "tool_name": "List Directory", "capability": "file_read", "probe_method": "acp_tool_registry"},
+        {"tool_id": "search_replace", "tool_name": "Search and Replace", "capability": "file_write", "probe_method": "acp_tool_registry"},
+        {"tool_id": "web_search", "tool_name": "Web Search", "capability": "web_fetch", "probe_method": "acp_tool_registry"},
+        {"tool_id": "web_fetch", "tool_name": "Web Fetch", "capability": "web_fetch", "probe_method": "acp_tool_registry"},
+        {"tool_id": "todo_write", "tool_name": "Todo Write", "capability": "file_write", "probe_method": "acp_tool_registry"},
+        {"tool_id": "task", "tool_name": "Task (Sub-Agent)", "capability": "subagent", "probe_method": "acp_tool_registry"},
+        {"tool_id": "agent", "tool_name": "Agent (Sub-Agent)", "capability": "subagent", "probe_method": "acp_tool_registry"},
+    ]

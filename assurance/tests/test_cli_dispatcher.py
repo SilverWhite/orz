@@ -41,8 +41,8 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertEqual(report["report_kind"], "gsa_cli_doctor_report")
         self.assertIsNone(report["repository_check"])
         self.assertEqual(report["runtime_boundaries"]["default_network"], "disabled")
-        self.assertIn("run_fake", report["entrypoints"])
-        self.assertIn("run_real", report["entrypoints"])
+        self.assertIn("chat", report["entrypoints"])
+        self.assertIn("tui", report["entrypoints"])
 
     def test_source_gate_json_uses_visibility_receipt(self) -> None:
         exit_code, receipt = self._capture_json(
@@ -366,7 +366,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         request = mock_run.call_args.args[0]
         self.assertFalse(request.fake_provider)
         self.assertEqual(request.model_id, "lif-deepseek-v4-pro")
-        self.assertTrue(request.disable_builtin_tools)
+        self.assertFalse(request.disable_builtin_tools)
         self.assertIn('env_key = "LIF_DEEPSEEK_API_KEY"', request.model_config_toml)
         self.assertEqual(
             request.provider_environment["LIF_DEEPSEEK_API_KEY"],
@@ -711,7 +711,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "retrieval_mode": "off",
                 "retrieval_mode_explicit": False,
                 "fake_provider": False,
-                "disable_builtin_tools": True,
+                "disable_builtin_tools": False,
             },
             "retrieval": {
                 "mode": "off",
@@ -767,7 +767,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         )
         self.assertTrue(receipt["checks"]["credential_read_succeeded"])
         self.assertTrue(receipt["checks"]["fake_provider_disabled"])
-        self.assertTrue(receipt["checks"]["builtin_tools_disabled"])
+        self.assertTrue(receipt["checks"]["builtin_tools_enabled"])
         self.assertTrue(receipt["checks"]["retrieval_off"])
         self.assertTrue(receipt["checks"]["no_secret_serialized"])
         mock_read_credential.assert_called_once_with("FEP-Agent/DeepSeek-Test")
@@ -776,7 +776,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertEqual(request.model_id, "lif-deepseek-v4-pro")
         self.assertEqual(request.retrieval_mode, "off")
         self.assertFalse(request.retrieval_mode_explicit)
-        self.assertTrue(request.disable_builtin_tools)
+        self.assertFalse(request.disable_builtin_tools)
         self.assertIn('env_key = "LIF_DEEPSEEK_API_KEY"', request.model_config_toml)
         self.assertEqual(
             request.provider_environment["LIF_DEEPSEEK_API_KEY"],

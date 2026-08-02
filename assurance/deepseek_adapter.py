@@ -151,8 +151,8 @@ def call_deepseek_api(
     temperature: float = 0.0,
     timeout_seconds: int = 60,
     conversation_id: str = "",
-    attempt: int = 0,
-    turn: int = 0,
+    attempt: int = 1,
+    turn: int = 1,
     allowed_categories: set[str] | None = None,
     allowed_endpoints: set[str] | None = None,
 ) -> dict[str, Any]:

@@ -68,7 +68,7 @@ class GrokRunRequest:
     retrieval_mode_explicit: bool = False
     prompt_text: str | None = None
     model_id: str = "lif-fake-deepseek"
-    max_turns: int = 1
+    max_turns: int = 20
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     terminal_visibility: TerminalVisibility = TerminalVisibility.POPOUT
     fake_provider: bool = False
@@ -79,7 +79,7 @@ class GrokRunRequest:
     #   "deny_by_default"  — cancel all permissions when no user callback (safe default)
     #   "auto_allow_once"  — auto-approve allow_once when no callback (smoke/dev only)
     #   "interactive"      — require on_acp_event callback; fail if missing
-    acp_permission_mode: str = "deny_by_default"
+    acp_permission_mode: str = "interactive"
 
 
 def _run_json_command(command: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -306,11 +306,23 @@ rules = [
     return config_path
 
 
-def _write_grok_model_config(profile: Path, config_toml: str) -> Path:
+def _write_grok_model_config(
+    profile: Path,
+    config_toml: str,
+    *,
+    base_url_override: str | None = None,
+) -> Path:
     config_dir = profile.resolve() / ".grok"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.toml"
-    config_path.write_text(config_toml.strip() + "\n", encoding="utf-8")
+    text = config_toml.strip()
+    if base_url_override:
+        # Replace the hardcoded api.deepseek.com base_url with the proxy.
+        text = text.replace(
+            'base_url = "https://api.deepseek.com"',
+            f'base_url = "{base_url_override}"',
+        )
+    config_path.write_text(text + "\n", encoding="utf-8")
     return config_path
 
 
@@ -404,10 +416,97 @@ def _start_loopback_fake_provider(
     return process, ready, provider_root, ready_path
 
 
+def _check_thinking_proxy_daemon() -> dict[str, Any] | None:
+    """Return the daemon ready dict if the persistent proxy is running."""
+    import socket as _socket
+
+    daemon_dir = Path(os.environ.get("GSA_HOME", str(Path.home() / ".gsa"))) / "thinking-proxy"
+    ready_path = daemon_dir / "daemon.json"
+    if not ready_path.exists():
+        return None
+    try:
+        ready = load_json(ready_path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(ready, dict):
+        return None
+    if not ready.get("ready"):
+        return None
+    port = ready.get("port")
+    if not isinstance(port, int):
+        return None
+    # Quick liveness check
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    s.settimeout(0.2)
+    try:
+        s.connect(("127.0.0.1", port))
+        s.close()
+        return ready
+    except (OSError, ConnectionRefusedError):
+        return None
+
+
 def _ensure_empty_run_root(path: Path) -> None:
     if path.exists() and any(path.iterdir()):
         raise AssuranceError(f"run_root must be empty or absent: {path}")
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _start_deepseek_thinking_proxy(
+    *,
+    run_root: Path,
+    timeout_seconds: int,
+) -> tuple[subprocess.Popen[Any], dict[str, Any], Path, Path]:
+    """Start a local passthrough proxy that injects ``thinking: disabled``.
+
+    Returns ``(process, ready_dict, proxy_root, ready_path)`` — same
+    signature as :func:`_start_loopback_fake_provider` so callers can
+    use the same cleanup pattern.
+    """
+    proxy_root = run_root / "thinking-proxy"
+    proxy_script = ROOT / "scripts" / "deepseek_thinking_proxy.py"
+    stdout_path = proxy_root.with_name("thinking-proxy.stdout.log")
+    stderr_path = proxy_root.with_name("thinking-proxy.stderr.log")
+    stdout_handle = stdout_path.open("wb")
+    stderr_handle = stderr_path.open("wb")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(proxy_script),
+            "--output-dir",
+            str(proxy_root),
+        ],
+        cwd=ROOT,
+        stdout=stdout_handle,
+        stderr=stderr_handle,
+        stdin=subprocess.DEVNULL,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    ready_path = proxy_root / "ready.json"
+    deadline = time.monotonic() + min(max(timeout_seconds, 1), 30)
+    ready: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        if ready_path.is_file():
+            candidate = load_json(ready_path)
+            if (
+                isinstance(candidate.get("port"), int)
+                and candidate.get("host") == "127.0.0.1"
+                and candidate.get("proxy_type") == "thinking_disabled_passthrough"
+            ):
+                ready = candidate
+                break
+        if process.poll() is not None:
+            break
+        time.sleep(0.05)
+    stdout_handle.close()
+    stderr_handle.close()
+    if ready is None:
+        try:
+            process.kill()
+        finally:
+            process.wait(timeout=5)
+        raise AssuranceError("DeepSeek thinking proxy did not become ready")
+    return process, ready, proxy_root, ready_path
 
 
 def _parse_streaming_json_output(
@@ -810,6 +909,9 @@ class GrokAcpSession:
         self._fake_provider_root: Path | None = None
         self._fake_provider_ready_path: Path | None = None
         self._fake_provider_config_path: Path | None = None
+        self._thinking_proxy_process: subprocess.Popen[Any] | None = None
+        self._thinking_proxy_ready: dict[str, Any] | None = None
+        self._thinking_proxy_root: Path | None = None
         self._model_config_path: Path | None = None
 
         from .finding_registry import FindingRegistry, record_permission_decision
@@ -848,10 +950,38 @@ class GrokAcpSession:
             raise
 
         extra_environment: dict[str, str] = dict(request.provider_environment)
+        # ── Thinking proxy for real provider (GAK-DS-001) ──────────────
+        # First check if the persistent daemon is already running (the
+        # preferred path for Grok native compatibility).  Only start a
+        # per-session foreground proxy if the daemon is absent.
+        _proxy_base_url: str | None = None
+        if request.model_config_toml and not request.fake_provider:
+            _daemon_ready = _check_thinking_proxy_daemon()
+            if _daemon_ready is not None:
+                _proxy_base_url = (
+                    f"http://127.0.0.1:{_daemon_ready['port']}"
+                )
+                self._thinking_proxy_process = None  # daemon, not ours
+                self._thinking_proxy_ready = _daemon_ready
+                self._thinking_proxy_root = None
+            else:
+                (
+                    self._thinking_proxy_process,
+                    self._thinking_proxy_ready,
+                    self._thinking_proxy_root,
+                    _thinking_proxy_ready_path,
+                ) = _start_deepseek_thinking_proxy(
+                    run_root=request.run_root,
+                    timeout_seconds=cfg.timeout_seconds,
+                )
+            _proxy_base_url = (
+                f"http://127.0.0.1:{self._thinking_proxy_ready['port']}"
+            )
         if request.model_config_toml:
             self._model_config_path = _write_grok_model_config(
                 profile,
                 request.model_config_toml,
+                base_url_override=_proxy_base_url,
             )
         if request.fake_provider:
             (
@@ -1353,6 +1483,13 @@ class GrokAcpSession:
                 except subprocess.TimeoutExpired:
                     self._fake_provider_process.kill()
                     self._fake_provider_process.wait(timeout=5)
+            if self._thinking_proxy_process is not None:
+                # Only kill foreground proxies — never the daemon.
+                try:
+                    self._thinking_proxy_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._thinking_proxy_process.kill()
+                    self._thinking_proxy_process.wait(timeout=5)
             if self._supervisor is not None:
                 self._supervisor.close()
 

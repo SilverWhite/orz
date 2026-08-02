@@ -76,27 +76,38 @@ def _doctor_report(*, include_repository_check: bool) -> dict[str, Any]:
         "git": git,
         "repository_check": repository_check,
         "entrypoints": {
+            "chat": "python gsa.py chat",
+            "chat_fake": "python gsa.py chat --fake-provider",
+            "chat_real": "python gsa.py chat (auto-detects DeepSeek credential)",
+            "tui": "python gsa.py tui",
             "ask": "python gsa.py ask --retrieval off|subagent <question>",
             "doctor": "python gsa.py doctor",
             "source_gate": "python gsa.py source gate --ledger <path>",
-            "run_fake": "python gsa.py run --ask <q> --source-ledger <path> --run-root <path>",
-            "run_real": "python gsa.py run --mode real --ask <q> --source-ledger <path> --run-root <path>",
-            "run_grok_gate": "python gsa.py run --runtime grok --ask <q> --run-root <path>",
             "alpha_smoke": "python gsa.py alpha smoke",
             "verify": "python gsa.py verify --run-root <path>",
         },
         "runtime_boundaries": {
+            "default_sandbox": "workspace_guarded",
+            "strict_sandbox": "docker_opt_in",
+            "docker_status": "optional_explicit_interface",
+            "command_review": "interactive_by_default",
             "default_network": "disabled",
             "default_credential_use": "disabled",
             "canonical_run_fake": "offline_no_network",
             "canonical_run_real": "deepseek_api_exactly_one_request",
             "grok_run_prompt_tool_gate": "explicit_fail_closed_execute_only_after_allow",
         },
+        "alpha_defaults": {
+            "max_turns": 20,
+            "tools": "all_builtin_enabled",
+            "acp_permission_mode": "interactive",
+            "sandbox": "workspace_guarded_logical_boundary",
+        },
         "limitations": [
             "doctor verifies repository mechanics and CLI wiring, not scientific correctness.",
-            "canonical run supports fake (offline) and real (DeepSeek API) adapter modes.",
             "real adapter reads credentials from Windows Credential Manager and never persists them.",
-            "gsa run --runtime grok emits a promotion gate receipt by default; --grok-execute runs only after an allow decision.",
+            "Interactive command review uses workspace_guarded (logical boundary); strict Docker sandbox is opt-in via --strict.",
+            "Windows native sandbox remains noncompliant for strict mode without Docker.",
             "GSA-CORE review and evaluation bridges exist but have not been connected to a live runtime.",
         ],
     }
@@ -169,7 +180,10 @@ def _run_doctor(args: argparse.Namespace) -> int:
         f"workspace: {report['workspace_root']}",
         f"python: {report['python']['version']}",
         repo_line,
-        f"canonical run: fake (offline) and real (DeepSeek API, {report['runtime_boundaries']['canonical_run_real']})",
+        f"sandbox: {report['runtime_boundaries']['default_sandbox']} (strict: {report['runtime_boundaries']['strict_sandbox']})",
+        f"Docker: {report['runtime_boundaries']['docker_status']}",
+        f"command review: {report['runtime_boundaries']['command_review']}",
+        f"alpha: max_turns={report['alpha_defaults']['max_turns']}, tools={report['alpha_defaults']['tools']}",
     ]
     _print_or_json(report, json_output=args.json, human_lines=human_lines)
     return 0 if report["valid"] else 1
@@ -633,7 +647,6 @@ def _run_grok(args: argparse.Namespace) -> int:
                 fake_provider=args.fake_provider,
                 provider_environment=provider_environment,
                 model_config_toml=model_config_toml,
-                disable_builtin_tools=bool(args.real_deepseek),
             )
         )
     containment = receipt.get("containment", {})
@@ -732,7 +745,6 @@ def _run_alpha_smoke(args: argparse.Namespace) -> int:
             retrieval_mode=DEFAULT_RETRIEVAL_MODE,
             retrieval_mode_explicit=False,
             fake_provider=True,
-            disable_builtin_tools=True,
             acp_permission_mode="auto_allow_once",
         )
     )
@@ -1026,8 +1038,12 @@ def _run_alpha_tool_check(args: argparse.Namespace) -> int:
     checks = {
         "verification_paths_present": not missing_paths,
         "negative_without_acp_probe_blocks": negative_gate_decision == "block",
-        "negative_permission_probe_degraded": (
+        "negative_permission_probe_unavailable": (
             "grok_acp_permission_probe" in negative_degraded_ids
+            or "grok_acp_permission_probe" in [
+                item["tool_id"] for item in negative_bundle["tool_availability_report"].get("unavailable", [])
+                if isinstance(item, dict)
+            ]
         ),
         "negative_no_model_invoked": negative_bundle["observation_receipt"]["checks"][
             "no_model_invoked"
@@ -1179,7 +1195,7 @@ def _run_alpha_real_call(args: argparse.Namespace) -> int:
         "retrieval_mode": DEFAULT_RETRIEVAL_MODE,
         "retrieval_mode_explicit": False,
         "fake_provider": False,
-        "disable_builtin_tools": True,
+        "disable_builtin_tools": False,
         "provider_environment_keys": [
             "LIF_DEEPSEEK_API_KEY",
             "HTTP_PROXY",
@@ -1212,7 +1228,6 @@ def _run_alpha_real_call(args: argparse.Namespace) -> int:
                         "NO_PROXY": "",
                     },
                     model_config_toml=_grok_real_deepseek_model_config(),
-                    disable_builtin_tools=True,
                 )
             )
         except Exception as exc:
@@ -1259,8 +1274,15 @@ def _run_alpha_real_call(args: argparse.Namespace) -> int:
         "fake_provider_disabled": request_shape["fake_provider"] is False
         and adapter_request.get("fake_provider", False) is False,
         "real_provider_model_configured": request_shape["model_id"] == "lif-deepseek-v4-pro",
-        "builtin_tools_disabled": request_shape["disable_builtin_tools"] is True
-        and adapter_request.get("disable_builtin_tools", True) is True,
+        "builtin_tools_enabled": (
+            # Only meaningful for grok-acp transport (direct-deepseek has no Grok tools concept)
+            request_shape["disable_builtin_tools"] is False
+            and (
+                adapter_request.get("disable_builtin_tools", False) is False
+                if args.transport == "grok-acp"
+                else True  # direct-deepseek: no Grok, always passes
+            )
+        ),
         "retrieval_off": request_shape["retrieval_mode"] == "off"
         and adapter_retrieval.get("mode", "off") == "off",
     }
@@ -1514,6 +1536,178 @@ def _run_tui(args: argparse.Namespace) -> int:
     if args.grok_retrieval_mode:
         tui_args.extend(["--retrieval-mode", args.grok_retrieval_mode])
     return tui_main(tui_args)
+
+
+def _run_interactive(args: argparse.Namespace) -> int:
+    """Interactive CLI conversation — ``gsa chat``.
+
+    Launches a Grok ACP session with tools enabled and streams events
+    to the terminal.  Each user input triggers a new ``send_prompt``
+    on the same session.  Special commands:
+
+    * ``/exit``, ``/quit`` — end the session
+    * ``/help`` — show available commands
+    * ``/clear`` — clear the screen (start a fresh visual context;
+      the session context persists in Grok)
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path as _Path
+
+    from .grok_runtime_adapter import (
+        DEFAULT_RETRIEVAL_MODE,
+        GrokRunRequest,
+        GrokAcpSession,
+        inspect_grok_runtime,
+        validate_grok_retrieval_mode,
+    )
+
+    # ── Grok detection ─────────────────────────────────────────────────
+    bin_path: _Path | None = None
+    try:
+        from .grok_runtime_adapter import _detect_grok_binary
+        grok_path, grok_ver = _detect_grok_binary()
+        if grok_path:
+            bin_path = _Path(grok_path)
+            ver_str = f" ({grok_ver})" if grok_ver else ""
+            print(f"gsa: Grok detected{ver_str}", file=sys.stderr)
+        else:
+            print("gsa: Grok not found on PATH.  Install Grok to continue.", file=sys.stderr)
+            print("  https://github.com/xai-org/grok-build", file=sys.stderr)
+            return 1
+    except Exception as exc:
+        print(f"gsa: Grok detection failed — {exc}", file=sys.stderr)
+        return 1
+
+    # ── Run root ───────────────────────────────────────────────────────
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_root = _Path(args.run_root) if getattr(args, "run_root", None) else (
+        ROOT / ".gsa" / "interactive" / f"{stamp}-{uuid.uuid4().hex[:8]}"
+    )
+    workspace = _Path(args.workspace) if getattr(args, "workspace", None) and args.workspace else (
+        run_root / "workspace"
+    )
+    run_id = getattr(args, "run_id", None) or f"RUN-GSA-INTERACTIVE-{uuid.uuid4().hex[:8].upper()}"
+    retrieval_mode = getattr(args, "interactive_retrieval_mode", None) or DEFAULT_RETRIEVAL_MODE
+    fake_provider = bool(getattr(args, "fake_provider", False))
+    auto_approve = bool(getattr(args, "auto_approve", False))
+    acp_permission_mode = "auto_allow_once" if auto_approve else "interactive"
+    credential_target = getattr(args, "credential_target", None) or "FEP-Agent/DeepSeek"
+
+    # ── Real-provider setup (opt-in) ──────────────────────────────────
+    provider_environment: dict[str, str] = {}
+    model_config_toml: str | None = None
+    model_id = "lif-fake-deepseek"
+    if not fake_provider:
+        try:
+            from .deepseek_adapter import _read_windows_credential
+            api_key = _read_windows_credential(credential_target)
+            model_id = "lif-deepseek-v4-pro"
+            provider_environment = {
+                "LIF_DEEPSEEK_API_KEY": api_key,
+                "HTTP_PROXY": "", "HTTPS_PROXY": "", "ALL_PROXY": "", "NO_PROXY": "",
+            }
+            model_config_toml = _grok_real_deepseek_model_config()
+        except Exception:
+            print("gsa: Real provider unavailable — falling back to loopback fake provider.",
+                  file=sys.stderr)
+            fake_provider = True
+
+    request = GrokRunRequest(
+        run_root=run_root,
+        workspace_path=workspace,
+        run_id=run_id,
+        mode="acp_smoke",
+        retrieval_mode=retrieval_mode,
+        retrieval_mode_explicit=True,
+        fake_provider=fake_provider,
+        provider_environment=provider_environment,
+        model_config_toml=model_config_toml,
+        model_id=model_id,
+        acp_permission_mode=acp_permission_mode,
+    )
+
+    # ── Event callback ─────────────────────────────────────────────────
+    def _on_event(event: dict[str, Any]) -> str | None:
+        etype = event.get("event_type", "")
+        payload = event.get("payload", {}) if isinstance(event.get("payload"), dict) else {}
+        if etype == "text_delta":
+            text = payload.get("text", "")
+            if text:
+                sys.stdout.write(text)
+                sys.stdout.flush()
+        elif etype == "tool_proposal":
+            tool_name = payload.get("tool_name", "")
+            summary = payload.get("input_summary", "")
+            print(f"\n  🔧 {tool_name}: {summary}", file=sys.stderr)
+        elif etype == "tool_completed":
+            tool_name = payload.get("tool_name", "")
+            status = payload.get("status", "")
+            symbol = "✓" if status == "success" else "✗"
+            print(f"  {symbol} {tool_name} ({status})", file=sys.stderr)
+        elif etype == "permission_requested":
+            perm = payload.get("permission", "")
+            options = payload.get("options", [])
+            print(f"\n  ⚡ Grok wants to: {perm}", file=sys.stderr)
+            if options:
+                print(f"     options: {', '.join(options)}", file=sys.stderr)
+            if auto_approve:
+                return "allow_once"
+            try:
+                choice = input("  Allow? [y/N] ").strip().lower()
+                return "allow_once" if choice in ("y", "yes") else "cancelled"
+            except (EOFError, KeyboardInterrupt):
+                return "cancelled"
+        elif etype == "error_event":
+            msg = payload.get("message", "")
+            print(f"\n  ⚠ {msg}", file=sys.stderr)
+        return None
+
+    # ── Interactive loop ───────────────────────────────────────────────
+    print(f"gsa interactive — {run_id}", file=sys.stderr)
+    print(f"  workspace: {workspace}", file=sys.stderr)
+    print(f"  provider: {'loopback fake' if fake_provider else 'DeepSeek (real)'}", file=sys.stderr)
+    print(f"  tools: enabled | permissions: {acp_permission_mode}", file=sys.stderr)
+    print(f"  commands: /help /exit /clear", file=sys.stderr)
+    print(f"  Type your message and press Enter.", file=sys.stderr)
+    print(file=sys.stderr)
+
+    exit_code = 0
+    try:
+        with GrokAcpSession(request) as session:
+            # First prompt — optional initial message from --ask
+            first_message = getattr(args, "ask", None) or getattr(args, "tui_run", None)
+            if first_message:
+                print(f"\n> {first_message}\n")
+                session.send_prompt(first_message, on_acp_event=_on_event)
+                print()
+
+            while True:
+                try:
+                    user_input = input("> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\ngsa: exiting.", file=sys.stderr)
+                    break
+                if not user_input:
+                    continue
+                if user_input == "/exit" or user_input == "/quit":
+                    print("gsa: exiting.", file=sys.stderr)
+                    break
+                if user_input == "/help":
+                    print("  /exit, /quit — end the session", file=sys.stderr)
+                    print("  /clear       — clear screen", file=sys.stderr)
+                    print("  /help        — show this help", file=sys.stderr)
+                    continue
+                if user_input == "/clear":
+                    sys.stdout.write("\033[2J\033[H")
+                    sys.stdout.flush()
+                    continue
+                print()
+                session.send_prompt(user_input, on_acp_event=_on_event)
+                print()
+    except Exception as exc:
+        print(f"\ngsa: session error — {exc}", file=sys.stderr)
+        exit_code = 1
+    return exit_code
 
 
 def _run_tui_default(args: argparse.Namespace) -> int:
@@ -2089,6 +2283,50 @@ def _parser() -> argparse.ArgumentParser:
         help="How terminal commands are executed (default: popout).",
     )
     tui.set_defaults(handler=_run_tui)
+
+    # ── chat ───────────────────────────────────────────────────────────────
+    chat = subparsers.add_parser(
+        "chat",
+        help="Start an interactive CLI conversation with Grok ACP (tools enabled).",
+    )
+    chat.add_argument(
+        "--ask",
+        help="Initial message to send before entering the interactive loop.",
+    )
+    chat.add_argument(
+        "--run-root",
+        type=Path,
+        help="Run root directory (default: .gsa/interactive/<timestamp-id>).",
+    )
+    chat.add_argument(
+        "--workspace",
+        type=Path,
+        help="Workspace directory (default: isolated directory under run root).",
+    )
+    chat.add_argument("--run-id")
+    chat.add_argument(
+        "--credential-target",
+        default="FEP-Agent/DeepSeek",
+        help="Windows Credential Manager target for the DeepSeek API key.",
+    )
+    chat.add_argument(
+        "--fake-provider",
+        action="store_true",
+        help="Use the local loopback fake provider instead of real DeepSeek.",
+    )
+    chat.add_argument(
+        "--auto-approve",
+        action="store_true",
+        help="Auto-approve all permission requests (bypass interactive command review).",
+    )
+    chat.add_argument(
+        "--retrieval-mode",
+        dest="interactive_retrieval_mode",
+        choices=["local_browser", "framework_fallback", "off"],
+        default=None,
+        help="Explicit retrieval mode (default: off).",
+    )
+    chat.set_defaults(handler=_run_interactive)
 
     # ── eval ─────────────────────────────────────────────────────────────
     eval_cmd = subparsers.add_parser("eval", help="Run frozen evaluation.")

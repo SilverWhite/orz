@@ -436,6 +436,106 @@ class GrokRuntimeAdapterTests(unittest.TestCase):
         self.assertLess(launched_args.index("--tools"), launched_args.index("agent"))
         self.assertLess(launched_args.index("--disallowed-tools"), launched_args.index("agent"))
 
+    def test_acp_smoke_tools_enabled_by_default_no_disable_flags(self) -> None:
+        """Alpha default: tools are enabled, no --disable-web-search etc."""
+        run_root = self.root / "run-acp-tools-on"
+        launched_args: list[str] = []
+
+        def popen_factory(args, **kwargs):
+            launched_args.extend(args)
+            return _FakeAcpProcess(args, **kwargs)
+
+        with patch(
+            "assurance.grok_runtime_adapter.inspect_grok_runtime",
+            return_value=_inspection(self.binary),
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ), patch("assurance.grok_runtime_adapter._resume_main_thread"):
+            receipt = run_grok_acp_once(
+                GrokRunRequest(
+                    run_root=run_root,
+                    workspace_path=self.workspace,
+                    run_id="RUN-GROK-ACP-TOOLS-ON-TEST-001",
+                    mode="acp_smoke",
+                    prompt_text="Say hello.",
+                    acp_permission_mode="auto_allow_once",
+                ),
+                config=self.config,
+                popen_factory=popen_factory,
+            )
+
+        self.assertTrue(receipt["valid"])
+        self.assertFalse(receipt["request"]["disable_builtin_tools"])
+        self.assertNotIn("--disable-web-search", launched_args)
+        self.assertNotIn("--no-subagents", launched_args)
+        self.assertNotIn("--disallowed-tools", launched_args)
+
+    def test_acp_smoke_max_turns_default_is_20(self) -> None:
+        """Alpha default: max_turns = 20 for multi-turn."""
+        run_root = self.root / "run-acp-multi-turn"
+        launched_args: list[str] = []
+
+        def popen_factory(args, **kwargs):
+            launched_args.extend(args)
+            return _FakeAcpProcess(args, **kwargs)
+
+        with patch(
+            "assurance.grok_runtime_adapter.inspect_grok_runtime",
+            return_value=_inspection(self.binary),
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ), patch("assurance.grok_runtime_adapter._resume_main_thread"):
+            receipt = run_grok_acp_once(
+                GrokRunRequest(
+                    run_root=run_root,
+                    workspace_path=self.workspace,
+                    run_id="RUN-GROK-ACP-MULTI-TURN-TEST-001",
+                    mode="acp_smoke",
+                    prompt_text="Say hello.",
+                    acp_permission_mode="auto_allow_once",
+                ),
+                config=self.config,
+                popen_factory=popen_factory,
+            )
+
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(receipt["prompt"]["max_turns"], 20)
+
+    def test_acp_smoke_permission_mode_defaults_to_interactive(self) -> None:
+        """Alpha default: acp_permission_mode = 'interactive'."""
+        run_root = self.root / "run-acp-interactive-perm"
+        launched_args: list[str] = []
+
+        def popen_factory(args, **kwargs):
+            launched_args.extend(args)
+            return _FakeAcpProcess(args, **kwargs)
+
+        with patch(
+            "assurance.grok_runtime_adapter.inspect_grok_runtime",
+            return_value=_inspection(self.binary),
+        ), patch("assurance.grok_runtime_adapter._workspace_trust", return_value=_trust()), patch(
+            "assurance.grok_runtime_adapter.JobObjectSupervisor",
+            return_value=_FakeSupervisor(),
+        ), patch("assurance.grok_runtime_adapter._resume_main_thread"):
+            receipt = run_grok_acp_once(
+                GrokRunRequest(
+                    run_root=run_root,
+                    workspace_path=self.workspace,
+                    run_id="RUN-GROK-ACP-INTERACTIVE-TEST-001",
+                    mode="acp_smoke",
+                    prompt_text="Say hello.",
+                ),
+                config=self.config,
+                popen_factory=popen_factory,
+            )
+
+        self.assertTrue(receipt["valid"])
+        self.assertEqual(
+            receipt["acp"]["acp_permission_mode"], "interactive"
+        )
+
     def test_real_provider_acp_smoke_marks_receipt_invalid_on_provider_api_error_stderr(self) -> None:
         run_root = self.root / "run-acp-provider-error"
 

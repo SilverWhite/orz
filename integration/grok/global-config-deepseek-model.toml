@@ -1,0 +1,43 @@
+# ── GSA DeepSeek model (via thinking proxy daemon) ──────────────────
+# Managed by: gsa proxy install / gsa proxy daemon
+# The base_url routes through the GSA thinking proxy which injects
+# "thinking": {"type": "disabled"} to avoid DeepSeek v4 Pro's
+# "Thinking mode does not support this tool_choice" error.
+#
+# Append this to ~/.grok/config.toml, OR run:
+#   python scripts/deepseek_thinking_proxy.py --daemon
+#   gsa proxy install
+#
+[model.lif-deepseek-v4-pro]
+model = "deepseek-v4-pro"
+base_url = "http://127.0.0.1:19800"
+name = "LIF DeepSeek V4 Pro (GSA)"
+env_key = "LIF_DEEPSEEK_API_KEY"
+api_backend = "chat_completions"
+max_completion_tokens = 128
+context_window = 128000
+stream_tool_calls = false
+thinking = { type = "disabled" }
+extra_body = { thinking = { type = "disabled" } }
+
+[model."grok-4.5"]
+model = "deepseek-v4-pro"
+base_url = "http://127.0.0.1:19800"
+name = "LIF DeepSeek V4 Pro (builtin-default override, GSA)"
+env_key = "LIF_DEEPSEEK_API_KEY"
+api_backend = "chat_completions"
+max_completion_tokens = 128
+context_window = 128000
+stream_tool_calls = false
+thinking = { type = "disabled" }
+extra_body = { thinking = { type = "disabled" } }
+
+[permission]
+rules = [
+  { action = "deny", tool = "edit" },
+  { action = "deny", tool = "bash" },
+  { action = "deny", tool = "grep" },
+  { action = "deny", tool = "mcp" },
+  { action = "deny", tool = "webfetch" },
+  { action = "deny", tool = "websearch" },
+]

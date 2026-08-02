@@ -207,3 +207,198 @@ DeepSeek-shaped streaming/repetition fixture 位于 `assurance/deepseek_stream_o
 下一步适合补真实 streaming 场景下的截断/重启边界和 runner adapter 策略：固定 step/token 触发条件、
 真实 SSE/runner record 到公开输出抽取层的映射，以及 restart packet 如何绑定已验证 state。
 Counterexample queue 暂不接入 orientation checkpoint；后续只在明确的 claim review 路径中单独实现。
+
+---
+
+# 设计修正与补充（2026-08-02）
+
+状态：alpha 机械检测完成后，重新审查中立问询机制的触发模型和注入时机，发现当前实现与设计意图存在
+结构性偏差。以下修正原文档中未明确写出的关键设计约束。
+
+## 修正 1：Orientation Checkpoint 是中途引导，不是前置拦截
+
+### 原理解（错误）
+
+```
+用户输入 → [塞入 orientation block] → 模型 → 回复
+```
+
+把 orientation checkpoint 当作 prompt 发送前的静态文本注入，和 tool availability context block
+同一性质。这在 `canonical_cli.py` 中就是这样实现的——所有 gate 在模型调用前按固定顺序跑一遍，
+orientation checkpoint 只是其中一个步骤。
+
+### 纠正后的理解（正确）
+
+```
+硬门控下发 → 模型思考/执行动作
+  → [某个动作完成，动作间隙]
+      → token 计数器 ≥ 阈值? 或 action 计数器 ≥ 阈值?
+         是 → 注入 orientation checkpoint（不打断思维链）
+         否 → 继续
+  → 模型收到 orientation，回复定位摘要
+  → 模型继续下一个动作
+  → [检索/子代理返回后，正式回复前]
+      → 信息收集确认: "已获取 {N} 个来源，覆盖范围 {scope}。是否足够回答？"
+  → 最终回复
+```
+
+### 关键约束
+
+1. **触发位置：动作间隙**。只在 `tool_completed`、`turn_completed` 等动作边界事件之后注入，
+   绝不在模型思考过程中打断。
+
+2. **触发条件：硬门控**。由 token 计数器或 action 计数器的机械阈值决定，不由模型自述
+   "我觉得该检查了" 触发。阈值应为固定配置项（默认：单轮 5000 token、8 个 action、
+6 种不同工具类型，OR 触发）。
+
+3. **不打断思维链**。Orientation checkpoint 是一条独立的、格式区别于普通对话的消息。
+   它不应要求模型"停止当前推理并重新思考"，而是"在当前位置做一个轻量定位标记"。
+
+4. **格式区分**。`[ORIENTATION_CHECKPOINT v0.1]` 块必须格式明显区别于用户消息和系统消息，
+   使模型能将其识别为"中途引导"而非"新任务"或"质疑"。
+
+## 修正 2：新增信息收集确认（Post-Retrieval Information Sufficiency Check）
+
+### 触发时机
+
+子代理检索或任何外部信息获取动作完成后、模型给出正式回复前。
+
+### 触发条件（硬门控）
+
+- 检索动作已返回结果（`tool_completed` for retrieval tools）
+- 模型尚未发出面向用户的 `assistant_final` 回复
+- 动作间隙中注入
+
+### 内容
+
+```
+[INFO_SUFFICIENCY_CHECK v0.1]
+已获取来源: {source_count} 项
+覆盖范围: {categories}
+全文可见: {fulltext_count}/{source_count}
+缺失: {missing_categories}
+
+当前信息是否足够回答用户问题？
+如不足，还需哪些信息？
+[/INFO_SUFFICIENCY_CHECK]
+```
+
+### 约束
+
+- 绝不暗示"你应该质疑当前结论"
+- 只陈述**机械可验证**的事实（来源数量、类别、全文可见性）
+- 不允许模型用此机制绕过 source visibility gate 的 block/defer 决策
+- 不可作为"模型已经查过了"的证明——这只是引导，证据在 gate receipt
+
+## 修正 3：触发模型从"线性管道"改为"事件驱动"
+
+### 原设计（canonical_cli.py 当前）
+
+```
+run_preflight → IPG → tool_availability → orientation → source_visibility
+→ gate_decision → model_request → model_output → artifact → run_finished
+```
+
+所有 gate 在模型调用前按固定顺序一次性执行。这适合 conformance fixture（证明形状能跑通），
+但不适合生产运行时——生产中的动作是多轮的，gate 需要在运行时按事件触发。
+
+### 纠正后的设计
+
+```
+run_preflight
+  → [IPG: 每个新输入/指令来源]
+  → [tool_availability context: session 开始时注入一次]
+  → run_started
+  → [action 循环]
+      ├─ action_proposed
+      ├─ action_approved/denied (P3 permit)
+      ├─ action_running
+      ├─ action_completed ← 触发点: token 计数检查
+      │   ├─ 达到阈值? → orientation checkpoint 注入
+      │   └─ 未达到? → 继续
+      ├─ [如果是检索动作]
+      │   └─ action_completed ← 触发点: 信息收集确认
+      └─ ...
+  → model_output
+  → [stagnation guard: 公开输出重复检测]
+  → run_finished | run_invalidated
+```
+
+### 硬门控参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `orientation_trigger_tokens` | 7000 | 单轮累计公开输出 token 超过此值时触发 |
+| `orientation_trigger_actions` | 10 | 单轮累计动作数超过此值时触发 |
+| `orientation_trigger_tool_variety` | 7 | 单轮使用不同工具种类数（按 tool_id 去重）超过此值时触发 |
+| `orientation_trigger_turn_interval` | 8 | 每 N 轮对话后，下一轮开始时必定触发一次 |
+| `orientation_cooldown_actions` | 3 | 两次 orientation 之间的最小动作间隔 |
+| `info_sufficiency_after_retrieval` | true | 任何检索动作完成后触发 |
+| `stagnation_repeat_threshold` | 10 | 连续重复内容触发停滞检测 |
+| `stagnation_ngram_threshold` | 10 | n-gram 重复触发停滞检测 |
+
+触发条件为 **OR 关系**。`tool_variety` 按 `tool_id` 去重计数。
+`turn_interval` 不受 cooldown 限制——跨轮漂移不能因"上轮刚查过"而跳过。
+
+### 设计依据
+
+两条防线分工：
+
+| 防线 | 阈值 | 防范目标 |
+|------|------|----------|
+| **轮次触发** | 每 8 轮必定触发 | 跨轮缓慢漂移（每轮都短、都正常，但累计已偏） |
+| **单轮阈值** | 7000 token / 10 actions / 7 tool types | 单轮异常发散（体量、复杂度、工具面异常大） |
+
+轮次触发让单轮阈值可以从"尽早发现"调高到"发现真正的异常"：
+
+| 阈值 | 为什么是这个值 | 为什么轮次触发让它可以从低值上调 |
+|------|---------------|----------------------------------|
+| 7000 token | 大型重构/多文件改动可能产生 5000-7000 token，超过才异常 | 即使每轮只输出 2000 token，第 8 轮也会被强制检查 |
+| 10 actions | 大型任务 8-10 步是正常体量（如逐个文件重构） | 即使每轮只做 3-4 步，第 8 轮也会被强制检查 |
+| 7 tool types | ~10 种工具中用到 7 种 = 70%，高度发散 | 正常中型任务可能用到 5-6 种，7 种才是异常 |
+
+### 触发伪代码
+
+```text
+# 轮次触发 — 不受 cooldown 限制
+on turn_start(next_turn_number):
+    if next_turn_number % 8 == 0 and next_turn_number > 0:
+        inject orientation checkpoint
+        reset cooldown counter
+        return
+
+# 动作间隙触发 — 受 cooldown 限制
+on action_completed:
+    if cooldown_actions > 0:
+        decrement cooldown; return
+    if (turn_output_tokens >= 7000)
+       or (turn_action_count >= 10)
+       or (distinct_tool_types_this_turn >= 7):
+        inject orientation checkpoint
+        reset cooldown counter
+```
+
+## 修正 4：Counterexample Queue 与 Orientation 的隔离
+
+（原文档已明确，此处重申关键规则）
+
+- Orientation checkpoint **绝不**自动触发 counterexample queue
+- Counterexample queue 只在显式 claim review 或用户要求反例审查时进入
+- 两者之间无自动桥接——需要独立的 gate decision
+
+## 实现差距
+
+当前实现状态（`assurance/orientation_runtime_guard.py`）：
+
+| 组件 | 设计状态 | 实现状态 |
+|------|----------|----------|
+| `build_orientation_checkpoint` | 格式正确 ✅ | 已实现 ✅ |
+| `verify_orientation_response` | 验证逻辑正确 ✅ | 已实现 ✅ |
+| `evaluate_runtime_stagnation_guard` | 检测逻辑正确 ✅ | 已实现 ✅ |
+| 动作间隙触发 | 事件驱动，动作边界 | **未实现** ❌ — 当前是 `canonical_cli.py` 中静态调用 |
+| 硬门控（token/action 阈值） | 机械计数器 | **未实现** ❌ |
+| 思维链保护 | 不打断 in-progress 思考 | **未实现** ❌ — 当前在 model_request 前一次性注入 |
+| 信息收集确认 | 检索后、回复前 | **未实现** ❌ |
+| 事件驱动触发模型 | 运行时事件 → gate | **未实现** ❌ — 当前是线性管道 |
+
+核心 gap：**checkpoint 格式和验证逻辑是正确且可复用的，但触发和注入机制需要完全重写。**
