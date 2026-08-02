@@ -7,15 +7,15 @@
 
 | 项目 | 状态 |
 |------|------|
-| 63 → 45 crates（删 18） | ✅ |
+| 63 → ~45 crates（删 19） | ✅ |
 | 21 `xai-grok-*` → `orz-*` 重命名（目录 + Cargo.toml 包名） | ✅ |
 | 4 Grok TUI crates 保留原名（兜底 UI） | ✅ |
 | Workspace Cargo.toml（members + deps）更新 | ✅ |
 | 全仓 Cargo.toml 交叉引用修复 | ✅ 零残留 |
 | `orz-bin` / `orz-assurance` / `orz-tui` 骨架 | ✅ 编译通过 |
 | `orz.exe` 产出 + 运行验证 | ✅ |
-| `xai-proto-build` Windows/MinGW protoc 兼容 | ✅ |
-| Rust GNU 工具链（B: 盘）+ MinGW + protoc | ✅ |
+| `xai-proto-build` Windows/MSVC protoc 兼容 | ✅ |
+| Rust MSVC 工具链（1.97.1, rust-lld linker）| ✅ |
 
 ## 2. 源码引用断裂（.rs 文件）
 
@@ -130,10 +130,6 @@ cargo check --workspace
 | 组件 | 位置 | 备注 |
 |------|------|------|
 | **Rust MSVC 1.97.1（pinned，激活）** | `B:\.rustup\toolchains\1.97.1-x86_64-pc-windows-msvc` | `rust-toolchain.toml`: `channel = "1.97.1"` |
-| Rust GNU 1.97.1 | `B:\.rustup\toolchains\1.97.1-x86_64-pc-windows-gnu` | 备用（Phase 1 初期使用，已弃用） |
-| VS BuildTools | `B:\VS\BuildTools\` | MSVC 链接器 + LIB + 头文件 |
-| Windows SDK | `C:\Program Files (x86)\Windows Kits\10\` | `kernel32.lib` 等系统库 |
-| protoc 35.1 | `B:\orz\bin\protoc.exe` | Protocol Buffers 编译器（从 winget 安装后复制） |
 
 **链接器**：`rust-lld`（Rust 内置 LLVM 链接器，配置在 `.cargo/config.toml`）。不依赖外部 `link.exe`。
 
@@ -142,7 +138,8 @@ cargo check --workspace
 $env:CARGO_HOME = "B:\.cargo"
 $env:RUSTUP_HOME = "B:\.rustup"
 $env:PROTOC = "B:\orz\bin\protoc.exe"
-$env:Path = "B:\.cargo\bin;B:\VS\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64;C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64;" + $env:Path
+# MSVC 环境通常在 build.bat 中通过 vcvars64.bat 设置
+cd B:\orz
 cargo build -p orz-bin
 # or: cargo build -p orz-bin -p orz-assurance -p orz-tui
 ```
@@ -160,7 +157,20 @@ cargo build -p orz-bin
 | `orz-assurance/lib.rs` GateDecision 含 payload | 审查 §4.2 | ✅ |
 | bin/protoc 从 git 中移除 | 审查 §3.2-C | ✅ 已 `git rm --cached` |
 
-## 5.2 设计决策补充（2026-08-02，用户确认）
+## 5.3 Phase 1 关闭偏差登记（2026-08-02）
+
+以下 4 项偏差在 Phase 1 关闭时确认，均有明确的推迟 Phase 和理由。
+
+| ID | 偏差 | 设计要求 | 当前状态 | 影响 | 推迟到 |
+|----|------|---------|---------|------|--------|
+| **DEV-001** | grok 二进制入口未裁剪 | §8 Phase 1 Step 6: "修改 xai-grok-pager-bin/src/main.rs：裁剪 telemetry/auth/update 引用" | `xai-grok-pager-bin/src/main.rs` (3380 行) 保留原始 Grok 入口代码，78 处 telemetry/sentry/auth/login/managed-config/auto-update 引用未裁剪。二进制输出名已改为 `grok` | `grok.exe` 当前无法编译（依赖 `orz_update`、`orz_telemetry` 等已删除 crate） | Phase 4 |
+| **DEV-002** | `orz_telemetry` / `orz_update` 引用残留 | §1.1: `xai-grok-telemetry` 和 `xai-grok-update` 已删除 | `orz-shell/src/agent/app.rs` 等 138 个文件中存在 `orz_telemetry` 引用，8 个文件中存在 `orz_update` 引用。详见 §2.1 | 不影响 `orz-bin` 编译（不链接 shell），但阻止全仓 `cargo check` | Phase 2 |
+| **DEV-003** | `memory.enabled = false` 开关未落地 | §1.6: "默认关闭，用户显式启用后本地运行" + `config.toml` 中 `memory.enabled = false` | `orz-memory` crate 保留且依赖已更新，但无 `enabled` config 开关 | 无立即影响——memory crate 未被任何代码路径激活 | Phase 2 |
+| **DEV-004** | 仅验证 debug build | §8 Phase 1 验证: `cargo build --release` | 只运行了 `cargo check -p orz-bin` + `cargo build -p orz-bin` (debug) | Release-dist profile (thin LTO + codegen-units=1) 可能暴露 debug 未出现的优化期错误 | Phase 2 前 |
+
+**判定**: Phase 1 核心目标（fork + 删除 dead crates + 重命名 + 新 crate 骨架 + 编译）已达成。4 项偏差均不影响 Phase 2 启动。
+
+## 5.4 设计决策补充（2026-08-02，用户确认）
 
 与审查报告 §2.2 中提出的设计问题对应：
 
