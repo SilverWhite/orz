@@ -1250,5 +1250,3 @@ enabled = false
 pub fn to_managed_name(display: &str) -> String {
     display.to_lowercase().replace(' ', "-")
 }
-
-/// Inject managed headers into MCP server configs.

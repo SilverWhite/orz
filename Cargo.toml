@@ -33,12 +33,14 @@ members = [
     "crates/codegen/xai-grok-pager-bin",
     "crates/codegen/xai-grok-pager-minimal",
     "crates/codegen/xai-grok-pager-render",
+    "crates/codegen/xai-mixpanel",
     "crates/codegen/orz-paths",
     "crates/codegen/orz-sampling-types",
     "crates/codegen/orz-telemetry",
     "crates/codegen/orz-sampler",
     "crates/codegen/orz-chat-state",
     "crates/codegen/orz-sandbox",
+    "crates/codegen/orz-secrets",
     "crates/codegen/orz-shell-session-support",
     "crates/codegen/orz-plugin-marketplace",
     "crates/codegen/orz-subagent-resolution",
@@ -295,6 +297,7 @@ orz-version = { path = "crates/codegen/orz-version" }
 orz-workspace = { path = "crates/codegen/orz-workspace" }
 orz-workspace-types = { path = "crates/codegen/orz-workspace-types" }
 xai-hooks-plugins-types = { path = "crates/codegen/xai-hooks-plugins-types" }
+xai-mixpanel = { path = "crates/codegen/xai-mixpanel" }
 xai-interjection-core = { path = "crates/common/xai-interjection-core" }
 xai-prompt-queue = { path = "crates/codegen/xai-prompt-queue" }
 xai-proto-build = { path = "crates/build/xai-proto-build" }
@@ -317,6 +320,7 @@ orz-sampling-types = { path = "crates/codegen/orz-sampling-types" }
 orz-shell-session-support = { path = "crates/codegen/orz-shell-session-support" }
 orz-plugin-marketplace = { path = "crates/codegen/orz-plugin-marketplace" }
 orz-subagent-resolution = { path = "crates/codegen/orz-subagent-resolution" }
+orz-secrets = { path = "crates/codegen/orz-secrets" }
 orz-sandbox = { path = "crates/codegen/orz-sandbox" }
 orz-compaction = { path = "crates/common/orz-compaction" }
 orz-bin = { path = "crates/orz-bin" }

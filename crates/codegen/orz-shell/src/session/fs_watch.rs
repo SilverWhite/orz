@@ -91,8 +91,8 @@ pub(crate) fn git_head_dedup_key(
 fn fs_event_to_codebase_graph_event(
     paths: &[PathBuf],
     kind: FsEventKind,
-) -> xai_codebase_graph::FileEvent {
-    use xai_codebase_graph::{FileEvent, FileEventKind};
+) -> orz_workspace::file_system::codebase_graph_stub::FileEvent {
+    use orz_workspace::file_system::codebase_graph_stub::{FileEvent, FileEventKind};
     let kind = match kind {
         FsEventKind::Created => FileEventKind::Created,
         FsEventKind::Modified => FileEventKind::Modified,
@@ -155,22 +155,22 @@ const GIT_DIFF_REBUILD_THRESHOLD: usize = 500;
 fn parse_diff_name_status_line(
     line: &str,
     repo_root: &Path,
-) -> Option<xai_codebase_graph::FileEvent> {
+) -> Option<orz_workspace::file_system::codebase_graph_stub::FileEvent> {
     let mut parts = line.splitn(3, '\t');
     let status = parts.next()?.trim();
     let path = parts.next()?;
 
     match status.chars().next()? {
-        'A' => Some(xai_codebase_graph::FileEvent::created(repo_root.join(path))),
-        'D' => Some(xai_codebase_graph::FileEvent::removed(repo_root.join(path))),
+        'A' => Some(orz_workspace::file_system::codebase_graph_stub::FileEvent::created(repo_root.join(path))),
+        'D' => Some(orz_workspace::file_system::codebase_graph_stub::FileEvent::removed(repo_root.join(path))),
         'R' | 'C' => {
             let new_path = parts.next()?;
-            Some(xai_codebase_graph::FileEvent::renamed(
+            Some(orz_workspace::file_system::codebase_graph_stub::FileEvent::renamed(
                 repo_root.join(path),
                 repo_root.join(new_path),
             ))
         }
-        _ => Some(xai_codebase_graph::FileEvent::modified(
+        _ => Some(orz_workspace::file_system::codebase_graph_stub::FileEvent::modified(
             repo_root.join(path),
         )),
     }
@@ -179,7 +179,7 @@ fn parse_diff_name_status_line(
 /// After a HEAD change, diff ORIG_HEAD..HEAD and send targeted events
 /// to the codebase graph. Falls back to full rebuild if too many changes.
 async fn refresh_codebase_graph_after_head_change(
-    idx: &xai_codebase_graph::IndexManagerHandle,
+    idx: &orz_workspace::file_system::codebase_graph_stub::IndexManagerHandle,
     repo_root: &Path,
 ) {
     let mut cmd = tokio::process::Command::new("git");
@@ -1071,7 +1071,7 @@ mod tests {
 
     #[test]
     fn parse_diff_name_status() {
-        use xai_codebase_graph::FileEventKind;
+        use orz_workspace::file_system::codebase_graph_stub::FileEventKind;
         let root = Path::new("/repo");
 
         let ev = parse_diff_name_status_line("M\tsrc/main.rs", root).unwrap();

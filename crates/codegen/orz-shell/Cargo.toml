@@ -148,6 +148,7 @@ orz-workspace = { workspace = true }
 orz-agent = { path = "../orz-agent" }
 orz-config = { workspace = true }
 orz-config-types = { workspace = true }
+orz-env = { workspace = true }
 orz-memory = { workspace = true }
 orz-hooks = { path = "../orz-hooks" }
 xai-hooks-plugins-types = { path = "../xai-hooks-plugins-types" }

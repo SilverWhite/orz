@@ -1,0 +1,15 @@
+[package]
+license = "Apache-2.0"
+edition.workspace = true
+name = "xai-mixpanel"
+version = "0.1.0"
+description = "Mixpanel stub - analytics disabled in orz"
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+orz-secrets = { path = "../orz-secrets" }
+
+[lints]
+workspace = true

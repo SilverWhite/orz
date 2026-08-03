@@ -18,7 +18,6 @@ xai-tty-utils = { workspace = true }
 orz-config = { path = "../orz-config" }
 orz-tools-api = { path = "../orz-tools-api" }
 orz-workspace-types = { path = "../orz-workspace-types" }
-orz-telemetry = { path = "../orz-telemetry" }
 orz-version = { workspace = true }
 xai-interjection-core = { workspace = true }
 xai-token-estimation = { workspace = true }

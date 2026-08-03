@@ -25,7 +25,7 @@ pub use orz_workspace_types::rpc::fs::FsReadEncoding;
 pub mod adapter;
 pub use adapter::AcpFsAdapter;
 
-pub(crate) mod codebase_graph_stub;
+pub mod codebase_graph_stub;
 mod codebase_index;
 pub use codebase_index::CodebaseIndexManager;
 
