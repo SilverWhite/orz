@@ -1,7 +1,7 @@
 //! GrokBuildEnvironment configuration for the shell crate family.
 //!
 //! The environment presets (per-environment endpoint URLs, the staging
-//! trust check, `EnvVarGuard`) live in the [`xai_grok_env`] leaf crate so
+//! trust check, `EnvVarGuard`) live in the [`orz_env`] leaf crate so
 //! sibling crates (telemetry, tools, workspace) can share them without
 //! depending on this crate. This module re-exports them and hosts the
 //! shell-specific gateway-bridge env vars.
@@ -12,8 +12,8 @@
 //!   it. Unset → falls back to [`GrokBuildEnvironment::gateway_ws_url`] for
 //!   sessions created in gateway mode; otherwise local-mode (unchanged).
 #[cfg(any(test, feature = "test-support"))]
-pub use xai_grok_env::EnvVarGuard;
-pub use xai_grok_env::{
+pub use orz_env::EnvVarGuard;
+pub use orz_env::{
     GrokBuildEnvironment, PROD_ASSET_SERVER_URL, PROD_CLI_CHAT_PROXY_BASE_URL, PROD_GATEWAY_WS_URL,
     PROD_RELAY_WS_URL, PROD_WS_ORIGIN,
 };

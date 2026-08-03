@@ -43,3 +43,8 @@ pub enum InstrumentationMode {
 pub fn current_mode() -> InstrumentationMode {
     InstrumentationMode::Off
 }
+pub struct ChromeTraceOptions;
+pub struct InstrumentationFinalizer;
+pub fn finalize() {}
+pub fn finalizer() -> InstrumentationFinalizer { InstrumentationFinalizer }
+pub fn generate_chrome_trace(_opts: ChromeTraceOptions) -> String { String::new() }

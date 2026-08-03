@@ -422,3 +422,4 @@ mod tests {
         assert!(!status.success(), "sleep was killed, not exited cleanly");
     }
 }
+pub mod sqlite_stub;

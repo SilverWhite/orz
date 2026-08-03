@@ -68,3 +68,15 @@ pub struct McpToolCalled { pub server_name: String, pub tool_name: String, pub q
 #[derive(Debug, Clone)] pub enum McpErrorType { SpawnFailed, Timeout, ConnectionLost, ProtocolError, Unknown }
 impl TelemetryEvent for McpServerFailed { fn event_name(&self) -> &'static str { "mcp_server_failed" } }
 impl TelemetryEvent for McpToolCalled { fn event_name(&self) -> &'static str { "mcp_tool_called" } }
+pub struct ManualAuthSurface;
+pub struct ManualAuth;
+pub enum ManualAuthReason { UserRequested, TokenExpired }
+pub enum AuthTokenKind { Bearer, ApiKey }
+pub struct RolloutSurvey;
+pub struct ClientHookGateOutcome;
+pub struct CompactionRetryDegraded;
+pub struct CompactionTrigger;
+impl TelemetryEvent for ManualAuthSurface { fn event_name(&self) -> &'static str { "manual_auth_surface" } }
+impl TelemetryEvent for ManualAuth { fn event_name(&self) -> &'static str { "manual_auth" } }
+impl TelemetryEvent for RolloutSurvey { fn event_name(&self) -> &'static str { "rollout_survey" } }
+impl TelemetryEvent for ClientHookGateOutcome { fn event_name(&self) -> &'static str { "client_hook_gate_outcome" } }

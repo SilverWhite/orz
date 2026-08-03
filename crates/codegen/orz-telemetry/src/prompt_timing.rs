@@ -1,1 +1,1 @@
-// stub
+pub struct PromptTiming;

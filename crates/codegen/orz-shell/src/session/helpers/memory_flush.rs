@@ -203,8 +203,8 @@ pub fn is_duplicate(content: &str, db_path: &std::path::Path) -> bool {
     let content_hash = blake3::hash(content.as_bytes()).to_hex().to_string();
 
     // Journal-mode-aware open: never mmap a legacy WAL -shm on network
-    // mounts (SIGBUS); see xai_sqlite_journal::JournalMode::open_readonly.
-    let conn = match xai_sqlite_journal::JournalMode::for_db_path(db_path).open_readonly(db_path) {
+    // mounts (SIGBUS); see crate::util::sqlite_stub::JournalMode::open_readonly.
+    let conn = match crate::util::sqlite_stub::JournalMode::for_db_path(db_path).open_readonly(db_path) {
         Ok(c) => c,
         Err(_) => {
             tracing::debug!(target: LOG, "MEMORY_FLUSH_DEDUP: can't open DB, allowing write");

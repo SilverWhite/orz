@@ -20,7 +20,7 @@
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use xai_sqlite_journal::JournalMode;
+use crate::util::sqlite_stub::JournalMode;
 
 use super::search_recovery;
 
