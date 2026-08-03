@@ -13,3 +13,6 @@ bin/protoc
 bin/protoc.exe
 bin/protoc.bak
 bin/protoc.dotslash
+
+# orz runtime journals
+/.gsa

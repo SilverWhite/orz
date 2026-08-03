@@ -11,4 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 orz-assurance = { path = "../orz-assurance" }
+orz-loop = { path = "../orz-loop" }
+orz-host = { path = "../orz-host" }
+tokio = { workspace = true, features = ["full"] }
 

@@ -64,6 +64,7 @@ members = [
     "crates/common/xai-tool-types",
     "crates/common/xai-tracing",
     "prod/mc/cli-chat-proxy-types",
+    "crates/orz-loop",
     "crates/orz-bin",
     "crates/orz-assurance",
     "crates/orz-tui",

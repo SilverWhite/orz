@@ -10,9 +10,9 @@ description = "orz thin core — ACP server + LoopHost implementation + session 
 agent-client-protocol = { workspace = true }
 xai-acp-lib = { workspace = true }
 
-# Self-built core — Phase 1+ (comment out for now, orz-loop/orz-assurance not yet created)
-# orz-loop = { path = "../orz-loop" }
-# orz-assurance = { path = "../orz-assurance" }
+# Self-built core
+orz-loop = { path = "../orz-loop" }
+orz-assurance = { path = "../orz-assurance" }
 
 # Grok providers (public APIs only)
 orz-tools-api = { path = "../codegen/orz-tools-api" }
@@ -25,6 +25,7 @@ orz-models = { path = "../codegen/orz-models" }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }

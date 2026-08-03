@@ -1,18 +1,24 @@
 // orz-assurance — assurance kernel for the orz CLI agent workbench.
 //
 // Ported from Python assurance/ (spec reference).
-// Modules: gates, orientation, journal, session, sandbox, credential, permit.
-//
-// Phase 1: empty skeleton. Real implementations in Phase 2-4.
+// Modules: journal (Phase 1), gates, orientation, session, sandbox, credential, permit (Phase 2+).
 
-// Future module declarations (Phase 2+):
+pub mod journal;
+
+// Phase 2+ module declarations:
 // pub mod gates;
 // pub mod orientation;
-// pub mod journal;
 // pub mod session;
 // pub mod sandbox;
 // pub mod credential;
 // pub mod permit;
+
+// Re-export commonly used types from journal
+pub use journal::{
+    canonical_json, compute_event_hash, replay_journal, seal_event, sha256_hex,
+    ChainValidation, EventType, JournalRecorder, JournalRecorderError, ReplayResult, Redaction,
+    RunEvent, TERMINAL_EVENTS,
+};
 
 /// Gate decision — modelled on PROTOCOL_DRAFT §9.
 /// Five-valued: Pass, Warn, Block, Defer, NotApplicable.
@@ -37,6 +43,9 @@ pub enum AssuranceError {
 
     #[error("journal error: {0}")]
     Journal(#[from] std::io::Error),
+
+    #[error("journal recorder error: {0}")]
+    JournalRecorder(#[from] JournalRecorderError),
 
     #[error("hash chain broken at event {sequence}: expected {expected}, got {actual}")]
     HashChainBroken {
