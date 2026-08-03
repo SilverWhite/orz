@@ -30,12 +30,15 @@ v0.1 (保留 shell):                   v0.2 (融合架构):
   ├── orz-loop                          ├── orz-config/models/memory/markdown (42k)
   ├── orz-assurance                     └── xai-* 工具库 (~80k)
   ├── orz-tui
-  └── orz-bin                           自研核心 (~52k)
+  └── orz-bin                           自研核心 (~20k)
                                         ├── **orz-host** (NEW ~8k) ← ACP + LoopHost
                                         ├── orz-loop (~2k)
-                                        ├── orz-assurance (25-40k)
+                                        ├── orz-assurance (4-7k) ← 热路径 gate/journal/trigger
                                         ├── orz-tui (5-8k)
                                         └── orz-bin (1k)
+
+                                        注: assurance Python 95k 行中仅 4-7k 热路径逻辑需 Rust 移植
+                                        其余保留为 conformance suite + schema authority + 离线验证
 
 继承代码: ~1.1M → ~320k (减 71%)
 Crate 数: 74 → ~42 (减 43%)
@@ -121,7 +124,7 @@ Crate 数: 74 → ~42 (减 43%)
 │  └──────────────────────┬───────────────────────────────┘       │
 │                         │                                        │
 │  ┌──────────────────────┼───────────────────────────────┐       │
-│  │              orz-assurance (自研 — 25-40k 行)         │       │
+│  │              orz-assurance (自研 — 4-7k 行热路径)       │       │
 │  │  gates/  orientation/  journal/  session/            │       │
 │  │  sandbox/  credential/  permit/                      │       │
 │  └──────────────────────┬───────────────────────────────┘       │
@@ -215,8 +218,13 @@ Crate 数: 74 → ~42 (减 43%)
 | orz-bin | ~1k | composition root |
 | orz-loop | ~2k | AgentLoopController + Blackboard + MechanicalRelay + Pro/Flash + Subagents |
 | orz-loop::gateway::transport | ~7.6k | 从 orz-sampler 移入的 SSE streaming + retry |
-| orz-assurance | 25-40k | gates/journal/orientation/session/snapshot/credential/permit |
+| orz-assurance | 4-7k | 热路径: journal+gate+orientation+trust。其余 Python 95k 保留为 conformance suite |
 | orz-tui | 5-8k | assurance workbench TUI |
+
+### 2.4 双 TUI 策略
+
+- **主 UI**: `orz-tui` (自研 assurance workbench, ACP 通信)
+- **兜底 UI**: Codex ratatui TUI (~20k 行轻量前端)。orz-host 同时暴露 ACP (给 orz-tui) 和 Codex app-server JSON-RPC (给兜底)。Codex TUI 不展示 assurance 面板，但 assurance 层在 orz-host 中完整静默运行
 
 ---
 
