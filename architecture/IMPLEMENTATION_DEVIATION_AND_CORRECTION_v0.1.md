@@ -1,7 +1,8 @@
 # 实现偏差与修正路线 v0.2
 
-状态：2026-08-02。v0.1 记录了 sidecar vs fork 架构偏差；v0.2 补充了中立询问机制的
-设计修正（触发模型从线性管道改为事件驱动）和最终阈值。
+状态：2026-08-03 更新。v0.1 记录了 sidecar vs fork 架构偏差；v0.2 补充了中立询问机制的
+设计修正（触发模型从线性管道改为事件驱动）和最终阈值。2026-08-03 更新 §4 技术债务——Phase 1
+完成、Phase 2 编译阻塞已解除（方案 A）。
 
 ## 1. 架构偏差：当前实现是 sidecar，不是 fork
 
@@ -108,11 +109,12 @@ conformance fixture（`canonical_cli.py` 文件头注释："不是 production ag
 
 ## 4. 当前遗留的技术债务
 
-1. **Architecture**: sidecar → fork 迁移（已决策，待执行）
-2. **Orientation 触发层**: checkpoint 格式和验证正确，触发/注入需重写为事件驱动
-3. **Gate 覆盖**: `gsa ask` 和 `gsa chat` 两条用户入口只跑部分 gate
-4. **Thinking proxy daemon**: sidecar 模式下的外部 workaround。fork 后在 HTTP 传输层源码解决
-5. **命名歧义**: `GrokAcpSession`（实际是 GSA 的 ACP 会话管理器）、`grok_runtime_adapter`（实际是 GSA runtime controller）
+1. **Architecture**: sidecar → fork 迁移 ✅ Phase 1 完成（scaffold + build），Phase 2 编译阻塞已解除（方案 A, 2026-08-03）
+2. **Phase 2 Journal + Transport**: 待实现 — orz-shell 已可编译，下一步实现 journal 系统和 thinking:disabled 注入
+3. **Orientation 触发层**: checkpoint 格式和验证正确，触发/注入需重写为事件驱动
+4. **Gate 覆盖**: `gsa ask` 和 `gsa chat` 两条用户入口只跑部分 gate（fork 后在 Phase 3 解决）
+5. **Thinking proxy daemon**: sidecar 模式下的外部 workaround。fork 后 Phase 2 在 HTTP 传输层源码解决
+6. **命名歧义**: `GrokAcpSession`（实际是 GSA 的 ACP 会话管理器）、`grok_runtime_adapter`（实际是 GSA runtime controller）
 
 ## 5. 架构决策：转向 fork 模式
 

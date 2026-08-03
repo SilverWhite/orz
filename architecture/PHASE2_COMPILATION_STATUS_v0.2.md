@@ -1,9 +1,35 @@
-# Phase 2 编译修复状态 v0.1
+# Phase 2 编译修复状态 v0.2
 
-状态：2026-08-03。记录 `B:\orz` Phase 2（Journal + Transport）中 orz-shell 编译修复的实际进展、
-阻断因素和分析。
+状态：2026-08-03。**已解决** — 方案 A 执行完成，orz-shell 编译错误从 981 → 0。
 
-## 1. 背景
+## 0. 解决方案（2026-08-03 更新）
+
+**方案 A 已执行完毕**：从 git `500129c` 恢复原始 crate 完整源码，替换手写 stub。
+
+| Crate | 来源 | 文件数 | 编译 |
+|------|------|--------|------|
+| `orz-telemetry` | 原始 `xai-grok-telemetry`（替换手写 21 模块 stub） | 40 | ✅ |
+| `orz-plugin-marketplace` | 原始 `xai-grok-plugin-marketplace` | 12 | ✅ |
+| `orz-subagent-resolution` | 原始 `xai-grok-subagent-resolution` | 8 | ✅ |
+| `orz-announcements` | 原始 `xai-grok-announcements` | 4 | ✅ |
+| `orz-secrets` | 原始 `xai-grok-secrets`（额外恢复，telemetry 的依赖） | 3 | ✅ |
+| `xai-mixpanel` | 新建最小 no-op stub（analytics disabled） | 2 | ✅ |
+
+**额外修复**：
+- 打破循环依赖：移除 `orz-config` 和 `orz-tools` 对 `orz-telemetry` 的不必要依赖
+- 补齐 `orz-shell/src/util/mod.rs` 缺失的 6 个模块声明（config, grok_auth_credentials, hooks, limits, subprocess, user_identity）
+- 补齐 3 个缺失函数：`is_user_instruction_path`, `expand_home`, `AbortOnDrop`
+- 修复 `xai_codebase_graph` → `codebase_graph_stub` 命名空间引用
+- 修复 `xai_grok_shared` → `orz_shared` 引用
+- `codebase_graph_stub` 可见性：`pub(crate)` → `pub`
+- 添加 `orz-env` 依赖到 `orz-shell`
+
+**提交**：`B:\orz` 仓库 `feat/phase1-scaffold` 分支，commit `a2a7868`。
+Phase 2 编译阻塞已解除。
+
+---
+
+## 1. 背景（原始问题记录，已解决）
 
 Phase 1 将 Grok Build `500129c7` fork 为 orz：删除了 19 个 crate，将 21 个 crate 从 `xai-grok-*` 重命名为 `orz-*`。
 批量重命名工具对 `.rs` 源文件也执行了 `xai_grok_*` → `orz_*` 的替换——**包括对已删除 crate 的引用**。
@@ -31,12 +57,14 @@ orz-shell 的依赖图存在深层断裂，修复成本远超预期。
 
 ```
 64fd464 chore(phase1): close Phase 1 — dual binary scaffold verified
-c736b1a feat(phase2): restore deleted crates + compatibility shims
-<N>      chore(phase2): complete remaining compilation fixes
-<N+1>    chore(phase2): restore shell-session-support crate + more stubs
+c2c48f0 feat(phase2): restore deleted crates + compatibility shims
+eaacbac chore(phase2): complete remaining compilation fixes
+4f7fe80 chore(phase2): restore shell-session-support crate + more stubs
+7906741 chore(phase2): checkpoint WIP stubs before Plan A restoration
+a2a7868 feat(phase2): Plan A — restore 4 crates from 500129c, orz-shell 981→0 errors
 ```
 
-### 3.2 恢复和创建的 crate
+### 3.2 恢复和创建的 crate（方案 A 执行前状态，最终结果见 §0）
 
 | Crate | 方式 | 状态 |
 |-------|------|------|
@@ -62,9 +90,9 @@ c736b1a feat(phase2): restore deleted crates + compatibility shims
 | `xai_grok_version` → `orz_version` | 1 | `changelog.rs` 引用修复 |
 | `to_managed_name` / `inject_managed_headers` | 1 | `managed_mcp.rs` 函数缺失（通过恢复 session-support 修复） |
 
-## 4. 当前错误状态
+## 4. 历史错误状态（方案 A 执行前，已解决）
 
-### 4.1 编译结果
+### 4.1 编译结果（修复前）
 
 ```
 $ cargo check -p orz-shell
@@ -120,9 +148,9 @@ prompt_timing:    PromptTiming (~10+ types)
 （如 `xai-grok-shell-session-support`）被 orz-shell 深度依赖。删除这些 crate 的决定
 基于"功能不需要"的逻辑，但未充分评估"代码仍引用"的实际情况。
 
-## 6. 推荐路径
+## 6. 推荐路径（历史记录 — 方案 A 已于 2026-08-03 执行完毕）
 
-基于以上分析，有三种可行方案（按推荐顺序）：
+基于以上分析，有三种可行方案（按推荐顺序），**方案 A 已被选择并执行**（见 §0）：
 
 ### 方案 A：从 git 批量恢复（推荐）
 
@@ -166,7 +194,7 @@ orz-shell 的编译修复推迟到 Phase 3，届时采用方案 A（批量恢复
 
 | 仓库 | 分支 | 最后提交 |
 |------|------|---------|
-| `B:\orz` | `feat/phase1-scaffold` | Phase 2 编译修复 WIP |
+| `B:\orz` | `feat/phase1-scaffold` | ✅ Phase 2 编译修复完成（方案 A, commit `a2a7868`）|
 | `D:\CLI` | `main` | Phase 1 tech debt 关闭 |
 | `D:\CLI` | `feat/fork-architecture` | 4 篇设计文档（v0.1-v0.3 + impl） |
 
