@@ -1,7 +1,7 @@
 # 融合架构：Codex 纪律 + Grok 能力 v0.2
 
 状态：2026-08-03。v0.1 整合了 Agent Loop Redesign 与 Fork Implementation Design，
-解决了注入点分类、crate 矩阵和 Phase 规划问题。v0.2 基于对 `B:\orz` (74 crate, ~1.1M 行)
+解决了注入点分类、crate 矩阵和 Phase 规划问题。v0.2 基于对 `D:\CLI\orz` (74 crate, ~1.1M 行)
 和 Codex CLI (~120 crate, core 151k 行) 的源码级审查，确认：**Grok 底座中仅 ~320k 行
 （tools/workspace/sandbox/mcp/chat-state/hooks）是真正有价值的成熟组件。其余 ~780k 行
 （shell + pager + telemetry + marketplace + announcements + sampler）是架构债。**
@@ -334,7 +334,7 @@ IP6 仍是唯一需要修改 kept Grok 组件的 assurance 功能。
 ## 5. 实施阶段
 
 ### Phase 0: 融合删除（本次）
-**目标**：`B:\orz` workspace 仅保留提供者 + orz-host skeleton，`cargo check` 绿色
+**目标**：`D:\CLI\orz` workspace 仅保留提供者 + orz-host skeleton，`cargo check` 绿色
 
 1. 创建分支 `feat/fusion-architecture`
 2. `git rm -r` 删除清单中的所有 crate

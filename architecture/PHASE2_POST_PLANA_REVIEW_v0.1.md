@@ -149,5 +149,5 @@ orz-shell 深度依赖这 10 个 crate 的类型定义、trait 实现和函数�
 - [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md) — 偏差分析
 - [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](FORK_IMPLEMENTATION_DESIGN_v0.1.md) — 实现设计（feat/fork-architecture 分支）
 - [`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md) — 最新设计语言（feat/fork-architecture 分支）
-- `B:\orz` commit `a2a7868` — 方案 A 提交点
+- `D:\CLI\orz` commit `a2a7868` — 方案 A 提交点（仓库 2026-08-04 由 `B:\orz` 迁移）
 - 代理审查完整记录：`a9e7a4cf5d62cc286`（设计一致性）、`a0baff606859b9397`（crate 结构）、`ae51e0f2437807c37`（文档问题）

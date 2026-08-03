@@ -33,10 +33,10 @@ Python assurance spec（`assurance/`）保留为 conformance suite、schema auth
 
 ## 实施 (Rust)
 
-- **仓库**：`B:\orz`（本地 fork of Grok Build `500129c7`）
-- **分支**：`feat/fusion-architecture`（58 crate workspace, `cargo check` 绿色）
+- **仓库**：`D:\CLI\orz`（本地 fork of Grok Build `500129c7`；2026-08-04 由 `B:\orz` 迁移，B 盘空间不足）
+- **分支**：`feat/fusion-architecture`（70 crate workspace, `cargo check` 绿色）
 - **设计符合性**：详见[审查报告](#) — v0.2 设计与实施高度一致
-- **跟踪项**：`memory/fusion-phase-tracking.md` — orz-loop / orz-assurance / orz-host Phase 1 待实施
+- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1（journal + loop + host 骨架）已完成，Phase 2 待实施
 
 ## 当前文件 (Python assurance spec + 架构 + 协议)
 
