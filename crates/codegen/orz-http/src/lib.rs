@@ -1,30 +1,16 @@
-//! orz-http — minimal HTTP client stub.
-//! Provides the shared reqwest client wrapper still referenced by kept providers.
+//! HTTP client stub for kept Grok providers.
 
-use std::sync::Arc;
+use reqwest_middleware::ClientWithMiddleware;
 
-/// Shared HTTP client.
-pub struct HttpClient {
-    pub client: reqwest::Client,
+/// Returns a shared HTTP client.
+pub fn shared_client() -> ClientWithMiddleware {
+    reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build()
 }
 
-impl HttpClient {
-    pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
-    }
-
-    pub fn client(&self) -> &reqwest::Client {
-        &self.client
-    }
+/// Wraps a client with auth retry middleware (no-op in stub).
+pub fn with_auth_retry<T>(
+    client: ClientWithMiddleware,
+    _credentials: T,
+) -> ClientWithMiddleware {
+    client
 }
-
-impl Default for HttpClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Shared HTTP client reference type.
-pub type SharedClient = Arc<HttpClient>;
