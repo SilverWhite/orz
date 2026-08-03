@@ -17,35 +17,23 @@ members = [
     "crates/codegen/xai-fsnotify",
     "crates/codegen/xai-gix-status",
     "crates/codegen/orz-agent",
-    "crates/codegen/orz-announcements",
     "crates/codegen/orz-auth",
     "crates/codegen/orz-config",
-    "crates/codegen/orz-config-types",
     "crates/codegen/orz-env",
     "crates/codegen/orz-hooks",
-    "crates/codegen/orz-http",
     "crates/codegen/orz-markdown",
     "crates/codegen/orz-markdown-core",
     "crates/codegen/orz-mcp",
     "crates/codegen/orz-memory",
     "crates/codegen/orz-models",
-    "crates/codegen/xai-grok-pager",
-    "crates/codegen/xai-grok-pager-bin",
-    "crates/codegen/xai-grok-pager-minimal",
-    "crates/codegen/xai-grok-pager-render",
     "crates/codegen/xai-mixpanel",
     "crates/codegen/orz-paths",
     "crates/codegen/orz-sampling-types",
-    "crates/codegen/orz-telemetry",
-    "crates/codegen/orz-sampler",
     "crates/codegen/orz-chat-state",
     "crates/codegen/orz-sandbox",
     "crates/codegen/orz-secrets",
-    "crates/codegen/orz-shell-session-support",
-    "crates/codegen/orz-plugin-marketplace",
     "crates/codegen/orz-subagent-resolution",
     "crates/codegen/orz-shared",
-    "crates/codegen/orz-shell",
     "crates/codegen/orz-tools",
     "crates/codegen/orz-tools-api",
     "crates/codegen/orz-version",
@@ -54,8 +42,6 @@ members = [
     "crates/codegen/orz-workspace-types",
     "crates/codegen/xai-hooks-plugins-types",
     "crates/codegen/xai-hunk-tracker",
-    "crates/codegen/xai-prompt-queue",
-    "crates/codegen/xai-ratatui-inline",
     "crates/codegen/xai-ratatui-textarea",
     "crates/codegen/xai-system-power",
     "crates/codegen/xai-token-estimation",
@@ -80,6 +66,7 @@ members = [
     "crates/orz-bin",
     "crates/orz-assurance",
     "crates/orz-tui",
+    "crates/orz-host",
 ]
 
 [workspace.package]
@@ -278,19 +265,15 @@ xai-computer-hub-core = { path = "crates/common/xai-computer-hub-core" }
 xai-computer-hub-sdk = { path = "crates/common/xai-computer-hub-sdk" }
 xai-gix-status = { path = "crates/codegen/xai-gix-status" }
 orz-agent = { path = "crates/codegen/orz-agent" }
-orz-announcements = { path = "crates/codegen/orz-announcements" }
 orz-auth = { path = "crates/codegen/orz-auth" }
 orz-config = { path = "crates/codegen/orz-config" }
-orz-config-types = { path = "crates/codegen/orz-config-types" }
 orz-env = { path = "crates/codegen/orz-env" }
-orz-http = { path = "crates/codegen/orz-http" }
 orz-markdown = { path = "crates/codegen/orz-markdown" }
 orz-markdown-core = { path = "crates/codegen/orz-markdown-core" }
 orz-mcp = { path = "crates/codegen/orz-mcp" }
 orz-memory = { path = "crates/codegen/orz-memory" }
 orz-models = { path = "crates/codegen/orz-models" }
 orz-shared = { path = "crates/codegen/orz-shared" }
-orz-shell = { path = "crates/codegen/orz-shell" }
 orz-tools = { path = "crates/codegen/orz-tools" }
 orz-tools-api = { path = "crates/codegen/orz-tools-api" }
 orz-version = { path = "crates/codegen/orz-version" }
@@ -299,9 +282,7 @@ orz-workspace-types = { path = "crates/codegen/orz-workspace-types" }
 xai-hooks-plugins-types = { path = "crates/codegen/xai-hooks-plugins-types" }
 xai-mixpanel = { path = "crates/codegen/xai-mixpanel" }
 xai-interjection-core = { path = "crates/common/xai-interjection-core" }
-xai-prompt-queue = { path = "crates/codegen/xai-prompt-queue" }
 xai-proto-build = { path = "crates/build/xai-proto-build" }
-xai-ratatui-inline = { path = "crates/codegen/xai-ratatui-inline" }
 xai-ratatui-textarea = { path = "crates/codegen/xai-ratatui-textarea" }
 xai-system-power = { path = "crates/codegen/xai-system-power" }
 xai-test-utils = { path = "crates/common/xai-test-utils" }
@@ -313,12 +294,8 @@ xai-tracing = { path = "crates/common/xai-tracing" }
 xai-tty-utils = { path = "crates/codegen/xai-tty-utils" }
 orz-hooks = { path = "crates/codegen/orz-hooks" }
 orz-paths = { path = "crates/codegen/orz-paths" }
-orz-telemetry = { path = "crates/codegen/orz-telemetry" }
-orz-sampler = { path = "crates/codegen/orz-sampler" }
 orz-chat-state = { path = "crates/codegen/orz-chat-state" }
 orz-sampling-types = { path = "crates/codegen/orz-sampling-types" }
-orz-shell-session-support = { path = "crates/codegen/orz-shell-session-support" }
-orz-plugin-marketplace = { path = "crates/codegen/orz-plugin-marketplace" }
 orz-subagent-resolution = { path = "crates/codegen/orz-subagent-resolution" }
 orz-secrets = { path = "crates/codegen/orz-secrets" }
 orz-sandbox = { path = "crates/codegen/orz-sandbox" }
@@ -326,6 +303,7 @@ orz-compaction = { path = "crates/common/orz-compaction" }
 orz-bin = { path = "crates/orz-bin" }
 orz-assurance = { path = "crates/orz-assurance" }
 orz-tui = { path = "crates/orz-tui" }
+orz-host = { path = "crates/orz-host" }
 zbus = { version = "5" }
 zstd = "0.13"
 
