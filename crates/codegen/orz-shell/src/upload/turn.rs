@@ -175,7 +175,7 @@ pub(crate) async fn complete_prompt_trace(
     session_copy_rx: oneshot::Receiver<
         anyhow::Result<crate::session::persistence::SessionStateCopy>,
     >,
-    turn_messages: Option<xai_chat_state::TurnCapture>,
+    turn_messages: Option<orz_chat_state::TurnCapture>,
     streaming_partial: Option<crate::session::acp_session::StreamingTurnCapture>,
     wait: UploadWait,
 ) -> anyhow::Result<bool> {

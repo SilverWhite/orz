@@ -4,7 +4,7 @@
 //! - Session start: inject relevant past context on the first turn
 //! - Post-compaction: recover relevant memory after context is lost
 
-use xai_chat_state::{MEMORY_CONTEXT_CLOSE_TAG, MEMORY_CONTEXT_OPEN_TAG};
+use orz_chat_state::{MEMORY_CONTEXT_CLOSE_TAG, MEMORY_CONTEXT_OPEN_TAG};
 use orz_sampling_types::ConversationItem;
 use orz_tools::types::memory_backend::{MemorySearchResult, format_staleness_note};
 

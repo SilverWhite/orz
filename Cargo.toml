@@ -39,6 +39,9 @@ members = [
     "crates/codegen/orz-sampler",
     "crates/codegen/orz-chat-state",
     "crates/codegen/orz-sandbox",
+    "crates/codegen/orz-shell-session-support",
+    "crates/codegen/orz-plugin-marketplace",
+    "crates/codegen/orz-subagent-resolution",
     "crates/codegen/orz-shared",
     "crates/codegen/orz-shell",
     "crates/codegen/orz-tools",
@@ -311,6 +314,9 @@ orz-telemetry = { path = "crates/codegen/orz-telemetry" }
 orz-sampler = { path = "crates/codegen/orz-sampler" }
 orz-chat-state = { path = "crates/codegen/orz-chat-state" }
 orz-sampling-types = { path = "crates/codegen/orz-sampling-types" }
+orz-shell-session-support = { path = "crates/codegen/orz-shell-session-support" }
+orz-plugin-marketplace = { path = "crates/codegen/orz-plugin-marketplace" }
+orz-subagent-resolution = { path = "crates/codegen/orz-subagent-resolution" }
 orz-sandbox = { path = "crates/codegen/orz-sandbox" }
 orz-compaction = { path = "crates/common/orz-compaction" }
 orz-bin = { path = "crates/orz-bin" }

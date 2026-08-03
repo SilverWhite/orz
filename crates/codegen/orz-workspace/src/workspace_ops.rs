@@ -1112,7 +1112,7 @@ impl WorkspaceOp for CodeIndexStatusReq {
         match handle {
             Some(h) => {
                 let file_count = h.get_file_count();
-                let stats = h.get_stats().map(|s| CodeIndexStats {
+                let stats = h.get_stats().ok().map(|s| CodeIndexStats {
                     files: s.files,
                     definitions: s.definitions,
                     references: s.references,
@@ -1132,21 +1132,18 @@ impl WorkspaceOp for CodeIndexStatusReq {
     }
 }
 fn query_result_to_response(
-    result: Result<crate::file_system::codebase_graph_stub::QueryResult, crate::file_system::codebase_graph_stub::QueryError>,
+    result: crate::file_system::codebase_graph_stub::QueryResult,
 ) -> CodeNavResponse {
-    match result {
-        Ok(qr) => CodeNavResponse {
-            locations: qr
-                .locations
-                .into_iter()
-                .map(|loc| CodeNavLocation {
-                    path: loc.path,
-                    line: loc.line,
-                    symbol: loc.matched_symbol,
-                })
-                .collect(),
-        },
-        Err(_) => CodeNavResponse { locations: vec![] },
+    CodeNavResponse {
+        locations: result
+            .locations
+            .into_iter()
+            .map(|loc| CodeNavLocation {
+                path: loc.path,
+                line: loc.line,
+                symbol: loc.matched_symbol,
+            })
+            .collect(),
     }
 }
 fn symbol_locations_to_response(

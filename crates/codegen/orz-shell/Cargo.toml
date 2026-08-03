@@ -130,8 +130,12 @@ xai-agent-lifecycle = { workspace = true }
 xai-interjection-core = { workspace = true }
 orz-sandbox = { path = "../orz-sandbox", default-features = false }
 orz-telemetry = { path = "../orz-telemetry" }
+orz-auth = { path = "../orz-auth", features = ["middleware"] }
+orz-shell-session-support = { path = "../orz-shell-session-support" }
 orz-announcements = { path = "../orz-announcements" }
 orz-sampler = { path = "../orz-sampler" }
+orz-plugin-marketplace = { path = "../orz-plugin-marketplace" }
+orz-subagent-resolution = { path = "../orz-subagent-resolution" }
 orz-chat-state = { path = "../orz-chat-state" }
 orz-compaction = { path = "../../common/orz-compaction" }
 xai-token-estimation = { workspace = true }

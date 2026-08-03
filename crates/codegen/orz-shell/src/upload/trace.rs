@@ -947,7 +947,7 @@ pub(crate) async fn upload_permission_events(
 }
 pub(crate) async fn upload_turn_messages(
     ctx: &PromptTraceContext,
-    _capture: xai_chat_state::TurnCapture,
+    _capture: orz_chat_state::TurnCapture,
     _wait: UploadWait,
 ) -> bool {
     super::manifest::skip_artifact(

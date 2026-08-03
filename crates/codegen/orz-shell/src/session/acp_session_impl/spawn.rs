@@ -201,7 +201,7 @@ pub(crate) async fn spawn_session_actor(
     session_info: SessionInfo,
     gateway: GatewaySender,
     sampling_config: SamplingConfig,
-    credentials: xai_chat_state::Credentials,
+    credentials: orz_chat_state::Credentials,
     auth_method_id: crate::agent::auth_method::SharedAuthMethodId,
     auth_manager: Option<Arc<AuthManager>>,
     attribution_callback: Option<orz_sampler::SharedAttributionCallback>,
@@ -225,7 +225,7 @@ pub(crate) async fn spawn_session_actor(
     client_type: ClientType,
     auto_compact_threshold_percent: u8,
     system_prompt_label: String,
-    compaction_mode: xai_chat_state::CompactionMode,
+    compaction_mode: orz_chat_state::CompactionMode,
     compaction_verbatim_input: bool,
     compaction_tool_choice: crate::util::config::CompactionToolChoice,
     two_pass_enabled: bool,
@@ -531,7 +531,7 @@ pub(crate) async fn spawn_session_actor(
         reasoning_effort: sampling_config.reasoning_effort,
         stream_tool_calls: Some(sampling_config.stream_tool_calls),
     };
-    let actor_pruning_config = xai_chat_state::PruningConfig {
+    let actor_pruning_config = orz_chat_state::PruningConfig {
         enabled: session_pruning_config.enabled,
         keep_last_n_turns: session_pruning_config.keep_last_n_turns,
         soft_trim_threshold: session_pruning_config.soft_trim_threshold,
@@ -540,7 +540,7 @@ pub(crate) async fn spawn_session_actor(
         hard_clear_age_turns: session_pruning_config.hard_clear_age_turns,
     };
     let (chat_state_event_tx, chat_state_event_rx) = mpsc::unbounded_channel();
-    let chat_state_handle = xai_chat_state::ChatStateActor::spawn_with_pruning(
+    let chat_state_handle = orz_chat_state::ChatStateActor::spawn_with_pruning(
         conversation.clone(),
         chat_state_sampling_config,
         actor_pruning_config,
@@ -2152,7 +2152,7 @@ pub(crate) async fn spawn_session_on_thread(
     session_info: SessionInfo,
     gateway: GatewaySender,
     sampling_config: SamplingConfig,
-    credentials: xai_chat_state::Credentials,
+    credentials: orz_chat_state::Credentials,
     auth_method_id: crate::agent::auth_method::SharedAuthMethodId,
     auth_manager: Option<Arc<AuthManager>>,
     attribution_callback: Option<orz_sampler::SharedAttributionCallback>,
@@ -2174,7 +2174,7 @@ pub(crate) async fn spawn_session_on_thread(
     client_type: ClientType,
     auto_compact_threshold_percent: u8,
     system_prompt_label: String,
-    compaction_mode: xai_chat_state::CompactionMode,
+    compaction_mode: orz_chat_state::CompactionMode,
     compaction_verbatim_input: bool,
     compaction_tool_choice: crate::util::config::CompactionToolChoice,
     two_pass_enabled: bool,

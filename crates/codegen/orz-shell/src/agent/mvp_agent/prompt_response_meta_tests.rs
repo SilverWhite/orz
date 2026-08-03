@@ -80,7 +80,7 @@ fn preserves_zero_token_values() {
 
 #[test]
 fn usage_object_lands_on_meta() {
-    let mut ledger = xai_chat_state::UsageLedger::default();
+    let mut ledger = orz_chat_state::UsageLedger::default();
     ledger.record_main_loop_call(
         "m",
         &TokenUsage {

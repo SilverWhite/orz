@@ -33,7 +33,7 @@ use orz_sampler::SamplerConfig as SamplingConfig;
 use orz_sampling_types::{ConversationItem, HostedTool, ToolSpec};
 use orz_telemetry::events::{CompactionRetryDegraded, CompactionTrigger};
 
-use xai_chat_state::compaction_utils::{
+use orz_chat_state::compaction_utils::{
     CompactionAttempt, MAX_CAPTURED_SUMMARY_CHARS, bound_captured_output,
 };
 

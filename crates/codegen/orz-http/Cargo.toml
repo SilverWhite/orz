@@ -10,6 +10,8 @@ reqwest = { workspace = true, features = ["blocking"] }
 reqwest-middleware = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+orz-auth = { path = "../orz-auth", features = ["middleware"] }
+orz-sampler = { path = "../orz-sampler" }
 orz-telemetry = { path = "../orz-telemetry" }
 orz-version = { workspace = true }
 orz-workspace = { workspace = true }

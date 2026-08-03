@@ -6,7 +6,7 @@
 use std::io;
 
 use tokio::sync::{mpsc, oneshot};
-use xai_chat_state::{ChatPersistence, StrictAppendAck, StrictAppendError};
+use orz_chat_state::{ChatPersistence, StrictAppendAck, StrictAppendError};
 use orz_sampling_types::ConversationItem;
 
 use super::persistence::PersistenceMsg;

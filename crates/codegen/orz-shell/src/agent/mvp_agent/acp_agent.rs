@@ -2674,7 +2674,7 @@ impl acp::Agent for MvpAgent {
                     .await;
                 let permission_events = self
                     .collect_permission_events(&arguments.session_id);
-                let turn_messages: Option<xai_chat_state::TurnCapture> = {
+                let turn_messages: Option<orz_chat_state::TurnCapture> = {
                     let (tx, rx) = oneshot::channel();
                     if handle
                         .cmd_tx
@@ -3130,7 +3130,7 @@ impl acp::Agent for MvpAgent {
                         &prompt_id,
                     )
                     .await;
-                let turn_messages: Option<xai_chat_state::TurnCapture> = {
+                let turn_messages: Option<orz_chat_state::TurnCapture> = {
                     let (tx, rx) = oneshot::channel();
                     if handle
                         .cmd_tx

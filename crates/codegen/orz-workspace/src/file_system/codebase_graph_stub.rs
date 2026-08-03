@@ -26,19 +26,19 @@ impl IndexManagerHandle {
     pub fn send_event(&self, _event: FileEvent) -> Result<(), String> { Ok(()) }
     pub fn send_events(&self, _events: Vec<FileEvent>) -> Result<(), String> { Ok(()) }
     pub fn get_stats(&self) -> Result<IndexStats, QueryError> { Ok(IndexStats::default()) }
-    pub async fn find_references(&self, _symbol: &str) -> Result<Vec<SymbolLocation>, QueryError> { Ok(vec![]) }
-    pub async fn find_definitions(&self, _symbol: &str) -> Result<Vec<SymbolLocation>, QueryError> { Ok(vec![]) }
-    pub async fn goto_definition(&self, _symbol: &str, _path: &str) -> Result<Vec<SymbolLocation>, QueryError> { Ok(vec![]) }
-    pub async fn goto_references(&self, _symbol: &str, _path: &str) -> Result<Vec<SymbolLocation>, QueryError> { Ok(vec![]) }
+    pub async fn find_references(&self, _symbol: String, _file: Option<PathBuf>) -> Result<Vec<SymbolLocation>, QueryError> { Ok(vec![]) }
+    pub async fn find_definitions(&self, _symbol: String, _file: Option<PathBuf>) -> Result<Vec<SymbolLocation>, QueryError> { Ok(vec![]) }
+    pub async fn goto_definition(&self, _file: PathBuf, _line: usize, _col: usize) -> Result<QueryResult, QueryError> { Ok(QueryResult { locations: vec![] }) }
+    pub async fn goto_references(&self, _file: PathBuf, _line: usize, _col: usize, _include_def: bool) -> Result<QueryResult, QueryError> { Ok(QueryResult { locations: vec![] }) }
     pub fn get_file_count(&self) -> Option<usize> { Some(0) }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct IndexStats {
-    pub indexed_files: u64,
-    pub files: u64,
-    pub definitions: u64,
-    pub references: u64,
+    pub indexed_files: usize,
+    pub files: usize,
+    pub definitions: usize,
+    pub references: usize,
 }
 
 #[derive(Debug, Clone)]

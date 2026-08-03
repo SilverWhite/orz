@@ -1245,3 +1245,10 @@ enabled = false
         );
     }
 }
+
+/// Normalize MCP server name from display form to wire-safe form.
+pub fn to_managed_name(display: &str) -> String {
+    display.to_lowercase().replace(' ', "-")
+}
+
+/// Inject managed headers into MCP server configs.

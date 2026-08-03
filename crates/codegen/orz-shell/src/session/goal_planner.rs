@@ -271,7 +271,7 @@ pub(crate) struct ChannelSpawner {
     pub(crate) cwd: Option<String>,
     /// Trace-artifact sink + resolved `task` tool name; `None` disables
     /// recording. See [`super::goal_classifier::record_subagent_trace`].
-    pub(crate) trace_sink: Option<(xai_chat_state::ChatStateHandle, String)>,
+    pub(crate) trace_sink: Option<(orz_chat_state::ChatStateHandle, String)>,
     /// Resolved per-role model+toolset override. Default (inherit) keeps the
     /// historic `::default()` spawn behavior.
     pub(crate) role_override: RoleSpawnOverride,

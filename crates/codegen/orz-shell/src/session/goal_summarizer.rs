@@ -96,7 +96,7 @@ pub(crate) struct ChannelSpawner {
     pub(crate) cwd: Option<String>,
     /// Trace-artifact sink + resolved `task` tool name; `None` disables
     /// recording. See [`crate::session::goal_classifier::record_subagent_trace`].
-    pub(crate) trace_sink: Option<(xai_chat_state::ChatStateHandle, String)>,
+    pub(crate) trace_sink: Option<(orz_chat_state::ChatStateHandle, String)>,
     /// Event sink for the spawn-and-retry-once fail-open telemetry; `None` in
     /// tests / when no event log is wired.
     pub(crate) events: Option<EventWriter>,

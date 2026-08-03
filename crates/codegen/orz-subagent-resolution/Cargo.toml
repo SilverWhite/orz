@@ -1,0 +1,6 @@
+[package]
+license = "Apache-2.0"
+name = "orz-subagent-resolution"
+version = "0.1.0"
+edition.workspace = true
+description = "orz subagent resolution stub"

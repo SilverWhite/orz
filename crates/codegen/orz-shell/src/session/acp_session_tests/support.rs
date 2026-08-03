@@ -210,7 +210,7 @@ pub(crate) async fn create_test_actor_ex(
     });
     let (chat_event_tx, _chat_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<SessionEvent>();
-    let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
+    let chat_state_handle = orz_chat_state::ChatStateActor::spawn(
         vec![],
         orz_sampling_types::SamplingConfig {
             base_url: "http://localhost".to_string(),
@@ -227,7 +227,7 @@ pub(crate) async fn create_test_actor_ex(
             reasoning_effort: None,
             stream_tool_calls: None,
         },
-        Box::new(xai_chat_state::NullChatPersistence),
+        Box::new(orz_chat_state::NullChatPersistence),
         chat_event_tx,
         tokio_util::sync::CancellationToken::new(),
     );
@@ -277,7 +277,7 @@ pub(crate) async fn create_test_actor_ex(
             count: std::sync::atomic::AtomicU64::new(0),
             auto_compact_suppressed: std::sync::atomic::AtomicU8::new(0),
             previous_model: std::cell::Cell::new(None),
-            compaction_mode: xai_chat_state::CompactionMode::Transcript,
+            compaction_mode: orz_chat_state::CompactionMode::Transcript,
             verbatim_input: true,
             tool_choice: crate::util::config::CompactionToolChoice::Auto,
             prefire: crate::session::compaction_config::PrefireState::default(),

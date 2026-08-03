@@ -4,6 +4,7 @@
 //! and workspace-scoped memory. All workspace-scoped memory lives under
 //! `~/.grok/memory/{project-slug}-{hash8}/` to avoid polluting the user's repo.
 
+use crate::journal_mode::JournalMode;
 use std::path::{Path, PathBuf};
 
 use orz_tools::util::grok_home::grok_home;
@@ -109,8 +110,8 @@ impl MemoryStorage {
     pub fn total_chunk_count(&self) -> usize {
         let db_path = self.workspace_dir.join("index.sqlite");
         // Journal-mode-aware open: never mmap a legacy WAL -shm on network
-        // mounts (SIGBUS); see xai_sqlite_journal::JournalMode::open_readonly.
-        xai_sqlite_journal::JournalMode::for_db_path(&db_path)
+        // mounts (SIGBUS); see JournalMode::open_readonly.
+        JournalMode::for_db_path(&db_path)
             .open_readonly(&db_path)
             .and_then(|c| c.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get::<_, i64>(0)))
             .unwrap_or(0) as usize

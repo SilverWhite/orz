@@ -29,7 +29,7 @@ impl MvpAgent {
         &self,
         session_id: Option<&acp::SessionId>,
         cwd: &std::path::Path,
-    ) -> Option<(std::sync::Arc<xai_codebase_graph::IndexManagerHandle>, bool)> {
+    ) -> Option<(std::sync::Arc<orz_workspace::file_system::codebase_graph_stub::IndexManagerHandle>, bool)> {
         let (handle, was_newly_started) = self.resolve_codebase_index(cwd)?;
         // Pin the index to the requesting session so the Weak in
         // CodebaseIndexManager doesn't orphan it immediately.
@@ -178,7 +178,7 @@ impl MvpAgent {
     pub(super) fn resolve_codebase_index(
         &self,
         cwd: &std::path::Path,
-    ) -> Option<(std::sync::Arc<xai_codebase_graph::IndexManagerHandle>, bool)> {
+    ) -> Option<(std::sync::Arc<orz_workspace::file_system::codebase_graph_stub::IndexManagerHandle>, bool)> {
         use crate::agent::config::CodebaseIndexingSetting;
 
         let setting = self.cfg.borrow().features.codebase_indexing.clone();
@@ -248,7 +248,7 @@ impl MvpAgent {
     pub(super) fn get_or_create_codebase_index(
         &self,
         cwd: PathBuf,
-    ) -> (std::sync::Arc<xai_codebase_graph::IndexManagerHandle>, bool) {
+    ) -> (std::sync::Arc<orz_workspace::file_system::codebase_graph_stub::IndexManagerHandle>, bool) {
         self.codebase_indexes.lock().get_or_create(cwd)
     }
 
@@ -257,7 +257,7 @@ impl MvpAgent {
     pub fn get_codebase_index(
         &self,
         cwd: &std::path::Path,
-    ) -> Option<std::sync::Arc<xai_codebase_graph::IndexManagerHandle>> {
+    ) -> Option<std::sync::Arc<orz_workspace::file_system::codebase_graph_stub::IndexManagerHandle>> {
         self.codebase_indexes.lock().get(cwd)
     }
 }

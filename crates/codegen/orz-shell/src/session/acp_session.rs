@@ -630,7 +630,7 @@ pub(crate) struct SessionActor {
     /// Actor-based chat state handle — manages conversation, tokens, timing, and persistence.
     /// Also stores credentials (api_key, optional extra access key,
     /// client_version) opaquely.
-    pub(crate) chat_state_handle: xai_chat_state::ChatStateHandle,
+    pub(crate) chat_state_handle: orz_chat_state::ChatStateHandle,
     /// Current running prompt/turn id, shared with SessionHandle.
     pub(crate) current_prompt_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub(crate) unattributed_background_usage: std::sync::atomic::AtomicBool,

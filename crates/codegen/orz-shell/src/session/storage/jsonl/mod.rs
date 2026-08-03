@@ -12,7 +12,7 @@ use fs2::FileExt;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use xai_chat_state::StrictAppendAck;
+use orz_chat_state::StrictAppendAck;
 use orz_workspace::session::file_state::RewindPoint;
 #[derive(Clone)]
 enum SessionDirMode {
@@ -1114,7 +1114,7 @@ impl JsonlStorageAdapter {
             transform_conversation_cwd(&mut chat_to_copy, &source_info.cwd, &target_info.cwd);
         }
         if options.strip_reasoning {
-            chat_to_copy = xai_chat_state::compaction_utils::strip_reasoning_blocks(chat_to_copy);
+            chat_to_copy = orz_chat_state::compaction_utils::strip_reasoning_blocks(chat_to_copy);
         }
         let num_chat_messages = chat_to_copy.len();
         let cwd_switch_bookkeeping_generation = chat_to_copy
@@ -1267,12 +1267,12 @@ impl JsonlStorageAdapter {
         let compaction_segments_copied = if options.copy_compaction_segments {
             let src_dir = self
                 .session_dir(source_info)
-                .join(xai_chat_state::compaction_transcript::COMPACTION_DIR);
+                .join(orz_chat_state::compaction_transcript::COMPACTION_DIR);
             let mut copied = 0usize;
             if src_dir.is_dir() {
                 let dst_dir = self
                     .session_dir(target_info)
-                    .join(xai_chat_state::compaction_transcript::COMPACTION_DIR);
+                    .join(orz_chat_state::compaction_transcript::COMPACTION_DIR);
                 std::fs::create_dir_all(&dst_dir)?;
                 for entry in std::fs::read_dir(&src_dir)? {
                     let entry = entry?;
@@ -1378,7 +1378,7 @@ async fn next_compaction_segment_index(compaction_dir: &std::path::Path) -> u64 
         if let Some(n) = entry
             .file_name()
             .to_str()
-            .and_then(xai_chat_state::compaction_transcript::parse_segment_index)
+            .and_then(orz_chat_state::compaction_transcript::parse_segment_index)
         {
             next = next.max(n + 1);
         }
@@ -1977,7 +1977,7 @@ impl StorageAdapter for JsonlStorageAdapter {
         segment: &crate::extensions::notification::CompactionSegmentFile,
     ) -> io::Result<()> {
         use tokio::io::AsyncWriteExt;
-        use xai_chat_state::compaction_transcript::{
+        use orz_chat_state::compaction_transcript::{
             COMPACTION_DIR, INDEX_FILE, INDEX_HEADER, extract_keywords, render_index_row,
             render_segment_md, segment_filename,
         };

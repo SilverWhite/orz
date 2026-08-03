@@ -3,7 +3,7 @@ use std::path::Path;
 use orz_workspace::session::git::VcsKind;
 
 // Re-export from xai-chat-state — canonical definition lives there.
-pub use xai_chat_state::compaction_utils::extract_user_query;
+pub use orz_chat_state::compaction_utils::extract_user_query;
 
 /// Wraps the user query properly
 pub fn user_query(user_message: String) -> String {
@@ -182,7 +182,7 @@ pub async fn construct_user_message(
     user_info
 }
 
-// Tests for extract_user_query now live in xai_chat_state::compaction_utils.
+// Tests for extract_user_query now live in orz_chat_state::compaction_utils.
 
 #[cfg(test)]
 mod tests {

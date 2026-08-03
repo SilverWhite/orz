@@ -26,7 +26,7 @@ use crate::session::two_pass::{
 };
 use agent_client_protocol as acp;
 use std::sync::Arc;
-use xai_chat_state::compaction_utils::{
+use orz_chat_state::compaction_utils::{
     CompactedHistoryInput, CompactionAttempt, build_compacted_history, is_degenerate_summary,
     prepare_conversation_for_verbatim_summarization, sanitize_compacted_history,
     validate_compacted_history,
@@ -296,7 +296,7 @@ impl SessionActor {
             prepare_conversation_for_verbatim_summarization(split.prefix.to_vec(), strips);
         let prefix_est_tokens = prefix_prepared
             .iter()
-            .map(xai_chat_state::estimate_item_tokens)
+            .map(orz_chat_state::estimate_item_tokens)
             .sum::<u64>();
         let prompt = build_two_pass_compaction_prompt(None);
         let pass1_history = build_two_pass_pass1_history(&prefix_prepared, &prompt);
@@ -812,9 +812,9 @@ impl SessionActor {
         match preserve_inherited_prefix(&full_conv, compacted_history, prefix_len) {
             Ok(preserved) => {
                 let projected_preserved = project_preserved_reseed_tokens(
-                    xai_chat_state::estimate_conversation_tokens(&preserved),
+                    orz_chat_state::estimate_conversation_tokens(&preserved),
                     tokens_before,
-                    xai_chat_state::estimate_conversation_tokens(&full_conv),
+                    orz_chat_state::estimate_conversation_tokens(&full_conv),
                 );
                 if xai_token_estimation::exceeds_threshold(
                     projected_preserved,
@@ -947,7 +947,7 @@ impl SessionActor {
             self.chat_state_handle.get_conversation(),
         );
         let segment_messages = if self.compaction.compaction_mode.writes_segments() {
-            xai_chat_state::compaction_utils::prepare_conversation_for_segment(
+            orz_chat_state::compaction_utils::prepare_conversation_for_segment(
                 full_conversation.clone(),
             )
         } else {
@@ -956,12 +956,12 @@ impl SessionActor {
         const SUMMARY_BUDGET_RESERVE_TOKENS: u64 = 32_768;
         let verbatim_input_enabled = self.compaction.verbatim_input;
         let simplified_messages = if verbatim_input_enabled {
-            xai_chat_state::compaction_utils::prepare_conversation_for_verbatim_summarization(
+            orz_chat_state::compaction_utils::prepare_conversation_for_verbatim_summarization(
                 full_conversation,
                 summary_strips_reasoning,
             )
         } else {
-            xai_chat_state::compaction_utils::prepare_conversation_for_summarization(
+            orz_chat_state::compaction_utils::prepare_conversation_for_summarization(
                 full_conversation,
             )
         };
@@ -1018,7 +1018,7 @@ impl SessionActor {
             .filter(|td| !backend_search_active || td.function.name != "web_search")
             .collect();
         let compaction_tool_tokens =
-            xai_chat_state::estimate_tool_definitions_tokens(&effective_tool_defs);
+            orz_chat_state::estimate_tool_definitions_tokens(&effective_tool_defs);
         let compaction_tools: Vec<orz_sampling_types::ToolSpec> = effective_tool_defs
             .into_iter()
             .map(orz_sampling_types::ToolSpec::from)
@@ -1057,7 +1057,7 @@ impl SessionActor {
         let use_short_prompt = false;
         let started_at = chrono::Utc::now().to_rfc3339();
         let estimated_input_tokens =
-            xai_chat_state::estimate_conversation_tokens(&simplified_messages);
+            orz_chat_state::estimate_conversation_tokens(&simplified_messages);
         let auto_trigger = matches!(trigger, orz_telemetry::events::CompactionTrigger::Auto);
         let wall_clock_budget_secs = self
             .agent
@@ -1167,19 +1167,19 @@ impl SessionActor {
                                     let budget = context_window
                                         .saturating_sub(SUMMARY_BUDGET_RESERVE_TOKENS)
                                         .saturating_sub(compaction_tool_tokens);
-                                    let verbatim = xai_chat_state::compaction_utils::prepare_conversation_for_verbatim_summarization(
+                                    let verbatim = orz_chat_state::compaction_utils::prepare_conversation_for_verbatim_summarization(
                                         conv,
                                         summary_strips_reasoning,
                                     );
-                                    xai_chat_state::compaction_utils::fit_conversation_to_budget(
+                                    orz_chat_state::compaction_utils::fit_conversation_to_budget(
                                         verbatim, budget,
                                     )
                                 }
                                 InputStage::Lossy => {
                                     let lossy_budget = (context_window.saturating_mul(7) / 10)
                                         .saturating_sub(compaction_tool_tokens);
-                                    xai_chat_state::compaction_utils::fit_conversation_to_budget(
-                                        xai_chat_state::compaction_utils::prepare_conversation_for_summarization(
+                                    orz_chat_state::compaction_utils::fit_conversation_to_budget(
+                                        orz_chat_state::compaction_utils::prepare_conversation_for_summarization(
                                             conv,
                                         ),
                                         lossy_budget,
@@ -2256,7 +2256,7 @@ mod inline_auto_compact_flow_tests {
         let (chat_event_tx, _chat_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (event_tx, _event_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::session::replay_events::SessionEvent>();
-        let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
+        let chat_state_handle = orz_chat_state::ChatStateActor::spawn(
             vec![],
             orz_sampling_types::SamplingConfig {
                 base_url: "http://localhost".to_string(),
@@ -2273,7 +2273,7 @@ mod inline_auto_compact_flow_tests {
                 reasoning_effort: None,
                 stream_tool_calls: None,
             },
-            Box::new(xai_chat_state::NullChatPersistence),
+            Box::new(orz_chat_state::NullChatPersistence),
             chat_event_tx,
             tokio_util::sync::CancellationToken::new(),
         );
@@ -2323,7 +2323,7 @@ mod inline_auto_compact_flow_tests {
                 count: std::sync::atomic::AtomicU64::new(0),
                 auto_compact_suppressed: std::sync::atomic::AtomicU8::new(0),
                 previous_model: std::cell::Cell::new(None),
-                compaction_mode: xai_chat_state::CompactionMode::Transcript,
+                compaction_mode: orz_chat_state::CompactionMode::Transcript,
                 verbatim_input: true,
                 tool_choice: crate::util::config::CompactionToolChoice::Auto,
                 prefire: crate::session::compaction_config::PrefireState::default(),
@@ -3809,7 +3809,7 @@ mod inline_auto_compact_flow_tests {
                 let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel::<PersistenceMsg>();
                 let mut actor =
                     create_test_actor(50_000, 200_000, 85, gateway_tx, persistence_tx).await;
-                actor.compaction.compaction_mode = xai_chat_state::CompactionMode::Transcript;
+                actor.compaction.compaction_mode = orz_chat_state::CompactionMode::Transcript;
                 let session_dir = crate::session::persistence::session_dir(&actor.session_info);
                 std::fs::create_dir_all(&session_dir).unwrap();
                 let updates_path = session_dir.join("updates.jsonl");
@@ -3824,7 +3824,7 @@ mod inline_auto_compact_flow_tests {
                 let hint = actor.transcript_hint().expect("transcript hint present");
                 assert!(hint.contains("read the full transcript"));
                 assert!(hint.ends_with("updates.jsonl"));
-                actor.compaction.compaction_mode = xai_chat_state::CompactionMode::Summary;
+                actor.compaction.compaction_mode = orz_chat_state::CompactionMode::Summary;
                 assert!(actor.transcript_hint().is_none());
                 let _ = std::fs::remove_file(&updates_path);
                 let _ = std::fs::remove_dir_all(&session_dir);

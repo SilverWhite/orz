@@ -617,7 +617,7 @@ const IDLE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis
 #[derive(Default)]
 struct ResidentResources {
     /// Strong ref pinning the code-nav index; the manager holds only a `Weak`.
-    codebase_index: Option<std::sync::Arc<xai_codebase_graph::IndexManagerHandle>>,
+    codebase_index: Option<std::sync::Arc<orz_workspace::file_system::codebase_graph_stub::IndexManagerHandle>>,
     require_gateway: bool,
 }
 /// Per-session state that survives an idle-unload (so the session stays
@@ -1020,7 +1020,7 @@ fn read_session_or_init_meta_str<'a>(
     };
     read(session_meta).or_else(|| read(init_meta))
 }
-use xai_chat_state::conversation_util::replace_or_insert_system_head;
+use orz_chat_state::conversation_util::replace_or_insert_system_head;
 /// Non-empty `systemPromptOverride` from session meta (preferred) or init meta.
 /// A blank string (empty or whitespace-only) is treated as "no override" so a
 /// client cannot accidentally blank the system prompt.
@@ -2404,7 +2404,7 @@ async fn handle_synthetic_turn_trace(
             upload_turn_result(&ctx, &turn_result_metadata, UploadWait::Confirm).await;
         }
     }
-    let turn_messages: Option<xai_chat_state::TurnCapture> = {
+    let turn_messages: Option<orz_chat_state::TurnCapture> = {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if ctx
             .session_handle

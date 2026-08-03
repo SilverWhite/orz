@@ -292,7 +292,7 @@ pub enum PersistenceMsg {
     AppendCwdSwitchAndAck {
         item: ConversationItem,
         respond_to: tokio::sync::oneshot::Sender<
-            Result<xai_chat_state::StrictAppendAck, xai_chat_state::StrictAppendError>,
+            Result<orz_chat_state::StrictAppendAck, orz_chat_state::StrictAppendError>,
         >,
     },
     /// Replace the entire chat history (used for compaction)
@@ -1918,12 +1918,12 @@ impl SessionPersistence {
                         .await
                         .map_err(|error| match error {
                             crate::session::storage::AppendCwdSwitchError::NotCommitted(error) => {
-                                xai_chat_state::StrictAppendError::NotCommitted(error)
+                                orz_chat_state::StrictAppendError::NotCommitted(error)
                             }
                             crate::session::storage::AppendCwdSwitchError::Committed {
                                 acknowledgement,
                                 source,
-                            } => xai_chat_state::StrictAppendError::Committed {
+                            } => orz_chat_state::StrictAppendError::Committed {
                                 acknowledgement,
                                 source,
                             },

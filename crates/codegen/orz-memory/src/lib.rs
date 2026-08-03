@@ -22,6 +22,7 @@
 //! `GROK_MEMORY=1` environment variable. When disabled, this crate
 //! is not initialized by the host.
 
+mod journal_mode;
 pub mod archive;
 pub mod backend;
 pub mod chunker;

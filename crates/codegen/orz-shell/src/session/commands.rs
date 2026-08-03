@@ -256,7 +256,7 @@ pub enum SessionCommand {
         responds_to: oneshot::Sender<PromptMode>,
     },
     GetModelMetadata {
-        responds_to: oneshot::Sender<xai_chat_state::ModelMetadata>,
+        responds_to: oneshot::Sender<orz_chat_state::ModelMetadata>,
     },
     /// Snapshot for `/session-info`.
     GetSessionInfo {
@@ -309,7 +309,7 @@ pub enum SessionCommand {
     RepairHistory {
         dry_run: bool,
         respond_to:
-            oneshot::Sender<anyhow::Result<xai_chat_state::compaction_utils::HistoryRepairReport>>,
+            oneshot::Sender<anyhow::Result<orz_chat_state::compaction_utils::HistoryRepairReport>>,
     },
     GetRewindPoints {
         respond_to: oneshot::Sender<RewindPointsResponse>,
@@ -343,7 +343,7 @@ pub enum SessionCommand {
     /// applied (prompt-attributed or session-only). Drop the oneshot on failure
     /// so the child treats the fold as not landed.
     RecordSubagentUsage {
-        by_model: Vec<(String, xai_chat_state::UsageTotals)>,
+        by_model: Vec<(String, orz_chat_state::UsageTotals)>,
         parent_prompt_id: Option<String>,
         /// Nested subagent bill may under-count.
         incomplete: bool,
@@ -742,7 +742,7 @@ pub enum SessionCommand {
     },
     /// Take turn messages from the chat state actor (proxied from mvp_agent).
     TakeTurnMessages {
-        respond_to: oneshot::Sender<Option<xai_chat_state::TurnCapture>>,
+        respond_to: oneshot::Sender<Option<orz_chat_state::TurnCapture>>,
     },
     /// Drain the sealed harness trace turns (goal planner + verifier panels)
     /// from the chat state actor (proxied from mvp_agent). Routed through the

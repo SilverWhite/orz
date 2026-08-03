@@ -1,0 +1,8 @@
+[package]
+license = "Apache-2.0"
+name = "orz-plugin-marketplace"
+version = "0.1.0"
+edition.workspace = true
+description = "orz plugin marketplace stub"
+[dependencies]
+serde = { workspace = true }

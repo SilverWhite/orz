@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::journal_mode::JournalMode;
 use orz_tools::types::memory_backend::{MemoryBackend, MemorySearchResult};
 
 use super::embedding::EmbeddingProvider as _;
@@ -266,7 +267,7 @@ impl MemoryBackendImpl {
     fn open_readonly(&self) -> Result<rusqlite::Connection, rusqlite::Error> {
         // Journal-mode-aware open (busy_timeout included): never mmap a legacy
         // WAL -shm on network mounts (SIGBUS); see JournalMode::open_readonly.
-        xai_sqlite_journal::JournalMode::for_db_path(&self.db_path).open_readonly(&self.db_path)
+        JournalMode::for_db_path(&self.db_path).open_readonly(&self.db_path)
     }
 
     async fn make_embedding_provider(&self) -> Option<super::embedding::ApiEmbeddingProvider> {

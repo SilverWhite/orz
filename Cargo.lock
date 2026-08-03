@@ -6796,6 +6796,8 @@ dependencies = [
 name = "orz-http"
 version = "0.1.0"
 dependencies = [
+ "orz-auth",
+ "orz-sampler",
  "orz-telemetry",
  "orz-version",
  "orz-workspace",
@@ -6889,6 +6891,7 @@ dependencies = [
  "git2",
  "nix 0.30.1",
  "notify",
+ "orz-auth",
  "orz-config-types",
  "orz-http",
  "orz-telemetry",
@@ -6922,6 +6925,13 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "orz-plugin-marketplace"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -7066,6 +7076,7 @@ dependencies = [
  "obfstr",
  "orz-agent",
  "orz-announcements",
+ "orz-auth",
  "orz-chat-state",
  "orz-compaction",
  "orz-config",
@@ -7076,10 +7087,13 @@ dependencies = [
  "orz-memory",
  "orz-models",
  "orz-paths",
+ "orz-plugin-marketplace",
  "orz-sampler",
  "orz-sampling-types",
  "orz-sandbox",
  "orz-shared",
+ "orz-shell-session-support",
+ "orz-subagent-resolution",
  "orz-telemetry",
  "orz-tools",
  "orz-version",
@@ -7153,6 +7167,30 @@ dependencies = [
  "xai-workflow",
  "zstd",
 ]
+
+[[package]]
+name = "orz-shell-session-support"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "axum",
+ "chrono",
+ "orz-http",
+ "orz-version",
+ "orz-workspace",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "xai-file-utils",
+]
+
+[[package]]
+name = "orz-subagent-resolution"
+version = "0.1.0"
 
 [[package]]
 name = "orz-telemetry"

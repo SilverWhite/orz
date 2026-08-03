@@ -479,12 +479,12 @@ pub(crate) fn build_subagent_trace_items(
 /// Record a harness-spawned subagent into the in-progress harness trace phase
 /// as a synthetic `task` call (see [`build_subagent_trace_items`]). The items
 /// accumulate in a side buffer (never the live model context); the caller seals
-/// the phase via [`xai_chat_state::ChatStateHandle::flush_harness_trace_turn`]
+/// the phase via [`orz_chat_state::ChatStateHandle::flush_harness_trace_turn`]
 /// so it uploads as its own sibling `turn_{N}` artifact. No-op when tracing is
 /// off (`sink` absent) or no prompt was captured. `sink` carries the chat-state
 /// handle and the resolved `task` tool name.
 pub(crate) fn record_subagent_trace(
-    sink: Option<&(xai_chat_state::ChatStateHandle, String)>,
+    sink: Option<&(orz_chat_state::ChatStateHandle, String)>,
     subagent_id: &str,
     subagent_type: &str,
     description: &str,
@@ -523,7 +523,7 @@ pub(crate) struct ChannelSpawner {
     pub(crate) cwd: Option<String>,
     /// Trace-artifact sink + the resolved `task` tool name. `None` disables
     /// trace recording (tests, or sessions without trace capture).
-    pub(crate) trace_sink: Option<(xai_chat_state::ChatStateHandle, String)>,
+    pub(crate) trace_sink: Option<(orz_chat_state::ChatStateHandle, String)>,
     /// Per-skeptic-index resolved model+toolset override, indexed by
     /// `skeptic_idx`. An out-of-range index (or `Default`) inherits the
     /// current model — round-robin expansion + auth/capability fail-open is

@@ -31,6 +31,7 @@ sqlite-vec = "=0.1.7-alpha.2"
 tar = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 tracing = { workspace = true }
+orz-auth = { path = "../orz-auth", features = ["middleware"] }
 orz-telemetry = { path = "../orz-telemetry" }
 orz-config-types = { workspace = true }
 orz-http = { workspace = true }

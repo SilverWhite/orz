@@ -93,7 +93,7 @@ impl PromptUsage {
     /// `incomplete` is set — even if `ledger` is `None` — so the flag is never
     /// dropped by omission. Always scrubs untrustworthy costs.
     pub fn project_from_ledger(
-        ledger: Option<&xai_chat_state::UsageLedger>,
+        ledger: Option<&orz_chat_state::UsageLedger>,
         incomplete: bool,
     ) -> Option<Self> {
         let mut usage = match ledger {
@@ -117,7 +117,7 @@ impl PromptUsage {
     /// Error-path attach: any open ledger is always incomplete (may under-count
     /// without a freeze drain). `may_undercount` only matters when the ledger is empty.
     pub fn for_error_path(
-        ledger: Option<&xai_chat_state::UsageLedger>,
+        ledger: Option<&orz_chat_state::UsageLedger>,
         may_undercount: bool,
     ) -> Option<Self> {
         match (ledger, may_undercount) {
@@ -202,11 +202,11 @@ pub struct PromptUsageModel {
     pub cost_missing_calls: u64,
 }
 
-impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
-    fn from(t: &xai_chat_state::UsageTotals) -> Self {
+impl From<&orz_chat_state::UsageTotals> for PromptUsageModel {
+    fn from(t: &orz_chat_state::UsageTotals) -> Self {
         // Exhaustive destructure: a new ledger field cannot silently miss the
         // wire. When one is added here, also extend `project_result_usage`.
-        let xai_chat_state::UsageTotals {
+        let orz_chat_state::UsageTotals {
             input_tokens,
             output_tokens,
             cached_read_tokens,
@@ -231,8 +231,8 @@ impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
     }
 }
 
-impl From<&xai_chat_state::UsageLedger> for PromptUsage {
-    fn from(ledger: &xai_chat_state::UsageLedger) -> Self {
+impl From<&orz_chat_state::UsageLedger> for PromptUsage {
+    fn from(ledger: &orz_chat_state::UsageLedger) -> Self {
         let mut usage = Self {
             totals: PromptUsageModel::from(&ledger.totals),
             model_usage: ledger
@@ -1205,7 +1205,7 @@ pub struct CompactionSegmentFile {
     pub items: Vec<orz_sampling_types::ConversationItem>,
     /// Curated summary, analysis tags already stripped.
     pub summary: String,
-    pub detail: xai_chat_state::CompactionDetail,
+    pub detail: orz_chat_state::CompactionDetail,
     /// ISO-8601, for the segment metadata.
     pub timestamp: String,
 }
@@ -1265,7 +1265,7 @@ pub struct CompactionRequestFile {
     /// records each rejected/degraded attempt so retries aren't bumped
     /// invisibly. Empty on artifacts written before schema v2.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attempt_details: Vec<xai_chat_state::compaction_utils::CompactionAttempt>,
+    pub attempt_details: Vec<orz_chat_state::compaction_utils::CompactionAttempt>,
 }
 
 /// On-disk artifact capturing the exact recap request sent to the model plus
@@ -1354,7 +1354,7 @@ mod tests {
 
     #[test]
     fn compaction_request_file_v2_roundtrips_attempt_details() {
-        use xai_chat_state::compaction_utils::CompactionAttempt;
+        use orz_chat_state::compaction_utils::CompactionAttempt;
         let artifact = CompactionRequestFile {
             schema_version: 2,
             request_id: "req-1".into(),

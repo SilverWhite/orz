@@ -693,8 +693,8 @@ fn resolve_compaction_mode_from(
     env: Option<&str>,
     config: Option<&str>,
     remote: Option<&str>,
-) -> xai_chat_state::CompactionMode {
-    use xai_chat_state::CompactionMode;
+) -> orz_chat_state::CompactionMode {
+    use orz_chat_state::CompactionMode;
     env.and_then(CompactionMode::parse)
         .or_else(|| config.and_then(CompactionMode::parse))
         .or_else(|| remote.and_then(CompactionMode::parse))
@@ -706,8 +706,8 @@ fn resolve_compaction_detail_from(
     env: Option<&str>,
     config: Option<&str>,
     remote: Option<&str>,
-) -> xai_chat_state::CompactionDetail {
-    use xai_chat_state::CompactionDetail;
+) -> orz_chat_state::CompactionDetail {
+    use orz_chat_state::CompactionDetail;
     env.and_then(CompactionDetail::parse)
         .or_else(|| config.and_then(CompactionDetail::parse))
         .or_else(|| remote.and_then(CompactionDetail::parse))
@@ -2950,7 +2950,7 @@ impl Config {
     /// Resolve the mode (env `GROK_COMPACTION_MODE` > config > remote settings >
     /// default, unrecognized falling through) and, for `Segments`, attach the
     /// separately-resolved detail level.
-    pub(crate) fn resolve_compaction_mode(&self) -> xai_chat_state::CompactionMode {
+    pub(crate) fn resolve_compaction_mode(&self) -> orz_chat_state::CompactionMode {
         resolve_compaction_mode_from(
             env_string("GROK_COMPACTION_MODE").as_deref(),
             self.features.compaction_mode.as_deref(),
@@ -2988,7 +2988,7 @@ impl Config {
     /// `features.compaction_detail`, then remote settings
     /// `remote_settings.compaction_detail`, then default (`verbose`). Drives the
     /// `segments` verbatim detail level.
-    fn resolve_compaction_detail(&self) -> xai_chat_state::CompactionDetail {
+    fn resolve_compaction_detail(&self) -> orz_chat_state::CompactionDetail {
         resolve_compaction_detail_from(
             env_string("GROK_COMPACTION_DETAIL").as_deref(),
             self.features.compaction_detail.as_deref(),
@@ -4794,7 +4794,7 @@ pub struct Features {
 pub struct ResolvedCredentials {
     pub api_key: Option<String>,
     pub base_url: String,
-    pub auth_type: xai_chat_state::AuthType,
+    pub auth_type: orz_chat_state::AuthType,
     pub auth_scheme: AuthScheme,
 }
 /// First usable BYOK credential: a non-empty (trimmed) api_key, else the first
@@ -4817,27 +4817,27 @@ pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> Res
         (
             Some(key),
             info.base_url.clone(),
-            xai_chat_state::AuthType::ApiKey,
+            orz_chat_state::AuthType::ApiKey,
         )
     } else if let Some(provider) = model.auth_provider.as_ref() {
         debug_assert!(model.effective_auth_provider().is_some());
         (
             provider.cached_token(),
             info.base_url.clone(),
-            xai_chat_state::AuthType::ApiKey,
+            orz_chat_state::AuthType::ApiKey,
         )
     } else if let Some(key) = session_key {
         (
             Some(key.to_owned()),
             info.base_url.clone(),
-            xai_chat_state::AuthType::SessionToken,
+            orz_chat_state::AuthType::SessionToken,
         )
     } else if let Ok(key) = crate::agent::auth_method::read_xai_api_key_env() {
         let url = model
             .api_base_url
             .clone()
             .unwrap_or_else(|| info.base_url.clone());
-        (Some(key), url, xai_chat_state::AuthType::ApiKey)
+        (Some(key), url, orz_chat_state::AuthType::ApiKey)
     } else {
         if let Some(ref env_keys) = model.env_key
             && !env_keys.is_empty()
@@ -4852,7 +4852,7 @@ pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> Res
         (
             None,
             info.base_url.clone(),
-            xai_chat_state::AuthType::ApiKey,
+            orz_chat_state::AuthType::ApiKey,
         )
     };
     let auth_scheme = info.auth_scheme;
@@ -4877,10 +4877,10 @@ pub fn enforce_disable_api_key_auth(
     session_key: Option<&str>,
 ) {
     if disable_api_key_auth
-        && creds.auth_type == xai_chat_state::AuthType::ApiKey
+        && creds.auth_type == orz_chat_state::AuthType::ApiKey
         && crate::util::is_xai_api_url(&creds.base_url)
     {
-        creds.auth_type = xai_chat_state::AuthType::SessionToken;
+        creds.auth_type = orz_chat_state::AuthType::SessionToken;
         creds.api_key = session_key.map(str::to_owned);
         orz_telemetry::unified_log::debug(
             "auth: kill switch blocked a first-party API key at the credential seam",
@@ -5157,8 +5157,8 @@ pub fn finalize_image_describe_sampler_config(
 pub fn resolve_chat_state_auth_type(
     model_id: &str,
     session_key: Option<&str>,
-    fallback: xai_chat_state::AuthType,
-) -> xai_chat_state::AuthType {
+    fallback: orz_chat_state::AuthType,
+) -> orz_chat_state::AuthType {
     try_resolve_model_credentials(model_id, session_key)
         .map(|r| r.auth_type)
         .unwrap_or(fallback)
@@ -6342,7 +6342,7 @@ reasoning_effort = "low"
         let _ = provider.ensure_fresh_token(None).await;
         let creds = resolve_credentials(model, Some("session-jwt"));
         assert_eq!(creds.api_key.as_deref(), Some("sk-house-key"));
-        assert_eq!(creds.auth_type, xai_chat_state::AuthType::ApiKey);
+        assert_eq!(creds.auth_type, orz_chat_state::AuthType::ApiKey);
         assert_eq!(creds.base_url, "https://switchboard.example/v1");
     }
     #[test]
@@ -6372,7 +6372,7 @@ reasoning_effort = "low"
     }
     #[tokio::test]
     async fn resolve_credentials_serves_cached_provider_token() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         let mut model = test_model_entry("m", "https://litellm.example/v1", None, None, None);
         let provider = crate::auth::AuthProviderRef::new(
             "resolve-creds-test".into(),
@@ -6590,7 +6590,7 @@ reasoning_effort = "low"
             ResolvedCredentials {
                 api_key: Some("fallback-key".to_string()),
                 base_url: model.info().base_url.clone(),
-                auth_type: xai_chat_state::AuthType::ApiKey,
+                auth_type: orz_chat_state::AuthType::ApiKey,
                 auth_scheme: AuthScheme::Bearer,
             },
             None,
@@ -6619,7 +6619,7 @@ reasoning_effort = "low"
                     .api_base_url
                     .clone()
                     .unwrap_or(entry.info().base_url.clone()),
-                auth_type: xai_chat_state::AuthType::ApiKey,
+                auth_type: orz_chat_state::AuthType::ApiKey,
                 auth_scheme: AuthScheme::Bearer,
             };
             assert_eq!(
@@ -6720,7 +6720,7 @@ reasoning_effort = "low"
     #[test]
     #[serial]
     fn resolve_credentials_multi_env_key_uses_lc_alias() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         let primary = "GROK_TEST_MULTI_ENV_PRIMARY";
         let alias = "GROK_TEST_MULTI_ENV_LC_ALIAS";
         unsafe {
@@ -6755,7 +6755,7 @@ reasoning_effort = "low"
     #[test]
     #[serial]
     fn resolve_credentials_empty_env_key_falls_through_to_session() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         use orz_test_support::EnvGuard;
         let primary = "GROK_TEST_EMPTY_ENV_PRIMARY";
         let alias = "GROK_TEST_EMPTY_ENV_LC_ALIAS";
@@ -6772,7 +6772,7 @@ reasoning_effort = "low"
     #[serial]
     fn resolve_credentials_empty_env_key_falls_through_to_global_key() {
         use crate::agent::auth_method::{LEGACY_XAI_API_KEY_ENV_VAR, XAI_API_KEY_ENV_VAR};
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         use orz_test_support::EnvGuard;
         let sentinel = "xai-global-sentinel-key";
         let primary = "GROK_TEST_EMPTY_ENV_GLOBAL_PRIMARY";
@@ -6790,7 +6790,7 @@ reasoning_effort = "low"
     }
     #[test]
     fn resolve_credentials_empty_api_key_falls_through_to_session() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         let model = test_model_entry("m", "https://inference.example/v1", Some(""), None, None);
         assert!(!model.has_own_credentials());
         let creds = resolve_credentials(&model, Some("session-jwt"));
@@ -6820,7 +6820,7 @@ reasoning_effort = "low"
     }
     #[test]
     fn resolve_credentials_sets_auth_type() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         let model = test_model_entry("m", "https://example.com/v1", None, None, None);
         let creds = resolve_credentials(&model, Some("tok"));
         assert_eq!(creds.auth_type, AuthType::SessionToken);
@@ -6833,7 +6833,7 @@ reasoning_effort = "low"
     #[test]
     #[serial_test::serial]
     fn resolve_credentials_env_key_byok_keeps_api_key_auth_with_session() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         let env_var = "REGRESSION_BYOK_TOKEN_FOR_AUTH_TYPE_TEST";
         unsafe {
             std::env::set_var(env_var, "sk-byok-test-value");
@@ -6898,20 +6898,20 @@ reasoning_effort = "low"
     fn resolve_credentials_no_session_key_returns_api_key() {
         let model = test_model_entry("m", "https://example.com/v1", None, None, None);
         let creds = resolve_credentials(&model, None);
-        assert_eq!(creds.auth_type, xai_chat_state::AuthType::ApiKey);
+        assert_eq!(creds.auth_type, orz_chat_state::AuthType::ApiKey);
     }
     fn api_key_creds(base_url: &str) -> ResolvedCredentials {
         ResolvedCredentials {
             api_key: Some("xai-secret".to_string()),
             base_url: base_url.to_string(),
-            auth_type: xai_chat_state::AuthType::ApiKey,
+            auth_type: orz_chat_state::AuthType::ApiKey,
             auth_scheme: Default::default(),
         }
     }
     /// `disable_api_key_auth` kill switch (Claude `forceLoginMethod` parity).
     #[test]
     fn enforce_disable_api_key_auth_blocks_first_party_only() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         let mut creds = api_key_creds("https://api.x.ai/v1");
         enforce_disable_api_key_auth(&mut creds, false, Some("session-jwt"));
         assert_eq!(creds.auth_type, AuthType::ApiKey);
@@ -6943,7 +6943,7 @@ reasoning_effort = "low"
     /// loads global config, so this exercises its resolve + enforce core.)
     #[test]
     fn try_resolve_model_credentials_swaps_first_party_own_key_under_kill_switch() {
-        use xai_chat_state::AuthType;
+        use orz_chat_state::AuthType;
         let entry = test_model_entry(
             "m",
             "https://api.x.ai/v1",
@@ -6990,7 +6990,7 @@ reasoning_effort = "low"
         model.info.auth_scheme = AuthScheme::XApiKey;
         let creds = resolve_credentials(&model, None);
         assert_eq!(creds.auth_scheme, AuthScheme::XApiKey);
-        assert_eq!(creds.auth_type, xai_chat_state::AuthType::ApiKey);
+        assert_eq!(creds.auth_type, orz_chat_state::AuthType::ApiKey);
         assert_eq!(creds.api_key, Some("sk-ant-test-key".to_string()));
         let config = sampling_config_for_model(&model, creds, None, None, None, None);
         assert_eq!(config.auth_scheme, AuthScheme::XApiKey);
@@ -7233,22 +7233,22 @@ reasoning_effort = "low"
     }
     #[test]
     fn compaction_mode_precedence_env_over_config_over_remote_over_default() {
-        use xai_chat_state::CompactionMode;
+        use orz_chat_state::CompactionMode;
         assert_eq!(
             resolve_compaction_mode_from(Some("transcript"), Some("segments"), Some("summary")),
             CompactionMode::Transcript
         );
         assert_eq!(
             resolve_compaction_mode_from(None, Some("segments"), Some("summary")),
-            CompactionMode::Segments(xai_chat_state::CompactionDetail::default())
+            CompactionMode::Segments(orz_chat_state::CompactionDetail::default())
         );
         assert_eq!(
             resolve_compaction_mode_from(None, None, Some("segments")),
-            CompactionMode::Segments(xai_chat_state::CompactionDetail::default())
+            CompactionMode::Segments(orz_chat_state::CompactionDetail::default())
         );
         assert_eq!(
             resolve_compaction_mode_from(Some("garbage"), None, Some("segments")),
-            CompactionMode::Segments(xai_chat_state::CompactionDetail::default())
+            CompactionMode::Segments(orz_chat_state::CompactionDetail::default())
         );
         assert_eq!(
             resolve_compaction_mode_from(None, None, None),
@@ -7260,7 +7260,7 @@ reasoning_effort = "low"
     /// `Verbose` default (with unrecognized values falling through).
     #[test]
     fn compaction_detail_resolves_remote_settings_and_verbose_default() {
-        use xai_chat_state::CompactionDetail;
+        use orz_chat_state::CompactionDetail;
         assert_eq!(
             resolve_compaction_detail_from(None, None, Some("minimal")),
             CompactionDetail::Minimal
