@@ -64,9 +64,6 @@ members = [
     "crates/common/xai-tool-types",
     "crates/common/xai-tracing",
     "prod/mc/cli-chat-proxy-types",
-    "third_party/dagre_rust",
-    "third_party/graphlib_rust",
-    "third_party/ordered_hashmap",
     "crates/orz-bin",
     "crates/orz-assurance",
     "crates/orz-tui",
@@ -157,7 +154,6 @@ linkify = "0.10"
 lipsum = "0.9"
 log = { version = "0.4", features = ["kv", "kv_unstable"] }
 md5 = "0.8"
-mermaid-to-svg = { path = "third_party/mermaid-to-svg" }
 minijinja = "2.9"
 mockito = "1"
 moka = "0.12"

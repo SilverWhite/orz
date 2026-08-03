@@ -1915,14 +1915,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "dagre_rust"
-version = "0.0.5"
-dependencies = [
- "graphlib_rust",
- "ordered_hashmap",
-]
-
-[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3968,13 +3960,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "graphlib_rust"
-version = "0.0.2"
-dependencies = [
- "ordered_hashmap",
-]
-
-[[package]]
 name = "grid"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5898,10 +5883,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "ordered_hashmap"
-version = "0.0.3"
 
 [[package]]
 name = "orz-agent"
