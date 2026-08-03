@@ -21,6 +21,9 @@ members = [
     "crates/codegen/orz-config",
     "crates/codegen/orz-env",
     "crates/codegen/orz-hooks",
+    "crates/codegen/orz-http",
+    "crates/codegen/orz-config-types",
+    "crates/codegen/orz-telemetry",
     "crates/codegen/orz-markdown",
     "crates/codegen/orz-markdown-core",
     "crates/codegen/orz-mcp",
@@ -293,6 +296,9 @@ xai-tool-types = { path = "crates/common/xai-tool-types" }
 xai-tracing = { path = "crates/common/xai-tracing" }
 xai-tty-utils = { path = "crates/codegen/xai-tty-utils" }
 orz-hooks = { path = "crates/codegen/orz-hooks" }
+    "crates/codegen/orz-http",
+    "crates/codegen/orz-config-types",
+    "crates/codegen/orz-telemetry",
 orz-paths = { path = "crates/codegen/orz-paths" }
 orz-chat-state = { path = "crates/codegen/orz-chat-state" }
 orz-sampling-types = { path = "crates/codegen/orz-sampling-types" }
