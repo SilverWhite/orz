@@ -1,57 +1,44 @@
-# Scientific-Assurance Agent CLI（LIF-first）
+# orz — Local Assurance-First CLI Agent
 
-状态：runtime-neutral、Windows-first 的通用科学保障工程，LIF 是首个领域 profile；P0 合同、P1 会话身份/归档删除、
-P2 Docker strict sandbox、P2.5 无模型 guarded execution、P3 指令来源/能力继承、
-P4 metadata-only 审计/compaction/恢复授权，以及 P4.5 workspace-first 集成链
-development 纵向切片已完成；P5 内部合成任务与 LIF 复杂任务只读投影 mechanical preflight
-已启动并通过；GSA-CORE 已新增首个非 LIF、多文件、确定性只读审查切片。标准模式默认使用受限工作区内的固定动作；Docker 只保留为显式、
-按需的 strict backend，strict 请求绝不静默降级。Windows native strict backend 已具备 AppContainer
-profile/observation/verifier 与 live probe：本机已 observed 进程/文件/注册表隔离，但 raw TCP
-出站在空 capability AppContainer 下仍可能成功，因此 outcome 保持 noncompliant，selection 不 allow。Grok Build 是当前第一生产 runtime 底座候选，
-`0.2.112 (9bbd559437)` 已完成本地锁定、离线核验与 promotion gate；`windows_child_tree_timeout` 仅作为 carried-forward limitation 记录。首个 Codex app-server 双向 ordered-capture lifecycle normalizer
-已完成 no-model 离线实现、独立重放与隔离 live app-server smoke；live 路径只执行 initialize 和
-ephemeral/read-only thread start，不发送 turn 或模型输入。独立 DeepSeek one-shot transport conformance 与一次固定、单轮、零工具的 Grok→DeepSeek
-真实模型会话均已成功。首次 Grok terminal artifact scan 因内置帮助文档的 Bearer 占位符
-误报而 fail closed；扫描器已离线修复并通过正反例验证，未自动补跑第二次付费请求。首个 GSA
-disposable reproduction 切片已完成 no-model manifest、固定 replay、receipt/verifier/run-proof、runtime preflight
-projection、一次性 runtime JSONL journal write/replay、development code/environment lock、no-model runner skeleton、runner
-journal sidecar lock、只读 recovery inspection、受控 repair/quarantine receipt 与 lifecycle repair policy
-和“不增加独立证据/不提升 claim 强度”边界。中性 orientation checkpoint、独立 counterexample queue
-与 runtime stagnation guard 已形成分离设计稿；首个 no-model/read-only fixture、runner 接入前置夹具、
-runtime event/journal projection、公开输出抽取层、一次 direct DeepSeek API one-shot 观测投影管线，以及
-DeepSeek-shaped streaming/repetition fixture 已实现；真实 API 观测只验证公开输出抽取与 guard 管线接线，streaming
-fixture 只验证 DeepSeek 风格 chunk 的边界映射，尚未接入真实 runner。
-2026-07-27 起，canonical guarded CLI offline 主路径已扩展为：instruction provenance gate → tool availability
-gate → orientation checkpoint → source visibility gate → fake DeepSeek-shaped adapter boundary → answer packet →
-runtime JSONL journal → independent verifier。配套新增工具可用性探测/信念停滞 guard、检索子代理 no-model
-fixture，以及 Windows native sandbox 合同层；这些均不调用真实模型、不联网、不读取 credential。
-P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`run` 支持 `--ask` 生成冻结 task contract，
-也支持 `--task` 复用既有合同。`gsa grok doctor`、`gsa grok run --mode version-smoke` 与 `gsa tui --runtime grok --run version-smoke` 已接入 Grok first slice；默认 `gsa run` 仍保留 canonical fixture/assurance path。
+状态：2026-08-03。**融合架构 v0.2 已冻结**——从 Grok Build 取用成熟底座（tools/workspace/sandbox/mcp/chat-state），
+自研 Agent Loop 引擎（orz-loop）与 Assurance 层（orz-assurance），采纳 Codex 式架构纪律（薄核心、单向依赖、零死代码）。
 
-本仓库记录一个不绑定单一 runtime 的本地 Agent 保障层。它从 FEP/LIF 工作流暴露的问题出发，但把
-来源先行、证据分层、独立性、反例搜索、机械验证和 claim 边界抽为通用科学保障能力，目标是让接入的模型
-尽可能遵守来源先行、Ask-Don't-Guess、证据分层、机械验证、全程留痕和独立复核，从而降低幻觉补全、过度推进与
-错误 claim promotion 的风险。它不能保证模型输出必然科学正确，也不把 LIF/FEP 理论本身实现为 Agent 控制算法。
+**实施基线**：`feat/fusion-architecture` 分支 — 58 crate workspace，`cargo check` 绿色，继承 ~320k 行 Grok 提供者。
+Phase 0（融合删除）已完成。Phase 1-3（Agent Loop + Assurance + TUI）待实施。
+
+Python assurance spec（`assurance/`）保留为 conformance suite、schema authority 与离线验证路径。
 
 ## 产品定位
 
-- **runtime-neutral / runtime-first**：通用 model/tool/session runtime 由通过 capability gate 的外部框架提供；Grok Build
-  是当前第一生产底座候选与默认锁定 runtime，其他框架保留为部件级设计参考。
-- **核心差异**：`general-science` profile 负责领域无关的来源/证据/claim 边界、研究生命周期、
-  validator、场景导出和评测隔离；`lif-research` 只添加 LIF 当前来源路由与 validator 增量。
-- **多源借鉴**：Grok、Codex CLI、Gemini CLI、Claude Code、Goose 与 OpenCode 均可提供设计参考；新增
-  runtime adapter 必须独立通过同类门禁，不继承其他框架的 PASS。
-- **上游策略**：每个实际 adapter 各自维护 observed baseline、candidate 和 promotion gate；reference
-  身份不能代替 observed acceptance。
-- **研究边界**：旧研究工作区的 INDEX/MAP/self-check 不迁入本仓库，只在具体 LIF claim-bearing 任务中按需
-  跨目录读取并登记来源。
+- **自研二进制**：orz 是独立 Rust 二进制，assurance 编译进二进制内部，不是外部 sidecar/wrapper。
+- **Grok 底座**：Grok Build (xai-org/grok-build, commit `500129c7`) 提供 tools/workspace/sandbox/mcp/chat-state/hooks/acp-lib 等成熟组件——保留但不修改其核心逻辑。
+- **Codex 纪律**：薄核心（orz-host ~8k）、单向依赖（Grok crate 不反向依赖自研 crate）、零死代码（telemetry/marketplace/announcements/voice/mermaid 已删）、严格 Clippy。
+- **核心差异**：Assurance 层 (orz-assurance) — hash-chained JSONL journal、instruction provenance gate、orientation checkpoint、工具可用性门禁、workspace trust、shadow Git snapshot。
+- **多源借鉴**：Grok（底座）、Codex CLI（架构纪律）、Gemini CLI（invariant checker）、OpenCode（snapshot）、Goose（SecurityFinding/PermissionDecision 分离）。
 
-完整裁决见
-[`adr/ADR-0003-runtime-neutral-assurance-kernel.md`](adr/ADR-0003-runtime-neutral-assurance-kernel.md) 与
-[`adr/ADR-0004-general-science-profile-layering.md`](adr/ADR-0004-general-science-profile-layering.md)、
-[`architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md)。
+## 产品定位
 
-## 当前文件
+- **上游策略**：Grok Build 锁定 `500129c7`，本地 fork 不可向上游提交——Grok 不接受社区 PR。三轨制（historical/current/selected）版本策略见 `UPSTREAM_VERSION_STRATEGY_v0.1.md`。
+- **研究边界**：旧研究工作区的 INDEX/MAP/self-check 不迁入本仓库。
+
+完整裁决见 ADR 与架构文档。
+
+## 融合架构文档 (权威)
+
+- [`architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`](architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md)：**当前权威设计** — 融合架构（Codex 纪律 + Grok 能力）、crate 矩阵、orz-host 设计、4-Phase 实施计划。
+- [`architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md`](architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md)：已被 v0.2 取代。保留 LoopHost trait 和注入点分类参考。
+- [`architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md)：五源融合设计语言（Codex/Gemini/OpenCode/Goose + Grok）。
+- [`architecture/AGENT_LOOP_REDESIGN_v0.1.md`](architecture/AGENT_LOOP_REDESIGN_v0.1.md)：Pro/Flash 双 Agent + Blackboard + MechanicalRelay + 检索子代理设计。
+- [`architecture/PHASE2_POST_PLANA_REVIEW_v0.1.md`](architecture/PHASE2_POST_PLANA_REVIEW_v0.1.md)：Plan A 编译修复后审查 — 4 个伪代码 bug 已全部修正。
+
+## 实施 (Rust)
+
+- **仓库**：`B:\orz`（本地 fork of Grok Build `500129c7`）
+- **分支**：`feat/fusion-architecture`（58 crate workspace, `cargo check` 绿色）
+- **设计符合性**：详见[审查报告](#) — v0.2 设计与实施高度一致
+- **跟踪项**：`memory/fusion-phase-tracking.md` — orz-loop / orz-assurance / orz-host Phase 1 待实施
+
+## 当前文件 (Python assurance spec + 架构 + 协议)
 
 - [`adr/ADR-0001-evidence-constrained-local-agent-kernel.md`](adr/ADR-0001-evidence-constrained-local-agent-kernel.md)：产品边界、核心不变量、案例库和反捷径决策。
 - [`adr/ADR-0003-runtime-neutral-assurance-kernel.md`](adr/ADR-0003-runtime-neutral-assurance-kernel.md)：冻结 runtime-neutral 所有权、capability-gated 选择与 Grok `reference_only` 边界。
@@ -203,28 +190,20 @@ P0.5 顶层入口已固定为 `python gsa.py doctor/source gate/run/verify`；`r
 
 ## 当前边界
 
-- 正式通用 runtime 由通过门禁的外部框架提供；Grok Build 是当前第一生产底座候选。本仓库不复刻
-  model/session/tool/permission 栈。P2 只实现 runtime-neutral sandbox launcher/verifier，不实现平行 runtime。
-- 当前包含 development-only disposable conformance fixtures、zero-model dry-run、loopback fake-provider launcher、已成功的显式确认/零重试 DeepSeek one-shot probe，以及一次成功完成的固定 Grok→DeepSeek 真实模型会话；尚未执行任意 prompt、真实 workspace、评分或生产 Agent session，修复后的 terminal `result.json` 路径也尚未用第二次真实请求复验。
-- 不决定全部使用 Rust；只把 Rust 视为少量保障组件与 Windows 进程边界的候选实现语言。
-- 不把历史案例直接作为模型提示词答案。
-- 不自动修改 MAP/INDEX。
-- D 的候选机制已完成定向源码 salvage；云端产品面依 ADR-0002 延期，未核本地 body 不作为当前依赖。
-- “让 LIF/FEP 原理参与 Agent 控制或规划”是单独的 deferred research concept，不属于当前保障层语义。
+- **orz 二进制**：自研 Rust 二进制，assurance 编译进内部。Grok Build 提供工具/workspace/沙箱/MCP/持久化/hooks 等成熟组件（~320k 行），但不保留其 agent loop（orz-shell 已删除）和 TUI（Grok TUI 已删除）。
+- **Python 项目角色**：Python assurance spec（`assurance/`）保留为 conformance suite、schema authority、新 gate 快速原型，以及离线 journal 验证。不删除。
+- **不决定全部使用 Rust**：只把 Rust 视为 Agent 二进制 + 保障组件的实现语言。Python 保留参考角色。
+- 不把历史案例直接作为模型提示词答案。不自动修改 MAP/INDEX。
+- D 的候选机制已完成定向源码 salvage。
+- “让 LIF/FEP 原理参与 Agent 控制或规划”是单独的 deferred research concept。
 
 ## 当前设计冻结点
 
-- 自动分类器只能提出候选，不能自动写入 canonical label。
-- 默认 CLI 模式为 guarded；机械错误可 block，证据不足通常 defer dependent claim。
+- 融合架构（v0.2）是当前权威设计：Grok 底座 ~320k 行 + 自研核心 ~20k 行（orz-host/orz-loop/orz-assurance/orz-tui）。
+- Grok 提供者 crate（tools/workspace/sandbox/mcp/chat-state/hooks）不改代码——assurance 通过 orz-loop 的 ToolDispatcher 包装层 + IP6 权限注入实现。
+- 删除清单已执行：orz-shell (364k)、Grok TUI (477k)、telemetry/marketplace/announcements/sampler/http/config-types (35k)。
+- 自动分类器只能提出候选，不能自动写入 canonical label。机械错误可 block，证据不足通常 defer dependent claim。
 - 用户授权可以解决权限问题，但不能把不独立、混淆或无来源的证据改标为合格。
-- 项目历史案例只能在独立初判后检索，并必须与结论相反的 countercase 共同评测。
-- 当前案例全属 development/challenge seed corpus，不宣称为未泄漏 holdout 成绩。
-- 当前 10 个错误簇均有历史检测案例和至少一个 challenge，7 个高频簇均有 permission-reversal challenge；但尚无 evaluation/holdout，评测阈值也未校准。
-- 5 个历史案例已有 source-hashed reviewer-only excerpt fixture；它们只提高 curation provenance 可审计性，不提高未见评测覆盖。
-- 实际选中的外部 runtime 是通用 model/tool/session 能力所有者；`general-science` 冻结为
-  SourceRouter、EvidenceKernel、ClaimBoundary、ResearchLifecycle、ValidatorBridge、ScenarioExporter、
-  LeakScanner 和 EvaluationRunner；`lif-research` 只添加当前来源路由与 validator 增量。Grok 仅作为
-  当前 reference adapter，不扩张通用产品功能面。
 
 ## License
 
