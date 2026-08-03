@@ -1,5 +1,13 @@
 # Fork 架构与统一设计语言 v0.3
 
+> **注意 (2026-08-03)**：本文档已被 [`INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md`](INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md) 整合。
+> 以下内容在此整合后的变化：
+> - Agent Loop 引擎从"注入 Grok Sampler"改为**完全替代 Grok Sampler** 的自研 `orz-loop` crate
+> - Grok TUI 保留为兜底 UI，不是删除（双二进制架构）
+> - Snapshot 归属 Phase 4（不是 Phase 2）
+> - Crate 命名统一 `orz-*`，Grok TUI crates 保留 `xai-grok-*`
+> - 本文档作为**设计语言参考**保留，实现细节以整合文档为准。
+
 状态：2026-08-02。从 v0.2 的"拆解 Grok + 混搭"进一步融合 Codex CLI、
 Gemini CLI、OpenCode、Goose 的成熟工程模式。同时项目从 GSA 更名为 **orz**（纯颜表情，无实际含义）。
 

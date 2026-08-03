@@ -1,5 +1,14 @@
 # Agent Loop 重设计 v0.1
 
+> **注意 (2026-08-03)**：本文档已被 [`INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md`](INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md) 整合。
+> 整合后的关键变化：
+> - Pro/Flash/Blackboard/MechanicalRelay/检索子代理 完整采纳
+> - Agent Loop Controller 作为独立 `orz-loop` crate（不是注入 orz-shell）
+> - 注入点 IP1-IP2 重新归类为 Agent Loop Controller 内置功能（不再称"注入"）
+> - IP3/IP4/IP5 保留为对 kept Grok 组件的真正注入
+> - IP6 提升为架构不变量
+> - 本文档作为**Agent Loop 设计参考**保留，实施阶段以整合文档为准。
+
 状态：2026-08-03。基于 Plan A 编译修复后的审查发现、D 项目黑板/蜂群传导的经验教训、
 以及多款成熟 CLI 的架构调研，重新设计 orz 的 agent loop 架构。
 
