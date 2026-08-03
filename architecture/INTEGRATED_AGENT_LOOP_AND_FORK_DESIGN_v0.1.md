@@ -1,5 +1,9 @@
 # 整合 Agent Loop 与 Fork 实现设计 v0.1
 
+> **已被 v0.2 取代 (2026-08-03)**：[`INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`](INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md) —
+> 融合架构（Codex 纪律 + Grok 能力）。v0.1 的 LoopHost trait 和注入点分类被保留，
+> 但 orz-shell + Grok TUI 被删除，orz-host 替代 shell 成为新的薄核心。
+
 状态：2026-08-03。本文整合三份核心设计文档 + 对 `B:\orz` fork 代码库的直接审查，
 消除矛盾，成为后续实现的唯一真相源：
 
