@@ -27,6 +27,8 @@ pub enum AcpError {
     SessionNotFound(String),
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    #[error("host error: {0}")]
+    Host(String),
 }
 
 /// Per-session metadata. Journals are per-**run** (one per prompt), so the
@@ -132,9 +134,15 @@ impl AcpServer {
 
         let suffix: String = session_id.chars().take(8).collect();
         let run_id = format!("RUN-{suffix}-{prompt_number}");
-        let handle = bootstrap_session(&run_id, Some(base_dir), trust_policy).await?;
+        let handle = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await?;
 
-        let host = JournalOnlyHost::new(handle.journal.clone());
+        // Phase 3 wiring: the real host — finalized GrokBuild toolset +
+        // workspace trust + IP6 permission bridge. The bridge consumes the
+        // outbound ACP gateway when interactive (`--stdio`); headless
+        // (`None` gateway) fails closed: Read auto-allows, Bash → Deny.
+        // (PermissionBridge spawns the manager actor via spawn_local, so
+        // this path must run inside a LocalSet — the stdio server does.)
+        let host = self.build_host(&handle, session_id, &base_dir)?;
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone());
         let (response, _, _) = controller
             .run_turn(
@@ -180,6 +188,31 @@ impl AcpServer {
     /// Returns `true` if the session existed and was removed.
     pub fn close_session(&self, session_id: &str) -> bool {
         self.sessions.lock().unwrap().remove(session_id).is_some()
+    }
+
+    /// Build the real host for a run: finalized GrokBuild toolset +
+    /// workspace-trust observation + IP6 permission bridge.
+    ///
+    /// The bridge consumes the outbound ACP gateway when one is wired
+    /// (`--stdio`); otherwise a fail-closed dead gateway — Read auto-allows,
+    /// Bash `Ask` → `Deny` (IP6 headless semantics).
+    fn build_host(
+        &self,
+        handle: &crate::session::SessionHandle,
+        session_id: &str,
+        base_dir: &std::path::Path,
+    ) -> Result<crate::OrzHost, AcpError> {
+        // The permission manager requires an absolute cwd (AbsPathBuf) —
+        // canonicalize, falling back to the raw path on failure.
+        let cwd = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
+        crate::OrzHost::with_bridge(
+            session_id,
+            handle.journal.clone(),
+            &cwd,
+            handle.workspace_trust,
+            self.gateway(),
+        )
+        .map_err(AcpError::Host)
     }
 }
 
@@ -233,10 +266,29 @@ impl LoopHost for JournalOnlyHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permission::dead_gateway;
+    use orz_loop::gateway::fake::ScriptedResponse;
+    use orz_loop::gateway::model::ToolCall;
+    use orz_assurance::EventType;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::path::PathBuf;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Typed events of the single run journal under `base`.
+    fn run_events(base: &PathBuf) -> Vec<orz_assurance::RunEvent> {
+        let runs_dir = base.join(".gsa").join("runs");
+        let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(run_dirs.len(), 1, "expected one run journal");
+        let content = std::fs::read_to_string(run_dirs[0].join("events.jsonl")).unwrap();
+        content
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
 
     fn test_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -273,49 +325,56 @@ mod tests {
 
     #[tokio::test]
     async fn session_prompt_produces_valid_journal_chain() {
-        let base = test_dir();
+        // `handle_session_prompt` builds the OrzHost + IP6 permission bridge
+        // (manager actor runs via `spawn_local`) — everything inside a
+        // LocalSet, matching the stdio server shape.
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
 
-        let server = AcpServer::new();
-        server
-            .handle_session_new(
-                "test-session-prompt",
-                Some(base.clone()),
-                crate::session::TrustPolicy::Skip,
-            )
+                let server = AcpServer::new();
+                server
+                    .handle_session_new(
+                        "test-session-prompt",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let result = server
+                    .handle_session_prompt("test-session-prompt", "hello world")
+                    .await
+                    .unwrap();
+
+                assert_eq!(result["session_id"], "test-session-prompt");
+                assert_eq!(result["status"], "completed");
+                assert!(result["response"].as_str().unwrap().contains("已收到请求"));
+
+                // The full ACP path (session/new → session/prompt) must produce a
+                // continuous hash chain: preflight → started → prompt → output → finished.
+                let runs_dir = base.join(".gsa").join("runs");
+                let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .collect();
+                assert_eq!(run_dirs.len(), 1, "expected exactly one run journal");
+                let events_path = run_dirs[0].join("events.jsonl");
+
+                let replay = orz_assurance::replay_journal(&events_path, None, None, true);
+                assert!(
+                    replay.valid,
+                    "ACP path journal invalid: {:?}",
+                    replay.errors
+                );
+                // Full Phase 2 gate chain: preflight + started + prompt_submitted +
+                // orientation + tool_availability + model_output + stagnation + finished.
+                assert_eq!(replay.event_count, 8);
+                assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
             .await
-            .unwrap();
-
-        let result = server
-            .handle_session_prompt("test-session-prompt", "hello world")
-            .await
-            .unwrap();
-
-        assert_eq!(result["session_id"], "test-session-prompt");
-        assert_eq!(result["status"], "completed");
-        assert!(result["response"].as_str().unwrap().contains("已收到请求"));
-
-        // The full ACP path (session/new → session/prompt) must produce a
-        // continuous hash chain: preflight → started → prompt → output → finished.
-        let runs_dir = base.join(".gsa").join("runs");
-        let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .collect();
-        assert_eq!(run_dirs.len(), 1, "expected exactly one run journal");
-        let events_path = run_dirs[0].join("events.jsonl");
-
-        let replay = orz_assurance::replay_journal(&events_path, None, None, true);
-        assert!(
-            replay.valid,
-            "ACP path journal invalid: {:?}",
-            replay.errors
-        );
-        // Full Phase 2 gate chain: preflight + started + prompt_submitted +
-        // orientation + tool_availability + model_output + stagnation + finished.
-        assert_eq!(replay.event_count, 8);
-        assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
@@ -327,56 +386,61 @@ mod tests {
 
     #[tokio::test]
     async fn second_prompt_continues_hash_chain() {
-        let base = test_dir();
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
 
-        // Two scripted responses — one per prompt turn (the default gateway
-        // has a single response and would exhaust on the second prompt).
-        let server = AcpServer::with_gateway(Arc::new(FakeProvider::from_texts(vec![
-            "(fake) 第一轮。",
-            "(fake) 第二轮。",
-        ])));
-        server
-            .handle_session_new(
-                "test-session-two-prompts",
-                Some(base.clone()),
-                crate::session::TrustPolicy::Skip,
-            )
+                // Two scripted responses — one per prompt turn (the default gateway
+                // has a single response and would exhaust on the second prompt).
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::from_texts(vec![
+                    "(fake) 第一轮。",
+                    "(fake) 第二轮。",
+                ])));
+                server
+                    .handle_session_new(
+                        "test-session-two-prompts",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let first = server
+                    .handle_session_prompt("test-session-two-prompts", "hello")
+                    .await
+                    .unwrap();
+                assert_eq!(first["status"], "completed");
+
+                let second = server
+                    .handle_session_prompt("test-session-two-prompts", "world")
+                    .await
+                    .unwrap();
+                assert_eq!(second["status"], "completed");
+
+                // Each prompt is its own run journal — a journal is a single-run
+                // hash chain with exactly one terminal event (2026-08-04 review P0).
+                let runs_dir = base.join(".gsa").join("runs");
+                let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .collect();
+                assert_eq!(run_dirs.len(), 2, "one run journal per prompt");
+
+                for dir in &run_dirs {
+                    let replay =
+                        orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
+                    assert!(
+                        replay.valid,
+                        "run journal invalid: {:?}",
+                        replay.errors
+                    );
+                    assert_eq!(replay.event_count, 8, "preflight + 7 turn events");
+                    assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+                }
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
             .await
-            .unwrap();
-
-        let first = server
-            .handle_session_prompt("test-session-two-prompts", "hello")
-            .await
-            .unwrap();
-        assert_eq!(first["status"], "completed");
-
-        let second = server
-            .handle_session_prompt("test-session-two-prompts", "world")
-            .await
-            .unwrap();
-        assert_eq!(second["status"], "completed");
-
-        // Each prompt is its own run journal — a journal is a single-run
-        // hash chain with exactly one terminal event (2026-08-04 review P0).
-        let runs_dir = base.join(".gsa").join("runs");
-        let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .collect();
-        assert_eq!(run_dirs.len(), 2, "one run journal per prompt");
-
-        for dir in &run_dirs {
-            let replay = orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
-            assert!(
-                replay.valid,
-                "run journal invalid: {:?}",
-                replay.errors
-            );
-            assert_eq!(replay.event_count, 8, "preflight + 7 turn events");
-            assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
-        }
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
@@ -404,5 +468,116 @@ mod tests {
         assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Phase 3 wiring: the ACP path must drive the REAL OrzHost toolset
+    /// through the IP6 permission bridge — a low-risk `read_file` call
+    /// auto-allows and actually executes (ToolStarted/ToolCompleted).
+    #[tokio::test]
+    async fn session_prompt_read_tool_executes_through_bridge() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let target = base.join("sample.txt");
+                std::fs::write(&target, "wired file content").unwrap();
+
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({"target_file": target}),
+                        call_id: "call-1".to_string(),
+                    }]),
+                    ScriptedResponse::text("完成（读取成功）。"),
+                ])));
+                // Interactive-gateway shape (--stdio wires the same way); a
+                // dead receiver still lets low-risk reads auto-allow.
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-read",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let result = server
+                    .handle_session_prompt("sess-read", "读取 sample.txt")
+                    .await
+                    .unwrap();
+                assert_eq!(result["status"], "completed");
+                assert!(
+                    result["response"].as_str().unwrap().contains("完成"),
+                    "{result}"
+                );
+
+                let events = run_events(&base);
+                let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
+                assert!(types.contains(&EventType::ToolStarted), "{types:?}");
+                assert!(types.contains(&EventType::ToolCompleted), "{types:?}");
+                let pd = events
+                    .iter()
+                    .find(|e| e.event_type == EventType::PermissionDecision)
+                    .expect("permission decision");
+                assert_eq!(
+                    pd.payload.get("decision").and_then(|d| d.as_str()),
+                    Some("allow_once")
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Phase 3 wiring: `bash` (SandboxEscape) with no interactive client
+    /// fails closed — PermissionDecision deny, tool never starts (IP6).
+    #[tokio::test]
+    async fn session_prompt_bash_denied_without_interactive_client() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "bash".to_string(),
+                        arguments: serde_json::json!({"command": "dir"}),
+                        call_id: "call-1".to_string(),
+                    }]),
+                    ScriptedResponse::text("完成（bash 被拒）。"),
+                ])));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-bash",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let result = server
+                    .handle_session_prompt("sess-bash", "执行命令")
+                    .await
+                    .unwrap();
+                assert_eq!(result["status"], "completed");
+
+                let events = run_events(&base);
+                let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
+                assert!(
+                    !types.contains(&EventType::ToolStarted),
+                    "bash must not start headless: {types:?}"
+                );
+                let pd = events
+                    .iter()
+                    .find(|e| e.event_type == EventType::PermissionDecision)
+                    .expect("permission decision");
+                assert_eq!(
+                    pd.payload.get("decision").and_then(|d| d.as_str()),
+                    Some("deny")
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
     }
 }

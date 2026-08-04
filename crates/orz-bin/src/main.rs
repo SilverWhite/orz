@@ -7,10 +7,10 @@
 // chain, no real model/network). Full CLI (subcommands, config, TUI wiring,
 // `--stdio` ACP server) arrives in Phase 2-4.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orz_host::session::bootstrap_session;
+use orz_host::session::{bootstrap_session, SessionHandle};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{ModelGateway, ToolCall};
 
@@ -32,7 +32,9 @@ fn main() {
         return;
     }
 
-    // Bootstrap a runtime for the async journal writer
+    // Bootstrap a runtime for the async journal writer. The IP6 permission
+    // bridge spawns its manager actor via `spawn_local` — everything runs
+    // inside a LocalSet (same shape as `run_stdio`).
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -41,7 +43,8 @@ fn main() {
         }
     };
 
-    let result = rt.block_on(run(&prompt));
+    let local = tokio::task::LocalSet::new();
+    let result = local.block_on(&rt, run(&prompt));
 
     match result {
         Ok((response, events_path)) => {
@@ -97,11 +100,14 @@ fn run_plan(prompt: &str) {
             std::process::exit(1);
         }
     };
-    let result = rt.block_on(async {
+    // The IP6 permission bridge needs a LocalSet (spawn_local manager).
+    let local = tokio::task::LocalSet::new();
+    let result = local.block_on(&rt, async {
         let run_id = format!("RUN-PLAN-{}", timestamp_suffix());
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         let handle = bootstrap_session(
             &run_id,
-            None,
+            Some(cwd.clone()),
             orz_host::session::TrustPolicy::Enforce,
         )
         .await
@@ -152,8 +158,8 @@ fn run_plan(prompt: &str) {
         seq += 1;
         prev_hash = Some(h2);
 
-        // Execute under the approved plan.
-        let host = orz_host::acp_server::JournalOnlyHost::new(handle.journal.clone());
+        // Execute under the approved plan — real host + IP6 bridge.
+        let host = build_cli_host(&handle, &run_id, &cwd)?;
         let controller = orz_loop::AgentLoopController::with_gateway(build_gateway());
         let (response, _, _) = controller
             .run_turn(
@@ -244,15 +250,31 @@ fn chrono_utc_now() -> String {
 
 /// Scripted provider: default = plain text response; ORZ_FAKE_TOOL=1
 /// exercises the full tool loop for the E2E gate-chain acceptance.
+///
+/// Since Phase 3 wiring the loop demonstrates both IP6 semantics in one
+/// run: `read_file` auto-allows through the permission bridge and executes
+/// on the real GrokBuild toolset; `bash` (SandboxEscape) has no interactive
+/// client headless → denied before execution. `rust-toolchain.toml` is the
+/// demo target when run from the orz workspace — small and non-repetitive,
+/// so the run ends with a clean `run_finished` (a large file like
+/// `Cargo.toml` trips the stagnation ngram guard honestly, and the run
+/// correctly ends `run_invalidated`).
 fn build_gateway() -> Arc<dyn ModelGateway> {
     if std::env::var("ORZ_FAKE_TOOL").is_ok() {
         Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "bash".to_string(),
-                arguments: serde_json::json!({"command": "dir"}),
-                call_id: "call-1".to_string(),
-            }]),
-            ScriptedResponse::text("完成（fake 工具路径）。"),
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "rust-toolchain.toml"}),
+                    call_id: "call-1".to_string(),
+                },
+                ToolCall {
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({"command": "dir"}),
+                    call_id: "call-2".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。"),
         ]))
     } else {
         Arc::new(FakeProvider::from_texts(vec!["(fake) 已收到请求。"]))
@@ -275,18 +297,18 @@ fn parse_prompt(args: &[String]) -> Result<String, String> {
 /// Bootstrap a session and run one turn, returning the response and journal path.
 async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
     let run_id = format!("RUN-CLI-{}", timestamp_suffix());
+    let cwd = std::env::current_dir()?;
 
-    // Default journals to `.gsa/runs/{run_id}/` under the current directory.
-    // Workspace trust is enforced (fail-closed): the current directory must
-    // carry repo-local trust config or be recorded in the trust store.
-    let handle = bootstrap_session(
-        &run_id,
-        None,
-        orz_host::session::TrustPolicy::Enforce,
-    )
-    .await?;
+    // Journals land in `{cwd}/.gsa/runs/{run_id}/`. Workspace trust is
+    // enforced (fail-closed): the current directory must carry repo-local
+    // trust config or be recorded in the trust store.
+    let handle = bootstrap_session(&run_id, Some(cwd.clone()), orz_host::session::TrustPolicy::Enforce)
+        .await?;
 
-    let host = orz_host::acp_server::JournalOnlyHost::new(handle.journal.clone());
+    // Phase 3 wiring: real OrzHost (GrokBuild toolset + trust) behind the
+    // IP6 permission bridge. Headless (`None` gateway): Read auto-allows,
+    // Bash Ask → Deny.
+    let host = build_cli_host(&handle, &run_id, &cwd)?;
 
     let controller = orz_loop::AgentLoopController::with_gateway(build_gateway());
     let (response, _, _) = controller
@@ -303,6 +325,22 @@ async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Erro
     handle.journal.shutdown_async().await?;
 
     Ok((response, handle.journal_dir.join("events.jsonl")))
+}
+
+/// Build the Phase 3 CLI host: OrzHost + IP6 permission bridge with a
+/// fail-closed dead gateway (headless — no ACP client to answer prompts).
+fn build_cli_host(
+    handle: &SessionHandle,
+    session_id: &str,
+    cwd: &Path,
+) -> Result<orz_host::OrzHost, String> {
+    orz_host::OrzHost::with_bridge(
+        session_id,
+        handle.journal.clone(),
+        cwd,
+        handle.workspace_trust,
+        None,
+    )
 }
 
 /// Short timestamp-based suffix for the run ID (no uuid dep in orz-bin yet).

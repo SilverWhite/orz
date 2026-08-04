@@ -20,38 +20,77 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::JournalRecorder;
-use orz_loop::host::{LoopHost, ToolError, ToolRegistry, ToolResult};
+use orz_loop::host::{LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult};
 
+use crate::permission::PermissionBridge;
 use crate::tools::ToolsetRegistry;
 
 /// Full LoopHost implementation over the Grok providers.
 ///
-/// Wires the journal, the finalized toolset, and the workspace-trust
-/// observation into the orz-loop contract. Permission, persistence, hooks,
-/// MCP, and credentials remain default stubs in Phase 2 (permission bridge
-/// lands with IP6; chat-state/hooks wiring in Phase 3).
+/// Wires the journal, the finalized toolset, the workspace-trust observation,
+/// and the IP6 permission bridge into the orz-loop contract. Persistence,
+/// hooks, MCP, and credentials remain default stubs (chat-state/hooks wiring
+/// in Phase 3).
 pub struct OrzHost {
     journal: JournalRecorder,
     registry: ToolsetRegistry,
     workspace_trust: WorkspaceTrust,
+    permission: Option<PermissionBridge>,
 }
 
 impl OrzHost {
     /// Build a host for a session working directory.
     ///
     /// `workspace_trust` comes from the session bootstrap (see
-    /// `session::check_workspace_trust`).
+    /// `session::check_workspace_trust`). No permission bridge — every
+    /// `request_permission` fails closed to `Deny` (LoopHost default,
+    /// review P1-1: a host that forgets to wire the bridge must not
+    /// silently auto-allow `bash`).
     pub fn new(
         journal: JournalRecorder,
         cwd: &Path,
         workspace_trust: WorkspaceTrust,
+    ) -> Result<Self, String> {
+        Self::with_permission(journal, cwd, workspace_trust, None)
+    }
+
+    /// Build a host with an optional IP6 permission bridge.
+    ///
+    /// `Some(bridge)` delegates `request_permission` to the Grok permission
+    /// manager (Read auto-allow; headless Ask → Deny); `None` keeps the
+    /// fail-closed default.
+    pub fn with_permission(
+        journal: JournalRecorder,
+        cwd: &Path,
+        workspace_trust: WorkspaceTrust,
+        permission: Option<PermissionBridge>,
     ) -> Result<Self, String> {
         let toolset = tools::build_toolset(cwd)?;
         Ok(Self {
             journal,
             registry: ToolsetRegistry::new(toolset),
             workspace_trust,
+            permission,
         })
+    }
+
+    /// Build a host with an IP6 permission bridge in one step.
+    ///
+    /// `gateway` is the outbound ACP sender when interactive (`--stdio`);
+    /// `None` (headless `-p`/`--plan`) substitutes a dead gateway — Read
+    /// auto-allows, `Ask` fails closed to `Deny`.
+    ///
+    /// Note: `PermissionBridge::spawn` runs the manager actor via
+    /// `spawn_local`, so callers must be inside a `tokio::task::LocalSet`.
+    pub fn with_bridge(
+        session_id: &str,
+        journal: JournalRecorder,
+        cwd: &Path,
+        workspace_trust: WorkspaceTrust,
+        gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
+    ) -> Result<Self, String> {
+        let bridge = PermissionBridge::spawn(session_id, gateway, cwd, journal.clone())?;
+        Self::with_permission(journal, cwd, workspace_trust, Some(bridge))
     }
 
     /// The underlying finalized toolset (for direct dispatch).
@@ -90,6 +129,19 @@ impl LoopHost for OrzHost {
             output: result.prompt_text,
             exit_code: None,
         })
+    }
+
+    async fn request_permission(
+        &self,
+        risk: RiskClass,
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> Result<PermitDecision, PermitError> {
+        match &self.permission {
+            Some(bridge) => bridge.request(risk, tool, args).await,
+            // No bridge wired → fail closed, never auto-allow (review P1-1).
+            None => Ok(PermitDecision::Deny),
+        }
     }
 }
 
@@ -181,5 +233,73 @@ mod tests {
         assert_eq!(response, "完成");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Phase 3 wiring: a host WITHOUT a permission bridge must fail closed —
+    /// never auto-allow (review P1-1).
+    #[tokio::test]
+    async fn host_without_bridge_fails_closed_on_permission() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.join("j"));
+        let host = OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted).expect("host");
+
+        for (risk, tool) in [
+            (RiskClass::ReadOnly, "read_file"),
+            (RiskClass::SandboxEscape, "bash"),
+        ] {
+            let decision = host
+                .request_permission(risk, tool, &serde_json::json!({}))
+                .await
+                .expect("request_permission");
+            assert_eq!(
+                decision,
+                PermitDecision::Deny,
+                "no bridge → fail closed for {tool}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Phase 3 wiring: host WITH the bridge — Read auto-allows through the
+    /// permission manager, Bash (no interactive client) Ask → Deny (IP6).
+    #[tokio::test]
+    async fn host_with_bridge_auto_allows_read_denies_bash() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let dir = test_dir();
+                let journal = JournalRecorder::new(dir.join("j"));
+                let host = OrzHost::with_bridge(
+                    "sess-1",
+                    journal,
+                    &dir,
+                    WorkspaceTrust::ObservedTrusted,
+                    None, // headless dead gateway
+                )
+                .expect("host with bridge");
+
+                let read = host
+                    .request_permission(
+                        RiskClass::ReadOnly,
+                        "read_file",
+                        &serde_json::json!({"target_file": "a.txt"}),
+                    )
+                    .await
+                    .expect("read request");
+                assert_eq!(read, PermitDecision::AllowOnce);
+
+                let bash = host
+                    .request_permission(
+                        RiskClass::SandboxEscape,
+                        "run_terminal_cmd",
+                        &serde_json::json!({"command": "dir"}),
+                    )
+                    .await
+                    .expect("bash request");
+                assert_eq!(bash, PermitDecision::Deny, "headless Ask → Deny");
+
+                let _ = std::fs::remove_dir_all(&dir);
+            })
+            .await
     }
 }

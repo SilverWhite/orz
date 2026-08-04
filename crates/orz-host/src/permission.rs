@@ -9,8 +9,15 @@
 //!   (Phase 3); headless `Ask` fails closed to `Deny`;
 //! - every decision is journaled here (GateDecision / PermissionDecision
 //!   events are written by the caller/controller).
+//!
+//! P1 scope hardening (2026-08-04 review): the provider's Read decision is
+//! unconditional `Allow` (`SAFE_COMMAND`) and `read_file` preserves absolute
+//! paths — so this bridge enforces the session-cwd scope itself before the
+//! manager sees the request (see `access_in_scope`).
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
@@ -21,39 +28,54 @@ use orz_workspace::permission::{
 };
 use xai_acp_lib::AcpAgentGatewaySender;
 
+/// How long a live gateway may wait for the client to answer a permission
+/// prompt before the bridge fails closed (mirrors the Phase 2 TUI bridge's
+/// 5-minute permission timeout; a silent client must not stall the loop
+/// forever — 2026-08-04 review P2-2).
+const PERMISSION_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Grok permission manager wrapped for the LoopHost contract.
 pub struct PermissionBridge {
     handle: PermissionHandle,
     journal: JournalRecorder,
+    /// Session working directory — the scope Read auto-allow is confined to.
+    cwd: orz_paths::AbsPathBuf,
 }
 
 impl PermissionBridge {
     /// Spawn the Grok permission manager over the ACP outbound gateway.
     ///
-    /// `gateway` comes from the stdio server (`AcpServer::gateway()`); with a
-    /// dropped receiver the interactive prompt path fails closed.
+    /// `gateway` comes from the stdio server (`AcpServer::gateway()`);
+    /// `None` (headless `-p`/`--plan`) substitutes a gateway whose receiver
+    /// is dropped — the interactive prompt path fails closed (IP6).
+    ///
+    /// Note: `spawn_permission_manager_with_hub` spawns the manager actor via
+    /// `spawn_local`, so this must be called inside a `tokio::task::LocalSet`.
     pub fn spawn(
         session_id: &str,
-        gateway: AcpAgentGatewaySender,
+        gateway: Option<AcpAgentGatewaySender>,
         cwd: &std::path::Path,
         journal: JournalRecorder,
     ) -> Result<Self, String> {
+        let gateway = gateway.unwrap_or_else(dead_gateway);
         let abs_cwd = orz_paths::AbsPathBuf::new(cwd.to_path_buf())
             .map_err(|e| format!("cwd must be absolute: {e}"))?;
         let (handle, _events) = spawn_permission_manager_with_hub(
             acp::SessionId::new(session_id.to_string()),
             gateway,
-            abs_cwd,
+            abs_cwd.clone(),
             ClientType::Generic,
             None, // no managed rules — prompt policy decides; headless Ask → Deny
-            Vec::new(), // deny_read_globs
+            Vec::new(), // deny_read_globs — the provider carries these for
+                        // subagent inheritance only; enforcement lives in
+                        // `access_in_scope` below (P1).
             Vec::new(), // web_fetch_allowed_domains
             false,      // initial_yolo — headless: yolo never on (IP6)
             None,       // client_identifier
             false,      // remember_tool_approvals
             None,       // hub_permission — interactive prompter lands Phase 3
         );
-        Ok(Self { handle, journal })
+        Ok(Self { handle, journal, cwd: abs_cwd })
     }
 
     /// Request permission for a tool call (LoopHost `request_permission`).
@@ -64,14 +86,30 @@ impl PermissionBridge {
         args: &serde_json::Value,
     ) -> Result<PermitDecision, PermitError> {
         let access = access_kind(tool, args);
+        // P1: the provider auto-allows Read regardless of path — confine it
+        // to the session cwd (and away from the runtime's own `.gsa` tree)
+        // before the manager sees the request.
+        if !self.access_in_scope(&access) {
+            return Ok(PermitDecision::Deny);
+        }
         let update = ToolCallUpdate::new(
             ToolCallId::new(format!("call-{tool}")),
             ToolCallUpdateFields::new(),
         );
-        let decision = self
-            .handle
-            .request(access, update, None, None, None)
-            .await;
+        // A live gateway awaits the client's answer; a silent client must not
+        // stall the loop forever — bounded wait, then fail closed (P2-2).
+        let decision = tokio::time::timeout(
+            PERMISSION_PROMPT_TIMEOUT,
+            self.handle.request(access, update, None, None, None),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                tool,
+                "permission prompt timed out after {PERMISSION_PROMPT_TIMEOUT:?} — denying"
+            );
+            Decision::Cancelled
+        });
         Ok(match decision {
             Decision::Allow => PermitDecision::AllowOnce,
             // Headless: an interactive prompt has no client to answer it —
@@ -82,6 +120,93 @@ impl PermissionBridge {
             }
         })
     }
+
+    /// P1 scope check for read-class accesses.
+    ///
+    /// The permission manager auto-allows `Read`/`Grep` unconditionally
+    /// (SAFE_COMMAND) and GrokBuild's `read_file` preserves absolute paths —
+    /// so without this, a headless agent could auto-read any absolute path on
+    /// the machine. Rule: the resolved target must live under the session
+    /// cwd and outside the runtime's own `.gsa` tree (journals/session state
+    /// are agent-invisible — keeps the evidence chain out of the model's
+    /// feedback loop). Non-read accesses pass through untouched.
+    fn access_in_scope(&self, access: &AccessKind) -> bool {
+        let path = match access {
+            AccessKind::Read(p) | AccessKind::Grep { path: p, .. } => p.as_deref(),
+            _ => return true,
+        };
+        let Some(path) = path else { return true };
+        let p = Path::new(path);
+        // Resolve relative paths against the toolset cwd — `..` can escape
+        // the cwd, so lexical normalization happens before the comparison.
+        let resolved = if p.is_absolute() {
+            normalize_lexical(p)
+        } else {
+            normalize_lexical(&self.cwd.join(path).to_path_buf())
+        };
+        let canonical = std::fs::canonicalize(&resolved).unwrap_or(resolved);
+        path_under(self.cwd.as_path(), &canonical)
+            && !path_under(&self.cwd.join(".gsa").to_path_buf(), &canonical)
+    }
+}
+
+/// Lexically resolve `.` / `..` components so an escaped relative path
+/// compares as what it would actually touch (a bare `..` component would
+/// otherwise pass `path_under` since it is still a normal component).
+fn normalize_lexical(p: &Path) -> PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A gateway whose receiver is dropped immediately: the interactive prompt
+/// path fails closed (permission manager's SendFailed → Ask → Deny).
+pub(crate) fn dead_gateway() -> AcpAgentGatewaySender {
+    AcpAgentGatewaySender::new(tokio::sync::mpsc::unbounded_channel().0)
+}
+
+/// Component-wise `path`-starts-with-`base`, case-insensitive on Windows
+/// (canonicalized paths may differ in case from the session cwd).
+fn path_under(base: &Path, path: &Path) -> bool {
+    let base_parts = components_lower(&strip_verbatim_prefix(base));
+    let path_parts = components_lower(&strip_verbatim_prefix(path));
+    path_parts.len() >= base_parts.len()
+        && base_parts.iter().zip(&path_parts).all(|(a, b)| a == b)
+}
+
+/// `std::fs::canonicalize` on Windows returns `\\?\`-prefixed (verbatim)
+/// extended-length paths — strip that prefix so a canonicalized target
+/// compares against the plain session cwd. `\\?\UNC\server\share` maps back
+/// to `\\server\share`.
+fn strip_verbatim_prefix(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy();
+        let stripped = s
+            .strip_prefix(r"\\?\UNC\")
+            .map(|rest| format!(r"\\{rest}"))
+            .or_else(|| s.strip_prefix(r"\\?\").map(str::to_string))
+            .unwrap_or_else(|| s.to_string());
+        PathBuf::from(stripped)
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_path_buf()
+    }
+}
+
+fn components_lower(p: &Path) -> Vec<String> {
+    p.components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect()
 }
 
 /// Mechanical tool-name → AccessKind mapping for the permission manager.
@@ -93,7 +218,9 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
             name: tool.to_string(),
             input: args.clone(),
         }
-    } else if tool == "run_terminal_cmd" {
+    } else if matches!(tool, "run_terminal_cmd" | "bash" | "sh" | "cmd" | "powershell" | "pwsh") {
+        // GrokBuild's terminal tool is `run_terminal_cmd`; the controller's
+        // risk classifier also recognizes the `bash` alias (P2-1 fix).
         AccessKind::Bash(
             args.get("command")
                 .and_then(|c| c.as_str())
@@ -148,6 +275,7 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -164,14 +292,9 @@ mod tests {
         dir
     }
 
-    /// A gateway whose receiver is dropped immediately: the interactive
-    /// prompt path fails closed (permission manager's SendFailed).
-    fn dead_gateway() -> AcpAgentGatewaySender {
-        xai_acp_lib::AcpGatewaySender::new(tokio::sync::mpsc::unbounded_channel().0)
-    }
-
     /// The permission manager actor spawns local tasks — everything runs
-    /// inside one LocalSet per test.
+    /// inside one LocalSet per test. `None` gateway = dropped receiver
+    /// (fail-closed), exactly the headless `-p`/`--plan` configuration.
     async fn with_bridge<F, Fut, T>(f: F) -> T
     where
         F: FnOnce(PermissionBridge) -> Fut,
@@ -181,8 +304,7 @@ mod tests {
             .run_until(async {
                 let dir = test_dir();
                 let journal = JournalRecorder::new(dir.join("j"));
-                let bridge =
-                    PermissionBridge::spawn("sess-test", dead_gateway(), &dir, journal).unwrap();
+                let bridge = PermissionBridge::spawn("sess-test", None, &dir, journal).unwrap();
                 f(bridge).await
             })
             .await
@@ -233,6 +355,16 @@ mod tests {
             access_kind("run_terminal_cmd", &serde_json::json!({"command": "ls"})),
             AccessKind::Bash(_)
         ));
+        // P2-1: the `bash` alias (and other shell names) must classify as
+        // Bash — not fall through to the generic `Edit` bucket.
+        assert!(matches!(
+            access_kind("bash", &serde_json::json!({"command": "dir"})),
+            AccessKind::Bash(_)
+        ));
+        assert!(matches!(
+            access_kind("powershell", &serde_json::json!({"command": "ls"})),
+            AccessKind::Bash(_)
+        ));
         assert!(matches!(
             access_kind("web_search", &serde_json::json!({"query": "x"})),
             AccessKind::WebSearch(_)
@@ -241,5 +373,111 @@ mod tests {
             access_kind("server__tool", &serde_json::json!({})),
             AccessKind::MCPTool { .. }
         ));
+    }
+
+    // ── P1 scope enforcement ─────────────────────────────────────────────
+
+    #[test]
+    fn path_under_component_wise_and_case_insensitive() {
+        assert!(path_under(Path::new("D:\\CLI\\orz"), Path::new("D:\\CLI\\orz\\a\\b")));
+        assert!(path_under(Path::new("D:\\CLI\\orz"), Path::new("d:\\cli\\ORZ\\x")));
+        // Windows canonicalize returns `\\?\`-prefixed paths — must compare
+        // equal to the plain cwd (regression: real files were all denied).
+        assert!(path_under(
+            Path::new("D:\\CLI\\orz"),
+            Path::new(r"\\?\D:\CLI\orz\rust-toolchain.toml")
+        ));
+        assert!(path_under(
+            Path::new(r"\\?\D:\CLI\orz"),
+            Path::new(r"\\?\D:\CLI\orz\a")
+        ));
+        // Boundary: a sibling with a shared prefix must NOT match.
+        assert!(!path_under(Path::new("D:\\CLI\\orz"), Path::new("D:\\CLI\\orz2\\x")));
+        assert!(!path_under(Path::new("D:\\CLI\\orz"), Path::new("C:\\CLI\\orz\\x")));
+    }
+
+    /// Bridge-scope unit test: build the bridge over a real temp cwd and
+    /// check `access_in_scope` directly (no manager actor involved).
+    fn bridge_over(dir: &std::path::Path) -> PermissionBridge {
+        let journal = JournalRecorder::new(dir.join("j"));
+        PermissionBridge {
+            handle: PermissionHandle::allow_all(),
+            journal,
+            cwd: orz_paths::AbsPathBuf::new(dir.to_path_buf()).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_scope_enforced_before_manager() {
+        let dir = test_dir();
+        std::fs::create_dir_all(dir.join("inside")).unwrap();
+        std::fs::create_dir_all(dir.join(".gsa").join("runs")).unwrap();
+        // Existing file → `canonicalize` succeeds → the Windows `\\?\` prefix
+        // path is exercised (regression: prefixed paths were all denied).
+        std::fs::write(dir.join("inside").join("a.txt"), "x").unwrap();
+        let outside = test_dir(); // sibling temp dir — outside cwd
+        let bridge = bridge_over(&dir);
+
+        async fn read_req(bridge: &PermissionBridge, path: &str) -> PermitDecision {
+            bridge
+                .request(
+                    RiskClass::ReadOnly,
+                    "read_file",
+                    &serde_json::json!({"target_file": path}),
+                )
+                .await
+                .unwrap()
+        }
+
+        // Relative path inside cwd → allowed (auto).
+        assert_eq!(read_req(&bridge, "inside/a.txt").await, PermitDecision::AllowOnce);
+        // Absolute path inside cwd → allowed.
+        let abs_in = dir.join("inside").join("a.txt");
+        assert_eq!(
+            read_req(&bridge, &abs_in.to_string_lossy()).await,
+            PermitDecision::AllowOnce
+        );
+        // `..` escaping cwd → denied.
+        assert_eq!(read_req(&bridge, "../outside-escape.txt").await, PermitDecision::Deny);
+        // Absolute path outside cwd → denied (the P1 hole).
+        assert_eq!(
+            read_req(&bridge, &outside.join("secret.txt").to_string_lossy()).await,
+            PermitDecision::Deny
+        );
+        // The runtime's own `.gsa` tree → denied.
+        assert_eq!(
+            read_req(&bridge, &dir.join(".gsa").join("runs").join("events.jsonl").to_string_lossy())
+                .await,
+            PermitDecision::Deny
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[tokio::test]
+    async fn non_read_accesses_skip_scope_check() {
+        let dir = test_dir();
+        let bridge = bridge_over(&dir);
+        // Bash and web accesses pass through to the manager regardless of
+        // scope (they fail closed via Ask → Deny anyway, and interactive
+        // prompts land in Phase 3).
+        assert!(bridge.access_in_scope(&AccessKind::Bash("dir".to_string())));
+        assert!(bridge.access_in_scope(&AccessKind::WebFetch("https://x".to_string())));
+        assert!(bridge.access_in_scope(&AccessKind::Edit("write: x".to_string())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalize_lexical_resolves_escapes() {
+        let base = Path::new("D:\\CLI\\orz");
+        assert_eq!(
+            normalize_lexical(&base.join("..").join("x")),
+            PathBuf::from("D:\\CLI\\x")
+        );
+        assert_eq!(
+            normalize_lexical(&base.join("a").join("..").join("b")),
+            PathBuf::from("D:\\CLI\\orz\\b")
+        );
     }
 }
