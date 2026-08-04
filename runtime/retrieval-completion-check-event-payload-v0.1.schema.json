@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-completion-check-event-payload-v0.1.schema.json",
+  "title": "Retrieval subagent close completion check runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "role",
+    "tool",
+    "decision",
+    "response",
+    "neutral_only",
+    "new_subagent_requested",
+    "global_review_requested",
+    "claim_strength_effect"
+  ],
+  "properties": {
+    "role": {
+      "enum": ["internal_retrieval", "external_retrieval"]
+    },
+    "tool": { "type": "string", "minLength": 1 },
+    "decision": {
+      "enum": ["yes", "no", "uncertain", "not_detected"]
+    },
+    "response": { "type": "string" },
+    "brief_reason": { "type": "string" },
+    "missing_content_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "neutral_only": { "const": true },
+    "new_subagent_requested": { "const": false },
+    "global_review_requested": { "const": false },
+    "claim_strength_effect": { "const": "none" }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/neutral-inquiry-event-payload-v0.1.schema.json",
+  "title": "Neutral inquiry runtime event payload (IP2c INFO_SUFFICIENCY)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trigger_reason",
+    "counters",
+    "message_block",
+    "block_present"
+  ],
+  "properties": {
+    "trigger_reason": {
+      "enum": ["output_repeats", "tool_calls", "actions", "rounds"]
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["main", "internal", "external"],
+      "properties": {
+        "main": { "$ref": "#/$defs/counter_set" },
+        "internal": { "$ref": "#/$defs/counter_set" },
+        "external": { "$ref": "#/$defs/counter_set" }
+      }
+    },
+    "message_block": {
+      "type": "string",
+      "pattern": "^\\[INFO_SUFFICIENCY v0\\.1\\]"
+    },
+    "block_present": { "const": true }
+  },
+  "$defs": {
+    "counter_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output_repeats", "tool_calls", "actions", "rounds"],
+      "properties": {
+        "output_repeats": { "type": "integer", "minimum": 0 },
+        "tool_calls": { "type": "integer", "minimum": 0 },
+        "actions": { "type": "integer", "minimum": 0 },
+        "rounds": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

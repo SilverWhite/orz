@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/counterexample-gate-event-payload-v0.1.schema.json",
+  "title": "Counterexample gate runtime event payload (COUNTEREXAMPLE_GATE)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "position",
+    "message_block",
+    "once_only"
+  ],
+  "properties": {
+    "position": {
+      "enum": ["final_answer", "plan_write"]
+    },
+    "message_block": {
+      "type": "string",
+      "pattern": "^\\[COUNTEREXAMPLE_GATE v0\\.1\\]"
+    },
+    "once_only": { "type": "boolean" },
+    "model_response": { "type": "string" }
+  }
+}

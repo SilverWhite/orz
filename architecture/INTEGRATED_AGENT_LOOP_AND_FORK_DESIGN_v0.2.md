@@ -378,6 +378,7 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
   - stagnation 的 `RestartRequested`（terminal_safe_restart_packet）语义为全局重启，本身重置一切，与清零不冲突。
 - **作用域**：仅作用于轮内中立问询；子代理关闭前 completion check 为独立一次性收尾检查，无积累语义，**不参与 4 计数**。
 - **默认阈值（Phase 3 落地时定稿，参照 CN 门控默认）**：输出阈值沿用 stagnation 默认（consecutive/ngram 严格大于 10）；工具调用次数 / 动作次数 / 轮次的默认阈值参照 CN 约束（10 动作 / 8 轮）——Phase 3 接线时按 §4.6.3 语义定稿，数值调整以 ADR 记录。
+- **2026-08-04 接线定稿（ADR-0005）**：4 判定点全部严格大于——输出阈值 > 10（consecutive/ngram，沿用 stagnation 默认）、工具调用次数 > 10、动作次数 > 10、轮次 > 8；触发检查顺序固定为 output_repeats → tool_calls → actions → rounds（返回第一个命中）；触发瞬间**三实例（主 agent + 检索子代理 ×2）4 计数全部清零**。数值后续调整以新 ADR 记录。
 
 ### 4.6.4 子代理动作语义分层（动作次数判定）
 
@@ -412,13 +413,14 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 [/INFO_SUFFICIENCY]
 ```
 
-### 4.6.6 实现位置（承接 §4 表格）
+### 4.6.6 实现位置（承接 §4 表格；2026-08-04 已接线）
 
-- IP2c INFO_SUFFICIENCY block：`orz-loop::PromptBuilder`（原生）
-- IP3b 4 判定点计数器 + 清零状态机：`orz-loop` 控制器持有状态（触发即清零）；计数事件源——主 agent 吃工具级（`ToolDispatcher` 包装），子代理吃语义级（`run_retrieval` / 轮）
-- IP3c sufficiency trigger：每轮检索动作彻底完成后检查（`ToolDispatcher` 包装后置）
-- 子代理关闭前 completion check：子代理关闭路径接线 Python 先例 `RETRIEVAL_COMPLETION_CHECK v0.1`（Rust 侧移植或桥接）
-- 反例询问：plan 写入前 + 正式答案输出前（仅一次 + 显式告知）；Rust 侧随 Phase 3 落地，Python conformance 侧已有 forbidden-field / claim-policy 机制
+- IP2c INFO_SUFFICIENCY block：`orz-loop::PromptBuilder`（原生）——常量位于 `orz-loop/src/prompt.rs`（`INFO_SUFFICIENCY_BLOCK`），以 `Role::User` message 注入（对模型的运行时提问而非系统上下文）
+- IP3b 4 判定点计数器 + 清零状态机：`orz-loop` 控制器持有状态（触发即清零）；计数事件源——主 agent 吃工具级（`ToolDispatcher` 包装），子代理吃语义级（`run_retrieval` / 轮）——`orz-loop/src/inquiry.rs`（`InquiryCounters`/`InquiryThresholds`/`DEFAULT_THRESHOLDS`）
+- IP3c sufficiency trigger：每轮检索动作彻底完成后检查（`ToolDispatcher` 包装后置）——`controller.rs` 工具循环内检索分发后触发；三实例同清零
+- 子代理关闭前 completion check：子代理关闭路径接线 Python 先例 `RETRIEVAL_COMPLETION_CHECK v0.1`（Rust 侧移植）——block 注入子代理请求（`agents/retrieval.rs` `completion_check_block` 参数），响应逐行解析 yes/no/uncertain（`parse_completion_decision`），事件带完整响应文本作证据
+- 反例询问：plan 写入前 + 正式答案输出前（仅一次 + 显式告知）——`run_plan` 在 `submit_plan` 前做一次模型轮（plan 变体 block 无"仅一次"行；机械 plan 下为 evidence-only，模型生成 plan 时升级为阻塞链环节）；正式答案输出前在工具循环无 tool_calls 分支拦截一次（`COUNTEREXAMPLE_GATE_BLOCK`，被拦截草稿 journal 为 model_output 但不进入会话）
+- 三个 gate 均记录 run-event：`neutral_inquiry` / `counterexample_gate` / `retrieval_completion_check`（run-event schema 27→30 变体，payload schema 见 `runtime/`）；模型回答无控制流后果（证据记录，循环自然继续）
 
 ---
 
@@ -459,7 +461,7 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 3. orz-assurance::sandbox::job_object, credential, permit
 4. Codex 纪律：严格 Clippy，零死代码 crate
 5. Python 项目 → reference-spec
-6. **§4.6 接线**（2026-08-04 审查补列）：反例询问（plan 写入前 + 正式答案输出前**仅一次 + message_block 显式告知**）；中立问询接线（IP2c `INFO_SUFFICIENCY` block + IP3c 每轮检索后触发 + 4 判定点计数/清零状态机，默认阈值定稿）；子代理关闭前 completion check（Python `RETRIEVAL_COMPLETION_CHECK` 移植）；OrzHost + PermissionBridge 接入三入口（实现已完成，当前 `--stdio`/`-p`/`--plan` 仍用 JournalOnlyHost）
+6. **§4.6 接线**（2026-08-04 审查补列；2026-08-04 已接线，部分闭合）：反例询问（plan 写入前 + 正式答案输出前**仅一次 + message_block 显式告知**）——`run_plan` submit_plan 前模型轮（plan 变体无"仅一次"行）+ 工具循环无 tool_calls 分支拦截一次；中立问询接线（IP2c `INFO_SUFFICIENCY` block + IP3c 每轮检索后触发 + 4 判定点计数/清零状态机，阈值定稿见 §4.6.3/ADR-0005）；子代理关闭前 completion check（Python `RETRIEVAL_COMPLETION_CHECK` 移植，逐字）；三机制均记 run-event（新增 3 事件类型 + payload schema，Python authority 先行）。OrzHost + PermissionBridge 接入三入口已于 Slice #1 完成。已知边界：模型回答暂不驱动控制流（evidence-only）；plan 变体 gate 在机械 plan 下为证据性触发
 7. **验证**: 全功能 conformance suite
 
 ---
