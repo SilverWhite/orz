@@ -21,6 +21,9 @@ NON_REPOSITORY_PARTS = {
     ".tools",
     "__pycache__",
     "candidate-gates",
+    # nested independent repository (own git history) — its docs are
+    # governed by the orz repo's own review, not this repository check
+    "orz",
 }
 NON_REPOSITORY_PREFIXES = ("tmp",)
 

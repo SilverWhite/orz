@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,33 @@ from .utils import canonical_bytes, sha256_bytes, sha256_file, utc_now
 
 
 UNIFIED_TRUST_SCHEMA = "workspace-trust-receipt-v0.1.schema.json"
+
+
+def _iter_workspace_files(workspace_root: Path) -> list[Path]:
+    """Return all regular files under ``workspace_root`` (sorted), excluding
+    VCS internals and nested independent repositories.
+
+    ``.git`` metadata churns on every operation and is not workspace content;
+    a nested repository (e.g. a gitignored sibling repo checked out inside
+    the workspace) is a separate project and does not belong to this
+    workspace's trust fingerprint.  Both are pruned during traversal so the
+    scan stays proportional to the workspace's own files.
+    """
+    files: list[Path] = []
+    for root, dirs, names in os.walk(workspace_root, topdown=True):
+        root_path = Path(root)
+        kept_dirs: list[str] = []
+        for dir_name in dirs:
+            dir_path = root_path / dir_name
+            if dir_name == ".git" or (dir_path / ".git").exists():
+                continue
+            kept_dirs.append(dir_name)
+        dirs[:] = kept_dirs
+        for name in names:
+            path = root_path / name
+            if path.is_file() and not path.is_symlink():
+                files.append(path)
+    return sorted(files)
 
 
 def establish_workspace_trust(
@@ -42,10 +70,9 @@ def establish_workspace_trust(
     file_count = 0
     aggregate_parts: list[str] = []
     try:
-        for path in sorted(workspace_root.rglob("*")):
-            if path.is_file() and not path.is_symlink():
-                file_count += 1
-                aggregate_parts.append(sha256_file(path))
+        for path in _iter_workspace_files(workspace_root):
+            file_count += 1
+            aggregate_parts.append(sha256_file(path))
     except OSError as exc:
         errors.append(f"workspace scan failed: {exc}")
         checks["workspace_scanned"] = False
@@ -118,9 +145,8 @@ def verify_workspace_trust(
 
     aggregate_parts: list[str] = []
     try:
-        for path in sorted(workspace_root.rglob("*")):
-            if path.is_file() and not path.is_symlink():
-                aggregate_parts.append(sha256_file(path))
+        for path in _iter_workspace_files(workspace_root):
+            aggregate_parts.append(sha256_file(path))
     except OSError as exc:
         return {"valid": False, "trust_still_valid": False, "errors": [str(exc)]}
 
