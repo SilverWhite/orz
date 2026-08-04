@@ -1,6 +1,7 @@
 # 融合架构：Codex 纪律 + Grok 能力 v0.2
 
-状态：2026-08-03。v0.1 整合了 Agent Loop Redesign 与 Fork Implementation Design，
+状态：2026-08-04 修正——放弃 Pro/Flash 双模型常驻（已暂时放弃实现这一构想，存档，非待办），
+采用单主 Agent + 检索子代理 ×2（见 §4.5）。v0.1 整合了 Agent Loop Redesign 与 Fork Implementation Design，
 解决了注入点分类、crate 矩阵和 Phase 规划问题。v0.2 基于对 `D:\CLI\orz` (74 crate, ~1.1M 行)
 和 Codex CLI (~120 crate, core 151k 行) 的源码级审查，确认：**Grok 底座中仅 ~320k 行
 （tools/workspace/sandbox/mcp/chat-state/hooks）是真正有价值的成熟组件。其余 ~780k 行
@@ -119,7 +120,7 @@ Crate 数: 74 → ~42 (减 43%)
 │  │    ├─ OrientationMonitor (事件驱动 + cooldown)         │       │
 │  │    ├─ MechanicalRelay    (纯 function.name 路由)       │       │
 │  │    ├─ Blackboard         (5 分区)                      │       │
-│  │    ├─ Pro / Flash        (DeepSeek V4 ×2)             │       │
+│  │    ├─ 主 Agent            (DeepSeek V4)                │       │
 │  │    └─ RetrievalSubagents (内部 + 外部)                 │       │
 │  └──────────────────────┬───────────────────────────────┘       │
 │                         │                                        │
@@ -216,7 +217,7 @@ Crate 数: 74 → ~42 (减 43%)
 |-------|---------|------|
 | **orz-host** | 6-12k | ACP server + LoopHost impl + session lifecycle + approval prompter |
 | orz-bin | ~1k | composition root |
-| orz-loop | ~2k | AgentLoopController + Blackboard + MechanicalRelay + Pro/Flash + Subagents |
+| orz-loop | ~2k | AgentLoopController + Blackboard + MechanicalRelay + 主 Agent + Subagents |
 | orz-loop::gateway::transport | ~7.6k | 从 orz-sampler 移入的 SSE streaming + retry |
 | orz-assurance | 4-7k | 热路径: journal+gate+orientation+trust。其余 Python 95k 保留为 conformance suite |
 | orz-tui | 5-8k | assurance workbench TUI |
@@ -331,6 +332,96 @@ IP6 仍是唯一需要修改 kept Grok 组件的 assurance 功能。
 
 ---
 
+## 4.5 2026-08-04 架构修正：单主 Agent 裁决
+
+**裁决**：放弃 Pro/Flash 双模型常驻构想，采用**单主 Agent + 检索子代理 ×2**。
+Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实现这一构想**」——非待办项，不作为后续默认计划。
+
+依据：
+1. Two-Subagent Default Constraint（`CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30`）：不得默认发展本地多代理调度器；双模型常驻即本地多代理调度器。
+2. 规划/执行分离由 plan mode 状态机承载（Python R15 已验证交付），非第二模型实例；Codex 纪律的本义是模式切换（同一模型的 prompt/权限切换），不是双模型常驻。
+3. Python 侧全部先例（canonical loop、orientation_runtime_journal）均为单 agent 语义，conformance 可直接对齐。
+4. 单模型入口使 IPG/permission 门控语义简单；Blackboard 无跨 agent 格式契约（主 agent 自写自读）。
+5. 上下文长度由用户控制（常新开对话）；单轮任务内双模型上下文拆分收益有限。
+
+连带调整：§1 架构图、§2.3 crate 矩阵、§5 Phase 2 的 Pro/Flash 行均改为「主 Agent（DeepSeek V4）」。
+若未来出现长会话多模型调度场景，重新评估此构想（届时以新设计版本/ADR 处理）。
+
+---
+
+## 4.6 中立问询与反例询问触发设计（2026-08-04 定稿）
+
+承接 Neutral vs Counterexample Trigger Split（2026-07-30，CN 设计约束）与子代理检索完成确认（CN §7.3），将 IP2c/IP3b/IP3c 的触发语义定稿。原则：**中立问询留在执行过程中，收尾只留反例询问；过犹不及**。
+
+### 4.6.1 触发位置总表
+
+| 位置 | 机制 | 触发规则 |
+|---|---|---|
+| 每轮检索动作彻底完成后 | 中立问询（信息充分性：IP2c block + IP3c trigger） | 4 判定点任一 → 同一问询 → **触发瞬间 4 计数全部清零** |
+| 关闭检索工具/检索子代理前 | 中立 completion check | 一次性（Python 先例 `RETRIEVAL_COMPLETION_CHECK v0.1`，Rust 接线） |
+| plan 写入前 | 反例询问 | 保留（plan approval gate 链组成部分） |
+| 正式答案输出前 | 反例询问 | **仅触发一次 + message_block 显式告知模型** |
+
+### 4.6.2 裁决
+
+1. **正式答案输出前不触发中立问询**（过犹不及）：模型能力足够，多加只是负担；且输出前中立问询的补救窗口（"还能补检索"）已关闭，价值近零。
+2. **正式答案输出前的反例询问仅触发一次**，message_block 显式告知"本询问仅出现一次"——与轮内问询区分收尾 gate 语义，让模型知道这是最后一次自查机会。
+3. **plan 写入前的反例询问保留**——它是 plan approval gate 链的组成部分，位置不同（plan 阶段模型无"即将输出"紧迫感），不在"仅一次"范围内。
+
+### 4.6.3 4 判定点与清零状态机（IP3b，轮内中立问询）
+
+- 4 判定点（满足任一即触发同一中立问询）：**输出阈值**（stagnation consecutive/ngram repeat > 阈值）、**工具调用次数**、**动作次数**、**轮次**。
+- **触发即清零**：问询触发瞬间 4 个计数全部归零并重新积累（非模型响应后）。
+  - 同作用问询 = 同一事件源；不共享重置点会导致未触发计数器在下一轮立即补触发（问询刷屏）。
+  - 清零形成**隐式冷却**：任何问询后必须重新积累阈值单位才可能再次触发。
+  - **取代 CN 约束的轮次豁免（2026-08-04 裁决）**：CN `GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN` 规定"轮次触发不受 cooldown 限制"；本定稿对**轮次计数同样清零**——4 判定点同作用共享重置点，用户批准的全清零方案优先，跨轮漂移由轮内其他 3 个判定点兜底。
+  - stagnation 的 `RestartRequested`（terminal_safe_restart_packet）语义为全局重启，本身重置一切，与清零不冲突。
+- **作用域**：仅作用于轮内中立问询；子代理关闭前 completion check 为独立一次性收尾检查，无积累语义，**不参与 4 计数**。
+- **默认阈值（Phase 3 落地时定稿，参照 CN 门控默认）**：输出阈值沿用 stagnation 默认（consecutive/ngram 严格大于 10）；工具调用次数 / 动作次数 / 轮次的默认阈值参照 CN 约束（10 动作 / 8 轮）——Phase 3 接线时按 §4.6.3 语义定稿，数值调整以 ADR 记录。
+
+### 4.6.4 子代理动作语义分层（动作次数判定）
+
+- 主 agent 与检索子代理除职责、prompt、权限外配置**一致且各自独立**（承接 Two-Subagent Default Constraint 精神——约束原文只规定子代理数量与类型，配置一致性是本定稿的细化）。
+- **动作次数计数粒度角色感知**——同一计数器接口，不同事件源：
+  - 主 agent：底层工具级事件（`ToolDispatcher` 包装）。
+  - 子代理：**上层语义动作**——一次 `run_retrieval`（一个 goal 执行）= 1 个动作；`budget_turns > 1` 时每轮 = 1 个动作。子代理内部**关闭工具级计数**（检索本身动作多——search/fetch/read 多工具调用，工具级计数必然误触发）。
+- 其余 3 判定点（输出阈值/工具调用/轮次）主 agent 与子代理照常。
+
+### 4.6.5 Block 文案模板（格式对齐 Python `[BLOCK v0.1]` 惯例）
+
+反例询问（正式答案输出前，仅一次）：
+
+```text
+[COUNTEREXAMPLE_GATE v0.1]
+最终回答即将输出。请对即将输出的结论做最后一次反例自查：
+1. 是否存在未验证的前提？
+2. 是否存在可推翻结论的已知证据？
+3. 结论强度是否超出证据支持？
+注意：本反例询问仅出现一次，请在最终回答前完成全部反例自查。
+[/COUNTEREXAMPLE_GATE]
+```
+
+中立问询（每轮检索动作彻底完成后，IP2c）：
+
+```text
+[INFO_SUFFICIENCY v0.1]
+本轮检索已完成。请确认：
+是否已获得完成当前主任务所需的内容？
+请回答 yes / no / uncertain，并附简短理由。
+若为 no 或 uncertain，只列出还需要的内容类型。
+[/INFO_SUFFICIENCY]
+```
+
+### 4.6.6 实现位置（承接 §4 表格）
+
+- IP2c INFO_SUFFICIENCY block：`orz-loop::PromptBuilder`（原生）
+- IP3b 4 判定点计数器 + 清零状态机：`orz-loop` 控制器持有状态（触发即清零）；计数事件源——主 agent 吃工具级（`ToolDispatcher` 包装），子代理吃语义级（`run_retrieval` / 轮）
+- IP3c sufficiency trigger：每轮检索动作彻底完成后检查（`ToolDispatcher` 包装后置）
+- 子代理关闭前 completion check：子代理关闭路径接线 Python 先例 `RETRIEVAL_COMPLETION_CHECK v0.1`（Rust 侧移植或桥接）
+- 反例询问：plan 写入前 + 正式答案输出前（仅一次 + 显式告知）；Rust 侧随 Phase 3 落地，Python conformance 侧已有 forbidden-field / claim-policy 机制
+
+---
+
 ## 5. 实施阶段
 
 ### Phase 0: 融合删除（本次）
@@ -352,10 +443,10 @@ IP6 仍是唯一需要修改 kept Grok 组件的 assurance 功能。
 4. Wire the seam: ACP prompt → AgentLoopController.run_turn()
 5. **验证**: `orz -p "hello"` → 有效 events.jsonl, hash chain 连续
 
-### Phase 2: 双 Agent + Blackboard + Gates
-**目标**：Pro + Flash + 检索子代理
+### Phase 2: 单主 Agent + Blackboard + Gates
+**目标**：单主 Agent + 检索子代理 + 完整 gate 链（注：Pro/Flash 双模型常驻已暂时放弃实现，见 §4.5）
 
-1. Blackboard + MechanicalRelay + Pro/Flash + Subagents
+1. Blackboard + MechanicalRelay + 主 Agent + Subagents
 2. orz-assurance::gates + orientation
 3. IP6: hard-gate @ orz-workspace permission
 4. **验证**: 完整 gate 链
@@ -368,7 +459,8 @@ IP6 仍是唯一需要修改 kept Grok 组件的 assurance 功能。
 3. orz-assurance::sandbox::job_object, credential, permit
 4. Codex 纪律：严格 Clippy，零死代码 crate
 5. Python 项目 → reference-spec
-6. **验证**: 全功能 conformance suite
+6. **§4.6 接线**（2026-08-04 审查补列）：反例询问（plan 写入前 + 正式答案输出前**仅一次 + message_block 显式告知**）；中立问询接线（IP2c `INFO_SUFFICIENCY` block + IP3c 每轮检索后触发 + 4 判定点计数/清零状态机，默认阈值定稿）；子代理关闭前 completion check（Python `RETRIEVAL_COMPLETION_CHECK` 移植）；OrzHost + PermissionBridge 接入三入口（实现已完成，当前 `--stdio`/`-p`/`--plan` 仍用 JournalOnlyHost）
+7. **验证**: 全功能 conformance suite
 
 ---
 
