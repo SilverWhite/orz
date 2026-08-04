@@ -386,6 +386,18 @@ pub(crate) async fn run_read_file(
                     versions::legacy_0_4_10::render_read_error(&path),
                 ));
             }
+            // Windows reports ERROR_ACCESS_DENIED (PermissionDenied) when
+            // opening a directory, where unix gives EISDIR (IsADirectory).
+            // Classify via metadata so the structured directory error is
+            // stable across platforms.
+            if path.is_dir() {
+                let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
+                let display_path = display_dcwd.join(&input.path);
+                return Ok(ReadFileOutput::IsADirectory(format!(
+                    "Error: {} is a directory, not a file.",
+                    display_path.display()
+                )));
+            }
             let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
             let display_path = display_dcwd.join(&input.path);
             return Ok(match e.io_error_kind() {

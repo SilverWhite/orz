@@ -6016,6 +6016,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "which",
+ "windows-sys 0.59.0",
  "xai-tty-utils",
 ]
 

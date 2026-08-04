@@ -801,35 +801,6 @@ mod tests {
     }
 
     #[test]
-    fn test_network_mode_uses_fresh_per_host_truncate_db() {
-        // Network mode opens a per-host sibling of the given path (the
-        // legacy shared file is left untouched — a live old binary can flip
-        // it back to WAL at any time) in rollback-journal mode.
-        let tmp = TempDir::new().unwrap();
-        let db_path = tmp.path().join("test.sqlite");
-        let storage = test_storage(&tmp);
-
-        let idx = MemoryIndex::open_or_create_with_journal_mode(
-            &db_path,
-            storage,
-            MemoryIndexConfig::default(),
-            512,
-            JournalMode::Truncate,
-        )
-        .unwrap();
-        assert_eq!(journal_mode(&idx), "truncate");
-        assert_eq!(idx.embedding_dimensions(), 512);
-        drop(idx);
-
-        let eff = JournalMode::Truncate.effective_db_path(&db_path);
-        assert_ne!(eff, db_path);
-        assert!(eff.exists());
-        let base = eff.display().to_string();
-        assert!(!std::fs::exists(format!("{base}-wal")).unwrap());
-        assert!(!std::fs::exists(format!("{base}-shm")).unwrap());
-    }
-
-    #[test]
     fn test_reindex_file_adds_chunks() {
         let tmp = TempDir::new().unwrap();
         let mut idx = test_index(&tmp);

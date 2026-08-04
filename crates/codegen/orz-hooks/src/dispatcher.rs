@@ -902,7 +902,11 @@ mod tests {
         assert_eq!(result.blocks.len(), 1);
     }
 
+    // Unix-only: the hook commands use POSIX shell syntax (`>&2`, `; exit 2`);
+    // on Windows shell commands are routed to the platform shell (PowerShell
+    // by default), where those forms do not parse.
     #[tokio::test]
+    #[cfg(unix)]
     async fn stop_exit2_fail_open_and_context() {
         let registry = registry_from_specs(vec![
             stop_spec("exit2", "echo 'fix the build' >&2; exit 2"),

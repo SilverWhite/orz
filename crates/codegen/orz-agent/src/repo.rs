@@ -181,6 +181,10 @@ mod tests {
         }
     }
 
+    // Unix-only: simulates `$HOME` by env override, but `dirs::home_dir()` on
+    // Windows resolves via `SHGetKnownFolderPath(FOLDERID_Profile)` and ignores
+    // env vars, so a fake home cannot be injected there.
+    #[cfg(unix)]
     #[test]
     #[serial(home_env)]
     fn resolve_treats_home_git_repo_as_no_repo() {

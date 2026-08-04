@@ -2971,7 +2971,9 @@ mod tests {
     fn test_effective_worktree_cwd_single_level_offset() {
         let result =
             effective_worktree_cwd("/home/user/.grok/worktrees/repo/ab-123-a", Path::new("src"));
-        assert_eq!(result, "/home/user/.grok/worktrees/repo/ab-123-a/src");
+        // Component-level comparison (PathBuf display uses `\` on Windows).
+        let expected = PathBuf::from("/home/user/.grok/worktrees/repo/ab-123-a").join("src");
+        assert_eq!(result, expected);
     }
     #[test]
     fn test_effective_worktree_cwd_nested_offset() {
@@ -2979,10 +2981,11 @@ mod tests {
             "/home/user/.grok/worktrees/repo/ab-123-b",
             Path::new("packages/frontend/src"),
         );
-        assert_eq!(
-            result,
-            "/home/user/.grok/worktrees/repo/ab-123-b/packages/frontend/src"
-        );
+        let expected = PathBuf::from("/home/user/.grok/worktrees/repo/ab-123-b")
+            .join("packages")
+            .join("frontend")
+            .join("src");
+        assert_eq!(result, expected);
     }
     #[test]
     fn test_effective_worktree_cwd_no_trailing_slash() {
@@ -3054,7 +3057,8 @@ mod tests {
         let (offset, _git_root) = compute_subdir_offset(&sub.to_string_lossy());
         let worktree_root = "/home/user/.grok/worktrees/myrepo/ab-test-a";
         let effective = effective_worktree_cwd(worktree_root, &offset);
-        assert_eq!(effective, format!("{}/src/lib", worktree_root));
+        let expected = PathBuf::from(worktree_root).join("src").join("lib");
+        assert_eq!(effective, expected);
     }
     #[test]
     fn test_find_git_root_from_repo_root() {
@@ -4419,8 +4423,11 @@ mod restore_code_tests {
             outcome.stash_ref.is_none(),
             "the stash must be popped back, leaving nothing orphaned"
         );
+        // Normalize CRLF: git checkout/pop converts LF→CRLF on Windows
+        // (core.autocrlf), which is irrelevant to the restoration semantics.
+        let restored = std::fs::read_to_string(tmp.path().join("README.md")).unwrap();
         assert_eq!(
-            std::fs::read_to_string(tmp.path().join("README.md")).unwrap(),
+            restored.replace("\r\n", "\n"),
             "dirty edit\n",
             "dirty work must be restored to the working tree"
         );

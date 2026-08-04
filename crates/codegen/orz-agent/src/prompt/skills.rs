@@ -956,8 +956,13 @@ mod tests {
         assert_eq!(paths.len(), 2);
 
         let path_strs: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-        assert!(path_strs.iter().any(|p| p.contains("parent/SKILL.md")));
-        assert!(path_strs.iter().any(|p| p.contains("child/SKILL.md")));
+        let sep = std::path::MAIN_SEPARATOR;
+        assert!(path_strs
+            .iter()
+            .any(|p| p.contains(&format!("parent{sep}SKILL.md"))));
+        assert!(path_strs
+            .iter()
+            .any(|p| p.contains(&format!("child{sep}SKILL.md"))));
     }
 
     // ── extract_first_paragraph ──────────────────────────────────────
@@ -2683,6 +2688,7 @@ mod tests {
             .find(|s| s.name == "zz-copyfix-japandi2")
             .unwrap();
         assert_eq!(rekeyed.display_name.as_deref(), Some("zz-copyfix-japandi"));
-        assert!(rekeyed.path.ends_with("zz-copyfix-japandi2/SKILL.md"));
+        assert!(Path::new(&rekeyed.path)
+            .ends_with(Path::new("zz-copyfix-japandi2").join("SKILL.md")));
     }
 }

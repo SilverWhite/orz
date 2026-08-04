@@ -108,14 +108,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // No gh in this dir yet.
         assert!(which::which_in("gh", Some(dir.path()), dir.path()).is_err());
-        // Create an executable `gh`.
-        let gh = dir.path().join("gh");
-        std::fs::write(&gh, b"#!/bin/sh\nexit 0\n").unwrap();
+        // Create an executable `gh`. Windows `which` resolves via PATHEXT, so
+        // the script needs an executable extension there.
         #[cfg(unix)]
-        {
+        let gh = {
+            let gh = dir.path().join("gh");
+            std::fs::write(&gh, b"#!/bin/sh\nexit 0\n").unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+            gh
+        };
+        #[cfg(windows)]
+        let gh = {
+            let gh = dir.path().join("gh.cmd");
+            std::fs::write(&gh, "@echo off\r\nexit /b 0\r\n").unwrap();
+            gh
+        };
         assert!(which::which_in("gh", Some(dir.path()), dir.path()).is_ok());
     }
 

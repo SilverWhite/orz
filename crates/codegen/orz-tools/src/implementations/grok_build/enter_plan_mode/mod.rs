@@ -633,7 +633,13 @@ mod tests {
         let EnterPlanModeOutput::Entered {
             ref plan_file_path, ..
         } = result;
-        assert_eq!(plan_file_path, "/workspace/my-project/.grok/plan.md");
+        // Display comparison must be platform-aware: on Windows the joined
+        // suffix renders with `\` while the unix-style cwd keeps `/`.
+        let expected = std::path::PathBuf::from("/workspace/my-project")
+            .join(".grok/plan.md")
+            .display()
+            .to_string();
+        assert_eq!(plan_file_path, &expected);
     }
 
     #[tokio::test]

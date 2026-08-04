@@ -484,15 +484,18 @@ pub fn resolve_model_path(
     let input = sanitize_model_path_arg(input);
     let expanded = shellexpand::tilde(input);
     let input_path = std::path::Path::new(expanded.as_ref());
+    // `has_root()` not `is_absolute()`: on Windows `/foo` is rooted but has no
+    // drive prefix, so `is_absolute()` is false — yet it is the model's
+    // absolute/display form and must get the same display-strip treatment.
     if let Some(display) = display_cwd
-        && input_path.is_absolute()
+        && input_path.has_root()
     {
         if let Ok(suffix) = input_path.strip_prefix(display) {
             return cwd.join(suffix);
         }
         return input_path.to_path_buf();
     }
-    if !input_path.is_absolute() && !expanded.is_empty() {
+    if !input_path.has_root() && !expanded.is_empty() {
         let as_absolute = std::path::PathBuf::from(format!("/{}", expanded.as_ref()));
         let effective_base = display_cwd.unwrap_or(cwd);
         if as_absolute.starts_with(effective_base)
@@ -500,6 +503,13 @@ pub fn resolve_model_path(
         {
             return cwd.join(suffix);
         }
+    }
+    // Rooted inputs are absolute-form: return as-is. On Windows `cwd.join`
+    // would keep the cwd's drive prefix (`C:\etc\hosts` from `/etc/hosts`),
+    // silently retargeting the path — a security-relevant miss for the
+    // permission resolver.
+    if input_path.has_root() {
+        return input_path.to_path_buf();
     }
     cwd.join(input_path)
 }

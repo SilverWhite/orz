@@ -334,7 +334,10 @@ fn is_static_path_operand(p: &str) -> bool {
 
 fn join_cwd(base: &Path, operand: &str) -> PathBuf {
     let p = Path::new(operand);
-    if p.is_absolute() {
+    // `has_root()` not `is_absolute()`: on Windows `/abs/path` is rooted but
+    // has no drive prefix, so `is_absolute()` is false — joining it onto the
+    // session cwd would scan the wrong directory (a security-relevant miss).
+    if p.is_absolute() || p.has_root() {
         p.to_path_buf()
     } else {
         base.join(p)

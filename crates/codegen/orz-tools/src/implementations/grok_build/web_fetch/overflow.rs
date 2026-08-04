@@ -360,6 +360,11 @@ mod tests {
         assert!(result.content.contains("showing first 100 of"));
         assert!(result.content.contains("ReadAsset"));
         let dump = tmp.path().join("web_fetch/1.md");
+        // Unix-only: the recovery footer (path + tool hints) must fit the
+        // 512-byte output budget for the path to appear inline; on Windows
+        // the full temp path is too long, so the footer is dropped by design
+        // (the artifact file itself is still verified below on all platforms).
+        #[cfg(unix)]
         assert!(result.content.contains(dump.to_string_lossy().as_ref()));
         assert_eq!(tokio::fs::read_to_string(dump).await.unwrap(), full);
     }

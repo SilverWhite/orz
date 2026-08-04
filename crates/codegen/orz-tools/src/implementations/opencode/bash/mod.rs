@@ -848,7 +848,14 @@ mod tests {
 
         match result {
             BashToolOutput::Bash(bash) => {
-                assert_eq!(bash.output_file, "/sessions/abc/terminal/my-call-42.log");
+                // Platform-aware display comparison: on Windows the joined
+                // segments render with `\`.
+                let expected = std::path::PathBuf::from("/sessions/abc")
+                    .join("terminal")
+                    .join("my-call-42.log")
+                    .display()
+                    .to_string();
+                assert_eq!(bash.output_file, expected);
             }
             BashToolOutput::BackgroundTaskStarted(_) => panic!("Expected foreground output"),
         }

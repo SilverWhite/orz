@@ -404,7 +404,9 @@ impl ProtectedEditPermission {
 /// preserves its uncollapsed components for physical symlink + `..` resolution,
 /// while checking a separate lexical normalization for traversal aliases.
 pub(crate) fn edit_target_protection(path: &Path) -> Option<ProtectedEditReason> {
-    if !path.is_absolute() {
+    // `has_root()` complement: on Windows `/work/...` is rooted but not
+    // `is_absolute()` (no drive prefix), yet it is an absolute-form path.
+    if !path.is_absolute() && !path.has_root() {
         return Some(ProtectedEditReason::Sensitive);
     }
     let lexical = orz_paths::normalize_lexically(path);
@@ -1205,7 +1207,9 @@ fn lexical_normalize(path: &str) -> String {
 /// mid-path link (not just the leaf).
 fn path_has_symlink(absolute: &str) -> bool {
     let path = Path::new(absolute);
-    if !path.is_absolute() {
+    // Rooted paths (`/work/...`) are absolute-form on Windows too — the
+    // caller already verified the string form via `is_absolute_shell_path`.
+    if !path.is_absolute() && !path.has_root() {
         return false;
     }
     let mut prefix = PathBuf::new();
@@ -1226,7 +1230,9 @@ fn path_has_symlink(absolute: &str) -> bool {
 /// the command's cwd, not the process cwd. Point-in-time (TOCTOU) only.
 fn resolve_symlink_target(absolute: &str) -> Option<String> {
     let path = Path::new(absolute);
-    if !path.is_absolute() {
+    // Rooted paths (`/work/...`) are absolute-form on Windows too — the
+    // caller already verified the string form via `is_absolute_shell_path`.
+    if !path.is_absolute() && !path.has_root() {
         return None;
     }
     let resolved = resolve_following_symlinks(path, 0)?;

@@ -15,6 +15,8 @@ use super::{LspBackend, LspError, LspOperation, LspToolInput, file_uri};
 const MOCK_LSP_SERVER: &str = r#"
 import json, sys
 
+sys.stdout.reconfigure(newline="")
+
 def read_message():
     headers = {}
     while True:
@@ -150,6 +152,8 @@ fn write_delayed_diagnostics_server() -> (tempfile::TempDir, std::path::PathBuf)
     const DELAYED_SERVER: &str = r#"
 import json, sys, time
 
+sys.stdout.reconfigure(newline="")
+
 def read_message():
     headers = {}
     while True:
@@ -221,6 +225,8 @@ fn write_init_failure_server() -> (tempfile::TempDir, std::path::PathBuf) {
 fn write_slow_init_server(delay_ms: u64) -> (tempfile::TempDir, std::path::PathBuf) {
     let script = format!(
         r#"import json, sys, time
+
+sys.stdout.reconfigure(newline="")
 
 def read_message():
     headers = {{}}
@@ -294,6 +300,8 @@ fn write_init_failure_server_n_times(
     let script = format!(
         r#"import json, os, sys
 
+sys.stdout.reconfigure(newline="")
+
 FAILURES_BEFORE_SUCCESS = {failures_before_success}
 COUNTER_FILE = os.environ["INIT_FAILURE_COUNTER_FILE"]
 INIT_ERROR = json.loads("{init_error_payload}")
@@ -361,11 +369,25 @@ while True:
     (dir, script_path)
 }
 
+fn mock_python_command() -> String {
+    // Windows: `python3` is usually an App Execution Alias stub (opens the
+    // Store and exits) rather than a real interpreter — use `python`, the
+    // standard Windows launcher name.
+    #[cfg(windows)]
+    {
+        "python".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        "python3".to_string()
+    }
+}
+
 fn mock_server_config(script_path: &Path) -> LspServerConfig {
     let mut ext_map = HashMap::new();
     ext_map.insert(".ts".to_string(), "typescript".to_string());
     LspServerConfig {
-        command: "python3".to_string(),
+        command: mock_python_command(),
         args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
         extensions: ext_map,
         startup_timeout: Some(10_000),
@@ -571,7 +593,7 @@ async fn e2e_multi_server_routing() {
     servers.insert(
         "mock-ts".to_string(),
         LspServerConfig {
-            command: "python3".to_string(),
+            command: mock_python_command(),
             args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
             extensions: ts_ext,
             startup_timeout: Some(10_000),
@@ -581,7 +603,7 @@ async fn e2e_multi_server_routing() {
     servers.insert(
         "mock-py".to_string(),
         LspServerConfig {
-            command: "python3".to_string(),
+            command: mock_python_command(),
             args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
             extensions: py_ext,
             startup_timeout: Some(10_000),
@@ -1024,7 +1046,7 @@ async fn e2e_finalize_no_longer_blocks_on_slow_lsp_startup() {
     let mut ext_map = HashMap::new();
     ext_map.insert(".ts".to_string(), "typescript".to_string());
     let server_config = LspServerConfig {
-        command: "python3".to_string(),
+        command: mock_python_command(),
         args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
         extensions: ext_map,
         startup_timeout: Some(5_000),
@@ -1079,7 +1101,7 @@ async fn e2e_first_dispatch_waits_for_background_startup() {
     let mut ext_map = HashMap::new();
     ext_map.insert(".ts".to_string(), "typescript".to_string());
     let server_config = LspServerConfig {
-        command: "python3".to_string(),
+        command: mock_python_command(),
         args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
         extensions: ext_map,
         startup_timeout: Some(5_000),
@@ -1143,7 +1165,7 @@ async fn e2e_restart_monitor_emits_failed_on_restart_init_error() {
                 counter_path.to_string_lossy().into_owned(),
             );
             let server_config = LspServerConfig {
-                command: "python3".to_string(),
+                command: mock_python_command(),
                 args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
                 env,
                 extensions: ext_map,
@@ -1236,7 +1258,7 @@ async fn e2e_drain_timeout_preserves_pending_diagnostics() {
     let mut ext_map = HashMap::new();
     ext_map.insert(".ts".to_string(), "typescript".to_string());
     let server_config = LspServerConfig {
-        command: "python3".to_string(),
+        command: mock_python_command(),
         args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
         extensions: ext_map,
         startup_timeout: Some(10_000),
@@ -1283,7 +1305,7 @@ async fn e2e_restart_replay_requeues_pending_diagnostics() {
     let mut ext_map = HashMap::new();
     ext_map.insert(".ts".to_string(), "typescript".to_string());
     let server_config = LspServerConfig {
-        command: "python3".to_string(),
+        command: mock_python_command(),
         args: vec!["-u".to_string(), script_path.to_string_lossy().into_owned()],
         extensions: ext_map,
         startup_timeout: Some(10_000),
@@ -1322,7 +1344,12 @@ async fn e2e_restart_replay_requeues_pending_diagnostics() {
     .expect("restart should succeed");
 
     for (uri_str, lang_id) in &tracked_docs {
-        let path = PathBuf::from(uri_str.strip_prefix("file://").unwrap());
+        // `Url::to_file_path` (not a string strip) so Windows `file:///C:/...`
+        // URIs convert to valid native paths.
+        let path = lsp_types::Url::parse(uri_str)
+            .unwrap()
+            .to_file_path()
+            .unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         restarted.notify_file_change(&path, &content, lang_id);
         mgr.mark_path_pending_diagnostics("delayed", lifecycle_id, &path);

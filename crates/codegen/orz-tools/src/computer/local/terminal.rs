@@ -3796,6 +3796,7 @@ mod tests {
         let _ = tokio::fs::remove_file(&output_file).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stderr_captured() {
         let backend = LocalTerminalBackend::new();
@@ -3855,6 +3856,7 @@ mod tests {
         let _ = tokio::fs::remove_file(&output_file).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_background_and_get_task() {
         let backend = LocalTerminalBackend::new();
@@ -3934,6 +3936,7 @@ mod tests {
     // BashOutputChunk streaming tests
     // -----------------------------------------------------------------------
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn chunk_notifications_sent_during_execution() {
         // Create a real notification channel (not noop)
@@ -4006,6 +4009,7 @@ mod tests {
         assert!(result.combined_output.contains("chunk_3"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn chunk_notifications_keep_flowing_after_truncation() {
         // Regression guard for the emission gate fix: the gate is keyed off the
@@ -4383,6 +4387,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_background_child_with_inherited_pipe_does_not_block() {
         // `sleep 300 &` inherits the pipe — without drain timeout this blocks forever.
@@ -4646,6 +4651,7 @@ mod tests {
     /// in `self.processes` for `COMPLETED_TASK_TTL`; if the actor kept the `Arc`
     /// that long, a `kill_all()` on exit could `killpg` a pid the OS recycled.
     /// Asserts the injected scope's live-group count goes 1 -> 0 across the reap.
+    #[cfg(unix)]
     #[test]
     fn reaped_background_child_leaves_scope_empty() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -4701,6 +4707,7 @@ mod tests {
     // Persistent shell tests
     // ================================================================
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_cd_persists() {
         let backend = LocalTerminalBackend::with_persistent_shell();
@@ -4719,6 +4726,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_env_var_persists() {
         let backend = LocalTerminalBackend::with_persistent_shell();
@@ -4760,6 +4768,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_function_persists() {
         let backend = LocalTerminalBackend::with_persistent_shell();
@@ -4779,6 +4788,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_variable_capture() {
         let backend = LocalTerminalBackend::with_persistent_shell();
@@ -4800,6 +4810,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_deleted_cwd_falls_back_to_request_cwd() {
         let backend = LocalTerminalBackend::with_persistent_shell();
@@ -4834,6 +4845,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_spawn_error_names_missing_cwd() {
         let backend = LocalTerminalBackend::with_persistent_shell();
@@ -4886,6 +4898,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_non_persistent_shell_unaffected_by_deleted_cd_target() {
         let backend = LocalTerminalBackend::new();
@@ -4907,6 +4920,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_parse_login_env_capture() {
         let stdout = "motd noise\n\x01/opt/rc/bin:/usr/bin\x01\
@@ -4937,6 +4951,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_parse_login_env_capture_path_only() {
         let (path, env) = parse_login_env_capture("\x01/usr/bin\x01");
@@ -4944,6 +4959,7 @@ mod tests {
         assert!(env.is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_non_persistent_shell_no_state() {
         // Verify the default (non-persistent) mode doesn't carry state.

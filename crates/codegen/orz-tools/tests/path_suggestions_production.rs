@@ -218,10 +218,13 @@ async fn pattern3_dropped_folder_with_display_remap() {
     let hint = path_not_found_hint(&resolved_missing, &resolved_cwd, &display_cwd).await;
 
     if let Some(ref suggestion) = hint.suggestion {
-        // Suggestion must be in display space, not resolved space.
+        // Suggestion must be in display space, not resolved space. Platform-
+        // aware prefix check: on Windows the joined suffix renders with `\`
+        // while the unix-style display cwd keeps `/`.
         let s = suggestion.display().to_string();
+        let display_prefix = display_cwd.display().to_string();
         assert!(
-            s.contains("/home/user/project/"),
+            s.starts_with(&display_prefix) && s.len() > display_prefix.len(),
             "suggestion should use display path, got: {s}"
         );
         assert!(

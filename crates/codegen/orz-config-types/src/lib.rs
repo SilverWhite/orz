@@ -1348,20 +1348,17 @@ mod tests {
     }
     #[test]
     fn remote_settings_announcements_populated() {
-        let json = r#"{"announcements": [{"id": "a", "message": "m"}]}"#;
+        let json = r#"{"announcements": [{"id": "a", "title": "t", "body": "m", "url": "https://x.ai", "enabled": true, "dismissible": true}]}"#;
         let settings: RemoteSettings = serde_json::from_str(json).unwrap();
         assert_eq!(
             settings.announcements,
             Some(vec![RemoteAnnouncement {
-                id: Some("a".to_string()),
-                message: Some("m".to_string()),
-                severity: None,
-                title: None,
-                cta: None,
-                updated_at: None,
-                expires_at: None,
-                dismissible: None,
-                persistent: None,
+                id: "a".to_string(),
+                title: "t".to_string(),
+                body: "m".to_string(),
+                url: Some("https://x.ai".to_string()),
+                enabled: true,
+                dismissible: true,
             }])
         );
     }
@@ -1369,23 +1366,20 @@ mod tests {
     fn remote_settings_announcements_one_bad_item_does_not_poison() {
         let json = r#"{
             "announcements": [
-                {"id": "good", "message": "ok"},
-                {"id": 999, "message": "bad-id-type"}
+                {"id": "good", "title": "t", "body": "ok"},
+                {"id": 999, "title": "bad-id-type"}
             ]
         }"#;
         let settings: RemoteSettings = serde_json::from_str(json).unwrap();
         assert_eq!(
             settings.announcements,
             Some(vec![RemoteAnnouncement {
-                id: Some("good".to_string()),
-                message: Some("ok".to_string()),
-                severity: None,
-                title: None,
-                cta: None,
-                updated_at: None,
-                expires_at: None,
-                dismissible: None,
-                persistent: None,
+                id: "good".to_string(),
+                title: "t".to_string(),
+                body: "ok".to_string(),
+                url: None,
+                enabled: false,
+                dismissible: false,
             }])
         );
     }

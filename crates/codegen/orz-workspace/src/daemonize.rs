@@ -12,7 +12,7 @@
 //! child, which can deadlock it.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::{FromRawFd as _, OwnedFd};
 use std::path::Path;
@@ -232,6 +232,27 @@ impl PidFile {
         file.flush()?;
 
         Ok(Some(Self { _file: file }))
+    }
+
+    /// Read the pidfile contents through the locked handle. On Windows an
+    /// exclusive `LockFileEx` denies reads from any other handle (even in the
+    /// same process), so in-lock reads must go through this handle.
+    pub fn contents(&self) -> io::Result<String> {
+        let mut file = &self._file;
+        file.seek(SeekFrom::Start(0))?;
+        let mut s = String::new();
+        file.read_to_string(&mut s)?;
+        Ok(s)
+    }
+
+    /// Replace the pidfile contents through the locked handle (Windows
+    /// exclusive locks likewise deny writes from other handles).
+    pub fn write_contents(&self, contents: &[u8]) -> io::Result<()> {
+        let mut file = &self._file;
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(contents)?;
+        file.flush()
     }
 
     /// Acquire the lock, taking over from a live predecessor workspace-server
@@ -566,7 +587,7 @@ mod tests {
         let path = dir.path().join("ws.pid");
 
         let guard = PidFile::acquire(&path).unwrap().unwrap();
-        let contents = fs::read_to_string(&path).unwrap();
+        let contents = guard.contents().unwrap();
         assert_eq!(contents.trim().parse::<u32>().unwrap(), process::id());
         drop(guard);
     }
@@ -603,7 +624,7 @@ mod tests {
         fs::write(&path, "999999999999 stale junk\n").unwrap();
 
         let guard = PidFile::acquire(&path).unwrap().unwrap();
-        let contents = fs::read_to_string(&path).unwrap();
+        let contents = guard.contents().unwrap();
         assert_eq!(
             contents,
             process::id().to_string(),
@@ -618,12 +639,12 @@ mod tests {
         let path = dir.path().join("ws.pid");
 
         let holder = PidFile::acquire(&path).unwrap().unwrap();
-        let before = fs::read_to_string(&path).unwrap();
+        let before = holder.contents().unwrap();
 
         let contended = PidFile::acquire(&path).unwrap();
         assert!(contended.is_none());
 
-        let after = fs::read_to_string(&path).unwrap();
+        let after = holder.contents().unwrap();
         assert_eq!(before, after, "contended acquire must not rewrite the file");
         drop(holder);
     }
@@ -754,10 +775,7 @@ mod tests {
 
         let guard = PidFile::acquire_or_take_over(&path, Duration::from_millis(100)).unwrap();
         assert!(guard.is_some());
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            process::id().to_string()
-        );
+        assert_eq!(guard.unwrap().contents().unwrap(), process::id().to_string());
     }
 
     #[test]
@@ -765,8 +783,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("ws.pid");
 
-        let _holder = PidFile::acquire(&path).unwrap().unwrap();
-        fs::write(&path, "not a pid").unwrap();
+        let holder = PidFile::acquire(&path).unwrap().unwrap();
+        holder.write_contents(b"not a pid").unwrap();
 
         let taken =
             PidFile::acquire_or_take_over_matching(&path, Duration::from_millis(100), "sleep")

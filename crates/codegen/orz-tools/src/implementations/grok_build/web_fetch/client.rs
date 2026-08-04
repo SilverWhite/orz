@@ -889,6 +889,11 @@ mod tests {
         assert!(!processed.content.contains(tail));
         assert!(expected.contains(tail));
         let artifact = tmp.path().join("web_fetch/1.md");
+        // Unix-only: the recovery footer (path + tool hints) must fit the
+        // output budget for the path to appear inline; on Windows the full
+        // temp path is too long, so the footer is dropped by design (the
+        // artifact file itself is still verified below on all platforms).
+        #[cfg(unix)]
         assert!(
             processed
                 .content

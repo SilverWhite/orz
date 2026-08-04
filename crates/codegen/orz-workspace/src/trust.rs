@@ -984,7 +984,11 @@ mod tests {
         }
     }
 
+    // Unix-only: simulates a fake `$HOME` via env override, but
+    // `dirs::home_dir()` on Windows resolves via SHGetKnownFolderPath and
+    // ignores env vars.
     #[test]
+    #[cfg(unix)]
     fn workspace_key_ignores_home_git_repo_for_subdir() {
         // Home-is-a-git-repo (dotfiles in $HOME): a subdir launched from under
         // home must key trust on the SUBDIR, not on $HOME — even though the git

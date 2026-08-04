@@ -321,7 +321,13 @@ fn make_envelope(event: HookEventName, payload: HookPayload) -> HookEventEnvelop
 
 /// Each new event type: write hook file → load → dispatch → verify the
 /// command fires and receives the correct JSON envelope on stdin.
+///
+/// Unix-only: the hook command uses POSIX redirect (`cat > file`); on
+/// Windows hooks run through the platform shell (PowerShell by default),
+/// where `cat` is a Get-Content alias with different stdin semantics, and
+/// its `>` redirect writes UTF-16LE, breaking the UTF-8 read below.
 #[tokio::test]
+#[cfg(unix)]
 async fn new_event_types_fire_and_receive_correct_envelope() {
     struct Case {
         event_name: HookEventName,
@@ -473,7 +479,11 @@ async fn new_event_types_fire_and_receive_correct_envelope() {
 /// constructs the spoof JSON, dispatches a hook that writes `printenv`
 /// for each key, and asserts the captured values are the runner's
 /// authentic ones.
+// Unix-only: the hook command uses POSIX `echo ... > file` redirects; on
+// Windows (PowerShell) `$NAME` does not read env vars (needs `$env:`), and
+// the `>` redirect writes UTF-16LE, breaking the UTF-8 read below.
 #[tokio::test]
+#[cfg(unix)]
 async fn runner_injected_vars_override_extra_env_at_spawn() {
     let dir = tempfile::tempdir().unwrap();
     let output_file = dir.path().join("envcap.txt");

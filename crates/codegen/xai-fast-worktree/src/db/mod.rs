@@ -295,7 +295,10 @@ impl WorktreeDb {
     /// before lookup). Otherwise it's looked up first as a DB ID, then as a
     /// worktree label (stored in `metadata.label`).
     pub fn get(&self, id_or_path: &str) -> Result<Option<WorktreeRecord>> {
-        if id_or_path.contains('/') {
+        // Both separators: Windows paths use `\` (an id/label never contains
+        // either). A `/`-only check would treat `C:\...\worktrees\repo\wt` as
+        // an id and miss every path lookup on Windows.
+        if id_or_path.contains('/') || id_or_path.contains('\\') {
             let canon = PathBuf::from(id_or_path);
             let canon = dunce::canonicalize(&canon).unwrap_or(canon);
             queries::get_by_path(&self.conn, &canon)

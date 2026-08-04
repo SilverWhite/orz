@@ -1053,7 +1053,13 @@ mod tests {
     /// Now the env-var pre-spawn check refuses with a clear reason when
     /// the var is unset (and the dispatcher fail-opens, so the tool call
     /// itself is not blocked).
+    ///
+    /// Unix-only: the `${VAR}` / `sh -c` contract is the unix branch of
+    /// `run_command_hook`; on Windows shell commands are routed to the
+    /// platform shell (PowerShell by default), which does not expand
+    /// `${...}`.
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_env_var_interpolation_runs_via_shell() {
         let tmp = tempfile::tempdir().unwrap();
         let script = tmp.path().join("hook.sh");
@@ -1107,7 +1113,11 @@ mod tests {
     /// it on the spawned child so shell expansion via the `sh -c` branch
     /// resolves correctly; otherwise such hooks fail to find the
     /// command.
+    ///
+    /// Unix-only: the hook script is a POSIX `sh` script; on Windows the
+    /// platform shell (PowerShell by default) cannot execute it.
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_claude_project_dir_is_exported() {
         let tmp = tempfile::tempdir().unwrap();
         let script = tmp.path().join("hook.sh");

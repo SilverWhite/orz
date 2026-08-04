@@ -1076,6 +1076,11 @@ mod tests {
     #[tokio::test]
     async fn test_rewind_point_creation() {
         let tracker = FileStateTracker::new();
+        // `/test` is rooted but not `is_absolute()` on Windows — use a
+        // drive-prefixed path there.
+        #[cfg(windows)]
+        let cwd = AbsPathBuf::new(PathBuf::from(r"C:\test")).unwrap();
+        #[cfg(not(windows))]
         let cwd = AbsPathBuf::new(PathBuf::from("/test")).unwrap();
         let fs = Arc::new(MockFs::new(cwd.to_path_buf()));
         let fs_wrapper = crate::file_system::AsyncFsWrapper::new(fs);
@@ -1098,6 +1103,11 @@ mod tests {
     #[tokio::test]
     async fn test_truncate_from() {
         let tracker = FileStateTracker::new();
+        // `/test` is rooted but not `is_absolute()` on Windows — use a
+        // drive-prefixed path there.
+        #[cfg(windows)]
+        let cwd = AbsPathBuf::new(PathBuf::from(r"C:\test")).unwrap();
+        #[cfg(not(windows))]
         let cwd = AbsPathBuf::new(PathBuf::from("/test")).unwrap();
         let fs = Arc::new(MockFs::new(cwd.to_path_buf()));
         let fs_wrapper = crate::file_system::AsyncFsWrapper::new(fs);

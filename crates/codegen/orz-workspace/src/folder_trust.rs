@@ -1134,7 +1134,11 @@ mod tests {
         );
     }
 
+    // Unix-only: simulates a fake `$HOME` via env override, but
+    // `dirs::home_dir()` on Windows resolves via SHGetKnownFolderPath and
+    // ignores env vars.
     #[test]
+    #[cfg(unix)]
     fn decide_inputs_flags_home_key_unrecordable() {
         // Case-2 wiring: with cwd == $HOME (git-init'd so workspace_key discovers
         // it as the home git root), the gather flags key_recordable=false and

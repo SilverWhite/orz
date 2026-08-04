@@ -404,13 +404,21 @@ async fn test_no_config_no_enforcement() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Allocate 64 MiB — would be killed with a 32 MiB limit, but should succeed here
-    let alloc_cmd = r#"python3 -c "
+    // `python3` is an App Execution Alias stub (not a real interpreter) on
+    // Windows — use the standard Windows launcher name there.
+    #[cfg(windows)]
+    let python = "python";
+    #[cfg(not(windows))]
+    let python = "python3";
+    let alloc_cmd = format!(
+        r#"{python} -c "
 data = bytearray(64 * 1024 * 1024)
 print('Allocated 64 MiB without limits')
-""#;
+""#
+    );
 
     let result = backend
-        .run(make_request(alloc_cmd, 10))
+        .run(make_request(&alloc_cmd, 10))
         .await
         .expect("command should succeed without limits");
 

@@ -107,8 +107,11 @@ pub fn detect_windows_shell() -> &'static WindowsShell {
 
 /// Locate Git Bash on disk. Checks common install paths, then falls back
 /// to `where bash.exe` (filtering for Git paths to avoid WSL bash).
+/// Public so bash-requiring subsystems (e.g. `.envrc` evaluation) can use
+/// the same Git-Bash-specific resolution instead of the general shell
+/// cascade (which prefers PowerShell).
 #[cfg(not(unix))]
-fn find_git_bash() -> Option<String> {
+pub fn find_git_bash() -> Option<String> {
     let candidates = [
         std::env::var("PROGRAMFILES")
             .map(|pf| format!("{pf}\\Git\\bin\\bash.exe"))

@@ -500,6 +500,12 @@ mod tests {
         assert!(!installed.repo_path.join("agents/new.md").exists());
     }
 
+    // Unix-only: simulates an "outside home" source via a fake `$HOME` tempdir.
+    // `dirs::home_dir()` on Windows resolves via
+    // `SHGetKnownFolderPath(FOLDERID_Profile)` (ignores env vars) and tempfile
+    // dirs live inside the real user profile, so an outside-home source cannot
+    // be constructed there.
+    #[cfg(unix)]
     #[test]
     #[serial(home_env)]
     fn refresh_skips_untrusted_source_outside_home() {

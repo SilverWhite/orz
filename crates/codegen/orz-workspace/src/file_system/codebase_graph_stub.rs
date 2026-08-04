@@ -57,7 +57,7 @@ impl FileEvent {
     pub fn renamed(from: PathBuf, _to: PathBuf) -> Self { Self { path: from.to_string_lossy().into_owned(), kind: FileEventKind::Renamed } }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FileEventKind { Created, Removed, Modified, Renamed }
 
 #[derive(Debug)]

@@ -368,12 +368,16 @@ mod tests {
         .unwrap();
 
         let files = discover_agents_md(tmp.path()).await;
+        let suffix = std::path::Path::new(".cursor")
+            .join("rules")
+            .join("xyzzy-discover-agents-md-test.md");
         let rule = files
             .iter()
             .find(|f| {
                 f["file_path"]
                     .as_str()
-                    .is_some_and(|p| p.ends_with("/.cursor/rules/xyzzy-discover-agents-md-test.md"))
+                    // Component-level suffix (Windows paths use `\`).
+                    .is_some_and(|p| std::path::Path::new(p).ends_with(&suffix))
             })
             .expect("should discover the rules file");
         let content = rule["content"].as_str().unwrap();

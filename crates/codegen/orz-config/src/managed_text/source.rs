@@ -60,7 +60,12 @@ impl ParentPlan {
                     }
                     chain.push(PathIdentity {
                         path: current.clone(),
-                        identity: FileIdentity::from_metadata(&metadata),
+                        identity: FileIdentity::from_path(&current, &metadata).ok_or_else(
+                            || ManagedConfigError::Read {
+                                path: current.clone(),
+                                source: std::io::Error::other("failed to read file identity"),
+                            },
+                        )?,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -115,7 +120,7 @@ impl ParentPlan {
                 .map_err(|_| ManagedConfigError::ParentChanged(expected.path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.is_dir()
-                || FileIdentity::from_metadata(&metadata) != expected.identity
+                || FileIdentity::from_path(&expected.path, &metadata) != Some(expected.identity)
             {
                 return Err(ManagedConfigError::ParentChanged(expected.path.clone()));
             }
@@ -128,6 +133,11 @@ impl ParentPlan {
 pub(super) struct ParentAnchor {
     path: PathBuf,
     identity: FileIdentity,
+    /// Directory handle held open so `sync()` can flush the rename on unix.
+    /// Unix-only: `fs::File::open` cannot open directories on Windows
+    /// (CreateFileW without FILE_FLAG_BACKUP_SEMANTICS fails with
+    /// ERROR_ACCESS_DENIED), and no sync is needed there.
+    #[cfg(unix)]
     directory: fs::File,
 }
 
@@ -140,13 +150,20 @@ impl ParentAnchor {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(ManagedConfigError::ParentChanged(path.to_path_buf()));
         }
+        #[cfg(unix)]
         let directory = fs::File::open(path).map_err(|source| ManagedConfigError::Read {
             path: path.to_path_buf(),
             source,
         })?;
         Ok(Self {
             path: path.to_path_buf(),
-            identity: FileIdentity::from_metadata(&metadata),
+            identity: FileIdentity::from_path(path, &metadata).ok_or_else(|| {
+                ManagedConfigError::Read {
+                    path: path.to_path_buf(),
+                    source: std::io::Error::other("failed to read file identity"),
+                }
+            })?,
+            #[cfg(unix)]
             directory,
         })
     }
@@ -182,34 +199,84 @@ struct PathIdentity {
     identity: FileIdentity,
 }
 
+/// Stable identity of a directory/file object.
+///
+/// Unix: `(dev, ino)` — immune to entry churn, so our own sibling artifacts
+/// (lock/backup/temp) created mid-transaction never look like a parent swap.
+/// Windows has no inode; `metadata.len()`/`modified()` of a directory change
+/// on ANY entry add/remove (including our own lock file), which would make
+/// every apply fail with `ParentChanged`. Windows identity is therefore the
+/// volume serial + file index from `GetFileInformationByHandle` — the NTFS
+/// analogue of `(dev, ino)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct FileIdentity {
     #[cfg(unix)]
     dev: u64,
     #[cfg(unix)]
     ino: u64,
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    volume_serial: u32,
+    #[cfg(windows)]
+    file_index: u64,
+    #[cfg(not(any(unix, windows)))]
     len: u64,
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     modified: Option<std::time::SystemTime>,
 }
 
 impl FileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
+    /// `None` when the path cannot be opened for identity (Windows handle
+    /// failure); callers treat an unidentifiable path as changed (fail-closed).
+    fn from_path(path: &Path, metadata: &fs::Metadata) -> Option<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-            Self {
+            Some(Self {
                 dev: metadata.dev(),
                 ino: metadata.ino(),
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt as _;
+            use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+            use windows_sys::Win32::Storage::FileSystem::{
+                CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+                FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            };
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            unsafe {
+                let handle = CreateFileW(
+                    wide.as_ptr(),
+                    FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS,
+                    std::ptr::null_mut(),
+                );
+                if handle == INVALID_HANDLE_VALUE {
+                    return None;
+                }
+                let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+                let ok = GetFileInformationByHandle(handle, &mut info);
+                CloseHandle(handle);
+                if ok == 0 {
+                    return None;
+                }
+                Some(Self {
+                    volume_serial: info.dwVolumeSerialNumber,
+                    file_index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+                })
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
-            Self {
+            Some(Self {
                 len: metadata.len(),
                 modified: metadata.modified().ok(),
-            }
+            })
         }
     }
 }
@@ -382,7 +449,7 @@ pub(super) fn read_source(path: &Path) -> Result<SourceState, ManagedConfigError
         hash: blake3::hash(&bytes).to_hex().to_string(),
         bytes: Some(bytes),
         mode: file_mode(&metadata),
-        identity: Some(FileIdentity::from_metadata(&metadata)),
+        identity: FileIdentity::from_path(path, &metadata),
     })
 }
 

@@ -29,6 +29,17 @@ orz-version = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = { workspace = true }
 
+# File identity for managed_text revalidation: GetFileInformationByHandle
+# (volume serial + file index) is the Windows analogue of unix (dev, ino).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    # CreateFileW's signature references SECURITY_ATTRIBUTES, so windows-sys
+    # gates it (and CreateFileW itself) under Win32_Security.
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

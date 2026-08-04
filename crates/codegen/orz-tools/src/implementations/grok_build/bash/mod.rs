@@ -2829,6 +2829,7 @@ mod tests {
 
     /// Absent `WorkspaceViewerContext` extension = no Progress emitted;
     /// terminal still surfaces.
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_streaming_progress_suppressed_when_gate_off() {
         use futures::StreamExt;
@@ -2877,6 +2878,7 @@ mod tests {
 
     /// Gate ON (via `test_ctx`): ≥1 `bash_output_chunk` then exactly
     /// one `Terminal(Ok(Foreground))`, in order.
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_streaming_progress() {
         use futures::StreamExt;
@@ -2925,6 +2927,7 @@ mod tests {
     /// byte limit mid-stream, deltas KEEP arriving after truncation, the
     /// reported `total_bytes` stays monotonic and consistent with the delta
     /// lengths, and `truncated` is surfaced.
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_streaming_progress_survives_truncation() {
         use futures::StreamExt;
@@ -3357,7 +3360,11 @@ mod tests {
         );
     }
 
+    // Unix-only: `get_prefixed_command` uses the platform chain separator
+    // (`orz_config::shell::chain_separator()`), which is `&&` on unix but `;`
+    // on Windows PowerShell 5.1 / cmd.exe.
     #[tokio::test]
+    #[cfg(unix)]
     async fn cmd_prefix_prepended() {
         // We can test this via the static helper
         assert_eq!(

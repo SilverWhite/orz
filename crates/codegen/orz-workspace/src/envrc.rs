@@ -126,25 +126,44 @@ fn load_envrc_via_bash(dir: &Path) -> Option<HashMap<String, String>> {
     // 1. Includes direnv stubs
     // 2. Sources the .envrc
     // 3. Outputs all env vars as KEY=VALUE pairs (null-separated for safety)
+    // Bash-safe paths: on Windows `C:\Users\...` backslashes are escape
+    // characters inside the double-quoted script — use forward slashes
+    // (accepted by Git Bash).
+    let dir_bash = dir.display().to_string().replace('\\', "/");
+    let envrc_bash = envrc_path.display().to_string().replace('\\', "/");
     let script = format!(
         r#"
 set -e
-cd "{dir}"
+cd "{dir_bash}"
 {stubs}
-. "{envrc}"
+. "{envrc_bash}"
 # Output all environment variables, null-separated
 env -0
 "#,
-        dir = dir.display(),
+        dir_bash = dir_bash,
         stubs = DIRENV_STUBS,
-        envrc = envrc_path.display(),
+        envrc_bash = envrc_bash,
     );
 
     // Capture baseline environment (before running .envrc)
     let baseline: HashMap<String, String> = std::env::vars().collect();
 
-    // Run the script and capture output
-    let mut bash_cmd = Command::new("/bin/bash");
+    // Run the script and capture output. `/bin/bash` does not exist on
+    // Windows, and a bare `bash` resolves to the WSL launcher in System32
+    // (CreateProcess searches System32 before PATH), which cannot run
+    // Windows paths — so use the detected Git Bash absolute path. Degrades
+    // to None (no envrc) when Git Bash is not installed.
+    #[cfg(windows)]
+    let bash = match orz_config::shell::find_git_bash() {
+        Some(path) => path,
+        None => {
+            tracing::warn!("envrc evaluation requires Git Bash on Windows; none detected");
+            return None;
+        }
+    };
+    #[cfg(not(windows))]
+    let bash = "/bin/bash";
+    let mut bash_cmd = Command::new(bash);
     bash_cmd
         .arg("-c")
         .arg(&script)
@@ -244,8 +263,17 @@ mod tests {
         fs::write(dir.path().join(".envrc"), "export MY_DIR=$PWD/subdir\n").unwrap();
 
         let env = load_envrc(dir.path()).unwrap();
-        let expected = format!("{}/subdir", dir.path().display());
-        assert_eq!(env.get("MY_DIR"), Some(&expected));
+        // `$PWD` expands to the shell's view of the dir: the Windows display
+        // path on unix, but the MSYS virtual path (/tmp/...) under Git Bash
+        // on Windows — assert on the common suffix (dir name + /subdir).
+        let dir_name = dir.path().file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            env.get("MY_DIR")
+                .unwrap()
+                .ends_with(&format!("{dir_name}/subdir")),
+            "got: {:?}",
+            env.get("MY_DIR")
+        );
     }
 
     #[test]
@@ -261,7 +289,14 @@ mod tests {
 
         let env = load_envrc(dir.path()).unwrap();
         let path = env.get("PATH").unwrap();
-        assert!(path.contains(&format!("{}/bin", dir.path().display())));
+        // PATH_add prepends `$PWD/bin` — the shell's view of the dir (MSYS
+        // /tmp/... under Git Bash on Windows), so assert on the common
+        // dir-name suffix.
+        let dir_name = dir.path().file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            path.contains(&format!("{dir_name}/bin")),
+            "got: {path}"
+        );
     }
 
     #[test]

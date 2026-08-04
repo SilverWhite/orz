@@ -217,7 +217,11 @@ impl RelPathBuf {
     /// Create from a string or PathBuf. Errors if absolute or not UTF-8.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, RelPathError> {
         let path = path.into();
-        if path.is_absolute() {
+        // `is_absolute()` alone is not enough on Windows: `/foo` is
+        // root-relative (has a root but no drive prefix), so `is_absolute()`
+        // is false — yet `join` treats it as rooted and would produce an
+        // absolute path, breaking the relative-path invariant.
+        if path.is_absolute() || path.has_root() {
             return Err(RelPathError::NotRelative {
                 input: path.display().to_string(),
             });

@@ -1734,7 +1734,11 @@ mod tests {
         );
     }
 
+    // Unix-only: simulates a fake `$HOME` via env override, but
+    // `dirs::home_dir()` on Windows resolves via SHGetKnownFolderPath and
+    // ignores env vars.
     #[test]
+    #[cfg(unix)]
     fn project_claude_absent_when_home_is_git_repo() {
         // Home-is-a-git-repo (dotfiles in $HOME): for a cwd under home, the
         // repo-root walk must NOT reach $HOME and treat `~/.claude` as
@@ -2892,7 +2896,11 @@ mod tests {
 
     /// Untrusted clone must not honor project `.claude/settings.json` permission
     /// rules or `defaultMode` (including bypassPermissions).
+    // Unix-only: simulates a fake `$HOME` via env override, but
+    // `dirs::home_dir()` on Windows resolves via SHGetKnownFolderPath and
+    // ignores env vars.
     #[test]
+    #[cfg(unix)]
     fn untrusted_project_claude_permissions_are_not_honored() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
