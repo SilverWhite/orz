@@ -856,7 +856,13 @@ mod tests {
         let gc = build_auto_gc_options(&opts, Vec::new());
         assert!(!gc.force, "auto path must never set force=true");
         assert!(gc.skip_kinds.is_empty());
-        assert_eq!(gc.max_age_by_kind.get(&WorktreeKind::Manual), Some(&None));
+        // Kind TTLs are carried only where the age path is live (CWD-scan
+        // platform); without a scan platform the kind map is dropped.
+        if process_cwd_scan_available() {
+            assert_eq!(gc.max_age_by_kind.get(&WorktreeKind::Manual), Some(&None));
+        } else {
+            assert!(gc.max_age_by_kind.is_empty());
+        }
     }
 
     #[test]
@@ -1164,8 +1170,19 @@ mod tests {
         assert_eq!(report.outcome, AutoGcOutcome::Ran);
         assert!(dir.exists());
         let gc = report.gc.unwrap();
-        assert_eq!(gc.expired_removed, 0);
-        assert_eq!(gc.skipped_alive, 1);
+        // The PID liveness guard is Unix-only (kill(pid, 0)); on other
+        // platforms is_pid_alive is false by design (never false-alive for
+        // recycled PIDs), so the expired worktree is reclaimed.
+        #[cfg(unix)]
+        {
+            assert_eq!(gc.expired_removed, 0);
+            assert_eq!(gc.skipped_alive, 1, "own PID must be detected as alive");
+        }
+        #[cfg(not(unix))]
+        {
+            assert_eq!(gc.expired_removed, 1, "expired worktree reclaimed without PID guard");
+            assert_eq!(gc.skipped_alive, 0, "PID guard disabled on this platform");
+        }
     }
 
     #[test]

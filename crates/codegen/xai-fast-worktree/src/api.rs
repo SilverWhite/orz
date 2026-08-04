@@ -3388,10 +3388,15 @@ mod tests {
             )
             .unwrap();
 
-            // Our PID is alive, so the real-path worktree should be skipped
-            assert_eq!(report.skipped_alive, 1);
             // The nonexistent-path one gets swept to dead then removed
             assert_eq!(report.dead_removed, 1);
+            // The PID liveness guard is Unix-only (kill(pid, 0)); on other
+            // platforms is_pid_alive is false by design (never false-alive for
+            // recycled PIDs), so the expired real-path worktree is reclaimed.
+            #[cfg(unix)]
+            assert_eq!(report.skipped_alive, 1, "own PID must be detected as alive");
+            #[cfg(not(unix))]
+            assert_eq!(report.skipped_alive, 0, "PID guard disabled on this platform");
         }
 
         #[test]

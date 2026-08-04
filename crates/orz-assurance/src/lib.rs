@@ -1,18 +1,17 @@
 // orz-assurance — assurance kernel for the orz CLI agent workbench.
 //
 // Ported from Python assurance/ (spec reference).
-// Modules: journal (Phase 1), gates, orientation, session, sandbox, credential, permit (Phase 2+).
+// Modules: journal (Phase 1), gates, orientation, plan (Phase 2),
+// session/snapshot, sandbox/job_object, credential, permit (Phase 3).
 
+pub mod credential;
 pub mod gates;
 pub mod journal;
 pub mod orientation;
+pub mod permit;
 pub mod plan;
-
-// Phase 2+ module declarations:
-// pub mod session;
-// pub mod sandbox;
-// pub mod credential;
-// pub mod permit;
+pub mod sandbox;
+pub mod session;
 
 // Re-export commonly used types from journal
 pub use journal::{

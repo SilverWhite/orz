@@ -5928,15 +5928,21 @@ dependencies = [
 name = "orz-assurance"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
+ "dunce",
  "regex",
+ "ring",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
+ "wildmatch",
+ "windows 0.61.3",
 ]
 
 [[package]]

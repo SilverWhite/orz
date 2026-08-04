@@ -610,10 +610,11 @@ fn open_at_uses_wal_on_local_fs() {
 }
 
 #[test]
-fn network_mode_uses_fresh_per_host_truncate_db() {
-    // Network mode opens a per-host sibling of the given path (the legacy
-    // shared file is left untouched — a live old binary can flip it back to
-    // WAL at any time) in rollback-journal mode.
+fn truncate_mode_reuses_same_db_with_rollback_journal() {
+    // Fork semantics (journal_mode.rs): the per-host sibling DB was removed
+    // with the network-mount detection — Truncate reopens the *same* file in
+    // rollback-journal mode, so legacy rows remain visible. No WAL/SHM
+    // sidecars are created.
     let tmp = tempfile::TempDir::new().unwrap();
     let path = tmp.path().join("worktrees.db");
 
@@ -629,15 +630,15 @@ fn network_mode_uses_fresh_per_host_truncate_db() {
 
     let db = WorktreeDb::open_at_with_journal_mode(&path, JournalMode::Truncate).unwrap();
     assert_eq!(journal_mode(&db), "truncate");
-    // Fresh per-host DB: legacy rows are intentionally not visible.
-    assert!(db.get("wt-legacy").unwrap().is_none());
+    // Same DB file: legacy rows remain visible.
+    assert!(db.get("wt-legacy").unwrap().is_some());
     db.register(&make_record("wt-nfs", "/tmp/wt-nfs", WorktreeKind::Manual))
         .unwrap();
     assert!(db.get("wt-nfs").unwrap().is_some());
     drop(db);
 
     let eff = JournalMode::Truncate.effective_db_path(&path);
-    assert_ne!(eff, path);
+    assert_eq!(eff, path);
     let base = eff.display().to_string();
     assert!(!std::fs::exists(format!("{base}-wal")).unwrap());
     assert!(!std::fs::exists(format!("{base}-shm")).unwrap());
