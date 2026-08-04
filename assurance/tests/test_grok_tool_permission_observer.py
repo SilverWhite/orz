@@ -101,7 +101,7 @@ def _acp_verification(
 
 
 class GrokToolPermissionObserverTests(unittest.TestCase):
-    def test_builds_deferred_static_observation_without_acp_probe(self) -> None:
+    def test_blocks_static_observation_without_acp_probe(self) -> None:
         receipt = build_grok_tool_permission_observation_receipt(
             inspect_report=_inspect_report(),
             grok_help_text=HELP_TEXT,
@@ -115,7 +115,7 @@ class GrokToolPermissionObserverTests(unittest.TestCase):
             label="grok tool permission observation receipt",
         )
         self.assertTrue(receipt["valid"])
-        self.assertEqual(receipt["decision"], "defer")
+        self.assertEqual(receipt["decision"], "block")
         self.assertFalse(receipt["checks"]["acp_permission_probe_attached"])
         self.assertEqual(
             receipt["surface"]["project_agents"],
@@ -123,11 +123,13 @@ class GrokToolPermissionObserverTests(unittest.TestCase):
         )
 
         report = build_grok_tool_availability_projection(receipt)
-        self.assertEqual(report["degraded"][0]["tool_id"], "grok_acp_permission_probe")
+        self.assertEqual(
+            report["unavailable"][0]["tool_id"], "grok_acp_permission_probe"
+        )
         gate = build_grok_tool_permission_observation_bundle(receipt)[
             "tool_availability_gate_receipt"
         ]
-        self.assertEqual(gate["decisions"]["gate_decision"], "warn")
+        self.assertEqual(gate["decisions"]["gate_decision"], "block")
 
     def test_attached_valid_acp_probe_allows_projection(self) -> None:
         receipt = build_grok_tool_permission_observation_receipt(
@@ -154,7 +156,7 @@ class GrokToolPermissionObserverTests(unittest.TestCase):
         )
         self.assertEqual(bundle["tool_availability_report"]["degraded"], [])
 
-    def test_single_attached_acp_probe_stays_degraded(self) -> None:
+    def test_single_attached_acp_probe_blocks_projection(self) -> None:
         receipt = build_grok_tool_permission_observation_receipt(
             inspect_report=_inspect_report(),
             grok_help_text=HELP_TEXT,
@@ -171,7 +173,9 @@ class GrokToolPermissionObserverTests(unittest.TestCase):
             ]
         )
         report = build_grok_tool_availability_projection(receipt)
-        self.assertEqual(report["degraded"][0]["tool_id"], "grok_acp_permission_probe")
+        self.assertEqual(
+            report["unavailable"][0]["tool_id"], "grok_acp_permission_probe"
+        )
 
     def test_missing_permission_flag_blocks_observation(self) -> None:
         receipt = build_grok_tool_permission_observation_receipt(

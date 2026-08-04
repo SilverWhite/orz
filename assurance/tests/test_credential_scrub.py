@@ -502,7 +502,7 @@ print(key)
                 # (path_basename, line): reason the scrub is verified
                 ("canonical_cli.py", 1020): "try/finally sibling scrub at L1064",
                 ("canonical_cli.py", 1055): "try/finally sibling scrub near credential read",
-                ("canonical_cli.py", 1090): "try/finally sibling scrub at L1137",
+                ("canonical_cli.py", 1099): "try/finally sibling scrub at L1137",
                 ("retrieval_subagent.py", 901): "try/finally sibling scrub at L949",
                 ("retrieval_subagent.py", 907): "try/finally sibling scrub near credential read",
                 ("retrieval_subagent.py", 1274): "try/finally sibling scrub at L1323",

@@ -1056,7 +1056,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         )
         self.assertEqual(
             bundle["tool_availability_gate_receipt"]["decisions"]["gate_decision"],
-            "warn",
+            "block",
         )
         mock_observe.assert_called_once_with(acp_verification_paths=[])
 
