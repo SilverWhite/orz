@@ -49,6 +49,7 @@
         "neutral_inquiry",
         "counterexample_gate",
         "retrieval_completion_check",
+        "snapshot_created",
         "artifact_registered",
         "plan_proposed",
         "plan_approved",

@@ -3,10 +3,11 @@
 状态：2026-08-05。**融合架构 v0.2 已冻结**——从 Grok Build 取用成熟底座（tools/workspace/sandbox/mcp/chat-state），
 自研 Agent Loop 引擎（orz-loop）与 Assurance 层（orz-assurance），采纳 Codex 式架构纪律（薄核心、单向依赖、零死代码）。
 
-**实施基线**：`feat/fusion-architecture` 分支 — 70 crate workspace，`cargo test --workspace` 全绿（自研 163 + 继承 ~9775，共 9938 tests，0 failed）、clippy 0 error（Windows 首跑通）。
+**实施基线**：`feat/fusion-architecture` 分支 — 70 crate workspace，`cargo test --workspace` 全绿（0 failed）、clippy 0 error（Windows 首跑通）。
 Phase 1（journal + transport + 单 Agent loop）、Phase 2（单主 Agent + gates + ACP + Plan Mode）已完成；
-Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）、Slice #2（§4.6 问询三机制）、Slice #3（session snapshot + sandbox/credential/permit）已完成，共 163 tests。
-Slice #3 按用户要求**已本地验证、未提交未推送**；存量修复：xai-fast-worktree 4 个 metadata-feature 测试 Windows 平台语义（stash 验证为既有问题，非切片回归）。
+Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）、Slice #2（§4.6 问询三机制）、Slice #3（session snapshot + sandbox/credential/permit）、Slice #4（IP5 snapshot 接线 + host keystore 注入 permit）已完成（自研 177 tests：163 + 14——loop +6、host +8）。
+Slice #4 按用户要求**已本地验证、未提交未推送**——IP5：mutation 工具执行前快照（`snapshot_created` 事件，run-event schema 30→31）；permit：DPAPI keystore（Python 同格式）注入 host `issue_permit`；全仓 0 failed、check_repository valid。
+Slice #3 已提交推送（orz `fc8e213` → `cli/feat/fusion-architecture`，主仓库 `3190d31` → `origin/main`）；存量修复：xai-fast-worktree 4 个 metadata-feature 测试 Windows 平台语义（stash 验证为既有问题，非切片回归）。
 主仓库 CI 4 作业（ubuntu/windows × 3.11/3.12）全绿；workspace trust 扫描已剪枝（跳过 .git/嵌套仓库，本地 doctor exit 0）。
 
 Python assurance spec（`assurance/`）保留为 conformance suite、schema authority 与离线验证路径。

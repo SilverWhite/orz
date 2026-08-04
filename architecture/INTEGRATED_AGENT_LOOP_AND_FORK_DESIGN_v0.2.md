@@ -328,6 +328,8 @@ IP6 仍是唯一需要修改 kept Grok 组件的 assurance 功能。
 | IP4b turn lifecycle | orz-host ACP prompt handler | 原生 (新) |
 | IP4c session close | orz-host ACP session close | 原生 (新) |
 | IP5 pre-mutation snapshot | orz-loop::ToolDispatcher (wrapper) | 原生 |
+
+> **IP5 接线裁决（2026-08-05 Slice #4）**：变异类工具（`modifies_files`，bash 等不可静态得知目标的除外）在权限放行后、`tool_started` 前对目标路径 `track` 并记 `snapshot_created` 事件（`snapshot_hash` / `snapshot_error` 二选一）。快照是 **evidence 层非 gate**——track 失败 journal 记录、不阻断工具（偏离 v0.1 §3.5 注入代码的 `?` 传播，理由：证据失败不应使合法工具不可用，且失败本身被记录）。恢复路径（v0.1 §3.5 "用户显式请求时 restore，记录到 journal"）**尚未接线**——`SnapshotStore::restore/revert` 模块可用，host 无恢复入口（approval/TUI 落地时补）。
 | IP6 hard-gate enforcement | **orz-workspace::permission (注入)** | **唯一的注入点** |
 
 ---
