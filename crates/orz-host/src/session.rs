@@ -1,4 +1,5 @@
-//! Session bootstrap — workspace trust, envelope init, journal creation.
+//! Session bootstrap — workspace trust, envelope init, journal creation,
+//! IP5 snapshot store, permit keystore.
 //!
 //! This is where orz-host wires the Grok providers into the assurance journal.
 //! Every run starts here: trust verification → journal creation → run_preflight.
@@ -6,10 +7,15 @@
 //! See: INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2 §3.3
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::JournalRecorder;
+use orz_assurance::permit::PermitSigner;
+use orz_assurance::session::snapshot::SnapshotStore;
 use orz_assurance::{EventType, Redaction, RunEvent};
+
+use crate::keystore::{KeystoreError, MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore};
 
 /// Error during session bootstrap.
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +24,10 @@ pub enum SessionError {
     TrustFailed(String),
     #[error("journal error: {0}")]
     Journal(#[from] orz_assurance::JournalRecorderError),
+    #[error("snapshot store error: {0}")]
+    Snapshot(#[from] orz_assurance::session::snapshot::SnapshotError),
+    #[error("keystore error: {0}")]
+    Keystore(#[from] KeystoreError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -44,6 +54,12 @@ pub struct SessionHandle {
     pub last_event_sha256: Option<String>,
     /// Workspace trust observation (feeds the IPG `trusted_project` rule).
     pub workspace_trust: WorkspaceTrust,
+    /// IP5 pre-mutation snapshot store, scoped to the session worktree
+    /// (root: `{cwd}/.gsa/snapshots/`). Wired into the loop's ToolDispatcher.
+    pub snapshot_store: Arc<SnapshotStore>,
+    /// Keystore-backed permit signer (DPAPI install key under `Enforce`;
+    /// test-only memory store under `Skip`). Consumed by permit issuance.
+    pub permit_signer: Arc<dyn PermitSigner>,
 }
 
 /// Evaluate workspace trust for `cwd` (fail-closed, non-interactive).
@@ -95,6 +111,25 @@ pub async fn bootstrap_session(
     let base = cwd.join(".gsa");
     let journal_dir = base.join("runs").join(run_id);
 
+    // IP5 pre-mutation snapshot store — session-scoped, root under
+    // `{cwd}/.gsa/snapshots/` (the `.gsa` tree is gitignored and excluded
+    // from the agent-visible read scope).
+    let snapshot_store = Arc::new(SnapshotStore::new(base.join("snapshots"), cwd.clone())?);
+
+    // Permit signing key — an install-level keystore under `Enforce`
+    // (Windows DPAPI-backed, fail-closed elsewhere); the test-only memory
+    // store under `Skip` (mirrors the Python dev bridge, which also uses
+    // `MemoryInstallationKeyStore`). The key is workspace-scoped
+    // (`{cwd}/.gsa/keystore/`), so it persists across runs of the same
+    // workspace; an install-level location is a later refinement (2026-08-05
+    // review P3-3).
+    let permit_signer: Arc<dyn PermitSigner> = match policy {
+        TrustPolicy::Enforce => Arc::new(WindowsDpapiInstallationKeyStore::create_or_load(
+            &base.join("keystore"),
+        )?),
+        TrustPolicy::Skip => Arc::new(MemoryInstallationKeyStore::new()),
+    };
+
     let journal = JournalRecorder::new(journal_dir.clone());
 
     // Compute a manifest SHA-256
@@ -136,6 +171,8 @@ pub async fn bootstrap_session(
         next_sequence,
         last_event_sha256,
         workspace_trust,
+        snapshot_store,
+        permit_signer,
     })
 }
 
@@ -180,6 +217,53 @@ mod tests {
         );
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.event_count, 1);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// IP5 + P1 wiring at bootstrap: the snapshot store is session-scoped to
+    /// the worktree (root `{cwd}/.gsa/snapshots/`) and the permit signer is a
+    /// keystore-backed key id (`KEY-…`).
+    #[tokio::test]
+    async fn bootstrap_wires_snapshot_store_and_permit_signer() {
+        let base = test_dir();
+        let handle = bootstrap_session("RUN-WIRED", Some(base.clone()), TrustPolicy::Skip)
+            .await
+            .unwrap();
+
+        // IP5: store scoped to the session worktree, root under `.gsa`.
+        assert_eq!(handle.snapshot_store.worktree(), &base);
+        assert!(
+            handle.snapshot_store.root().starts_with(&base.join(".gsa")),
+            "store root: {}",
+            handle.snapshot_store.root().display()
+        );
+        // Usable immediately — explicit target track round-trips.
+        let target = base.join("a.txt");
+        std::fs::write(&target, "original").unwrap();
+        let record = handle
+            .snapshot_store
+            .track(&[PathBuf::from("a.txt")])
+            .await
+            .unwrap();
+        assert_eq!(record.entries.len(), 1);
+        assert_eq!(
+            handle
+                .snapshot_store
+                .verify(&record.snapshot_hash)
+                .await
+                .unwrap(),
+            orz_assurance::session::snapshot::SnapshotVerifyOutcome::Clean
+        );
+
+        // P1: keystore-backed signer injected.
+        assert!(
+            handle.permit_signer.key_id().starts_with("KEY-"),
+            "key id: {}",
+            handle.permit_signer.key_id()
+        );
+        let signature = handle.permit_signer.sign(b"payload").unwrap();
+        assert!(handle.permit_signer.verify(b"payload", &signature));
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -34,6 +34,8 @@ use orz_assurance::{
     RunEvent,
 };
 
+use orz_assurance::session::snapshot::SnapshotStore;
+
 use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole, SubagentSpec};
 use crate::blackboard::SharedBlackboard;
 use crate::gateway::fake::FakeProvider;
@@ -75,6 +77,9 @@ pub struct AgentLoopController {
     blackboard: Arc<SharedBlackboard>,
     orientation_monitor: Mutex<OrientationMonitor>,
     max_tool_rounds: u32,
+    /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
+    /// snapshotting (tests / hosts that opted out).
+    snapshot_store: Option<Arc<SnapshotStore>>,
 }
 
 impl AgentLoopController {
@@ -100,7 +105,16 @@ impl AgentLoopController {
             blackboard: Arc::new(SharedBlackboard::new()),
             orientation_monitor: Mutex::new(OrientationMonitor::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
+            snapshot_store: None,
         }
+    }
+
+    /// IP5: attach the session's pre-mutation snapshot store (see
+    /// `orz-assurance::session::snapshot`). Mutation-class tools with
+    /// knowable targets get tracked before execution.
+    pub fn with_snapshot_store(mut self, store: Option<Arc<SnapshotStore>>) -> Self {
+        self.snapshot_store = store;
+        self
     }
 
     /// Component injection for tests (independent scripted providers).
@@ -116,6 +130,7 @@ impl AgentLoopController {
             blackboard: Arc::new(SharedBlackboard::new()),
             orientation_monitor: Mutex::new(OrientationMonitor::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
+            snapshot_store: None,
         }
     }
 
@@ -832,6 +847,50 @@ impl AgentLoopController {
             });
         }
 
+        // IP5: pre-mutation snapshot — record the pre-tool worktree state of
+        // the mutation tool's targets (ToolDispatcher wrapper, v0.2 §4 IP5).
+        // Evidence layer, not a gate: a snapshot failure is journaled
+        // (`snapshot_error`) and does not block the tool. Tools without
+        // statically knowable targets (e.g. bash) produce no snapshot.
+        if let Some(store) = &self.snapshot_store {
+            if ToolDispatcher::modifies_files(&tc.name) {
+                let targets =
+                    ToolDispatcher::snapshot_targets(store.worktree(), &tc.name, &tc.arguments);
+                if !targets.is_empty() {
+                    let target_strs: Vec<String> = targets
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect();
+                    match store.track(&targets).await {
+                        Ok(record) => {
+                            writer
+                                .record(
+                                    EventType::SnapshotCreated,
+                                    serde_json::json!({
+                                        "tool": tc.name,
+                                        "targets": target_strs,
+                                        "snapshot_hash": record.snapshot_hash,
+                                    }),
+                                )
+                                .await?;
+                        }
+                        Err(e) => {
+                            writer
+                                .record(
+                                    EventType::SnapshotCreated,
+                                    serde_json::json!({
+                                        "tool": tc.name,
+                                        "targets": target_strs,
+                                        "snapshot_error": e.to_string(),
+                                    }),
+                                )
+                                .await?;
+                        }
+                    }
+                }
+            }
+        }
+
         // Execute.
         writer
             .record(
@@ -1156,6 +1215,97 @@ mod tests {
             r.exec.results.iter().any(|s| s.contains("file contents")),
             "{:?}",
             r.exec.results
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// IP5 wiring: a mutation-class tool with a knowable target gets
+    /// pre-mutation snapshotted — SnapshotCreated precedes ToolStarted, and
+    /// the created snapshot verifies Clean against the still-unmodified
+    /// worktree state (evidence layer: the tool itself is stubbed here).
+    #[tokio::test]
+    async fn mutation_tool_records_pre_mutation_snapshot() {
+        use orz_assurance::session::snapshot::SnapshotVerifyOutcome;
+
+        let dir = test_dir();
+        let store_root = dir.join(".gsa").join("snapshots");
+        let target = dir.join("src").join("main.rs");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "original").unwrap();
+
+        let store = Arc::new(SnapshotStore::new(store_root.clone(), dir.clone()).unwrap());
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "patched".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "src/main.rs",
+                    "old_string": "original",
+                    "new_string": "patched",
+                }),
+                call_id: "call-1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_snapshot_store(Some(store.clone()));
+        controller
+            .run_turn(&host, "改文件", "RUN-SNAP", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        let snap_idx = types
+            .iter()
+            .position(|t| *t == EventType::SnapshotCreated)
+            .expect("SnapshotCreated event");
+        let started_idx = types
+            .iter()
+            .position(|t| *t == EventType::ToolStarted)
+            .expect("ToolStarted event");
+        assert!(
+            snap_idx < started_idx,
+            "snapshot must precede tool start: {types:?}"
+        );
+
+        let snap_event = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::SnapshotCreated)
+            .unwrap();
+        assert_eq!(
+            snap_event.payload.get("tool").and_then(|v| v.as_str()),
+            Some("search_replace")
+        );
+        let hash = snap_event
+            .payload
+            .get("snapshot_hash")
+            .and_then(|v| v.as_str())
+            .expect("snapshot hash")
+            .to_string();
+        assert!(
+            snap_event.payload.get("snapshot_error").is_none(),
+            "no error expected: {:?}",
+            snap_event.payload
+        );
+
+        // The pre-mutation snapshot verifies Clean — the target file still
+        // matches the snapshotted state.
+        let outcome = store.verify(&hash).await.unwrap();
+        assert_eq!(outcome, SnapshotVerifyOutcome::Clean);
+        // Content-addressed manifest exists under the store root.
+        assert!(
+            store_root.join("manifests").join(format!("{hash}.json")).is_file(),
+            "missing manifest for {hash}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

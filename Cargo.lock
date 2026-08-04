@@ -6081,6 +6081,7 @@ dependencies = [
  "orz-paths",
  "orz-tools",
  "orz-workspace",
+ "ring",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -6088,6 +6089,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "windows 0.61.3",
  "xai-acp-lib",
  "xai-tool-runtime",
 ]

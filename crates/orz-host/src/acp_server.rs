@@ -146,7 +146,10 @@ impl AcpServer {
         // (PermissionBridge spawns the manager actor via spawn_local, so
         // this path must run inside a LocalSet — the stdio server does.)
         let host = self.build_host(&handle, session_id, &base_dir)?;
-        let controller = AgentLoopController::with_gateway(self.model_gateway.clone());
+        // IP5: attach the session's pre-mutation snapshot store — mutation
+        // tools with knowable targets get tracked before execution.
+        let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
+            .with_snapshot_store(Some(handle.snapshot_store.clone()));
         let (response, _, _) = controller
             .run_turn(
                 &host,
@@ -208,14 +211,17 @@ impl AcpServer {
         // The permission manager requires an absolute cwd (AbsPathBuf) —
         // canonicalize, falling back to the raw path on failure.
         let cwd = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
-        crate::OrzHost::with_bridge(
+        // P1 permit keystore: the session's DPAPI-backed signer (or the
+        // test-only memory store under TrustPolicy::Skip).
+        Ok(crate::OrzHost::with_bridge(
             session_id,
             handle.journal.clone(),
             &cwd,
             handle.workspace_trust,
             self.gateway(),
         )
-        .map_err(AcpError::Host)
+        .map_err(AcpError::Host)?
+        .with_permit_signer(handle.permit_signer.clone()))
     }
 }
 
@@ -584,6 +590,66 @@ mod tests {
                 assert_eq!(
                     pd.payload.get("decision").and_then(|d| d.as_str()),
                     Some("deny")
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// IP5 wiring E2E (headless fail-closed): a mutation tool
+    /// (`search_replace`) is denied by the dead gateway before it starts —
+    /// the pre-mutation snapshot is NOT taken for denied tools (the snapshot
+    /// fires only after the permission gate allows, preserving the
+    /// fail-closed ordering).
+    #[tokio::test]
+    async fn session_prompt_denied_mutation_records_no_snapshot() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                std::fs::write(base.join("lib.rs"), "fn main() {}").unwrap();
+
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "search_replace".to_string(),
+                        arguments: serde_json::json!({
+                            "file_path": "lib.rs",
+                            "old_string": "fn main",
+                            "new_string": "fn renamed",
+                        }),
+                        call_id: "call-1".to_string(),
+                    }]),
+                    ScriptedResponse::text("完成（被拒）。"),
+                    ScriptedResponse::text("完成（被拒）。"),
+                ])));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-deny-snap",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let result = server
+                    .handle_session_prompt("sess-deny-snap", "修改 lib.rs")
+                    .await
+                    .unwrap();
+                assert_eq!(result["status"], "completed");
+
+                let types: Vec<EventType> = run_events(&base)
+                    .iter()
+                    .map(|e| e.event_type.clone())
+                    .collect();
+                assert!(types.contains(&EventType::PermissionDecision), "{types:?}");
+                assert!(
+                    !types.contains(&EventType::SnapshotCreated),
+                    "denied mutation must not snapshot: {types:?}"
+                );
+                assert!(
+                    !types.contains(&EventType::ToolStarted),
+                    "denied tool must not start: {types:?}"
                 );
 
                 let _ = std::fs::remove_dir_all(&base);

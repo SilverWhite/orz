@@ -33,3 +33,9 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 tokio-util = { workspace = true }
+
+# Keystore (permit signing — install-level key, Windows DPAPI)
+ring = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }

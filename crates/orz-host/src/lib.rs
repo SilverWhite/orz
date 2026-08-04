@@ -13,15 +13,25 @@ pub mod approval;
 pub mod stdio;
 pub mod tools;
 pub mod permission;
+pub mod keystore;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::JournalRecorder;
-use orz_loop::host::{LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult};
+// NOTE: `PermitError` (orz_loop::host) is the LoopHost contract error; the
+// assurance permit error is aliased to keep the two distinct.
+use orz_assurance::permit::{
+    PermitEnvelope, PermitError as PermitSigningError, PermitSigner, PermitStore,
+    SensitiveActionPermit,
+};
+use orz_loop::host::{
+    LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult,
+};
 
+use crate::keystore::MemoryInstallationKeyStore;
 use crate::permission::PermissionBridge;
 use crate::tools::ToolsetRegistry;
 
@@ -36,6 +46,12 @@ pub struct OrzHost {
     registry: ToolsetRegistry,
     workspace_trust: WorkspaceTrust,
     permission: Option<PermissionBridge>,
+    /// Keystore-backed P1 permit signer (DPAPI install key; test-only
+    /// memory store when not injected). Consumed by `issue_permit`.
+    permit_signer: Arc<dyn PermitSigner>,
+    /// Root for permit artifacts — `{cwd}/.gsa/` (mirrors the Python
+    /// namespace layout `<root>/one_shot_permit/`).
+    permit_store_root: PathBuf,
 }
 
 impl OrzHost {
@@ -71,7 +87,62 @@ impl OrzHost {
             registry: ToolsetRegistry::new(toolset),
             workspace_trust,
             permission,
+            // Default: test-only memory signer (no permit is issued unless
+            // `issue_permit` is called) — the session bootstrap injects the
+            // DPAPI keystore-backed signer via `with_permit_signer`.
+            permit_signer: Arc::new(MemoryInstallationKeyStore::new()),
+            permit_store_root: cwd.join(".gsa"),
         })
+    }
+
+    /// Inject the session's keystore-backed permit signer (see
+    /// `session::bootstrap_session`). Without injection the host signs with
+    /// a fresh in-memory key per run.
+    pub fn with_permit_signer(mut self, signer: Arc<dyn PermitSigner>) -> Self {
+        self.permit_signer = signer;
+        self
+    }
+
+    /// The active permit signer (for inspection / verification).
+    pub fn permit_signer(&self) -> &Arc<dyn PermitSigner> {
+        &self.permit_signer
+    }
+
+    /// Issue a P1 one-shot sensitive-action permit signed by the
+    /// keystore-backed signer, persisted under `{cwd}/.gsa/one_shot_permit/`.
+    ///
+    /// `envelope` carries the session's conversation/envelope identity and
+    /// expiry clamp (the session security envelope in production).
+    ///
+    /// KNOWN GAP (2026-08-05 review P2-1): the Python authority verifies the
+    /// envelope before issuance (`verify_security_envelope`: schema +
+    /// `installation_key_id` match + signature). orz has no security-envelope
+    /// module yet, so the envelope is caller-supplied plain data — the
+    /// approval path (still a stub) must verify envelope authenticity before
+    /// calling this when it lands. Until then, issuing is only sound when the
+    /// caller owns the envelope construction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_permit(
+        &self,
+        envelope: &PermitEnvelope,
+        confirmation_sha256: &str,
+        action_sha256: &str,
+        target_sha256: &str,
+        impact_scope_sha256: &str,
+        attempt: u32,
+        ttl_seconds: u64,
+    ) -> Result<SensitiveActionPermit, PermitSigningError> {
+        PermitStore::new(self.permit_store_root.clone()).issue(
+            self.permit_signer.as_ref(),
+            envelope,
+            confirmation_sha256,
+            action_sha256,
+            target_sha256,
+            impact_scope_sha256,
+            attempt,
+            ttl_seconds,
+            None,
+        )
     }
 
     /// Build a host with an IP6 permission bridge in one step.
@@ -259,6 +330,60 @@ mod tests {
                 "no bridge → fail closed for {tool}"
             );
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1 permit keystore injection: a permit issued through the host signs
+    /// with the injected keystore signer and self-verifies; the artifact
+    /// lands under `{cwd}/.gsa/one_shot_permit/` (Python namespace layout).
+    #[tokio::test]
+    async fn issue_permit_uses_injected_keystore_signer() {
+        use orz_assurance::permit::verify_sensitive_action_permit;
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.join("j"));
+        let host = OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted)
+            .expect("host build")
+            .with_permit_signer(Arc::new(
+                MemoryInstallationKeyStore::from_secret(&[0x42u8; 32]).unwrap(),
+            ));
+
+        let envelope = PermitEnvelope {
+            conversation_id: "conv-1".into(),
+            envelope_id: "env-1".into(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        };
+        let digest = |s: &str| orz_assurance::sha256_hex(s.as_bytes());
+        let permit = host
+            .issue_permit(
+                &envelope,
+                &digest("confirmation"),
+                &digest("action"),
+                &digest("target"),
+                &digest("impact scope"),
+                1,
+                300,
+            )
+            .expect("issue permit");
+
+        assert!(
+            permit.integrity.key_id.starts_with("KEY-"),
+            "key id: {}",
+            permit.integrity.key_id
+        );
+        let verification = verify_sensitive_action_permit(
+            host.permit_signer().as_ref(),
+            &envelope,
+            &permit,
+            None,
+        );
+        assert!(verification.valid, "{:?}", verification.errors);
+        let artifact = dir
+            .join(".gsa")
+            .join("one_shot_permit")
+            .join(format!("{}.issued.json", permit.permit_id));
+        assert!(artifact.is_file(), "missing permit artifact");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

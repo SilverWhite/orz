@@ -130,7 +130,8 @@ fn run_plan(prompt: &str) {
         // Execute under the approved plan — real host + IP6 bridge, sharing
         // the gateway instance (its script continues after the gate round).
         let host = build_cli_host(&handle, &run_id, &cwd)?;
-        let controller = orz_loop::AgentLoopController::with_gateway(gateway);
+        let controller = orz_loop::AgentLoopController::with_gateway(gateway)
+            .with_snapshot_store(Some(handle.snapshot_store.clone()));
         let (response, _, _) = controller
             .run_turn(
                 &host,
@@ -432,7 +433,8 @@ async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Erro
     // Bash Ask → Deny.
     let host = build_cli_host(&handle, &run_id, &cwd)?;
 
-    let controller = orz_loop::AgentLoopController::with_gateway(build_gateway());
+    let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
+        .with_snapshot_store(Some(handle.snapshot_store.clone()));
     let (response, _, _) = controller
         .run_turn(
             &host,
@@ -456,13 +458,15 @@ fn build_cli_host(
     session_id: &str,
     cwd: &Path,
 ) -> Result<orz_host::OrzHost, String> {
-    orz_host::OrzHost::with_bridge(
+    Ok(orz_host::OrzHost::with_bridge(
         session_id,
         handle.journal.clone(),
         cwd,
         handle.workspace_trust,
         None,
-    )
+    )?
+    // P1 permit keystore — the session's DPAPI-backed signer.
+    .with_permit_signer(handle.permit_signer.clone()))
 }
 
 /// Short timestamp-based suffix for the run ID (no uuid dep in orz-bin yet).

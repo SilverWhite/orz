@@ -55,6 +55,9 @@ pub enum EventType {
     CounterexampleGate,
     RetrievalCompletionCheck,
 
+    // IP5 pre-mutation snapshot (Phase 3, slice #4 wiring)
+    SnapshotCreated,
+
     // Artifact
     ArtifactRegistered,
 
