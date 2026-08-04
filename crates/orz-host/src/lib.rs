@@ -224,7 +224,9 @@ mod tests {
         let host = OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted)
             .expect("host build");
 
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["完成"]));
+        // Two texts — the counterexample gate (§4.6) intercepts the first.
+        let gateway: Arc<dyn ModelGateway> =
+            Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
         let controller = AgentLoopController::with_gateway(gateway);
         let (response, _, _) = controller
             .run_turn(&host, "hi", "RUN-T", "manifest-sha", 0, None)

@@ -50,6 +50,11 @@ pub enum EventType {
     InstructionProvenanceGate,
     GateDecision,
 
+    // Inquiry gates (Phase 3, §4.6 wiring — mirrors run-event schema)
+    NeutralInquiry,
+    CounterexampleGate,
+    RetrievalCompletionCheck,
+
     // Artifact
     ArtifactRegistered,
 

@@ -53,7 +53,10 @@ pub struct AcpServer {
 
 impl AcpServer {
     pub fn new() -> Self {
+        // Two scripted texts per turn — the counterexample gate (§4.6) adds
+        // one model round before the final answer.
         Self::with_gateway(Arc::new(FakeProvider::from_texts(vec![
+            "(fake) 已收到请求。",
             "(fake) 已收到请求。",
         ])))
     }
@@ -367,9 +370,11 @@ mod tests {
                     "ACP path journal invalid: {:?}",
                     replay.errors
                 );
-                // Full Phase 2 gate chain: preflight + started + prompt_submitted +
-                // orientation + tool_availability + model_output + stagnation + finished.
-                assert_eq!(replay.event_count, 8);
+                // Full Phase 2 gate chain + §4.6: preflight + started +
+                // prompt_submitted + orientation + tool_availability +
+                // model_output + counterexample_gate + model_output +
+                // stagnation + finished.
+                assert_eq!(replay.event_count, 10);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -390,11 +395,14 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
 
-                // Two scripted responses — one per prompt turn (the default gateway
-                // has a single response and would exhaust on the second prompt).
+                // Four scripted responses — two per prompt turn (each turn's
+                // first round is gate-intercepted; the default gateway's two
+                // entries would exhaust on the second prompt).
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::from_texts(vec![
                     "(fake) 第一轮。",
+                    "(fake) 第一轮终答。",
                     "(fake) 第二轮。",
+                    "(fake) 第二轮终答。",
                 ])));
                 server
                     .handle_session_new(
@@ -434,7 +442,7 @@ mod tests {
                         "run journal invalid: {:?}",
                         replay.errors
                     );
-                    assert_eq!(replay.event_count, 8, "preflight + 7 turn events");
+                    assert_eq!(replay.event_count, 10, "preflight + 9 turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 
@@ -487,6 +495,7 @@ mod tests {
                         arguments: serde_json::json!({"target_file": target}),
                         call_id: "call-1".to_string(),
                     }]),
+                    ScriptedResponse::text("完成（读取成功）。"),
                     ScriptedResponse::text("完成（读取成功）。"),
                 ])));
                 // Interactive-gateway shape (--stdio wires the same way); a
@@ -543,6 +552,7 @@ mod tests {
                         arguments: serde_json::json!({"command": "dir"}),
                         call_id: "call-1".to_string(),
                     }]),
+                    ScriptedResponse::text("完成（bash 被拒）。"),
                     ScriptedResponse::text("完成（bash 被拒）。"),
                 ])));
                 server.set_gateway(dead_gateway());

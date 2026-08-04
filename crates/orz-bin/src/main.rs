@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use orz_host::session::{bootstrap_session, SessionHandle};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
-use orz_loop::gateway::model::{ModelGateway, ToolCall};
+use orz_loop::gateway::model::{Message, ModelGateway, Role, ToolCall};
 
 fn main() {
     // Minimal arg parsing (no clap yet — Phase 2+ adds the real CLI)
@@ -113,54 +113,24 @@ fn run_plan(prompt: &str) {
         .await
         .map_err(|e| e.to_string())?;
 
-        let mut sm = orz_assurance::plan::PlanStateMachine::new();
-        sm.enter_planning(None)
-            .map_err(|e| format!("plan: {e}"))?;
-        let artifact = plan_artifact_from_prompt(&run_id, prompt);
-        let verification = orz_assurance::plan::verify_plan_artifact(&artifact);
-        if !verification.valid {
-            return Err(format!("plan artifact invalid: {:?}", verification.errors));
-        }
-        sm.submit_plan(artifact.clone())
-            .map_err(|e| format!("plan: {e}"))?;
         let mut seq = handle.next_sequence;
         let mut prev_hash = handle.last_event_sha256.clone();
-        let h1 = record_plan_event(
-            &handle,
-            seq,
-            prev_hash.clone(),
-            orz_assurance::EventType::PlanProposed,
-            serde_json::json!({
-                "plan_id": artifact.plan_id,
-                "task_id": artifact.task_id,
-                "sections": artifact.sections.len(),
-            }),
-        )
-        .await?;
-        seq += 1;
-        prev_hash = Some(h1);
-        let approval = sm
-            .approve("user", Some("manual"))
-            .map_err(|e| format!("plan: {e}"))?;
-        let h2 = record_plan_event(
-            &handle,
-            seq,
-            prev_hash.clone(),
-            orz_assurance::EventType::PlanApproved,
-            serde_json::json!({
-                "plan_id": approval.plan_id,
-                "authority": approval.authority,
-                "decision": approval.decision.as_str(),
-                "execution_policy": sm.approval_policy,
-            }),
-        )
-        .await?;
-        seq += 1;
-        prev_hash = Some(h2);
+        let gateway = build_gateway();
 
-        // Execute under the approved plan — real host + IP6 bridge.
+        // Plan phase — on error the journal must still terminate (review
+        // P2-1): record RunFailed continuing the chain, then exit.
+        if let Err(e) =
+            run_plan_phase(&handle, &mut seq, &mut prev_hash, &run_id, prompt, &gateway).await
+        {
+            record_plan_failure(&handle, seq, prev_hash.clone(), &e).await;
+            let _ = handle.journal.shutdown_async().await;
+            return Err(e);
+        }
+
+        // Execute under the approved plan — real host + IP6 bridge, sharing
+        // the gateway instance (its script continues after the gate round).
         let host = build_cli_host(&handle, &run_id, &cwd)?;
-        let controller = orz_loop::AgentLoopController::with_gateway(build_gateway());
+        let controller = orz_loop::AgentLoopController::with_gateway(gateway);
         let (response, _, _) = controller
             .run_turn(
                 &host,
@@ -191,6 +161,124 @@ fn run_plan(prompt: &str) {
             std::process::exit(1);
         }
     }
+}
+
+/// Plan phase: enter the state machine → counterexample gate round (§4.6.1,
+/// before the plan write) → submit → approve, journaling the plan events and
+/// advancing the chain (`seq`/`prev_hash`). Returns Ok on success; the caller
+/// terminates the journal on error (review P2-1: plan-phase failures must not
+/// leave the journal without a terminal event).
+async fn run_plan_phase(
+    handle: &orz_host::session::SessionHandle,
+    seq: &mut u64,
+    prev_hash: &mut Option<String>,
+    run_id: &str,
+    prompt: &str,
+    gateway: &Arc<dyn ModelGateway>,
+) -> Result<(), String> {
+    let mut sm = orz_assurance::plan::PlanStateMachine::new();
+    sm.enter_planning(None)
+        .map_err(|e| format!("plan: {e}"))?;
+    let artifact = plan_artifact_from_prompt(run_id, prompt);
+    let verification = orz_assurance::plan::verify_plan_artifact(&artifact);
+    if !verification.valid {
+        return Err(format!("plan artifact invalid: {:?}", verification.errors));
+    }
+
+    // §4.6.1: counterexample gate BEFORE the plan write — one model round
+    // with the plan text in context. The artifact is mechanically derived
+    // (no model involvement today), so the gate fires as evidence only;
+    // it becomes a blocking link of the plan approval gate chain once
+    // plans are model-generated. The shared gateway's script order is
+    // gate round first, then the execution turn.
+    let gate_response = gateway
+        .generate(orz_loop::gateway::model::ModelRequest {
+            system: orz_loop::prompt::BASE_SYSTEM_PROMPT.to_string(),
+            messages: vec![
+                Message {
+                    role: Role::User,
+                    content: render_plan_for_gate(&artifact),
+                },
+                Message {
+                    role: Role::User,
+                    content: orz_loop::prompt::COUNTEREXAMPLE_GATE_PLAN_BLOCK.to_string(),
+                },
+            ],
+            tools: Vec::new(),
+            max_tokens: 1024,
+        })
+        .await
+        .map_err(|e| format!("plan gate: {e}"))?;
+    let h0 = record_plan_event(
+        handle,
+        *seq,
+        prev_hash.clone(),
+        orz_assurance::EventType::CounterexampleGate,
+        serde_json::json!({
+            "position": "plan_write",
+            "message_block": orz_loop::prompt::COUNTEREXAMPLE_GATE_PLAN_BLOCK,
+            "once_only": false,
+            "model_response": gate_response.text.unwrap_or_default(),
+        }),
+    )
+    .await?;
+    *seq += 1;
+    *prev_hash = Some(h0);
+
+    sm.submit_plan(artifact.clone())
+        .map_err(|e| format!("plan: {e}"))?;
+    let h1 = record_plan_event(
+        handle,
+        *seq,
+        prev_hash.clone(),
+        orz_assurance::EventType::PlanProposed,
+        serde_json::json!({
+            "plan_id": artifact.plan_id,
+            "task_id": artifact.task_id,
+            "sections": artifact.sections.len(),
+        }),
+    )
+    .await?;
+    *seq += 1;
+    *prev_hash = Some(h1);
+    let approval = sm
+        .approve("user", Some("manual"))
+        .map_err(|e| format!("plan: {e}"))?;
+    let h2 = record_plan_event(
+        handle,
+        *seq,
+        prev_hash.clone(),
+        orz_assurance::EventType::PlanApproved,
+        serde_json::json!({
+            "plan_id": approval.plan_id,
+            "authority": approval.authority,
+            "decision": approval.decision.as_str(),
+            "execution_policy": sm.approval_policy,
+        }),
+    )
+    .await?;
+    *seq += 1;
+    *prev_hash = Some(h2);
+    Ok(())
+}
+
+/// Record a terminal RunFailed continuing the hash chain — the plan-phase
+/// failure path (review P2-1). Best effort: if the journal itself is dead the
+/// original error is returned regardless by the caller.
+async fn record_plan_failure(
+    handle: &orz_host::session::SessionHandle,
+    seq: u64,
+    prev_hash: Option<String>,
+    error: &str,
+) {
+    let _ = record_plan_event(
+        handle,
+        seq,
+        prev_hash,
+        orz_assurance::EventType::RunFailed,
+        serde_json::json!({"error": error}),
+    )
+    .await;
 }
 
 /// Write one plan-mode event, continuing the session hash chain.
@@ -259,6 +347,12 @@ fn chrono_utc_now() -> String {
 /// so the run ends with a clean `run_finished` (a large file like
 /// `Cargo.toml` trips the stagnation ngram guard honestly, and the run
 /// correctly ends `run_invalidated`).
+///
+/// §4.6 (Phase 3): the final-answer counterexample gate adds one model round
+/// per turn — the script carries headroom. `--plan` consumes one extra entry
+/// up front for the plan-write gate round (with ORZ_FAKE_TOOL=1 that entry is
+/// a tool_calls response whose text is None → `model_response` is "" — a
+/// demo-path-only artifact of the scripted provider).
 fn build_gateway() -> Arc<dyn ModelGateway> {
     if std::env::var("ORZ_FAKE_TOOL").is_ok() {
         Arc::new(FakeProvider::new(vec![
@@ -274,11 +368,39 @@ fn build_gateway() -> Arc<dyn ModelGateway> {
                     call_id: "call-2".to_string(),
                 },
             ]),
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "rust-toolchain.toml"}),
+                    call_id: "call-1".to_string(),
+                },
+                ToolCall {
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({"command": "dir"}),
+                    call_id: "call-2".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。"),
             ScriptedResponse::text("完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。"),
         ]))
     } else {
-        Arc::new(FakeProvider::from_texts(vec!["(fake) 已收到请求。"]))
+        Arc::new(FakeProvider::from_texts(vec![
+            "(fake) 已收到请求。",
+            "(fake) 已收到请求。",
+            "(fake) 已收到请求。",
+            "(fake) 已收到请求。",
+        ]))
     }
+}
+
+/// Render the plan artifact's four sections for the plan-write counterexample
+/// gate round (mechanical — no model-generated plan text yet).
+fn render_plan_for_gate(artifact: &orz_assurance::plan::PlanArtifact) -> String {
+    let mut out = String::new();
+    for section in &artifact.sections {
+        out.push_str(&format!("## {}\n{}\n\n", section.title, section.content_md));
+    }
+    out
 }
 
 /// Parse `-p <prompt>` or `--prompt <prompt>` from argv.
@@ -349,4 +471,61 @@ fn timestamp_suffix() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{:08x}", now.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orz_loop::gateway::fake::FakeProvider;
+
+    fn test_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-bin-plan-fail-{}-{:08x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// P2-1 regression: a plan-phase error (the counterexample gate round
+    /// fails here) must not leave the journal without a terminal event — the
+    /// caller records RunFailed continuing the chain, and the journal replays
+    /// as valid with a run_failed terminal.
+    #[tokio::test]
+    async fn plan_phase_failure_writes_terminal_run_failed() {
+        let dir = test_dir();
+        let handle = orz_host::session::bootstrap_session(
+            "RUN-PLAN-FAIL",
+            Some(dir.clone()),
+            orz_host::session::TrustPolicy::Skip,
+        )
+        .await
+        .unwrap();
+
+        let mut seq = handle.next_sequence;
+        let mut prev_hash = handle.last_event_sha256.clone();
+        // Empty script — the gate round exhausts on the first call.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(Vec::new()));
+        let err = run_plan_phase(&handle, &mut seq, &mut prev_hash, "RUN-PLAN-FAIL", "hi", &gateway)
+            .await;
+        assert!(err.is_err(), "gate round must fail on an empty script");
+        record_plan_failure(&handle, seq, prev_hash.clone(), err.unwrap_err().as_str()).await;
+        handle.journal.shutdown_async().await.unwrap();
+
+        let replay = orz_assurance::replay_journal(
+            &handle.journal_dir.join("events.jsonl"),
+            Some("RUN-PLAN-FAIL"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

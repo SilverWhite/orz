@@ -115,8 +115,9 @@ fn session_new_and_prompt_over_real_frames() {
     let replay = orz_assurance::replay_journal(&events_path, None, None, true);
     assert!(replay.valid, "stdio path journal invalid: {:?}", replay.errors);
     // preflight + started + prompt_submitted + orientation + tool_availability
-    // + model_output + stagnation + finished
-    assert_eq!(replay.event_count, 8);
+    // + model_output + counterexample_gate + model_output + stagnation
+    // + finished (§4.6 gate round)
+    assert_eq!(replay.event_count, 10);
     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
     let _ = std::fs::remove_dir_all(&dir);

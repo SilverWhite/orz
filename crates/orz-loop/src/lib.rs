@@ -16,6 +16,7 @@ pub mod agents;
 pub mod prompt;
 pub mod tool;
 pub mod orientation;
+pub mod inquiry;
 pub mod controller;
 
 // Re-export core types

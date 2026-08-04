@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::blackboard::{InternalRetSection, SharedBlackboard};
-use crate::gateway::model::{GatewayError, ModelGateway, ModelResponse};
+use crate::gateway::model::{GatewayError, Message, ModelGateway, ModelResponse, Role};
 
 /// Which retrieval domain a subagent serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,11 +52,23 @@ impl RetrievalSubagent {
     /// `project_docs`; `[SOURCE]`-prefixed lines → `source_ledger` (internal)
     /// or `web_sources` (external). Real retrieval semantics will populate
     /// these same fields later.
+    ///
+    /// `completion_check_block` (Phase 3 §4.6): the subagent-close completion
+    /// check is injected into the request when the caller is about to close
+    /// the subagent; the free-form response carries the answer (parsed as
+    /// evidence by the caller, never structurally enforced).
     pub async fn run_retrieval(
         &self,
         blackboard: &Arc<SharedBlackboard>,
         spec: &SubagentSpec,
+        completion_check_block: Option<&str>,
     ) -> Result<ModelResponse, GatewayError> {
+        let messages = completion_check_block
+            .map(|block| vec![Message {
+                role: Role::User,
+                content: block.to_string(),
+            }])
+            .unwrap_or_default();
         let response = self
             .gateway
             .generate(crate::gateway::model::ModelRequest {
@@ -65,7 +77,7 @@ impl RetrievalSubagent {
                     role = self.section_name(),
                     goal = spec.goal,
                 ),
-                messages: Vec::new(),
+                messages,
                 tools: Vec::new(),
                 max_tokens: 1024,
             })
@@ -126,7 +138,7 @@ mod tests {
             goal: "找到设计文档".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md", "gate.rs"]);
@@ -148,7 +160,7 @@ mod tests {
             goal: "检索论文".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(r.external_ret.web_sources, vec!["https://example.com/paper"]);
@@ -165,6 +177,34 @@ mod tests {
         assert_eq!(
             RetrievalSubagent::new(SubagentRole::ExternalRetrieval, gateway("x")).section_name(),
             "external_ret"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_check_block_is_injected_into_request() {
+        // §4.6.1: the close-time completion check rides in the subagent's
+        // request messages; the [DOC]/[SOURCE] parse stays on the response
+        // side. FakeProvider retains requests, so the injection is assertable.
+        let fake = Arc::new(FakeProvider::from_texts(vec!["[DOC] a.md\nyes，已获得全部内容"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let bb = Arc::new(SharedBlackboard::new());
+        let subagent = RetrievalSubagent::new(SubagentRole::InternalRetrieval, gateway.clone());
+        let spec = SubagentSpec {
+            role: SubagentRole::InternalRetrieval,
+            goal: "找文档".to_string(),
+            budget_turns: 1,
+        };
+        subagent
+            .run_retrieval(&bb, &spec, Some(crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK))
+            .await
+            .unwrap();
+
+        let requests = fake.received_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages.len(), 1);
+        assert_eq!(
+            requests[0].messages[0].content,
+            crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK
         );
     }
 }

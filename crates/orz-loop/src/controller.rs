@@ -39,8 +39,12 @@ use crate::blackboard::SharedBlackboard;
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{FinishReason, Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PermitDecision, ToolResult};
+use crate::inquiry::{parse_completion_decision, InquiryCounters, DEFAULT_THRESHOLDS};
 use crate::orientation::OrientationMonitor;
-use crate::prompt::build_tool_availability_block;
+use crate::prompt::{
+    build_tool_availability_block, is_injected_block_text, COUNTEREXAMPLE_GATE_BLOCK,
+    INFO_SUFFICIENCY_BLOCK, RETRIEVAL_COMPLETION_CHECK_BLOCK,
+};
 use crate::relay::{route, DispatchTarget};
 use crate::tool::ToolDispatcher;
 
@@ -269,6 +273,14 @@ impl AgentLoopController {
         }];
         let mut tool_rounds = 0u32;
         let mut last_text: Option<String> = None;
+        // §4.6 wiring state: the final-answer counterexample gate fires once
+        // per run; inquiry counters are per-agent instances (main + the two
+        // retrieval subagents), local to the turn (D11 — counters reset each
+        // run, matching the stateless-between-turns controller contract).
+        let mut counterexample_fired = false;
+        let mut main_counters = InquiryCounters::default();
+        let mut internal_counters = InquiryCounters::default();
+        let mut external_counters = InquiryCounters::default();
 
         loop {
             let avail_block = build_tool_availability_block(
@@ -311,7 +323,60 @@ impl AgentLoopController {
                 )
                 .await?;
 
+            // §4.6.3: per-round output-threshold feed — repeated-content
+            // measure over the conversation (injected inquiry blocks excluded,
+            // D7) plus this response, accumulated as the max.
+            main_counters.feed_round();
+            let mut output_texts: Vec<String> = messages
+                .iter()
+                .filter(|m| {
+                    matches!(m.role, Role::User | Role::Assistant)
+                        && !m.content.is_empty()
+                        && !is_injected_block_text(&m.content)
+                })
+                .map(|m| m.content.clone())
+                .collect();
+            if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
+                output_texts.push(text.clone());
+            }
+            let (_, output_metrics) = evaluate_runtime_stagnation_guard(&StagnationInput {
+                public_outputs: output_texts,
+                ..Default::default()
+            })
+            .map_err(|e| AgentLoopError::Assurance(e.to_string()))?;
+            main_counters.feed_output_repeats(
+                output_metrics
+                    .max_consecutive_repeated_content
+                    .max(output_metrics.max_ngram_repeat),
+            );
+
             if response.tool_calls.is_empty() {
+                // §4.6.1/4.6.2: the first no-tool-call response is a
+                // final-answer candidate — before committing it, the
+                // counterexample gate fires ONCE (the block explicitly tells
+                // the model it appears only once). The candidate is journaled
+                // as model_output (evidence) but not committed to the
+                // conversation; the post-gate response is the final answer
+                // (D6). A post-gate round that returns tool calls continues
+                // the loop normally — the gate never fires again this run.
+                if !counterexample_fired {
+                    writer
+                        .record(
+                            EventType::CounterexampleGate,
+                            serde_json::json!({
+                                "position": "final_answer",
+                                "message_block": COUNTEREXAMPLE_GATE_BLOCK,
+                                "once_only": true,
+                            }),
+                        )
+                        .await?;
+                    messages.push(Message {
+                        role: Role::User,
+                        content: COUNTEREXAMPLE_GATE_BLOCK.to_string(),
+                    });
+                    counterexample_fired = true;
+                    continue;
+                }
                 // Include the final assistant message in the conversation so
                 // stagnation sees the model's actual output and the rebuilt
                 // dialogue matches what a real transport would have received
@@ -368,8 +433,8 @@ impl AgentLoopController {
                     DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval => {
                         self.run_retrieval_subagent(
                             host,
-                            &mut writer,
-                            target,
+                            writer,
+                            target.clone(),
                             tc,
                             &mut messages,
                             prompt,
@@ -377,17 +442,48 @@ impl AgentLoopController {
                         .await?
                     }
                     DispatchTarget::Host => {
-                        self.run_host_tool(
-                            host,
-                            &mut writer,
-                            tc,
-                            prompt,
-                            workspace_trust,
-                        )
-                        .await?
+                        self.run_host_tool(host, writer, tc, prompt, workspace_trust)
+                            .await?
                     }
                 };
                 assistant_parts.push(format!("[{}] {}", tc.name, result.output));
+
+                // §4.6.3/4.6.4: counter feeds — the main agent counts
+                // tool-level events (ToolDispatcher wrapper); subagents count
+                // semantic actions (one run_retrieval = 1 action, tool-level
+                // counting disabled inside). The IP3c trigger check runs after
+                // each retrieval round completes.
+                match target {
+                    DispatchTarget::Host => main_counters.feed_tool_call(),
+                    DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval => {
+                        main_counters.feed_tool_call();
+                        let sub_counters = match target {
+                            DispatchTarget::InternalRetrieval => &mut internal_counters,
+                            _ => &mut external_counters,
+                        };
+                        sub_counters.feed_semantic_action();
+                        let (_, sub_metrics) = evaluate_runtime_stagnation_guard(
+                            &StagnationInput {
+                                public_outputs: vec![result.output.clone()],
+                                ..Default::default()
+                            },
+                        )
+                        .map_err(|e| AgentLoopError::Assurance(e.to_string()))?;
+                        sub_counters.feed_output_repeats(
+                            sub_metrics
+                                .max_consecutive_repeated_content
+                                .max(sub_metrics.max_ngram_repeat),
+                        );
+                        self.maybe_fire_neutral_inquiry(
+                            writer,
+                            &mut messages,
+                            &mut main_counters,
+                            &mut internal_counters,
+                            &mut external_counters,
+                        )
+                        .await?;
+                    }
+                }
             }
             if !assistant_parts.is_empty() {
                 messages.push(Message {
@@ -416,9 +512,16 @@ impl AgentLoopController {
         }
 
         // 5. runtime_stagnation_guard — mechanical, per-turn
+        // Runtime-injected inquiry blocks are excluded (D7): fixed injected
+        // text is not model output, and repeated blocks would pollute the
+        // consecutive/ngram statistics.
         let public_outputs: Vec<String> = messages
             .iter()
-            .filter(|m| matches!(m.role, Role::User | Role::Assistant) && !m.content.is_empty())
+            .filter(|m| {
+                matches!(m.role, Role::User | Role::Assistant)
+                    && !m.content.is_empty()
+                    && !is_injected_block_text(&m.content)
+            })
             .map(|m| m.content.clone())
             .collect();
         let (stagnation_decision, stagnation_metrics) = evaluate_runtime_stagnation_guard(
@@ -487,6 +590,64 @@ impl AgentLoopController {
         4096
     }
 
+    /// §4.6.3 IP3b/IP3c: after a retrieval round completes, check the inquiry
+    /// counters (main + the involved subagent). Any 判定点 over its threshold
+    /// fires the same neutral inquiry and ALL counters reset at the trigger
+    /// instant — the implicit cooldown (a fired inquiry must re-accumulate
+    /// threshold units before it can fire again). The block is injected as a
+    /// User message so the main agent's next round answers it; the answer is
+    /// journaled via the following model_output (no structural parse — the
+    /// loop continues naturally, per the §4.6 定稿).
+    async fn maybe_fire_neutral_inquiry(
+        &self,
+        writer: &mut EventWriter<'_>,
+        messages: &mut Vec<Message>,
+        main: &mut InquiryCounters,
+        internal: &mut InquiryCounters,
+        external: &mut InquiryCounters,
+    ) -> Result<(), AgentLoopError> {
+        let reason = main
+            .any_over(&DEFAULT_THRESHOLDS)
+            .or_else(|| internal.any_over(&DEFAULT_THRESHOLDS))
+            .or_else(|| external.any_over(&DEFAULT_THRESHOLDS));
+        let Some(reason) = reason else {
+            return Ok(());
+        };
+        let counters = |c: &InquiryCounters| {
+            serde_json::json!({
+                "output_repeats": c.output_repeats,
+                "tool_calls": c.tool_calls,
+                "actions": c.actions,
+                "rounds": c.rounds,
+            })
+        };
+        writer
+            .record(
+                EventType::NeutralInquiry,
+                serde_json::json!({
+                    "trigger_reason": reason.as_str(),
+                    "counters": {
+                        "main": counters(main),
+                        "internal": counters(internal),
+                        "external": counters(external),
+                    },
+                    "message_block": INFO_SUFFICIENCY_BLOCK,
+                    "block_present": true,
+                }),
+            )
+            .await?;
+        messages.push(Message {
+            role: Role::User,
+            content: INFO_SUFFICIENCY_BLOCK.to_string(),
+        });
+        // Trigger-instant reset across all three instances (D5) — a counter
+        // near its threshold must not re-fire on the next round.
+        main.reset_all();
+        internal.reset_all();
+        external.reset_all();
+        Ok(())
+    }
+
     /// Run a retrieval subagent for a retrieval-shaped tool call.
     async fn run_retrieval_subagent(
         &self,
@@ -533,7 +694,10 @@ impl AgentLoopController {
             SubagentRole::ExternalRetrieval => &self.external_retrieval,
         };
 
-        let result = match subagent.run_retrieval(&self.blackboard, &spec).await {
+        let result = match subagent
+            .run_retrieval(&self.blackboard, &spec, Some(RETRIEVAL_COMPLETION_CHECK_BLOCK))
+            .await
+        {
             Ok(response) => {
                 let output = response.text.unwrap_or_default();
                 writer
@@ -544,6 +708,28 @@ impl AgentLoopController {
                             "call_id": tc.call_id,
                             "target": target_name,
                             "exit_code": 0,
+                        }),
+                    )
+                    .await?;
+                // §4.6.1: neutral completion check on subagent close — one-shot
+                // per close, no accumulation, not part of the 4 counters. The
+                // block was injected into the subagent's request; the response
+                // text is the evidence (subagent outputs are not journaled
+                // elsewhere). Failure paths record nothing (D8 — no model
+                // answer, fabricating evidence is worse).
+                let decision = parse_completion_decision(&output);
+                writer
+                    .record(
+                        EventType::RetrievalCompletionCheck,
+                        serde_json::json!({
+                            "role": target_name,
+                            "tool": tc.name,
+                            "decision": decision,
+                            "response": output,
+                            "neutral_only": true,
+                            "new_subagent_requested": false,
+                            "global_review_requested": false,
+                            "claim_strength_effect": "none",
                         }),
                     )
                     .await?;
@@ -876,8 +1062,11 @@ mod tests {
             tool_result: None,
         };
 
+        // Two scripted texts — the first is intercepted by the counterexample
+        // gate (§4.6: the final-answer gate fires once before the conclusion);
+        // the second is the post-gate final answer.
         let gateway: Arc<dyn ModelGateway> =
-            Arc::new(FakeProvider::from_texts(vec!["结果：完成"]));
+            Arc::new(FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
             .run_turn(&host, "列出当前目录", "RUN-SEQ", MANIFEST, 0, None)
@@ -896,7 +1085,8 @@ mod tests {
         assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
         // Full gate sequence (text-only path) — the availability probe
-        // precedes run_started (Python conformance).
+        // precedes run_started (Python conformance); the counterexample gate
+        // separates the two model outputs.
         let types = event_types(&dir);
         assert_eq!(
             types,
@@ -905,6 +1095,8 @@ mod tests {
                 EventType::RunStarted,
                 EventType::PromptSubmitted,
                 EventType::OrientationCheckpoint,
+                EventType::ModelOutput,
+                EventType::CounterexampleGate,
                 EventType::ModelOutput,
                 EventType::RuntimeStagnationGuard,
                 EventType::RunFinished,
@@ -930,6 +1122,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-1")]),
             ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
@@ -948,12 +1141,13 @@ mod tests {
         );
         assert!(types.contains(&EventType::PermissionRequested));
         assert!(types.contains(&EventType::PermissionDecision));
-        // Two model rounds (tool-call round + final text round).
+        // Three model rounds: tool-call round + text round (gate-intercepted)
+        // + post-gate final text round.
         let model_outputs = types
             .iter()
             .filter(|t| **t == EventType::ModelOutput)
             .count();
-        assert_eq!(model_outputs, 2);
+        assert_eq!(model_outputs, 3);
 
         // Exec section received the tool result.
         let bb = controller.blackboard();
@@ -1024,10 +1218,12 @@ mod tests {
         };
 
         // Script: main agent requests internal retrieval → subagent returns
-        // doc-tagged text → main agent concludes.
+        // doc-tagged text → main agent concludes (first text is gate-
+        // intercepted, the second is the post-gate final answer).
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
             ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
@@ -1094,10 +1290,13 @@ mod tests {
 
         // A single output repeating an 11× 3-token pattern trips the n-gram
         // threshold (10) → restart_requested → the run must be invalidated,
-        // not finished as "completed" (2026-08-04 review P1-2).
+        // not finished as "completed" (2026-08-04 review P1-2). Two scripted
+        // copies: the first is gate-intercepted, the second is the post-gate
+        // final answer — either one trips the n-gram within itself.
         let pattern = "重复 的 片段 ";
         let repeated = pattern.repeat(11);
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
+            repeated.as_str(),
             repeated.as_str(),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
@@ -1167,6 +1366,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("bash", "call-1")]),
             ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
@@ -1178,6 +1378,216 @@ mod tests {
         // fail-closed in the headless host (2026-08-04 review P2).
         let types = event_types(&dir);
         assert!(!types.contains(&EventType::ToolStarted), "{types:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn counterexample_gate_fires_once_before_final_answer() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        // First text-only round is the final-answer candidate → the gate
+        // fires ONCE and the post-gate round produces the actual final answer.
+        let fake = Arc::new(FakeProvider::from_texts(vec!["草稿", "终答"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let (response, _, _) = controller
+            .run_turn(&host, "hello", "RUN-GATE", MANIFEST, 0, None)
+            .await
+            .unwrap();
+        // The intercepted draft is never returned — the post-gate answer is.
+        assert_eq!(response, "终答");
+
+        let types = event_types(&dir);
+        assert_eq!(
+            types.iter().filter(|t| **t == EventType::CounterexampleGate).count(),
+            1,
+            "gate must fire exactly once: {types:?}"
+        );
+        assert_eq!(
+            types.iter().filter(|t| **t == EventType::ModelOutput).count(),
+            2,
+            "{types:?}"
+        );
+        let events = events(&dir);
+        let gate_event = events
+            .iter()
+            .find(|e| e.event_type == EventType::CounterexampleGate)
+            .unwrap();
+        assert_eq!(
+            gate_event.payload.get("position").and_then(|p| p.as_str()),
+            Some("final_answer")
+        );
+        assert_eq!(
+            gate_event.payload.get("once_only").and_then(|o| o.as_bool()),
+            Some(true)
+        );
+        assert!(
+            gate_event
+                .payload
+                .get("message_block")
+                .and_then(|b| b.as_str())
+                .is_some_and(|b| b.starts_with("[COUNTEREXAMPLE_GATE v0.1]"))
+        );
+
+        // The block was injected into the post-gate round's request.
+        let requests = fake.received_requests();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1]
+                .messages
+                .iter()
+                .any(|m| m.role == Role::User && m.content.contains("[COUNTEREXAMPLE_GATE v0.1]")),
+            "{:?}",
+            requests[1].messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn neutral_inquiry_fires_on_subagent_output_repeats() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        // Subagent output repeats an 11× 3-token n-gram → its output counter
+        // crosses the threshold → the neutral inquiry fires after the
+        // retrieval round and all counters reset at the trigger instant.
+        let repeated = format!("[DOC] design.md\n{}", "重复 的 片段 ".repeat(11));
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text(&repeated),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-INQ", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let inquiry = events
+            .iter()
+            .find(|e| e.event_type == EventType::NeutralInquiry)
+            .expect("neutral_inquiry event");
+        assert_eq!(
+            inquiry.payload.get("trigger_reason").and_then(|r| r.as_str()),
+            Some("output_repeats")
+        );
+        assert_eq!(
+            inquiry
+                .payload
+                .get("counters")
+                .and_then(|c| c.get("internal"))
+                .and_then(|i| i.get("output_repeats"))
+                .and_then(|v| v.as_u64()),
+            Some(11)
+        );
+        assert_eq!(
+            inquiry
+                .payload
+                .get("counters")
+                .and_then(|c| c.get("main"))
+                .and_then(|m| m.get("actions"))
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        // The inquiry block lands in the next main-agent round's request.
+        let requests = fake.received_requests();
+        assert!(requests[2]
+            .messages
+            .iter()
+            .any(|m| m.content.contains("[INFO_SUFFICIENCY v0.1]")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn retrieval_completion_check_recorded_on_close() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] design.md\nyes，已获得全部内容"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-CC", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // Completion check event with the parsed decision + full response
+        // evidence (the subagent response is not journaled elsewhere).
+        let events = events(&dir);
+        let check = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCompletionCheck)
+            .expect("retrieval_completion_check event");
+        assert_eq!(
+            check.payload.get("role").and_then(|r| r.as_str()),
+            Some("internal_retrieval")
+        );
+        assert_eq!(
+            check.payload.get("decision").and_then(|d| d.as_str()),
+            Some("yes")
+        );
+        assert!(
+            check
+                .payload
+                .get("response")
+                .and_then(|r| r.as_str())
+                .is_some_and(|r| r.contains("[DOC] design.md"))
+        );
+        // Claim-policy constants locked by the schema.
+        assert_eq!(
+            check.payload.get("neutral_only").and_then(|n| n.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            check
+                .payload
+                .get("new_subagent_requested")
+                .and_then(|n| n.as_bool()),
+            Some(false)
+        );
+
+        // The completion check block rode in the subagent's request.
+        let requests = fake.received_requests();
+        assert_eq!(requests.len(), 4);
+        assert!(
+            requests[1]
+                .messages
+                .iter()
+                .any(|m| m.content.contains("[RETRIEVAL_COMPLETION_CHECK v0.1]"))
+        );
+
+        // Counters below thresholds → no neutral inquiry in this run.
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.event_type == EventType::NeutralInquiry),
+            "neutral inquiry must not fire below thresholds"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
