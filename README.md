@@ -3,9 +3,10 @@
 状态：2026-08-05。**融合架构 v0.2 已冻结**——从 Grok Build 取用成熟底座（tools/workspace/sandbox/mcp/chat-state），
 自研 Agent Loop 引擎（orz-loop）与 Assurance 层（orz-assurance），采纳 Codex 式架构纪律（薄核心、单向依赖、零死代码）。
 
-**实施基线**：`feat/fusion-architecture` 分支 — 70 crate workspace，`cargo test --workspace` 全绿（自研 122 + 继承 ~6200 tests，0 failed）、clippy 0 error（Windows 首跑通）。
+**实施基线**：`feat/fusion-architecture` 分支 — 70 crate workspace，`cargo test --workspace` 全绿（自研 163 + 继承 ~9775，共 9938 tests，0 failed）、clippy 0 error（Windows 首跑通）。
 Phase 1（journal + transport + 单 Agent loop）、Phase 2（单主 Agent + gates + ACP + Plan Mode）已完成；
-Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）与 Slice #2（§4.6 问询三机制）已完成，共 122 tests。
+Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）、Slice #2（§4.6 问询三机制）、Slice #3（session snapshot + sandbox/credential/permit）已完成，共 163 tests。
+Slice #3 按用户要求**已本地验证、未提交未推送**；存量修复：xai-fast-worktree 4 个 metadata-feature 测试 Windows 平台语义（stash 验证为既有问题，非切片回归）。
 主仓库 CI 4 作业（ubuntu/windows × 3.11/3.12）全绿；workspace trust 扫描已剪枝（跳过 .git/嵌套仓库，本地 doctor exit 0）。
 
 Python assurance spec（`assurance/`）保留为 conformance suite、schema authority 与离线验证路径。
@@ -38,7 +39,7 @@ Python assurance spec（`assurance/`）保留为 conformance suite、schema auth
 - **仓库**：`D:\CLI\orz`（本地 fork of Grok Build `500129c7`；2026-08-04 由 `B:\orz` 迁移，B 盘空间不足）
 - **分支**：`feat/fusion-architecture`（70 crate workspace, `cargo check` 绿色）
 - **设计符合性**：详见[审查报告](#) — v0.2 设计与实施高度一致
-- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，Phase 3 Slice #1-2 完成（122 tests）；剩余：session snapshot、sandbox（job_object/credential/permit）、orz-tui、Clippy 全仓、Python reference-spec
+- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，Phase 3 Slice #1-3 完成（163 tests）；剩余：orz-tui、严格 Clippy/零死代码收尾、Python reference-spec、conformance suite 验证；待接线：ToolDispatcher IP5 snapshot、host 侧 keystore 注入 permit
 
 ## 当前文件 (Python assurance spec + 架构 + 协议)
 
