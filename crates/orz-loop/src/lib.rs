@@ -12,6 +12,7 @@ pub mod host;
 pub mod blackboard;
 pub mod relay;
 pub mod gateway;
+pub mod agents;
 pub mod prompt;
 pub mod tool;
 pub mod orientation;

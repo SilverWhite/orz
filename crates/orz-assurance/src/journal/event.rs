@@ -52,6 +52,12 @@ pub enum EventType {
 
     // Artifact
     ArtifactRegistered,
+
+    // Plan mode (Phase 2, SLICE-10)
+    PlanProposed,
+    PlanApproved,
+    PlanRejected,
+    ActionApproved,
 }
 
 impl EventType {
@@ -107,7 +113,8 @@ pub struct RunEvent {
     pub run_manifest_sha256: String,
 
     /// SHA-256 of the previous event, or null for seq=0.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Serialized as an explicit `null` for seq=0 — the run-event schema
+    /// requires this key on every line (required array + allOf null rule).
     pub previous_event_sha256: Option<String>,
 
     /// Schema identifier for the payload.
@@ -129,7 +136,8 @@ pub struct RunEvent {
 
 impl RunEvent {
     /// Create a new event with fields filled from context.
-    /// The caller MUST call `seal()` or set `event_sha256` before recording.
+    /// The caller MUST call `seal_event()` (or `JournalRecorder::record()`,
+    /// which seals automatically) before recording.
     pub fn new(
         run_id: String,
         sequence: u64,
@@ -143,8 +151,10 @@ impl RunEvent {
     ) -> Self {
         let event_id = {
             // Strip "RUN-" prefix to get the suffix for the event ID.
+            // `{:03}` matches the Python authority (canonical_cli.py uses
+            // `{sequence:03d}`) so event hashes align across sides.
             let suffix = run_id.strip_prefix("RUN-").unwrap_or(&run_id);
-            format!("EVT-{suffix}-{sequence:06}")
+            format!("EVT-{suffix}-{sequence:03}")
         };
 
         RunEvent {
@@ -196,6 +206,6 @@ mod tests {
             Redaction::None,
             "2026-08-04T00:00:00Z".into(),
         );
-        assert_eq!(event.event_id, "EVT-A1B2C3D4-000000");
+        assert_eq!(event.event_id, "EVT-A1B2C3D4-000");
     }
 }

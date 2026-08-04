@@ -3,8 +3,9 @@
 //! 5 sections, each with a single writer. All sections are readable by all agents.
 //! Write rules enforce single-writer discipline.
 //!
-//! Phase 1: Pro section + GateLog section fully implemented.
-//! Flash + Retrieval sections reserved for Phase 2.
+//! Single main agent + two retrieval subagents (fusion §4.5): the main agent
+//! writes Plan/Exec, each retrieval subagent writes its own section, and the
+//! controller writes GateLog.
 
 use std::sync::RwLock;
 
@@ -24,7 +25,7 @@ pub enum StepStatus {
     Blocked,
 }
 
-/// Pro writes: goal, steps, analysis, decisions, auth_grants.
+/// Main agent writes: goal, steps, analysis, decisions, auth_grants.
 #[derive(Debug, Clone, Default)]
 pub struct PlanSection {
     pub goal: Option<String>,
@@ -34,7 +35,7 @@ pub struct PlanSection {
     pub auth_grants: Vec<String>,
 }
 
-/// Flash writes: results, observations, errors, auth_requests.
+/// Main agent writes: results, observations, errors, auth_requests.
 #[derive(Debug, Clone, Default)]
 pub struct ExecSection {
     pub results: Vec<String>,

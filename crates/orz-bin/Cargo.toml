@@ -13,5 +13,9 @@ path = "src/main.rs"
 orz-assurance = { path = "../orz-assurance" }
 orz-loop = { path = "../orz-loop" }
 orz-host = { path = "../orz-host" }
+serde_json = { workspace = true }
+chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tracing-subscriber = { workspace = true }
+
 

@@ -21,7 +21,11 @@ use super::event::RunEvent;
 /// Commands sent to the background writer task.
 enum JournalCmd {
     /// Record a single event (blocking send — event must not be lost).
-    WriteEvent(RunEvent),
+    /// The ack reports the write result, including terminal-state refusal.
+    WriteEvent {
+        event: RunEvent,
+        ack: oneshot::Sender<Result<(), JournalRecorderError>>,
+    },
     /// Flush all buffered writes to disk and fsync.
     Flush {
         ack: oneshot::Sender<Result<(), JournalRecorderError>>,
@@ -37,6 +41,8 @@ enum JournalCmd {
 pub enum JournalRecorderError {
     #[error("journal closed (shutdown already called)")]
     Closed,
+    #[error("journal append refused after terminal event (seq {0})")]
+    TerminalAppended(u64),
     #[error("journal io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("journal serialization error: {0}")]
@@ -78,31 +84,46 @@ impl JournalRecorder {
     /// Events are automatically sealed (payload_sha256 + event_sha256 computed)
     /// before being sent.
     ///
-    /// Returns `JournalRecorderError::Closed` if the journal has been shut down.
-    pub fn record(&self, mut event: RunEvent) -> Result<(), JournalRecorderError> {
+    /// Returns an error when the append is refused — `Closed` after shutdown,
+    /// `TerminalAppended` after a terminal event. Callers must treat a refused
+    /// append as a journal integrity violation (the event was NOT recorded).
+    pub fn record(&self, event: RunEvent) -> Result<(), JournalRecorderError> {
         // Auto-seal the event (compute hashes)
+        let mut event = event;
         seal_event(&mut event)?;
 
-        // POST-PLANA BUGFIX #1: blocking send — never silently drop
+        // POST-PLANA BUGFIX #1: blocking send — never silently drop.
+        // The ack carries the writer's decision so refusal is observable.
+        let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
-            .blocking_send(JournalCmd::WriteEvent(event))
+            .blocking_send(JournalCmd::WriteEvent {
+                event,
+                ack: ack_tx,
+            })
             .map_err(|_| JournalRecorderError::Closed)?;
-
-        Ok(())
+        ack_rx
+            .blocking_recv()
+            .unwrap_or(Err(JournalRecorderError::Closed))
     }
 
     /// Async version of `record()` — safe to call from within a Tokio runtime.
     ///
     /// Uses `send().await` instead of `blocking_send`. Otherwise identical to `record()`.
-    pub async fn record_async(&self, mut event: RunEvent) -> Result<(), JournalRecorderError> {
+    pub async fn record_async(&self, event: RunEvent) -> Result<(), JournalRecorderError> {
+        let mut event = event;
         seal_event(&mut event)?;
 
+        let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
-            .send(JournalCmd::WriteEvent(event))
+            .send(JournalCmd::WriteEvent {
+                event,
+                ack: ack_tx,
+            })
             .await
             .map_err(|_| JournalRecorderError::Closed)?;
-
-        Ok(())
+        ack_rx
+            .await
+            .unwrap_or(Err(JournalRecorderError::Closed))
     }
 
     /// Flush all buffered writes to disk and fsync.
@@ -230,16 +251,23 @@ impl JournalWriterTask {
         use JournalCmd::*;
         while let Some(cmd) = self.rx.recv().await {
             match cmd {
-                WriteEvent(event) => {
+                WriteEvent { event, ack } => {
                     if self.closed {
+                        let _ = ack.send(Err(JournalRecorderError::Closed));
                         continue;
                     }
-                    // Refuse appends after a terminal event (hash-chain invariant)
+                    // Refuse appends after a terminal event (hash-chain invariant).
+                    // The caller must observe the refusal via the ack — a
+                    // dropped event with Ok would break the caller's seq/hash
+                    // bookkeeping invisibly.
                     if self.terminal_seen {
                         tracing::warn!(
                             "journal append refused after terminal event (seq {})",
                             event.sequence
                         );
+                        let _ = ack.send(Err(JournalRecorderError::TerminalAppended(
+                            event.sequence,
+                        )));
                         continue;
                     }
                     match Self::ensure_file(&mut self) {
@@ -247,13 +275,18 @@ impl JournalWriterTask {
                             if let Err(e) = Self::write_event(file, &event) {
                                 tracing::error!("journal write error: {e}");
                                 self.closed = true;
-                            } else if event.is_terminal() {
-                                self.terminal_seen = true;
+                                let _ = ack.send(Err(e));
+                            } else {
+                                if event.is_terminal() {
+                                    self.terminal_seen = true;
+                                }
+                                let _ = ack.send(Ok(()));
                             }
                         }
                         Err(e) => {
                             tracing::error!("journal file open error: {e}");
                             self.closed = true;
+                            let _ = ack.send(Err(JournalRecorderError::Io(e)));
                         }
                     }
                 }
@@ -325,29 +358,21 @@ mod tests {
         let dir = temp_dir();
         let recorder = JournalRecorder::new(dir.clone());
 
-        // Record 3 events in a chain
-        let e0 = make_event("RUN-CHAIN", 0, EventType::RunStarted, None);
+        // Caller-owned chain: seal each event and thread the previous hash
+        // through — the controller's EventWriter does the same. The recorder
+        // seals payload/event hashes but does NOT maintain the chain.
+        let mut e0 = make_event("RUN-CHAIN", 0, EventType::RunStarted, None);
+        seal_event(&mut e0).unwrap();
+        let prev0 = Some(e0.event_sha256.clone());
         recorder.record(e0).unwrap();
 
-        let e1 = {
-            // Use the previous event's hash — but we don't have it directly.
-            // The recorder auto-seals, so we construct with a placeholder
-            // and the recorder computes the real hash.
-            make_event(
-                "RUN-CHAIN",
-                1,
-                EventType::PromptSubmitted,
-                Some("placeholder-will-be-replaced-by-seal-64chars__".into()),
-            )
-        };
+        let mut e1 = make_event("RUN-CHAIN", 1, EventType::PromptSubmitted, prev0);
+        seal_event(&mut e1).unwrap();
+        let prev1 = Some(e1.event_sha256.clone());
         recorder.record(e1).unwrap();
 
-        let e2 = make_event(
-            "RUN-CHAIN",
-            2,
-            EventType::RunFinished,
-            Some("another-placeholder-64chars-long_____________".into()),
-        );
+        let mut e2 = make_event("RUN-CHAIN", 2, EventType::RunFinished, prev1);
+        seal_event(&mut e2).unwrap();
         recorder.record(e2).unwrap();
 
         recorder.shutdown().unwrap();
@@ -364,7 +389,62 @@ mod tests {
             let _: serde_json::Value = serde_json::from_str(line).unwrap();
         }
 
+        // The chain must replay valid — a placeholder previous hash would
+        // fail here (see 2026-08-04 review P0-1).
+        let replay = super::super::verifier::replay_journal(
+            &events_path,
+            Some("RUN-CHAIN"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "chain broken: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+
         // Clean up
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_refused_after_terminal_event() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let dir = temp_dir();
+        let recorder = JournalRecorder::new(dir.clone());
+
+        let mut terminal = make_event("RUN-TERM", 0, EventType::RunFinished, None);
+        seal_event(&mut terminal).unwrap();
+        recorder.record(terminal).unwrap();
+
+        // Any further append must be refused with an explicit error — never
+        // a silent drop that returns Ok (2026-08-04 review P0-2).
+        let mut late = make_event("RUN-TERM", 1, EventType::PromptSubmitted, None);
+        seal_event(&mut late).unwrap();
+        let err = recorder.record(late).unwrap_err();
+        assert!(
+            matches!(err, JournalRecorderError::TerminalAppended(1)),
+            "expected TerminalAppended, got {err:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn append_refused_after_terminal_event_async() {
+        let dir = temp_dir();
+        let recorder = JournalRecorder::new(dir.clone());
+
+        let mut terminal = make_event("RUN-TERM-A", 0, EventType::RunFinished, None);
+        seal_event(&mut terminal).unwrap();
+        recorder.record_async(terminal).await.unwrap();
+
+        let mut late = make_event("RUN-TERM-A", 1, EventType::RunStarted, None);
+        seal_event(&mut late).unwrap();
+        let err = recorder.record_async(late).await.unwrap_err();
+        assert!(
+            matches!(err, JournalRecorderError::TerminalAppended(1)),
+            "expected TerminalAppended, got {err:?}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -375,7 +455,9 @@ mod tests {
         let dir = temp_dir();
         let recorder = JournalRecorder::new(dir.clone());
 
-        // Rapid-fire 50 events — none should be dropped
+        // Rapid-fire 50 events — none should be dropped. Chain links are the
+        // caller's job (this test only asserts zero-loss delivery, so `None`
+        // previous hashes are fine here).
         for i in 0..50 {
             let event = make_event(
                 "RUN-BLOCK",
@@ -385,7 +467,7 @@ mod tests {
                 } else {
                     EventType::PromptSubmitted
                 },
-                None, // placeholder — recorder auto-seals
+                None,
             );
             recorder.record(event).unwrap();
         }

@@ -3,11 +3,12 @@
 // Ported from Python assurance/ (spec reference).
 // Modules: journal (Phase 1), gates, orientation, session, sandbox, credential, permit (Phase 2+).
 
+pub mod gates;
 pub mod journal;
+pub mod orientation;
+pub mod plan;
 
 // Phase 2+ module declarations:
-// pub mod gates;
-// pub mod orientation;
 // pub mod session;
 // pub mod sandbox;
 // pub mod credential;
@@ -22,7 +23,7 @@ pub use journal::{
 
 /// Gate decision — modelled on PROTOCOL_DRAFT §9.
 /// Five-valued: Pass, Warn, Block, Defer, NotApplicable.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateDecision {
     /// Evidence sufficient, no concerns.
     Pass,
@@ -34,6 +35,20 @@ pub enum GateDecision {
     Defer { missing: Vec<String> },
     /// Gate does not apply to the current action.
     NotApplicable,
+}
+
+impl GateDecision {
+    /// Canonical short name for journal payloads (GAK-02 vocabulary:
+    /// pass / warn / block / defer / not_applicable).
+    pub fn decision_str(&self) -> &'static str {
+        match self {
+            GateDecision::Pass => "pass",
+            GateDecision::Warn { .. } => "warn",
+            GateDecision::Block { .. } => "block",
+            GateDecision::Defer { .. } => "defer",
+            GateDecision::NotApplicable => "not_applicable",
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -35,7 +35,7 @@ pub enum ToolError {
 }
 
 /// Permission decision returned by the host's approval prompter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermitDecision {
     AllowOnce,
     AllowAlways,
@@ -151,6 +151,13 @@ pub trait LoopHost: Send + Sync {
     /// Look up available tools.
     fn tools_registry(&self) -> &dyn ToolRegistry;
 
+    /// Workspace trust observation state, fed to the instruction provenance
+    /// gate (`trusted_project` downgrades unless `observed_trusted`).
+    /// Defaults to `not_observed` (fail-closed); orz-host overrides.
+    fn workspace_trust(&self) -> orz_assurance::gates::ipg::WorkspaceTrust {
+        orz_assurance::gates::ipg::WorkspaceTrust::NotObserved
+    }
+
     /// Execute a tool call.
     async fn call_tool(
         &self,
@@ -162,13 +169,18 @@ pub trait LoopHost: Send + Sync {
     }
 
     /// Request user permission for a risky action.
+    ///
+    /// Default is fail-closed `Deny`. Hosts must implement their own
+    /// permission bridge (e.g. `PermissionBridge` for ACP) to allow tools —
+    /// an `AllowOnce` default would silently auto-allow `bash` whenever a
+    /// host forgets to wire the bridge (review P1-1, 2026-08-04).
     async fn request_permission(
         &self,
         _risk: RiskClass,
         _tool: &str,
         _args: &Value,
     ) -> Result<PermitDecision, PermitError> {
-        Ok(PermitDecision::AllowOnce)
+        Ok(PermitDecision::Deny)
     }
 
     /// Persist a turn record.

@@ -5929,6 +5929,7 @@ name = "orz-assurance"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5955,10 +5956,13 @@ dependencies = [
 name = "orz-bin"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "orz-assurance",
  "orz-host",
  "orz-loop",
+ "serde_json",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -6066,18 +6070,19 @@ dependencies = [
  "async-trait",
  "chrono",
  "orz-assurance",
- "orz-config",
  "orz-loop",
- "orz-mcp",
- "orz-models",
- "orz-tools-api",
+ "orz-paths",
+ "orz-tools",
  "orz-workspace",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
+ "uuid",
  "xai-acp-lib",
+ "xai-tool-runtime",
 ]
 
 [[package]]
