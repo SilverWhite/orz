@@ -12,6 +12,8 @@ orz-assurance = { path = "../orz-assurance" }
 # Runtime
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
+async-openai = { workspace = true, features = ["chat-completion"] }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

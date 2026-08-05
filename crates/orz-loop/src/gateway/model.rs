@@ -29,10 +29,20 @@ pub enum Role {
 }
 
 /// One conversation message.
+///
+/// `tool_call_id` is only set on `Role::Tool` messages — the provider
+/// protocol (OpenAI-compatible chat completions) requires each tool result
+/// to reference the call it answers, so a transport must be able to emit it.
+/// `tool_calls` is only set on `Role::Assistant` messages: the assistant's
+/// call declarations must be replayed before their tool results, or the
+/// provider rejects the round as an unmatched `tool_call_id`
+/// (2026-08-06 design review D2-1).
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: Role,
     pub content: String,
+    pub tool_call_id: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// A tool call requested by the model.
@@ -95,6 +105,11 @@ pub enum GatewayError {
     Model(String),
     #[error("response parse error: {0}")]
     Parse(String),
+    /// Cooperative cancellation observed mid-stream (Phase 3 slice #11,
+    /// P3-7 closure). The loop maps this to `AgentLoopError::Cancelled` so
+    /// the run ends with `run_cancelled`, not a spurious failure.
+    #[error("generation cancelled")]
+    Cancelled,
 }
 
 /// The model gateway contract. `generate` takes the full request and returns
@@ -109,11 +124,17 @@ pub enum GatewayError {
 pub trait ModelGateway: Send + Sync {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError>;
 
+    /// `cancel` is a cooperative cancellation check (Phase 3 slice #11):
+    /// streaming transports poll it between wire chunks and bail with
+    /// `GatewayError::Cancelled` when set. Buffered backends may ignore it —
+    /// the loop re-checks after the model round either way.
     async fn generate_stream(
         &self,
         request: ModelRequest,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
+        let _ = cancel;
         let response = self.generate(request).await?;
         // Clone so the closure's borrow cannot outlive the response move.
         if let Some(t) = response.text.clone().filter(|t| !t.is_empty()) {
@@ -150,6 +171,7 @@ mod tests {
                     tools: Vec::new(),
                     max_tokens: 0,
                 },
+                None,
                 &mut |c| chunks.push(c.to_string()),
             )
             .await

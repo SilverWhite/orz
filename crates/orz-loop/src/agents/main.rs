@@ -33,6 +33,7 @@ impl MainAgent {
         messages: Vec<Message>,
         tools: Vec<ToolDef>,
         max_tokens: u32,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
         self.gateway
@@ -43,6 +44,7 @@ impl MainAgent {
                     tools,
                     max_tokens,
                 },
+                cancel,
                 on_chunk,
             )
             .await

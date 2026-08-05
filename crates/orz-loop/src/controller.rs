@@ -349,6 +349,8 @@ impl AgentLoopController {
         let mut messages: Vec<Message> = vec![Message {
             role: Role::User,
             content: prompt.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }];
         let mut tool_rounds = 0u32;
         let mut last_text: Option<String> = None;
@@ -407,10 +409,19 @@ impl AgentLoopController {
                     messages.clone(),
                     tool_defs.clone(),
                     self.main_agent_max_tokens(),
+                    cancel,
                     &mut |chunk| host.on_text_delta(chunk),
                 )
                 .await
-                .map_err(|e| AgentLoopError::Model(e.to_string()))?;
+                // Phase 3 slice #11 (P3-7): a cancellation observed mid-stream
+                // is a cancel, not a model failure — it must end the run with
+                // `run_cancelled`, not a spurious `run_failed`.
+                .map_err(|e| match e {
+                    crate::gateway::model::GatewayError::Cancelled => {
+                        AgentLoopError::Cancelled
+                    }
+                    other => AgentLoopError::Model(other.to_string()),
+                })?;
 
             // Cooperative cancellation checkpoint (Phase 3 slice #7): a
             // cancelled run may omit this round's `model_output` — the chain
@@ -490,6 +501,8 @@ impl AgentLoopController {
                     messages.push(Message {
                         role: Role::User,
                         content: COUNTEREXAMPLE_GATE_BLOCK.to_string(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
                     });
                     counterexample_fired = true;
                     continue;
@@ -502,6 +515,8 @@ impl AgentLoopController {
                     messages.push(Message {
                         role: Role::Assistant,
                         content: text,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
                     });
                 }
                 last_text = response.text;
@@ -551,6 +566,16 @@ impl AgentLoopController {
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 return Err(AgentLoopError::Cancelled);
             }
+            // Replay the assistant's call declarations BEFORE their results:
+            // the provider protocol requires each tool message's
+            // `tool_call_id` to match a declaration in the history, and
+            // DeepSeek rejects unmatched ids (2026-08-06 design review D2-1).
+            messages.push(Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: response.tool_calls.clone(),
+            });
             let mut assistant_parts: Vec<String> = Vec::new();
             for tc in &response.tool_calls {
                 if cancel.is_some_and(|c| c.is_cancelled()) {
@@ -570,7 +595,7 @@ impl AgentLoopController {
                         .await?
                     }
                     DispatchTarget::Host => {
-                        self.run_host_tool(host, writer, tc, prompt, workspace_trust)
+                        self.run_host_tool(host, writer, tc, prompt, workspace_trust, &mut messages)
                             .await?
                     }
                 };
@@ -617,6 +642,8 @@ impl AgentLoopController {
                 messages.push(Message {
                     role: Role::Assistant,
                     content: assistant_parts.join("\n"),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 });
             }
 
@@ -767,6 +794,8 @@ impl AgentLoopController {
         messages.push(Message {
             role: Role::User,
             content: INFO_SUFFICIENCY_BLOCK.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         });
         // Trigger-instant reset across all three instances (D5) — a counter
         // near its threshold must not re-fire on the next round.
@@ -897,6 +926,10 @@ impl AgentLoopController {
         messages.push(Message {
             role: Role::Tool,
             content: result.output.clone(),
+            // The provider protocol needs the call this result answers; the
+            // call_id travels from the model's request through the journal.
+            tool_call_id: Some(tc.call_id.clone()),
+            tool_calls: Vec::new(),
         });
         let _ = host;
         Ok(result)
@@ -912,6 +945,7 @@ impl AgentLoopController {
         tc: &ToolCall,
         _prompt: &str,
         _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
+        messages: &mut Vec<Message>,
     ) -> Result<ToolResult, AgentLoopError> {
         // Permission gate.
         let risk = ToolDispatcher::risk_class(&tc.name);
@@ -1055,6 +1089,18 @@ impl AgentLoopController {
             }
         };
 
+        // Replay the tool result into the conversation — the provider
+        // protocol requires a tool message answering each declared call
+        // (D2-1; the retrieval subagent path already did this, the host path
+        // only mirrored the result into the blackboard — a real transport
+        // would have seen `[user, decl, summary]` with no tool message and
+        // rejected the round).
+        messages.push(Message {
+            role: Role::Tool,
+            content: result.output.clone(),
+            tool_call_id: Some(tc.call_id.clone()),
+            tool_calls: Vec::new(),
+        });
         Ok(result)
     }
 }
@@ -1370,11 +1416,12 @@ mod tests {
             }),
         };
 
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-1")]),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
             .run_turn(&host, "读文件", "RUN-TOOL", MANIFEST, 0, None)
@@ -1408,6 +1455,23 @@ mod tests {
             "{:?}",
             r.exec.results
         );
+
+        // D2-1 protocol shape: the round after a tool round must replay the
+        // assistant's call declaration BEFORE the tool result — a provider
+        // rejects a tool_call_id with no matching declaration (the
+        // `tool_calls` field on the assistant message, added slice #11).
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "round 2 request exists: {received:?}");
+        let round2 = &received[1].messages;
+        // user + assistant declaration + tool result + text summary.
+        assert_eq!(round2.len(), 4, "protocol shape: {round2:?}");
+        assert_eq!(round2[1].role, Role::Assistant);
+        assert_eq!(round2[1].tool_calls.len(), 1, "declaration replayed");
+        assert_eq!(round2[1].tool_calls[0].call_id, "call-1");
+        assert_eq!(round2[1].tool_calls[0].name, "read_file");
+        assert_eq!(round2[2].role, Role::Tool);
+        assert_eq!(round2[2].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(round2[3].role, Role::Assistant, "text summary kept");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

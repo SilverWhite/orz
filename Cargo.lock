@@ -6113,8 +6113,10 @@ dependencies = [
 name = "orz-loop"
 version = "0.1.0"
 dependencies = [
+ "async-openai",
  "async-trait",
  "chrono",
+ "futures",
  "orz-assurance",
  "serde",
  "serde_json",

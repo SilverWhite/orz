@@ -288,10 +288,14 @@ async fn run_plan_phase(
                 Message {
                     role: Role::User,
                     content: render_plan_for_gate(&artifact),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 Message {
                     role: Role::User,
                     content: orz_loop::prompt::COUNTEREXAMPLE_GATE_PLAN_BLOCK.to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
             ],
             tools: Vec::new(),

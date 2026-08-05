@@ -136,12 +136,14 @@ pub struct AcpServer {
     gateway: Arc<Mutex<Option<AcpAgentGatewaySender>>>,
     /// Model gateway for agent turns (scripted FakeProvider offline).
     model_gateway: Arc<dyn ModelGateway>,
-    /// In-flight run cancellation tokens, keyed by session (Phase 3 slice
-    /// #7). Per-session (not global): the stdio server can host multiple
-    /// sessions, and cancelling one must never touch another. A token is
+    /// Per-session in-flight run state (Phase 3 slice #7 token map, extended
+    /// slice #11 P2-2 to cover restores). One lock, one map: check + insert
+    /// happen in a single critical section, so prompt-vs-restore and
+    /// restore-vs-restore exclusions are atomic — no check-then-act window
+    /// survives concurrent dispatch (the SSE entry). A `Prompt` token is
     /// inserted when a prompt starts and removed on every completion path —
     /// a cancel arriving after completion is a benign no-op.
-    run_cancels: Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
+    runs: Arc<Mutex<HashMap<String, RunInFlight>>>,
     /// Sessions that cancelled while no run was registered (Phase 3 slice
     /// #7, cancel-before-bootstrap race): a client pressing Ctrl+Z
     /// immediately after submitting can beat the prompt's bootstrap. The
@@ -151,11 +153,58 @@ pub struct AcpServer {
     pending_cancels: Arc<Mutex<HashMap<String, std::time::Instant>>>,
 }
 
+/// What is in flight for a session under `AcpServer::runs`.
+enum RunInFlight {
+    /// A prompt is running; the token is the slice #7 cancellation handle.
+    Prompt(tokio_util::sync::CancellationToken),
+    /// A snapshot restore is executing (no cancellation token — P3-7
+    /// record: restores are short host-side operations, not agent runs).
+    Restore,
+}
+
 /// How long a remembered cancel stays valid. A cancel racing the prompt's
 /// registration (task-spawn → token-registration gap) is honored; anything
 /// older is an idle/stale cancel and must not cancel an unrelated later
 /// prompt (2026-08-05 review P2-1).
 const PENDING_CANCEL_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// RAII release of a session's restore-in-flight marker (Phase 3 slice #11,
+/// P2-2). Registering happens inside `new` under the same lock as the
+/// check — the shared `runs` map — so neither a concurrent restore nor a
+/// running prompt can slip between check and insert; dropping the guard
+/// removes the marker on every completion path — including errors and
+/// journal failures — so a later restore/prompt is never falsely rejected
+/// by a stale marker.
+struct RestoreInflightGuard {
+    runs: Arc<Mutex<HashMap<String, RunInFlight>>>,
+    session: String,
+}
+
+impl RestoreInflightGuard {
+    /// Register the marker; returns `Err(session_id)` when the session
+    /// already has anything in flight (prompt or restore).
+    fn new(
+        runs: &Arc<Mutex<HashMap<String, RunInFlight>>>,
+        session_id: &str,
+    ) -> Result<Self, String> {
+        let mut guard = runs.lock().unwrap();
+        if guard.contains_key(session_id) {
+            return Err(session_id.to_string());
+        }
+        guard.insert(session_id.to_string(), RunInFlight::Restore);
+        drop(guard);
+        Ok(Self {
+            runs: runs.clone(),
+            session: session_id.to_string(),
+        })
+    }
+}
+
+impl Drop for RestoreInflightGuard {
+    fn drop(&mut self) {
+        self.runs.lock().unwrap().remove(&self.session);
+    }
+}
 
 impl AcpServer {
     pub fn new() -> Self {
@@ -172,7 +221,7 @@ impl AcpServer {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             gateway: Arc::new(Mutex::new(None)),
             model_gateway,
-            run_cancels: Arc::new(Mutex::new(HashMap::new())),
+            runs: Arc::new(Mutex::new(HashMap::new())),
             pending_cancels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -188,8 +237,8 @@ impl AcpServer {
     /// return `false`.
     pub fn cancel_current_run(&self, session_id: &str) -> bool {
         {
-            let map = self.run_cancels.lock().unwrap();
-            if let Some(token) = map.get(session_id) {
+            let map = self.runs.lock().unwrap();
+            if let Some(RunInFlight::Prompt(token)) = map.get(session_id) {
                 token.cancel();
                 drop(map);
                 // The live-token path supersedes any remembered cancel.
@@ -294,10 +343,22 @@ impl AcpServer {
         // sent immediately after a completed run) cancels that next prompt —
         // ACP `session/cancel` cancels the session's next operation; the TUI
         // never hits this (it only cancels while `running`).
+        //
+        // Phase 3 slice #11 (P2-2): the restore exclusion lives in the same
+        // critical section — check + insert under one lock, so a concurrent
+        // restore cannot slip between the check and our registration
+        // (prompt-vs-restore atomicity; the restore side registers under the
+        // same map). Prompt-vs-prompt keeps the recorded overwrite semantics
+        // (slice #7 P3 — the TUI guards `running`, stdio is sequential).
         let cancel = tokio_util::sync::CancellationToken::new();
         {
-            let mut map = self.run_cancels.lock().unwrap();
-            map.insert(session_id.to_string(), cancel.clone());
+            let mut map = self.runs.lock().unwrap();
+            if matches!(map.get(session_id), Some(RunInFlight::Restore)) {
+                return Err(AcpError::InvalidRequest(format!(
+                    "prompt rejected: a snapshot restore is in flight for session {session_id}"
+                )));
+            }
+            map.insert(session_id.to_string(), RunInFlight::Prompt(cancel.clone()));
             if let Some(stamped) = self.pending_cancels.lock().unwrap().remove(session_id)
                 && stamped.elapsed() < PENDING_CANCEL_WINDOW
             {
@@ -313,7 +374,7 @@ impl AcpServer {
         // next successful prompt.
         let bootstrap = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await;
         if bootstrap.is_err() {
-            self.run_cancels.lock().unwrap().remove(session_id);
+            self.runs.lock().unwrap().remove(session_id);
         }
         let handle = bootstrap?;
 
@@ -341,9 +402,10 @@ impl AcpServer {
             )
             .await;
 
-        // Every path: release the token (stale cancels become no-ops) and the
-        // journal writer task (previously only the success path released it).
-        self.run_cancels.lock().unwrap().remove(session_id);
+        // Every path: release the run token (stale cancels become no-ops)
+        // and the journal writer task (previously only the success path
+        // released it).
+        self.runs.lock().unwrap().remove(session_id);
         let _ = handle.journal.shutdown_async().await;
 
         match run_result {
@@ -386,11 +448,11 @@ impl AcpServer {
     ///   error — the journal is the evidence record either way.
     ///
     /// Known records (2026-08-05 review):
-    /// - P2-2: the in-flight guard is check-then-act and there is no
-    ///   restore-vs-restore exclusion — unreachable today (the only callers
-    ///   are the single-threaded in-process TUI runner and tests); revisit
-    ///   with a per-session in-flight marker when a protocol entry lands
-    ///   (SSE transport can dispatch requests concurrently).
+    /// - P2-2 (CLOSED, slice #11): prompt and restore in-flight state share
+    ///   one map (`runs`) with check + register in a single critical
+    ///   section — prompt-vs-restore and restore-vs-restore exclusions are
+    ///   atomic under concurrent dispatch (SSE entry); an RAII guard
+    ///   releases the restore marker on every completion path.
     /// - P3-1: a rejected restore still consumes a restore sequence number
     ///   (holes in `RST-…-n` numbering) — harmless while nothing derives
     ///   restore dirs from the counter.
@@ -413,14 +475,16 @@ impl AcpServer {
             session.restore_count += 1;
             (session.base_dir.clone(), session.trust_policy, n)
         };
-        // Fail-closed: refuse a restore while the session's prompt is still
-        // running (a live cancellation token marks it) — the restore would
-        // mutate the worktree under the running agent's tools.
-        if self.run_cancels.lock().unwrap().contains_key(session_id) {
-            return Err(AcpError::InvalidRequest(format!(
-                "restore rejected: a run is in flight for session {session_id}"
-            )));
-        }
+        // Fail-closed (P2-2, slice #11): register the session's restore
+        // marker under the same lock as the check — the shared `runs` map —
+        // so neither a running prompt (a live token marks it) nor a
+        // concurrent restore can slip between check and insert. The RAII
+        // guard releases the marker on every path below.
+        let _inflight = RestoreInflightGuard::new(&self.runs, session_id).map_err(|session_id| {
+            AcpError::InvalidRequest(format!(
+                "restore rejected: a run or restore is already in flight for session {session_id}"
+            ))
+        })?;
 
         let suffix: String = session_id.chars().take(8).collect();
         let run_id = format!("RST-{suffix}-{restore_number}");
@@ -522,8 +586,9 @@ impl AcpServer {
     pub fn close_session(&self, session_id: &str) -> bool {
         let existed = self.sessions.lock().unwrap().remove(session_id).is_some();
         // Release cancellation state too — a remembered cancel must not
-        // outlive its session (2026-08-05 review P2-1).
-        self.run_cancels.lock().unwrap().remove(session_id);
+        // outlive its session (2026-08-05 review P2-1). A stray run/restore
+        // marker is dropped the same way (slice #11, P2-2).
+        self.runs.lock().unwrap().remove(session_id);
         self.pending_cancels.lock().unwrap().remove(session_id);
         existed
     }
@@ -1580,10 +1645,13 @@ mod tests {
         // Simulate an in-flight prompt: a live cancellation token for the
         // session (registered at prompt start, slice #7).
         server
-            .run_cancels
+            .runs
             .lock()
             .unwrap()
-            .insert("sess-busy".into(), tokio_util::sync::CancellationToken::new());
+            .insert(
+                "sess-busy".into(),
+                RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+            );
 
         let err = server
             .restore_snapshot("sess-busy", &"d".repeat(64), None)
@@ -1596,6 +1664,143 @@ mod tests {
         assert!(
             !base.join(".gsa").exists(),
             "rejected before bootstrap — no journal side effects"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Slice #11 P2-2: restore-vs-restore exclusion — the per-session
+    /// in-flight marker is registered atomically with the check, so a second
+    /// restore for the same session is rejected instead of running
+    /// concurrently over the worktree.
+    #[tokio::test]
+    async fn restore_snapshot_rejected_while_restore_in_flight() {
+        let base = test_dir();
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-restore-busy",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        // Simulate an in-flight restore: the marker a restore registers
+        // before executing.
+        server
+            .runs
+            .lock()
+            .unwrap()
+            .insert("sess-restore-busy".into(), RunInFlight::Restore);
+
+        let err = server
+            .restore_snapshot("sess-restore-busy", &"d".repeat(64), None)
+            .await
+            .expect_err("concurrent restore must be rejected");
+        assert!(
+            matches!(err, AcpError::InvalidRequest(_)),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !base.join(".gsa").exists(),
+            "rejected before bootstrap — no journal side effects"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Slice #11 P2-2: prompt-vs-restore exclusion, the prompt side — a
+    /// prompt landing while a restore is in flight is rejected rather than
+    /// interleaving with the worktree mutation.
+    #[tokio::test]
+    async fn prompt_rejected_while_restore_in_flight() {
+        tokio::task::LocalSet::new().run_until(async {
+            let base = test_dir();
+            let server = AcpServer::new();
+            server
+                .handle_session_new(
+                    "sess-restore-prompt",
+                    Some(base.clone()),
+                    crate::session::TrustPolicy::Skip,
+                )
+                .await
+                .unwrap();
+            server
+                .runs
+                .lock()
+                .unwrap()
+                .insert("sess-restore-prompt".into(), RunInFlight::Restore);
+
+            let result = server
+                .handle_session_prompt("sess-restore-prompt", "hello")
+                .await;
+            let err = result.expect_err("prompt during restore must be rejected");
+            assert!(
+                matches!(err, AcpError::InvalidRequest(_)),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                !matches!(
+                    server.runs.lock().unwrap().get("sess-restore-prompt"),
+                    Some(RunInFlight::Prompt(_))
+                ),
+                "no run token registered on the rejected path"
+            );
+
+            let _ = std::fs::remove_dir_all(&base);
+        })
+        .await;
+    }
+
+    /// Slice #11 P2-2: the in-flight marker is released on every completion
+    /// path — success and failure — so a later restore/prompt is never
+    /// falsely rejected by a stale marker.
+    #[tokio::test]
+    async fn restore_releases_inflight_marker_on_success_and_failure() {
+        let base = test_dir();
+        let target = base.join("a.txt");
+        std::fs::write(&target, "v1").unwrap();
+        let store = orz_assurance::session::snapshot::SnapshotStore::new(
+            base.join(".gsa").join("snapshots"),
+            base.clone(),
+        )
+        .unwrap();
+        let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
+
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-release",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+
+        // Success path: a restore completes and releases the marker.
+        server
+            .restore_snapshot("sess-release", &record.snapshot_hash, None)
+            .await
+            .unwrap();
+        assert!(
+            !server.runs.lock().unwrap().contains_key("sess-release"),
+            "marker released after a successful restore"
+        );
+
+        // Failure path: an unknown hash also releases the marker — the next
+        // restore passes the in-flight check and fails on the hash instead
+        // of being falsely rejected as concurrent.
+        let err = server
+            .restore_snapshot("sess-release", &"0".repeat(64), None)
+            .await
+            .expect_err("unknown hash still fails on the snapshot");
+        assert!(
+            !matches!(err, AcpError::InvalidRequest(_)),
+            "no false in-flight rejection after failure: {err:?}"
+        );
+        assert!(
+            !server.runs.lock().unwrap().contains_key("sess-release"),
+            "marker released after a failed restore"
         );
 
         let _ = std::fs::remove_dir_all(&base);
@@ -1632,7 +1837,7 @@ mod tests {
             let result = server.handle_session_prompt("sess-token", "x").await;
             assert!(result.is_err(), "bootstrap must fail: {result:?}");
             assert!(
-                !server.run_cancels.lock().unwrap().contains_key("sess-token"),
+                !server.runs.lock().unwrap().contains_key("sess-token"),
                 "token released on the bootstrap-failure path"
             );
             // A restore afterwards is NOT falsely rejected as in-flight

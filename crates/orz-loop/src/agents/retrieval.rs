@@ -67,6 +67,8 @@ impl RetrievalSubagent {
             .map(|block| vec![Message {
                 role: Role::User,
                 content: block.to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             }])
             .unwrap_or_default();
         let response = self
