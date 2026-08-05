@@ -33,6 +33,11 @@ pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> KeyOutcome {
         app.open_help();
         return KeyOutcome::Continue;
     }
+    // Alt+S opens the snapshot selector (slice #10; parity with Alt+H).
+    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('s') {
+        app.open_snapshots();
+        return KeyOutcome::Continue;
+    }
 
     match app.focus {
         Focus::Dialog => handle_dialog_key(app, key),
@@ -264,12 +269,28 @@ fn handle_modal_key(app: &mut TuiApp, key: KeyEvent) -> KeyOutcome {
         app.focus = Focus::Chat;
         return KeyOutcome::Continue;
     }
-    if matches!(app.modal, Some(crate::modals::Modal::Find(_))) {
-        handle_find_key(app, key);
-    } else {
-        handle_tabbed_key(app, key);
+    match &app.modal {
+        Some(crate::modals::Modal::Find(_)) => handle_find_key(app, key),
+        Some(crate::modals::Modal::Snapshots(_)) => handle_snapshots_key(app, key),
+        _ => handle_tabbed_key(app, key),
     }
     KeyOutcome::Continue
+}
+
+/// Snapshot selector: ↑/↓ move the selection, Enter is two-step confirm
+/// (first press arms the confirm state on the row, second records the
+/// restore intent — slice #10), Esc cascades (confirm → selection, else
+/// close).
+fn handle_snapshots_key(app: &mut TuiApp, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up => app.snapshots_select_prev(),
+        KeyCode::Down => app.snapshots_select_next(),
+        KeyCode::Enter => {
+            let _ = app.snapshots_confirm();
+        }
+        KeyCode::Esc => app.snapshots_esc(),
+        _ => {}
+    }
 }
 
 fn handle_neutral_key(app: &mut TuiApp, key: KeyEvent) -> KeyOutcome {
@@ -456,6 +477,141 @@ mod tests {
         let outcome = handle_key(&mut a, key(KeyCode::Enter, M::NONE));
         assert_eq!(outcome, KeyOutcome::Continue);
         assert!(a.stop_pending, "/stop Enter while running marks intent");
+    }
+
+    // ── Phase 3 slice #10: snapshot selector ────────────────────────────
+
+    /// Hermetic cwd with two sealed `snapshot_created` journals (two runs
+    /// of the same session — navigation needs >1 row).
+    fn snapshot_fixture_cwd() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-tui-input-snapshots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (n, h) in [(0u32, "a".repeat(64)), (1, "b".repeat(64))] {
+            let run_id = format!("RUN-a1b2c3d4-{n}");
+            let runs = dir.join(".gsa").join("runs").join(&run_id);
+            std::fs::create_dir_all(&runs).unwrap();
+            let mut ev = orz_assurance::journal::RunEvent::new(
+                run_id.clone(),
+                0,
+                orz_assurance::journal::EventType::SnapshotCreated,
+                "m".into(),
+                None,
+                "run-event-v0.1.schema.json".into(),
+                serde_json::json!({"tool": "search_replace", "targets": ["a.txt"], "snapshot_hash": h}),
+                orz_assurance::journal::Redaction::None,
+                "2026-08-05T00:00:00Z".into(),
+            );
+            orz_assurance::seal_event(&mut ev).unwrap();
+            std::fs::write(
+                runs.join("events.jsonl"),
+                format!("{}\n", serde_json::to_string(&ev).unwrap()),
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn alt_s_opens_snapshot_selector() {
+        let dir = snapshot_fixture_cwd();
+        let mut a = TuiApp::new();
+        a.cwd = dir.clone();
+        handle_key(&mut a, key(KeyCode::Char('s'), M::ALT));
+        assert!(matches!(
+            a.modal,
+            Some(crate::modals::Modal::Snapshots(_))
+        ));
+        assert_eq!(a.focus, Focus::Modal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn alt_s_refused_while_permission_showing() {
+        let mut a = TuiApp::new();
+        a.show_permission_dialog(crate::app::PendingPermission::new("bash", "dir", None));
+        handle_key(&mut a, key(KeyCode::Char('s'), M::ALT));
+        assert!(a.modal.is_none(), "permission flow is blocking");
+    }
+
+    #[test]
+    fn snapshots_slash_dispatch_opens_selector() {
+        let dir = snapshot_fixture_cwd();
+        let mut a = TuiApp::new();
+        a.cwd = dir.clone();
+        a.input.textarea.set_text("/snapshots");
+        let outcome = handle_key(&mut a, key(KeyCode::Enter, M::NONE));
+        assert_eq!(outcome, KeyOutcome::Continue);
+        assert!(matches!(
+            a.modal,
+            Some(crate::modals::Modal::Snapshots(_))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_selector_keys_navigate_confirm_and_esc() {
+        let dir = snapshot_fixture_cwd();
+        let mut a = TuiApp::new();
+        a.cwd = dir.clone();
+        handle_key(&mut a, key(KeyCode::Char('s'), M::ALT)); // open
+        // Runs sort newest first — index 0 is -1 (hash b…), index 1 is -0
+        // (hash a…). Down moves to the older row.
+        let crate::modals::Modal::Snapshots(sel) = a.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert_eq!(sel.entries[0].run_id, "RUN-a1b2c3d4-1");
+        handle_key(&mut a, key(KeyCode::Down, M::NONE));
+        let crate::modals::Modal::Snapshots(sel) = a.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert_eq!(sel.selected, 1);
+        assert_eq!(sel.entries[sel.selected].run_id, "RUN-a1b2c3d4-0");
+        // First Enter arms confirm; second records the intent and closes.
+        handle_key(&mut a, key(KeyCode::Enter, M::NONE));
+        let crate::modals::Modal::Snapshots(sel) = a.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert!(sel.confirm, "first Enter arms the confirm state");
+        assert!(a.pending_restore.is_none());
+        handle_key(&mut a, key(KeyCode::Enter, M::NONE));
+        assert_eq!(a.pending_restore.as_deref(), Some("a".repeat(64).as_str()));
+        assert!(a.modal.is_none(), "second Enter closes the selector");
+
+        // Reopen; Esc from the confirm state cascades back, then closes.
+        handle_key(&mut a, key(KeyCode::Char('s'), M::ALT));
+        handle_key(&mut a, key(KeyCode::Enter, M::NONE)); // confirm
+        handle_key(&mut a, key(KeyCode::Esc, M::NONE)); // cascade back
+        let crate::modals::Modal::Snapshots(sel) = a.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert!(!sel.confirm);
+        handle_key(&mut a, key(KeyCode::Esc, M::NONE)); // close
+        assert!(a.modal.is_none());
+        assert_eq!(a.focus, Focus::Chat);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tab_is_a_noop_in_snapshot_selector() {
+        let dir = snapshot_fixture_cwd();
+        let mut a = TuiApp::new();
+        a.cwd = dir.clone();
+        handle_key(&mut a, key(KeyCode::Char('s'), M::ALT));
+        handle_key(&mut a, key(KeyCode::Tab, M::NONE));
+        let crate::modals::Modal::Snapshots(sel) = a.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert_eq!(sel.selected, 0, "Tab must not move the selection");
+        assert!(!sel.confirm);
+        assert!(a.modal.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The Esc cascade (Chat→Neutral→Chat) with a stale double-Esc stamp —

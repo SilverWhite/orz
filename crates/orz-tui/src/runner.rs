@@ -136,6 +136,9 @@ pub fn run_replay(path: &Path) -> Result<(), TuiError> {
 /// error (review P1-1: `?` inside the loop used to skip the teardown).
 pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<(), TuiError> {
     let server = Arc::new(AcpServer::with_gateway(gateway));
+    // The restore path keeps its own handle — connect_inprocess moves the
+    // Arc into the agent-side handler (slice #10).
+    let restore_server = server.clone();
     let mut client = connect_inprocess(server, TrustPolicy::Enforce);
     let mut app = TuiApp::new();
     app.cwd = config.cwd.clone();
@@ -158,6 +161,7 @@ pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<()
     render_frame(&mut terminal, &mut app)?;
 
     let result = run_loop(
+        &restore_server,
         &mut client,
         &mut app,
         &config.cwd,
@@ -216,6 +220,7 @@ impl TailState {
 /// guarantee teardown after it returns (success or error).
 #[allow(clippy::too_many_arguments)]
 async fn run_loop(
+    server: &AcpServer,
     client: &mut InProcessClient,
     app: &mut TuiApp,
     cwd: &Path,
@@ -287,6 +292,20 @@ async fn run_loop(
                                 if std::mem::take(&mut app.stop_pending) {
                                     do_cancel(client, app).await;
                                 }
+                                // A confirmed snapshot restore (slice #10) —
+                                // the runner owns the async restore call.
+                                // The two intents are mutually exclusive by
+                                // the app-side guards; drain both anyway.
+                                if let Some(hash) = std::mem::take(&mut app.pending_restore) {
+                                    // Review D2-1: the loop suspends for the
+                                    // whole restore await, so render a frame
+                                    // with 恢复中 BEFORE it — the user sees
+                                    // live feedback instead of a freeze.
+                                    app.restoring = true;
+                                    app.status.set_run_state("恢复中", true);
+                                    render_frame(terminal, app).map_err(TuiError::from)?;
+                                    do_restore(server, client, app, cwd, hash).await?;
+                                }
                             }
                             KeyOutcome::Quit => break Ok(()),
                             KeyOutcome::CancelRun => {
@@ -296,9 +315,11 @@ async fn run_loop(
                                 // Running guard (review P1-2): a second prompt
                                 // while a turn is in flight would collide on
                                 // the run-dir counter and corrupt the journal.
-                                if app.running {
+                                // Restoring has no host in-flight marker
+                                // (record P2-2) — the TUI is the only guard.
+                                if app.running || app.restoring {
                                     app.content.add_system_message(
-                                        "当前运行中——请等待完成或发送 /stop", false);
+                                        "当前有运行/恢复进行中——请等待完成", false);
                                 } else {
                                     run_prompt(client, app, &mut tail_state, cwd, text).await?;
                                 }
@@ -378,6 +399,15 @@ async fn run_loop(
 /// dropped oneshot resolves the manager's prompt to Cancelled — the loop's
 /// next checkpoint then terminates the run.
 async fn do_cancel(client: &mut InProcessClient, app: &mut TuiApp) {
+    // A restore has no cancellation token on the host (record P3-7) and no
+    // in-flight marker (record P2-2) — refusing here is the only guard: a
+    // cancel would otherwise fall into the 2s pending_cancels window and
+    // could pre-cancel the NEXT prompt.
+    if app.restoring {
+        app.content
+            .add_system_message("恢复进行中——无法取消（恢复无取消令牌）", false);
+        return;
+    }
     if app.running {
         client.request_cancel().await;
         app.content
@@ -454,6 +484,72 @@ async fn run_prompt(
     app.last_prompt = Some(text.clone());
     let seq = client.prompt_count;
     client.spawn_prompt(session_id, text, seq);
+    Ok(())
+}
+
+/// Restore a snapshot into the live session's worktree (slice #10). The
+/// restore is its own `RST-` run on the host; its journal is never tailed
+/// by the TUI (the tail and discover_sessions both match `RUN-` only), so
+/// the returned report is the completion signal.
+async fn do_restore(
+    server: &AcpServer,
+    client: &mut InProcessClient,
+    app: &mut TuiApp,
+    cwd: &Path,
+    hash: String,
+) -> Result<(), TuiError> {
+    // Defense in depth — the selector's confirm already refuses while
+    // running; a run could have started between confirm and this drain.
+    // (Only `running` is checked here: the production drain arm pre-sets
+    // `restoring` for the pre-render — the guard would refuse itself.)
+    if app.running {
+        app.content
+            .add_system_message("当前运行中——请等待完成后再恢复", false);
+        app.restoring = false;
+        app.status.set_run_state("空闲", true);
+        return Ok(());
+    }
+    // The host needs the full session UUID; only the client holds it (run
+    // dirs encode 8 chars and no session.json markers exist). Mirror
+    // run_prompt's auto-start.
+    if client.session_id.is_none() {
+        client
+            .start_session(cwd.to_path_buf())
+            .await
+            .map_err(|e| TuiError::Session(e.to_string()))?;
+        app.accept_event(TuiEvent::AcpSessionCreated {
+            session_id: client.session_id.clone().unwrap_or_default(),
+        });
+    }
+    let session_id = client
+        .session_id
+        .clone()
+        .ok_or_else(|| TuiError::Session("no session id".into()))?;
+
+    // NOTE: do NOT touch client.prompt_count — RST- ids come from the
+    // host's independent restore_count, so the client's
+    // run_dir_for_next_prompt derivation stays correct (host test
+    // restore_and_prompt_run_ids_are_independent pins this).
+    app.restoring = true;
+    app.status.set_run_state("恢复中", true);
+    match server.restore_snapshot(&session_id, &hash, None).await {
+        Ok(report) => {
+            let n = report
+                .get("restored")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let short: String = hash.chars().take(8).collect();
+            app.content
+                .add_system_message(&format!("[快照恢复] {short} 恢复 {n} 个文件"), false);
+        }
+        Err(e) => {
+            app.content
+                .add_system_message(&format!("[快照恢复] 失败（{e}）"), true);
+        }
+    }
+    app.status.set_run_state("空闲", true);
+    app.restoring = false;
     Ok(())
 }
 
@@ -831,6 +927,324 @@ mod tests {
                     "a user-typed input is never clobbered"
                 );
 
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    // ── Phase 3 slice #10: snapshot restore ─────────────────────────────
+
+    fn runner_base(tag: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!(
+            "orz-tui-runner-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    /// `{base}/.gsa/runs/RST-{session8}-{n}/events.jsonl` — the restore
+    /// run's journal (host-side restore_count numbering, slice #8).
+    fn rst_journal(client: &InProcessClient, base: &Path, n: u32) -> PathBuf {
+        let session8: String = client
+            .session_id
+            .as_ref()
+            .expect("session started")
+            .chars()
+            .take(8)
+            .collect();
+        base.join(".gsa")
+            .join("runs")
+            .join(format!("RST-{session8}-{n}"))
+            .join("events.jsonl")
+    }
+
+    fn system_messages(app: &TuiApp) -> Vec<String> {
+        app.content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::view_model::ContentItem::Message(m) if m.role == "系统" => {
+                    Some(m.content.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Full restore through the host (host-test pattern, acp_server.rs):
+    /// track a file, mutate it, restore — the worktree returns to the
+    /// snapshot, a valid RST- journal is recorded, and the TUI surfaces
+    /// the report from the direct call (RST journals are never tailed).
+    #[tokio::test]
+    async fn do_restore_restores_worktree_and_records_rst_journal() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = runner_base("restore");
+                std::fs::write(base.join("a.txt"), "v1").unwrap();
+                let store =
+                    orz_assurance::session::snapshot::SnapshotStore::new(
+                        base.join(".gsa").join("snapshots"),
+                        base.clone(),
+                    )
+                    .unwrap();
+                let record = store.track(&[std::path::PathBuf::from("a.txt")]).await.unwrap();
+                std::fs::write(base.join("a.txt"), "v2").unwrap();
+
+                let server = Arc::new(AcpServer::new());
+                let mut client = connect_inprocess(server.clone(), TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                client.start_session(base.to_path_buf()).await.unwrap();
+
+                do_restore(&server, &mut client, &mut app, &base, record.snapshot_hash)
+                    .await
+                    .unwrap();
+
+                // Worktree restored to the snapshot content.
+                assert_eq!(std::fs::read_to_string(base.join("a.txt")).unwrap(), "v1");
+                // The restore run's journal is a valid chain ending
+                // run_finished (preflight → snapshot_restored → finished).
+                let journal = rst_journal(&client, &base, 0);
+                let replay = orz_assurance::replay_journal(&journal, None, None, true);
+                assert!(replay.valid, "RST journal invalid: {:?}", replay.errors);
+                assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+                let msgs = system_messages(&app);
+                assert!(
+                    msgs.iter().any(|m| m.contains("[快照恢复]") && m.contains("1 个文件")),
+                    "report surfaced: {msgs:?}"
+                );
+                assert_eq!(app.status.items[5].label, "空闲");
+                assert!(!app.restoring, "restoring flag cleared");
+                // Prompt count untouched — the next prompt still lands in
+                // RUN-…-0 (host test restore_and_prompt_run_ids_are_independent).
+                assert_eq!(client.prompt_count, 0);
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn do_restore_starts_session_when_none() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = runner_base("autosess");
+                std::fs::write(base.join("a.txt"), "v1").unwrap();
+                let store =
+                    orz_assurance::session::snapshot::SnapshotStore::new(
+                        base.join(".gsa").join("snapshots"),
+                        base.clone(),
+                    )
+                    .unwrap();
+                let record = store.track(&[std::path::PathBuf::from("a.txt")]).await.unwrap();
+
+                let server = Arc::new(AcpServer::new());
+                let mut client = connect_inprocess(server.clone(), TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                assert!(client.session_id.is_none());
+
+                do_restore(&server, &mut client, &mut app, &base, record.snapshot_hash)
+                    .await
+                    .unwrap();
+                assert!(
+                    client.session_id.is_some(),
+                    "restore auto-starts the session (full UUID required)"
+                );
+                assert_eq!(std::fs::read_to_string(base.join("a.txt")).unwrap(), "v1");
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn do_restore_refused_while_running() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = runner_base("refuse");
+                let server = Arc::new(AcpServer::new());
+                let mut client = connect_inprocess(server.clone(), TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                app.running = true;
+
+                do_restore(&server, &mut client, &mut app, &base, "a".repeat(64))
+                    .await
+                    .unwrap();
+                assert!(!base.join(".gsa").exists(), "no host side effects");
+                assert!(
+                    system_messages(&app)
+                        .iter()
+                        .any(|m| m.contains("请等待完成后再恢复")),
+                    "refusal message surfaced"
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn do_restore_unknown_hash_surfaces_error_and_returns_idle() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = runner_base("bogus");
+                let server = Arc::new(AcpServer::new());
+                let mut client = connect_inprocess(server.clone(), TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                client.start_session(base.to_path_buf()).await.unwrap();
+
+                do_restore(&server, &mut client, &mut app, &base, "b".repeat(64))
+                    .await
+                    .unwrap();
+                // The host records the failure in the RST journal and
+                // returns the original store error — the TUI surfaces it.
+                assert!(
+                    system_messages(&app).iter().any(|m| m.contains("[快照恢复] 失败")),
+                    "error surfaced"
+                );
+                assert_eq!(app.status.items[5].label, "空闲", "status recovers");
+                assert!(!app.restoring, "restoring flag cleared on error");
+                let journal = rst_journal(&client, &base, 0);
+                let replay = orz_assurance::replay_journal(&journal, None, None, true);
+                assert!(replay.valid);
+                assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// A restore has no host cancellation token (record P3-7) — the TUI
+    /// refuses cancel while restoring instead of letting the cancel fall
+    /// into the 2s pending_cancels window and pre-cancel the next prompt.
+    #[tokio::test]
+    async fn do_cancel_refuses_while_restoring() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = runner_base("cancel-restore");
+                let server = Arc::new(AcpServer::new());
+                let mut client = connect_inprocess(server, TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                app.restoring = true;
+
+                do_cancel(&mut client, &mut app).await;
+                assert!(
+                    system_messages(&app)
+                        .iter()
+                        .any(|m| m.contains("恢复进行中——无法取消")),
+                    "restore refuses cancellation"
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Full chain E2E: a real mutation run records a snapshot_created
+    /// event (allow-once permission), then restore returns the worktree to
+    /// the pre-mutation state — the selector's data source and the
+    /// restore path working against real journal payloads.
+    #[tokio::test]
+    async fn restore_after_mutation_run_e2e() {
+        use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
+        use orz_loop::gateway::model::ToolCall;
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = runner_base("e2e");
+                std::fs::write(base.join("a.txt"), "v1").unwrap();
+
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "search_replace".to_string(),
+                        arguments: serde_json::json!({
+                            "file_path": "a.txt",
+                            "old_string": "v1",
+                            "new_string": "v2",
+                        }),
+                        call_id: "call-1".to_string(),
+                    }]),
+                    // The counterexample gate consumes two identical texts
+                    // per round (acp_client.rs quirk).
+                    ScriptedResponse::text("完成。"),
+                    ScriptedResponse::text("完成。"),
+                ]))));
+                let mut client = connect_inprocess(server.clone(), TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                client.start_session(base.to_path_buf()).await.unwrap();
+                client.prompt_count += 1;
+                let seq = client.prompt_count;
+                let session_id = client.session_id.clone().unwrap();
+                client.spawn_prompt(session_id, "把 v1 改成 v2".to_string(), seq);
+                app.running = true;
+
+                // Allow the mutation once.
+                let completed = loop {
+                    match client.msg_rx.recv().await.unwrap() {
+                        ClientMsg::PermissionRequest { request, respond } => {
+                            let allow_once = request
+                                .options
+                                .iter()
+                                .find(|o| o.kind == acp::PermissionOptionKind::AllowOnce)
+                                .unwrap()
+                                .option_id
+                                .0
+                                .to_string();
+                            respond
+                                .send(acp::RequestPermissionResponse::new(
+                                    acp::RequestPermissionOutcome::Selected(
+                                        acp::SelectedPermissionOutcome::new(allow_once),
+                                    ),
+                                ))
+                                .unwrap();
+                        }
+                        ClientMsg::PromptCompleted { result, .. } => break result,
+                        ClientMsg::SessionNotification { .. } => {}
+                    }
+                };
+                assert!(completed.is_ok(), "prompt failed: {completed:?}");
+                assert_eq!(std::fs::read_to_string(base.join("a.txt")).unwrap(), "v2");
+
+                // The run journal carries the snapshot_created hash.
+                let run_dir = base
+                    .join(".gsa")
+                    .join("runs")
+                    .join(format!(
+                        "RUN-{}-0",
+                        client.session_id.as_ref().unwrap().chars().take(8).collect::<String>()
+                    ));
+                let content = std::fs::read_to_string(run_dir.join("events.jsonl")).unwrap();
+                let mut hash: Option<String> = None;
+                for line in content.lines() {
+                    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+                    if v.get("event_type").and_then(|t| t.as_str()) == Some("snapshot_created")
+                        && let Some(h) = v
+                            .get("payload")
+                            .and_then(|p| p.get("snapshot_hash"))
+                            .and_then(|h| h.as_str())
+                    {
+                        hash = Some(h.to_string());
+                        break;
+                    }
+                }
+                let hash = hash.expect("snapshot_created hash in the journal");
+
+                // Restore through the same direct path the selector arms.
+                app.running = false;
+                do_restore(&server, &mut client, &mut app, &base, hash)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    std::fs::read_to_string(base.join("a.txt")).unwrap(),
+                    "v1",
+                    "worktree returned to the pre-mutation state"
+                );
+                assert!(
+                    system_messages(&app)
+                        .iter()
+                        .any(|m| m.contains("[快照恢复]") && m.contains("1 个文件")),
+                    "report surfaced"
+                );
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await

@@ -117,6 +117,15 @@ pub struct TuiApp {
     /// (Phase 3 slice #7; app state only marks intent so key handling stays
     /// sync).
     pub stop_pending: bool,
+    /// A snapshot restore was confirmed in the selector — the runner owns
+    /// the async call (slice #10; same intent-marking pattern as
+    /// stop_pending).
+    pub pending_restore: Option<String>,
+    /// A restore is in flight. The host has no restore in-flight marker
+    /// (record P2-2) and no restore cancellation token (record P3-7), so
+    /// the TUI is the only guard — it blocks new prompts, re-entry and
+    /// cancel while set.
+    pub restoring: bool,
     pub quit: bool,
     /// Prompt counter for card turn labels (each prompt = one run).
     pub turn_counter: u32,
@@ -173,6 +182,8 @@ impl TuiApp {
             modal: None,
             running: false,
             stop_pending: false,
+            pending_restore: None,
+            restoring: false,
             quit: false,
             turn_counter: 0,
             cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
@@ -390,6 +401,93 @@ impl TuiApp {
         true
     }
 
+    /// Open the snapshot selector (slice #10): a fresh read-only scan at
+    /// every open (v1 — no live refresh while the modal is open; the
+    /// explorer tree has the same one-shot-load precedent). The selector is
+    /// the approval surface for restore: restore has no permission flow by
+    /// design (the host API is a user-explicit request, slice #8).
+    pub fn open_snapshots(&mut self) -> bool {
+        if !self.modal_available() {
+            self.queue_modal_refusal();
+            return false;
+        }
+        let entries = crate::snapshots::discover_snapshots(&self.cwd);
+        self.modal = Some(crate::modals::Modal::Snapshots(
+            crate::modals::SnapshotSelector::new(entries),
+        ));
+        self.focus = Focus::Modal;
+        true
+    }
+
+    // ── snapshot selector key helpers (input.rs routes here to avoid
+    //    borrowing the modal while mutating the app) ──
+
+    pub fn snapshots_select_next(&mut self) {
+        if let Some(crate::modals::Modal::Snapshots(s)) = &mut self.modal
+            && !s.confirm // review P3-4: lock the selection mid-confirm
+        {
+            s.select_next();
+        }
+    }
+
+    pub fn snapshots_select_prev(&mut self) {
+        if let Some(crate::modals::Modal::Snapshots(s)) = &mut self.modal
+            && !s.confirm
+        {
+            s.select_prev();
+        }
+    }
+
+    /// Esc: from the confirm state, cascade back to selection; otherwise
+    /// close the selector (and present a queued permission, if any).
+    pub fn snapshots_esc(&mut self) {
+        if let Some(crate::modals::Modal::Snapshots(s)) = &mut self.modal
+            && s.confirm
+        {
+            s.confirm = false;
+            return;
+        }
+        self.close_modal();
+    }
+
+    /// Enter: the first press arms the confirm state on the selected row;
+    /// the second records the restore intent (`pending_restore`) and closes
+    /// the modal. Refused while a run or another restore is in flight (the
+    /// host would reject the restore with InvalidRequest anyway — refuse
+    /// here for UX). Returns true when a restore intent was armed.
+    pub fn snapshots_confirm(&mut self) -> bool {
+        let hash = match &mut self.modal {
+            Some(crate::modals::Modal::Snapshots(s)) if s.entries.is_empty() => {
+                return false; // empty list: silent no-op, no confirm state
+            }
+            Some(crate::modals::Modal::Snapshots(s)) if !s.confirm => {
+                s.confirm = true;
+                return false;
+            }
+            Some(crate::modals::Modal::Snapshots(s)) => s
+                .entries
+                .get(s.selected)
+                .map(|e| e.hash.clone()),
+            _ => None,
+        };
+        if self.running || self.restoring {
+            self.content
+                .add_system_message("当前运行中——请等待完成后再恢复", false);
+            return false;
+        }
+        let Some(hash) = hash else {
+            return false; // unreachable: entries checked non-empty above
+        };
+        // Review D2-3: any queued permission belongs to a run that already
+        // ended (confirm is refused while running) — its oneshot is dead.
+        // Presenting it after close_modal would leave a stale dialog up for
+        // the whole 300s countdown for no reason.
+        self.permission_queue.clear();
+        self.pending_restore = Some(hash);
+        self.close_modal(); // presents a queued permission if any
+        true
+    }
+
     fn queue_modal_refusal(&mut self) {
         self.content
             .add_system_message("请先处理权限请求", false);
@@ -411,6 +509,7 @@ impl TuiApp {
                 crate::modals::Modal::Help(h) => h.sheet.next_tab(),
                 crate::modals::Modal::Properties(p) => p.sheet.next_tab(),
                 crate::modals::Modal::Find(_) => {}
+                crate::modals::Modal::Snapshots(_) => {} // single list, no tabs
             }
         }
     }
@@ -421,6 +520,7 @@ impl TuiApp {
                 crate::modals::Modal::Help(h) => h.sheet.prev_tab(),
                 crate::modals::Modal::Properties(p) => p.sheet.prev_tab(),
                 crate::modals::Modal::Find(_) => {}
+                crate::modals::Modal::Snapshots(_) => {} // single list, no tabs
             }
         }
     }
@@ -619,6 +719,11 @@ impl TuiApp {
             "/properties" => {
                 if self.open_properties() {
                     messages.push("属性已打开".into());
+                }
+            }
+            "/snapshots" => {
+                if self.open_snapshots() {
+                    messages.push("快照已打开".into());
                 }
             }
             _ => {
@@ -835,6 +940,11 @@ mod tests {
             app.modal,
             Some(crate::modals::Modal::Properties(_))
         ));
+        assert!(app.open_snapshots());
+        assert!(matches!(
+            app.modal,
+            Some(crate::modals::Modal::Snapshots(_))
+        ));
         app.close_modal();
         assert!(app.modal.is_none());
         assert_eq!(app.focus, Focus::Chat);
@@ -876,6 +986,184 @@ mod tests {
             )
         });
         assert!(system, "refusal message surfaced");
+    }
+
+    // ── Phase 3 slice #10: snapshot selector ───────────────────────────
+
+    /// A hermetic cwd with one sealed `snapshot_created` journal (the loop
+    /// records these per pre-mutation snapshot).
+    fn snapshot_fixture_cwd() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-tui-app-snapshots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let runs = dir.join(".gsa").join("runs").join("RUN-a1b2c3d4-0");
+        std::fs::create_dir_all(&runs).unwrap();
+        let mut ev = orz_assurance::journal::RunEvent::new(
+            "RUN-a1b2c3d4-0".into(),
+            0,
+            orz_assurance::journal::EventType::SnapshotCreated,
+            "m".into(),
+            None,
+            "run-event-v0.1.schema.json".into(),
+            serde_json::json!({
+                "tool": "search_replace",
+                "targets": ["a.txt"],
+                "snapshot_hash": "a".repeat(64)
+            }),
+            orz_assurance::journal::Redaction::None,
+            "2026-08-05T00:00:00Z".into(),
+        );
+        orz_assurance::seal_event(&mut ev).unwrap();
+        std::fs::write(
+            runs.join("events.jsonl"),
+            format!("{}\n", serde_json::to_string(&ev).unwrap()),
+        )
+        .unwrap();
+        dir
+    }
+
+    fn system_has(app: &TuiApp, needle: &str) -> bool {
+        app.content.items.iter().any(|i| {
+            matches!(
+                i,
+                crate::view_model::ContentItem::Message(m)
+                    if m.role == "系统" && m.content.contains(needle)
+            )
+        })
+    }
+
+    #[test]
+    fn open_snapshots_scans_and_sets_focus() {
+        let dir = snapshot_fixture_cwd();
+        let mut app = TuiApp::new();
+        app.cwd = dir.clone();
+        assert!(app.open_snapshots());
+        assert_eq!(app.focus, Focus::Modal);
+        let crate::modals::Modal::Snapshots(sel) = app.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert_eq!(sel.entries.len(), 1);
+        assert_eq!(sel.entries[0].hash, "a".repeat(64));
+        assert_eq!(sel.entries[0].run_id, "RUN-a1b2c3d4-0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_snapshots_refused_while_permission_showing() {
+        let mut app = TuiApp::new();
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", None));
+        assert!(!app.open_snapshots(), "permission flow is blocking");
+        assert!(app.modal.is_none());
+        assert!(system_has(&app, "请先处理权限请求"));
+    }
+
+    #[test]
+    fn snapshots_confirm_two_enter_arms_intent_and_closes() {
+        let dir = snapshot_fixture_cwd();
+        let mut app = TuiApp::new();
+        app.cwd = dir.clone();
+        app.open_snapshots();
+        // First Enter: confirm state on the selected row, no intent yet.
+        assert!(!app.snapshots_confirm());
+        let crate::modals::Modal::Snapshots(sel) = app.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert!(sel.confirm);
+        assert!(app.pending_restore.is_none());
+        // Second Enter: restore intent armed, modal closed, focus back.
+        assert!(app.snapshots_confirm());
+        assert_eq!(app.pending_restore.as_deref(), Some("a".repeat(64).as_str()));
+        assert!(app.modal.is_none());
+        assert_eq!(app.focus, Focus::Chat);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshots_esc_cascades_confirm_then_closes() {
+        let dir = snapshot_fixture_cwd();
+        let mut app = TuiApp::new();
+        app.cwd = dir.clone();
+        app.open_snapshots();
+        app.snapshots_confirm(); // → confirm state
+        app.snapshots_esc();
+        let crate::modals::Modal::Snapshots(sel) = app.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert!(!sel.confirm, "Esc cascades back to selection");
+        assert!(app.modal.is_some(), "modal stays open");
+        app.snapshots_esc();
+        assert!(app.modal.is_none(), "second Esc closes");
+        assert_eq!(app.focus, Focus::Chat);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshots_confirm_refused_while_running() {
+        let dir = snapshot_fixture_cwd();
+        let mut app = TuiApp::new();
+        app.cwd = dir.clone();
+        app.running = true;
+        app.open_snapshots();
+        app.snapshots_confirm(); // first Enter arms confirm
+        assert!(!app.snapshots_confirm(), "second Enter refused while running");
+        assert!(app.pending_restore.is_none());
+        assert!(system_has(&app, "请等待完成后再恢复"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshots_confirm_on_empty_list_is_noop() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-tui-app-snapshots-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = TuiApp::new();
+        app.cwd = dir.clone();
+        app.open_snapshots();
+        assert!(!app.snapshots_confirm());
+        assert!(!app.snapshots_confirm());
+        assert!(app.pending_restore.is_none());
+        let crate::modals::Modal::Snapshots(sel) = app.modal.as_ref().unwrap() else {
+            panic!("snapshots modal");
+        };
+        assert!(!sel.confirm, "empty list never arms confirm");
+        assert!(app.modal.is_some(), "modal stays open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn permission_queued_while_snapshot_selector_open() {
+        let dir = snapshot_fixture_cwd();
+        let mut app = TuiApp::new();
+        app.cwd = dir.clone();
+        let fired = fired_cell();
+        app.open_snapshots();
+        // A permission request arriving under the selector queues (the
+        // existing modal-guard invariant, slice #9).
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
+        assert_eq!(app.permission_queue.len(), 1);
+        assert!(app.modal.is_some(), "modal stays up");
+        assert!(app.dialog.is_none(), "permission never renders under modal");
+        app.close_modal();
+        assert!(app.dialog.is_some(), "queued permission presented on close");
+        assert_eq!(app.permission_queue.len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

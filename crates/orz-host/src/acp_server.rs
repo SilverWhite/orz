@@ -307,7 +307,15 @@ impl AcpServer {
             }
         }
 
-        let handle = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await?;
+        // Slice #10 review D2-4: a bootstrap failure must release the token
+        // too — a leaked token would make restore_snapshot's in-flight check
+        // reject every restore with a false "a run is in flight" until the
+        // next successful prompt.
+        let bootstrap = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await;
+        if bootstrap.is_err() {
+            self.run_cancels.lock().unwrap().remove(session_id);
+        }
+        let handle = bootstrap?;
 
         // Phase 3 wiring: the real host — finalized GrokBuild toolset +
         // workspace trust + IP6 permission bridge. The bridge consumes the
@@ -1591,6 +1599,56 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Slice #10 review D2-4: a bootstrap failure releases the cancel token
+    /// — a leaked token would make restore_snapshot's in-flight check reject
+    /// every restore with a false "a run is in flight" until the next
+    /// successful prompt.
+    #[tokio::test]
+    async fn prompt_bootstrap_failure_releases_cancel_token() {
+        tokio::task::LocalSet::new().run_until(async {
+            let base = test_dir();
+            let server = AcpServer::new();
+            server
+                .handle_session_new(
+                    "sess-token",
+                    Some(base.clone()),
+                    crate::session::TrustPolicy::Skip,
+                )
+                .await
+                .unwrap();
+            // Block the prompt's run dir with a FILE → bootstrap_session
+            // fails after the token was registered (slice #7 inserts it
+            // before bootstrap).
+            let session8: String = "sess-token".chars().take(8).collect();
+            std::fs::create_dir_all(base.join(".gsa").join("runs")).unwrap();
+            std::fs::write(
+                base.join(".gsa").join("runs").join(format!("RUN-{session8}-0")),
+                "blocker",
+            )
+            .unwrap();
+
+            let result = server.handle_session_prompt("sess-token", "x").await;
+            assert!(result.is_err(), "bootstrap must fail: {result:?}");
+            assert!(
+                !server.run_cancels.lock().unwrap().contains_key("sess-token"),
+                "token released on the bootstrap-failure path"
+            );
+            // A restore afterwards is NOT falsely rejected as in-flight
+            // (it fails on the unknown hash instead).
+            let err = server
+                .restore_snapshot("sess-token", &"0".repeat(64), None)
+                .await
+                .expect_err("restore proceeds past the in-flight check");
+            assert!(
+                !matches!(err, AcpError::InvalidRequest(_)),
+                "no false in-flight rejection: {err:?}"
+            );
+
+            let _ = std::fs::remove_dir_all(&base);
+        })
+        .await
     }
 
     /// RST- and RUN- run ids are independent: a second restore gets

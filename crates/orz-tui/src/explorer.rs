@@ -361,7 +361,7 @@ pub fn discover_sessions(cwd: &Path) -> Vec<SessionEntry> {
 }
 
 /// `RUN-{session8}-{n}` → (session part, numeric turn index).
-fn run_parts(id: &str) -> (String, u32) {
+pub(crate) fn run_parts(id: &str) -> (String, u32) {
     id.strip_prefix("RUN-")
         .and_then(|r| r.rsplit_once('-'))
         .map(|(sid, n)| (sid.to_string(), n.parse().unwrap_or(0)))
@@ -369,7 +369,8 @@ fn run_parts(id: &str) -> (String, u32) {
 }
 
 /// `YYYY-MM-DD` from a file mtime (chrono is already a workspace dep).
-fn format_date(t: std::time::SystemTime) -> Option<String> {
+/// pub(crate): snapshots.rs reuses it for manifest/dir dates (slice #10).
+pub(crate) fn format_date(t: std::time::SystemTime) -> Option<String> {
     let dt: chrono::DateTime<chrono::Utc> = t.into();
     Some(dt.format("%Y-%m-%d").to_string())
 }

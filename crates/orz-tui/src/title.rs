@@ -28,6 +28,9 @@ pub fn title_for(app: &TuiApp) -> String {
         "已取消" => "已取消 ✗".to_string(),
         "无效" => "无效 ✗".to_string(),
         "预检" => "预检…".to_string(),
+        // Slice #10: the restore state maps explicitly (a tick boundary can
+        // land during 恢复中; without this it would show 就绪).
+        "恢复中" => "恢复中".to_string(),
         _ => "就绪".to_string(),
     };
     format!("orz — {title}")
@@ -83,6 +86,7 @@ mod tests {
             ("已取消", "orz — 已取消 ✗"),
             ("无效", "orz — 无效 ✗"),
             ("预检", "orz — 预检…"),
+            ("恢复中", "orz — 恢复中"),
         ] {
             app.status.set_run_state(state, state == "完成" || state == "已取消");
             assert_eq!(title_for(&app), expect, "state {state}");

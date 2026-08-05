@@ -61,6 +61,12 @@ const BUILTIN: &[CommandDef] = &[
         description_zh: "显示当前运行/会话属性",
         category: "导航",
     },
+    CommandDef {
+        slash: "/snapshots",
+        name_zh: "快照",
+        description_zh: "打开快照选择器（恢复到变更前状态）",
+        category: "运行",
+    },
 ];
 
 /// Registry with prefix search — slash commands are matched on the slash

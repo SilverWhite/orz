@@ -21,6 +21,7 @@ pub mod modals;
 pub mod projection;
 pub mod runner;
 pub mod snapshot;
+pub mod snapshots;
 pub mod source;
 pub mod theme;
 pub mod title;

@@ -353,12 +353,13 @@ impl StatusBar {
         }
     }
 
-    /// Set the run-state segment (空闲/预检/运行中/等待审批/完成/失败/已取消).
+    /// Set the run-state segment (空闲/预检/运行中/等待审批/完成/失败/已取消/
+    /// 无效/恢复中 — slice #10: the restore state must remain replaceable).
     pub fn set_run_state(&mut self, state: &str, ok: bool) {
         for item in &mut self.items {
             if matches!(
                 item.label.as_str(),
-                "空闲" | "预检" | "运行中" | "等待审批" | "完成" | "失败" | "已取消" | "无效"
+                "空闲" | "预检" | "运行中" | "等待审批" | "完成" | "失败" | "已取消" | "无效" | "恢复中"
             ) {
                 item.label = state.to_string();
                 item.ok = ok;

@@ -86,6 +86,7 @@ impl HelpOverlay {
                              Ctrl+Z        取消当前运行\n\
                              Ctrl+F        查找\n\
                              Alt+H / F1    帮助\n\
+                             Alt+S        快照选择器（恢复到变更前状态）\n\
                              p（中性焦点） 属性\n\
                              /             命令输入"
                                 .into(),
@@ -270,6 +271,58 @@ impl PropertiesSheet {
     }
 }
 
+/// Snapshot selector — a list of pre-mutation snapshots (Phase 3 slice
+/// #10; data from `crate::snapshots::discover_snapshots`, snapshotted at
+/// open time). Enter is two-step: the first Enter arms the confirm state on
+/// the selected row, the second records the restore intent; Esc cascades.
+#[derive(Debug, Clone)]
+pub struct SnapshotSelector {
+    pub entries: Vec<crate::snapshots::SnapshotEntry>,
+    pub selected: usize,
+    pub confirm: bool,
+}
+
+impl SnapshotSelector {
+    pub fn new(entries: Vec<crate::snapshots::SnapshotEntry>) -> Self {
+        Self {
+            entries,
+            selected: 0,
+            confirm: false,
+        }
+    }
+
+    /// Move down, clamping at the last row (no wrap — the footer's ↑↓ are
+    /// explicit).
+    pub fn select_next(&mut self) {
+        if !self.entries.is_empty() {
+            self.selected = (self.selected + 1).min(self.entries.len() - 1);
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn selected(&self) -> Option<&crate::snapshots::SnapshotEntry> {
+        self.entries.get(self.selected)
+    }
+
+    /// Window top so the selected row is visible (bottom-anchored
+    /// jump-scroll, ExplorerPane::visible_window pattern — pure, no scroll
+    /// state).
+    pub fn window_top(&self, max_rows: usize) -> usize {
+        if max_rows == 0 {
+            return 0;
+        }
+        let sel = self.selected;
+        if sel >= max_rows {
+            sel + 1 - max_rows
+        } else {
+            0
+        }
+    }
+}
+
 /// All modal kinds — one visible at a time. The Find dialog carries a
 /// textarea (~576 B), so it is boxed to keep the enum small
 /// (clippy::large_enum_variant).
@@ -278,6 +331,7 @@ pub enum Modal {
     Help(HelpOverlay),
     Find(Box<FindDialog>),
     Properties(PropertiesSheet),
+    Snapshots(SnapshotSelector),
 }
 
 #[cfg(test)]
@@ -304,19 +358,62 @@ mod tests {
             help.sheet.tabs.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             ["快捷键", "命令", "模型", "审批", "终端", "来源"]
         );
-        // 命令 tab derives from the registry (8 builtins incl. /properties).
+        // 命令 tab derives from the registry (9 builtins incl. /properties
+        // and /snapshots — slice #10).
         let commands = &help.sheet.tabs[1];
         let slashes: Vec<&str> = commands.fields.iter().map(|(s, _)| s.as_str()).collect();
-        assert_eq!(slashes.len(), 8);
+        assert_eq!(slashes.len(), 9);
         assert!(slashes.contains(&"/toggle-explorer"));
         assert!(slashes.contains(&"/properties"));
+        assert!(slashes.contains(&"/snapshots"));
         // 模型 tab carries the live adapter label.
         let model = &help.sheet.tabs[2];
         assert!(model.fields.iter().any(|(_, v)| v == "off"));
         // 快捷键 tab documents the double-Esc entry (review D2-4:
-        // discoverability — the session list has no other entry point).
+        // discoverability — the session list has no other entry point) and
+        // the snapshot selector trigger (slice #10 — Alt+S).
         let shortcuts = help.sheet.tabs[0].content.as_ref().unwrap();
         assert!(shortcuts.contains("双 Esc"), "double-Esc discoverable in Help");
+        assert!(shortcuts.contains("Alt+S"), "snapshot selector discoverable in Help");
+    }
+
+    #[test]
+    fn snapshot_selector_navigation_clamps_and_jumps() {
+        use crate::snapshots::SnapshotEntry;
+        let entry = |h: &str| SnapshotEntry {
+            hash: h.into(),
+            tool: "t".into(),
+            targets: vec![],
+            run_id: "RUN-a1b2c3d4-0".into(),
+            date: "2026-08-05".into(),
+            file_count: None,
+        };
+        let mut s = SnapshotSelector::new(vec![entry("a"), entry("b"), entry("c")]);
+        assert_eq!(s.selected, 0);
+        // Down clamps at the last row (no wrap).
+        s.select_next();
+        s.select_next();
+        s.select_next();
+        s.select_next();
+        assert_eq!(s.selected, 2, "clamps at the last row");
+        // Up saturates at the first row.
+        s.select_prev();
+        s.select_prev();
+        s.select_prev();
+        s.select_prev();
+        assert_eq!(s.selected, 0, "saturates at the first row");
+        assert_eq!(s.selected().unwrap().hash, "a");
+        // Empty list is safe and yields no selection.
+        let mut empty = SnapshotSelector::new(vec![]);
+        empty.select_next();
+        empty.select_prev();
+        assert_eq!(empty.selected, 0);
+        assert!(empty.selected().is_none());
+        // Bottom-anchored jump window (ExplorerPane pattern).
+        assert_eq!(s.window_top(2), 0, "selection 0 with height 2");
+        s.selected = 5;
+        assert_eq!(s.window_top(2), 4, "selected 5 with height 2 → top 4");
+        assert_eq!(s.window_top(0), 0, "height 0 is safe");
     }
 
     #[test]

@@ -628,7 +628,91 @@ pub fn compose_modal_overlay(
             compose_tabbed_overlay(&p.sheet, box_width, max_height)
         }
         crate::modals::Modal::Find(f) => compose_find_overlay(f, box_width, max_height),
+        crate::modals::Modal::Snapshots(s) => {
+            compose_snapshots_overlay(s, box_width, max_height)
+        }
     }
+}
+
+/// Snapshot selector overlay (slice #10) — title / header / entry rows /
+/// footer, every row exactly *box_width* columns (D3-1 corner discipline).
+/// The selected row enters a confirm state after the first Enter.
+/// Height-adaptive like the tabbed sheet: drop content rows, keep the
+/// footer + borders; bottom-anchored jump scroll (ExplorerPane pattern).
+fn compose_snapshots_overlay(
+    sel: &crate::modals::SnapshotSelector,
+    box_width: u16,
+    max_height: u16,
+) -> Vec<String> {
+    let w = (box_width as usize).max(24);
+    let inner = w.saturating_sub(2);
+    let mut lines: Vec<String> = Vec::new();
+    let title = " 快照 ";
+    // Corner-flush title row (review D3-1 — same fix as the tabbed sheet).
+    let fill = inner.saturating_sub(str_width(title) as usize);
+    lines.push(pad_right(&format!("┌{title}{}┐", "─".repeat(fill)), box_width));
+
+    // Column header.
+    lines.push(format!(
+        "│ {} │",
+        pad_right("运行 工具 哈希 文件 日期", inner as u16 - 2)
+    ));
+
+    if sel.entries.is_empty() {
+        lines.push(format!(
+            "│ {} │",
+            pad_right("  (无快照 — 尚无变更前快照)", inner as u16 - 2)
+        ));
+    } else {
+        // Content budget: title + header + footer + bottom border = 4.
+        let budget = (max_height as usize).saturating_sub(4);
+        let top = sel.window_top(budget);
+        for (i, e) in sel.entries.iter().enumerate().skip(top).take(budget) {
+            let cursor = if i == sel.selected { "▸ " } else { "  " };
+            let row = if sel.confirm && i == sel.selected {
+                let short: String = e.hash.chars().take(8).collect();
+                // Review D2-6: restoring overwrites the current worktree
+                // state with no undo — the confirm row says so explicitly.
+                format!("{cursor}确认恢复？ {short} 覆盖当前文件（无撤销）— Enter 确认 / Esc 返回")
+            } else {
+                let sid8: String = e
+                    .run_id
+                    .strip_prefix("RUN-")
+                    .and_then(|r| r.split('-').next())
+                    .map(|s| s.chars().take(8).collect())
+                    .unwrap_or_default();
+                let short: String = e.hash.chars().take(8).collect();
+                let files = match e.file_count {
+                    Some(n) => format!("{n} 文件"),
+                    None => "—".to_string(),
+                };
+                format!("{cursor}[{sid8}] {} {short} {files} {}", e.tool, e.date)
+            };
+            let fitted = truncate_to_width(&row, inner as u16 - 2, "…");
+            lines.push(format!("│ {} │", pad_right(&fitted, inner as u16 - 2)));
+        }
+    }
+
+    // Review D2-2: the list is scanned once at open — the footer says so
+    // (a run finishing mid-modal leaves the list without its snapshot).
+    lines.push(format!(
+        "│ {} │",
+        pad_right(
+            "Esc 关闭  ↑↓ 选择  Enter 确认恢复 · 列表为打开时快照",
+            inner as u16 - 2
+        )
+    ));
+    lines.push(format!("└{}┘", "─".repeat(inner)));
+
+    // Defensive height clamp (keeps the footer + bottom border). Reserve a
+    // row for the border after truncating (review P3-5: the naive truncate
+    // then push yields max_height + 1 rows — unreachable today because
+    // modal_area floors the box at height 12, but a trap for future callers).
+    if lines.len() > max_height as usize {
+        lines.truncate(max_height.saturating_sub(1) as usize);
+        lines.push(format!("└{}┘", "─".repeat(inner)));
+    }
+    lines
 }
 
 /// Tabbed sheet: title / tab row (`▶名`) / separator / fields or content /
@@ -1165,6 +1249,113 @@ mod tests {
         assert!(lines.len() <= 5);
         assert!(lines.last().unwrap().starts_with('└'));
         assert!(lines.iter().any(|l| l.contains("Esc 关闭")), "footer survives");
+    }
+
+    #[test]
+    fn snapshots_overlay_rows_are_rectangular() {
+        use crate::snapshots::SnapshotEntry;
+        let entry = |h: &str, files: Option<usize>| SnapshotEntry {
+            hash: h.into(),
+            tool: "search_replace".into(),
+            targets: vec!["a.txt".into()],
+            run_id: "RUN-a1b2c3d4-3".into(),
+            date: "2026-08-05".into(),
+            file_count: files,
+        };
+        let mut sel = crate::modals::SnapshotSelector::new(vec![
+            entry(&"a".repeat(64), Some(2)),
+            entry(&"b".repeat(64), None),
+        ]);
+        sel.selected = 1;
+        let lines = compose_snapshots_overlay(&sel, 60, 20);
+        for line in &lines {
+            assert_eq!(str_width(line), 60, "snapshot rows must be rectangular: {line:?}");
+        }
+        assert!(lines[0].starts_with('┌'));
+        assert!(lines[0].ends_with('┐'), "title corner flush at w-1 (D3-1)");
+        assert!(lines[0].contains("快照"));
+        assert!(lines.iter().any(|l| l.contains("▸ [a1b2c3d4]")), "selection cursor + sid8");
+        assert!(lines.iter().any(|l| l.contains("2 文件")), "file count from manifest");
+        assert!(lines.iter().any(|l| l.contains("—")), "missing manifest renders —");
+        assert!(lines.last().unwrap().starts_with('└'));
+        assert!(lines.iter().any(|l| l.contains("Enter 确认恢复")));
+
+        // Confirm state on the selected row.
+        sel.confirm = true;
+        let lines = compose_snapshots_overlay(&sel, 60, 20);
+        assert!(
+            lines.iter().any(|l| l.contains("确认恢复？")),
+            "confirm prompt on the selected row"
+        );
+    }
+
+    #[test]
+    fn snapshots_overlay_empty_and_height_adaptive() {
+        use crate::snapshots::SnapshotEntry;
+        // Empty list → a single content row.
+        let empty = crate::modals::SnapshotSelector::new(vec![]);
+        let lines = compose_snapshots_overlay(&empty, 60, 20);
+        assert!(lines.iter().any(|l| l.contains("(无快照")));
+        for line in &lines {
+            assert_eq!(str_width(line), 60);
+        }
+        // Tiny box with many entries: footer + bottom border survive.
+        let entries: Vec<SnapshotEntry> = (0..20)
+            .map(|i| SnapshotEntry {
+                hash: format!("h{i}"),
+                tool: "t".into(),
+                targets: vec![],
+                run_id: format!("RUN-a1b2c3d4-{i}"),
+                date: "2026-08-05".into(),
+                file_count: None,
+            })
+            .collect();
+        let sel = crate::modals::SnapshotSelector::new(entries);
+        let lines = compose_snapshots_overlay(&sel, 60, 6);
+        assert!(lines.len() <= 6);
+        assert!(lines.last().unwrap().starts_with('└'));
+        assert!(lines.iter().any(|l| l.contains("Esc 关闭")), "footer survives");
+    }
+
+    #[test]
+    fn snapshots_overlay_renders_in_full_screen() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-tui-widgets-snapshots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let runs = dir.join(".gsa").join("runs").join("RUN-a1b2c3d4-0");
+        std::fs::create_dir_all(&runs).unwrap();
+        let mut ev = orz_assurance::journal::RunEvent::new(
+            "RUN-a1b2c3d4-0".into(),
+            0,
+            orz_assurance::journal::EventType::SnapshotCreated,
+            "m".into(),
+            None,
+            "run-event-v0.1.schema.json".into(),
+            serde_json::json!({"tool": "search_replace", "targets": ["a.txt"], "snapshot_hash": "a".repeat(64)}),
+            orz_assurance::journal::Redaction::None,
+            "2026-08-05T00:00:00Z".into(),
+        );
+        orz_assurance::seal_event(&mut ev).unwrap();
+        std::fs::write(
+            runs.join("events.jsonl"),
+            format!("{}\n", serde_json::to_string(&ev).unwrap()),
+        )
+        .unwrap();
+
+        let mut app = crate::app::TuiApp::new();
+        app.cwd = dir.clone();
+        app.open_snapshots();
+        let screen = compose_screen(&app, 100, 40);
+        let joined = screen.join("\n");
+        assert!(joined.contains("快照"), "overlay blended into the frame");
+        assert!(joined.contains("[a1b2c3d4]"), "entry row rendered");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
