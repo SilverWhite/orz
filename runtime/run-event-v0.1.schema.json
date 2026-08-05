@@ -21,8 +21,8 @@
   ],
   "properties": {
     "schema_version": { "const": "0.1.0-draft" },
-    "run_id": { "type": "string", "pattern": "^RUN-[A-Z0-9._-]+$" },
-    "event_id": { "type": "string", "pattern": "^EVT-[A-Z0-9._-]+$" },
+    "run_id": { "type": "string", "pattern": "^(RUN|RST)-[A-Za-z0-9._-]+$" },
+    "event_id": { "type": "string", "pattern": "^EVT-[A-Za-z0-9._-]+$" },
     "sequence": { "type": "integer", "minimum": 0 },
     "timestamp": { "type": "string", "format": "date-time" },
     "event_type": {
@@ -50,6 +50,7 @@
         "counterexample_gate",
         "retrieval_completion_check",
         "snapshot_created",
+        "snapshot_restored",
         "artifact_registered",
         "plan_proposed",
         "plan_approved",

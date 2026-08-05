@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/snapshot-restored-event-payload-v0.1.schema.json",
+  "title": "Snapshot restored runtime event payload (IP5 restore/revert)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "snapshot_hash": { "$ref": "#/$defs/sha256" },
+    "scope": {
+      "description": "Requested revert scope (worktree-relative, `/`-separated). Absent = full restore.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "restored": {
+      "description": "Paths actually restored from the snapshot (worktree-relative).",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "snapshot_error": { "type": "string", "minLength": 1 }
+  },
+  "anyOf": [
+    { "required": ["snapshot_hash", "restored"] },
+    { "required": ["snapshot_error"] }
+  ],
+  "allOf": [
+    {
+      "if": { "required": ["snapshot_hash"] },
+      "then": { "not": { "required": ["snapshot_error"] } }
+    },
+    {
+      "if": { "required": ["snapshot_error"] },
+      "then": { "not": { "required": ["snapshot_hash"] } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

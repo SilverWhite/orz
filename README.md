@@ -43,7 +43,7 @@ Python assurance spec（`assurance/`）保留为 conformance suite、schema auth
 - **仓库**：`D:\CLI\orz`（本地 fork of Grok Build `500129c7`；2026-08-04 由 `B:\orz` 迁移，B 盘空间不足）
 - **分支**：`feat/fusion-architecture`（70 crate workspace, `cargo check` 绿色）
 - **设计符合性**：详见[审查报告](#) — v0.2 设计与实施高度一致
-- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，Phase 3 Slice #1-7 完成（自研 292 tests）；剩余：严格 Clippy/零死代码收尾（orz-telemetry/orz-announcements/orz-config-types 保留待裁）、Python reference-spec、conformance suite 验证
+- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，Phase 3 Slice #1-8 完成（自研 301 tests）；剩余：探索器树/会话列表/Properties/Find/HelpOverlay/OSC 标题（TUI v1 延后清单）、TUI 侧 restore 触发入口（快照选择器 UI，host 入口已就绪 Slice #8）、真实 transport 流式（SSE 接线）、地址栏恢复输入（用户裁决=做）、严格 Clippy/零死代码收尾（orz-telemetry/orz-announcements/orz-config-types 保留待裁）、Python reference-spec、conformance suite 验证（含 payload schema good/bad fixtures 补齐）、Codex 兜底 TUI（设计 §2.4 已设计未排期，用户裁决：独立二进制名、默认不启用）
 
 ## 当前文件 (Python assurance spec + 架构 + 协议)
 
