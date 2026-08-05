@@ -17,6 +17,9 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::RunStarted { prompt, .. } => {
             app.running = true;
+            // A new run clears the previous gate block — the OSC title's ⚠
+            // state is per-run (slice #9).
+            app.gate_block = None;
             app.status.set_run_state("运行中", true);
             if !prompt.is_empty()
                 && !app
@@ -142,6 +145,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("ACP 初始化（协议 v{protocol_version}）")]
         }
         TuiEvent::AcpSessionCreated { session_id } => {
+            app.session_id = Some(session_id.clone());
             app.content
                 .add_system_message(&format!("ACP 会话已创建（{session_id}）"), false);
             vec!["ACP 会话已创建".into()]
@@ -232,6 +236,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         TuiEvent::InstructionProvenanceGate { decision, .. } => {
             if decision == "block" {
                 app.status.set_run_state("失败", false);
+                app.gate_block = Some("IPG".into());
             }
             app.content
                 .add_system_message(&format!("[门控] IPG: {decision}"), decision == "block");
@@ -245,6 +250,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         } => {
             if decision == "block" {
                 app.status.set_run_state("失败", false);
+                app.gate_block = Some(gate.clone());
             }
             let suffix = reason
                 .filter(|r| !r.is_empty())

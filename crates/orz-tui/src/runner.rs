@@ -138,6 +138,10 @@ pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<()
     let server = Arc::new(AcpServer::with_gateway(gateway));
     let mut client = connect_inprocess(server, TrustPolicy::Enforce);
     let mut app = TuiApp::new();
+    app.cwd = config.cwd.clone();
+    // Explorer tree: a one-shot load at startup (v1 snapshot — no live fs
+    // refresh; the render path stays fs-free).
+    app.explorer.load(&config.cwd);
 
     // Terminal setup (production only — tests never reach here).
     crossterm::terminal::enable_raw_mode()?;
@@ -167,6 +171,7 @@ pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<()
     client.request_cancel().await;
     let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
     let _ = crossterm::terminal::disable_raw_mode();
+    crate::title::restore_title();
     result
 }
 
@@ -219,6 +224,8 @@ async fn run_loop(
     ticker: &mut tokio::time::Interval,
 ) -> Result<(), TuiError> {
     let mut tail_state = TailState::new();
+    // OSC title cache — write only on change (slice #9).
+    let mut last_title: Option<String> = None;
 
     loop {
         tokio::select! {
@@ -258,6 +265,15 @@ async fn run_loop(
                     {
                         tail_state.start(path);
                     }
+                }
+                // Live event-group counts for the explorer pane (slice #9).
+                app.explorer.refresh_events(&app.events_log);
+                // OSC terminal title — derived from app state, written only
+                // when it changes (no title churn on the 50ms tick).
+                let title = crate::title::title_for(app);
+                if last_title.as_deref() != Some(title.as_str()) {
+                    crate::title::set_title(&title);
+                    last_title = Some(title);
                 }
                 render_frame(terminal, app).map_err(TuiError::from)?;
             }
@@ -316,11 +332,19 @@ async fn run_loop(
                             continue;
                         }
                         match result {
-                            Ok(_) => {
+                            Ok(response) => {
                                 // The journal terminal event drives the UI;
                                 // dismiss any orphaned permission dialog
                                 // defensively.
                                 app.dismiss_permission_dialog("运行已结束");
+                                // Slice #9: a cancelled run restores its
+                                // prompt for editing (do_cancel already did
+                                // this — one-shot semantics make this a
+                                // no-op; the seq guard above stays
+                                // authoritative for which completion wins).
+                                if response.stop_reason == acp::StopReason::Cancelled {
+                                    app.restore_last_prompt();
+                                }
                             }
                             Err(e) => {
                                 // Failed prompt (e.g. untrusted cwd): no run
@@ -333,6 +357,7 @@ async fn run_loop(
                                 app.content.add_system_message(
                                     &format!("[错误] 会话请求失败: {e}"), true);
                                 app.dismiss_permission_dialog("运行已结束");
+                                app.restore_last_prompt();
                             }
                         }
                     }
@@ -365,6 +390,11 @@ async fn do_cancel(client: &mut InProcessClient, app: &mut TuiApp) {
         if app.pending_permission.is_none() {
             app.status.set_run_state("运行中", true);
         }
+        // Slice #9: put the cancelled prompt back into the input for
+        // editing/retry (Python `_cancel_run` parity — immediate feedback;
+        // the completion handler restores too, one-shot semantics make the
+        // second call a no-op).
+        app.restore_last_prompt();
     } else {
         app.content.add_system_message("当前没有运行", false);
     }
@@ -416,6 +446,12 @@ async fn run_prompt(
     client.prompt_count += 1;
     app.status.set_run_state("运行中", true);
     app.running = true;
+    // Slice #9 stale-flag fix (review P3): a `/stop` mark left over from a
+    // run that ended on its own would otherwise cancel THIS run on the next
+    // Continue drain. Submitting a prompt clears the intent.
+    app.stop_pending = false;
+    // Remember the prompt so a cancel can restore it into the input.
+    app.last_prompt = Some(text.clone());
     let seq = client.prompt_count;
     client.spawn_prompt(session_id, text, seq);
     Ok(())
@@ -659,6 +695,140 @@ mod tests {
                 assert_eq!(
                     replay.terminal_event.as_deref(),
                     Some("run_cancelled")
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    // ── Phase 3 slice #9: stale stop_pending + restore-on-cancel ──────────
+
+    /// A `/stop` mark left over from a run that finished on its own must not
+    /// cancel the NEXT run (review P3 record: the runner drains stop_pending
+    /// on Continue). `run_prompt` clears the flag at submit.
+    #[tokio::test]
+    async fn prompt_submit_clears_stale_stop_pending() {
+        use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = std::env::temp_dir().join(format!(
+                    "orz-tui-runner-stale-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ));
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(&base).unwrap();
+
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![ScriptedResponse::text("完成。")]),
+                )));
+                let mut client = connect_inprocess(server, TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                let mut tail = TailState::new();
+                client.start_session(base.to_path_buf()).await.unwrap();
+
+                // The stale scenario: stop_pending survives a finished run.
+                app.stop_pending = true;
+                app.last_prompt = None;
+                run_prompt(&mut client, &mut app, &mut tail, &base, "新提示".into())
+                    .await
+                    .unwrap();
+                assert!(
+                    !app.stop_pending,
+                    "submitting a prompt clears the stale cancel intent"
+                );
+                assert_eq!(
+                    app.last_prompt.as_deref(),
+                    Some("新提示"),
+                    "the prompt is remembered for restore-on-cancel"
+                );
+
+                // Drain the run so no tail/thread leaks.
+                let mut completed = false;
+                while !completed {
+                    match client.msg_rx.recv().await.unwrap() {
+                        ClientMsg::PromptCompleted { .. } => completed = true,
+                        ClientMsg::SessionNotification { .. } => {}
+                        ClientMsg::PermissionRequest { .. } => {}
+                    }
+                }
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Cancel restores the submitted prompt into the input — and never
+    /// clobbers a user-typed replacement (in-process duplex E2E).
+    #[tokio::test]
+    async fn cancel_restores_last_prompt_only_when_input_empty() {
+        use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
+        use std::time::Duration;
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = std::env::temp_dir().join(format!(
+                    "orz-tui-runner-restore-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ));
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(&base).unwrap();
+
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                    ])
+                    .with_chunk_delay(Duration::from_millis(100)),
+                )));
+                let mut client = connect_inprocess(server, TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                client.start_session(base.to_path_buf()).await.unwrap();
+                client.prompt_count += 1;
+                let seq = client.prompt_count;
+                let session_id = client.session_id.clone().unwrap();
+                client.spawn_prompt(session_id, "被取消的问题".to_string(), seq);
+                app.running = true;
+                app.last_prompt = Some("被取消的问题".into());
+
+                do_cancel(&mut client, &mut app).await;
+                assert_eq!(
+                    app.input.textarea.text(),
+                    "被取消的问题",
+                    "the cancelled prompt is restored immediately"
+                );
+                // The user edits it while the run winds down.
+                app.input.textarea.set_text("修改后的新问题");
+
+                // The completion arrives with StopReason::Cancelled — the
+                // restore must NOT clobber the user's edit (input non-empty).
+                let completed = loop {
+                    match client.msg_rx.recv().await.unwrap() {
+                        ClientMsg::PromptCompleted { seq: got, result } => {
+                            assert_eq!(got, seq);
+                            break result;
+                        }
+                        ClientMsg::SessionNotification { .. } => {}
+                        ClientMsg::PermissionRequest { .. } => {}
+                    }
+                };
+                let response = completed.expect("cancel is a success response");
+                assert_eq!(response.stop_reason, acp::StopReason::Cancelled);
+                // The one-shot restore already consumed last_prompt at
+                // do_cancel; the completion handler's call is a no-op.
+                app.restore_last_prompt();
+                assert_eq!(
+                    app.input.textarea.text(),
+                    "修改后的新问题",
+                    "a user-typed input is never clobbered"
                 );
 
                 let _ = std::fs::remove_dir_all(&base);

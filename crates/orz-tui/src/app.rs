@@ -24,7 +24,10 @@ pub const ABSOLUTE_MIN_HEIGHT: u16 = 15;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Chat,
+    Explorer,
     Dialog,
+    /// A tabbed modal (help / find / properties — slice #9).
+    Modal,
     Neutral,
 }
 
@@ -106,6 +109,9 @@ pub struct TuiApp {
     /// One modal at a time — multi-tool rounds can queue several requests
     /// (review P2-2b); the next one is presented when the current closes.
     pub permission_queue: std::collections::VecDeque<PendingPermission>,
+    /// Tabbed modal (help / find / properties — slice #9), mutually
+    /// exclusive with the permission dialog.
+    pub modal: Option<crate::modals::Modal>,
     pub running: bool,
     /// `/stop` was typed while running — the runner owns the async cancel
     /// (Phase 3 slice #7; app state only marks intent so key handling stays
@@ -115,12 +121,30 @@ pub struct TuiApp {
     /// Prompt counter for card turn labels (each prompt = one run).
     pub turn_counter: u32,
 
+    // ── session / run identity ──
+    /// Session cwd (explorer tree root; journal scan base). Set by the
+    /// runner from TuiConfig; defaults to the process cwd for tests.
+    pub cwd: std::path::PathBuf,
+    /// ACP session id (set by the AcpSessionCreated projection).
+    pub session_id: Option<String>,
+    /// Last gate block label — the OSC title's ⚠ state (cleared on
+    /// RunStarted; set on GateDecision/IPG block).
+    pub gate_block: Option<String>,
+    /// Last submitted prompt — restored into the input after a cancel
+    /// (slice #9, Python `_cancel_run` parity).
+    pub last_prompt: Option<String>,
+    /// Last Esc timestamp — the double-Esc (<500 ms) session-list window.
+    pub last_esc: Option<std::time::Instant>,
+
     // ── navigation history (object URIs, v1 minimal) ──
     pub nav_back: Vec<String>,
     pub nav_forward: Vec<String>,
 
     // ── view toggles ──
+    pub show_explorer: bool,
     pub show_marker: bool,
+    /// The explorer pane (tree + events + session list).
+    pub explorer: crate::explorer::ExplorerPane,
 
     // ── event log (diagnostics surface, not the content pane) ──
     pub events_log: Vec<String>,
@@ -146,13 +170,24 @@ impl TuiApp {
             dialog: None,
             pending_permission: None,
             permission_queue: std::collections::VecDeque::new(),
+            modal: None,
             running: false,
             stop_pending: false,
             quit: false,
             turn_counter: 0,
+            cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            session_id: None,
+            gate_block: None,
+            last_prompt: None,
+            last_esc: None,
             nav_back: Vec::new(),
             nav_forward: Vec::new(),
-            show_marker: true,
+            // User ruling (2026-08-05): both sidebars default hidden —
+            // the big-main-window layout is the default; `/toggle-*`
+            // reveals the panels.
+            show_explorer: false,
+            show_marker: false,
+            explorer: crate::explorer::ExplorerPane::default(),
             events_log: Vec::new(),
             max_events_log: 500,
         }
@@ -241,9 +276,11 @@ impl TuiApp {
 
     /// Show the permission dialog for a pending request. If another modal
     /// is already open, the request is queued (review P2-2b — the first
-    /// request must never be silently dropped).
+    /// request must never be silently dropped). A tabbed modal never renders
+    /// under/over the permission dialog (slice #9: the permission flow wins
+    /// and queues).
     pub fn show_permission_dialog(&mut self, pending: PendingPermission) {
-        if self.pending_permission.is_some() || self.dialog.is_some() {
+        if self.pending_permission.is_some() || self.dialog.is_some() || self.modal.is_some() {
             self.permission_queue.push_back(pending);
             return;
         }
@@ -308,7 +345,189 @@ impl TuiApp {
         }
     }
 
+    // ── tabbed modals (slice #9: help / find / properties) ──
+
+    /// A modal can open only when no permission dialog is showing — the
+    /// permission flow is blocking (the host is waiting on the response).
+    fn modal_available(&self) -> bool {
+        self.dialog.is_none() && self.pending_permission.is_none()
+    }
+
+    /// Returns true when the modal actually opened (false = a permission
+    /// dialog is blocking — refusal message shown).
+    pub fn open_help(&mut self) -> bool {
+        if !self.modal_available() {
+            self.queue_modal_refusal();
+            return false;
+        }
+        let model = self.status.items[4].label.clone();
+        self.modal = Some(crate::modals::Modal::Help(
+            crate::modals::HelpOverlay::new(&model),
+        ));
+        self.focus = Focus::Modal;
+        true
+    }
+
+    pub fn open_find(&mut self) -> bool {
+        if !self.modal_available() {
+            self.queue_modal_refusal();
+            return false;
+        }
+        self.modal = Some(crate::modals::Modal::Find(Box::default()));
+        self.focus = Focus::Modal;
+        true
+    }
+
+    pub fn open_properties(&mut self) -> bool {
+        if !self.modal_available() {
+            self.queue_modal_refusal();
+            return false;
+        }
+        self.modal = Some(crate::modals::Modal::Properties(
+            crate::modals::PropertiesSheet::from_app(self),
+        ));
+        self.focus = Focus::Modal;
+        true
+    }
+
+    fn queue_modal_refusal(&mut self) {
+        self.content
+            .add_system_message("请先处理权限请求", false);
+    }
+
+    /// Close the modal, returning to chat, then present a queued permission
+    /// request (its 300s countdown still starts at presentation).
+    pub fn close_modal(&mut self) {
+        self.modal = None;
+        self.focus = Focus::Chat;
+        self.next_permission();
+    }
+
+    /// Tab/←→ key helpers for the tabbed modals (input.rs routes here to
+    /// avoid borrowing the modal while mutating the app).
+    pub fn modal_next_tab(&mut self) {
+        if let Some(m) = &mut self.modal {
+            match m {
+                crate::modals::Modal::Help(h) => h.sheet.next_tab(),
+                crate::modals::Modal::Properties(p) => p.sheet.next_tab(),
+                crate::modals::Modal::Find(_) => {}
+            }
+        }
+    }
+
+    pub fn modal_prev_tab(&mut self) {
+        if let Some(m) = &mut self.modal {
+            match m {
+                crate::modals::Modal::Help(h) => h.sheet.prev_tab(),
+                crate::modals::Modal::Properties(p) => p.sheet.prev_tab(),
+                crate::modals::Modal::Find(_) => {}
+            }
+        }
+    }
+
+    pub fn find_focus_row(&self) -> usize {
+        match &self.modal {
+            Some(crate::modals::Modal::Find(f)) => f.focus_row,
+            _ => 0,
+        }
+    }
+
+    pub fn find_focus_next(&mut self) {
+        if let Some(crate::modals::Modal::Find(f)) = &mut self.modal {
+            f.focus_next();
+        }
+    }
+
+    pub fn find_focus_prev(&mut self) {
+        if let Some(crate::modals::Modal::Find(f)) = &mut self.modal {
+            f.focus_prev();
+        }
+    }
+
+    pub fn find_cycle_scope(&mut self) {
+        if let Some(crate::modals::Modal::Find(f)) = &mut self.modal {
+            f.cycle_scope();
+        }
+    }
+
+    pub fn find_toggle_case(&mut self) {
+        if let Some(crate::modals::Modal::Find(f)) = &mut self.modal {
+            f.case_sensitive = !f.case_sensitive;
+        }
+    }
+
+    pub fn find_toggle_regex(&mut self) {
+        if let Some(crate::modals::Modal::Find(f)) = &mut self.modal {
+            f.use_regex = !f.use_regex;
+        }
+    }
+
+    /// Delegate an editing key to the Find query textarea (multiline).
+    pub fn find_input(&mut self, key: crossterm::event::KeyEvent) {
+        if let Some(crate::modals::Modal::Find(f)) = &mut self.modal {
+            f.query.input(key);
+        }
+    }
+
+    /// Execute the Find dialog's search (Enter on the action row): scan the
+    /// conversation, replace the marker's search hits, close, and report the
+    /// count. Invalid regex patterns surface as a status message.
+    pub fn execute_find(&mut self) -> Vec<String> {
+        let Some(crate::modals::Modal::Find(find)) = &self.modal else {
+            return Vec::new();
+        };
+        let query = find.query.text().to_string();
+        let case = find.case_sensitive;
+        let regex = find.use_regex;
+        if query.trim().is_empty() {
+            self.close_modal();
+            return Vec::new();
+        }
+        match self.content.find(&query, case, regex) {
+            Ok(hits) => {
+                self.marker.clear_search_hits();
+                for idx in &hits {
+                    self.marker.add_search_hit(idx + 1);
+                }
+                self.close_modal();
+                let mut msg = format!("查找: {query} — {} 处匹配", hits.len());
+                // Review D2-2: the hit markers live in the marker column,
+                // which is default-hidden — point at the toggle so the
+                // search's output is reachable.
+                if !hits.is_empty() && !self.show_marker {
+                    msg.push_str("（标记栏已隐藏——/toggle-markers 查看位置）");
+                }
+                vec![msg]
+            }
+            Err(e) => {
+                self.close_modal();
+                vec![format!("查找失败: {e}")]
+            }
+        }
+    }
+
+    // ── input restore (slice #9: cancel → restore the prompt) ──
+
+    /// Restore the last submitted prompt into the chat input — only when
+    /// the input is currently empty (a user typing a new prompt is never
+    /// clobbered). One-shot: consuming the stored prompt.
+    pub fn restore_last_prompt(&mut self) {
+        let Some(prompt) = self.last_prompt.take() else {
+            return;
+        };
+        if self.input.textarea.text().is_empty() {
+            self.input.textarea.set_text(&prompt);
+        }
+    }
+
     // ── navigation history ──
+
+    /// Open an object URI — push onto the back stack + surface the action
+    /// (v1: /open and the explorer file rows share this path).
+    pub fn open_uri(&mut self, uri: &str) {
+        self.push_uri(uri);
+        self.content.add_system_message(&format!("[打开] {uri}"), false);
+    }
 
     /// Push an object URI onto the back stack (v1: /open records only).
     pub fn push_uri(&mut self, uri: &str) {
@@ -344,8 +563,9 @@ impl TuiApp {
         let mut messages = Vec::new();
         match slash {
             "/help" => {
-                self.open_dialog(crate::dialogs::help_dialog());
-                messages.push("帮助已打开".into());
+                if self.open_help() {
+                    messages.push("帮助已打开".into());
+                }
             }
             "/status" => {
                 let state = if self.running { "运行中" } else { "空闲" };
@@ -368,9 +588,7 @@ impl TuiApp {
                 if arg.is_empty() {
                     messages.push("用法: /open <uri>".into());
                 } else {
-                    self.push_uri(arg);
-                    self.content
-                        .add_system_message(&format!("[打开] {arg}"), false);
+                    self.open_uri(arg);
                     messages.push(format!("已打开: {arg}"));
                 }
             }
@@ -382,8 +600,26 @@ impl TuiApp {
                     "标记栏已隐藏".into()
                 });
             }
-            "/toggle-explorer" | "/toggle-events" => {
-                messages.push("探索器/事件栏尚未实现（后续切片）".into());
+            "/toggle-explorer" => {
+                self.show_explorer = !self.show_explorer;
+                messages.push(if self.show_explorer {
+                    "探索器已显示".into()
+                } else {
+                    "探索器已隐藏".into()
+                });
+            }
+            "/toggle-events" => {
+                self.explorer.show_events = !self.explorer.show_events;
+                messages.push(if self.explorer.show_events {
+                    "事件栏已显示".into()
+                } else {
+                    "事件栏已隐藏".into()
+                });
+            }
+            "/properties" => {
+                if self.open_properties() {
+                    messages.push("属性已打开".into());
+                }
             }
             _ => {
                 messages.push(format!("未知命令: {slash}（/help 查看）"));
@@ -501,12 +737,16 @@ mod tests {
 
     #[test]
     fn dismiss_does_not_close_non_permission_dialogs() {
-        // Review P3 #2: a run ending must not force-close e.g. the /help
-        // overlay.
+        // Review P3 #2: a run ending must not force-close e.g. a plain
+        // dialog (the permission flow only touches its own dialog).
         let mut app = TuiApp::new();
-        app.open_dialog(crate::dialogs::help_dialog());
+        app.open_dialog(Dialog::new(
+            "通知",
+            vec!["x".into()],
+            vec![DialogAction::Ok],
+        ));
         app.dismiss_permission_dialog("运行已结束");
-        assert!(app.dialog.is_some(), "help overlay stays open");
+        assert!(app.dialog.is_some(), "non-permission dialog stays open");
     }
 
     #[test]
@@ -566,11 +806,240 @@ mod tests {
     #[test]
     fn close_dialog_returns_to_chat() {
         let mut app = TuiApp::new();
-        app.open_dialog(crate::dialogs::help_dialog());
+        app.open_dialog(Dialog::new("x", vec![], vec![DialogAction::Ok]));
         assert_eq!(app.focus, Focus::Dialog);
         app.close_dialog();
         assert_eq!(app.focus, Focus::Chat);
         assert!(app.dialog.is_none());
+    }
+
+    // ── Phase 3 slice #9: modals / toggles / input restore ─────────────────
+
+    #[test]
+    fn modals_open_close_and_are_mutually_exclusive() {
+        let mut app = TuiApp::new();
+        assert!(app.open_help());
+        assert_eq!(app.focus, Focus::Modal);
+        assert!(matches!(
+            app.modal,
+            Some(crate::modals::Modal::Help(_))
+        ));
+        // Reopening replaces the current modal (one at a time).
+        assert!(app.open_find());
+        assert!(matches!(
+            app.modal,
+            Some(crate::modals::Modal::Find(_))
+        ));
+        assert!(app.open_properties());
+        assert!(matches!(
+            app.modal,
+            Some(crate::modals::Modal::Properties(_))
+        ));
+        app.close_modal();
+        assert!(app.modal.is_none());
+        assert_eq!(app.focus, Focus::Chat);
+    }
+
+    #[test]
+    fn permission_queued_while_modal_open_and_presented_on_close() {
+        let mut app = TuiApp::new();
+        let fired = fired_cell();
+        app.open_find();
+        // A permission request arriving under a modal queues (the modal
+        // must not be silently dropped).
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
+        assert_eq!(app.permission_queue.len(), 1);
+        assert!(app.modal.is_some(), "modal stays up");
+        assert!(app.dialog.is_none(), "permission never renders under modal");
+
+        app.close_modal();
+        assert!(app.dialog.is_some(), "queued permission presented on close");
+        assert_eq!(app.permission_queue.len(), 0);
+        assert_eq!(app.status.items[5].label, "等待审批");
+    }
+
+    #[test]
+    fn modal_refused_while_permission_dialog_showing() {
+        let mut app = TuiApp::new();
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", None));
+        assert!(!app.open_help(), "permission flow is blocking");
+        assert!(app.modal.is_none());
+        let system = app.content.items.iter().any(|i| {
+            matches!(
+                i,
+                crate::view_model::ContentItem::Message(m)
+                    if m.content.contains("请先处理权限请求")
+            )
+        });
+        assert!(system, "refusal message surfaced");
+    }
+
+    #[test]
+    fn dismiss_permission_dialog_keeps_modal_closed_state() {
+        // dismiss only fires with a permission dialog present — with no
+        // pending permission it is a no-op and a modal stays open.
+        let mut app = TuiApp::new();
+        app.open_help();
+        app.dismiss_permission_dialog("运行已结束");
+        assert!(app.modal.is_some(), "dismiss never touches modals");
+        assert_eq!(app.focus, Focus::Modal);
+    }
+
+    #[test]
+    fn restore_last_prompt_only_when_input_empty() {
+        let mut app = TuiApp::new();
+        app.last_prompt = Some("被取消的提示".into());
+        // Empty input → restored, one-shot.
+        app.restore_last_prompt();
+        assert_eq!(app.input.textarea.text(), "被取消的提示");
+        assert!(app.last_prompt.is_none());
+        // Idempotent: second call is a no-op.
+        app.restore_last_prompt();
+        assert_eq!(app.input.textarea.text(), "被取消的提示");
+
+        // A user-typed new input is never clobbered.
+        app.last_prompt = Some("旧提示".into());
+        app.input.textarea.set_text("用户新输入");
+        app.restore_last_prompt();
+        assert_eq!(app.input.textarea.text(), "用户新输入");
+        assert!(app.last_prompt.is_none(), "consumed even when not restored");
+    }
+
+    #[test]
+    fn execute_find_searches_and_marks_hits() {
+        let mut app = TuiApp::new();
+        app.content.add_user_message("审查 session 列表");
+        app.content.add_model_message("来源可见性", 1, false);
+        app.content.add_or_update_tool_trace("read_file", "session.json", "运行中");
+        app.open_find();
+        let crate::modals::Modal::Find(find) = app.modal.as_mut().unwrap() else {
+            panic!("find modal");
+        };
+        find.query.set_text("session");
+        let msgs = app.execute_find();
+        assert!(msgs.iter().any(|m| m.contains("2 处匹配")), "{msgs:?}");
+        assert!(app.modal.is_none(), "find closes after executing");
+        // Hit markers: item 0 (user card) + item 2 (tool line) → L1, L3.
+        let hits: Vec<&str> = app
+            .marker
+            .markers
+            .iter()
+            .map(|m| m.label.as_str())
+            .collect();
+        assert!(hits.contains(&"● L1") && hits.contains(&"● L3"), "{hits:?}");
+
+        // A second search replaces the previous hits only.
+        let mut app2 = TuiApp::new();
+        app2.content.add_user_message("x");
+        app2.content.add_user_message("y");
+        app2.marker.add_user_input(1);
+        app2.open_find();
+        let crate::modals::Modal::Find(find) = app2.modal.as_mut().unwrap() else {
+            panic!("find modal");
+        };
+        find.query.set_text("y");
+        app2.execute_find();
+        let hits: Vec<&str> = app2
+            .marker
+            .markers
+            .iter()
+            .map(|m| m.label.as_str())
+            .collect();
+        assert_eq!(hits, vec!["▸ L1", "● L2"]);
+    }
+
+    /// Review D2-2: with the marker bar default-hidden, a find with hits
+    /// must point the user at the toggle so the output is reachable.
+    #[test]
+    fn execute_find_hints_marker_toggle_when_hidden() {
+        let mut app = TuiApp::new();
+        assert!(!app.show_marker, "marker default hidden");
+        app.content.add_user_message("含 关键词 的内容");
+        app.open_find();
+        let crate::modals::Modal::Find(find) = app.modal.as_mut().unwrap() else {
+            panic!("find modal");
+        };
+        find.query.set_text("关键词");
+        let msgs = app.execute_find();
+        let joined = msgs.join(" ");
+        assert!(joined.contains("1 处匹配"), "{joined}");
+        assert!(joined.contains("标记栏已隐藏"), "hint when marker hidden: {joined}");
+
+        // Marker visible → no hint.
+        let mut app2 = TuiApp::new();
+        app2.show_marker = true;
+        app2.content.add_user_message("含 关键词 的内容");
+        app2.open_find();
+        let crate::modals::Modal::Find(find) = app2.modal.as_mut().unwrap() else {
+            panic!("find modal");
+        };
+        find.query.set_text("关键词");
+        let msgs = app2.execute_find();
+        assert!(
+            msgs.join(" ").contains("1 处匹配")
+                && !msgs.join(" ").contains("标记栏已隐藏"),
+            "no hint when marker visible: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn execute_find_invalid_regex_surfaces_error() {
+        let mut app = TuiApp::new();
+        app.content.add_user_message("内容");
+        app.open_find();
+        let crate::modals::Modal::Find(find) = app.modal.as_mut().unwrap() else {
+            panic!("find modal");
+        };
+        find.query.set_text("([");
+        find.use_regex = true;
+        let msgs = app.execute_find();
+        assert!(msgs.iter().any(|m| m.contains("正则表达式错误")), "{msgs:?}");
+        assert!(app.modal.is_none());
+        assert!(app.marker.markers.is_empty(), "no markers on failed search");
+    }
+
+    #[test]
+    fn toggle_explorer_and_events_flags() {
+        let mut app = TuiApp::new();
+        assert!(!app.show_explorer, "sidebars default hidden (user ruling)");
+        assert!(!app.show_marker, "marker default hidden (user ruling)");
+
+        let msgs = app.dispatch_command("/toggle-explorer");
+        assert!(app.show_explorer);
+        assert!(msgs.iter().any(|m| m == "探索器已显示"), "{msgs:?}");
+        let msgs = app.dispatch_command("/toggle-events");
+        assert!(!app.explorer.show_events);
+        assert!(msgs.iter().any(|m| m == "事件栏已隐藏"), "{msgs:?}");
+        let msgs = app.dispatch_command("/toggle-markers");
+        assert!(app.show_marker);
+        assert!(msgs.iter().any(|m| m == "标记栏已显示"), "{msgs:?}");
+    }
+
+    #[test]
+    fn properties_sheet_snapshots_app_state() {
+        let mut app = TuiApp::new();
+        app.session_id = Some("S-ABC".into());
+        app.turn_counter = 2;
+        app.status.set_run_state("完成", true);
+        let sheet = crate::modals::PropertiesSheet::from_app(&app);
+        assert_eq!(
+            sheet.sheet.tabs.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            ["常规", "溯源", "可见性", "依赖", "验证", "历史"]
+        );
+        let general = &sheet.sheet.tabs[0];
+        assert!(
+            general
+                .fields
+                .iter()
+                .any(|(k, v)| k == "会话 ID" && v == "S-ABC")
+        );
+        assert!(
+            general.fields.iter().any(|(k, v)| k == "状态" && v == "完成")
+        );
     }
 
     // ── Phase 3 slice #7: /stop intent + permission countdown ─────────────

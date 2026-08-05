@@ -63,29 +63,6 @@ impl Dialog {
     }
 }
 
-/// Static help overlay builder (v1: shortcut + command summary).
-pub fn help_dialog() -> Dialog {
-    Dialog::new(
-        "帮助",
-        vec![
-            "快捷键:".into(),
-            "  Tab / Shift+Tab   切换焦点".into(),
-            "  Esc               关闭对话框 / 取消".into(),
-            "  Ctrl+C            退出".into(),
-            "  Ctrl+Z            停止当前运行".into(),
-            "  F6                循环主面板".into(),
-            "".into(),
-            "命令:".into(),
-            "  /help   本帮助".into(),
-            "  /status 运行状态".into(),
-            "  /stop   取消当前运行".into(),
-            "  /open   打开文件".into(),
-            "  /toggle-markers 显示/隐藏标记栏".into(),
-        ],
-        vec![DialogAction::Ok],
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

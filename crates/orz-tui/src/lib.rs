@@ -14,13 +14,16 @@ pub mod bridge;
 pub mod commands;
 pub mod dialogs;
 pub mod events;
+pub mod explorer;
 pub mod input;
 pub mod journal_tail;
+pub mod modals;
 pub mod projection;
 pub mod runner;
 pub mod snapshot;
 pub mod source;
 pub mod theme;
+pub mod title;
 pub mod view_model;
 pub mod widgets;
 

@@ -8,7 +8,7 @@ use ratatui::backend::Backend;
 use ratatui::Terminal;
 
 use crate::app::{Focus, TuiApp};
-use crate::theme::{pad_right, str_width, truncate_to_width, MARKER_WIDTH};
+use crate::theme::{pad_right, str_width, truncate_to_width, EXPLORER_WIDTH, MARKER_WIDTH};
 use crate::view_model::{ChatMessage, ContentItem, ContentPane, ToolTraceLine};
 
 /// Compose the full screen as display lines (Python `render(width, height)`).
@@ -27,23 +27,32 @@ pub fn compose_screen(app: &TuiApp, width: u16, height: u16) -> Vec<String> {
     lines.push(pad_right(&app.menu_bar.items.join(" "), w as u16));
     // Row 1 — toolbar (right-aligned 命令.../查找... group with a gap).
     lines.push(render_toolbar(&app, w));
-    // Body. The junction column is shared between the content pane's right
-    // border and the marker pane's left border, so the content pane gets one
-    // extra column when the marker column is visible (region width == w).
+    // Body. Each visible side column shares its junction column with the
+    // content pane's adjacent border, so the content pane gains one column
+    // per visible side column (region width == w by construction).
+    let explorer_w = if app.show_explorer { EXPLORER_WIDTH as usize } else { 0 };
     let marker_w = if app.show_marker { MARKER_WIDTH as usize } else { 0 };
-    let content_w = if marker_w > 0 {
-        w.saturating_sub(marker_w) + 1
-    } else {
-        w
-    };
+    let content_w = w.saturating_sub(explorer_w + marker_w)
+        + usize::from(explorer_w > 0)
+        + usize::from(marker_w > 0);
     let body_h = h.saturating_sub(4); // menu + toolbar + input + status
-    let body = render_body(app, content_w, marker_w, body_h);
+    let body = render_body(app, explorer_w, content_w, marker_w, body_h);
     lines.extend(body);
     // Input row.
     lines.push(render_input_line(app, w));
     // Status bar.
     lines.push(render_status_bar(app, w));
     lines.truncate(h);
+
+    // Tabbed-modal overlay (help / find / properties — slice #9), blended
+    // before the permission dialog; the two are mutually exclusive by
+    // construction (app.rs), so this order is only defensive.
+    if let Some(modal) = &app.modal
+        && let Some((m_x, m_y, m_w, m_h)) = modal_area(width, height)
+    {
+        let overlay = compose_modal_overlay(modal, m_w, m_h);
+        blend_overlay(&mut lines, overlay, m_x, m_y, m_w);
+    }
 
     // Dialog overlay — replace the base frame's lines inside the centered
     // box (base content stays visible around it: centered modal retaining
@@ -57,25 +66,37 @@ pub fn compose_screen(app: &TuiApp, width: u16, height: u16) -> Vec<String> {
                 pp.remaining().map(|r| format!("剩余 {}s", r.as_secs()))
             });
             let overlay = compose_dialog_overlay(dialog, d_w, countdown);
-            for (i, dline) in overlay.iter().enumerate() {
-                let y = d_y as usize + i;
-                if y >= lines.len() {
-                    break;
-                }
-                let base: Vec<char> = lines[y].chars().collect();
-                let mut out: Vec<char> = base;
-                for (j, c) in dline.chars().take(d_w as usize).enumerate() {
-                    let x = d_x as usize + j;
-                    if x >= out.len() {
-                        out.resize(x + 1, ' ');
-                    }
-                    out[x] = c;
-                }
-                lines[y] = out.into_iter().collect();
-            }
+            blend_overlay(&mut lines, overlay, d_x, d_y, d_w);
         }
     }
     lines
+}
+
+/// Blend an overlay's lines into the base frame at (x, y) — the shared
+/// character-replacement path for dialogs and modals.
+fn blend_overlay(
+    lines: &mut [String],
+    overlay: Vec<String>,
+    x: u16,
+    y: u16,
+    w: u16,
+) {
+    for (i, oline) in overlay.iter().enumerate() {
+        let row = y as usize + i;
+        if row >= lines.len() {
+            break;
+        }
+        let base: Vec<char> = lines[row].chars().collect();
+        let mut out: Vec<char> = base;
+        for (j, c) in oline.chars().take(w as usize).enumerate() {
+            let col = x as usize + j;
+            if col >= out.len() {
+                out.resize(col + 1, ' ');
+            }
+            out[col] = c;
+        }
+        lines[row] = out.into_iter().collect();
+    }
 }
 
 /// Blit the composed screen into the frame buffer with minimal styling.
@@ -123,6 +144,7 @@ fn render_toolbar(_app: &TuiApp, w: usize) -> String {
 
 fn render_body(
     app: &TuiApp,
+    explorer_w: usize,
     content_w: usize,
     marker_w: usize,
     body_h: usize,
@@ -131,25 +153,31 @@ fn render_body(
         return Vec::new();
     }
     let mut lines: Vec<String> = Vec::with_capacity(body_h);
+    let explorer_inner = explorer_w.saturating_sub(2).max(1);
     let content_inner = content_w.saturating_sub(2).max(1);
     let marker_inner = marker_w.saturating_sub(2).max(1);
 
-    // The junction column is shared between the content pane's right border
-    // and the marker pane's left border (frozen layout: `├───┬───┤`), so the
-    // region width is content_w + marker_w - 1 == full width by construction
-    // (compose_screen sets content_w = w - marker_w + 1 when the marker
-    // column is visible).
-    let top = if marker_w > 0 {
-        format!("├{}┬{}┤", "─".repeat(content_inner), "─".repeat(marker_inner))
-    } else {
-        format!("├{}┤", "─".repeat(content_inner))
-    };
+    // Each visible side column shares its junction column with the content
+    // pane's adjacent border (frozen layout `├───┬───┬───┤`), so the region
+    // width is explorer_w + content_w + marker_w - 2 == full width by
+    // construction (compose_screen adds one column per visible side column).
+    let mut segments: Vec<String> = Vec::new();
+    if explorer_w > 0 {
+        segments.push("─".repeat(explorer_inner));
+    }
+    segments.push("─".repeat(content_inner));
+    if marker_w > 0 {
+        segments.push("─".repeat(marker_inner));
+    }
+    let top = format!("├{}┤", segments.join("┬"));
     lines.push(top);
 
-    // Content pane rows (Python box_vertical: side borders, bottom-anchored).
+    // Content pane rows (Python box_vertical: side borders, bottom-anchored);
+    // explorer pane is top-anchored (tree from the top, like the marker).
+    let inner_h = body_h.saturating_sub(2); // minus top + bottom borders
     let item_lines = render_content_pane(&app.content, content_inner);
     let marker_lines = render_marker_pane(app, marker_inner);
-    let inner_h = body_h.saturating_sub(2); // minus top + bottom borders
+    let explorer_lines = render_explorer_pane(app, explorer_inner, inner_h);
     let start = item_lines.len().saturating_sub(inner_h);
     let visible: Vec<String> = item_lines
         .iter()
@@ -158,25 +186,25 @@ fn render_body(
         .cloned()
         .collect();
     for i in 0..inner_h {
+        let mut row = String::from("│");
+        if explorer_w > 0 {
+            let explorer_row = explorer_lines.get(i).cloned().unwrap_or_default();
+            row.push_str(&pad_right(&explorer_row, explorer_inner as u16));
+            row.push('│');
+        }
         let content_row = visible.get(i).cloned().unwrap_or_default();
+        row.push_str(&pad_right(&content_row, content_inner as u16));
+        row.push('│');
         if marker_w > 0 {
             let marker_row = marker_lines.get(i).cloned().unwrap_or_default();
-            lines.push(format!(
-                "│{}│{}│",
-                pad_right(&content_row, content_inner as u16),
-                pad_right(&marker_row, marker_inner as u16)
-            ));
-        } else {
-            lines.push(format!("│{}│", pad_right(&content_row, content_inner as u16)));
+            row.push_str(&pad_right(&marker_row, marker_inner as u16));
+            row.push('│');
         }
+        lines.push(row);
     }
 
     // Bottom border.
-    let bottom = if marker_w > 0 {
-        format!("└{}┴{}┘", "─".repeat(content_inner), "─".repeat(marker_inner))
-    } else {
-        format!("└{}┘", "─".repeat(content_inner))
-    };
+    let bottom = format!("└{}┘", segments.join("┴"));
     lines.push(bottom);
     lines.truncate(body_h);
     lines
@@ -380,6 +408,110 @@ fn render_marker_pane(app: &TuiApp, inner_w: usize) -> Vec<String> {
     lines
 }
 
+/// Explorer pane (slice #9): the session list (double-Esc mode), the cwd
+/// tree (F6 focus), or the live event counts — top-anchored like the
+/// marker pane. `pane_h` is the body's inner height (tree scroll window).
+fn render_explorer_pane(app: &TuiApp, inner_w: usize, pane_h: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    if app.explorer.session_mode {
+        lines.extend(render_session_list(app, inner_w));
+    } else {
+        lines.extend(render_tree(app, inner_w, pane_h));
+        if app.explorer.show_events {
+            lines.push("────".to_string());
+            lines.extend(render_event_groups(app, inner_w));
+        }
+    }
+    lines
+}
+
+/// Preorder tree rows with ▾/▸ markers and the ▸ selection cursor.
+fn render_tree(app: &TuiApp, inner_w: usize, pane_h: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(pad_right("探索器", inner_w as u16));
+    lines.push("────".to_string());
+    if !app.explorer.loaded {
+        lines.push(pad_right("(未加载)", inner_w as u16));
+        return lines;
+    }
+    if app.explorer.tree.is_empty() {
+        lines.push(pad_right("(空)", inner_w as u16));
+        return lines;
+    }
+    let visible: Vec<(usize, &crate::explorer::TreeNode)> =
+        crate::explorer::flatten(&app.explorer.tree, 0);
+    let height = pane_h.saturating_sub(2).max(1);
+    let window_top = app.explorer.visible_window(height);
+    for (i, (depth, node)) in visible.iter().enumerate().skip(window_top).take(height) {
+        let cursor = if i == app.explorer.selected { "▸ " } else { "  " };
+        let marker = if !node.children.is_empty() {
+            if node.expanded { "▾ " } else { "▸ " }
+        } else {
+            "  "
+        };
+        let indent = "  ".repeat(*depth);
+        let row = format!("{cursor}{indent}{marker}{}", node.label);
+        lines.push(truncate_to_width(&row, inner_w as u16, "…"));
+    }
+    lines
+}
+
+/// Run-history list (double-Esc mode): date groups + one row per run
+/// journal. Labeled 运行历史, not 会话列表 — the Rust world has no
+/// session.json, so each row is one run, not one session (review D2-1
+/// honest labeling; a per-session grouping lands with the marker contract).
+fn render_session_list(app: &TuiApp, inner_w: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(pad_right("▾ 运行历史", inner_w as u16));
+    lines.push("────".to_string());
+    if app.explorer.sessions.is_empty() {
+        lines.push(pad_right("  (无历史会话)", inner_w as u16));
+        return lines;
+    }
+    let mut current_date: Option<String> = None;
+    for (i, s) in app.explorer.sessions.iter().enumerate() {
+        if current_date.as_deref() != Some(s.date.as_str()) {
+            current_date = Some(s.date.clone());
+            let count = app
+                .explorer
+                .sessions
+                .iter()
+                .filter(|x| x.date == s.date)
+                .count();
+            lines.push(truncate_to_width(
+                &format!("▾ {} ({})", s.date, count),
+                inner_w as u16,
+                "…",
+            ));
+        }
+        let cursor = if i == app.explorer.session_selected { "▸ " } else { "  " };
+        let sid8: String = s
+            .session_id
+            .strip_prefix("RUN-")
+            .and_then(|r| r.split('-').next())
+            .map(|s| s.chars().take(8).collect())
+            .unwrap_or_else(|| s.session_id.clone());
+        let preview = crate::theme::truncate_to_width(&s.prompt_preview, 12, "…");
+        let row = format!("{cursor}[{sid8}] {}t  {preview}", s.turn_count);
+        lines.push(truncate_to_width(&row, inner_w as u16, "…"));
+    }
+    lines
+}
+
+/// Live event-group counts (Python `_render_events` shape; v1 = counts).
+fn render_event_groups(app: &TuiApp, inner_w: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(pad_right("事件", inner_w as u16));
+    if app.explorer.events.is_empty() {
+        lines.push(pad_right("  (无)", inner_w as u16));
+        return lines;
+    }
+    for (kind, count) in &app.explorer.events {
+        lines.push(truncate_to_width(&format!("  {kind} ({count})"), inner_w as u16, "…"));
+    }
+    lines
+}
+
 fn render_input_line(app: &TuiApp, w: usize) -> String {
     let text = app.input.textarea.text();
     let line = format!("> {text}");
@@ -464,6 +596,160 @@ pub fn compose_dialog_overlay(
     let actions_row = format!("│ {} │", pad_right(&actions.join(" "), inner as u16 - 2));
     lines.push(actions_row);
     lines.push(format!("└{}┘", "─".repeat(inner)));
+    lines
+}
+
+/// Centered tabbed-modal area (slice #9). Width clamps to 36..68 per the
+/// design (HelpOverlay width 36-68); height is content-adaptive but never
+/// exceeds the viewport.
+fn modal_area(width: u16, height: u16) -> Option<(u16, u16, u16, u16)> {
+    if width < 40 || height < 12 {
+        return None;
+    }
+    let m_w = (width.saturating_sub(8)).clamp(36, 68);
+    // Height computed by the overlay builder; the area only positions it.
+    let m_h = height.saturating_sub(4).min(30);
+    let m_x = (width - m_w) / 2;
+    let m_y = (height - m_h) / 2;
+    Some((m_x, m_y, m_w, m_h))
+}
+
+/// Compose the tabbed-modal overlay lines (help / find / properties).
+pub fn compose_modal_overlay(
+    modal: &crate::modals::Modal,
+    box_width: u16,
+    max_height: u16,
+) -> Vec<String> {
+    match modal {
+        crate::modals::Modal::Help(h) => {
+            compose_tabbed_overlay(&h.sheet, box_width, max_height)
+        }
+        crate::modals::Modal::Properties(p) => {
+            compose_tabbed_overlay(&p.sheet, box_width, max_height)
+        }
+        crate::modals::Modal::Find(f) => compose_find_overlay(f, box_width, max_height),
+    }
+}
+
+/// Tabbed sheet: title / tab row (`▶名`) / separator / fields or content /
+/// footer / bottom border — every row exactly *box_width* display columns.
+pub fn compose_tabbed_overlay(
+    sheet: &crate::modals::TabbedSheet,
+    box_width: u16,
+    max_height: u16,
+) -> Vec<String> {
+    let w = (box_width as usize).max(24);
+    let inner = w.saturating_sub(2);
+    let mut lines: Vec<String> = Vec::new();
+    let title = format!(" {} ", sheet.title);
+    // `┌ {title} ───┐` spans exactly box_width: fill = inner - title width
+    // (review D3-1: the corner must sit flush at w-1, not w-3).
+    let fill = inner.saturating_sub(str_width(&title) as usize);
+    lines.push(pad_right(&format!("┌{title}{}┐", "─".repeat(fill)), box_width));
+
+    // Tab row — active tab carries the ▶ marker (Python PropertiesSheet).
+    let mut tab_content = String::new();
+    for (i, tab) in sheet.tabs.iter().enumerate() {
+        if i > 0 {
+            tab_content.push(' ');
+        }
+        if i == sheet.active {
+            tab_content.push_str(&format!("▶{}", tab.name));
+        } else {
+            tab_content.push_str(&tab.name);
+        }
+    }
+    lines.push(format!(
+        "│ {} │",
+        pad_right(&tab_content, inner as u16 - 2)
+    ));
+
+    // Separator under the tabs.
+    lines.push(format!("├{}┤", "─".repeat(inner)));
+
+    // Fields / content rows.
+    if let Some(tab) = sheet.active_tab() {
+        let rows: Vec<String> = if let Some(content) = &tab.content {
+            content.lines().map(|l| l.to_string()).collect()
+        } else {
+            tab.fields
+                .iter()
+                .map(|(k, v)| format!("  {k}: {v}"))
+                .collect()
+        };
+        for row in rows {
+            let fitted = truncate_to_width(&row, inner as u16 - 2, "…");
+            lines.push(format!("│ {} │", pad_right(&fitted, inner as u16 - 2)));
+        }
+    }
+
+    // Footer hint.
+    lines.push(format!(
+        "│ {} │",
+        pad_right("Esc 关闭  ←→ 切换标签", inner as u16 - 2)
+    ));
+    lines.push(format!("└{}┘", "─".repeat(inner)));
+
+    // Height-adaptive: drop content rows from the bottom if the box would
+    // exceed the viewport, keeping the footer + borders.
+    if lines.len() > max_height as usize {
+        let overflow = lines.len() - max_height as usize;
+        // Remove the oldest content rows (after the separator, before the
+        // footer — index 3 + overflow).
+        if lines.len() > 4 + overflow {
+            lines.drain(3..3 + overflow);
+        }
+    }
+    lines
+}
+
+/// Find overlay — 5 focus rows: query / scope / case+regex / actions.
+fn compose_find_overlay(
+    find: &crate::modals::FindDialog,
+    box_width: u16,
+    max_height: u16,
+) -> Vec<String> {
+    let w = (box_width as usize).max(24);
+    let inner = w.saturating_sub(2);
+    let mut lines: Vec<String> = Vec::new();
+    let title = " 查找 ";
+    // Corner-flush title row (review D3-1 — same fix as the tabbed sheet).
+    let fill = inner.saturating_sub(str_width(title) as usize);
+    lines.push(pad_right(&format!("┌{title}{}┐", "─".repeat(fill)), box_width));
+
+    let focus_mark = |row: usize| -> &'static str {
+        if find.focus_row == row { "▸ " } else { "  " }
+    };
+    let row_line = |mark: &str, content: String| -> String {
+        format!(
+            "│ {} │",
+            pad_right(&format!("{mark}{content}"), inner as u16 - 2)
+        )
+    };
+
+    // Row 0 — query input.
+    let query_text = find.query.text().replace('\n', "\\n");
+    lines.push(row_line(focus_mark(0), format!("查找: {query_text}")));
+
+    // Row 1 — scope.
+    let scope = find.scopes.get(find.scope).copied().unwrap_or("对话");
+    lines.push(row_line(focus_mark(1), format!("范围: {scope}")));
+
+    // Row 2 — case; Row 3 — regex.
+    let case = if find.case_sensitive { "是" } else { "否" };
+    let regex = if find.use_regex { "是" } else { "否" };
+    lines.push(row_line(focus_mark(2), format!("大小写: {case}")));
+    lines.push(row_line(focus_mark(3), format!("正则: {regex}")));
+
+    // Row 4 — actions.
+    lines.push(row_line(focus_mark(4), "[ 查找 ] [ 取消 ]".to_string()));
+
+    lines.push(format!("└{}┘", "─".repeat(inner)));
+    // Find content is fixed-height (6 rows) — truncate defensively.
+    if lines.len() > max_height as usize {
+        lines.truncate(max_height as usize);
+        lines.push(format!("└{}┘", "─".repeat(inner)));
+    }
     lines
 }
 
@@ -662,6 +948,10 @@ mod tests {
     #[test]
     fn full_screen_100x30_frozen_layout() {
         let mut a = app();
+        // Frozen-layout state with the marker column shown (sidebars default
+        // hidden since the slice #9 user ruling — see
+        // layout_no_sidebars_big_main_window).
+        a.show_marker = true;
         a.accept_event(TuiEvent::PromptSubmitted {
             prompt: "你好".into(),
             character_count: 2,
@@ -696,11 +986,12 @@ mod tests {
 
     #[test]
     fn full_screen_140x40_marker_none() {
-        let a = app();
+        let mut a = app();
+        a.show_marker = true;
         let lines = compose_screen(&a, 140, 40);
         assert_eq!(lines.len(), 40);
         let marker_row = &lines[2];
-        // Marker column exists by default; empty state shows (none) inside.
+        // Marker column shown; empty state shows (none) inside.
         assert!(marker_row.contains("┬"));
         let body = lines[3..39].join("\n");
         assert!(body.contains("(none)"));
@@ -708,7 +999,8 @@ mod tests {
 
     #[test]
     fn body_row_alignment_with_marker_junction() {
-        let a = app();
+        let mut a = app();
+        a.show_marker = true;
         let lines = compose_screen(&a, 100, 30);
         // Top border, body rows and bottom border must all fill the viewport
         // in DISPLAY columns (CJK counts 2 — chars().count() differs).
@@ -731,6 +1023,164 @@ mod tests {
         let lines = compose_screen(&a, 100, 30);
         let top = &lines[2];
         assert!(!top.contains("┬"), "marker column must be gone");
+    }
+
+    // ── Phase 3 slice #9: sidebar layouts ──────────────────────────────────
+
+    /// Default (user ruling): both sidebars hidden — full-width 大主窗.
+    #[test]
+    fn layout_no_sidebars_big_main_window() {
+        let a = app();
+        assert!(!a.show_explorer && !a.show_marker, "sidebars default hidden");
+        let lines = compose_screen(&a, 100, 30);
+        let top = &lines[2];
+        assert!(!top.contains('┬'), "no junctions with all sidebars hidden");
+        assert!(top.starts_with('├') && top.ends_with('┤'));
+        assert_eq!(str_width(top), 100);
+        // Content spans the full width (row 3 is a body row).
+        assert_eq!(str_width(&lines[3]), 100);
+        let body = lines[3..lines.len() - 3].join("\n");
+        assert!(body.contains("输入问题开始对话..."), "empty-hint centered");
+    }
+
+    /// Both sidebars shown — junctions at cols 21 (explorer) and 84 (marker).
+    #[test]
+    fn layout_100x30_explorer_marker() {
+        let mut a = app();
+        a.show_explorer = true;
+        a.show_marker = true;
+        a.explorer.loaded = true;
+        let lines = compose_screen(&a, 100, 30);
+        let top = &lines[2];
+        assert_eq!(str_width(top), 100);
+        // `├` + 20 explorer-inner + `┬` + 62 content-inner + `┬` + 14
+        // marker-inner + `┤`.
+        assert_eq!(top.chars().next(), Some('├'));
+        assert_eq!(top.chars().nth(21), Some('┬'));
+        assert_eq!(top.chars().nth(84), Some('┬'));
+        assert_eq!(top.chars().nth(99), Some('┤'));
+        // Rows carry three columns.
+        let row = &lines[3];
+        assert_eq!(str_width(row), 100);
+        assert!(row.contains("探索器"), "explorer header visible");
+        let bottom = &lines[lines.len() - 3];
+        assert_eq!(bottom.chars().nth(21), Some('┴'));
+        assert_eq!(bottom.chars().nth(84), Some('┴'));
+    }
+
+    #[test]
+    fn layout_explorer_only() {
+        let mut a = app();
+        a.show_explorer = true;
+        let lines = compose_screen(&a, 100, 30);
+        let top = &lines[2];
+        // `├` + 20 + `┬` + 77 content-inner + `┤` (junction at col 21 only).
+        assert_eq!(top.chars().nth(21), Some('┬'));
+        assert!(
+            !top.chars().skip(22).any(|c| c == '┬'),
+            "no marker junction"
+        );
+        let row = &lines[3];
+        assert!(row.contains("探索器"));
+        assert_eq!(str_width(row), 100);
+    }
+
+    #[test]
+    fn layout_marker_only() {
+        let mut a = app();
+        a.show_marker = true;
+        let lines = compose_screen(&a, 100, 30);
+        let top = &lines[2];
+        assert_eq!(top.chars().nth(84), Some('┬'));
+        assert_eq!(str_width(top), 100);
+    }
+
+    #[test]
+    fn explorer_renders_tree_events_and_session_list() {
+        let mut a = app();
+        a.show_explorer = true;
+        a.explorer.loaded = true;
+        a.explorer.tree = vec![crate::explorer::TreeNode {
+            label: "src".into(),
+            children: vec![crate::explorer::TreeNode {
+                label: "lib.rs".into(),
+                children: vec![],
+                expanded: false,
+                uri: Some("file:///x/lib.rs".into()),
+            }],
+            expanded: true,
+            uri: None,
+        }];
+        a.accept_event(TuiEvent::StatusUpdate { label: "x".into(), ok: true });
+        a.explorer.refresh_events(&a.events_log);
+        let lines = compose_screen(&a, 100, 30);
+        let body = lines[3..27].join("\n");
+        assert!(body.contains("探索器"));
+        assert!(body.contains("▾ src"), "expanded dir marker");
+        assert!(body.contains("lib.rs"));
+        assert!(body.contains("事件"), "events section header");
+        assert!(body.contains("status_update (1)"), "event group count");
+
+        // Session mode replaces the tree + events.
+        a.explorer.session_mode = true;
+        a.explorer.sessions = vec![crate::explorer::SessionEntry {
+            run_dir: std::path::PathBuf::from("x"),
+            session_id: "RUN-a1b2c3d4-0".into(),
+            prompt_preview: "审查".into(),
+            turn_count: 1,
+            date: "2026-08-05".into(),
+        }];
+        let lines = compose_screen(&a, 100, 30);
+        let body = lines[3..27].join("\n");
+        assert!(body.contains("运行历史"), "honest per-run labeling (D2-1)");
+        assert!(body.contains("2026-08-05 (1)"));
+        assert!(body.contains("[a1b2c3d4] 1t"));
+        assert!(!body.contains("探索器"), "tree hidden in session mode");
+    }
+
+    #[test]
+    fn tabbed_overlay_rows_are_rectangular() {
+        let sheet = crate::modals::HelpOverlay::new("off").sheet;
+        let lines = compose_tabbed_overlay(&sheet, 60, 30);
+        for line in &lines {
+            assert_eq!(str_width(line), 60, "tabbed rows must be rectangular: {line:?}");
+        }
+        assert!(lines[0].starts_with('┌'));
+        assert!(lines[0].ends_with('┐'), "title corner flush at w-1 (D3-1)");
+        assert!(lines[1].contains("▶快捷键"), "active tab marker");
+        assert!(lines.last().unwrap().starts_with('└'));
+        assert!(lines.iter().any(|l| l.contains("Esc 关闭")));
+        // 命令 tab content derives from the registry.
+        let mut sheet2 = sheet.clone();
+        sheet2.next_tab();
+        let lines = compose_tabbed_overlay(&sheet2, 60, 30);
+        assert!(lines.iter().any(|l| l.contains("/toggle-explorer")));
+    }
+
+    #[test]
+    fn tabbed_overlay_height_adaptive() {
+        let sheet = crate::modals::HelpOverlay::new("off").sheet;
+        // A tiny box drops content rows but keeps footer + borders.
+        let lines = compose_tabbed_overlay(&sheet, 60, 5);
+        assert!(lines.len() <= 5);
+        assert!(lines.last().unwrap().starts_with('└'));
+        assert!(lines.iter().any(|l| l.contains("Esc 关闭")), "footer survives");
+    }
+
+    #[test]
+    fn find_overlay_rows_are_rectangular_with_focus_marks() {
+        let mut f = crate::modals::FindDialog::new();
+        f.query.set_text("审查");
+        f.focus_row = 2;
+        let lines = compose_find_overlay(&f, 60, 30);
+        for line in &lines {
+            assert_eq!(str_width(line), 60, "find rows must be rectangular");
+        }
+        assert!(lines[0].starts_with('┌') && lines[0].ends_with('┐'));
+        assert!(lines[1].contains("查找: 审查"));
+        assert!(lines[3].contains("▸ 大小写: 否"), "focus row 2 marked");
+        assert!(lines[4].contains("正则: 否"));
+        assert!(lines[5].contains("[ 查找 ] [ 取消 ]"));
     }
 
     #[test]

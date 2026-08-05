@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use orz_assurance::journal::RunEvent;
+use orz_assurance::journal::{EventType, RunEvent};
 
 /// Default poll interval (Python drain loop parity).
 pub const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -75,6 +75,32 @@ impl Drop for JournalTail {
         // without the join, a future loop change could leak the thread).
         self.stop();
     }
+}
+
+/// Peek the first prompt text of a sealed run journal — the session list's
+/// preview column (Phase 3 slice #9). Reads at most the first 10 lines and
+/// returns the `payload.prompt` of the first `run_started` /
+/// `prompt_submitted` event; `None` when the journal is missing/unreadable
+/// or carries no prompt (restore runs, empty journals).
+pub fn peek_first_prompt(path: &Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = File::options().read(true).open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines().take(10).flatten() {
+        // A corrupt/blank line must not abort the peek — later lines can
+        // still carry the prompt (review P3-4).
+        let Ok(ev) = serde_json::from_str::<RunEvent>(&line) else {
+            continue;
+        };
+        if matches!(
+            ev.event_type,
+            EventType::RunStarted | EventType::PromptSubmitted
+        ) && let Some(prompt) = ev.payload.get("prompt").and_then(|v| v.as_str())
+        {
+            return Some(prompt.to_string());
+        }
+    }
+    None
 }
 
 fn tail_loop(

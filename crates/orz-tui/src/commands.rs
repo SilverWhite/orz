@@ -40,13 +40,13 @@ const BUILTIN: &[CommandDef] = &[
     CommandDef {
         slash: "/toggle-explorer",
         name_zh: "探索器",
-        description_zh: "显示/隐藏探索器面板（待实施）",
+        description_zh: "显示/隐藏左侧探索器面板",
         category: "视图",
     },
     CommandDef {
         slash: "/toggle-events",
         name_zh: "事件栏",
-        description_zh: "显示/隐藏事件栏（待实施）",
+        description_zh: "显示/隐藏探索器内的事件段",
         category: "视图",
     },
     CommandDef {
@@ -54,6 +54,12 @@ const BUILTIN: &[CommandDef] = &[
         name_zh: "标记栏",
         description_zh: "显示/隐藏右侧标记栏",
         category: "视图",
+    },
+    CommandDef {
+        slash: "/properties",
+        name_zh: "属性",
+        description_zh: "显示当前运行/会话属性",
+        category: "导航",
     },
 ];
 

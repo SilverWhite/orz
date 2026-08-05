@@ -204,6 +204,52 @@ impl ContentPane {
             }
         }
     }
+
+    /// Search the conversation for *query* (Find dialog, v1 scope = 对话):
+    /// message content and tool-trace targets/details. Returns the 0-based
+    /// indices of matching content items (marker line = index + 1, mirroring
+    /// the projection's card-line numbering).
+    ///
+    /// `use_regex` compiles *query* with the `regex` crate (multi_line for
+    /// multiline queries; invalid patterns surface as `Err`). Without regex,
+    /// matching is substring `contains` honoring `case_sensitive`.
+    pub fn find(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+        use_regex: bool,
+    ) -> Result<Vec<usize>, String> {
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let matcher: Box<dyn Fn(&str) -> bool> = if use_regex {
+            let re = regex::RegexBuilder::new(query)
+                .case_insensitive(!case_sensitive)
+                .multi_line(true)
+                .build()
+                .map_err(|e| format!("正则表达式错误: {e}"))?;
+            Box::new(move |h| re.is_match(h))
+        } else if case_sensitive {
+            Box::new(move |h| h.contains(query))
+        } else {
+            let q = query.to_lowercase();
+            Box::new(move |h| h.to_lowercase().contains(&q))
+        };
+        let hits: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| match item {
+                ContentItem::Message(m) => matcher(&m.content),
+                ContentItem::ToolTrace(t) => t
+                    .entries
+                    .iter()
+                    .any(|e| matcher(&e.target) || matcher(&e.detail)),
+            })
+            .map(|(i, _)| i)
+            .collect();
+        Ok(hits)
+    }
 }
 
 /// Marker column entry (right side).
@@ -219,8 +265,7 @@ pub enum MarkerKind {
     SearchHit,
 }
 
-/// Content markers — user-input positions (v1); search hits come with the
-/// Find slice.
+/// Content markers — user-input positions + search hits (Find slice #9).
 #[derive(Debug, Clone, Default)]
 pub struct ContentMarker {
     pub markers: Vec<MarkerEntry>,
@@ -232,6 +277,19 @@ impl ContentMarker {
             kind: MarkerKind::UserInput,
             label: format!("▸ L{line}"),
         });
+    }
+
+    /// Add a search-hit marker (`● L{n}`, n = 1-based content-item line).
+    pub fn add_search_hit(&mut self, line: usize) {
+        self.markers.push(MarkerEntry {
+            kind: MarkerKind::SearchHit,
+            label: format!("● L{line}"),
+        });
+    }
+
+    /// Drop all search-hit markers (a new Find replaces the previous hits).
+    pub fn clear_search_hits(&mut self) {
+        self.markers.retain(|m| m.kind != MarkerKind::SearchHit);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -380,9 +438,12 @@ impl Toolbar {
                 ToolbarButton { label: "停止".into(), enabled: false },
                 ToolbarButton { label: "打开".into(), enabled: false },
                 ToolbarButton { label: "验证".into(), enabled: true },
-                ToolbarButton { label: "属性".into(), enabled: false },
+                // Slice #9: Properties (Neutral `p`) and Find (Ctrl+F) are
+                // live; the toolbar renders static text, so the flags are
+                // informational (render_toolbar ignores state).
+                ToolbarButton { label: "属性".into(), enabled: true },
                 ToolbarButton { label: "命令...".into(), enabled: true },
-                ToolbarButton { label: "查找...".into(), enabled: false },
+                ToolbarButton { label: "查找...".into(), enabled: true },
             ],
         }
     }
@@ -421,9 +482,14 @@ impl ChatInputState {
     }
 
     /// Take the current buffer, push it to history, and clear.
+    ///
+    /// History dedup (Python `AddressBar._push_history` rule): adjacent
+    /// duplicates are suppressed — re-submitting the same prompt must not
+    /// create a repeated history entry. Empty lines never enter history.
     pub fn take_line(&mut self) -> String {
         let line = self.textarea.text().to_string();
-        if !line.trim().is_empty() {
+        if !line.trim().is_empty() && self.history.last().map(String::as_str) != Some(line.as_str())
+        {
             self.history.push(line.clone());
         }
         self.textarea.set_text("");
@@ -585,5 +651,96 @@ mod tests {
         assert_eq!(input.textarea.text(), "第二个问题");
         input.history_down();
         assert!(input.textarea.text().is_empty());
+    }
+
+    // ── Phase 3 slice #9: history dedup + find + search-hit markers ───────
+
+    #[test]
+    fn take_line_dedup_only_vs_last() {
+        let mut input = ChatInputState::new();
+        // First submit enters history.
+        input.textarea.set_text("重复问题");
+        input.take_line();
+        // Immediate re-submit of the SAME text is suppressed (adjacent dup).
+        input.textarea.set_text("重复问题");
+        input.take_line();
+        assert_eq!(input.history, vec!["重复问题"]);
+
+        // A different text in between allows the same text again
+        // (non-adjacent repeats are permitted — Python parity).
+        input.textarea.set_text("别的");
+        input.take_line();
+        input.textarea.set_text("重复问题");
+        input.take_line();
+        assert_eq!(input.history, vec!["重复问题", "别的", "重复问题"]);
+
+        // Empty/whitespace lines never enter history.
+        input.textarea.set_text("   ");
+        assert_eq!(input.take_line(), "   ");
+        assert_eq!(input.history.len(), 3);
+    }
+
+    fn pane_with_items() -> ContentPane {
+        let mut pane = ContentPane::default();
+        pane.add_user_message("审查 session 列表设计");
+        pane.add_model_message("来源可见性需要检查", 1, false);
+        pane.add_or_update_tool_trace("read_file", "session.json", "运行中");
+        pane
+    }
+
+    #[test]
+    fn find_matches_message_and_tool_entries() {
+        let pane = pane_with_items();
+        // Message content match.
+        let hits = pane.find("列表设计", true, false).unwrap();
+        assert_eq!(hits, vec![0]);
+        // Tool trace target match (item 2).
+        let hits = pane.find("session.json", true, false).unwrap();
+        assert_eq!(hits, vec![2]);
+        // No match → empty.
+        assert!(pane.find("不存在的词", true, false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn find_case_sensitivity() {
+        let pane = pane_with_items();
+        // Case-sensitive: "Session" does not match "session".
+        assert!(pane.find("Session", true, false).unwrap().is_empty());
+        // Case-insensitive default matches.
+        assert_eq!(pane.find("SESSION.JSON", false, false).unwrap(), vec![2]);
+    }
+
+    #[test]
+    fn find_regex_and_multiline_query() {
+        let pane = pane_with_items();
+        // Regex alternation.
+        let hits = pane.find("列表|可见性", false, true).unwrap();
+        assert_eq!(hits, vec![0, 1]);
+        // Regex honors case_insensitive=false.
+        assert!(pane.find("SESSION", true, true).unwrap().is_empty());
+        // Multiline query with (?s) spanning content lines.
+        let pane = ContentPane::default();
+        let mut pane = pane;
+        pane.add_model_message("第一行\n第二行", 1, false);
+        let hits = pane.find("第一行(?s:.)*第二行", false, true).unwrap();
+        assert_eq!(hits, vec![0]);
+        // Invalid regex surfaces as Err.
+        let err = pane.find("([", false, true).unwrap_err();
+        assert!(err.contains("正则表达式错误"), "{err}");
+    }
+
+    #[test]
+    fn marker_search_hits_add_and_clear() {
+        let mut marker = ContentMarker::default();
+        marker.add_user_input(1);
+        marker.add_search_hit(3);
+        marker.add_search_hit(5);
+        assert_eq!(marker.markers.len(), 3);
+        assert!(marker.markers[1].label.starts_with("● L3"));
+
+        // A new search replaces previous hits only — user inputs survive.
+        marker.clear_search_hits();
+        assert_eq!(marker.markers.len(), 1);
+        assert_eq!(marker.markers[0].kind, MarkerKind::UserInput);
     }
 }
