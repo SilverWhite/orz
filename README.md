@@ -5,8 +5,9 @@
 
 **实施基线**：`feat/fusion-architecture` 分支 — 70 crate workspace，`cargo test --workspace` 全绿（0 failed）、clippy 0 error（Windows 首跑通）。
 Phase 1（journal + transport + 单 Agent loop）、Phase 2（单主 Agent + gates + ACP + Plan Mode）已完成；
-Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）、Slice #2（§4.6 问询三机制）、Slice #3（session snapshot + sandbox/credential/permit）、Slice #4（IP5 snapshot 接线 + host keystore 注入 permit）、Slice #5（orz-tui 核心工作台 v1）已完成（自研 264 tests：177 + 87——orz-tui 新增，含审查后 +11）。
-Slice #5 已本地提交（orz `3f116d0` → `cli/feat/fusion-architecture`，主仓库待推送）——orz-tui：进程内 ACP 双工工作台（冻结布局/ContentPane 消息卡+工具行/状态栏/简化 Marker）、50ms journal tail 全事件投影、权限对话框交互解锁（现有 gateway 路径，无 permission.rs 改动）、replay 模式链校验、裸 `orz`→TUI（+`--replay`/`--run-root`/`--fake-provider`）；提交前审查闭合（P1×3：矩形卡、run-id bootstrap 前预留、运行中守卫+精确去重；P2×6：ANSI 净化、EOF 退出、权限队列、兜底扫描、require_terminal、teardown 恒执行）；全仓 0 failed、clippy 触碰文件 0 warning。
+Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）、Slice #2（§4.6 问询三机制）、Slice #3（session snapshot + sandbox/credential/permit）、Slice #4（IP5 snapshot 接线 + host keystore 注入 permit）、Slice #5（orz-tui 核心工作台 v1）、Slice #6（host 流式 text-delta 生产者）已完成（自研 274 tests：186 + 88——Slice #6 新增 9：loop +7、host +1、tui +1）。
+Slice #6 已本地提交，推送待手动（orz → `cli/feat/fusion-architecture`，主仓库 → `origin/main`）——模型输出流式传输到 TUI：`ModelGateway::generate_stream`（回调式，默认委托 `generate`，DeepSeekTransport 桩不动）+ FakeProvider char 边界分块（chunk_size/chunk_delay）→ `LoopHost::on_text_delta`（同步默认 no-op）→ OrzHost `forward_fire_and_forget` 发 ACP `agent_message_chunk` 通知（实时、非 journal、无 schema/EventType 变更——Python live-only 先例）；controller 循环顶部 120ms 节流守卫（覆盖 TUI journal 双 50ms 阶段的最坏 ~100ms 对齐 + gate/工具轮两路径 + turn≥2 首轮——守卫置 0 时 TUI E2E 确定性失败 `["X+X","X"]`）；stdio 线自动序列化 session/update 通知帧（stdio e2e 新增断言）；`--fake-provider` 演示 250ms 分块可见流式；TUI 生产代码 +2 行（terminal 事件重置流式追加目标，审查 P3-1 修复）。提交前审查闭合（两独立代理，无 P1）：P2×2（守卫 60→120ms 双阶段对齐；docs 措辞/计数修正）+ P3×4 修复（跨轮 append 目标残留、turn≥2 首轮竞态、README 自相矛盾、headless sleep 注释）。附存修复：`find_git_bash` 增强（GitForWindows 注册表 InstallPath + PATH 含 git 条目父目录探测——非标准安装位置如 B 盘 Git 可发现）+ 5 个 POSIX 语义测试 Git Bash 后端门控（PowerShell 后端显式 skip，d48b724 平台感知先例；`GROK_SHELL=bash` 下真实执行验证通过）。全仓 0 failed、clippy 0 error 新代码零新增警告。
+Slice #5 已本地提交（orz `3f116d0` → `cli/feat/fusion-architecture`，推送待手动）——orz-tui：进程内 ACP 双工工作台（冻结布局/ContentPane 消息卡+工具行/状态栏/简化 Marker）、50ms journal tail 全事件投影、权限对话框交互解锁（现有 gateway 路径，无 permission.rs 改动）、replay 模式链校验、裸 `orz`→TUI（+`--replay`/`--run-root`/`--fake-provider`）；提交前审查闭合（P1×3：矩形卡、run-id bootstrap 前预留、运行中守卫+精确去重；P2×6：ANSI 净化、EOF 退出、权限队列、兜底扫描、require_terminal、teardown 恒执行）；全仓 0 failed、clippy 触碰文件 0 warning。
 Slice #4 已提交推送（orz `58df321` → `cli/feat/fusion-architecture`，主仓库 `ce7ec83` → `origin/main`）——IP5：mutation 工具执行前快照（`snapshot_created` 事件，run-event schema 30→31）；permit：DPAPI keystore（Python 同格式，交叉兼容实测）注入 host `issue_permit`；全仓 0 failed、check_repository valid。
 Slice #3 已提交推送（orz `fc8e213` → `cli/feat/fusion-architecture`，主仓库 `3190d31` → `origin/main`）；存量修复：xai-fast-worktree 4 个 metadata-feature 测试 Windows 平台语义（stash 验证为既有问题，非切片回归）。
 主仓库 CI 4 作业（ubuntu/windows × 3.11/3.12）全绿；workspace trust 扫描已剪枝（跳过 .git/嵌套仓库，本地 doctor exit 0）。
@@ -41,7 +42,7 @@ Python assurance spec（`assurance/`）保留为 conformance suite、schema auth
 - **仓库**：`D:\CLI\orz`（本地 fork of Grok Build `500129c7`；2026-08-04 由 `B:\orz` 迁移，B 盘空间不足）
 - **分支**：`feat/fusion-architecture`（70 crate workspace, `cargo check` 绿色）
 - **设计符合性**：详见[审查报告](#) — v0.2 设计与实施高度一致
-- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，Phase 3 Slice #1-3 完成（163 tests）；剩余：orz-tui、严格 Clippy/零死代码收尾、Python reference-spec、conformance suite 验证；待接线：ToolDispatcher IP5 snapshot、host 侧 keystore 注入 permit
+- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，Phase 3 Slice #1-6 完成（自研 274 tests）；剩余：严格 Clippy/零死代码收尾、Python reference-spec、conformance suite 验证
 
 ## 当前文件 (Python assurance spec + 架构 + 协议)
 
