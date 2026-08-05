@@ -27,11 +27,25 @@ use crate::acp_server::AcpServer;
 /// Agent-side handler: dispatches inbound client requests to the AcpServer.
 pub struct StdioAgentHandler {
     server: Arc<AcpServer>,
+    trust_policy: crate::session::TrustPolicy,
 }
 
 impl StdioAgentHandler {
+    /// Default handler with the strict `Enforce` trust policy.
     pub fn new(server: Arc<AcpServer>) -> Self {
-        Self { server }
+        Self::with_trust_policy(server, crate::session::TrustPolicy::Enforce)
+    }
+
+    /// Handler with an explicit trust policy — the TUI's in-process wiring
+    /// and integration tests run against temp workspaces via `Skip`.
+    pub fn with_trust_policy(
+        server: Arc<AcpServer>,
+        trust_policy: crate::session::TrustPolicy,
+    ) -> Self {
+        Self {
+            server,
+            trust_policy,
+        }
     }
 }
 
@@ -59,11 +73,7 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                 // The client asks for a new session; the agent generates the ID.
                 let session_id = uuid::Uuid::new_v4().to_string();
                 self.server
-                    .handle_session_new(
-                        &session_id,
-                        Some(args.cwd),
-                        crate::session::TrustPolicy::Enforce,
-                    )
+                    .handle_session_new(&session_id, Some(args.cwd), self.trust_policy)
                     .await
                     .map_err(acp::Error::into_internal_error)?;
                 Ok(AgentResponse::NewSessionResponse(NewSessionResponse::new(

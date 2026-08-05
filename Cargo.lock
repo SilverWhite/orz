@@ -5966,6 +5966,7 @@ dependencies = [
  "orz-assurance",
  "orz-host",
  "orz-loop",
+ "orz-tui",
  "serde_json",
  "tokio",
  "tracing-subscriber",
@@ -6488,6 +6489,23 @@ dependencies = [
 [[package]]
 name = "orz-tui"
 version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-trait",
+ "crossterm",
+ "futures",
+ "orz-assurance",
+ "orz-host",
+ "orz-loop",
+ "ratatui",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "unicode-width 0.2.0",
+ "xai-acp-lib",
+ "xai-ratatui-textarea",
+]
 
 [[package]]
 name = "orz-version"

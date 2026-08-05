@@ -21,9 +21,33 @@ fn main() {
         run_stdio();
         return;
     }
+    // `--replay` is a standalone static mode and takes precedence over the
+    // other flags (review P3 #11: `--replay x -p hi` must not silently run
+    // a live session).
+    if let Some(pos) = args.iter().position(|a| a == "--replay") {
+        let path = match args.get(pos + 1) {
+            Some(p) => PathBuf::from(p),
+            None => {
+                eprintln!("error: --replay requires a journal path");
+                std::process::exit(2);
+            }
+        };
+        run_replay_entry(&path);
+        return;
+    }
+    // Bare `orz` (or `--run-root` / `--fake-provider` only) launches the
+    // assurance workbench TUI — Python `gsa` precedent.
+    let cli_mode = args
+        .iter()
+        .any(|a| a == "-p" || a == "--prompt" || a == "--plan");
+    if !cli_mode {
+        run_tui();
+        return;
+    }
+
     let prompt = parse_prompt(&args).unwrap_or_else(|e| {
         eprintln!("error: {e}");
-        eprintln!("usage: orz -p \"<prompt>\"  (or --prompt <prompt>; --stdio for ACP)");
+        eprintln!("usage: orz -p \"<prompt>\"  (or --prompt <prompt>; --stdio for ACP; bare orz for TUI)");
         std::process::exit(2);
     });
 
@@ -56,6 +80,71 @@ fn main() {
             eprintln!("error: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Parse `--run-root <dir>` (default: current dir).
+fn parse_run_root(args: &[String]) -> Result<PathBuf, String> {
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--run-root" {
+            return args
+                .get(i + 1)
+                .map(PathBuf::from)
+                .ok_or_else(|| "missing value after --run-root".to_string());
+        }
+    }
+    std::env::current_dir().map_err(|e| e.to_string())
+}
+
+/// Bare-`orz` entry: launch the assurance workbench TUI with the in-process
+/// ACP host. `--fake-provider` forces the scripted tool path.
+fn run_tui() {
+    let _guard = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--fake-provider") {
+        // Reuse the scripted-tool branch of build_gateway (unsafe in 2024
+        // edition; single-threaded before the runtime starts).
+        unsafe {
+            std::env::set_var("ORZ_FAKE_TOOL", "1");
+        }
+    }
+    let cwd = match parse_run_root(&args) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to start async runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+    let local = tokio::task::LocalSet::new();
+    let cfg = orz_tui::TuiConfig {
+        cwd,
+        replay: None,
+    };
+    let result = local.block_on(&rt, orz_tui::run(cfg, build_gateway()));
+    if let Err(e) = result {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+/// `--replay <journal>`: static replay of a journal through the projection.
+fn run_replay_entry(path: &std::path::Path) {
+    if let Err(e) = orz_tui::run_replay(path) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
     }
 }
 
@@ -292,10 +381,10 @@ async fn record_plan_event(
     payload: serde_json::Value,
 ) -> Result<String, String> {
     let mut event = orz_assurance::RunEvent::new(
-        handle.run_id.clone().into(),
+        handle.run_id.clone(),
         seq,
         event_type,
-        handle.run_manifest_sha256.clone().into(),
+        handle.run_manifest_sha256.clone(),
         prev_hash,
         "run-event-v0.1.schema.json".into(),
         payload,

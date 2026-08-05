@@ -123,15 +123,21 @@ impl AcpServer {
         session_id: &str,
         prompt: &str,
     ) -> Result<serde_json::Value, AcpError> {
+        // Reserve the run id BEFORE bootstrap: the counter advances even when
+        // the run fails (untrusted cwd, model error), so a retried prompt gets
+        // a fresh run dir — reusing a failed run's dir would append to its
+        // journal and corrupt the chain (2026-08-05 orz-tui review P2-2).
         let (base_dir, trust_policy, prompt_number) = {
-            let sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.sessions.lock().unwrap();
             let session = sessions
-                .get(session_id)
+                .get_mut(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            let n = session.prompt_count;
+            session.prompt_count += 1;
             (
                 session.base_dir.clone(),
                 session.trust_policy,
-                session.prompt_count,
+                n,
             )
         };
 
@@ -162,16 +168,9 @@ impl AcpServer {
             .await?;
 
         // The run journal is complete — release the writer task (best effort;
-        // the journal content was already flushed inside run_turn).
+        // the journal content was already flushed inside run_turn). The run-id
+        // counter was already advanced at the top (reserved before bootstrap).
         let _ = handle.journal.shutdown_async().await;
-
-        // Advance the counter so the next prompt gets a fresh run id.
-        {
-            let mut sessions = self.sessions.lock().unwrap();
-            if let Some(session) = sessions.get_mut(session_id) {
-                session.prompt_count += 1;
-            }
-        }
 
         Ok(serde_json::json!({
             "session_id": session_id,
