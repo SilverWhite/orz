@@ -70,11 +70,11 @@ mod tests {
     #[test]
     fn rendered_frame_dialog_overlay() {
         let mut app = TuiApp::new();
-        app.show_permission_dialog(crate::app::PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: None,
-        });
+        app.show_permission_dialog(crate::app::PendingPermission::new(
+            "bash",
+            "dir",
+            None,
+        ));
         let rendered = render_to_string(&mut app, 100, 30);
         assert!(rendered.contains("工具权限请求"));
         assert!(rendered.contains("允许一次"));

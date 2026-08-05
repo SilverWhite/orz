@@ -32,7 +32,12 @@ use xai_acp_lib::AcpAgentGatewaySender;
 /// prompt before the bridge fails closed (mirrors the Phase 2 TUI bridge's
 /// 5-minute permission timeout; a silent client must not stall the loop
 /// forever — 2026-08-04 review P2-2).
-const PERMISSION_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
+///
+/// `pub` so orz-tui's permission-dialog countdown shares this single source
+/// of truth (Phase 3 slice #7): the TUI times out its dialog from its own
+/// clock at the same ~300s mark; a few ms of drift between the two is benign
+/// (the host's deny wins, the dialog's respond send fails silently).
+pub const PERMISSION_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Grok permission manager wrapped for the LoopHost contract.
 pub struct PermissionBridge {

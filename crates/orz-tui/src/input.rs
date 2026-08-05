@@ -193,35 +193,48 @@ mod tests {
         let mut a = TuiApp::new();
         // Esc → Cancelled.
         let fired = cell();
-        a.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(respond(&fired)),
-        });
+        a.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
         handle_key(&mut a, key(KeyCode::Esc, M::NONE));
         assert_eq!(fired.get(), Some(PermissionOutcome::Cancelled));
         assert_eq!(a.focus, Focus::Chat);
 
         // Tab to Cancel, Enter → Cancelled.
         let fired = cell();
-        a.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(respond(&fired)),
-        });
+        a.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
         handle_key(&mut a, key(KeyCode::Tab, M::NONE));
         handle_key(&mut a, key(KeyCode::Enter, M::NONE));
         assert_eq!(fired.get(), Some(PermissionOutcome::Cancelled));
 
         // Default Enter → AllowOnce.
         let fired = cell();
-        a.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(respond(&fired)),
-        });
+        a.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
         handle_key(&mut a, key(KeyCode::Enter, M::NONE));
         assert_eq!(fired.get(), Some(PermissionOutcome::AllowOnce));
+    }
+
+    /// Phase 3 slice #7: Enter on `/stop` while running marks the runner's
+    /// cancel intent (key handling stays synchronous; the runner owns the
+    /// async cancel).
+    #[test]
+    fn stop_slash_dispatch_sets_pending_when_running() {
+        let mut a = TuiApp::new();
+        a.running = true;
+        a.input.textarea.set_text("/stop");
+        let outcome = handle_key(&mut a, key(KeyCode::Enter, M::NONE));
+        assert_eq!(outcome, KeyOutcome::Continue);
+        assert!(a.stop_pending, "/stop Enter while running marks intent");
     }
 
     #[test]

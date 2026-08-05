@@ -50,7 +50,13 @@ pub fn compose_screen(app: &TuiApp, width: u16, height: u16) -> Vec<String> {
     // context, SESSION_PERSISTENCE doc).
     if let Some(dialog) = &app.dialog {
         if let Some((d_x, d_y, d_w, _d_h)) = dialog_area(width, height) {
-            let overlay = compose_dialog_overlay(dialog, d_w);
+            // Permission-dialog countdown (Phase 3 slice #7): derived at
+            // render time from the pending request's open instant — no state
+            // mutation on the 50ms tick.
+            let countdown = app.pending_permission.as_ref().and_then(|pp| {
+                pp.remaining().map(|r| format!("剩余 {}s", r.as_secs()))
+            });
+            let overlay = compose_dialog_overlay(dialog, d_w, countdown);
             for (i, dline) in overlay.iter().enumerate() {
                 let y = d_y as usize + i;
                 if y >= lines.len() {
@@ -420,7 +426,14 @@ fn dialog_area(width: u16, height: u16) -> Option<(u16, u16, u16, u16)> {
 /// base frame — the renderer clears the dialog area first). Every row is
 /// exactly *box_width* display columns, so the box is rectangular
 /// (review P3-6c: rows used to differ by 2 columns).
-pub fn compose_dialog_overlay(dialog: &crate::dialogs::Dialog, box_width: u16) -> Vec<String> {
+///
+/// `countdown` renders an extra row between the message and the actions
+/// (the permission dialog's 300s timeout countdown — Phase 3 slice #7).
+pub fn compose_dialog_overlay(
+    dialog: &crate::dialogs::Dialog,
+    box_width: u16,
+    countdown: Option<String>,
+) -> Vec<String> {
     let w = (box_width as usize).max(24);
     let inner = w.saturating_sub(2);
     let mut lines: Vec<String> = Vec::new();
@@ -430,6 +443,9 @@ pub fn compose_dialog_overlay(dialog: &crate::dialogs::Dialog, box_width: u16) -
     lines.push(pad_right(&format!("┌{title}{}┐", "─".repeat(fill)), box_width));
     for mline in &dialog.message {
         lines.push(format!("│ {} │", pad_right(mline, inner as u16 - 2)));
+    }
+    if let Some(cd) = countdown {
+        lines.push(format!("│ {} │", pad_right(&cd, inner as u16 - 2)));
     }
     // Actions row — selected action styled by the renderer; text keeps
     // bracket markers for snapshot tests.
@@ -753,7 +769,7 @@ mod tests {
                 DialogAction::Cancel,
             ],
         );
-        let lines = compose_dialog_overlay(&d, 60);
+        let lines = compose_dialog_overlay(&d, 60, None);
         assert!(lines[0].starts_with("┌ 工具权限请求"));
         assert!(lines[1].contains("工具: bash"));
         assert!(lines[2].contains("<允许一次>"));
@@ -762,18 +778,50 @@ mod tests {
         for line in &lines {
             assert_eq!(str_width(line), 60, "dialog rows must be rectangular");
         }
-        assert!(lines[0].contains('┐'));
-        assert!(lines.last().unwrap().contains('┘'));
+
+        // Phase 3 slice #7: the countdown renders between message and
+        // actions, keeping the box rectangular.
+        let lines = compose_dialog_overlay(&d, 60, Some("剩余 50s".into()));
+        assert!(lines[1].contains("工具: bash"));
+        assert!(lines[2].contains("剩余 50s"), "{lines:?}");
+        assert!(lines[3].contains("<允许一次>"));
+        for line in &lines {
+            assert_eq!(str_width(line), 60, "countdown rows must be rectangular");
+        }
+    }
+
+    /// Phase 3 slice #7: the permission dialog's countdown line is derived
+    /// at render time from the pending request's open instant.
+    #[test]
+    fn permission_dialog_renders_remaining_seconds_line() {
+        let mut a = app();
+        a.show_permission_dialog(PendingPermission::new("bash", "dir", None));
+        // Backdate AFTER presentation — the countdown starts at show time.
+        a.pending_permission.as_mut().unwrap().opened_at =
+            std::time::Instant::now() - std::time::Duration::from_secs(250);
+        let lines = compose_screen(&a, 100, 30);
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("剩余 "),
+            "countdown line must render: {joined}"
+        );
+        // 50s remaining (tolerance: ±1s tick granularity).
+        let remaining = a.pending_permission.as_ref().unwrap().remaining().unwrap();
+        let secs = remaining.as_secs();
+        assert!(
+            (49..=50).contains(&secs),
+            "250s elapsed of 300s leaves ~50s, got {secs}s"
+        );
     }
 
     #[test]
     fn permission_dialog_renders_in_screen() {
         let mut a = app();
-        a.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(Box::new(|_: PermissionOutcome| {})),
-        });
+        a.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(Box::new(|_: PermissionOutcome| {})),
+        ));
         let lines = compose_screen(&a, 100, 30);
         let joined = lines.join("\n");
         assert!(joined.contains("工具权限请求"));

@@ -83,13 +83,21 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
             ClientRequest::PromptRequest(args) => {
                 let session_id = args.session_id.0.as_ref().to_string();
                 let prompt = extract_prompt_text(&args.prompt);
-                self.server
-                    .handle_session_prompt(&session_id, &prompt)
-                    .await
-                    .map_err(acp::Error::into_internal_error)?;
-                Ok(AgentResponse::PromptResponse(PromptResponse::new(
-                    StopReason::EndTurn,
-                )))
+                match self.server.handle_session_prompt(&session_id, &prompt).await {
+                    Ok(_) => Ok(AgentResponse::PromptResponse(PromptResponse::new(
+                        StopReason::EndTurn,
+                    ))),
+                    // A user cancel is NOT an error — the protocol contract
+                    // (agent-client-protocol-schema, session/cancel) requires
+                    // replying to the original prompt request with
+                    // `StopReason::Cancelled` (Phase 3 slice #7).
+                    Err(crate::acp_server::AcpError::AgentLoop(
+                        orz_loop::controller::AgentLoopError::Cancelled,
+                    )) => Ok(AgentResponse::PromptResponse(PromptResponse::new(
+                        StopReason::Cancelled,
+                    ))),
+                    Err(e) => Err(acp::Error::into_internal_error(e)),
+                }
             }
             _ => Err(acp::Error::method_not_found()),
         }
@@ -97,9 +105,12 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
 
     async fn handle_notification(&self, notification: ClientNotification) -> acp::Result<()> {
         match notification {
-            ClientNotification::CancelNotification(_args) => {
-                // Phase 2: the controller runs the turn to completion;
-                // cancellation wiring lands with streaming (Phase 3).
+            ClientNotification::CancelNotification(args) => {
+                // Phase 3 slice #7: route the cancel to the in-flight run's
+                // token. The loop polls it cooperatively at its checkpoints;
+                // a cancel when idle or already finished is a benign no-op.
+                let session_id = args.session_id.0.as_ref().to_string();
+                self.server.cancel_current_run(&session_id);
                 Ok(())
             }
             _ => Ok(()),

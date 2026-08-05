@@ -46,6 +46,36 @@ pub struct PendingPermission {
     pub args_summary: String,
     /// Fires the ACP response (set by the client wiring).
     pub respond: Option<Box<dyn FnOnce(PermissionOutcome)>>,
+    /// When the dialog was presented — the countdown's start point. Re-stamped
+    /// on presentation so QUEUED requests count down from display, not from
+    /// arrival (Phase 3 slice #7).
+    pub opened_at: std::time::Instant,
+}
+
+impl PendingPermission {
+    /// New request stamped with the current instant.
+    pub fn new(
+        tool: impl Into<String>,
+        args_summary: impl Into<String>,
+        respond: Option<Box<dyn FnOnce(PermissionOutcome)>>,
+    ) -> Self {
+        Self {
+            tool: tool.into(),
+            args_summary: args_summary.into(),
+            respond,
+            opened_at: std::time::Instant::now(),
+        }
+    }
+
+    /// Seconds remaining until the host's permission-prompt timeout denies
+    /// the request. `None` = already expired. The TUI derives the countdown
+    /// from its own clock against the host's constant (single source of
+    /// truth — `orz_host::permission::PERMISSION_PROMPT_TIMEOUT`); a few ms
+    /// of drift between the two timers is benign (Phase 3 slice #7).
+    pub fn remaining(&self) -> Option<std::time::Duration> {
+        crate::PERMISSION_PROMPT_TIMEOUT
+            .checked_sub(self.opened_at.elapsed())
+    }
 }
 
 /// Outcome of a key event handled by the app.
@@ -77,6 +107,10 @@ pub struct TuiApp {
     /// (review P2-2b); the next one is presented when the current closes.
     pub permission_queue: std::collections::VecDeque<PendingPermission>,
     pub running: bool,
+    /// `/stop` was typed while running — the runner owns the async cancel
+    /// (Phase 3 slice #7; app state only marks intent so key handling stays
+    /// sync).
+    pub stop_pending: bool,
     pub quit: bool,
     /// Prompt counter for card turn labels (each prompt = one run).
     pub turn_counter: u32,
@@ -113,6 +147,7 @@ impl TuiApp {
             pending_permission: None,
             permission_queue: std::collections::VecDeque::new(),
             running: false,
+            stop_pending: false,
             quit: false,
             turn_counter: 0,
             nav_back: Vec::new(),
@@ -215,7 +250,10 @@ impl TuiApp {
         self.present_permission(pending);
     }
 
-    fn present_permission(&mut self, pending: PendingPermission) {
+    fn present_permission(&mut self, mut pending: PendingPermission) {
+        // Countdown restarts at presentation — a queued request's dialog
+        // starts its 300s from the moment it is shown (Phase 3 slice #7).
+        pending.opened_at = std::time::Instant::now();
         self.status.set_run_state("等待审批", true);
         let mut message = vec![
             format!("工具: {}", pending.tool),
@@ -241,6 +279,16 @@ impl TuiApp {
         if let Some(next) = self.permission_queue.pop_front() {
             self.present_permission(next);
         }
+    }
+
+    /// Whether the pending permission dialog has exceeded the host's 300s
+    /// prompt timeout (Phase 3 slice #7). The runner polls this on its tick
+    /// and dismisses the dialog — the host has already denied (or denies
+    /// milliseconds later), so the run continues without an orphan dialog.
+    pub fn permission_timed_out(&self) -> bool {
+        self.pending_permission
+            .as_ref()
+            .is_some_and(|pp| pp.remaining().is_none())
     }
 
     /// Close a *permission* dialog without responding (run ended, timeout).
@@ -309,7 +357,9 @@ impl TuiApp {
             }
             "/stop" => {
                 if self.running {
-                    messages.push("停止请求已发送（运行至完成）".into());
+                    // The runner owns the async cancel; mark intent here so
+                    // key handling stays synchronous (Phase 3 slice #7).
+                    self.stop_pending = true;
                 } else {
                     messages.push("当前没有运行".into());
                 }
@@ -369,11 +419,11 @@ mod tests {
     fn dialog_focus_and_confirm() {
         let mut app = TuiApp::new();
         let fired = fired_cell();
-        app.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(respond(&fired)),
-        });
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
         assert_eq!(app.focus, Focus::Dialog);
         assert!(app.dialog.is_some());
         assert_eq!(app.status.items[5].label, "等待审批");
@@ -389,11 +439,11 @@ mod tests {
     fn esc_cancel_fires_cancelled() {
         let mut app = TuiApp::new();
         let fired = fired_cell();
-        app.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(respond(&fired)),
-        });
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
         // Select Cancel via key path (dialog.select_next + confirm).
         app.dialog.as_mut().unwrap().select_next();
         app.confirm_dialog();
@@ -407,16 +457,16 @@ mod tests {
         let mut app = TuiApp::new();
         let first = fired_cell();
         let second = fired_cell();
-        app.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(respond(&first)),
-        });
-        app.show_permission_dialog(PendingPermission {
-            tool: "edit_file".into(),
-            args_summary: "lib.rs".into(),
-            respond: Some(respond(&second)),
-        });
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&first)),
+        ));
+        app.show_permission_dialog(PendingPermission::new(
+            "edit_file",
+            "lib.rs",
+            Some(respond(&second)),
+        ));
         assert_eq!(app.permission_queue.len(), 1, "second request queued");
 
         // Resolve the first (Allow Once) → the queued one is presented.
@@ -438,11 +488,11 @@ mod tests {
         // dialog must not overwrite it back to 空闲.
         let mut app = TuiApp::new();
         let fired = fired_cell();
-        app.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(respond(&fired)),
-        });
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
         app.status.set_run_state("完成", true);
         app.dismiss_permission_dialog("运行已结束");
         assert_eq!(app.status.items[5].label, "完成");
@@ -464,11 +514,11 @@ mod tests {
         let mut app = TuiApp::new();
         let fired = Rc::new(Cell::new(false));
         let fired_clone = fired.clone();
-        app.show_permission_dialog(PendingPermission {
-            tool: "bash".into(),
-            args_summary: "dir".into(),
-            respond: Some(Box::new(move |_o| fired_clone.set(true))),
-        });
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(Box::new(move |_o| fired_clone.set(true))),
+        ));
         app.dismiss_permission_dialog("运行已结束");
         assert!(!fired.get());
         assert!(app.dialog.is_none());
@@ -521,5 +571,99 @@ mod tests {
         app.close_dialog();
         assert_eq!(app.focus, Focus::Chat);
         assert!(app.dialog.is_none());
+    }
+
+    // ── Phase 3 slice #7: /stop intent + permission countdown ─────────────
+
+    #[test]
+    fn stop_command_marks_pending_only_when_running() {
+        let mut app = TuiApp::new();
+        // Idle: no pending flag, feedback message.
+        let msgs = app.dispatch_command("/stop");
+        assert!(!app.stop_pending);
+        assert!(msgs.iter().any(|m| m == "当前没有运行"), "{msgs:?}");
+
+        // Running: marks intent for the runner; no message.
+        app.running = true;
+        let msgs = app.dispatch_command("/stop");
+        assert!(app.stop_pending, "/stop while running marks intent");
+        assert!(msgs.is_empty(), "the runner owns the feedback: {msgs:?}");
+    }
+
+    #[test]
+    fn pending_permission_remaining_expires_at_timeout() {
+        use std::time::{Duration, Instant};
+
+        // Fresh dialog: counts down from ~300s (host single source of truth).
+        let fresh = PendingPermission::new("bash", "dir", None);
+        let r = fresh.remaining().unwrap();
+        assert!(
+            r > Duration::from_secs(299),
+            "fresh dialog has ~300s left, got {r:?}"
+        );
+
+        // Backdated 299s: ~1s left (no clock injection — Instant arithmetic).
+        let mut old = PendingPermission::new("bash", "dir", None);
+        old.opened_at = Instant::now() - Duration::from_secs(299);
+        let r = old.remaining().unwrap();
+        assert!(r.as_secs() <= 1, "299s elapsed leaves ≤1s, got {r:?}");
+
+        // Backdated 301s: expired.
+        let mut expired = PendingPermission::new("bash", "dir", None);
+        expired.opened_at = Instant::now() - Duration::from_secs(301);
+        assert!(expired.remaining().is_none(), "301s elapsed = expired");
+    }
+
+    #[test]
+    fn timed_out_permission_dismisses_without_firing_and_presents_queued() {
+        use std::time::{Duration, Instant};
+
+        let mut app = TuiApp::new();
+        let fired = fired_cell();
+        app.show_permission_dialog(PendingPermission::new(
+            "bash",
+            "dir",
+            Some(respond(&fired)),
+        ));
+        // Backdate AFTER presentation — `present_permission` re-stamps the
+        // open instant (the countdown starts when the dialog is shown).
+        let expired = app.pending_permission.as_mut().unwrap();
+        expired.opened_at = Instant::now() - Duration::from_secs(301);
+        // A second request queues behind the expired one.
+        app.show_permission_dialog(PendingPermission::new("edit_file", "lib.rs", None));
+        assert!(app.permission_timed_out(), "expired dialog detected");
+
+        app.dismiss_permission_dialog("已超时");
+        assert_eq!(
+            fired.get(),
+            None,
+            "timeout dismissal never fires a response"
+        );
+        let messages: Vec<String> = app
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::view_model::ContentItem::Message(m)
+                    if m.role == "系统" =>
+                {
+                    Some(m.content.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("请求已取消（已超时）")),
+            "timeout dismissal surfaces the reason: {messages:?}"
+        );
+        assert!(app.dialog.is_some(), "queued request now presented");
+        assert_eq!(app.permission_queue.len(), 0);
+        // The queued request counts down from PRESENTATION (re-stamped).
+        let shown = app.pending_permission.as_ref().unwrap();
+        assert_eq!(shown.tool, "edit_file");
+        assert!(
+            shown.remaining().unwrap() > Duration::from_secs(299),
+            "queued dialog restarts its ~300s countdown on presentation"
+        );
     }
 }

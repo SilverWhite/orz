@@ -28,7 +28,7 @@ const BUILTIN: &[CommandDef] = &[
     CommandDef {
         slash: "/stop",
         name_zh: "停止",
-        description_zh: "发送停止请求（运行至完成）",
+        description_zh: "取消当前运行",
         category: "运行",
     },
     CommandDef {

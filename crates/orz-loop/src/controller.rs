@@ -74,6 +74,11 @@ pub enum AgentLoopError {
     Session(String),
     #[error("assurance invariant: {0}")]
     Assurance(String),
+    /// The run was cancelled by the client (ACP `session/cancel`). The
+    /// controller records a terminal `run_cancelled` event instead of
+    /// `run_failed` (Phase 3 slice #7).
+    #[error("run cancelled by user")]
+    Cancelled,
 }
 
 /// The main agent loop controller.
@@ -179,6 +184,36 @@ impl AgentLoopController {
         next_sequence: u64,
         previous_event_sha256: Option<String>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
+        self.run_turn_with_cancel(
+            host,
+            prompt,
+            run_id,
+            run_manifest_sha256,
+            next_sequence,
+            previous_event_sha256,
+            None,
+        )
+        .await
+    }
+
+    /// `run_turn` with cooperative cancellation (Phase 3 slice #7).
+    ///
+    /// `cancel` is polled at fixed checkpoints — loop top, after each model
+    /// round, and before tool dispatch — never inside the permission await
+    /// (the permission manager is session-scoped and shared; a dropped
+    /// future could leave its prompt unresolved until the dialog answers or
+    /// the host's 300s timeout). `None` behaves exactly like `run_turn`.
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn + the cancel token
+    pub async fn run_turn_with_cancel(
+        &self,
+        host: &dyn LoopHost,
+        prompt: &str,
+        run_id: &str,
+        run_manifest_sha256: &str,
+        next_sequence: u64,
+        previous_event_sha256: Option<String>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         let journal = host.journal();
         let mut writer = EventWriter::new(
             journal,
@@ -188,7 +223,7 @@ impl AgentLoopController {
             previous_event_sha256,
         );
         let result = self
-            .run_turn_inner(&mut writer, host, prompt, run_id, run_manifest_sha256)
+            .run_turn_inner(&mut writer, host, prompt, run_id, run_manifest_sha256, cancel)
             .await;
         match result {
             Ok(response) => {
@@ -196,16 +231,23 @@ impl AgentLoopController {
                 Ok((response, writer.seq(), writer.prev_hash()))
             }
             Err(e) => {
-                // Terminal failure event — best effort; the journal must end
-                // on a terminal event, never a mid-sequence orphan. If the
-                // journal itself is dead this also fails, and the original
-                // error is returned regardless.
-                let _ = writer
-                    .record(
-                        EventType::RunFailed,
-                        serde_json::json!({"error": e.to_string()}),
-                    )
-                    .await;
+                // Terminal event — best effort; the journal must end on a
+                // terminal event, never a mid-sequence orphan. A user cancel
+                // records `run_cancelled` (already terminal, schema-valid);
+                // everything else records `run_failed`. If the journal itself
+                // is dead this also fails, and the original error is returned
+                // regardless.
+                let payload = match &e {
+                    AgentLoopError::Cancelled => {
+                        serde_json::json!({"reason": "user_cancelled"})
+                    }
+                    _ => serde_json::json!({"error": e.to_string()}),
+                };
+                let event = match &e {
+                    AgentLoopError::Cancelled => EventType::RunCancelled,
+                    _ => EventType::RunFailed,
+                };
+                let _ = writer.record(event, payload).await;
                 let _ = journal.flush_async().await;
                 Err(e)
             }
@@ -214,6 +256,7 @@ impl AgentLoopController {
 
     /// The turn body — writes all events except the failure terminal.
     /// The caller (`run_turn`) owns the `EventWriter` and finalizes the chain.
+    /// `cancel` is polled at cooperative checkpoints (Phase 3 slice #7).
     async fn run_turn_inner(
         &self,
         mut writer: &mut EventWriter<'_>,
@@ -221,6 +264,7 @@ impl AgentLoopController {
         prompt: &str,
         run_id: &str,
         _run_manifest_sha256: &str,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<String, AgentLoopError> {
         let workspace_trust = host.workspace_trust();
 
@@ -318,6 +362,14 @@ impl AgentLoopController {
         let mut external_counters = InquiryCounters::default();
 
         loop {
+            // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
+            // BEFORE the pacing sleep so a cancel never waits on
+            // TEXT_DELTA_PACING. Returning here terminates the run with a
+            // `run_cancelled` journal event (recorded by `run_turn`).
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                return Err(AgentLoopError::Cancelled);
+            }
+
             // Streaming ordering guard (Phase 3 slice #6): this round's text
             // deltas reach a live client at arrival rate, but the previous
             // round's `model_output` lands via the TUI journal tail — the
@@ -359,6 +411,13 @@ impl AgentLoopController {
                 )
                 .await
                 .map_err(|e| AgentLoopError::Model(e.to_string()))?;
+
+            // Cooperative cancellation checkpoint (Phase 3 slice #7): a
+            // cancelled run may omit this round's `model_output` — the chain
+            // stays valid (the terminal event follows).
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                return Err(AgentLoopError::Cancelled);
+            }
 
             writer
                 .record(
@@ -484,8 +543,19 @@ impl AgentLoopController {
             }
 
             // Execute tool calls, feeding results back into the conversation.
+            // Cooperative cancellation checkpoints (Phase 3 slice #7): the
+            // loop-top check before dispatch plus a per-tool re-check inside
+            // — a cancel landing while tool #k runs must not start tools
+            // #k+1..N of the same round (2026-08-05 review P2-2; the comment
+            // "never starts a new tool" holds per tool, not per round).
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                return Err(AgentLoopError::Cancelled);
+            }
             let mut assistant_parts: Vec<String> = Vec::new();
             for tc in &response.tool_calls {
+                if cancel.is_some_and(|c| c.is_cancelled()) {
+                    return Err(AgentLoopError::Cancelled);
+                }
                 let target = route(&tc.name);
                 let result = match target {
                     DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval => {
@@ -1860,6 +1930,299 @@ mod tests {
                 .any(|e| e.event_type == EventType::NeutralInquiry),
             "neutral inquiry must not fire below thresholds"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Phase 3 slice #7: cooperative cancellation ─────────────────────────
+
+    /// A pre-cancelled token aborts at the loop-top checkpoint (before any
+    /// model round): the journal ends with a valid `run_cancelled` terminal
+    /// and never sees a `model_output`.
+    #[tokio::test]
+    async fn pre_cancelled_token_aborts_run_with_run_cancelled_terminal() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> =
+            Arc::new(FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+
+        let result = controller
+            .run_turn_with_cancel(&host, "hello", "RUN-CANCEL", MANIFEST, 0, None, Some(&token))
+            .await;
+
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+        let types = event_types(&dir);
+        assert!(
+            !types.contains(&EventType::ModelOutput),
+            "cancel at loop top precedes any model round: {types:?}"
+        );
+
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-CANCEL"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
+        let cancelled = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::RunCancelled)
+            .expect("run_cancelled event");
+        assert_eq!(
+            cancelled.payload.get("reason").and_then(|r| r.as_str()),
+            Some("user_cancelled")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cancel landing mid-model-round terminates at the after-round
+    /// checkpoint — BEFORE tool dispatch, so no tool ever starts.
+    #[tokio::test]
+    async fn cancel_mid_round_skips_tool_dispatch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        // First round is a text (slow-chunked so the cancel lands inside the
+        // model round); the tool round would come after it — never reached.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::new(vec![
+                ScriptedResponse::text("准备执行命令。"),
+                ScriptedResponse::tool_calls(vec![tool_call("bash", "call-1")]),
+                ScriptedResponse::text("结果：完成"),
+                ScriptedResponse::text("结果：完成"),
+            ])
+            .with_chunk_delay(std::time::Duration::from_millis(100)),
+        );
+        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let token = tokio_util::sync::CancellationToken::new();
+
+        let c = controller.clone();
+        let t = token.clone();
+        let run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(&host, "执行命令", "RUN-CANCEL-2", MANIFEST, 0, None, Some(&t))
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        token.cancel();
+        let result = run.await.unwrap();
+
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+        let types = event_types(&dir);
+        assert!(
+            !types.contains(&EventType::ToolStarted),
+            "cancel precedes tool dispatch: {types:?}"
+        );
+        assert!(types.contains(&EventType::RunCancelled), "{types:?}");
+
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-CANCEL-2"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A multi-tool round: a cancel landing while the FIRST tool is still
+    /// running must not start the remaining tools — the per-tool checkpoint
+    /// (2026-08-05 review P2-2) gates every dispatch, not just the round.
+    #[tokio::test]
+    async fn cancel_mid_multi_tool_round_skips_unstarted_tools() {
+        struct SlowFirstToolHost {
+            journal: JournalRecorder,
+            release: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<()>>>>,
+        }
+
+        #[async_trait]
+        impl LoopHost for SlowFirstToolHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+            async fn call_tool(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                if name == "bash" {
+                    // Block until the test releases — the cancel lands while
+                    // tool #1 is in flight.
+                    let mut rx = self.release.lock().unwrap().take().unwrap();
+                    let _ = rx.recv().await;
+                }
+                Ok(ToolResult {
+                    output: "ok".to_string(),
+                    exit_code: None,
+                })
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let (release_tx, release_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let host = SlowFirstToolHost {
+            journal,
+            release: Arc::new(Mutex::new(Some(release_rx))),
+        };
+        // One round with TWO tool calls: bash (slow) + read_file.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                tool_call("bash", "call-1"),
+                tool_call("read_file", "call-2"),
+            ]),
+            ScriptedResponse::text("结果：完成"),
+            ScriptedResponse::text("结果：完成"),
+        ]));
+        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let token = tokio_util::sync::CancellationToken::new();
+
+        let c = controller.clone();
+        let t = token.clone();
+        let mut run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(&host, "执行命令", "RUN-CANCEL-4", MANIFEST, 0, None, Some(&t))
+                .await
+        });
+
+        // The run parks inside bash (tool #1 in flight); cancel lands there.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        token.cancel();
+        // Cooperative: the in-flight tool finishes first.
+        tokio::select! {
+            _ = &mut run => panic!("cancel must not abort the in-flight tool"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+        }
+        let _ = release_tx.send(()).await;
+        let result = run.await.unwrap();
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+
+        let all_events = events(&dir);
+        let types: Vec<EventType> =
+            all_events.iter().map(|e| e.event_type.clone()).collect();
+        let started: Vec<&str> = all_events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolStarted)
+            .filter_map(|e| e.payload.get("tool").and_then(|t| t.as_str()))
+            .collect();
+        assert_eq!(
+            started,
+            vec!["bash"],
+            "only the in-flight tool starts — read_file must never dispatch: {types:?}"
+        );
+        assert!(types.contains(&EventType::RunCancelled), "{types:?}");
+
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-CANCEL-4"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host whose permission await is gated on an external oneshot: a
+    /// cancel during the permission prompt does NOT interrupt it (cooperative
+    /// semantics — the permission manager is session-scoped and shared; a
+    /// dropped future could orphan its prompt). The run terminates at the
+    /// next checkpoint AFTER the permission resolves.
+    #[tokio::test]
+    async fn cancel_during_permission_await_resolves_then_terminates() {
+        struct GatedHost {
+            journal: JournalRecorder,
+            release: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<()>>>>,
+        }
+
+        #[async_trait]
+        impl LoopHost for GatedHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                // Block until the test sends the release, then deny.
+                let mut rx = self.release.lock().unwrap().take().unwrap();
+                let _ = rx.recv().await;
+                Ok(PermitDecision::Deny)
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let (release_tx, release_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let host = GatedHost {
+            journal,
+            release: Arc::new(Mutex::new(Some(release_rx))),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("bash", "call-1")]),
+            ScriptedResponse::text("结果：完成"),
+            ScriptedResponse::text("结果：完成"),
+        ]));
+        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let token = tokio_util::sync::CancellationToken::new();
+
+        let c = controller.clone();
+        let t = token.clone();
+        let mut run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(&host, "执行命令", "RUN-CANCEL-3", MANIFEST, 0, None, Some(&t))
+                .await
+        });
+
+        // The run parks at the permission await (tool round reached).
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        token.cancel();
+        // Cooperative: cancelling does NOT abort the pending permission.
+        tokio::select! {
+            _ = &mut run => panic!("cancel must not interrupt the permission await"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+        }
+        // Release the gate (deny) — the loop's next checkpoint terminates.
+        let _ = release_tx.send(()).await;
+        let result = run.await.unwrap();
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+
+        let types = event_types(&dir);
+        assert!(
+            !types.contains(&EventType::ToolStarted),
+            "denied tool must not start: {types:?}"
+        );
+        assert!(types.contains(&EventType::PermissionRequested), "{types:?}");
+        assert!(types.contains(&EventType::RunCancelled), "{types:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -78,7 +78,7 @@ pub fn help_dialog() -> Dialog {
             "命令:".into(),
             "  /help   本帮助".into(),
             "  /status 运行状态".into(),
-            "  /stop   停止请求".into(),
+            "  /stop   取消当前运行".into(),
             "  /open   打开文件".into(),
             "  /toggle-markers 显示/隐藏标记栏".into(),
         ],

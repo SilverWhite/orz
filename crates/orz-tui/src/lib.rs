@@ -25,3 +25,8 @@ pub mod view_model;
 pub mod widgets;
 
 pub use runner::{run, run_replay, replay_to_screen, TuiConfig, TuiError};
+
+/// Single source of truth for the permission-dialog countdown: the host
+/// denies at this timeout, so the TUI's dialog shows the same deadline
+/// (Phase 3 slice #7 — Feature B).
+pub use orz_host::permission::PERMISSION_PROMPT_TIMEOUT;

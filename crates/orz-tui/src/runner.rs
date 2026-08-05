@@ -237,6 +237,10 @@ async fn run_loop(
                         app.dismiss_permission_dialog("运行已结束");
                         tail_state.stop();
                     }
+                    // Permission-dialog timeout (Phase 3 slice #7): the host
+                    // denied at ~300s; close the orphaned dialog. The run
+                    // continues — 运行中 restored (dismiss alone sets 空闲).
+                    tick_timeout_dismiss(app);
                     tail_state.was_active = active_now;
                     // Plan §4 fallback: the deterministic run-dir path never
                     // produced events within the grace period → re-point at
@@ -261,12 +265,16 @@ async fn run_loop(
                 match key {
                     Some(Ok(Event::Key(k))) if k.kind == KeyEventKind::Press => {
                         match handle_key(app, k) {
-                            KeyOutcome::Continue => {}
+                            KeyOutcome::Continue => {
+                                // `/stop` typed while running marks intent;
+                                // the runner owns the async cancel.
+                                if std::mem::take(&mut app.stop_pending) {
+                                    do_cancel(client, app).await;
+                                }
+                            }
                             KeyOutcome::Quit => break Ok(()),
                             KeyOutcome::CancelRun => {
-                                client.request_cancel().await;
-                                app.content.add_system_message(
-                                    "停止请求已发送（运行至完成）", false);
+                                do_cancel(client, app).await;
                             }
                             KeyOutcome::Prompt(text) => {
                                 // Running guard (review P1-2): a second prompt
@@ -300,7 +308,13 @@ async fn run_loop(
                             app.accept_event(TuiEvent::TextDelta { text: text_chunk });
                         }
                     }
-                    Some(ClientMsg::PromptCompleted { result }) => {
+                    Some(ClientMsg::PromptCompleted { seq, result }) => {
+                        // Generation guard (Phase 3 slice #7): after a cancel
+                        // the PREVIOUS run's completion must not stop the new
+                        // run's tail, clear `running`, or dismiss its dialog.
+                        if seq != client.prompt_count {
+                            continue;
+                        }
                         match result {
                             Ok(_) => {
                                 // The journal terminal event drives the UI;
@@ -328,6 +342,46 @@ async fn run_loop(
         }
         if app.quit {
             break Ok(());
+        }
+    }
+}
+
+/// User-requested cancel (Ctrl+Z or `/stop`, Phase 3 slice #7): send the ACP
+/// cancel notification and give immediate UI feedback; the journal's
+/// `run_cancelled` terminal event drives the rest (projection clears
+/// `running`, sets 已取消). A pending permission dialog is dismissed so its
+/// dropped oneshot resolves the manager's prompt to Cancelled — the loop's
+/// next checkpoint then terminates the run.
+async fn do_cancel(client: &mut InProcessClient, app: &mut TuiApp) {
+    if app.running {
+        client.request_cancel().await;
+        app.content
+            .add_system_message("停止请求已发送（正在取消）", false);
+        app.dismiss_permission_dialog("用户取消");
+        // The run is still winding down to its next checkpoint — the
+        // dismiss above set 空闲 (from 等待审批); keep the status honest.
+        // A queued request presented by the dismiss keeps 等待审批 and must
+        // not be overwritten (2026-08-05 review P3-3).
+        if app.pending_permission.is_none() {
+            app.status.set_run_state("运行中", true);
+        }
+    } else {
+        app.content.add_system_message("当前没有运行", false);
+    }
+}
+
+/// Tick-driven permission-timeout dismissal (Phase 3 slice #7): the dialog
+/// outlived the host's 300s prompt timeout — the host already denied (or
+/// denies milliseconds later) — so close it without firing a response. The
+/// run continues, so 运行中 is restored (dismiss alone would set 空闲).
+fn tick_timeout_dismiss(app: &mut TuiApp) {
+    if app.permission_timed_out() {
+        app.dismiss_permission_dialog("已超时");
+        // The run continues — restore 运行中 (dismiss alone sets 空闲). A
+        // queued request presented by the dismiss keeps 等待审批 and must
+        // not be overwritten (2026-08-05 review P3-3).
+        if app.pending_permission.is_none() {
+            app.status.set_run_state("运行中", true);
         }
     }
 }
@@ -362,7 +416,8 @@ async fn run_prompt(
     client.prompt_count += 1;
     app.status.set_run_state("运行中", true);
     app.running = true;
-    client.spawn_prompt(session_id, text);
+    let seq = client.prompt_count;
+    client.spawn_prompt(session_id, text, seq);
     Ok(())
 }
 
@@ -391,10 +446,10 @@ fn show_permission(
         .as_ref()
         .map(|v| v.to_string())
         .unwrap_or_default();
-    app.show_permission_dialog(PendingPermission {
+    app.show_permission_dialog(PendingPermission::new(
         tool,
         args_summary,
-        respond: Some(Box::new(move |outcome| {
+        Some(Box::new(move |outcome| {
             let response = match outcome {
                 PermissionOutcome::AllowOnce => {
                     acp::RequestPermissionResponse::new(
@@ -409,7 +464,7 @@ fn show_permission(
             };
             let _ = respond.send(response);
         })),
-    });
+    ));
 }
 
 #[cfg(test)]
@@ -484,5 +539,130 @@ mod tests {
         let joined = lines.join("\n");
         assert!(joined.contains("日志链无效"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Phase 3 slice #7: cancel + permission timeout ─────────────────────
+
+    /// The tick poll dismisses an expired permission dialog and restores
+    /// 运行中 — the run is still in flight (dismiss alone would set 空闲).
+    #[test]
+    fn tick_dismisses_timed_out_permission_and_restores_running_state() {
+        use std::time::{Duration, Instant};
+
+        let mut app = TuiApp::new();
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", None));
+        // Backdate AFTER presentation — the dialog counts down from show
+        // time (present_permission re-stamps the open instant).
+        let expired = app.pending_permission.as_mut().unwrap();
+        expired.opened_at = Instant::now() - Duration::from_secs(301);
+        assert_eq!(app.status.items[5].label, "等待审批");
+
+        tick_timeout_dismiss(&mut app);
+        assert!(app.dialog.is_none(), "expired dialog dismissed");
+        assert!(app.pending_permission.is_none());
+        assert_eq!(
+            app.status.items[5].label,
+            "运行中",
+            "the run continues past the timeout — status stays honest"
+        );
+    }
+
+    /// `do_cancel` sends the ACP cancel, gives immediate feedback, and the
+    /// run resolves with `StopReason::Cancelled` + a valid `run_cancelled`
+    /// journal terminal (in-process duplex, like the host's stdio path).
+    #[tokio::test]
+    async fn do_cancel_sends_cancel_and_feedback() {
+        use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
+        use std::time::Duration;
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = std::env::temp_dir().join(format!(
+                    "orz-tui-runner-cancel-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ));
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(&base).unwrap();
+
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                    ])
+                    .with_chunk_delay(Duration::from_millis(100)),
+                )));
+                let mut client = connect_inprocess(server, TrustPolicy::Skip);
+                let mut app = TuiApp::new();
+                client.start_session(base.to_path_buf()).await.unwrap();
+                client.prompt_count += 1;
+                let seq = client.prompt_count;
+                let session_id = client.session_id.clone().unwrap();
+                client.spawn_prompt(session_id, "回答我".to_string(), seq);
+                app.running = true;
+
+                do_cancel(&mut client, &mut app).await;
+                let joined: Vec<String> = app
+                    .content
+                    .items
+                    .iter()
+                    .filter_map(|i| match i {
+                        crate::view_model::ContentItem::Message(m)
+                            if m.role == "系统" =>
+                        {
+                            Some(m.content.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(
+                    joined.iter().any(|m| m.contains("停止请求已发送（正在取消）")),
+                    "immediate feedback: {joined:?}"
+                );
+
+                // The run resolves with StopReason::Cancelled (a success
+                // response — the ACP protocol contract for cancellation).
+                let completed = loop {
+                    match client.msg_rx.recv().await.unwrap() {
+                        ClientMsg::PromptCompleted { seq: got, result } => {
+                            assert_eq!(got, seq, "completion stamped with its seq");
+                            break result;
+                        }
+                        ClientMsg::SessionNotification { .. } => {}
+                        ClientMsg::PermissionRequest { .. } => {}
+                    }
+                };
+                let response = completed.expect("cancel is a success response");
+                assert_eq!(
+                    response.stop_reason,
+                    acp::StopReason::Cancelled,
+                    "cancel resolves the prompt with StopReason::Cancelled"
+                );
+
+                let session8: String = client
+                    .session_id
+                    .as_ref()
+                    .unwrap()
+                    .chars()
+                    .take(8)
+                    .collect();
+                let events_path = base
+                    .join(".gsa")
+                    .join("runs")
+                    .join(format!("RUN-{session8}-0"))
+                    .join("events.jsonl");
+                let replay = orz_assurance::replay_journal(&events_path, None, None, true);
+                assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+                assert_eq!(
+                    replay.terminal_event.as_deref(),
+                    Some("run_cancelled")
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
     }
 }

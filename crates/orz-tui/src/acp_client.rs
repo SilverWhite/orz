@@ -31,7 +31,13 @@ pub enum ClientMsg {
     /// A streamed agent message chunk (text-delta source, streaming slice).
     SessionNotification { session_id: String, text_chunk: String },
     /// A spawned prompt turn finished (result of the full run).
+    ///
+    /// `seq` is the prompt counter snapshot at spawn time — the runner's
+    /// generation guard: after a cancel, the PREVIOUS run's completion must
+    /// not stop the tail / clear `running` / dismiss the dialog of the NEXT
+    /// run (Phase 3 slice #7 stale-completion race).
     PromptCompleted {
+        seq: u32,
         result: Result<acp::PromptResponse, acp::Error>,
     },
 }
@@ -129,7 +135,8 @@ mod tests {
         client.start_session(base.to_path_buf()).await.unwrap();
         client.prompt_count += 1;
         let session_id = client.session_id.clone().unwrap();
-        client.spawn_prompt(session_id, text.to_string());
+        let seq = client.prompt_count;
+        client.spawn_prompt(session_id, text.to_string(), seq);
         // The permission request arrives while the prompt turn runs.
         loop {
             match client.msg_rx.recv().await.unwrap() {
@@ -137,7 +144,7 @@ mod tests {
                     return (*request, respond);
                 }
                 ClientMsg::SessionNotification { .. } => {}
-                ClientMsg::PromptCompleted { result } => {
+                ClientMsg::PromptCompleted { result, .. } => {
                     panic!("prompt completed before permission: {result:?}");
                 }
             }
@@ -188,7 +195,7 @@ mod tests {
                 // Await the run completion.
                 let completed = loop {
                     match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result } => break result,
+                        ClientMsg::PromptCompleted { result, .. } => break result,
                         _ => {}
                     }
                 };
@@ -255,7 +262,8 @@ mod tests {
                 client.start_session(base.to_path_buf()).await.unwrap();
                 client.prompt_count += 1;
                 let session_id = client.session_id.clone().unwrap();
-                client.spawn_prompt(session_id, "回答我".to_string());
+                let seq = client.prompt_count;
+                client.spawn_prompt(session_id, "回答我".to_string(), seq);
 
                 // Mirror production: deltas at arrival rate, journal events at
                 // 50ms tail granularity.
@@ -279,7 +287,7 @@ mod tests {
                                         text: text_chunk,
                                     });
                                 }
-                                ClientMsg::PromptCompleted { result } => break result,
+                                ClientMsg::PromptCompleted { result, .. } => break result,
                                 _ => {}
                             }
                         }
@@ -343,10 +351,11 @@ mod tests {
                 // Prompt 1.
                 client.prompt_count += 1;
                 let session_id = client.session_id.clone().unwrap();
-                client.spawn_prompt(session_id.clone(), "问题一".into());
+                let seq = client.prompt_count;
+                client.spawn_prompt(session_id.clone(), "问题一".into(), seq);
                 let done = loop {
                     match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result } => break result,
+                        ClientMsg::PromptCompleted { result, .. } => break result,
                         _ => {}
                     }
                 };
@@ -355,10 +364,11 @@ mod tests {
                 // Prompt 2 — must land in a DIFFERENT run dir.
                 let dir1 = run_dir_of(&client, &base);
                 client.prompt_count += 1;
-                client.spawn_prompt(session_id, "问题二".into());
+                let seq = client.prompt_count;
+                client.spawn_prompt(session_id, "问题二".into(), seq);
                 let done = loop {
                     match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result } => break result,
+                        ClientMsg::PromptCompleted { result, .. } => break result,
                         _ => {}
                     }
                 };
@@ -399,7 +409,7 @@ mod tests {
 
                 let completed = loop {
                     match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result } => break result,
+                        ClientMsg::PromptCompleted { result, .. } => break result,
                         _ => {}
                     }
                 };
@@ -411,6 +421,164 @@ mod tests {
                 let content = std::fs::read_to_string(&events_path).unwrap();
                 assert!(content.contains("\"deny\""));
                 assert!(!content.contains("\"tool_started\""), "denied tool must not execute");
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// Phase 3 slice #7: `request_cancel` over the in-process duplex aborts
+    /// the run — the prompt resolves with `StopReason::Cancelled` (a success
+    /// response, per the protocol contract), the journal ends with a valid
+    /// `run_cancelled` terminal, and replay projects the 已取消 card.
+    #[tokio::test]
+    async fn cancel_aborts_run_inprocess_with_cancelled_stop_reason() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                    ])
+                    .with_chunk_delay(std::time::Duration::from_millis(100)),
+                )));
+                let mut client = connect_inprocess(server, TrustPolicy::Skip);
+                client.start_session(base.to_path_buf()).await.unwrap();
+                client.prompt_count += 1;
+                let seq = client.prompt_count;
+                let session_id = client.session_id.clone().unwrap();
+                client.spawn_prompt(session_id, "回答我".to_string(), seq);
+
+                // Let the first model round get underway, then cancel —
+                // mirrors the runner's Ctrl+Z / /stop path.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                client.request_cancel().await;
+
+                let completed = loop {
+                    match client.msg_rx.recv().await.unwrap() {
+                        ClientMsg::PromptCompleted { seq: got, result } => {
+                            assert_eq!(got, seq, "completion stamped with its seq");
+                            break result;
+                        }
+                        ClientMsg::SessionNotification { .. } => {}
+                        ClientMsg::PermissionRequest { .. } => {}
+                    }
+                };
+                let response = completed.expect("cancel resolves as a success response");
+                assert_eq!(
+                    response.stop_reason,
+                    acp::StopReason::Cancelled,
+                    "cancel must resolve with StopReason::Cancelled"
+                );
+
+                let events_path = run_dir_of(&client, &base).join("events.jsonl");
+                let replay = orz_assurance::replay_journal(&events_path, None, None, true);
+                assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+                assert_eq!(
+                    replay.terminal_event.as_deref(),
+                    Some("run_cancelled")
+                );
+
+                // Replay projection shows the 已取消 status card.
+                let (lines, valid) =
+                    crate::runner::replay_to_screen(&events_path, 100, 30).unwrap();
+                assert!(valid, "cancelled journal replays clean");
+                assert!(lines.join("\n").contains("已取消"));
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// Phase 3 slice #7 — stale-completion race: a cancel followed
+    /// immediately by a second prompt delivers TWO completions; only the one
+    /// stamped with the CURRENT prompt counter is honored (the runner's seq
+    /// guard drops the stale one — no tail stop, no running clear, no dialog
+    /// dismiss). Both journals stay valid: RUN-0 cancelled, RUN-1 finished.
+    #[tokio::test]
+    async fn stale_prompt_completion_ignored_after_next_run_started() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // run #1 consumes 1–2 texts (cancelled mid-round); run #2
+                // needs 2 (counterexample gate + final answer).
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第二轮回答。"),
+                        ScriptedResponse::text("第二轮回答。"),
+                    ])
+                    .with_chunk_delay(std::time::Duration::from_millis(100)),
+                )));
+                let mut client = connect_inprocess(server, TrustPolicy::Skip);
+                client.start_session(base.to_path_buf()).await.unwrap();
+
+                // Run #1 — cancel without draining its completion.
+                client.prompt_count += 1;
+                let seq1 = client.prompt_count;
+                let session_id = client.session_id.clone().unwrap();
+                client.spawn_prompt(session_id.clone(), "问题一".into(), seq1);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                client.request_cancel().await;
+
+                // Run #2 immediately — the stale run #1 completion may still
+                // be in flight (the guard's job is order-independent).
+                client.prompt_count += 1;
+                let seq2 = client.prompt_count;
+                client.spawn_prompt(session_id, "问题二".into(), seq2);
+
+                // Mirror the runner's generation guard: only the completion
+                // stamped with the CURRENT prompt counter drives UI state.
+                let current = client.prompt_count;
+                assert_eq!(current, seq2);
+                let second_done = loop {
+                    match client.msg_rx.recv().await.unwrap() {
+                        ClientMsg::PromptCompleted { seq, result } => {
+                            if seq != current {
+                                // Stale completion from run #1 — dropped.
+                                assert_eq!(seq, seq1, "only run #1's seq can be stale");
+                                assert_eq!(
+                                    result.as_ref().unwrap().stop_reason,
+                                    acp::StopReason::Cancelled
+                                );
+                                continue;
+                            }
+                            break result;
+                        }
+                        ClientMsg::SessionNotification { .. } => {}
+                        ClientMsg::PermissionRequest { .. } => {}
+                    }
+                };
+                assert!(second_done.is_ok(), "run #2 completes: {second_done:?}");
+
+                // Two run dirs, both valid — the reserved-counter invariant
+                // holds on the cancelled path too.
+                let runs_dir = base.join(".gsa").join("runs");
+                let mut dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .collect();
+                dirs.sort();
+                assert_eq!(dirs.len(), 2, "two runs, two journals");
+                for (dir, terminal) in [
+                    (dirs[0].clone(), "run_cancelled"),
+                    (dirs[1].clone(), "run_finished"),
+                ] {
+                    let replay = orz_assurance::replay_journal(
+                        &dir.join("events.jsonl"),
+                        None,
+                        None,
+                        true,
+                    );
+                    assert!(replay.valid, "{dir:?} invalid: {:?}", replay.errors);
+                    assert_eq!(
+                        replay.terminal_event.as_deref(),
+                        Some(terminal),
+                        "{dir:?}"
+                    );
+                }
+
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await;
@@ -522,8 +690,9 @@ impl InProcessClient {
             .await
     }
 
-    /// Best-effort cancel notification (host v1 ignores it — runs to
-    /// completion; true cancellation lands with the streaming slice).
+    /// Send the ACP `session/cancel` notification (Phase 3 slice #7). The
+    /// host cancels the in-flight run cooperatively; idle or already-finished
+    /// sessions make this a benign no-op.
     pub async fn request_cancel(&self) {
         let Some(session_id) = self.session_id.clone() else {
             return;
@@ -535,7 +704,10 @@ impl InProcessClient {
     }
 
     /// Spawn the prompt as a local task; reports completion on the channel.
-    pub fn spawn_prompt(&self, session_id: String, text: String) {
+    ///
+    /// `seq` stamps the completion with the caller's prompt counter — the
+    /// generation guard against stale completions after a cancel.
+    pub fn spawn_prompt(&self, session_id: String, text: String, seq: u32) {
         let conn = self.conn.clone();
         let msg_tx = self.msg_tx.clone();
         tokio::task::spawn_local(async move {
@@ -545,7 +717,7 @@ impl InProcessClient {
                     vec![acp::ContentBlock::Text(acp::TextContent::new(&text))],
                 ))
                 .await;
-            let _ = msg_tx.send(ClientMsg::PromptCompleted { result });
+            let _ = msg_tx.send(ClientMsg::PromptCompleted { seq, result });
         });
     }
 }

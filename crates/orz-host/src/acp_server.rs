@@ -49,7 +49,26 @@ pub struct AcpServer {
     gateway: Arc<Mutex<Option<AcpAgentGatewaySender>>>,
     /// Model gateway for agent turns (scripted FakeProvider offline).
     model_gateway: Arc<dyn ModelGateway>,
+    /// In-flight run cancellation tokens, keyed by session (Phase 3 slice
+    /// #7). Per-session (not global): the stdio server can host multiple
+    /// sessions, and cancelling one must never touch another. A token is
+    /// inserted when a prompt starts and removed on every completion path —
+    /// a cancel arriving after completion is a benign no-op.
+    run_cancels: Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
+    /// Sessions that cancelled while no run was registered (Phase 3 slice
+    /// #7, cancel-before-bootstrap race): a client pressing Ctrl+Z
+    /// immediately after submitting can beat the prompt's bootstrap. The
+    /// flag is consumed by the next prompt's token registration — but only
+    /// within a short window, so a stale/idle cancel never poisons an
+    /// unrelated later prompt (2026-08-05 review P2-1).
+    pending_cancels: Arc<Mutex<HashMap<String, std::time::Instant>>>,
 }
+
+/// How long a remembered cancel stays valid. A cancel racing the prompt's
+/// registration (task-spawn → token-registration gap) is honored; anything
+/// older is an idle/stale cancel and must not cancel an unrelated later
+/// prompt (2026-08-05 review P2-1).
+const PENDING_CANCEL_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl AcpServer {
     pub fn new() -> Self {
@@ -66,7 +85,39 @@ impl AcpServer {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             gateway: Arc::new(Mutex::new(None)),
             model_gateway,
+            run_cancels: Arc::new(Mutex::new(HashMap::new())),
+            pending_cancels: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Cancel the run currently in flight for a session (ACP `session/cancel`
+    /// — Phase 3 slice #7). Returns whether a run was tracked: `false` means
+    /// the session is idle or its run already finished. A cancel arriving
+    /// BEFORE the next prompt's bootstrap registers its token is remembered
+    /// as pending — the prompt starts already-cancelled (the
+    /// cancel-before-bootstrap race; a client pressing Ctrl+Z immediately
+    /// after submitting). `CancellationToken::cancel()` is idempotent, so
+    /// double cancels are safe; after the map entry is removed stale cancels
+    /// return `false`.
+    pub fn cancel_current_run(&self, session_id: &str) -> bool {
+        {
+            let map = self.run_cancels.lock().unwrap();
+            if let Some(token) = map.get(session_id) {
+                token.cancel();
+                drop(map);
+                // The live-token path supersedes any remembered cancel.
+                self.pending_cancels.lock().unwrap().remove(session_id);
+                return true;
+            }
+        }
+        // No live run — remember the cancel for the bootstrap window only
+        // (it expires, so a stale/idle cancel cannot cancel an unrelated
+        // later prompt).
+        self.pending_cancels
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), std::time::Instant::now());
+        false
     }
 
     /// Set the outbound ACP gateway (wired by the stdio server; consumed by
@@ -143,6 +194,31 @@ impl AcpServer {
 
         let suffix: String = session_id.chars().take(8).collect();
         let run_id = format!("RUN-{suffix}-{prompt_number}");
+
+        // Phase 3 slice #7: register the run's cancellation token BEFORE the
+        // bootstrap awaits — a `session/cancel` landing anywhere in this
+        // function's body (including during the trust scan) hits the token
+        // directly instead of the pending fallback. A cancel arriving in the
+        // tiny gap between the connection spawning this task and this line is
+        // consumed from the pending set — the run starts already-cancelled
+        // (the cancel-before-bootstrap race). NOTE the protocol-order
+        // semantic: a cancel that beats the NEXT prompt's registration (e.g.
+        // sent immediately after a completed run) cancels that next prompt —
+        // ACP `session/cancel` cancels the session's next operation; the TUI
+        // never hits this (it only cancels while `running`).
+        let cancel = tokio_util::sync::CancellationToken::new();
+        {
+            let mut map = self.run_cancels.lock().unwrap();
+            map.insert(session_id.to_string(), cancel.clone());
+            if let Some(stamped) = self.pending_cancels.lock().unwrap().remove(session_id)
+                && stamped.elapsed() < PENDING_CANCEL_WINDOW
+            {
+                // A cancel within the bootstrap window — the run starts
+                // already-cancelled. Stale/idle cancels expire silently.
+                cancel.cancel();
+            }
+        }
+
         let handle = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await?;
 
         // Phase 3 wiring: the real host — finalized GrokBuild toolset +
@@ -156,28 +232,36 @@ impl AcpServer {
         // tools with knowable targets get tracked before execution.
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
             .with_snapshot_store(Some(handle.snapshot_store.clone()));
-        let (response, _, _) = controller
-            .run_turn(
+
+        let run_result = controller
+            .run_turn_with_cancel(
                 &host,
                 prompt,
                 &handle.run_id,
                 &handle.run_manifest_sha256,
                 handle.next_sequence,
                 handle.last_event_sha256.clone(),
+                Some(&cancel),
             )
-            .await?;
+            .await;
 
-        // The run journal is complete — release the writer task (best effort;
-        // the journal content was already flushed inside run_turn). The run-id
-        // counter was already advanced at the top (reserved before bootstrap).
+        // Every path: release the token (stale cancels become no-ops) and the
+        // journal writer task (previously only the success path released it).
+        self.run_cancels.lock().unwrap().remove(session_id);
         let _ = handle.journal.shutdown_async().await;
 
-        Ok(serde_json::json!({
-            "session_id": session_id,
-            "response": response,
-            "status": "completed",
-            "run_id": run_id,
-        }))
+        match run_result {
+            Ok((response, _, _)) => Ok(serde_json::json!({
+                "session_id": session_id,
+                "response": response,
+                "status": "completed",
+                "run_id": run_id,
+            })),
+            // A user cancel propagates distinctly — the stdio layer maps it
+            // to `StopReason::Cancelled` (the ACP-correct reply to a
+            // cancelled session/prompt), not an internal error.
+            Err(e) => Err(AcpError::AgentLoop(e)),
+        }
     }
 
     /// List active session IDs.
@@ -192,7 +276,12 @@ impl AcpServer {
     /// for long-lived/embedded hosts (2026-08-04 review P2-4).
     /// Returns `true` if the session existed and was removed.
     pub fn close_session(&self, session_id: &str) -> bool {
-        self.sessions.lock().unwrap().remove(session_id).is_some()
+        let existed = self.sessions.lock().unwrap().remove(session_id).is_some();
+        // Release cancellation state too — a remembered cancel must not
+        // outlive its session (2026-08-05 review P2-1).
+        self.run_cancels.lock().unwrap().remove(session_id);
+        self.pending_cancels.lock().unwrap().remove(session_id);
+        existed
     }
 
     /// Build the real host for a run: finalized GrokBuild toolset +
@@ -275,11 +364,28 @@ impl LoopHost for JournalOnlyHost {
 mod tests {
     use super::*;
     use crate::permission::dead_gateway;
+    use crate::stdio::StdioAgentHandler;
+    use agent_client_protocol as acp;
+    use agent_client_protocol::MessageHandler;
+    use orz_loop::controller::AgentLoopError;
     use orz_loop::gateway::fake::ScriptedResponse;
     use orz_loop::gateway::model::ToolCall;
     use orz_assurance::EventType;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::path::PathBuf;
+
+    /// Paths of every run journal under `base`, in creation order.
+    fn all_run_events_paths(base: &PathBuf) -> Vec<PathBuf> {
+        let runs_dir = base.join(".gsa").join("runs");
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        dirs.sort();
+        dirs.iter()
+            .map(|d| d.join("events.jsonl"))
+            .collect()
+    }
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -650,6 +756,308 @@ mod tests {
                     !types.contains(&EventType::ToolStarted),
                     "denied tool must not start: {types:?}"
                 );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Phase 3 slice #7: `cancel_current_run` aborts the in-flight prompt
+    /// cooperatively — the loop's next checkpoint terminates with a
+    /// `run_cancelled` journal terminal, and the token is removed so a
+    /// follow-up cancel is a no-op.
+    #[tokio::test]
+    async fn cancel_current_run_aborts_pending_prompt() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                    ])
+                    .with_chunk_delay(std::time::Duration::from_millis(100)),
+                )));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-cancel",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let srv = server.clone();
+                let prompt = tokio::task::spawn_local(async move {
+                    srv.handle_session_prompt("sess-cancel", "hello").await
+                });
+                // Let the first model round get underway, then cancel — the
+                // run terminates at the after-round checkpoint.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                assert!(server.cancel_current_run("sess-cancel"));
+
+                let result = prompt.await.unwrap();
+                assert!(matches!(
+                    result,
+                    Err(AcpError::AgentLoop(AgentLoopError::Cancelled))
+                ));
+
+                // Token removed on completion — a stale cancel is a no-op.
+                assert!(!server.cancel_current_run("sess-cancel"));
+
+                let events = run_events(&base);
+                let types: Vec<EventType> =
+                    events.iter().map(|e| e.event_type.clone()).collect();
+                assert!(
+                    types.contains(&EventType::RunCancelled),
+                    "{types:?}"
+                );
+                let runs_dir = base.join(".gsa").join("runs");
+                let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .collect();
+                let replay = orz_assurance::replay_journal(
+                    &run_dirs[0].join("events.jsonl"),
+                    None,
+                    None,
+                    true,
+                );
+                assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+                assert_eq!(
+                    replay.terminal_event.as_deref(),
+                    Some("run_cancelled")
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Phase 3 slice #7: cancelling when idle (fresh session) or after a run
+    /// already finished is a benign no-op returning `false` — no panic, no
+    /// effect on the (already finished) run.
+    #[tokio::test]
+    async fn cancel_when_idle_is_noop() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(AcpServer::new());
+                server
+                    .handle_session_new(
+                        "sess-idle",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                // A completed run removed its token synchronously.
+                server
+                    .handle_session_prompt("sess-idle", "hello")
+                    .await
+                    .unwrap();
+                assert!(!server.cancel_current_run("sess-idle"));
+
+                // Fresh session, never ran: also false (no in-flight run).
+                server
+                    .handle_session_new(
+                        "sess-idle2",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                assert!(!server.cancel_current_run("sess-idle2"));
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Phase 3 slice #7 — cancel-before-bootstrap race: a cancel arriving
+    /// before the prompt's token registration is remembered and the run
+    /// starts already-cancelled (a client pressing Ctrl+Z immediately after
+    /// submitting must not run to completion).
+    #[tokio::test]
+    async fn cancel_before_bootstrap_cancels_next_prompt() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]),
+                )));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-race",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                // Cancel BEFORE the prompt is even issued.
+                assert!(!server.cancel_current_run("sess-race"));
+
+                let result = server
+                    .handle_session_prompt("sess-race", "hello")
+                    .await;
+                assert!(matches!(
+                    result,
+                    Err(AcpError::AgentLoop(AgentLoopError::Cancelled))
+                ));
+
+                let replay = orz_assurance::replay_journal(
+                    &all_run_events_paths(&base)[0],
+                    None,
+                    None,
+                    true,
+                );
+                assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+                assert_eq!(
+                    replay.terminal_event.as_deref(),
+                    Some("run_cancelled")
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Phase 3 slice #7: a cancelled run's journal is `run_cancelled`-terminal
+    /// and valid; the next prompt still gets a FRESH run dir with a valid
+    /// journal (the run-id counter advances on the cancelled path too — the
+    /// reserved-counter invariant from the 2026-08-05 orz-tui review P2-2).
+    #[tokio::test]
+    async fn cancel_then_next_prompt_gets_fresh_valid_journal() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // run #1 consumes 1–2 texts (cancelled mid-round); run #2
+                // needs 2 (counterexample gate + final answer).
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第二轮回答。"),
+                        ScriptedResponse::text("第二轮回答。"),
+                    ])
+                    .with_chunk_delay(std::time::Duration::from_millis(100)),
+                )));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-seq",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let srv = server.clone();
+                let run1 = tokio::task::spawn_local(async move {
+                    srv.handle_session_prompt("sess-seq", "first").await
+                });
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                assert!(server.cancel_current_run("sess-seq"));
+                let result = run1.await.unwrap();
+                assert!(matches!(
+                    result,
+                    Err(AcpError::AgentLoop(AgentLoopError::Cancelled))
+                ));
+
+                let result2 = server
+                    .handle_session_prompt("sess-seq", "second")
+                    .await
+                    .unwrap();
+                assert_eq!(result2["status"], "completed");
+
+                let journals = all_run_events_paths(&base);
+                assert_eq!(journals.len(), 2, "two runs, two journals");
+                for (path, terminal) in [
+                    (&journals[0], "run_cancelled"),
+                    (&journals[1], "run_finished"),
+                ] {
+                    let replay =
+                        orz_assurance::replay_journal(path, None, None, true);
+                    assert!(replay.valid, "{path:?} invalid: {:?}", replay.errors);
+                    assert_eq!(
+                        replay.terminal_event.as_deref(),
+                        Some(terminal),
+                        "{path:?}"
+                    );
+                }
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Phase 3 slice #7: an ACP `session/cancel` notification over the stdio
+    /// handler aborts the in-flight prompt and the prompt request resolves
+    /// with `StopReason::Cancelled` (the protocol contract for cancellation —
+    /// a success response, not an error).
+    #[tokio::test]
+    async fn stdio_cancel_notification_yields_cancelled_stop_reason() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                    ])
+                    .with_chunk_delay(std::time::Duration::from_millis(100)),
+                )));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-stdio-cancel",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let handler = Arc::new(StdioAgentHandler::with_trust_policy(
+                    server.clone(),
+                    crate::session::TrustPolicy::Skip,
+                ));
+
+                let h = handler.clone();
+                let prompt_task = tokio::task::spawn_local(async move {
+                    h.handle_request(acp::ClientRequest::PromptRequest(
+                        acp::PromptRequest::new(
+                            "sess-stdio-cancel",
+                            vec![acp::ContentBlock::Text(
+                                acp::TextContent::new("hello"),
+                            )],
+                        ),
+                    ))
+                    .await
+                });
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                handler
+                    .handle_notification(
+                        acp::ClientNotification::CancelNotification(
+                            acp::CancelNotification::new(acp::SessionId::new(
+                                "sess-stdio-cancel".to_string(),
+                            )),
+                        ),
+                    )
+                    .await
+                    .unwrap();
+
+                match prompt_task.await.unwrap().unwrap() {
+                    acp::AgentResponse::PromptResponse(p) => assert_eq!(
+                        p.stop_reason,
+                        acp::StopReason::Cancelled,
+                        "cancel must resolve the prompt with StopReason::Cancelled"
+                    ),
+                    other => panic!("unexpected response: {other:?}"),
+                }
 
                 let _ = std::fs::remove_dir_all(&base);
             })
