@@ -38,6 +38,8 @@ windows-sys = { version = "0.59", features = [
     # gates it (and CreateFileW itself) under Win32_Security.
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    # Git for Windows install-root discovery (find_git_bash registry probe).
+    "Win32_System_Registry",
 ] }
 
 [dev-dependencies]

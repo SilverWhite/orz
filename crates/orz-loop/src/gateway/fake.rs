@@ -44,6 +44,11 @@ impl ScriptedResponse {
 pub struct FakeProvider {
     script: Mutex<VecDeque<ScriptedResponse>>,
     received: Mutex<Vec<ModelRequest>>,
+    /// Char-count split for `generate_stream` (char boundaries — CJK-safe;
+    /// never byte slicing). Default 4.
+    chunk_size: usize,
+    /// Optional pause before each chunk (demo visibility; tests use None).
+    chunk_delay: Option<std::time::Duration>,
 }
 
 impl FakeProvider {
@@ -51,12 +56,28 @@ impl FakeProvider {
         Self {
             script: Mutex::new(script.into()),
             received: Mutex::new(Vec::new()),
+            chunk_size: 4,
+            chunk_delay: None,
         }
     }
 
     /// Convenience: a sequence of plain text responses.
     pub fn from_texts(texts: Vec<&str>) -> Self {
         Self::new(texts.into_iter().map(ScriptedResponse::text).collect())
+    }
+
+    /// Split `generate_stream` text into chunks of this many chars
+    /// (char-boundary split; clamped to at least 1).
+    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.chunk_size = chunk_size.max(1);
+        self
+    }
+
+    /// Pause before each streamed chunk (including the first) so the TUI
+    /// demo streams visibly. Tests keep the default `None`.
+    pub fn with_chunk_delay(mut self, delay: std::time::Duration) -> Self {
+        self.chunk_delay = Some(delay);
+        self
     }
 
     /// Requests received so far (for assertions). Cloned to avoid lock issues.
@@ -85,6 +106,42 @@ impl ModelGateway for FakeProvider {
             tool_calls: next.tool_calls,
             finish_reason: next.finish_reason,
         })
+    }
+
+    async fn generate_stream(
+        &self,
+        request: ModelRequest,
+        on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ModelResponse, GatewayError> {
+        self.received.lock().unwrap().push(request);
+        let next = self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| GatewayError::Model("fake script exhausted".to_string()))?;
+        let response = ModelResponse {
+            text: next.text,
+            tool_calls: next.tool_calls,
+            finish_reason: next.finish_reason,
+        };
+        // Split on char boundaries (CJK-safe) — concatenating the chunks must
+        // reproduce the full text exactly (Python text_delta invariant).
+        if let Some(text) = response.text.as_deref() {
+            let chunks: Vec<String> = text
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(self.chunk_size)
+                .map(|c| c.iter().collect())
+                .collect();
+            for chunk in chunks {
+                if let Some(delay) = self.chunk_delay {
+                    tokio::time::sleep(delay).await;
+                }
+                on_chunk(&chunk);
+            }
+        }
+        Ok(response)
     }
 }
 
@@ -140,6 +197,85 @@ mod tests {
             let _ = r; // if a thinking field is ever added, update IP1 here
         };
         let _ = _compile_time_check;
+    }
+
+    #[tokio::test]
+    async fn generate_stream_splits_on_char_boundaries() {
+        // CJK-safe: char boundaries, never byte slicing ("你" is 3 UTF-8
+        // bytes; a byte split would produce invalid text).
+        let provider = FakeProvider::from_texts(vec!["你好世界ABC"]).with_chunk_size(2);
+        let mut chunks: Vec<String> = Vec::new();
+        let response = provider
+            .generate_stream(request(), &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(chunks, vec!["你好", "世界", "AB", "C"]);
+        assert_eq!(response.text.as_deref(), Some("你好世界ABC"));
+    }
+
+    #[tokio::test]
+    async fn generate_stream_chunks_concat_equals_full_text() {
+        for (text, size) in [
+            ("你好世界", 1usize),
+            ("你好世界ABC", 2),
+            ("hello world", 4),
+            ("你好，world！", 99),
+        ] {
+            let provider = FakeProvider::from_texts(vec![text]).with_chunk_size(size);
+            let mut joined = String::new();
+            let response = provider
+                .generate_stream(request(), &mut |c| joined.push_str(c))
+                .await
+                .unwrap();
+            // Python text_delta invariant: deltas accumulate to the full text.
+            assert_eq!(joined, text, "chunk_size={size}");
+            assert_eq!(response.text.as_deref(), Some(text), "chunk_size={size}");
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_stream_no_text_yields_no_chunks() {
+        let call = ToolCall {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+            call_id: "call-1".to_string(),
+        };
+        let provider = FakeProvider::new(vec![ScriptedResponse::tool_calls(vec![call])]);
+        let mut chunk_count = 0;
+        let response = provider
+            .generate_stream(request(), &mut |_| chunk_count += 1)
+            .await
+            .unwrap();
+        assert_eq!(chunk_count, 0);
+        assert_eq!(response.finish_reason, FinishReason::ToolCalls);
+        assert_eq!(response.tool_calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn generate_stream_exhausted_script_errors() {
+        let provider = FakeProvider::from_texts(vec!["only one"]).with_chunk_size(2);
+        let mut on_chunk = |_c: &str| {};
+        provider
+            .generate_stream(request(), &mut on_chunk)
+            .await
+            .unwrap();
+        let err = provider
+            .generate_stream(request(), &mut on_chunk)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("script exhausted"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn generate_stream_records_received_request() {
+        let provider = FakeProvider::from_texts(vec!["ok"]).with_chunk_size(2);
+        let mut on_chunk = |_c: &str| {};
+        provider
+            .generate_stream(request(), &mut on_chunk)
+            .await
+            .unwrap();
+        let received = provider.received_requests();
+        assert_eq!(received.len(), 1);
     }
 
     #[tokio::test]

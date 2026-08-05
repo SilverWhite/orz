@@ -472,7 +472,10 @@ fn build_gateway() -> Arc<dyn ModelGateway> {
             ]),
             ScriptedResponse::text("完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。"),
             ScriptedResponse::text("完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。"),
-        ]))
+        ])
+        // Streaming slice: pace the chunks so the TUI demo streams visibly
+        // (tool-call rounds have no text → no chunks → no delay).
+        .with_chunk_delay(std::time::Duration::from_millis(250)))
     } else {
         Arc::new(FakeProvider::from_texts(vec![
             "(fake) 已收到请求。",

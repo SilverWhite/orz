@@ -183,6 +183,14 @@ pub trait LoopHost: Send + Sync {
         Ok(PermitDecision::Deny)
     }
 
+    /// Live text-delta hook (streaming slice): the controller forwards each
+    /// model text chunk in order, as the gateway produces it, before the
+    /// round's `model_output` is recorded. Live-only — never journaled
+    /// (Python `text_delta` precedent). Default no-op; hosts with a live
+    /// client forward fire-and-forget. Synchronous because every delivery
+    /// path is fire-and-forget (a dropped client must not stall the turn).
+    fn on_text_delta(&self, _text: &str) {}
+
     /// Persist a turn record.
     async fn persist_turn(&self, _turn: &TurnRecord) -> Result<(), PersistError> {
         Ok(())

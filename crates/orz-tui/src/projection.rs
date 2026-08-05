@@ -34,6 +34,11 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::RunFinished { status } => {
             app.running = false;
+            // Turn ended — clear the streamed-text append target so the
+            // next turn's first text delta starts a fresh card (review
+            // P3-1: a turn ending on a tool round leaves the empty-card
+            // index set).
+            app.content.current_model_index = None;
             app.status.set_run_state("完成", true);
             app.content.collapse_non_warnings();
             app.content.add_system_message(&format!("运行完成（{status}）"), false);
@@ -41,6 +46,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::RunFailed { error } => {
             app.running = false;
+            app.content.current_model_index = None;
             app.status.set_run_state("失败", false);
             app.content.collapse_non_warnings();
             app.content.add_system_message(&format!("[错误] {error}"), true);
@@ -48,6 +54,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::RunCancelled { reason } => {
             app.running = false;
+            app.content.current_model_index = None;
             app.status.set_run_state("已取消", true);
             app.content.collapse_non_warnings();
             app.content.add_system_message(&format!("运行已取消（{reason}）"), false);
@@ -55,6 +62,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::RunInvalidated { status } => {
             app.running = false;
+            app.content.current_model_index = None;
             app.status.set_run_state("无效", false);
             app.content.collapse_non_warnings();
             app.content
@@ -496,6 +504,42 @@ mod tests {
             panic!("expected model card");
         };
         assert_eq!(m.content, "流式文本");
+    }
+
+    #[test]
+    fn terminal_event_resets_stream_append_target() {
+        // Review P3-1: a turn ending on a tool round (empty-text model_output
+        // with tool_calls) leaves the append target on the empty card — the
+        // next turn's first text delta must start a FRESH card, not append
+        // to the previous turn's empty one.
+        let mut a = app();
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "".into(),
+            tool_calls: vec![crate::events::ToolCallInfo {
+                name: "read_file".into(),
+                arguments: "…".into(),
+                call_id: "call-1".into(),
+            }],
+            finish_reason: "tool_calls".into(),
+        });
+        a.accept_event(TuiEvent::RunFinished {
+            status: "completed".into(),
+        });
+        a.accept_event(TuiEvent::TextDelta { text: "新轮回答".into() });
+        let model_cards: Vec<&str> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) if m.role == "模型" => Some(m.content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            model_cards,
+            vec!["", "新轮回答"],
+            "next turn's delta must create a fresh card after the terminal event"
+        );
     }
 
     #[test]

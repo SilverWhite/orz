@@ -3041,6 +3041,20 @@ mod tests {
     async fn bash_streaming_progress_includes_final_drain() {
         use futures::StreamExt;
 
+        // POSIX shell semantics (bash tool executes through the detected
+        // Windows shell) — skip under a PowerShell backend where `printf`
+        // would not run as bash (d48b724 platform-awareness precedent).
+        if !matches!(
+            orz_config::shell::detect_windows_shell(),
+            orz_config::shell::WindowsShell::GitBash(_)
+        ) {
+            eprintln!(
+                "skipped: bash semantics require the Git Bash backend (detected {:?})",
+                orz_config::shell::detect_windows_shell()
+            );
+            return;
+        }
+
         let (resources, _tmp) = make_real_resources(None);
         let tool = BashTool;
         // Fast-exiting command that emits its full output in one burst —

@@ -18,6 +18,7 @@ pub mod keystore;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use agent_client_protocol as acp;
 use async_trait::async_trait;
 use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::JournalRecorder;
@@ -52,6 +53,12 @@ pub struct OrzHost {
     /// Root for permit artifacts — `{cwd}/.gsa/` (mirrors the Python
     /// namespace layout `<root>/one_shot_permit/`).
     permit_store_root: PathBuf,
+    /// Live-client session id (ACP `session_notification` target for
+    /// streamed text deltas). `None` = headless — deltas are no-ops.
+    session_id: Option<String>,
+    /// Live-client outbound gateway (clone; the original goes to the
+    /// permission bridge). `None` = headless — deltas are no-ops.
+    gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
 }
 
 impl OrzHost {
@@ -92,6 +99,8 @@ impl OrzHost {
             // DPAPI keystore-backed signer via `with_permit_signer`.
             permit_signer: Arc::new(MemoryInstallationKeyStore::new()),
             permit_store_root: cwd.join(".gsa"),
+            session_id: None,
+            gateway: None,
         })
     }
 
@@ -160,8 +169,15 @@ impl OrzHost {
         workspace_trust: WorkspaceTrust,
         gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
     ) -> Result<Self, String> {
+        // Clone the live-client sender before handing the original to the
+        // bridge — the streamed text-delta path uses its own sender clone
+        // (the permission manager gets the original).
+        let live_gateway = gateway.clone();
         let bridge = PermissionBridge::spawn(session_id, gateway, cwd, journal.clone())?;
-        Self::with_permission(journal, cwd, workspace_trust, Some(bridge))
+        let mut host = Self::with_permission(journal, cwd, workspace_trust, Some(bridge))?;
+        host.session_id = Some(session_id.to_string());
+        host.gateway = live_gateway;
+        Ok(host)
     }
 
     /// The underlying finalized toolset (for direct dispatch).
@@ -182,6 +198,30 @@ impl LoopHost for OrzHost {
 
     fn workspace_trust(&self) -> WorkspaceTrust {
         self.workspace_trust
+    }
+
+    /// Forward a streamed model text chunk to the live ACP client as an
+    /// `agent_message_chunk` notification — the TUI renders it incrementally
+    /// into the current model card (streaming slice). Deltas are live-only,
+    /// never journaled (Python `text_delta` precedent); headless hosts
+    /// (no gateway) drop the chunk silently.
+    fn on_text_delta(&self, text: &str) {
+        let (Some(gateway), Some(session_id)) = (&self.gateway, &self.session_id) else {
+            return;
+        };
+        let notification = acp::SessionNotification::new(
+            acp::SessionId::new(session_id.clone()),
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                acp::ContentBlock::Text(acp::TextContent::new(text.to_string())),
+            )),
+        );
+        // Fire-and-forget: the `acp::Agent::session_notification` trait method
+        // is `#[async_trait(?Send)]` (its future is not Send), so it cannot be
+        // awaited inside this Send-bound LoopHost impl — `forward_fire_and_forget`
+        // is the documented bypass. A dropped receiver discards the chunk.
+        if !gateway.forward_fire_and_forget(notification) {
+            tracing::debug!("on_text_delta: gateway receiver dropped, chunk discarded");
+        }
     }
 
     async fn call_tool(
@@ -424,6 +464,63 @@ mod tests {
                     .await
                     .expect("bash request");
                 assert_eq!(bash, PermitDecision::Deny, "headless Ask → Deny");
+
+                let _ = std::fs::remove_dir_all(&dir);
+            })
+            .await
+    }
+
+    /// Streaming slice: `on_text_delta` forwards the chunk to the live
+    /// client as an `agent_message_chunk` session notification, in order.
+    #[tokio::test]
+    async fn on_text_delta_forwards_session_notification_to_gateway() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let dir = test_dir();
+                let (tx, mut rx) =
+                    tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+                let sender = xai_acp_lib::AcpAgentGatewaySender::new(tx);
+                let host = OrzHost::with_bridge(
+                    "sess-1",
+                    JournalRecorder::new(dir.join("j")),
+                    &dir,
+                    WorkspaceTrust::ObservedTrusted,
+                    Some(sender),
+                )
+                .expect("host with bridge");
+
+                host.on_text_delta("你好");
+                host.on_text_delta("世界");
+
+                for expected in ["你好", "世界"] {
+                    let msg = rx.recv().await.expect("notification");
+                    match msg {
+                        xai_acp_lib::AcpClientMessage::SessionNotification(args) => {
+                            assert_eq!(args.request.session_id.0.as_ref(), "sess-1");
+                            match args.request.update {
+                                acp::SessionUpdate::AgentMessageChunk(chunk) => {
+                                    match chunk.content {
+                                        acp::ContentBlock::Text(t) => {
+                                            assert_eq!(t.text, expected);
+                                        }
+                                        other => panic!("unexpected content block: {other:?}"),
+                                    }
+                                }
+                                other => panic!("unexpected update: {other:?}"),
+                            }
+                        }
+                        other => panic!("unexpected message: {other:?}"),
+                    }
+                }
+
+                // Headless host (no gateway): on_text_delta is a silent no-op.
+                let headless = OrzHost::new(
+                    JournalRecorder::new(dir.join("j2")),
+                    &dir,
+                    WorkspaceTrust::ObservedTrusted,
+                )
+                .expect("headless host");
+                headless.on_text_delta("丢弃");
 
                 let _ = std::fs::remove_dir_all(&dir);
             })

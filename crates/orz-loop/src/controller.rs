@@ -53,6 +53,16 @@ use crate::tool::ToolDispatcher;
 /// Cap on model↔tool rounds per turn (anti-runaway backstop).
 pub const MAX_TOOL_ROUNDS: u32 = 8;
 
+/// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
+/// fsync-acked) must be projected by a live client before the next round's
+/// first text delta arrives (deltas travel in-memory at arrival rate). The
+/// TUI's journal path has TWO 50ms stages — the tail thread polls the file
+/// (journal_tail.rs) and the runner drains the channel on its own 50ms tick
+/// (runner.rs) — so worst-case projection is ~100ms after fsync. Two ticks
+/// (120ms) covers that alignment; a render stall beyond 10ms could still
+/// theoretically race (recorded boundary, 2026-08-05 review).
+pub const TEXT_DELTA_PACING: std::time::Duration = std::time::Duration::from_millis(120);
+
 /// Error during agent loop execution.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentLoopError {
@@ -80,6 +90,14 @@ pub struct AgentLoopController {
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
     snapshot_store: Option<Arc<SnapshotStore>>,
+    /// Monotonic model-round counter across turns (streaming pacing guard).
+    /// Kept on the controller (not per-turn) so a turn ≥ 2's FIRST round is
+    /// also paced: a programmatic stdio client issuing prompt #2 immediately
+    /// after response #1 could otherwise race its first deltas against the
+    /// previous turn's final `model_output` through the 50ms tail (review
+    /// P3-5, 2026-08-05). User-paced TUIs are naturally safe (turn gaps
+    /// ≫ 50ms) — this covers automated clients.
+    pacing_rounds: std::sync::atomic::AtomicU32,
 }
 
 impl AgentLoopController {
@@ -106,6 +124,7 @@ impl AgentLoopController {
             orientation_monitor: Mutex::new(OrientationMonitor::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             snapshot_store: None,
+            pacing_rounds: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -131,6 +150,7 @@ impl AgentLoopController {
             orientation_monitor: Mutex::new(OrientationMonitor::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             snapshot_store: None,
+            pacing_rounds: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -298,6 +318,28 @@ impl AgentLoopController {
         let mut external_counters = InquiryCounters::default();
 
         loop {
+            // Streaming ordering guard (Phase 3 slice #6): this round's text
+            // deltas reach a live client at arrival rate, but the previous
+            // round's `model_output` lands via the TUI journal tail — the
+            // tail thread polls the file every 50ms AND the runner drains
+            // its channel on a separate 50ms tick, so worst-case projection
+            // is ~100ms after the fsync ack; TEXT_DELTA_PACING (2 ticks)
+            // covers that alignment. Starting a new round's deltas before
+            // that journal event is projected would append them to the
+            // previous round's card (the dedup only clears
+            // `current_model_index` on a matching model_output). The counter
+            // lives on the controller (not per-turn) so a turn ≥ 2's FIRST
+            // round is paced too — a programmatic client may chain prompts
+            // faster than the tail projects the previous turn's terminal
+            // events (review P3-5); user-paced TUIs are naturally safe.
+            // Residual boundary (2026-08-05 review): a render stall beyond
+            // ~10ms could still race — accepted. Note the sleep applies per
+            // extra round even headless (deltas go nowhere): ~120ms × rounds
+            // is the recorded cost of keeping the guard universal.
+            if self.pacing_rounds.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                tokio::time::sleep(TEXT_DELTA_PACING).await;
+            }
+
             let avail_block = build_tool_availability_block(
                 &report.available,
                 &report.unavailable,
@@ -313,6 +355,7 @@ impl AgentLoopController {
                     messages.clone(),
                     tool_defs.clone(),
                     self.main_agent_max_tokens(),
+                    &mut |chunk| host.on_text_delta(chunk),
                 )
                 .await
                 .map_err(|e| AgentLoopError::Model(e.to_string()))?;
@@ -1146,6 +1189,85 @@ mod tests {
         // Full gate sequence (text-only path) — the availability probe
         // precedes run_started (Python conformance); the counterexample gate
         // separates the two model outputs.
+        let types = event_types(&dir);
+        assert_eq!(
+            types,
+            vec![
+                EventType::ToolAvailabilityCheck,
+                EventType::RunStarted,
+                EventType::PromptSubmitted,
+                EventType::OrientationCheckpoint,
+                EventType::ModelOutput,
+                EventType::CounterexampleGate,
+                EventType::ModelOutput,
+                EventType::RuntimeStagnationGuard,
+                EventType::RunFinished,
+            ],
+            "{types:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn text_deltas_forwarded_in_order_before_model_output() {
+        // Streaming slice: the controller forwards gateway chunks to the host
+        // hook in order, across both counterexample-gate rounds, while the
+        // journal sequence stays exactly the non-streaming 9-event chain
+        // (deltas are live-only, never journaled).
+        struct RecordingHost {
+            journal: JournalRecorder,
+            deltas: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl LoopHost for RecordingHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+            fn on_text_delta(&self, text: &str) {
+                self.deltas.lock().unwrap().push(text.to_string());
+            }
+        }
+
+        let dir = test_dir();
+        let deltas = Arc::new(Mutex::new(Vec::new()));
+        let host = RecordingHost {
+            journal: JournalRecorder::new(dir.clone()),
+            deltas: deltas.clone(),
+        };
+        // CJK chunks across both gate rounds — the first text is intercepted
+        // by the counterexample gate, the second is the final answer.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::from_texts(vec!["你好世界", "你好世界"]).with_chunk_size(2),
+        );
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(&host, "列出当前目录", "RUN-DELTA", MANIFEST, 0, None)
+            .await;
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(result.unwrap().0, "你好世界");
+
+        // Chunk order preserved across both rounds, concat == full text.
+        assert_eq!(
+            *deltas.lock().unwrap(),
+            vec!["你好", "世界", "你好", "世界"],
+            "chunks must arrive in order and cover both gate rounds"
+        );
+
+        // Journal unchanged: streaming adds no events.
         let types = event_types(&dir);
         assert_eq!(
             types,

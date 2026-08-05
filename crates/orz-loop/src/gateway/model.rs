@@ -98,8 +98,63 @@ pub enum GatewayError {
 }
 
 /// The model gateway contract. `generate` takes the full request and returns
-/// a structured response; streaming is assembled inside the implementation.
+/// a structured response; `generate_stream` additionally delivers the text
+/// to `on_chunk` as ordered chunks as they are produced (live `text_delta`
+/// delivery to the TUI — the chunks are never journaled, Python precedent).
+/// Transports that stream over the wire override `generate_stream`; the
+/// default buffers the whole response into a single chunk via `generate`,
+/// so non-streaming backends stay untouched. Concatenating the chunks must
+/// reproduce `response.text` exactly.
 #[async_trait]
 pub trait ModelGateway: Send + Sync {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError>;
+
+    async fn generate_stream(
+        &self,
+        request: ModelRequest,
+        on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ModelResponse, GatewayError> {
+        let response = self.generate(request).await?;
+        // Clone so the closure's borrow cannot outlive the response move.
+        if let Some(t) = response.text.clone().filter(|t| !t.is_empty()) {
+            on_chunk(&t);
+        }
+        Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestProvider;
+
+    #[async_trait]
+    impl ModelGateway for TestProvider {
+        async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, GatewayError> {
+            Ok(ModelResponse::text_response("buffered"))
+        }
+    }
+
+    #[tokio::test]
+    async fn default_generate_stream_buffers_single_chunk() {
+        // Guards the "default buffers via generate" contract for future
+        // transports that don't override generate_stream.
+        let provider = TestProvider;
+        let mut chunks: Vec<String> = Vec::new();
+        let response = provider
+            .generate_stream(
+                ModelRequest {
+                    system: String::new(),
+                    messages: Vec::new(),
+                    tools: Vec::new(),
+                    max_tokens: 0,
+                },
+                &mut |c| chunks.push(c.to_string()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chunks, vec!["buffered"]);
+        assert_eq!(response.text.as_deref(), Some("buffered"));
+    }
 }

@@ -3281,6 +3281,26 @@ mod tests {
         }
     }
 
+    /// POSIX shell semantics (head/tr //dev/zero pipelines, `true` exit
+    /// codes) require the Git Bash backend. Under a PowerShell backend
+    /// (Windows default cascade) these commands would assert against
+    /// PowerShell error output — skip explicitly instead of failing
+    /// (d48b724 platform-awareness precedent).
+    fn require_git_bash_backend() -> bool {
+        let detected = orz_config::shell::detect_windows_shell();
+        if matches!(
+            detected,
+            orz_config::shell::WindowsShell::GitBash(_)
+        ) {
+            true
+        } else {
+            eprintln!(
+                "skipped: POSIX shell semantics require the Git Bash backend (detected {detected:?})"
+            );
+            false
+        }
+    }
+
     #[tokio::test]
     async fn run_background_preserves_description_on_snapshot() {
         let backend = LocalTerminalBackend::new();
@@ -3758,6 +3778,9 @@ mod tests {
     // passes the size cap, independent of its timeout.
     #[tokio::test]
     async fn test_output_size_guard_kills_runaway() {
+        if !require_git_bash_backend() {
+            return;
+        }
         // Serialize flag-asserting tests; opt into the guards for this one.
         // Tiny cap so `yes` trips it within a tick or two.
         let backend = LocalTerminalBackend::new_with_output_cap(2_000);
@@ -4085,6 +4108,9 @@ mod tests {
     /// Size guard must kill runaway writers and bound the output file.
     #[tokio::test]
     async fn output_file_capped_by_size_guard() {
+        if !require_git_bash_backend() {
+            return;
+        }
         let cap: u64 = 5000;
         let output_amount = cap * 1000;
         let backend = LocalTerminalBackend::new_with_output_cap(cap);
@@ -4123,6 +4149,9 @@ mod tests {
     /// Verify retention cap constant and that small output is not truncated.
     #[tokio::test]
     async fn output_file_truncated_after_exit() {
+        if !require_git_bash_backend() {
+            return;
+        }
         let backend = LocalTerminalBackend::new();
         let tmp = tempfile::TempDir::new().unwrap();
         let output_file = tmp.path().join("output.log");
@@ -4876,6 +4905,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_persistent_shell_does_not_inherit_dump_errexit() {
+        if !require_git_bash_backend() {
+            return;
+        }
         let backend = LocalTerminalBackend::with_persistent_shell();
 
         let result = backend.run(make_request("true")).await.unwrap();

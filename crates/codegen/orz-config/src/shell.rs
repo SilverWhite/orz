@@ -105,8 +105,9 @@ pub fn detect_windows_shell() -> &'static WindowsShell {
     })
 }
 
-/// Locate Git Bash on disk. Checks common install paths, then falls back
-/// to `where bash.exe` (filtering for Git paths to avoid WSL bash).
+/// Locate Git Bash on disk. Checks common install paths, the Git for Windows
+/// registry root, then PATH entries pointing into a Git layout, and falls
+/// back to `where bash.exe` (filtering for Git paths to avoid WSL bash).
 /// Public so bash-requiring subsystems (e.g. `.envrc` evaluation) can use
 /// the same Git-Bash-specific resolution instead of the general shell
 /// cascade (which prefers PowerShell).
@@ -128,6 +129,30 @@ pub fn find_git_bash() -> Option<String> {
             return Some(candidate.clone());
         }
     }
+    // Git for Windows registers its install root at
+    // HKLM\SOFTWARE\GitForWindows\InstallPath — the reliable signal for
+    // non-standard install locations (e.g. another drive).
+    if let Some(root) = git_for_windows_install_root()
+        && let Some(bash) = git_bash_in_root(&root)
+    {
+        return Some(bash);
+    }
+    // PATH entries containing "git" often point into a Git layout (e.g.
+    // `B:\Git\cmd`) even when the standard install paths are absent — probe
+    // the parent directory as an install root. This also covers setups where
+    // `where bash.exe` would only surface WSL/WindowsApp stubs.
+    if let Some(path) = std::env::var_os("PATH") {
+        for entry in std::env::split_paths(&path) {
+            if !entry.to_string_lossy().to_ascii_lowercase().contains("git") {
+                continue;
+            }
+            if let Some(root) = entry.parent()
+                && let Some(bash) = git_bash_in_root(root)
+            {
+                return Some(bash);
+            }
+        }
+    }
     // Fall back to PATH; prefer Git Bash over WSL bash.
     if let Ok(output) = {
         let mut cmd = std::process::Command::new("where");
@@ -146,6 +171,75 @@ pub fn find_git_bash() -> Option<String> {
         }
     }
     None
+}
+
+/// Probe a Git for Windows install root for a usable bash binary.
+#[cfg(not(unix))]
+fn git_bash_in_root(root: &std::path::Path) -> Option<String> {
+    for rel in ["bin\\bash.exe", "usr\\bin\\bash.exe", "cmd\\bash.exe"] {
+        let candidate = root.join(rel);
+        if candidate.exists() {
+            return Some(candidate.display().to_string());
+        }
+    }
+    None
+}
+
+/// Read `HKLM\SOFTWARE\GitForWindows\InstallPath` — Git for Windows writes
+/// its install root there on install (covers non-standard locations like
+/// another drive that the standard path candidates miss).
+#[cfg(not(unix))]
+fn git_for_windows_install_root() -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
+    };
+
+    const SUBKEY: &str = "SOFTWARE\\GitForWindows";
+    const VALUE: &str = "InstallPath";
+    let subkey_wide: Vec<u16> = std::ffi::OsStr::new(SUBKEY)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let value_wide: Vec<u16> = std::ffi::OsStr::new(VALUE)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    let mut key: HKEY = ptr::null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey_wide.as_ptr(), 0, KEY_READ, &mut key)
+    };
+    if status != 0 || key.is_null() {
+        return None;
+    }
+    let mut buf = [0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    let mut kind = 0u32;
+    let status = unsafe {
+        RegQueryValueExW(
+            key,
+            value_wide.as_ptr(),
+            ptr::null(),
+            &mut kind,
+            buf.as_mut_ptr() as *mut u8,
+            &mut size,
+        )
+    };
+    unsafe {
+        RegCloseKey(key);
+    }
+    if status != 0 || kind != REG_SZ {
+        return None;
+    }
+    let root = String::from_utf16_lossy(&buf[..(size as usize / 2)]);
+    let root = root.trim_end_matches('\0').trim().to_string();
+    if root.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(root))
+    }
 }
 
 #[cfg(not(unix))]

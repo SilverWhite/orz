@@ -21,7 +21,8 @@ impl MainAgent {
         }
     }
 
-    /// Run one model generation round.
+    /// Run one model generation round, streaming the text to `on_chunk` as
+    /// the gateway produces it (live `text_delta` delivery — never journaled).
     ///
     /// `system` is the assembled system prompt (assurance blocks injected by
     /// the caller/controller); `messages` carries the turn history including
@@ -32,13 +33,18 @@ impl MainAgent {
         messages: Vec<Message>,
         tools: Vec<ToolDef>,
         max_tokens: u32,
+        on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
-        self.gateway.generate(ModelRequest {
-            system: system.to_string(),
-            messages,
-            tools,
-            max_tokens,
-        })
-        .await
+        self.gateway
+            .generate_stream(
+                ModelRequest {
+                    system: system.to_string(),
+                    messages,
+                    tools,
+                    max_tokens,
+                },
+                on_chunk,
+            )
+            .await
     }
 }

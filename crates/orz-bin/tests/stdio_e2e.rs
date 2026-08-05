@@ -18,13 +18,18 @@ fn spawn_stdio(cwd: &std::path::Path) -> Child {
         .expect("spawn orz --stdio")
 }
 
-/// Send one request frame, read one response frame.
+/// Send one request frame, read the matching response frame.
+///
+/// Interleaved server notifications (e.g. `session/update` streamed text
+/// deltas — streaming slice) are collected into `notifications` and skipped,
+/// the way a real ACP client consumes them.
 fn roundtrip(
     writer: &mut impl Write,
     reader: &mut impl BufRead,
     id: u64,
     method: &str,
     params: serde_json::Value,
+    notifications: &mut Vec<serde_json::Value>,
 ) -> serde_json::Value {
     let frame = serde_json::json!({
         "jsonrpc": "2.0",
@@ -34,11 +39,16 @@ fn roundtrip(
     });
     writeln!(writer, "{frame}").unwrap();
     writer.flush().unwrap();
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("read response frame");
-    let response: serde_json::Value = serde_json::from_str(&line).expect("parse response frame");
-    assert_eq!(response["id"], id, "unexpected frame: {line}");
-    response
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read response frame");
+        let response: serde_json::Value = serde_json::from_str(&line).expect("parse response frame");
+        if response.get("id") == Some(&serde_json::Value::from(id)) {
+            return response;
+        }
+        // A frame without our id is a server notification — collect and skip.
+        notifications.push(response);
+    }
 }
 
 #[test]
@@ -62,12 +72,14 @@ fn session_new_and_prompt_over_real_frames() {
     let mut reader = BufReader::new(stdout);
 
     // 1. initialize
+    let mut notifications = Vec::new();
     let init = roundtrip(
         &mut writer,
         &mut reader,
         1,
         "initialize",
         serde_json::json!({"protocolVersion": 1, "clientCapabilities": {}}),
+        &mut notifications,
     );
     assert_eq!(init["result"]["protocolVersion"], 1);
 
@@ -78,6 +90,7 @@ fn session_new_and_prompt_over_real_frames() {
         2,
         "session/new",
         serde_json::json!({"cwd": dir, "mcpServers": []}),
+        &mut notifications,
     );
     let session_id = created["result"]["sessionId"]
         .as_str()
@@ -95,8 +108,17 @@ fn session_new_and_prompt_over_real_frames() {
             "sessionId": session_id,
             "prompt": [{"type": "text", "text": "hello world"}],
         }),
+        &mut notifications,
     );
     assert_eq!(prompted["result"]["stopReason"], "end_turn");
+
+    // Streaming slice: the host must have streamed text-delta notifications
+    // over the wire before the prompt response.
+    assert!(
+        notifications.iter().any(|n| n["method"] == "session/update"
+            && n["params"]["update"]["sessionUpdate"] == "agent_message_chunk"),
+        "expected streamed text-delta notifications, got: {notifications:?}"
+    );
 
     // Close stdin → agent sees EOF → io future completes → process exits.
     drop(writer);

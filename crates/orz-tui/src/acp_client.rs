@@ -234,6 +234,95 @@ mod tests {
             .await;
     }
 
+    /// Streaming slice: chunked model text arrives as incremental
+    /// `agent_message_chunk` notifications (arrival rate, msg arm) while
+    /// `model_output` lands via the 50ms journal tail (tick arm) — the
+    /// controller's pacing guard keeps the two gate-round cards distinct,
+    /// deduped, and free of concatenation. Pins the guard: without it the
+    /// second round's deltas append to the first round's card.
+    #[tokio::test]
+    async fn chunked_stream_renders_incremental_cards_then_dedups() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // Two identical gate-round texts (the counterexample gate
+                // intercepts the first), chunked by 3 chars each.
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                    FakeProvider::from_texts(vec!["第一轮回答。", "第一轮回答。"])
+                        .with_chunk_size(3),
+                )));
+                let mut client = connect_inprocess(server, TrustPolicy::Skip);
+                client.start_session(base.to_path_buf()).await.unwrap();
+                client.prompt_count += 1;
+                let session_id = client.session_id.clone().unwrap();
+                client.spawn_prompt(session_id, "回答我".to_string());
+
+                // Mirror production: deltas at arrival rate, journal events at
+                // 50ms tail granularity.
+                let mut app = crate::app::TuiApp::new();
+                let mut tail =
+                    crate::source::JournalTailSource::new(run_dir_of(&client, &base).join("events.jsonl"));
+                let mut ticker = tokio::time::interval(std::time::Duration::from_millis(50));
+                let completed = loop {
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            for ev in tail.poll() {
+                                app.accept_event(ev);
+                            }
+                        }
+                        msg = client.msg_rx.recv() => {
+                            match msg.unwrap() {
+                                ClientMsg::SessionNotification { text_chunk, .. }
+                                    if !text_chunk.is_empty() =>
+                                {
+                                    app.accept_event(crate::events::TuiEvent::TextDelta {
+                                        text: text_chunk,
+                                    });
+                                }
+                                ClientMsg::PromptCompleted { result } => break result,
+                                _ => {}
+                            }
+                        }
+                    }
+                };
+                assert!(completed.is_ok(), "prompt failed: {completed:?}");
+
+                // Project trailing journal events (MO2 dedup, run_finished) —
+                // the tail thread polls the file every 50ms.
+                for _ in 0..10 {
+                    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                    let evs = tail.poll();
+                    for ev in evs {
+                        app.accept_event(ev);
+                    }
+                    if !tail.is_active() {
+                        break;
+                    }
+                }
+                tail.close();
+
+                let model_texts: Vec<String> = app
+                    .content
+                    .items
+                    .iter()
+                    .filter_map(|i| match i {
+                        crate::view_model::ContentItem::Message(m) if m.role == "模型" => {
+                            Some(m.content.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    model_texts,
+                    vec!["第一轮回答。", "第一轮回答。"],
+                    "two distinct gate-round cards — no duplication, no concatenation"
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
     /// Review P2-2: run ids are reserved before bootstrap, so a failed prompt
     /// must NOT collide with a retried one — two sequential successful
     /// prompts each get a fresh, valid journal.
