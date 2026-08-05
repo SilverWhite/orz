@@ -5,7 +5,8 @@
 
 **实施基线**：`feat/fusion-architecture` 分支 — 70 crate workspace，`cargo test --workspace` 全绿（0 failed）、clippy 0 error（Windows 首跑通）。
 Phase 1（journal + transport + 单 Agent loop）、Phase 2（单主 Agent + gates + ACP + Plan Mode）已完成；
-Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）、Slice #2（§4.6 问询三机制）、Slice #3（session snapshot + sandbox/credential/permit）、Slice #4（IP5 snapshot 接线 + host keystore 注入 permit）已完成（自研 177 tests：163 + 14——loop +6、host +8）。
+Phase 3 Slice #1（OrzHost + IP6 PermissionBridge 接线）、Slice #2（§4.6 问询三机制）、Slice #3（session snapshot + sandbox/credential/permit）、Slice #4（IP5 snapshot 接线 + host keystore 注入 permit）、Slice #5（orz-tui 核心工作台 v1）已完成（自研 264 tests：177 + 87——orz-tui 新增，含审查后 +11）。
+Slice #5 已本地提交（orz `3f116d0` → `cli/feat/fusion-architecture`，主仓库待推送）——orz-tui：进程内 ACP 双工工作台（冻结布局/ContentPane 消息卡+工具行/状态栏/简化 Marker）、50ms journal tail 全事件投影、权限对话框交互解锁（现有 gateway 路径，无 permission.rs 改动）、replay 模式链校验、裸 `orz`→TUI（+`--replay`/`--run-root`/`--fake-provider`）；提交前审查闭合（P1×3：矩形卡、run-id bootstrap 前预留、运行中守卫+精确去重；P2×6：ANSI 净化、EOF 退出、权限队列、兜底扫描、require_terminal、teardown 恒执行）；全仓 0 failed、clippy 触碰文件 0 warning。
 Slice #4 已提交推送（orz `58df321` → `cli/feat/fusion-architecture`，主仓库 `ce7ec83` → `origin/main`）——IP5：mutation 工具执行前快照（`snapshot_created` 事件，run-event schema 30→31）；permit：DPAPI keystore（Python 同格式，交叉兼容实测）注入 host `issue_permit`；全仓 0 failed、check_repository valid。
 Slice #3 已提交推送（orz `fc8e213` → `cli/feat/fusion-architecture`，主仓库 `3190d31` → `origin/main`）；存量修复：xai-fast-worktree 4 个 metadata-feature 测试 Windows 平台语义（stash 验证为既有问题，非切片回归）。
 主仓库 CI 4 作业（ubuntu/windows × 3.11/3.12）全绿；workspace trust 扫描已剪枝（跳过 .git/嵌套仓库，本地 doctor exit 0）。
