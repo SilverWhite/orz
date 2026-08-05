@@ -306,6 +306,31 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             }
         }
 
+        TuiEvent::SnapshotRestored {
+            snapshot_hash,
+            restored,
+            snapshot_error,
+            ..
+        } => {
+            if let Some(err) = snapshot_error {
+                app.content.add_system_message(
+                    &format!("[快照恢复] 失败（{err}）"),
+                    true,
+                );
+                vec![format!("快照恢复失败: {err}")]
+            } else {
+                let short: String = snapshot_hash
+                    .as_deref()
+                    .map(|h| h.chars().take(8).collect())
+                    .unwrap_or_default();
+                app.content.add_system_message(
+                    &format!("[快照恢复] {short} 恢复 {} 个文件", restored.len()),
+                    false,
+                );
+                vec![format!("快照恢复: {short}（{} 个文件）", restored.len())]
+            }
+        }
+
         // ── artifact ──
         TuiEvent::ArtifactRegistered { artifact_path, .. } => {
             app.content
@@ -610,6 +635,37 @@ mod tests {
             })
             .collect();
         assert!(msgs[0].contains("01234567"));
+        assert!(msgs[1].contains("失败"));
+    }
+
+    /// Slice #8: restore events render as snapshot-restore cards — success
+    /// (hash + file count) and failure (warning).
+    #[test]
+    fn snapshot_restored_events_render_cards() {
+        let mut a = app();
+        a.accept_event(TuiEvent::SnapshotRestored {
+            snapshot_hash: Some("0123456789abcdef".into()),
+            scope: None,
+            restored: vec!["lib.rs".into(), "Cargo.toml".into()],
+            snapshot_error: None,
+        });
+        a.accept_event(TuiEvent::SnapshotRestored {
+            snapshot_hash: None,
+            scope: None,
+            restored: vec![],
+            snapshot_error: Some("snapshot not found".into()),
+        });
+        let msgs: Vec<&str> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) => Some(m.content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(msgs[0].contains("01234567"), "hash short form: {}", msgs[0]);
+        assert!(msgs[0].contains("2"), "file count: {}", msgs[0]);
         assert!(msgs[1].contains("失败"));
     }
 

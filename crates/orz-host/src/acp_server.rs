@@ -8,10 +8,12 @@
 //! Full ACP lifecycle (tool calls, permissions, notifications) in Phase 2.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use std::path::PathBuf;
-
+use orz_assurance::{
+    seal_event, EventType, JournalRecorderError, Redaction, RunEvent,
+};
 use orz_loop::AgentLoopController;
 
 use crate::session::{bootstrap_session, SessionError};
@@ -31,6 +33,86 @@ pub enum AcpError {
     Host(String),
 }
 
+/// Journal-recording error → ACP error (the ACP layer has no journal variant;
+/// `SessionError::Journal` wraps the recorder error, mirroring `session.rs`).
+fn acp_journal_error(e: JournalRecorderError) -> AcpError {
+    AcpError::Session(SessionError::Journal(e))
+}
+
+/// Chain-aware event recorder for host-authored runs (restore). Mirrors the
+/// loop's `EventWriter` (seal → record → advance) for the few events a
+/// host-initiated run writes after bootstrap's `run_preflight`.
+struct RunRecorder<'a> {
+    journal: &'a JournalRecorder,
+    run_id: String,
+    manifest_sha256: String,
+    seq: u64,
+    prev_hash: Option<String>,
+}
+
+impl<'a> RunRecorder<'a> {
+    fn new(
+        journal: &'a JournalRecorder,
+        run_id: &str,
+        manifest_sha256: &str,
+        seq: u64,
+        prev_hash: Option<String>,
+    ) -> Self {
+        Self {
+            journal,
+            run_id: run_id.to_string(),
+            manifest_sha256: manifest_sha256.to_string(),
+            seq,
+            prev_hash,
+        }
+    }
+
+    async fn record(
+        &mut self,
+        event_type: EventType,
+        payload: serde_json::Value,
+    ) -> Result<(), JournalRecorderError> {
+        let mut event = RunEvent::new(
+            self.run_id.clone(),
+            self.seq,
+            event_type,
+            self.manifest_sha256.clone(),
+            self.prev_hash.clone(),
+            "run-event-v0.1.schema.json".into(),
+            payload,
+            Redaction::None,
+            chrono::Utc::now().to_rfc3339(),
+        );
+        seal_event(&mut event).map_err(JournalRecorderError::Serde)?;
+        let event_hash = event.event_sha256.clone();
+        // Only advance the chain link after the write is accepted (a refused
+        // append must not pollute the caller's bookkeeping — 2026-08-04
+        // review P2-7 precedent).
+        self.journal.record_async(event).await?;
+        self.prev_hash = Some(event_hash);
+        self.seq += 1;
+        Ok(())
+    }
+}
+
+/// Payload-friendly scope strings: worktree-relative, `/`-separated (the
+/// store's own manifest format). Only relative paths reach this on a
+/// success path — the store rejects absolute paths and `..` escapes
+/// fail-closed before any write — so the caller's paths are joined
+/// verbatim. (2026-08-05 review P3-4: future protocol entries must filter
+/// empty/absolute scope items before calling.)
+fn scope_strings(scope: &[PathBuf]) -> Vec<String> {
+    scope
+        .iter()
+        .map(|p| {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect()
+}
+
 /// Per-session metadata. Journals are per-**run** (one per prompt), so the
 /// session itself holds no journal — each `session/prompt` bootstraps a fresh
 /// run with its own hash-chained journal.
@@ -39,6 +121,11 @@ struct StoredSession {
     trust_policy: crate::session::TrustPolicy,
     /// Prompt counter — each prompt gets a unique run id (`RUN-{suffix}-{n}`).
     prompt_count: u64,
+    /// Restore counter — each user-initiated restore is its own run with a
+    /// distinct prefix (`RST-{suffix}-{n}`), so it can neither collide with
+    /// prompt run ids nor desync the TUI's `run_dir_for_next_prompt` (which
+    /// derives the next prompt's dir from the prompt counter; slice #8).
+    restore_count: u64,
 }
 
 /// The ACP server — holds active sessions and dispatches requests.
@@ -154,6 +241,7 @@ impl AcpServer {
                 base_dir: base_dir.unwrap_or_else(|| PathBuf::from(".")),
                 trust_policy,
                 prompt_count: 0,
+                restore_count: 0,
             },
         );
 
@@ -264,6 +352,154 @@ impl AcpServer {
         }
     }
 
+    /// IP5 restore entry (Phase 3, slice #8 — P2-3 closure): restore the
+    /// session worktree from a snapshot recorded earlier in this session's
+    /// runs.
+    ///
+    /// A restore is **its own run** (`RST-{suffix}-{n}`) with a full
+    /// hash-chained journal (`run_preflight → snapshot_restored → terminal`):
+    /// journals are single-run integrity units (2026-08-04 review P0), so a
+    /// user-initiated restore between prompts cannot append to a finished
+    /// run's journal. The `RST-` prefix (vs `RUN-`) keeps the TUI journal
+    /// tail — which scans for the newest `RUN-{session8}-{n}` dir — from
+    /// tailing a restore journal.
+    ///
+    /// - `scope = None` → full `restore`; `Some(paths)` → selective `revert`
+    ///   (paths must be worktree-relative — the store rejects `..` escapes
+    ///   and absolute paths, fail-closed).
+    /// - No permission flow: the restore does not touch the permission
+    ///   system (design v0.1 §3.5 — "恢复成功不改变原 permission 决策");
+    ///   the approval/TUI layer decides when to call this.
+    /// - Fail-closed: unknown session → `SessionNotFound`; a prompt in
+    ///   flight → `InvalidRequest` (a restore mid-run would mutate the
+    ///   worktree under the running agent — the approval/TUI layer must
+    ///   sequence it between runs); a failed restore records
+    ///   `snapshot_restored{snapshot_error}` + `run_failed` and returns the
+    ///   error — the journal is the evidence record either way.
+    ///
+    /// Known records (2026-08-05 review):
+    /// - P2-2: the in-flight guard is check-then-act and there is no
+    ///   restore-vs-restore exclusion — unreachable today (the only callers
+    ///   are the single-threaded in-process TUI runner and tests); revisit
+    ///   with a per-session in-flight marker when a protocol entry lands
+    ///   (SSE transport can dispatch requests concurrently).
+    /// - P3-1: a rejected restore still consumes a restore sequence number
+    ///   (holes in `RST-…-n` numbering) — harmless while nothing derives
+    ///   restore dirs from the counter.
+    /// - P3-7: a restore registers no cancellation token; a cancel during a
+    ///   future protocol-level restore would fall into `pending_cancels`
+    ///   and pre-cancel the next prompt within the 2s window — handle when
+    ///   wiring the protocol entry.
+    pub async fn restore_snapshot(
+        &self,
+        session_id: &str,
+        snapshot_hash: &str,
+        scope: Option<Vec<PathBuf>>,
+    ) -> Result<serde_json::Value, AcpError> {
+        let (base_dir, trust_policy, restore_number) = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            let n = session.restore_count;
+            session.restore_count += 1;
+            (session.base_dir.clone(), session.trust_policy, n)
+        };
+        // Fail-closed: refuse a restore while the session's prompt is still
+        // running (a live cancellation token marks it) — the restore would
+        // mutate the worktree under the running agent's tools.
+        if self.run_cancels.lock().unwrap().contains_key(session_id) {
+            return Err(AcpError::InvalidRequest(format!(
+                "restore rejected: a run is in flight for session {session_id}"
+            )));
+        }
+
+        let suffix: String = session_id.chars().take(8).collect();
+        let run_id = format!("RST-{suffix}-{restore_number}");
+
+        // The restore run bootstraps like any other run (trust + journal +
+        // preflight + session snapshot store) — no agent loop involved.
+        let handle = bootstrap_session(&run_id, Some(base_dir), trust_policy).await?;
+        let mut recorder = RunRecorder::new(
+            &handle.journal,
+            &handle.run_id,
+            &handle.run_manifest_sha256,
+            handle.next_sequence,
+            handle.last_event_sha256.clone(),
+        );
+
+        let outcome = match &scope {
+            None => handle.snapshot_store.restore(snapshot_hash).await,
+            Some(paths) => handle.snapshot_store.revert(snapshot_hash, paths).await,
+        };
+
+        let result = match outcome {
+            Ok(outcome) => {
+                let mut payload = serde_json::json!({
+                    "snapshot_hash": snapshot_hash,
+                    "restored": outcome.restored,
+                });
+                if let Some(paths) = &scope {
+                    payload["scope"] = serde_json::json!(scope_strings(paths));
+                }
+                // Journal both events; the second only if the first landed —
+                // the chain must never skip a link. NOTE: a journal write
+                // failure here DOES surface as an error (the worktree is
+                // already restored, but the evidence record is mandatory —
+                // evidence-layer, not gate, semantics apply to the *track*
+                // side; a failed restore journal is an integrity failure).
+                // The journal task still shuts down on every path (slice #7
+                // "shutdown 全路径").
+                let mut recorded = recorder
+                    .record(EventType::SnapshotRestored, payload)
+                    .await;
+                if recorded.is_ok() {
+                    recorded = recorder
+                        .record(
+                            EventType::RunFinished,
+                            serde_json::json!({"status": "completed"}),
+                        )
+                        .await;
+                }
+                recorded
+                    .map(|_| {
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "run_id": run_id,
+                            "snapshot_hash": snapshot_hash,
+                            "restored": outcome.restored,
+                            "status": "restored",
+                        })
+                    })
+                    .map_err(acp_journal_error)
+            }
+            Err(e) => {
+                // Best effort journaling; the ORIGINAL error is returned
+                // regardless (loop precedent — "the original error is
+                // returned even if the journal is dead").
+                let mut recorded = recorder
+                    .record(
+                        EventType::SnapshotRestored,
+                        serde_json::json!({"snapshot_error": e.to_string()}),
+                    )
+                    .await;
+                if recorded.is_ok() {
+                    recorded = recorder
+                        .record(
+                            EventType::RunFailed,
+                            serde_json::json!({"error": e.to_string()}),
+                        )
+                        .await;
+                }
+                let _ = recorded; // journal failure does not shadow the restore failure
+                Err(AcpError::Session(SessionError::Snapshot(e)))
+            }
+        };
+        // Every path: release the journal writer task (slice #7 discipline).
+        let _ = handle.journal.shutdown_async().await;
+        result
+    }
+
     /// List active session IDs.
     pub fn list_sessions(&self) -> Vec<String> {
         self.sessions.lock().unwrap().keys().cloned().collect()
@@ -372,7 +608,7 @@ mod tests {
     use orz_loop::gateway::model::ToolCall;
     use orz_assurance::EventType;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// Paths of every run journal under `base`, in creation order.
     fn all_run_events_paths(base: &PathBuf) -> Vec<PathBuf> {
@@ -1060,6 +1296,360 @@ mod tests {
                 }
 
                 let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    // ── Slice #8: IP5 restore entry (P2-3 closure) ───────────────────────
+
+    /// The restore journal path for `session_id` restore number `n`.
+    fn restore_journal(base: &Path, session_id: &str, n: u64) -> PathBuf {
+        let session8: String = session_id.chars().take(8).collect();
+        base.join(".gsa")
+            .join("runs")
+            .join(format!("RST-{session8}-{n}"))
+            .join("events.jsonl")
+    }
+
+    fn read_journal(path: &PathBuf) -> Vec<orz_assurance::RunEvent> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// Full restore: the worktree is restored from the snapshot, and the
+    /// restore is its own run journal (`RST-{suffix}-{n}`) with a complete
+    /// valid chain — run_preflight → snapshot_restored → run_finished.
+    #[tokio::test]
+    async fn restore_snapshot_full_restore_records_valid_chain() {
+        let base = test_dir();
+        let target = base.join("a.txt");
+        std::fs::write(&target, "v1").unwrap();
+
+        let store = orz_assurance::session::snapshot::SnapshotStore::new(
+            base.join(".gsa").join("snapshots"),
+            base.clone(),
+        )
+        .unwrap();
+        let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
+        std::fs::write(&target, "v2").unwrap();
+
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-restore-1",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        let report = server
+            .restore_snapshot("sess-restore-1", &record.snapshot_hash, None)
+            .await
+            .expect("full restore");
+        assert_eq!(report["status"], "restored");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "v1",
+            "worktree must be restored"
+        );
+
+        let journal_path = restore_journal(&base, "sess-restore-1", 0);
+        let replay = orz_assurance::replay_journal(&journal_path, None, None, true);
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+        let events = read_journal(&journal_path);
+        let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+        assert_eq!(
+            types,
+            ["run_preflight", "snapshot_restored", "run_finished"]
+        );
+        let payload = &events[1].payload;
+        assert_eq!(payload["snapshot_hash"], record.snapshot_hash);
+        assert_eq!(payload["restored"], serde_json::json!(["a.txt"]));
+        assert!(
+            payload.get("scope").is_none(),
+            "full restore has no scope key"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Selective revert: only the scoped paths come back; the scope and the
+    /// actually-restored paths are both recorded in the payload.
+    #[tokio::test]
+    async fn restore_snapshot_selective_revert_only_restores_scoped_paths() {
+        let base = test_dir();
+        let a = base.join("a.txt");
+        let b = base.join("b.txt");
+        std::fs::write(&a, "a-v1").unwrap();
+        std::fs::write(&b, "b-v1").unwrap();
+
+        let store = orz_assurance::session::snapshot::SnapshotStore::new(
+            base.join(".gsa").join("snapshots"),
+            base.clone(),
+        )
+        .unwrap();
+        let record = store
+            .track(&[PathBuf::from("a.txt"), PathBuf::from("b.txt")])
+            .await
+            .unwrap();
+        std::fs::write(&a, "a-v2").unwrap();
+        std::fs::write(&b, "b-v2").unwrap();
+
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-revert",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        let report = server
+            .restore_snapshot(
+                "sess-revert",
+                &record.snapshot_hash,
+                Some(vec![PathBuf::from("a.txt")]),
+            )
+            .await
+            .expect("selective revert");
+        assert_eq!(report["restored"], serde_json::json!(["a.txt"]));
+        assert_eq!(
+            std::fs::read_to_string(&a).unwrap(),
+            "a-v1",
+            "scoped file restored"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&b).unwrap(),
+            "b-v2",
+            "unscoped file untouched"
+        );
+
+        let events = read_journal(&restore_journal(&base, "sess-revert", 0));
+        let payload = &events[1].payload;
+        assert_eq!(payload["snapshot_hash"], record.snapshot_hash);
+        assert_eq!(payload["scope"], serde_json::json!(["a.txt"]));
+        assert_eq!(payload["restored"], serde_json::json!(["a.txt"]));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Fail-closed: an unknown snapshot hash records
+    /// `snapshot_restored{snapshot_error}` + `run_failed` (valid chain) and
+    /// returns the error — the journal is the evidence record either way.
+    #[tokio::test]
+    async fn restore_snapshot_unknown_hash_records_error_and_run_failed() {
+        let base = test_dir();
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-bad-hash",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+
+        let unknown = "b".repeat(64);
+        let err = server
+            .restore_snapshot("sess-bad-hash", &unknown, None)
+            .await
+            .expect_err("unknown snapshot must fail");
+        assert!(
+            matches!(err, AcpError::Session(SessionError::Snapshot(_))),
+            "unexpected error: {err:?}"
+        );
+
+        let journal_path = restore_journal(&base, "sess-bad-hash", 0);
+        let replay = orz_assurance::replay_journal(&journal_path, None, None, true);
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
+        let events = read_journal(&journal_path);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[1].event_type, EventType::SnapshotRestored);
+        assert!(
+            events[1].payload["snapshot_error"]
+                .as_str()
+                .unwrap()
+                .contains("b".repeat(64).as_str()),
+            "error payload: {:?}",
+            events[1].payload
+        );
+        assert_eq!(events[2].event_type, EventType::RunFailed);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Fail-closed: an unknown session is rejected without touching disk.
+    #[tokio::test]
+    async fn restore_snapshot_unknown_session_rejected() {
+        let base = test_dir();
+        let server = AcpServer::new();
+        let err = server
+            .restore_snapshot("sess-nope", &"c".repeat(64), None)
+            .await
+            .expect_err("unknown session must fail");
+        assert!(
+            matches!(err, AcpError::SessionNotFound(_)),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !base.join(".gsa").exists(),
+            "no session → no journal side effects"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Fail-closed: a `..`-escaping revert scope is rejected by the store
+    /// before any write, and the journal still ends on `run_failed`.
+    #[tokio::test]
+    async fn restore_snapshot_escape_scope_rejected_fail_closed() {
+        let base = test_dir();
+        let target = base.join("a.txt");
+        std::fs::write(&target, "v1").unwrap();
+
+        let store = orz_assurance::session::snapshot::SnapshotStore::new(
+            base.join(".gsa").join("snapshots"),
+            base.clone(),
+        )
+        .unwrap();
+        let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
+
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-escape",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        let err = server
+            .restore_snapshot(
+                "sess-escape",
+                &record.snapshot_hash,
+                Some(vec![PathBuf::from("../evil.txt")]),
+            )
+            .await
+            .expect_err("escape scope must fail");
+        assert!(
+            matches!(err, AcpError::Session(SessionError::Snapshot(_))),
+            "unexpected error: {err:?}"
+        );
+        assert!(!base.parent().unwrap().join("evil.txt").exists());
+
+        let replay = orz_assurance::replay_journal(
+            &restore_journal(&base, "sess-escape", 0),
+            None,
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Fail-closed: a restore is rejected while the session's prompt is
+    /// still running (a live cancellation token marks it) — restoring would
+    /// mutate the worktree under the running agent's tools.
+    #[tokio::test]
+    async fn restore_snapshot_rejected_while_run_in_flight() {
+        let base = test_dir();
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-busy",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        // Simulate an in-flight prompt: a live cancellation token for the
+        // session (registered at prompt start, slice #7).
+        server
+            .run_cancels
+            .lock()
+            .unwrap()
+            .insert("sess-busy".into(), tokio_util::sync::CancellationToken::new());
+
+        let err = server
+            .restore_snapshot("sess-busy", &"d".repeat(64), None)
+            .await
+            .expect_err("in-flight restore must be rejected");
+        assert!(
+            matches!(err, AcpError::InvalidRequest(_)),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !base.join(".gsa").exists(),
+            "rejected before bootstrap — no journal side effects"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// RST- and RUN- run ids are independent: a second restore gets
+    /// `RST-…-1`, and a prompt after restores still gets `RUN-…-0` (the
+    /// prompt counter is untouched — the TUI derives the next run dir from
+    /// it, review P2-2 drift precedent).
+    #[tokio::test]
+    async fn restore_and_prompt_run_ids_are_independent() {
+        // The prompt path spawns the permission-manager actor via
+        // `spawn_local` — the whole body runs inside a LocalSet.
+        tokio::task::LocalSet::new()
+            .run_until(async {
+        let base = test_dir();
+        std::fs::write(base.join("a.txt"), "v1").unwrap();
+        let store = orz_assurance::session::snapshot::SnapshotStore::new(
+            base.join(".gsa").join("snapshots"),
+            base.clone(),
+        )
+        .unwrap();
+        let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
+
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                "sess-indep",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        server
+            .restore_snapshot("sess-indep", &record.snapshot_hash, None)
+            .await
+            .unwrap();
+        server
+            .restore_snapshot("sess-indep", &record.snapshot_hash, None)
+            .await
+            .unwrap();
+        assert!(restore_journal(&base, "sess-indep", 0).is_file());
+        assert!(restore_journal(&base, "sess-indep", 1).is_file());
+
+        // A prompt after two restores still uses the prompt counter (0) —
+        // the client's `run_dir_for_next_prompt` guess stays correct.
+        server
+            .handle_session_prompt("sess-indep", "hi")
+            .await
+            .expect("prompt after restores");
+        let session8: String = "sess-indep".chars().take(8).collect();
+        let prompt_journal = base
+            .join(".gsa")
+            .join("runs")
+            .join(format!("RUN-{session8}-0"))
+            .join("events.jsonl");
+        assert!(
+            prompt_journal.is_file(),
+            "prompt run id must not be displaced by restores"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
             })
             .await
     }

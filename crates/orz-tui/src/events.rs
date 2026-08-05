@@ -114,6 +114,14 @@ pub enum TuiEvent {
         snapshot_hash: Option<String>,
         snapshot_error: Option<String>,
     },
+    /// IP5 restore/revert (slice #8 — host restore runs are their own
+    /// journals: preflight → snapshot_restored → terminal).
+    SnapshotRestored {
+        snapshot_hash: Option<String>,
+        scope: Option<Vec<String>>,
+        restored: Vec<String>,
+        snapshot_error: Option<String>,
+    },
 
     // ── artifact ──
     ArtifactRegistered {
@@ -177,6 +185,7 @@ impl TuiEvent {
             TuiEvent::CounterexampleGate { .. } => "counterexample_gate",
             TuiEvent::RetrievalCompletionCheck { .. } => "retrieval_completion_check",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
+            TuiEvent::SnapshotRestored { .. } => "snapshot_restored",
             TuiEvent::ArtifactRegistered { .. } => "artifact_registered",
             TuiEvent::PlanProposed { .. } => "plan_proposed",
             TuiEvent::PlanApproved { .. } => "plan_approved",

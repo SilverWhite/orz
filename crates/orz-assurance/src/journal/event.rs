@@ -57,6 +57,9 @@ pub enum EventType {
 
     // IP5 pre-mutation snapshot (Phase 3, slice #4 wiring)
     SnapshotCreated,
+    /// IP5 restore/revert (Phase 3, slice #8 — host restore entry; a restore
+    /// is its own run: preflight → snapshot_restored → terminal).
+    SnapshotRestored,
 
     // Artifact
     ArtifactRegistered,
@@ -158,10 +161,14 @@ impl RunEvent {
         timestamp: String,
     ) -> Self {
         let event_id = {
-            // Strip "RUN-" prefix to get the suffix for the event ID.
-            // `{:03}` matches the Python authority (canonical_cli.py uses
+            // Strip the run-kind prefix ("RUN-" prompts, "RST-" restore
+            // runs — slice #8) to get the suffix for the event ID. `{:03}`
+            // matches the Python authority (canonical_cli.py uses
             // `{sequence:03d}`) so event hashes align across sides.
-            let suffix = run_id.strip_prefix("RUN-").unwrap_or(&run_id);
+            let suffix = run_id
+                .strip_prefix("RUN-")
+                .or_else(|| run_id.strip_prefix("RST-"))
+                .unwrap_or(&run_id);
             format!("EVT-{suffix}-{sequence:03}")
         };
 

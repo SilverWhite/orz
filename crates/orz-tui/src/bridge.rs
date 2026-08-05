@@ -196,6 +196,16 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             snapshot_hash: get_opt_str(p, "snapshot_hash"),
             snapshot_error: get_opt_str(p, "snapshot_error"),
         },
+        EventType::SnapshotRestored => TuiEvent::SnapshotRestored {
+            snapshot_hash: get_opt_str(p, "snapshot_hash"),
+            scope: if p.get("scope").is_some() {
+                Some(get_str_list(p, "scope"))
+            } else {
+                None
+            },
+            restored: get_str_list(p, "restored"),
+            snapshot_error: get_opt_str(p, "snapshot_error"),
+        },
         EventType::ArtifactRegistered => TuiEvent::ArtifactRegistered {
             artifact_path: get_str(p, "artifact_path"),
             artifact_sha256: get_str(p, "artifact_sha256"),
@@ -281,6 +291,7 @@ mod tests {
             (EventType::CounterexampleGate, json!({"position": "final_answer", "once_only": true})),
             (EventType::RetrievalCompletionCheck, json!({"role": "internal_retrieval", "decision": "yes"})),
             (EventType::SnapshotCreated, json!({"tool": "edit_file", "targets": ["lib.rs"], "snapshot_hash": "abc"})),
+            (EventType::SnapshotRestored, json!({"snapshot_hash": "abc", "restored": ["lib.rs"]})),
             (EventType::ArtifactRegistered, json!({"artifact_path": "p", "artifact_sha256": "h"})),
             (EventType::PlanProposed, json!({"plan_id": "PLAN-1", "task_id": "T", "sections": 4})),
             (EventType::PlanApproved, json!({"plan_id": "PLAN-1", "authority": "user", "decision": "approve", "execution_policy": "manual"})),
@@ -376,5 +387,54 @@ mod tests {
         };
         assert_eq!(snapshot_error.as_deref(), Some("disk full"));
         assert_eq!(snapshot_hash, None);
+    }
+
+    /// Restore maps scope (revert) vs no scope (full restore) and the
+    /// error branch (no hash/restored).
+    #[test]
+    fn snapshot_restored_maps_scope_and_error() {
+        let full = make_event(
+            EventType::SnapshotRestored,
+            json!({"snapshot_hash": "h", "restored": ["a.txt"]}),
+        );
+        let TuiEvent::SnapshotRestored {
+            snapshot_hash,
+            scope,
+            restored,
+            snapshot_error,
+        } = run_event_to_tui(&full)
+        else {
+            panic!("expected SnapshotRestored");
+        };
+        assert_eq!(snapshot_hash.as_deref(), Some("h"));
+        assert_eq!(scope, None, "full restore has no scope key");
+        assert_eq!(restored, ["a.txt"]);
+        assert_eq!(snapshot_error, None);
+
+        let revert = make_event(
+            EventType::SnapshotRestored,
+            json!({"snapshot_hash": "h", "scope": ["a.txt"], "restored": ["a.txt"]}),
+        );
+        let TuiEvent::SnapshotRestored { scope, .. } = run_event_to_tui(&revert) else {
+            panic!("expected SnapshotRestored");
+        };
+        assert_eq!(scope, Some(vec!["a.txt".to_string()]));
+
+        let err = make_event(
+            EventType::SnapshotRestored,
+            json!({"snapshot_error": "snapshot not found"}),
+        );
+        let TuiEvent::SnapshotRestored {
+            snapshot_hash,
+            restored,
+            snapshot_error,
+            ..
+        } = run_event_to_tui(&err)
+        else {
+            panic!("expected SnapshotRestored");
+        };
+        assert_eq!(snapshot_error.as_deref(), Some("snapshot not found"));
+        assert_eq!(snapshot_hash, None);
+        assert!(restored.is_empty());
     }
 }
