@@ -1845,40 +1845,18 @@ def check_repository() -> dict[str, Any]:
     run_event_fixture_root = ROOT / "runtime/fixtures/run-event-v0.1"
     run_event_payload_root = run_event_fixture_root / "payloads"
     run_event_envelope_root = run_event_fixture_root / "envelope"
+    # Phase 3 #7: single registry source — the cross-validator's
+    # PAYLOAD_SCHEMA_BY_EVENT_TYPE (the three dual-track slugs point at the
+    # runtime/ Rust-track files; assurance/ twins stay the orientation-track
+    # shapes). No third copy of the mapping.
+    from assurance.run_event_journal_validation import (
+        PAYLOAD_SCHEMA_BY_EVENT_TYPE,
+        validate_journal_file,
+    )
+
     run_event_payload_schema_by_slug = {
-        "run-preflight": ROOT / "runtime/run-preflight-event-payload-v0.1.schema.json",
-        "run-started": ROOT / "runtime/run-started-event-payload-v0.1.schema.json",
-        "prompt-submitted": ROOT / "runtime/prompt-submitted-event-payload-v0.1.schema.json",
-        "model-request": ROOT / "runtime/model-request-event-payload-v0.1.schema.json",
-        "model-response-received": ROOT / "runtime/model-response-received-event-payload-v0.1.schema.json",
-        "model-output": ROOT / "runtime/model-output-event-payload-v0.1.schema.json",
-        "acp-initialize": ROOT / "runtime/acp-initialize-event-payload-v0.1.schema.json",
-        "acp-session-created": ROOT / "runtime/acp-session-created-event-payload-v0.1.schema.json",
-        "tool-proposal": ROOT / "runtime/tool-proposal-event-payload-v0.1.schema.json",
-        "permission-requested": ROOT / "runtime/permission-requested-event-payload-v0.1.schema.json",
-        "permission-decision": ROOT / "runtime/permission-decision-event-payload-v0.1.schema.json",
-        "tool-started": ROOT / "runtime/tool-started-event-payload-v0.1.schema.json",
-        "tool-completed": ROOT / "runtime/tool-completed-event-payload-v0.1.schema.json",
-        "orientation-checkpoint": assurance_root / "orientation-checkpoint-event-payload-v0.1.schema.json",
-        "runtime-stagnation-guard": assurance_root / "runtime-stagnation-guard-event-payload-v0.1.schema.json",
-        "tool-availability-check": assurance_root / "tool-availability-check-event-payload-v0.1.schema.json",
-        "tool-belief-stagnation": assurance_root / "tool-belief-stagnation-event-payload-v0.1.schema.json",
-        "instruction-provenance-gate": ROOT / "runtime/instruction-provenance-gate-event-payload-v0.1.schema.json",
-        "gate-decision": ROOT / "runtime/gate-decision-event-payload-v0.1.schema.json",
-        "neutral-inquiry": ROOT / "runtime/neutral-inquiry-event-payload-v0.1.schema.json",
-        "counterexample-gate": ROOT / "runtime/counterexample-gate-event-payload-v0.1.schema.json",
-        "retrieval-completion-check": ROOT / "runtime/retrieval-completion-check-event-payload-v0.1.schema.json",
-        "snapshot-created": ROOT / "runtime/snapshot-created-event-payload-v0.1.schema.json",
-        "snapshot-restored": ROOT / "runtime/snapshot-restored-event-payload-v0.1.schema.json",
-        "artifact-registered": ROOT / "runtime/artifact-registered-event-payload-v0.1.schema.json",
-        "plan-proposed": ROOT / "runtime/plan-proposed-event-payload-v0.1.schema.json",
-        "plan-approved": ROOT / "runtime/plan-approved-event-payload-v0.1.schema.json",
-        "plan-rejected": ROOT / "runtime/plan-rejected-event-payload-v0.1.schema.json",
-        "action-approved": ROOT / "runtime/action-approved-event-payload-v0.1.schema.json",
-        "run-finished": ROOT / "runtime/run-finished-event-payload-v0.1.schema.json",
-        "run-failed": ROOT / "runtime/run-failed-event-payload-v0.1.schema.json",
-        "run-cancelled": ROOT / "runtime/run-cancelled-event-payload-v0.1.schema.json",
-        "run-invalidated": ROOT / "runtime/run-invalidated-event-payload-v0.1.schema.json",
+        slug: schema_path
+        for _event_type, (slug, schema_path) in PAYLOAD_SCHEMA_BY_EVENT_TYPE.items()
     }
     run_event_envelope_schema = ROOT / "runtime/run-event-v0.1.schema.json"
     run_event_payload_positive_contracts = {
@@ -1990,10 +1968,40 @@ def check_repository() -> dict[str, Any]:
     counts["run_event_reference_fixtures"] = len(payload_fixture_names) + len(
         envelope_fixture_names
     )
+
+    # Phase 3 #7: REAL Rust-produced journals — every line validated
+    # (envelope + per-event payload schema by payload_schema track string +
+    # full hash-chain recompute) by the cross-validator; the fixture set must
+    # exactly match the expected names (a stray or missing journal fails).
+    run_event_journal_root = run_event_fixture_root / "journals"
+    run_event_journal_expected = {
+        "plain-run.jsonl",
+        "tool-snapshot-run.jsonl",
+        "plan-run.jsonl",
+        "cancelled-run.jsonl",
+        "failed-run.jsonl",
+        "restore-run.jsonl",
+    }
+    run_event_journal_names = {path.name for path in run_event_journal_root.glob("*.jsonl")}
+    if run_event_journal_names != run_event_journal_expected:
+        errors.append(
+            "run-event journal fixture set diverges: "
+            f"unmapped={sorted(run_event_journal_names - run_event_journal_expected)} "
+            f"missing={sorted(run_event_journal_expected - run_event_journal_names)}"
+        )
+    for journal_path in sorted(run_event_journal_root.glob("*.jsonl")):
+        for message in validate_journal_file(journal_path):
+            errors.append(
+                f"run-event journal invalid ({journal_path.relative_to(ROOT)}): {message}"
+            )
+    counts["run_event_journal_fixtures"] = len(run_event_journal_names)
+    counts["run_event_journal_validation"] = 1
+
     for required_path in (
         ROOT / "architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md",
         ROOT / "scripts/generate_run_event_fixtures.py",
         ROOT / "runtime/tests/test_run_event_conformance.py",
+        ROOT / "assurance/run_event_journal_validation.py",
         run_event_fixture_root / "README.md",
     ):
         if not required_path.is_file():

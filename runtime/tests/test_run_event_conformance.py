@@ -29,43 +29,16 @@ CANONICAL_CLI_DIR = ASSURANCE / "fixtures" / "canonical_cli"
 
 RUN_EVENT_SCHEMA = RUNTIME / "run-event-v0.1.schema.json"
 
-# event_type -> (slug, payload schema file). The four assurance/ schemas are
-# the pre-existing assurance-track shapes; everything else lives in runtime/.
-_PAYLOAD_SCHEMAS: dict[str, tuple[str, Path]] = {
-    "run_preflight": ("run-preflight", RUNTIME / "run-preflight-event-payload-v0.1.schema.json"),
-    "run_started": ("run-started", RUNTIME / "run-started-event-payload-v0.1.schema.json"),
-    "prompt_submitted": ("prompt-submitted", RUNTIME / "prompt-submitted-event-payload-v0.1.schema.json"),
-    "model_request": ("model-request", RUNTIME / "model-request-event-payload-v0.1.schema.json"),
-    "model_response_received": ("model-response-received", RUNTIME / "model-response-received-event-payload-v0.1.schema.json"),
-    "model_output": ("model-output", RUNTIME / "model-output-event-payload-v0.1.schema.json"),
-    "acp_initialize": ("acp-initialize", RUNTIME / "acp-initialize-event-payload-v0.1.schema.json"),
-    "acp_session_created": ("acp-session-created", RUNTIME / "acp-session-created-event-payload-v0.1.schema.json"),
-    "tool_proposal": ("tool-proposal", RUNTIME / "tool-proposal-event-payload-v0.1.schema.json"),
-    "permission_requested": ("permission-requested", RUNTIME / "permission-requested-event-payload-v0.1.schema.json"),
-    "permission_decision": ("permission-decision", RUNTIME / "permission-decision-event-payload-v0.1.schema.json"),
-    "tool_started": ("tool-started", RUNTIME / "tool-started-event-payload-v0.1.schema.json"),
-    "tool_completed": ("tool-completed", RUNTIME / "tool-completed-event-payload-v0.1.schema.json"),
-    "orientation_checkpoint": ("orientation-checkpoint", ASSURANCE / "orientation-checkpoint-event-payload-v0.1.schema.json"),
-    "runtime_stagnation_guard": ("runtime-stagnation-guard", ASSURANCE / "runtime-stagnation-guard-event-payload-v0.1.schema.json"),
-    "tool_availability_check": ("tool-availability-check", ASSURANCE / "tool-availability-check-event-payload-v0.1.schema.json"),
-    "tool_belief_stagnation": ("tool-belief-stagnation", ASSURANCE / "tool-belief-stagnation-event-payload-v0.1.schema.json"),
-    "instruction_provenance_gate": ("instruction-provenance-gate", RUNTIME / "instruction-provenance-gate-event-payload-v0.1.schema.json"),
-    "gate_decision": ("gate-decision", RUNTIME / "gate-decision-event-payload-v0.1.schema.json"),
-    "neutral_inquiry": ("neutral-inquiry", RUNTIME / "neutral-inquiry-event-payload-v0.1.schema.json"),
-    "counterexample_gate": ("counterexample-gate", RUNTIME / "counterexample-gate-event-payload-v0.1.schema.json"),
-    "retrieval_completion_check": ("retrieval-completion-check", RUNTIME / "retrieval-completion-check-event-payload-v0.1.schema.json"),
-    "snapshot_created": ("snapshot-created", RUNTIME / "snapshot-created-event-payload-v0.1.schema.json"),
-    "snapshot_restored": ("snapshot-restored", RUNTIME / "snapshot-restored-event-payload-v0.1.schema.json"),
-    "artifact_registered": ("artifact-registered", RUNTIME / "artifact-registered-event-payload-v0.1.schema.json"),
-    "plan_proposed": ("plan-proposed", RUNTIME / "plan-proposed-event-payload-v0.1.schema.json"),
-    "plan_approved": ("plan-approved", RUNTIME / "plan-approved-event-payload-v0.1.schema.json"),
-    "plan_rejected": ("plan-rejected", RUNTIME / "plan-rejected-event-payload-v0.1.schema.json"),
-    "action_approved": ("action-approved", RUNTIME / "action-approved-event-payload-v0.1.schema.json"),
-    "run_finished": ("run-finished", RUNTIME / "run-finished-event-payload-v0.1.schema.json"),
-    "run_failed": ("run-failed", RUNTIME / "run-failed-event-payload-v0.1.schema.json"),
-    "run_cancelled": ("run-cancelled", RUNTIME / "run-cancelled-event-payload-v0.1.schema.json"),
-    "run_invalidated": ("run-invalidated", RUNTIME / "run-invalidated-event-payload-v0.1.schema.json"),
-}
+# Single registry source (slice #17): the cross-validator's registry — three
+# dual-track slugs point at the runtime/ Rust-track files; the assurance/
+# twins remain the orientation-track shapes.
+from assurance.run_event_journal_validation import (  # noqa: E402
+    PAYLOAD_SCHEMA_BY_EVENT_TYPE as _PAYLOAD_SCHEMAS,
+)
+
+# Slugs that legitimately exist in BOTH runtime/ (Rust track) and assurance/
+# (orientation track) — the registered dual-track collision (slice #17).
+DUAL_TRACK_SLUGS = {"orientation-checkpoint", "tool-availability-check", "runtime-stagnation-guard"}
 
 PAYLOAD_POSITIVE_CONTRACTS: dict[Path, Path] = {
     PAYLOAD_DIR / f"{slug}.minimal.valid.json": schema
@@ -143,22 +116,37 @@ class RunEventPayloadContractTests(unittest.TestCase):
                 self.assertTrue(errors_for(instance_path, schema_path))
 
     def test_payload_schema_file_convention(self) -> None:
-        """Every event type maps to exactly one payload schema file and the
-        `*-event-payload-v0.1.schema.json` set has no orphans or gaps."""
+        """The `*-event-payload-v0.1.schema.json` set has no orphans or gaps;
+        the three dual-track slugs must exist in BOTH runtime/ and assurance/
+        (registered collision), every other slug in exactly one directory."""
         for event_type, (slug, schema_path) in _PAYLOAD_SCHEMAS.items():
             with self.subTest(event_type=event_type):
                 self.assertTrue(schema_path.is_file(), f"missing schema {schema_path}")
-        actual = {
-            path.name
-            for path in [
-                *RUNTIME.glob("*-event-payload-v0.1.schema.json"),
-                *ASSURANCE.glob("*-event-payload-v0.1.schema.json"),
-            ]
-        }
+        runtime_names = {path.name for path in RUNTIME.glob("*-event-payload-v0.1.schema.json")}
+        assurance_names = {path.name for path in ASSURANCE.glob("*-event-payload-v0.1.schema.json")}
         expected = {
             f"{slug}-event-payload-v0.1.schema.json" for slug, _ in _PAYLOAD_SCHEMAS.values()
         }
-        self.assertEqual(actual, expected)
+        self.assertEqual(runtime_names | assurance_names, expected)
+        for slug, _ in _PAYLOAD_SCHEMAS.values():
+            name = f"{slug}-event-payload-v0.1.schema.json"
+            dirs = [
+                directory
+                for directory, names in (
+                    ("runtime", runtime_names),
+                    ("assurance", assurance_names),
+                )
+                if name in names
+            ]
+            if slug in DUAL_TRACK_SLUGS:
+                self.assertEqual(
+                    dirs, ["runtime", "assurance"],
+                    f"dual-track slug must exist in both dirs: {slug}",
+                )
+            else:
+                self.assertEqual(
+                    len(dirs), 1, f"slug must exist in exactly one dir: {slug}"
+                )
 
 
 class RunEventEnvelopeContractTests(unittest.TestCase):

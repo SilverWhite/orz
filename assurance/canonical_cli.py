@@ -844,6 +844,28 @@ def _build_events_and_receipt(
     return receipt
 
 
+def _orientation_checkpoint_payload(gates: dict[str, Any]) -> dict[str, Any]:
+    """7-field assurance-track orientation_checkpoint event payload, derived
+    from the written checkpoint artifact (single source of truth — slice #17
+    closes the §7 gap where the payload matched neither track's schema)."""
+    checkpoint = load_json(gates["orientation_checkpoint_path"])
+    payload = {
+        "checkpoint_id": checkpoint["checkpoint_id"],
+        "orientation_checkpoint_sha256": gates["orientation_checkpoint_sha256"],
+        "task_id": checkpoint["task_id"],
+        "step_index": checkpoint["trigger"]["step_index"],
+        "neutral_orientation_only": True,
+        "counterexample_queue_invoked": False,
+        "claim_strength_effect": "none",
+    }
+    validate_contract(
+        payload,
+        "orientation-checkpoint-event-payload-v0.1.schema.json",
+        label="canonical-cli orientation checkpoint event payload",
+    )
+    return payload
+
+
 def run_canonical_guarded_cli(
     *,
     run_root: Path,
@@ -938,11 +960,7 @@ def run_canonical_guarded_cli(
         (
             "orientation_checkpoint",
             "orientation-checkpoint-event-payload-v0.1",
-            {
-                "checkpoint_sha256": gates["orientation_checkpoint_sha256"],
-                "trigger_step": 0,
-                "task_contract_sha256": tcs,
-            },
+            _orientation_checkpoint_payload(gates),
             "metadata_only",
         ),
         (
@@ -1294,11 +1312,7 @@ def run_canonical_guarded_cli_real(
         (
             "orientation_checkpoint",
             "orientation-checkpoint-event-payload-v0.1",
-            {
-                "checkpoint_sha256": gates["orientation_checkpoint_sha256"],
-                "trigger_step": 0,
-                "task_contract_sha256": tcs,
-            },
+            _orientation_checkpoint_payload(gates),
             "metadata_only",
         ),
         (

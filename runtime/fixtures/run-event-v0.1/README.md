@@ -18,9 +18,19 @@ Conventions:
   `chained-run-finished.valid.json` covers the sequence-1 branch.
 - `envelope/<bad-name>.invalid.json` — one envelope constraint violation each.
 
-Hashes: fixtures use legal dummy lowercase 64-hex values (all zeros). The
-hash *chain* is not validated here — chain integrity is verified against real
-produced journals by the #7 conformance slice.
+Hashes: fixtures use legal dummy lowercase 64-hex values (all zeros).
+
+`journals/*.jsonl` — REAL run journals captured from the Rust production
+implementation (conformance suite, Phase 3 #7). They are NOT produced by this
+generator (which only touches `payloads/`, `envelope/` and the canonical_cli
+fixtures); re-capture via the orz `#[ignore]` conformance capture tests and
+copy into this directory (see
+`docs/CONFORMANCE_SUITE_SLICE_17_2026-08-06.md`). Every journal line is
+validated (envelope schema + per-event payload schema selected by the
+`payload_schema` track string + full hash-chain recompute) by
+`assurance/run_event_journal_validation.py` — never compare against stored
+hashes, recompute is the check. Re-captures will byte-differ (timestamps,
+run ids) — that is expected and semantic-only.
 
 Envelope `payload_schema` value: `"run-event-v0.1.schema.json"` — the Rust
 production track records this string for every event (reference-spec

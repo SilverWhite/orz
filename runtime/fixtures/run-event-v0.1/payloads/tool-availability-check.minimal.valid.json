@@ -1,9 +1,10 @@
 {
-  "tool_availability_report_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-  "available_count": 3,
-  "unavailable_count": 0,
-  "unprobed_count": 1,
-  "degraded_count": 0,
-  "context_block_injected": true,
-  "model_must_not_guess": true
+  "available": [
+    "read_file",
+    "grep"
+  ],
+  "unavailable": [],
+  "degraded": [],
+  "unprobed": [],
+  "gate_decision": "pass"
 }

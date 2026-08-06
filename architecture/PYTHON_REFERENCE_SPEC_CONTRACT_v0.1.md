@@ -9,7 +9,7 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 | 角色 | 落地 |
 |---|---|
 | Assurance spec reference（金版） | 本文档 + `runtime/*.schema.json`（run-event envelope + 33 事件 payload）+ `assurance/*.schema.json`（receipt/contract 体系） |
-| Conformance test suite | `runtime/tests/test_run_event_conformance.py` + `assurance/tests/`（test_p0_contracts 等）+ CI 门禁 `scripts/check_repository.py` |
+| Conformance test suite | `runtime/tests/test_run_event_conformance.py` + `runtime/tests/test_run_event_journal_validation.py` + `assurance/run_event_journal_validation.py`（**#7 最终验证器，已落地**）+ `assurance/tests/`（test_p0_contracts 等）+ CI 门禁 `scripts/check_repository.py` |
 | Design documents | `architecture/`、`docs/`、`adr/`（本文档属于此角色且是 schema 契约的注册表） |
 | Offline verification | `assurance/canonical_cli.py`（保留为离线验证路径；其 payload 走 `canonical-cli-*` 独立轨） |
 | Rapid prototyping | 新 gate/行为先在 Python 实现验证，再移植 Rust（约定） |
@@ -52,10 +52,10 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 | permission_decision | permission-decision-event-payload-v0.1 | Rust controller.rs:966-979 |
 | tool_started | tool-started-event-payload-v0.1 | Rust controller.rs:829-836, 1042-1050 |
 | tool_completed | tool-completed-event-payload-v0.1 | Rust controller.rs:862/900/1053/1071 |
-| orientation_checkpoint | assurance/orientation-checkpoint-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
-| runtime_stagnation_guard | assurance/runtime-stagnation-guard-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
-| tool_availability_check | assurance/tool-availability-check-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
-| tool_belief_stagnation | assurance/tool-belief-stagnation-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
+| orientation_checkpoint | runtime/orientation-checkpoint-event-payload-v0.1 | **双轨（§6 裁决，slice #17）：Rust 轨 = 本 runtime/ 文件**，形状权威 controller.rs:335-343；assurance/ 同名文件为 orientation 轨形状 |
+| runtime_stagnation_guard | runtime/runtime-stagnation-guard-event-payload-v0.1 | **双轨（§6 裁决，slice #17）：Rust 轨 = 本 runtime/ 文件**，形状权威 controller.rs:695-710；assurance/ 同名文件为 orientation 轨形状 |
+| tool_availability_check | runtime/tool-availability-check-event-payload-v0.1 | **双轨（§6 裁决，slice #17）：Rust 轨 = 本 runtime/ 文件**，形状权威 controller.rs:300-311（**available/unavailable/degraded/unprobed 为工具名数组**——真实捕获 journal 钉死）；assurance/ 同名文件为 orientation 轨形状 |
+| tool_belief_stagnation | assurance/tool-belief-stagnation-event-payload-v0.1 | 既有（assurance 轨，见 §6；Rust 不构造，无双轨） |
 | instruction_provenance_gate | instruction-provenance-gate-event-payload-v0.1 | Rust controller.rs:530-539 |
 | gate_decision | gate-decision-event-payload-v0.1 | Rust controller.rs:542-549, 654-663（decision 含 `"stop"`） |
 | neutral_inquiry | neutral-inquiry-event-payload-v0.1 | 既有（runtime 轨，Rust controller.rs:781-793 对齐） |
@@ -86,6 +86,7 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 - **cli session lifecycle 轨**（`cli_session_lifecycle.py:14,288-291`）：`cli-session-lifecycle-event-v0.2.schema.json`——以 run-event envelope 产出 6 个 33-enum 事件类型（run_started/model_request/model_output/run_finished/run_failed/run_cancelled），但 payload 为 lifecycle 形状（与 §4 不同）。
 - **注册表范围声明**：本表登记已知全部 run-event 产出方；`#7` 交叉验证按 **payload_schema 字符串**（而非 event_type）选择校验 schema，未登记的新产出方必须先入本表。
 - **envelope 轨标识**：`payload_schema` 值不带 `.schema.json` 后缀的（`canonical-cli-*`、`grok-runtime-normalized-v0.1`、`orientation-stagnation-*`、`deepseek-runtime-normalized-v0.1`）是轨标识而非文件名引用；带后缀或 fragment 的是文件名/指针引用。
+- **#7 交叉验证按本表执行**（slice #17 落地）：`assurance/run_event_journal_validation.py` 的 `PRODUCER_SCHEMAS` + `_resolve_payload_schema` 是本表的唯一执行点——精确字符串匹配，**按 payload_schema 字符串（而非 event_type）选 schema**。规则：① Rust 轨字符串 `"run-event-v0.1.schema.json"` → §4 注册表（双轨 slug → runtime/ 文件）；② 带后缀形式（orientation 轨约定）→ `assurance/` 同名文件，**永不解析到 runtime/ 双轨文件**；③ 去后缀 canonical-cli/assurance 名 → `assurance/` 补 `.schema.json`；④ fragment 形式 → `assurance/gsa-runtime-preflight-projection-v0.1.schema.json` 的 `runtime_event_payload` 子 schema（slice #17 补齐该键——此前指针指向不存在的键）；⑤ `grok-runtime-normalized-v0.1` / `deepseek-runtime-normalized-v0.1` → envelope-only；⑥ 未登记字符串 → 报错并列注册表（"未登记产出方必须先入本表"硬执行）。**后缀写法不一致项（orientation 带后缀 vs canonical-cli 去后缀）裁决：保留登记**——两种形式均可确定解析，不归一化。
 
 ## 6. 豁免登记
 
@@ -102,7 +103,7 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 | runtime_stagnation_guard | 11 字段（receipt_sha256/decision/action/reason_codes/…/三个 const） | `{decision, reason_codes, max_consecutive_repeated_content, max_ngram_repeat}` |
 | tool_belief_stagnation | 7 字段（receipt_sha256/decision/reason_codes/mismatch_count/三个 const） | （Rust 生产不构造） |
 
-决议：**本 slice 不改这 4 个 schema**（修改会破坏 `orientation_runtime_journal.py` 验证与既有 p0 映射）。它们的轨归属（Rust 对齐 or 双轨并存）留给 #7 交叉验证 slice 裁决。
+**裁决（#7 交叉验证 slice，2026-08-06）**：**双轨并存**——3 个 Rust 构造事件（orientation_checkpoint / tool_availability_check / runtime_stagnation_guard）在 `runtime/` 新建 Rust 轨 schema（形状 = controller.rs 实际构造，经真实捕获 journal 验证钉死），§4 注册表与 fixtures 落 Rust 轨；`assurance/` 4 个文件**原样保留**（`orientation_runtime_journal.py` 与 p0 映射零破坏）；`tool_belief_stagnation` 保持 assurance-only（Rust 从不构造）。备选路线记录：Rust 对齐需在 orz-assurance 新造 Rust 当前没有的数据管线（receipt_sha256/counts/action 等）+ TUI bridge/projection 重建；放松 schema 会削弱承重 const 不变量且 stagnation 缺 6/11 字段退化为任意 object 检查——均否决。
 
 4. **gate_decision.decision 含 `"stop"`**（tool_rounds_limit 变体，controller.rs:654-663）——已纳入 schema enum，非豁免。
 5. **run_finished 双变体**（controller.rs 带 turn_count/tool_rounds vs acp_server.rs restore 路径仅 status）——schema required 仅 `{status}`，兼容。
@@ -110,12 +111,13 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 ## 7. 已知缺口
 
 - **8 个参考形状事件**（§4 标注"参考形状"）：Rust 生产不构造（acp_initialize/acp_session_created/tool_proposal/model_request/model_response_received/artifact_registered/plan_rejected/action_approved），schema 以 TUI bridge.rs 消费字段为最低面 + normalizer 词汇为 optional 收录——**非定论**，若未来 Rust 构造形状不同须按 §9 修订。
-- **canonical_cli 自身缺口**：其 orientation_checkpoint payload `{checkpoint_sha256, trigger_step, task_contract_sha256}`（canonical_cli.py:940-944）与 assurance orientation-checkpoint schema（`{checkpoint_id, orientation_checkpoint_sha256, task_id, ...}`）**形状不吻合**——canonical_cli 声明了该 payload_schema 字符串但 payload 不满足 schema，属其内部一致性问题，登记。
+- **canonical_cli 自身缺口**：其 orientation_checkpoint payload `{checkpoint_sha256, trigger_step, task_contract_sha256}`（canonical_cli.py:940-944）与 assurance orientation-checkpoint schema **形状不吻合**——**已修复（#7 slice，2026-08-06）**：`_orientation_checkpoint_payload` helper 从已写的 checkpoint 工件派生 7 字段 assurance 形状（fake/real 两处构造点 + validate_contract 守卫），test_canonical_cli 全绿。
 - **跨轨词汇表分轨**：permission_requested 的 `risk` 是 Rust `RiskClass` 的 Debug 串（PascalCase：ReadOnly/LocalMutation/NetworkCall/SandboxEscape）；Python 侧 `instruction_gate.py` 的 risk_class（normal/sensitive/external_side_effect）是另一套词汇——分属不同轨，互不换算，勿混淆。
 - **TUI 事件模型**（`orz-tui/src/events.rs`）声明"与 run-event schema 独立但镜像"——仅事件种类镜像，字段形状以本契约 §4 为准。
-- **payload_schema 后缀写法不一致**（§5 orientation 轨带后缀 vs canonical-cli 轨去后缀）。
+- **payload_schema 后缀写法不一致**（§5 orientation 轨带后缀 vs canonical-cli 轨去后缀）——**裁决：保留登记**（§5，两种形式均可确定解析）。
 - **jsonschema date-time no-op**（§3 环境事实）。
-- **#7 未完成**：Rust↔Python 交叉验证（真实 journal → envelope + payload schema 校验 + 链校验）——本契约的最终验证器。
+- **哈希规范形**：链校验用 **Rust-parity 形** `json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=False)`（`assurance/utils.py` 的 RFC8785 `canonical_bytes` 是另一规范形，仅用于 Python 自产 journal 的 `_event_hash`；`#7` 以真实捕获 journal 为 parity 终裁——2026-08-06 六 journal 全部 digest 一致，零 mismatch）。
+- **#7 已完成**（2026-08-06，slice #17）：Rust↔Python 交叉验证落地——6 个真实 Rust journal 静态提交 `runtime/fixtures/run-event-v0.1/journals/`，`assurance/run_event_journal_validation.py` 全链校验（envelope + 按轨 payload + 链重算），测试 + check_repository 门禁 + 采集测试（orz `#[ignore]`）。**校验范围声明**：验证器对 Rust 轨 journal 全链执行；orientation/canonical-cli 轨 journal 由各自产出方自校验（orientation_runtime_journal.py 逐事件 envelope+payload+链）兜底，未接入本验证器（设计审查 D3 记录）。审计：`docs/CONFORMANCE_SUITE_SLICE_17_2026-08-06.md`。**交叉验证实战捕获 2 个形状错误**（初版 Rust 轨 schema 的 tool_availability_check 布尔 vs 真实数组、checkpoint_id pattern 缺小写）——真实 journal 是形状终裁的证据。
 
 ## 8. Rust 镜像同步纪律
 
@@ -127,17 +129,17 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 
 1. 修改/新增 `runtime/` 或 `assurance/` 的 schema 文件（Python 侧先行）。
 2. 更新 `scripts/generate_run_event_fixtures.py` 内嵌形状 → 重生成 fixtures。
-3. 同步 `runtime/tests/test_run_event_conformance.py` 与 `scripts/check_repository.py` 的映射。
-4. 跑 conformance 测试 + `check_repository.py`（两者任一失败即阻断）。
-5. 更新本文档 §4 注册表 / §6 豁免 / §7 缺口。
+3. 同步 `assurance/run_event_journal_validation.py` 的 `PAYLOAD_SCHEMA_BY_EVENT_TYPE` 与 `PRODUCER_SCHEMAS` 注册表（与 §4/§5 同步；测试与 check_repository 共同消费，无第三处映射）。
+4. 跑 conformance 测试 + check_repository.py（两者任一失败即阻断）。
+5. 更新本文档 §4 注册表 / §5 解析表 / §6 豁免 / §7 缺口。
 6. Rust 侧核对构造点（event.rs 镜像 + controller.rs/main.rs/session.rs 形状），需要时同步修改。
 
 ## 10. 参考
 
 - `architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`（§5 Phase 3 item 5/7，权威设计）
 - `architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md`（§7 Python 六角色）
-- `runtime/run-event-v0.1.schema.json`（envelope 事实源）+ `runtime/*-event-payload-v0.1.schema.json`（24 个 2026-08-06 新建 + 5 个既有）
-- `assurance/*-event-payload-v0.1.schema.json`（4 个既有）+ `assurance/canonical-cli-*-v0.1.schema.json`（7 个 2026-08-06 补齐）
-- `runtime/fixtures/run-event-v0.1/`（fixtures + README）、`assurance/fixtures/canonical_cli/`
-- `runtime/tests/test_run_event_conformance.py`、`scripts/generate_run_event_fixtures.py`、`scripts/check_repository.py`
+- `runtime/run-event-v0.1.schema.json`（envelope 事实源）+ `runtime/*-event-payload-v0.1.schema.json`（24 个 2026-08-06 新建 + 5 个既有 + **3 个 slice #17 Rust 轨双轨文件**）
+- `assurance/*-event-payload-v0.1.schema.json`（4 个既有）+ `assurance/canonical-cli-*-v0.1.schema.json`（7 个 2026-08-06 补齐）+ `assurance/orientation-stagnation-{preflight,run-started,terminal}-v0.1.schema.json`（3 个 slice #17 补齐）
+- `runtime/fixtures/run-event-v0.1/`（fixtures + README + **journals/ 6 个真实捕获**）、`assurance/fixtures/canonical_cli/`
+- `runtime/tests/test_run_event_conformance.py`、`runtime/tests/test_run_event_journal_validation.py`、`assurance/run_event_journal_validation.py`（#7 交叉验证器）、`scripts/generate_run_event_fixtures.py`、`scripts/check_repository.py`
 - 相关记忆：`fusion-phase-tracking.md`（Phase 3 slice #14）

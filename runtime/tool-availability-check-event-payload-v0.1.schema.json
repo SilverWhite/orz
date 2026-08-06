@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-availability-check-event-payload-v0.1.schema.json",
+  "title": "Tool availability check runtime event payload (Rust track)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "available",
+    "unavailable",
+    "degraded",
+    "unprobed",
+    "gate_decision"
+  ],
+  "properties": {
+    "available": { "type": "array", "items": { "type": "string" } },
+    "unavailable": { "type": "array", "items": { "type": "string" } },
+    "degraded": { "type": "array", "items": { "type": "string" } },
+    "unprobed": { "type": "array", "items": { "type": "string" } },
+    "gate_decision": {
+      "type": "string",
+      "enum": ["pass", "warn", "block", "defer", "not_applicable"]
+    }
+  }
+}

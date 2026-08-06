@@ -9,13 +9,10 @@
   "previous_event_sha256": null,
   "payload_schema": "run-event-v0.1.schema.json",
   "payload": {
-    "checkpoint_id": "ORIENT-CONF-0001",
-    "orientation_checkpoint_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "task_id": "TASK1",
+    "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+    "trigger": "fixed_step_interval",
     "step_index": 0,
-    "neutral_orientation_only": true,
-    "counterexample_queue_invoked": false,
-    "claim_strength_effect": "none"
+    "message_block": "[ORIENTATION v0.1] 当前正在做什么？"
   },
   "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "redaction": "none",

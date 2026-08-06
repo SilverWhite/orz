@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/runtime-stagnation-guard-event-payload-v0.1.schema.json",
+  "title": "Runtime stagnation guard runtime event payload (Rust track)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision",
+    "reason_codes",
+    "max_consecutive_repeated_content",
+    "max_ngram_repeat"
+  ],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["continue", "restart_requested", "handoff_required"]
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "max_consecutive_repeated_content": { "type": "integer", "minimum": 0 },
+    "max_ngram_repeat": { "type": "integer", "minimum": 0 }
+  }
+}

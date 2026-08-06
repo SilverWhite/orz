@@ -13,9 +13,17 @@ Fixture conventions (see `runtime/fixtures/run-event-v0.1/README.md`):
 - `<slug>.constraint.invalid.json` — violates exactly one constraint of the
   payload schema (fail-closed direction: never a merely-missing required
   field when a sharper constraint exists).
-- envelope samples use legal dummy hashes (all-zero lowercase 64-hex); the
-  hash *chain* is NOT validated here — chain integrity belongs to the #7
-  conformance slice against real produced journals.
+- envelope samples use legal dummy hashes (all-zero lowercase 64-hex).
+
+Slice #17 (conformance suite) changes:
+- Three events (orientation_checkpoint / tool_availability_check /
+  runtime_stagnation_guard) carry RUST-TRACK payload shapes here — the
+  `runtime/` schemas of the same basenames are the Rust-track authority;
+  the `assurance/` twins remain the orientation-track shapes (dual-track
+  adjudication, contract §6).
+- Hash-chain integrity is NOT validated by this generator's fixtures — it is
+  verified against real captured journals by
+  `assurance/run_event_journal_validation.py` (journals/ directory).
 """
 
 from __future__ import annotations
@@ -153,36 +161,28 @@ PAYLOAD_GOOD: dict[str, dict] = {
     "permission_decision": {"tool": "bash", "decision": "deny"},
     "tool_started": {"tool": "read_file", "call_id": "call-1"},
     "tool_completed": {"tool": "read_file", "call_id": "call-1", "exit_code": 0},
+    # Rust-track shapes (slice #17 dual-track adjudication): these three
+    # events' payloads are the shapes the Rust loop actually constructs
+    # (controller.rs) — the assurance/ schemas of the same basenames remain
+    # the orientation-track shapes, validated by orientation_runtime_journal.
     "orientation_checkpoint": {
-        "checkpoint_id": "ORIENT-CONF-0001",
-        "orientation_checkpoint_sha256": ZERO_HASH,
-        "task_id": "TASK1",
+        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+        "trigger": "fixed_step_interval",
         "step_index": 0,
-        "neutral_orientation_only": True,
-        "counterexample_queue_invoked": False,
-        "claim_strength_effect": "none",
+        "message_block": "[ORIENTATION v0.1] 当前正在做什么？",
     },
     "runtime_stagnation_guard": {
-        "runtime_stagnation_guard_receipt_sha256": ZERO_HASH,
         "decision": "continue",
-        "action": "none",
         "reason_codes": [],
-        "public_output_count": 3,
-        "retry_count": 0,
-        "retry_budget": 1,
-        "restart_packet_sha256": None,
-        "public_output_only": True,
-        "asks_model_if_stuck": False,
-        "hidden_chain_of_thought_saved": False,
+        "max_consecutive_repeated_content": 0,
+        "max_ngram_repeat": 0,
     },
     "tool_availability_check": {
-        "tool_availability_report_sha256": ZERO_HASH,
-        "available_count": 3,
-        "unavailable_count": 0,
-        "unprobed_count": 1,
-        "degraded_count": 0,
-        "context_block_injected": True,
-        "model_must_not_guess": True,
+        "available": ["read_file", "grep"],
+        "unavailable": [],
+        "degraded": [],
+        "unprobed": [],
+        "gate_decision": "pass",
     },
     "tool_belief_stagnation": {
         "tool_belief_stagnation_receipt_sha256": ZERO_HASH,
@@ -275,35 +275,23 @@ PAYLOAD_BAD: dict[str, dict] = {
     "tool_started": {"tool": "read_file"},
     "tool_completed": {"tool": "read_file", "call_id": "call-1", "exit_code": 0, "extra": 1},
     "orientation_checkpoint": {
-        "checkpoint_id": "ORIENT-X-1",
-        "orientation_checkpoint_sha256": ZERO_HASH,
-        "task_id": "TASK1",
+        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+        "trigger": "manual",
         "step_index": 0,
-        "neutral_orientation_only": True,
-        "counterexample_queue_invoked": False,
-        "claim_strength_effect": "none",
+        "message_block": "[ORIENTATION v0.1] 当前正在做什么？",
     },
     "runtime_stagnation_guard": {
-        "runtime_stagnation_guard_receipt_sha256": ZERO_HASH,
         "decision": "stop",
-        "action": "none",
         "reason_codes": [],
-        "public_output_count": 3,
-        "retry_count": 0,
-        "retry_budget": 1,
-        "restart_packet_sha256": None,
-        "public_output_only": True,
-        "asks_model_if_stuck": False,
-        "hidden_chain_of_thought_saved": False,
+        "max_consecutive_repeated_content": 0,
+        "max_ngram_repeat": 0,
     },
     "tool_availability_check": {
-        "tool_availability_report_sha256": ZERO_HASH,
-        "available_count": 3,
-        "unavailable_count": 0,
-        "unprobed_count": 1,
-        "degraded_count": 0,
-        "context_block_injected": True,
-        "model_must_not_guess": False,
+        "available": ["read_file", "grep"],
+        "unavailable": [],
+        "degraded": [],
+        "unprobed": [],
+        "gate_decision": "stop",
     },
     "tool_belief_stagnation": {
         "tool_belief_stagnation_receipt_sha256": ZERO_HASH,
@@ -499,9 +487,19 @@ Conventions:
   `chained-run-finished.valid.json` covers the sequence-1 branch.
 - `envelope/<bad-name>.invalid.json` — one envelope constraint violation each.
 
-Hashes: fixtures use legal dummy lowercase 64-hex values (all zeros). The
-hash *chain* is not validated here — chain integrity is verified against real
-produced journals by the #7 conformance slice.
+Hashes: fixtures use legal dummy lowercase 64-hex values (all zeros).
+
+`journals/*.jsonl` — REAL run journals captured from the Rust production
+implementation (conformance suite, Phase 3 #7). They are NOT produced by this
+generator (which only touches `payloads/`, `envelope/` and the canonical_cli
+fixtures); re-capture via the orz `#[ignore]` conformance capture tests and
+copy into this directory (see
+`docs/CONFORMANCE_SUITE_SLICE_17_2026-08-06.md`). Every journal line is
+validated (envelope schema + per-event payload schema selected by the
+`payload_schema` track string + full hash-chain recompute) by
+`assurance/run_event_journal_validation.py` — never compare against stored
+hashes, recompute is the check. Re-captures will byte-differ (timestamps,
+run ids) — that is expected and semantic-only.
 
 Envelope `payload_schema` value: `"run-event-v0.1.schema.json"` — the Rust
 production track records this string for every event (reference-spec

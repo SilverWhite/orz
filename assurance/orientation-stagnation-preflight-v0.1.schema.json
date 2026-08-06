@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/orientation-stagnation-preflight-v0.1.schema.json",
+  "title": "Orientation runtime journal — preflight event payload (orientation track)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "integration_receipt_sha256",
+    "runner_attached",
+    "model_invoked",
+    "network_requested",
+    "tool_availability_gate_invoked"
+  ],
+  "properties": {
+    "integration_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "runner_attached": { "type": "boolean" },
+    "model_invoked": { "type": "boolean" },
+    "network_requested": { "type": "boolean" },
+    "tool_availability_gate_invoked": { "type": "boolean" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

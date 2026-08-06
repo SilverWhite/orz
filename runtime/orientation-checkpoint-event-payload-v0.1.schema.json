@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/orientation-checkpoint-event-payload-v0.1.schema.json",
+  "title": "Orientation checkpoint runtime event payload (Rust track)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkpoint_id",
+    "trigger",
+    "step_index",
+    "message_block"
+  ],
+  "properties": {
+    "checkpoint_id": { "type": "string", "pattern": "^ORIENT-[A-Za-z0-9._-]+-[0-9]{4}$" },
+    "trigger": {
+      "type": "string",
+      "enum": ["fixed_step_interval", "pre_handoff"]
+    },
+    "step_index": { "type": "integer", "minimum": 0 },
+    "message_block": { "type": "string" }
+  }
+}

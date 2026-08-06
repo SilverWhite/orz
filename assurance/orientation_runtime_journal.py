@@ -34,6 +34,12 @@ ORIENTATION_PAYLOAD_SCHEMA = "orientation-checkpoint-event-payload-v0.1.schema.j
 STAGNATION_PAYLOAD_SCHEMA = "runtime-stagnation-guard-event-payload-v0.1.schema.json"
 TOOL_AVAIL_PAYLOAD_SCHEMA = "tool-availability-check-event-payload-v0.1.schema.json"
 TOOL_BELIEF_PAYLOAD_SCHEMA = "tool-belief-stagnation-event-payload-v0.1.schema.json"
+# Orientation-stagnation track's own event payload schemas (slice #17 — the
+# de-suffixed `payload_schema` journal strings are track identifiers; the
+# suffixed names here are the schema files they correspond to).
+ORIENTATION_STAGNATION_PREFLIGHT_SCHEMA = "orientation-stagnation-preflight-v0.1.schema.json"
+ORIENTATION_STAGNATION_RUN_STARTED_SCHEMA = "orientation-stagnation-run-started-v0.1.schema.json"
+ORIENTATION_STAGNATION_TERMINAL_SCHEMA = "orientation-stagnation-terminal-v0.1.schema.json"
 RUN_ID = "RUN-ORIENTATION-STAGNATION-JOURNAL"
 CREATED_AT = "2026-07-26T00:00:00Z"
 RUN_MANIFEST_NAME = "run-manifest.json"
@@ -270,20 +276,27 @@ def _build_events(
         "formal_runner_claimed": False,
         "restart_packet_retains_runaway_suffix": False,
     }
-    specs: list[tuple[str, str, dict[str, Any]]] = [
-        (
-            "run_preflight",
-            "orientation-stagnation-preflight-v0.1",
-            {
-                "integration_receipt_sha256": sha256_file(
-                    integration_root / INTEGRATION_RECEIPT_NAME
-                ),
-                "runner_attached": False,
-                "model_invoked": False,
-                "network_requested": False,
-                "tool_availability_gate_invoked": tool_avail_exists,
-            },
+    validate_contract(
+        terminal_payload,
+        ORIENTATION_STAGNATION_TERMINAL_SCHEMA,
+        label="orientation stagnation terminal event payload",
+    )
+    preflight_payload = {
+        "integration_receipt_sha256": sha256_file(
+            integration_root / INTEGRATION_RECEIPT_NAME
         ),
+        "runner_attached": False,
+        "model_invoked": False,
+        "network_requested": False,
+        "tool_availability_gate_invoked": tool_avail_exists,
+    }
+    validate_contract(
+        preflight_payload,
+        ORIENTATION_STAGNATION_PREFLIGHT_SCHEMA,
+        label="orientation stagnation preflight event payload",
+    )
+    specs: list[tuple[str, str, dict[str, Any]]] = [
+        ("run_preflight", "orientation-stagnation-preflight-v0.1", preflight_payload),
     ]
     if tool_avail_exists:
         tool_avail_report = load_json(tool_avail_report_path)
@@ -300,15 +313,17 @@ def _build_events(
             ("tool_availability_check", TOOL_AVAIL_PAYLOAD_SCHEMA, toll_avail_payload)
         )
 
+    run_started_payload = {
+        "task_id": integration_receipt["task_id"],
+        "step_index": integration_receipt["step_index"],
+    }
+    validate_contract(
+        run_started_payload,
+        ORIENTATION_STAGNATION_RUN_STARTED_SCHEMA,
+        label="orientation stagnation run-started event payload",
+    )
     specs.append(
-        (
-            "run_started",
-            "orientation-stagnation-run-started-v0.1",
-            {
-                "task_id": integration_receipt["task_id"],
-                "step_index": integration_receipt["step_index"],
-            },
-        )
+        ("run_started", "orientation-stagnation-run-started-v0.1", run_started_payload)
     )
     specs.append(
         (

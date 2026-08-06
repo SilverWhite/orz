@@ -112,5 +112,61 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     }
+  },
+  "runtime_event_payload": {
+    "title": "Runtime event payload for gsa-runtime-preflight events (track fragment)",
+    "description": "Slice #17: the `#runtime_event_payload` fragment referenced by runtime_preflight.py's payload_schema track identifier pointed at nothing; the three shapes below are the actual payloads the producer emits. Unknown to whole-document validation (custom keyword). Patterns are inlined because the fragment validates as its own schema root (a `#/$defs/...` ref would resolve against the fragment, not the document).",
+    "type": "object",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "required": [
+          "reproduction_id",
+          "proof_sha256",
+          "manifest_sha256",
+          "code_file_count",
+          "input_count"
+        ],
+        "properties": {
+          "reproduction_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,95}$" },
+          "proof_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "code_file_count": { "type": "integer", "minimum": 0 },
+          "input_count": { "type": "integer", "minimum": 0 }
+        }
+      },
+      {
+        "additionalProperties": false,
+        "required": [
+          "reproduction_id",
+          "receipt_sha256",
+          "output_count",
+          "model_invoked",
+          "tool_invoked"
+        ],
+        "properties": {
+          "reproduction_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,95}$" },
+          "receipt_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "output_count": { "type": "integer", "minimum": 0 },
+          "model_invoked": { "type": "boolean" },
+          "tool_invoked": { "type": "boolean" }
+        }
+      },
+      {
+        "additionalProperties": false,
+        "required": [
+          "reproduction_id",
+          "verification_sha256",
+          "valid",
+          "formal_runner_claimed"
+        ],
+        "properties": {
+          "reproduction_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,95}$" },
+          "verification_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "valid": { "const": true },
+          "formal_runner_claimed": { "const": false }
+        }
+      }
+    ]
   }
 }
