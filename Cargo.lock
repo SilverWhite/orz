@@ -5816,6 +5816,7 @@ dependencies = [
 name = "orz-bin"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol",
  "chrono",
  "orz-assurance",
  "orz-host",

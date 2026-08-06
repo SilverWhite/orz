@@ -20,3 +20,8 @@ tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { workspace = true }
 
 
+
+[dev-dependencies]
+# Capture tests answer allow-once permission requests over the in-process
+# ACP wire (conformance_capture, Phase 3 #7).
+agent-client-protocol = { workspace = true }

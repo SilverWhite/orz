@@ -651,3 +651,475 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Phase 3 #7 conformance capture — deterministic REAL run journals for the
+/// Rust↔Python cross-validation suite.
+///
+/// Each `#[ignore]`d test runs one scenario in-process (fake provider, no
+/// network, `TrustPolicy::Skip`) and stages `events.jsonl` under
+/// `target/conformance-journals/<scenario>/`, self-checking the chain with
+/// `replay_journal` first. The staged files are committed to the main repo
+/// as `runtime/fixtures/run-event-v0.1/journals/` (dev-time copy, see the
+/// slice audit doc) — CI stays pure Python.
+///
+/// Run: `cargo test -p orz-bin -- --ignored conformance_capture --nocapture
+/// --test-threads=1`
+#[cfg(test)]
+mod conformance_capture {
+    use super::*;
+    use agent_client_protocol as acp;
+    use orz_host::acp_server::{AcpError, AcpServer};
+    use orz_host::session::TrustPolicy;
+    use orz_loop::controller::AgentLoopError;
+
+    /// `{workspace}/target/conformance-journals` — hermetic (gitignored
+    /// target/), one dir per scenario; `worktrees/<scenario>/` holds each
+    /// scenario's cwd so no capture writes outside the workspace.
+    fn staging_root() -> PathBuf {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(
+            manifest.join("../../Cargo.toml").is_file(),
+            "workspace marker missing — capture tests must run inside the orz workspace"
+        );
+        manifest.join("../../target/conformance-journals")
+    }
+
+    /// Wipe + recreate `<scenario>/` (re-runnable) and return its path.
+    fn scenario_staging(name: &str) -> PathBuf {
+        let dir = staging_root().join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Wipe + recreate the scenario cwd.
+    fn worktree(name: &str) -> PathBuf {
+        let dir = staging_root().join("worktrees").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Copy `{journal_dir}/events.jsonl` into the scenario staging dir.
+    fn copy_journal(journal_dir: &Path, name: &str) {
+        let to = scenario_staging(name).join("events.jsonl");
+        std::fs::copy(journal_dir.join("events.jsonl"), &to).unwrap();
+        println!("  captured {name}: {}", to.display());
+    }
+
+    /// Self-check with the Rust verifier: chain valid + expected terminal +
+    /// EXACT event-type sequence (the staleness signal — a changed loop
+    /// structure fails loudly at re-capture time).
+    fn verify(journal: &Path, name: &str, expected: &[&str], terminal: &str) {
+        let replay = orz_assurance::replay_journal(journal, None, None, true);
+        assert!(replay.valid, "{name}: replay invalid: {:?}", replay.errors);
+        assert_eq!(
+            replay.terminal_event.as_deref(),
+            Some(terminal),
+            "{name}: unexpected terminal"
+        );
+        let content = std::fs::read_to_string(journal).unwrap();
+        let types: Vec<String> = content
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .map(|v| {
+                v.get("event_type")
+                    .and_then(|t| t.as_str())
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            types,
+            expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            "{name}: event sequence drifted"
+        );
+        println!(
+            "  {name}: {} events, terminal={terminal}, valid",
+            types.len()
+        );
+    }
+
+    /// 1. plain — scripted text-only turn through the real CLI host.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_plain_run() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("plain-run");
+                let run_id = "RUN-PLAIN-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let controller =
+                    orz_loop::AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+                        ScriptedResponse::text("X"),
+                        ScriptedResponse::text("X"),
+                    ])))
+                    .with_snapshot_store(Some(handle.snapshot_store.clone()));
+                controller
+                    .run_turn(
+                        &host,
+                        "hello",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "plain-run",
+                    &[
+                        "run_preflight",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "orientation_checkpoint",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                copy_journal(&handle.journal_dir, "plain-run");
+            })
+            .await
+    }
+
+    /// 2. tool + snapshot — `search_replace` mutates a.txt through an
+    /// allow-once permission grant; the run journal carries the
+    /// snapshot_created hash.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_tool_snapshot_run() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("tool-snapshot-run");
+                std::fs::write(base.join("a.txt"), "v1").unwrap();
+
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "search_replace".to_string(),
+                        arguments: serde_json::json!({
+                            "file_path": "a.txt",
+                            "old_string": "v1",
+                            "new_string": "v2",
+                        }),
+                        call_id: "call-1".to_string(),
+                    }]),
+                    // The counterexample gate consumes two identical texts
+                    // per round (acp_client.rs quirk).
+                    ScriptedResponse::text("完成。"),
+                    ScriptedResponse::text("完成。"),
+                ]))));
+                let mut client =
+                    orz_tui::acp_client::connect_inprocess(server.clone(), TrustPolicy::Skip);
+                client.start_session(base.to_path_buf()).await.unwrap();
+                client.prompt_count += 1;
+                let seq = client.prompt_count;
+                let session_id = client.session_id.clone().unwrap();
+                client.spawn_prompt(session_id, "把 v1 改成 v2".to_string(), seq);
+
+                let completed = loop {
+                    match client.msg_rx.recv().await.unwrap() {
+                        orz_tui::acp_client::ClientMsg::PermissionRequest { request, respond } => {
+                            let allow_once = request
+                                .options
+                                .iter()
+                                .find(|o| o.kind == acp::PermissionOptionKind::AllowOnce)
+                                .unwrap()
+                                .option_id
+                                .0
+                                .to_string();
+                            respond
+                                .send(acp::RequestPermissionResponse::new(
+                                    acp::RequestPermissionOutcome::Selected(
+                                        acp::SelectedPermissionOutcome::new(allow_once),
+                                    ),
+                                ))
+                                .unwrap();
+                        }
+                        orz_tui::acp_client::ClientMsg::PromptCompleted { result, .. } => {
+                            break result;
+                        }
+                        orz_tui::acp_client::ClientMsg::SessionNotification { .. } => {}
+                    }
+                };
+                assert!(completed.is_ok(), "prompt failed: {completed:?}");
+                assert_eq!(std::fs::read_to_string(base.join("a.txt")).unwrap(), "v2");
+
+                let runs_dir = base.join(".gsa").join("runs");
+                let journal_dir = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .find(|p| p.file_name().unwrap().to_string_lossy().starts_with("RUN-"))
+                    .expect("RUN- journal dir");
+                verify(
+                    &journal_dir.join("events.jsonl"),
+                    "tool-snapshot-run",
+                    &[
+                        "run_preflight",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "orientation_checkpoint",
+                        "model_output",
+                        "permission_requested",
+                        "permission_decision",
+                        "snapshot_created",
+                        "tool_started",
+                        "tool_completed",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                copy_journal(&journal_dir, "tool-snapshot-run");
+            })
+            .await
+    }
+
+    /// 3. plan — plan-write gate round + plan_proposed/plan_approved, then
+    /// the execution turn under the approved plan.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_plan_run() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("plan-run");
+                let run_id = "RUN-PLAN-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let mut seq = handle.next_sequence;
+                let mut prev_hash = handle.last_event_sha256.clone();
+                let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("X"),
+                    ScriptedResponse::text("X"),
+                    ScriptedResponse::text("X"),
+                    ScriptedResponse::text("X"),
+                ]));
+                run_plan_phase(&handle, &mut seq, &mut prev_hash, run_id, "hi", &gateway)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let controller = orz_loop::AgentLoopController::with_gateway(gateway)
+                    .with_snapshot_store(Some(handle.snapshot_store.clone()));
+                controller
+                    .run_turn(
+                        &host,
+                        "hi",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        seq,
+                        prev_hash,
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "plan-run",
+                    &[
+                        "run_preflight",
+                        "counterexample_gate",
+                        "plan_proposed",
+                        "plan_approved",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "orientation_checkpoint",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                copy_journal(&handle.journal_dir, "plan-run");
+            })
+            .await
+    }
+
+    /// 4. cancelled — the host's cooperative cancel turns the in-flight
+    /// prompt into a `run_cancelled` terminal.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_cancelled_run() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("cancelled-run");
+                let provider = Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                    ])
+                    .with_chunk_delay(std::time::Duration::from_millis(100)),
+                );
+                let server = Arc::new(AcpServer::with_gateway(provider.clone()));
+                server
+                    .handle_session_new("sess-cancel", Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+
+                let srv = server.clone();
+                let prompt = tokio::task::spawn_local(async move {
+                    srv.handle_session_prompt("sess-cancel", "hello").await
+                });
+                // Event-based wait: cancel once the first model round is
+                // actually underway (design review D2 — no timing race on
+                // slow machines). The run terminates at the after-round
+                // checkpoint.
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    if !provider.received_requests().is_empty() {
+                        break;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "provider never received a request"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                assert!(server.cancel_current_run("sess-cancel"));
+
+                let result = prompt.await.unwrap();
+                assert!(matches!(
+                    result,
+                    Err(AcpError::AgentLoop(AgentLoopError::Cancelled))
+                ));
+
+                let runs_dir = base.join(".gsa").join("runs");
+                let journal_dir = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .find(|p| p.file_name().unwrap().to_string_lossy().starts_with("RUN-"))
+                    .expect("RUN- journal dir");
+                verify(
+                    &journal_dir.join("events.jsonl"),
+                    "cancelled-run",
+                    &[
+                        "run_preflight",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "orientation_checkpoint",
+                        "run_cancelled",
+                    ],
+                    "run_cancelled",
+                );
+                copy_journal(&journal_dir, "cancelled-run");
+            })
+            .await
+    }
+
+    /// 5. failed — the fake script exhausts mid-turn; the loop records a
+    /// `run_failed` terminal on the error path.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_failed_run() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("failed-run");
+                let run_id = "RUN-FAILED-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
+                    FakeProvider::new(Vec::new()),
+                ))
+                .with_snapshot_store(Some(handle.snapshot_store.clone()));
+                let result = controller
+                    .run_turn(
+                        &host,
+                        "hi",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                    )
+                    .await;
+                assert!(result.is_err(), "empty script must fail the turn");
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "failed-run",
+                    &[
+                        "run_preflight",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "orientation_checkpoint",
+                        "run_failed",
+                    ],
+                    "run_failed",
+                );
+                copy_journal(&handle.journal_dir, "failed-run");
+            })
+            .await
+    }
+
+    /// 6. restore — a tracked snapshot is restored through the host; the
+    /// RST- run journal ends run_finished (preflight → snapshot_restored →
+    /// finished).
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_restore_run() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("restore-run");
+                std::fs::write(base.join("a.txt"), "v1").unwrap();
+                let store = orz_assurance::session::snapshot::SnapshotStore::new(
+                    base.join(".gsa").join("snapshots"),
+                    base.clone(),
+                )
+                .unwrap();
+                let record = store
+                    .track(&[std::path::PathBuf::from("a.txt")])
+                    .await
+                    .unwrap();
+                std::fs::write(base.join("a.txt"), "v2").unwrap();
+
+                let server = Arc::new(AcpServer::new());
+                let mut client =
+                    orz_tui::acp_client::connect_inprocess(server.clone(), TrustPolicy::Skip);
+                client.start_session(base.to_path_buf()).await.unwrap();
+                let session_id = client.session_id.clone().unwrap();
+                let report = server
+                    .restore_snapshot(&session_id, &record.snapshot_hash, None)
+                    .await
+                    .unwrap();
+                let restored = report
+                    .get("restored")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                assert_eq!(restored, 1, "restore report: {report}");
+
+                let session8: String = session_id.chars().take(8).collect();
+                let journal_dir = base
+                    .join(".gsa")
+                    .join("runs")
+                    .join(format!("RST-{session8}-0"));
+                verify(
+                    &journal_dir.join("events.jsonl"),
+                    "restore-run",
+                    &["run_preflight", "snapshot_restored", "run_finished"],
+                    "run_finished",
+                );
+                copy_journal(&journal_dir, "restore-run");
+            })
+            .await
+    }
+}
