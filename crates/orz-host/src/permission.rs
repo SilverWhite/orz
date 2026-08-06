@@ -25,6 +25,7 @@ use orz_assurance::journal::JournalRecorder;
 use orz_loop::host::{PermitDecision, PermitError, RiskClass};
 use orz_workspace::permission::{
     spawn_permission_manager_with_hub, AccessKind, ClientType, Decision, PermissionHandle,
+    PermissionHookTransport,
 };
 use xai_acp_lib::AcpAgentGatewaySender;
 
@@ -62,6 +63,24 @@ impl PermissionBridge {
         cwd: &std::path::Path,
         journal: JournalRecorder,
     ) -> Result<Self, String> {
+        Self::spawn_with_hub(session_id, gateway, None, cwd, journal)
+    }
+
+    /// Variant that threads an interactive permission transport (`hub`).
+    ///
+    /// `Some(hub)` routes the manager's interactive prompts through
+    /// `PermissionHookTransport::request_permission` instead of the ACP
+    /// gateway — the codex app-server approval surface (Phase 3 slice #12);
+    /// `None` keeps the ACP-gateway behavior. The hub path has no manager
+    /// built-in timeout (`request_permission_via_hub` awaits without bound),
+    /// so the transport itself must bound the wait and fail closed.
+    pub fn spawn_with_hub(
+        session_id: &str,
+        gateway: Option<AcpAgentGatewaySender>,
+        hub: Option<Arc<dyn PermissionHookTransport>>,
+        cwd: &std::path::Path,
+        journal: JournalRecorder,
+    ) -> Result<Self, String> {
         let gateway = gateway.unwrap_or_else(dead_gateway);
         let abs_cwd = orz_paths::AbsPathBuf::new(cwd.to_path_buf())
             .map_err(|e| format!("cwd must be absolute: {e}"))?;
@@ -78,7 +97,7 @@ impl PermissionBridge {
             false,      // initial_yolo — headless: yolo never on (IP6)
             None,       // client_identifier
             false,      // remember_tool_approvals
-            None,       // hub_permission — interactive prompter lands Phase 3
+            hub,        // interactive prompter — codex app-server (slice #12)
         );
         Ok(Self { handle, journal, cwd: abs_cwd })
     }

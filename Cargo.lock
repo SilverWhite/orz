@@ -5990,6 +5990,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "orz-codex"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "futures",
+ "orz-assurance",
+ "orz-host",
+ "orz-loop",
+ "orz-tui",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "xai-ratatui-textarea",
+]
+
+[[package]]
 name = "orz-compaction"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,34 @@
+[package]
+name = "orz-codex"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Codex-style fallback TUI for orz (design §2.4) — Codex app-server JSON-RPC client + minimal renderer"
+
+[[bin]]
+name = "orz-codex"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
+tokio = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+
+xai-ratatui-textarea = { workspace = true }
+
+# Self-built core — the fallback shares the host machinery, not the
+# workbench UI (theme width/CJK helpers come from orz-tui; the FakeProvider
+# demo gateway from orz-loop).
+orz-host = { path = "../orz-host" }
+orz-tui = { path = "../orz-tui" }
+orz-loop = { path = "../orz-loop" }
+
+[dev-dependencies]
+orz-assurance = { path = "../orz-assurance" }

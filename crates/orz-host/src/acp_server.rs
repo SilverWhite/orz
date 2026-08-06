@@ -15,6 +15,7 @@ use orz_assurance::{
     seal_event, EventType, JournalRecorderError, Redaction, RunEvent,
 };
 use orz_loop::AgentLoopController;
+use orz_workspace::permission::PermissionHookTransport;
 
 use crate::session::{bootstrap_session, SessionError};
 
@@ -151,6 +152,12 @@ pub struct AcpServer {
     /// within a short window, so a stale/idle cancel never poisons an
     /// unrelated later prompt (2026-08-05 review P2-1).
     pending_cancels: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    /// Optional interactive permission transport (Phase 3 slice #12): when
+    /// set, the permission manager routes interactive prompts through
+    /// `PermissionHookTransport::request_permission` (the codex app-server
+    /// approval surface) instead of the ACP gateway. `None` keeps the
+    /// gateway path (stdio/TUI).
+    hub_permission: Arc<Mutex<Option<Arc<dyn PermissionHookTransport>>>>,
 }
 
 /// What is in flight for a session under `AcpServer::runs`.
@@ -223,7 +230,16 @@ impl AcpServer {
             model_gateway,
             runs: Arc::new(Mutex::new(HashMap::new())),
             pending_cancels: Arc::new(Mutex::new(HashMap::new())),
+            hub_permission: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Route interactive permission prompts through `hub` (the codex
+    /// app-server approval surface) instead of the ACP gateway. Call once
+    /// after construction, before any turn; the transport must bound its own
+    /// wait and fail closed (the hub path has no manager-side timeout).
+    pub fn set_hub_permission(&self, hub: Arc<dyn PermissionHookTransport>) {
+        *self.hub_permission.lock().unwrap() = Some(hub);
     }
 
     /// Cancel the run currently in flight for a session (ACP `session/cancel`
@@ -610,12 +626,13 @@ impl AcpServer {
         let cwd = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
         // P1 permit keystore: the session's DPAPI-backed signer (or the
         // test-only memory store under TrustPolicy::Skip).
-        Ok(crate::OrzHost::with_bridge(
+        Ok(crate::OrzHost::with_bridge_and_hub(
             session_id,
             handle.journal.clone(),
             &cwd,
             handle.workspace_trust,
             self.gateway(),
+            self.hub_permission.lock().unwrap().clone(),
         )
         .map_err(AcpError::Host)?
         .with_permit_signer(handle.permit_signer.clone()))

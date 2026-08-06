@@ -14,6 +14,8 @@ pub mod stdio;
 pub mod tools;
 pub mod permission;
 pub mod keystore;
+pub mod codex_app;
+pub mod codex_permission;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,6 +37,7 @@ use orz_loop::host::{
 use crate::keystore::MemoryInstallationKeyStore;
 use crate::permission::PermissionBridge;
 use crate::tools::ToolsetRegistry;
+use orz_workspace::permission::PermissionHookTransport;
 
 /// Full LoopHost implementation over the Grok providers.
 ///
@@ -169,11 +172,27 @@ impl OrzHost {
         workspace_trust: WorkspaceTrust,
         gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
     ) -> Result<Self, String> {
+        Self::with_bridge_and_hub(session_id, journal, cwd, workspace_trust, gateway, None)
+    }
+
+    /// `with_bridge` variant that additionally threads an interactive
+    /// permission transport (`hub` — Phase 3 slice #12: the codex app-server
+    /// approval surface). `None` keeps the ACP-gateway behavior; the rest is
+    /// identical.
+    pub fn with_bridge_and_hub(
+        session_id: &str,
+        journal: JournalRecorder,
+        cwd: &Path,
+        workspace_trust: WorkspaceTrust,
+        gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
+        hub: Option<Arc<dyn PermissionHookTransport>>,
+    ) -> Result<Self, String> {
         // Clone the live-client sender before handing the original to the
         // bridge — the streamed text-delta path uses its own sender clone
         // (the permission manager gets the original).
         let live_gateway = gateway.clone();
-        let bridge = PermissionBridge::spawn(session_id, gateway, cwd, journal.clone())?;
+        let bridge =
+            PermissionBridge::spawn_with_hub(session_id, gateway, hub, cwd, journal.clone())?;
         let mut host = Self::with_permission(journal, cwd, workspace_trust, Some(bridge))?;
         host.session_id = Some(session_id.to_string());
         host.gateway = live_gateway;
