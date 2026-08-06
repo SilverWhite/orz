@@ -129,9 +129,7 @@ impl PlanStateMachine {
             plan.approval_decision = "approve".to_string();
             plan.approval_timestamp = record.timestamp.clone();
             plan.approval_authority = authority.to_string();
-            plan.selected_approval_policy = execution_policy
-                .unwrap_or("manual")
-                .to_string();
+            plan.selected_approval_policy = execution_policy.unwrap_or("manual").to_string();
         }
         if let Some(policy) = execution_policy {
             self.approval_policy = policy.to_string();
@@ -225,7 +223,7 @@ impl PlanStateMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::artifact::{PlanSection, PlanArtifact};
+    use crate::plan::artifact::{PlanArtifact, PlanSection};
 
     fn section(title: &str) -> PlanSection {
         PlanSection {

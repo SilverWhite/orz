@@ -2,8 +2,8 @@
 //! `render_frame` path into a `TestBackend` and dump it as text (Python
 //! `FullScreenRenderTests` shape). Headless: no crossterm raw mode.
 
-use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 use crate::app::TuiApp;
 
@@ -70,11 +70,7 @@ mod tests {
     #[test]
     fn rendered_frame_dialog_overlay() {
         let mut app = TuiApp::new();
-        app.show_permission_dialog(crate::app::PendingPermission::new(
-            "bash",
-            "dir",
-            None,
-        ));
+        app.show_permission_dialog(crate::app::PendingPermission::new("bash", "dir", None));
         let rendered = render_to_string(&mut app, 100, 30);
         assert!(rendered.contains("工具权限请求"));
         assert!(rendered.contains("允许一次"));

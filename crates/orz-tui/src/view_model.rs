@@ -324,12 +324,30 @@ impl StatusBar {
     pub fn new() -> Self {
         Self {
             items: vec![
-                StatusItem { label: "守护".into(), ok: true },
-                StatusItem { label: "网络关闭".into(), ok: true },
-                StatusItem { label: "沙箱严格".into(), ok: true },
-                StatusItem { label: "来源 0/0".into(), ok: true },
-                StatusItem { label: "模型".into(), ok: true },
-                StatusItem { label: "空闲".into(), ok: true },
+                StatusItem {
+                    label: "守护".into(),
+                    ok: true,
+                },
+                StatusItem {
+                    label: "网络关闭".into(),
+                    ok: true,
+                },
+                StatusItem {
+                    label: "沙箱严格".into(),
+                    ok: true,
+                },
+                StatusItem {
+                    label: "来源 0/0".into(),
+                    ok: true,
+                },
+                StatusItem {
+                    label: "模型".into(),
+                    ok: true,
+                },
+                StatusItem {
+                    label: "空闲".into(),
+                    ok: true,
+                },
             ],
         }
     }
@@ -359,7 +377,15 @@ impl StatusBar {
         for item in &mut self.items {
             if matches!(
                 item.label.as_str(),
-                "空闲" | "预检" | "运行中" | "等待审批" | "完成" | "失败" | "已取消" | "无效" | "恢复中"
+                "空闲"
+                    | "预检"
+                    | "运行中"
+                    | "等待审批"
+                    | "完成"
+                    | "失败"
+                    | "已取消"
+                    | "无效"
+                    | "恢复中"
             ) {
                 item.label = state.to_string();
                 item.ok = ok;
@@ -433,18 +459,45 @@ impl Toolbar {
     pub fn new() -> Self {
         Self {
             items: vec![
-                ToolbarButton { label: "后退".into(), enabled: false },
-                ToolbarButton { label: "前进".into(), enabled: false },
-                ToolbarButton { label: "刷新".into(), enabled: false },
-                ToolbarButton { label: "停止".into(), enabled: false },
-                ToolbarButton { label: "打开".into(), enabled: false },
-                ToolbarButton { label: "验证".into(), enabled: true },
+                ToolbarButton {
+                    label: "后退".into(),
+                    enabled: false,
+                },
+                ToolbarButton {
+                    label: "前进".into(),
+                    enabled: false,
+                },
+                ToolbarButton {
+                    label: "刷新".into(),
+                    enabled: false,
+                },
+                ToolbarButton {
+                    label: "停止".into(),
+                    enabled: false,
+                },
+                ToolbarButton {
+                    label: "打开".into(),
+                    enabled: false,
+                },
+                ToolbarButton {
+                    label: "验证".into(),
+                    enabled: true,
+                },
                 // Slice #9: Properties (Neutral `p`) and Find (Ctrl+F) are
                 // live; the toolbar renders static text, so the flags are
                 // informational (render_toolbar ignores state).
-                ToolbarButton { label: "属性".into(), enabled: true },
-                ToolbarButton { label: "命令...".into(), enabled: true },
-                ToolbarButton { label: "查找...".into(), enabled: true },
+                ToolbarButton {
+                    label: "属性".into(),
+                    enabled: true,
+                },
+                ToolbarButton {
+                    label: "命令...".into(),
+                    enabled: true,
+                },
+                ToolbarButton {
+                    label: "查找...".into(),
+                    enabled: true,
+                },
             ],
         }
     }

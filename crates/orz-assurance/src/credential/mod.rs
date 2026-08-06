@@ -21,8 +21,8 @@
 //! (`audit_credential_scrub_sites`) has no Rust equivalent: ownership +
 //! zeroise-on-drop is enforced by the type system instead.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{SecondsFormat, Utc};
 use wildmatch::WildMatch;
@@ -191,7 +191,10 @@ impl CredentialGuard {
             };
             self.record.released_at = utc_now_iso();
             if let Some(credential) = self.credential.take() {
-                debug_assert!(credential.is_empty(), "credential must be zeroed before release");
+                debug_assert!(
+                    credential.is_empty(),
+                    "credential must be zeroed before release"
+                );
             }
             scrub_audit().lock().unwrap().push(self.record.clone());
         }
@@ -228,19 +231,21 @@ impl std::fmt::Debug for CredentialGuard {
 /// [`CredentialGuard`] to zero it on drop).
 #[cfg(windows)]
 pub fn read_windows_credential(target: &str) -> Result<Vec<u8>, CredentialError> {
-    use windows::core::PCWSTR;
     use windows::Win32::Security::Credentials::{
-        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+        CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
     };
+    use windows::core::PCWSTR;
 
-    let target_wide: Vec<u16> = target
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let target_wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
-        CredReadW(PCWSTR(target_wide.as_ptr()), CRED_TYPE_GENERIC, None, &mut credential)
-            .map_err(|e| CredentialError::AcquisitionFailed(format!("CredReadW({target}): {e}")))?;
+        CredReadW(
+            PCWSTR(target_wide.as_ptr()),
+            CRED_TYPE_GENERIC,
+            None,
+            &mut credential,
+        )
+        .map_err(|e| CredentialError::AcquisitionFailed(format!("CredReadW({target}): {e}")))?;
         if credential.is_null() {
             return Err(CredentialError::AcquisitionFailed(format!(
                 "no credential found for {target}"
@@ -307,12 +312,16 @@ pub const CREDENTIAL_ENV_NAMES: &[&str] = &[
 
 /// Substrings that flag an env var name as potentially credential-bearing
 /// (case-insensitive, Python `_CREDENTIAL_ENV_NAME_PATTERNS`).
-pub const CREDENTIAL_ENV_NAME_PATTERNS: &[&str] = &["key", "secret", "token", "password", "credential", "auth"];
+pub const CREDENTIAL_ENV_NAME_PATTERNS: &[&str] =
+    &["key", "secret", "token", "password", "credential", "auth"];
 
 /// True if `name` looks like it could carry a credential.
 pub fn env_name_looks_like_credential(name: &str) -> bool {
     let upper = name.to_uppercase();
-    if CREDENTIAL_ENV_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&upper)) {
+    if CREDENTIAL_ENV_NAMES
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(&upper))
+    {
         return true;
     }
     CREDENTIAL_ENV_NAME_PATTERNS
@@ -623,7 +632,10 @@ mod tests {
             guard.secret().unwrap(),
             &b"sk-0123456789abcdef0123456789abcdef"[..]
         );
-        assert_eq!(guard.secret_string().unwrap(), "sk-0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            guard.secret_string().unwrap(),
+            "sk-0123456789abcdef0123456789abcdef"
+        );
         assert!(!guard.scrub_succeeded()); // not yet released — nothing scrubbed so far
 
         // Explicit release zeroes the buffer.
@@ -663,7 +675,9 @@ mod tests {
     fn failed_acquisition_records_clean_release() {
         let target = format!("fail-target-{}", std::process::id());
         let err = CredentialGuard::acquire(&target, |_| {
-            Err(CredentialError::AcquisitionFailed("no such credential".into()))
+            Err(CredentialError::AcquisitionFailed(
+                "no such credential".into(),
+            ))
         })
         .unwrap_err();
         assert!(matches!(err, CredentialError::AcquisitionFailed(_)));
@@ -686,7 +700,11 @@ mod tests {
         // No real credential manager entry can be assumed in CI; the contract
         // is: missing target → error (never panic), and the error carries the
         // target name.
-        let target = format!("GSA-TEST-NO-SUCH-CREDENTIAL-{}-{}", std::process::id(), GUARD_SEQUENCE.fetch_add(1, Ordering::Relaxed));
+        let target = format!(
+            "GSA-TEST-NO-SUCH-CREDENTIAL-{}-{}",
+            std::process::id(),
+            GUARD_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
         let err = read_windows_credential(&target).unwrap_err();
         assert!(matches!(err, CredentialError::AcquisitionFailed(_)));
         assert!(err.to_string().contains(&target));
@@ -714,7 +732,10 @@ mod tests {
         );
         assert_eq!(
             sanitized.vars,
-            vec![("SAFE_VAR".to_string(), "ok".to_string()), ("PATH".to_string(), "C:\\bin".to_string())]
+            vec![
+                ("SAFE_VAR".to_string(), "ok".to_string()),
+                ("PATH".to_string(), "C:\\bin".to_string())
+            ]
         );
     }
 
@@ -727,7 +748,10 @@ mod tests {
         let audit = audit_child_environment(&env);
         assert!(!audit.safe);
         assert_eq!(audit.total_vars, 2);
-        assert_eq!(audit.flagged_credential_vars, vec!["DEEPSEEK_API_KEY".to_string()]);
+        assert_eq!(
+            audit.flagged_credential_vars,
+            vec!["DEEPSEEK_API_KEY".to_string()]
+        );
         assert!(audit_child_environment(&[("PATH".to_string(), "C:\\bin".to_string())]).safe);
     }
 
@@ -794,7 +818,11 @@ mod tests {
             r"C:\Users\me",
         ] {
             let audit = audit_container_mount(path);
-            assert!(audit.safe, "expected {path} to be safe: {:?}", audit.warnings);
+            assert!(
+                audit.safe,
+                "expected {path} to be safe: {:?}",
+                audit.warnings
+            );
         }
     }
 
@@ -807,6 +835,8 @@ mod tests {
     #[test]
     fn assert_safe_mount_raises_on_leak() {
         assert!(assert_safe_container_mount(r"C:\Users\me\project").is_ok());
-        assert!(assert_safe_container_mount(r"C:\Users\me\AppData\Local\Microsoft\Crypto").is_err());
+        assert!(
+            assert_safe_container_mount(r"C:\Users\me\AppData\Local\Microsoft\Crypto").is_err()
+        );
     }
 }

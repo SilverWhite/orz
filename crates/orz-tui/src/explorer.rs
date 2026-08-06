@@ -109,7 +109,10 @@ impl ExplorerPane {
     /// selects the parent row (review P3-2 — the parent is the previous
     /// visible row at depth-1, not the previous sibling).
     pub fn collapse_or_parent(&mut self) {
-        if self.visible_node_mut(self.selected).is_some_and(|n| n.expanded) {
+        if self
+            .visible_node_mut(self.selected)
+            .is_some_and(|n| n.expanded)
+        {
             let Some(node) = self.visible_node_mut(self.selected) else {
                 return;
             };
@@ -184,17 +187,12 @@ impl ExplorerPane {
             return 0;
         }
         let sel = self.selected;
-        if sel >= height {
-            sel + 1 - height
-        } else {
-            0
-        }
+        if sel >= height { sel + 1 - height } else { 0 }
     }
 
     /// Rebuild the events section counts from the event log (kind strings).
     pub fn refresh_events(&mut self, events_log: &[String]) {
-        let mut counts: std::collections::BTreeMap<&str, usize> =
-            std::collections::BTreeMap::new();
+        let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
         for kind in events_log {
             *counts.entry(kind.as_str()).or_default() += 1;
         }
@@ -276,7 +274,13 @@ fn load_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
 fn visible_count(nodes: &[TreeNode]) -> usize {
     nodes
         .iter()
-        .map(|n| 1 + if n.expanded { visible_count(&n.children) } else { 0 })
+        .map(|n| {
+            1 + if n.expanded {
+                visible_count(&n.children)
+            } else {
+                0
+            }
+        })
         .sum()
 }
 
@@ -299,7 +303,9 @@ fn walk_mut<'a>(nodes: &'a mut [TreeNode], remaining: &mut usize) -> Option<&'a 
             return Some(node);
         }
         *remaining -= 1;
-        if node.expanded && let Some(found) = walk_mut(&mut node.children, remaining) {
+        if node.expanded
+            && let Some(found) = walk_mut(&mut node.children, remaining)
+        {
             return Some(found);
         }
     }
@@ -339,8 +345,7 @@ pub fn discover_sessions(cwd: &Path) -> Vec<SessionEntry> {
             .and_then(|m| m.modified().ok())
             .and_then(format_date)
             .unwrap_or_default();
-        let preview = crate::journal_tail::peek_first_prompt(&events_path)
-            .unwrap_or_default();
+        let preview = crate::journal_tail::peek_first_prompt(&events_path).unwrap_or_default();
         entries.push(SessionEntry {
             run_dir: dir,
             session_id: name,

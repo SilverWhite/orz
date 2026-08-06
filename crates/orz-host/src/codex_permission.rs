@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::codex_app::JsonMessage;
@@ -113,12 +113,7 @@ impl orz_workspace::permission::PermissionHookTransport for CodexPermissionTrans
         // A closed connection (dropped receiver) fails closed — the manager
         // turns the error into a reject. Every failure path forgets the
         // pending entry (implementation review P3-2).
-        if self
-            .broker
-            .tx_out
-            .send(request)
-            .is_err()
-        {
+        if self.broker.tx_out.send(request).is_err() {
             self.broker.forget(&id);
             return Err("codex approval channel closed".to_owned());
         }
@@ -294,7 +289,9 @@ mod tests {
             CodexPermissionTransport::with_timeout(broker.clone(), Duration::from_millis(50));
 
         let started = std::time::Instant::now();
-        let result = transport.request_permission(json!({ "bash_command": "ls" })).await;
+        let result = transport
+            .request_permission(json!({ "bash_command": "ls" }))
+            .await;
         assert!(result.is_err(), "timeout must fail closed: {result:?}");
         assert!(
             started.elapsed() >= Duration::from_millis(45),

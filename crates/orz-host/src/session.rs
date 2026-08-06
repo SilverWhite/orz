@@ -15,7 +15,9 @@ use orz_assurance::permit::PermitSigner;
 use orz_assurance::session::snapshot::SnapshotStore;
 use orz_assurance::{EventType, Redaction, RunEvent};
 
-use crate::keystore::{KeystoreError, MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore};
+use crate::keystore::{
+    KeystoreError, MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore,
+};
 
 /// Error during session bootstrap.
 #[derive(Debug, thiserror::Error)]
@@ -78,13 +80,11 @@ pub fn check_workspace_trust(cwd: &Path) -> Result<WorkspaceTrust, SessionError>
     let key = orz_workspace::trust::workspace_key(cwd);
     let inputs = orz_workspace::folder_trust::decide_inputs_with_interactive(cwd, &key, false);
     match orz_workspace::folder_trust::decide(true, &inputs) {
-        orz_workspace::folder_trust::TrustOutcome::Trusted => {
-            Ok(WorkspaceTrust::ObservedTrusted)
-        }
+        orz_workspace::folder_trust::TrustOutcome::Trusted => Ok(WorkspaceTrust::ObservedTrusted),
         orz_workspace::folder_trust::TrustOutcome::Prompt
-        | orz_workspace::folder_trust::TrustOutcome::Untrusted => Err(
-            SessionError::TrustFailed(format!("workspace not trusted: {}", cwd.display())),
-        ),
+        | orz_workspace::folder_trust::TrustOutcome::Untrusted => Err(SessionError::TrustFailed(
+            format!("workspace not trusted: {}", cwd.display()),
+        )),
     }
 }
 
@@ -138,9 +138,8 @@ pub async fn bootstrap_session(
         "created_at": chrono::Utc::now().to_rfc3339(),
         "schema_version": "0.1.0-draft",
     });
-    let manifest_sha256 = orz_assurance::sha256_hex(
-        &orz_assurance::canonical_json(&manifest).unwrap_or_default(),
-    );
+    let manifest_sha256 =
+        orz_assurance::sha256_hex(&orz_assurance::canonical_json(&manifest).unwrap_or_default());
 
     // Record run_preflight as event 0
     let mut preflight = RunEvent::new(
@@ -185,7 +184,11 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("orz-host-session-test-{}-{}", std::process::id(), n));
+        let dir = std::env::temp_dir().join(format!(
+            "orz-host-session-test-{}-{}",
+            std::process::id(),
+            n
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

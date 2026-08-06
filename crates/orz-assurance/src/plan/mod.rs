@@ -14,6 +14,4 @@ pub mod artifact;
 pub mod state_machine;
 
 pub use artifact::{PlanArtifact, PlanSection, verify_plan_artifact};
-pub use state_machine::{
-    PlanApprovalDecision, PlanApprovalRecord, PlanState, PlanStateMachine,
-};
+pub use state_machine::{PlanApprovalDecision, PlanApprovalRecord, PlanState, PlanStateMachine};

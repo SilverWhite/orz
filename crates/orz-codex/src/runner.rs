@@ -14,18 +14,20 @@ use std::time::Duration;
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use futures::StreamExt;
 use orz_host::acp_server::AcpServer;
 use orz_host::codex_app::CodexAppServer;
 use orz_host::session::TrustPolicy;
 use orz_loop::gateway::model::ModelGateway;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::time::interval;
 
-use crate::app::{handle_key, CodexApp, KeyOutcome};
-use crate::client::{CodexClient, ClientMsg};
+use crate::app::{CodexApp, KeyOutcome, handle_key};
+use crate::client::{ClientMsg, CodexClient};
 use crate::widgets::render_frame;
 
 /// UI tick — dialog countdown rendering and frame refresh.
@@ -174,7 +176,10 @@ async fn do_prompt(client: &mut CodexClient, app: &mut CodexApp, text: String) {
 /// Request cancellation (Ctrl+Z / `/stop`) — immediate feedback; the
 /// terminal `turn/completed{interrupted}` arrives via the message loop.
 async fn do_interrupt(client: &mut CodexClient, app: &mut CodexApp) {
-    if matches!(app.status, crate::app::RunState::Running | crate::app::RunState::WaitingApproval) {
+    if matches!(
+        app.status,
+        crate::app::RunState::Running | crate::app::RunState::WaitingApproval
+    ) {
         // An open approval blocks the run inside the permission await — the
         // cancel checkpoint is unreachable until it resolves. Answer deny on
         // the wire first (same reasoning as drain_until_cancelled, review
@@ -293,10 +298,7 @@ mod tests {
     /// Build host + client + app (the run-loop pieces) for E2E tests — the
     /// loop itself is exercised through the same message pump the runner
     /// uses, without a real terminal.
-    fn harness(
-        script: Vec<ScriptedResponse>,
-        base: &std::path::Path,
-    ) -> (CodexClient, CodexApp) {
+    fn harness(script: Vec<ScriptedResponse>, base: &std::path::Path) -> (CodexClient, CodexApp) {
         let acp = Arc::new(AcpServer::with_gateway(Arc::new(FakeProvider::new(script))));
         let parts = CodexAppServer::new_parts(acp, base.to_path_buf(), TrustPolicy::Skip);
         (CodexClient::connect_inprocess(parts), CodexApp::new())
@@ -382,7 +384,11 @@ mod tests {
                 assert!(delta_text.contains("终局答案。"), "{delta_text:?}");
                 assert_eq!(completed_text.as_deref(), Some("终局答案。"));
                 // The user message is rendered from the submission.
-                assert!(app.messages.iter().any(|m| m.role == crate::app::Role::User && m.text == "你好"));
+                assert!(
+                    app.messages
+                        .iter()
+                        .any(|m| m.role == crate::app::Role::User && m.text == "你好")
+                );
                 let thread8: String = app.thread_id.as_ref().unwrap().chars().take(8).collect();
                 assert_eq!(journal_terminal(&base, &thread8), "run_finished");
             })
@@ -479,7 +485,8 @@ mod tests {
                 recv_until_turn_completed(&mut client2, &mut app2).await;
                 let thread8b: String = app2.thread_id.as_ref().unwrap().chars().take(8).collect();
                 let events2 = std::fs::read_to_string(
-                    base2.join(".gsa")
+                    base2
+                        .join(".gsa")
                         .join("runs")
                         .join(format!("RUN-{thread8b}-0"))
                         .join("events.jsonl"),
@@ -537,7 +544,11 @@ mod tests {
                 // Second submit while running → rejected with a hint.
                 let before = app.messages.len();
                 submit(&mut client, &mut app, "第二个").await;
-                assert_eq!(app.messages.len(), before + 1, "only the hint message added");
+                assert_eq!(
+                    app.messages.len(),
+                    before + 1,
+                    "only the hint message added"
+                );
                 assert!(app.messages.last().unwrap().text.contains("正在运行"));
                 // Drain to completion so the LocalSet has no pending turns.
                 recv_until_turn_completed(&mut client, &mut app).await;

@@ -13,8 +13,7 @@ pub const ORIENTATION_BLOCK: &str = "[ORIENTATION_CHECKPOINT v0.1]\n\
 [/ORIENTATION_CHECKPOINT]";
 
 /// Checklist context prefix template (Python `CHECKLIST_CONTEXT_TEMPLATE`).
-pub const CHECKLIST_CONTEXT_TEMPLATE: &str =
-    "[CHECKLIST_CONTEXT v0.1]\n\
+pub const CHECKLIST_CONTEXT_TEMPLATE: &str = "[CHECKLIST_CONTEXT v0.1]\n\
 当前步骤: {step_id} — {title}\n\
 任务位置: 步骤 {position} / 共 {total} 项\n\
 步骤状态: {status}\n\
@@ -264,7 +263,13 @@ mod tests {
             total: 5,
             status: "in_progress".to_string(),
         };
-        let c = build_checkpoint("TASK", CheckpointTrigger::FixedStepInterval { step_index: 1 }, None, None, Some(&ctx));
+        let c = build_checkpoint(
+            "TASK",
+            CheckpointTrigger::FixedStepInterval { step_index: 1 },
+            None,
+            None,
+            Some(&ctx),
+        );
         assert!(c.message_block.starts_with("[CHECKLIST_CONTEXT v0.1]"));
         assert!(c.message_block.contains("当前步骤: S3 — 验证证据链"));
         assert!(c.message_block.contains("步骤 3 / 共 5 项"));

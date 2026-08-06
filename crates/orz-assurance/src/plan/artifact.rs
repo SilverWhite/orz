@@ -37,12 +37,8 @@ pub struct PlanArtifact {
 
 impl PlanArtifact {
     /// The four canonical section titles (§3.1).
-    pub const REQUIRED_SECTION_TITLES: [&'static str; 4] = [
-        "前期调查",
-        "具体计划",
-        "具体设计",
-        "实施方案",
-    ];
+    pub const REQUIRED_SECTION_TITLES: [&'static str; 4] =
+        ["前期调查", "具体计划", "具体设计", "实施方案"];
 
     pub fn new(
         plan_id: impl Into<String>,
@@ -142,7 +138,11 @@ pub fn verify_plan_artifact(artifact: &PlanArtifact) -> PlanVerification {
             "sections must be exactly the four required titles in order, got {titles:?}"
         ));
     }
-    if artifact.sections.iter().any(|s| s.content_md.trim().is_empty()) {
+    if artifact
+        .sections
+        .iter()
+        .any(|s| s.content_md.trim().is_empty())
+    {
         errors.push("every section must have non-empty content".to_string());
     }
 

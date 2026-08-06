@@ -11,13 +11,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use orz_assurance::{
-    seal_event, EventType, JournalRecorderError, Redaction, RunEvent,
-};
+use orz_assurance::{EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
 use orz_workspace::permission::PermissionHookTransport;
 
-use crate::session::{bootstrap_session, SessionError};
+use crate::session::{SessionError, bootstrap_session};
 
 /// Errors from the ACP server layer.
 #[derive(Debug, thiserror::Error)]
@@ -338,11 +336,7 @@ impl AcpServer {
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
             let n = session.prompt_count;
             session.prompt_count += 1;
-            (
-                session.base_dir.clone(),
-                session.trust_policy,
-                n,
-            )
+            (session.base_dir.clone(), session.trust_policy, n)
         };
 
         let suffix: String = session_id.chars().take(8).collect();
@@ -538,9 +532,7 @@ impl AcpServer {
                 // side; a failed restore journal is an integrity failure).
                 // The journal task still shuts down on every path (slice #7
                 // "shutdown 全路径").
-                let mut recorded = recorder
-                    .record(EventType::SnapshotRestored, payload)
-                    .await;
+                let mut recorded = recorder.record(EventType::SnapshotRestored, payload).await;
                 if recorded.is_ok() {
                     recorded = recorder
                         .record(
@@ -648,12 +640,12 @@ impl Default for AcpServer {
 
 // ── Phase 1: Minimal LoopHost implementation ─────────────────────────
 
+use async_trait::async_trait;
 use orz_assurance::JournalRecorder;
 use orz_loop::gateway::fake::FakeProvider;
 use orz_loop::gateway::model::ModelGateway;
 use orz_loop::host::{LoopHost, ToolDef, ToolRegistry};
 use xai_acp_lib::AcpAgentGatewaySender;
-use async_trait::async_trait;
 
 /// Phase 1 minimal host — only provides journal access.
 /// Tool registry, permissions, etc. are stubbed.
@@ -694,12 +686,12 @@ mod tests {
     use crate::stdio::StdioAgentHandler;
     use agent_client_protocol as acp;
     use agent_client_protocol::MessageHandler;
+    use orz_assurance::EventType;
     use orz_loop::controller::AgentLoopError;
     use orz_loop::gateway::fake::ScriptedResponse;
     use orz_loop::gateway::model::ToolCall;
-    use orz_assurance::EventType;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Paths of every run journal under `base`, in creation order.
     fn all_run_events_paths(base: &Path) -> Vec<PathBuf> {
@@ -709,9 +701,7 @@ mod tests {
             .map(|e| e.unwrap().path())
             .collect();
         dirs.sort();
-        dirs.iter()
-            .map(|d| d.join("events.jsonl"))
-            .collect()
+        dirs.iter().map(|d| d.join("events.jsonl")).collect()
     }
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -733,9 +723,7 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(
-            format!("orz-acp-test-{}-{}", std::process::id(), n)
-        );
+        let dir = std::env::temp_dir().join(format!("orz-acp-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -875,11 +863,7 @@ mod tests {
                 for dir in &run_dirs {
                     let replay =
                         orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
-                    assert!(
-                        replay.valid,
-                        "run journal invalid: {:?}",
-                        replay.errors
-                    );
+                    assert!(replay.valid, "run journal invalid: {:?}", replay.errors);
                     assert_eq!(replay.event_count, 10, "preflight + 9 turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
@@ -902,15 +886,25 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(server.list_sessions().contains(&"test-session-close".to_string()));
+        assert!(
+            server
+                .list_sessions()
+                .contains(&"test-session-close".to_string())
+        );
 
         assert!(server.close_session("test-session-close"));
-        assert!(!server.list_sessions().contains(&"test-session-close".to_string()));
+        assert!(
+            !server
+                .list_sessions()
+                .contains(&"test-session-close".to_string())
+        );
         // Closing a nonexistent session reports false.
         assert!(!server.close_session("test-session-close"));
 
         // A closed session rejects new prompts.
-        let result = server.handle_session_prompt("test-session-close", "hi").await;
+        let result = server
+            .handle_session_prompt("test-session-close", "hi")
+            .await;
         assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&base);
@@ -1134,12 +1128,8 @@ mod tests {
                 assert!(!server.cancel_current_run("sess-cancel"));
 
                 let events = run_events(&base);
-                let types: Vec<EventType> =
-                    events.iter().map(|e| e.event_type.clone()).collect();
-                assert!(
-                    types.contains(&EventType::RunCancelled),
-                    "{types:?}"
-                );
+                let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
+                assert!(types.contains(&EventType::RunCancelled), "{types:?}");
                 let runs_dir = base.join(".gsa").join("runs");
                 let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
                     .unwrap()
@@ -1152,10 +1142,7 @@ mod tests {
                     true,
                 );
                 assert!(replay.valid, "journal invalid: {:?}", replay.errors);
-                assert_eq!(
-                    replay.terminal_event.as_deref(),
-                    Some("run_cancelled")
-                );
+                assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
 
                 let _ = std::fs::remove_dir_all(&base);
             })
@@ -1212,9 +1199,9 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = Arc::new(AcpServer::with_gateway(Arc::new(
-                    FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]),
-                )));
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(FakeProvider::from_texts(
+                    vec!["结果：完成", "结果：完成"],
+                ))));
                 server.set_gateway(dead_gateway());
                 server
                     .handle_session_new(
@@ -1228,9 +1215,7 @@ mod tests {
                 // Cancel BEFORE the prompt is even issued.
                 assert!(!server.cancel_current_run("sess-race"));
 
-                let result = server
-                    .handle_session_prompt("sess-race", "hello")
-                    .await;
+                let result = server.handle_session_prompt("sess-race", "hello").await;
                 assert!(matches!(
                     result,
                     Err(AcpError::AgentLoop(AgentLoopError::Cancelled))
@@ -1243,10 +1228,7 @@ mod tests {
                     true,
                 );
                 assert!(replay.valid, "journal invalid: {:?}", replay.errors);
-                assert_eq!(
-                    replay.terminal_event.as_deref(),
-                    Some("run_cancelled")
-                );
+                assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
 
                 let _ = std::fs::remove_dir_all(&base);
             })
@@ -1307,14 +1289,9 @@ mod tests {
                     (&journals[0], "run_cancelled"),
                     (&journals[1], "run_finished"),
                 ] {
-                    let replay =
-                        orz_assurance::replay_journal(path, None, None, true);
+                    let replay = orz_assurance::replay_journal(path, None, None, true);
                     assert!(replay.valid, "{path:?} invalid: {:?}", replay.errors);
-                    assert_eq!(
-                        replay.terminal_event.as_deref(),
-                        Some(terminal),
-                        "{path:?}"
-                    );
+                    assert_eq!(replay.terminal_event.as_deref(), Some(terminal), "{path:?}");
                 }
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -1355,25 +1332,19 @@ mod tests {
 
                 let h = handler.clone();
                 let prompt_task = tokio::task::spawn_local(async move {
-                    h.handle_request(acp::ClientRequest::PromptRequest(
-                        acp::PromptRequest::new(
-                            "sess-stdio-cancel",
-                            vec![acp::ContentBlock::Text(
-                                acp::TextContent::new("hello"),
-                            )],
-                        ),
-                    ))
+                    h.handle_request(acp::ClientRequest::PromptRequest(acp::PromptRequest::new(
+                        "sess-stdio-cancel",
+                        vec![acp::ContentBlock::Text(acp::TextContent::new("hello"))],
+                    )))
                     .await
                 });
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 handler
-                    .handle_notification(
-                        acp::ClientNotification::CancelNotification(
-                            acp::CancelNotification::new(acp::SessionId::new(
-                                "sess-stdio-cancel".to_string(),
-                            )),
-                        ),
-                    )
+                    .handle_notification(acp::ClientNotification::CancelNotification(
+                        acp::CancelNotification::new(acp::SessionId::new(
+                            "sess-stdio-cancel".to_string(),
+                        )),
+                    ))
                     .await
                     .unwrap();
 
@@ -1662,14 +1633,10 @@ mod tests {
             .unwrap();
         // Simulate an in-flight prompt: a live cancellation token for the
         // session (registered at prompt start, slice #7).
-        server
-            .runs
-            .lock()
-            .unwrap()
-            .insert(
-                "sess-busy".into(),
-                RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
-            );
+        server.runs.lock().unwrap().insert(
+            "sess-busy".into(),
+            RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+        );
 
         let err = server
             .restore_snapshot("sess-busy", &"d".repeat(64), None)
@@ -1732,42 +1699,43 @@ mod tests {
     /// interleaving with the worktree mutation.
     #[tokio::test]
     async fn prompt_rejected_while_restore_in_flight() {
-        tokio::task::LocalSet::new().run_until(async {
-            let base = test_dir();
-            let server = AcpServer::new();
-            server
-                .handle_session_new(
-                    "sess-restore-prompt",
-                    Some(base.clone()),
-                    crate::session::TrustPolicy::Skip,
-                )
-                .await
-                .unwrap();
-            server
-                .runs
-                .lock()
-                .unwrap()
-                .insert("sess-restore-prompt".into(), RunInFlight::Restore);
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = AcpServer::new();
+                server
+                    .handle_session_new(
+                        "sess-restore-prompt",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server
+                    .runs
+                    .lock()
+                    .unwrap()
+                    .insert("sess-restore-prompt".into(), RunInFlight::Restore);
 
-            let result = server
-                .handle_session_prompt("sess-restore-prompt", "hello")
-                .await;
-            let err = result.expect_err("prompt during restore must be rejected");
-            assert!(
-                matches!(err, AcpError::InvalidRequest(_)),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                !matches!(
-                    server.runs.lock().unwrap().get("sess-restore-prompt"),
-                    Some(RunInFlight::Prompt(_))
-                ),
-                "no run token registered on the rejected path"
-            );
+                let result = server
+                    .handle_session_prompt("sess-restore-prompt", "hello")
+                    .await;
+                let err = result.expect_err("prompt during restore must be rejected");
+                assert!(
+                    matches!(err, AcpError::InvalidRequest(_)),
+                    "unexpected error: {err:?}"
+                );
+                assert!(
+                    !matches!(
+                        server.runs.lock().unwrap().get("sess-restore-prompt"),
+                        Some(RunInFlight::Prompt(_))
+                    ),
+                    "no run token registered on the rejected path"
+                );
 
-            let _ = std::fs::remove_dir_all(&base);
-        })
-        .await;
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
     }
 
     /// Slice #11 P2-2: the in-flight marker is released on every completion
@@ -1830,48 +1798,51 @@ mod tests {
     /// successful prompt.
     #[tokio::test]
     async fn prompt_bootstrap_failure_releases_cancel_token() {
-        tokio::task::LocalSet::new().run_until(async {
-            let base = test_dir();
-            let server = AcpServer::new();
-            server
-                .handle_session_new(
-                    "sess-token",
-                    Some(base.clone()),
-                    crate::session::TrustPolicy::Skip,
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = AcpServer::new();
+                server
+                    .handle_session_new(
+                        "sess-token",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                // Block the prompt's run dir with a FILE → bootstrap_session
+                // fails after the token was registered (slice #7 inserts it
+                // before bootstrap).
+                let session8: String = "sess-token".chars().take(8).collect();
+                std::fs::create_dir_all(base.join(".gsa").join("runs")).unwrap();
+                std::fs::write(
+                    base.join(".gsa")
+                        .join("runs")
+                        .join(format!("RUN-{session8}-0")),
+                    "blocker",
                 )
-                .await
                 .unwrap();
-            // Block the prompt's run dir with a FILE → bootstrap_session
-            // fails after the token was registered (slice #7 inserts it
-            // before bootstrap).
-            let session8: String = "sess-token".chars().take(8).collect();
-            std::fs::create_dir_all(base.join(".gsa").join("runs")).unwrap();
-            std::fs::write(
-                base.join(".gsa").join("runs").join(format!("RUN-{session8}-0")),
-                "blocker",
-            )
-            .unwrap();
 
-            let result = server.handle_session_prompt("sess-token", "x").await;
-            assert!(result.is_err(), "bootstrap must fail: {result:?}");
-            assert!(
-                !server.runs.lock().unwrap().contains_key("sess-token"),
-                "token released on the bootstrap-failure path"
-            );
-            // A restore afterwards is NOT falsely rejected as in-flight
-            // (it fails on the unknown hash instead).
-            let err = server
-                .restore_snapshot("sess-token", &"0".repeat(64), None)
-                .await
-                .expect_err("restore proceeds past the in-flight check");
-            assert!(
-                !matches!(err, AcpError::InvalidRequest(_)),
-                "no false in-flight rejection: {err:?}"
-            );
+                let result = server.handle_session_prompt("sess-token", "x").await;
+                assert!(result.is_err(), "bootstrap must fail: {result:?}");
+                assert!(
+                    !server.runs.lock().unwrap().contains_key("sess-token"),
+                    "token released on the bootstrap-failure path"
+                );
+                // A restore afterwards is NOT falsely rejected as in-flight
+                // (it fails on the unknown hash instead).
+                let err = server
+                    .restore_snapshot("sess-token", &"0".repeat(64), None)
+                    .await
+                    .expect_err("restore proceeds past the in-flight check");
+                assert!(
+                    !matches!(err, AcpError::InvalidRequest(_)),
+                    "no false in-flight rejection: {err:?}"
+                );
 
-            let _ = std::fs::remove_dir_all(&base);
-        })
-        .await
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
     }
 
     /// RST- and RUN- run ids are independent: a second restore gets
@@ -1884,53 +1855,53 @@ mod tests {
         // `spawn_local` — the whole body runs inside a LocalSet.
         tokio::task::LocalSet::new()
             .run_until(async {
-        let base = test_dir();
-        std::fs::write(base.join("a.txt"), "v1").unwrap();
-        let store = orz_assurance::session::snapshot::SnapshotStore::new(
-            base.join(".gsa").join("snapshots"),
-            base.clone(),
-        )
-        .unwrap();
-        let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
+                let base = test_dir();
+                std::fs::write(base.join("a.txt"), "v1").unwrap();
+                let store = orz_assurance::session::snapshot::SnapshotStore::new(
+                    base.join(".gsa").join("snapshots"),
+                    base.clone(),
+                )
+                .unwrap();
+                let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
 
-        let server = AcpServer::new();
-        server
-            .handle_session_new(
-                "sess-indep",
-                Some(base.clone()),
-                crate::session::TrustPolicy::Skip,
-            )
-            .await
-            .unwrap();
-        server
-            .restore_snapshot("sess-indep", &record.snapshot_hash, None)
-            .await
-            .unwrap();
-        server
-            .restore_snapshot("sess-indep", &record.snapshot_hash, None)
-            .await
-            .unwrap();
-        assert!(restore_journal(&base, "sess-indep", 0).is_file());
-        assert!(restore_journal(&base, "sess-indep", 1).is_file());
+                let server = AcpServer::new();
+                server
+                    .handle_session_new(
+                        "sess-indep",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server
+                    .restore_snapshot("sess-indep", &record.snapshot_hash, None)
+                    .await
+                    .unwrap();
+                server
+                    .restore_snapshot("sess-indep", &record.snapshot_hash, None)
+                    .await
+                    .unwrap();
+                assert!(restore_journal(&base, "sess-indep", 0).is_file());
+                assert!(restore_journal(&base, "sess-indep", 1).is_file());
 
-        // A prompt after two restores still uses the prompt counter (0) —
-        // the client's `run_dir_for_next_prompt` guess stays correct.
-        server
-            .handle_session_prompt("sess-indep", "hi")
-            .await
-            .expect("prompt after restores");
-        let session8: String = "sess-indep".chars().take(8).collect();
-        let prompt_journal = base
-            .join(".gsa")
-            .join("runs")
-            .join(format!("RUN-{session8}-0"))
-            .join("events.jsonl");
-        assert!(
-            prompt_journal.is_file(),
-            "prompt run id must not be displaced by restores"
-        );
+                // A prompt after two restores still uses the prompt counter (0) —
+                // the client's `run_dir_for_next_prompt` guess stays correct.
+                server
+                    .handle_session_prompt("sess-indep", "hi")
+                    .await
+                    .expect("prompt after restores");
+                let session8: String = "sess-indep".chars().take(8).collect();
+                let prompt_journal = base
+                    .join(".gsa")
+                    .join("runs")
+                    .join(format!("RUN-{session8}-0"))
+                    .join("events.jsonl");
+                assert!(
+                    prompt_journal.is_file(),
+                    "prompt run id must not be displaced by restores"
+                );
 
-        let _ = std::fs::remove_dir_all(&base);
+                let _ = std::fs::remove_dir_all(&base);
             })
             .await
     }

@@ -29,7 +29,10 @@ pub enum ClientMsg {
         respond: oneshot::Sender<acp::RequestPermissionResponse>,
     },
     /// A streamed agent message chunk (text-delta source, streaming slice).
-    SessionNotification { session_id: String, text_chunk: String },
+    SessionNotification {
+        session_id: String,
+        text_chunk: String,
+    },
     /// A spawned prompt turn finished (result of the full run).
     ///
     /// `seq` is the prompt counter snapshot at spawn time — the runner's
@@ -67,10 +70,17 @@ impl acp::Client for TuiClientHandler {
             })
             .is_err()
         {
-            return Err(acp::Error::new(acp::ErrorCode::InternalError.into(), "permission dialog channel closed"));
+            return Err(acp::Error::new(
+                acp::ErrorCode::InternalError.into(),
+                "permission dialog channel closed",
+            ));
         }
-        rx.await
-            .map_err(|_| acp::Error::new(acp::ErrorCode::InternalError.into(), "permission dialog dropped"))
+        rx.await.map_err(|_| {
+            acp::Error::new(
+                acp::ErrorCode::InternalError.into(),
+                "permission dialog dropped",
+            )
+        })
     }
 
     async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
@@ -109,7 +119,9 @@ pub fn connect_inprocess(server: Arc<AcpServer>, policy: TrustPolicy) -> InProce
     let (msg_tx, msg_rx) = mpsc::unbounded_channel();
 
     // Client side — the TUI.
-    let handler = TuiClientHandler { msg_tx: msg_tx.clone() };
+    let handler = TuiClientHandler {
+        msg_tx: msg_tx.clone(),
+    };
     let (conn, client_io) = acp::ClientSideConnection::new(
         handler,
         client_write.compat_write(),
@@ -182,10 +194,9 @@ impl InProcessClient {
     /// Send one prompt and await the full run (blocks until the turn ends —
     /// callers spawn this as a task; live rendering comes from the tail).
     pub async fn prompt(&self, text: &str) -> acp::Result<acp::PromptResponse> {
-        let session_id = self
-            .session_id
-            .clone()
-            .ok_or_else(|| acp::Error::new(acp::ErrorCode::InternalError.into(), "no session started"))?;
+        let session_id = self.session_id.clone().ok_or_else(|| {
+            acp::Error::new(acp::ErrorCode::InternalError.into(), "no session started")
+        })?;
         self.conn
             .prompt(acp::PromptRequest::new(
                 session_id,
@@ -238,11 +249,8 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "orz-tui-acp-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("orz-tui-acp-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -268,7 +276,10 @@ mod tests {
         client: &mut InProcessClient,
         base: &Path,
         text: &str,
-    ) -> (acp::RequestPermissionRequest, tokio::sync::oneshot::Sender<acp::RequestPermissionResponse>) {
+    ) -> (
+        acp::RequestPermissionRequest,
+        tokio::sync::oneshot::Sender<acp::RequestPermissionResponse>,
+    ) {
         client.start_session(base.to_path_buf()).await.unwrap();
         client.prompt_count += 1;
         let session_id = client.session_id.clone().unwrap();
@@ -296,7 +307,9 @@ mod tests {
             .chars()
             .take(8)
             .collect();
-        base.join(".gsa").join("runs").join(format!("RUN-{session8}-0"))
+        base.join(".gsa")
+            .join("runs")
+            .join(format!("RUN-{session8}-0"))
     }
 
     #[tokio::test]
@@ -307,10 +320,16 @@ mod tests {
                 let server = scripted_server(bash_script());
                 let mut client = connect_inprocess(server, TrustPolicy::Skip);
 
-                let (request, respond) = run_prompt_until_permission(&mut client, &base, "运行 dir").await;
+                let (request, respond) =
+                    run_prompt_until_permission(&mut client, &base, "运行 dir").await;
                 // The host normalizes call ids to `call-<tool>`.
                 assert_eq!(request.tool_call.tool_call_id.0.as_ref(), "call-bash");
-                assert!(request.options.iter().any(|o| o.kind == acp::PermissionOptionKind::AllowOnce));
+                assert!(
+                    request
+                        .options
+                        .iter()
+                        .any(|o| o.kind == acp::PermissionOptionKind::AllowOnce)
+                );
 
                 // User allows once.
                 let allow_once = request
@@ -331,7 +350,11 @@ mod tests {
 
                 // Await the run completion.
                 let completed = loop {
-                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
+                    if let ClientMsg::PromptCompleted { result, .. } =
+                        client.msg_rx.recv().await.unwrap()
+                    {
+                        break result;
+                    }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");
 
@@ -402,8 +425,9 @@ mod tests {
                 // Mirror production: deltas at arrival rate, journal events at
                 // 50ms tail granularity.
                 let mut app = crate::app::TuiApp::new();
-                let mut tail =
-                    crate::source::JournalTailSource::new(run_dir_of(&client, &base).join("events.jsonl"));
+                let mut tail = crate::source::JournalTailSource::new(
+                    run_dir_of(&client, &base).join("events.jsonl"),
+                );
                 let mut ticker = tokio::time::interval(std::time::Duration::from_millis(50));
                 let completed = loop {
                     tokio::select! {
@@ -488,7 +512,11 @@ mod tests {
                 let seq = client.prompt_count;
                 client.spawn_prompt(session_id.clone(), "问题一".into(), seq);
                 let done = loop {
-                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
+                    if let ClientMsg::PromptCompleted { result, .. } =
+                        client.msg_rx.recv().await.unwrap()
+                    {
+                        break result;
+                    }
                 };
                 assert!(done.is_ok(), "prompt 1 failed: {done:?}");
 
@@ -498,17 +526,24 @@ mod tests {
                 let seq = client.prompt_count;
                 client.spawn_prompt(session_id, "问题二".into(), seq);
                 let done = loop {
-                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
+                    if let ClientMsg::PromptCompleted { result, .. } =
+                        client.msg_rx.recv().await.unwrap()
+                    {
+                        break result;
+                    }
                 };
                 assert!(done.is_ok(), "prompt 2 failed: {done:?}");
 
-                let dir2 = base
-                    .join(".gsa")
-                    .join("runs")
-                    .join(format!(
-                        "RUN-{}-1",
-                        client.session_id.as_ref().unwrap().chars().take(8).collect::<String>()
-                    ));
+                let dir2 = base.join(".gsa").join("runs").join(format!(
+                    "RUN-{}-1",
+                    client
+                        .session_id
+                        .as_ref()
+                        .unwrap()
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                ));
                 assert_ne!(dir1, dir2, "run dirs must be distinct");
                 for path in [dir1.join("events.jsonl"), dir2.join("events.jsonl")] {
                     let replay = orz_assurance::replay_journal(&path, None, None, true);
@@ -528,7 +563,8 @@ mod tests {
                 let server = scripted_server(bash_script());
                 let mut client = connect_inprocess(server, TrustPolicy::Skip);
 
-                let (_request, respond) = run_prompt_until_permission(&mut client, &base, "运行 dir").await;
+                let (_request, respond) =
+                    run_prompt_until_permission(&mut client, &base, "运行 dir").await;
                 respond
                     .send(acp::RequestPermissionResponse::new(
                         acp::RequestPermissionOutcome::Cancelled,
@@ -536,7 +572,11 @@ mod tests {
                     .unwrap();
 
                 let completed = loop {
-                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
+                    if let ClientMsg::PromptCompleted { result, .. } =
+                        client.msg_rx.recv().await.unwrap()
+                    {
+                        break result;
+                    }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");
 
@@ -545,7 +585,10 @@ mod tests {
                 assert!(replay.valid, "journal invalid: {:?}", replay.errors);
                 let content = std::fs::read_to_string(&events_path).unwrap();
                 assert!(content.contains("\"deny\""));
-                assert!(!content.contains("\"tool_started\""), "denied tool must not execute");
+                assert!(
+                    !content.contains("\"tool_started\""),
+                    "denied tool must not execute"
+                );
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await;
@@ -599,10 +642,7 @@ mod tests {
                 let events_path = run_dir_of(&client, &base).join("events.jsonl");
                 let replay = orz_assurance::replay_journal(&events_path, None, None, true);
                 assert!(replay.valid, "journal invalid: {:?}", replay.errors);
-                assert_eq!(
-                    replay.terminal_event.as_deref(),
-                    Some("run_cancelled")
-                );
+                assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
 
                 // Replay projection shows the 已取消 status card.
                 let (lines, valid) =
@@ -690,18 +730,10 @@ mod tests {
                     (dirs[0].clone(), "run_cancelled"),
                     (dirs[1].clone(), "run_finished"),
                 ] {
-                    let replay = orz_assurance::replay_journal(
-                        &dir.join("events.jsonl"),
-                        None,
-                        None,
-                        true,
-                    );
+                    let replay =
+                        orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
                     assert!(replay.valid, "{dir:?} invalid: {:?}", replay.errors);
-                    assert_eq!(
-                        replay.terminal_event.as_deref(),
-                        Some(terminal),
-                        "{dir:?}"
-                    );
+                    assert_eq!(replay.terminal_event.as_deref(), Some(terminal), "{dir:?}");
                 }
 
                 let _ = std::fs::remove_dir_all(&base);

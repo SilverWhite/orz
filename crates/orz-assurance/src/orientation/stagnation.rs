@@ -69,7 +69,9 @@ pub fn max_ngram_repeat(tokens: &[String], min_n: usize, max_n: usize) -> u32 {
         }
         let mut counts: HashMap<&[String], u32> = HashMap::new();
         for index in 0..=(tokens.len() - ngram_size) {
-            *counts.entry(&tokens[index..index + ngram_size]).or_insert(0) += 1;
+            *counts
+                .entry(&tokens[index..index + ngram_size])
+                .or_insert(0) += 1;
         }
         if let Some(max_count) = counts.values().max() {
             best = best.max(*max_count);
@@ -227,9 +229,13 @@ mod tests {
     fn consecutive_repeat_over_threshold_triggers() {
         // 11 identical outputs > threshold 10.
         let outputs = vec!["同样的输出内容"; 11];
-        let (decision, metrics) =
-            evaluate_runtime_stagnation_guard(&inputs(outputs)).unwrap();
-        assert_eq!(decision, StagnationDecision::RestartRequested { packet: RestartPacket::new() });
+        let (decision, metrics) = evaluate_runtime_stagnation_guard(&inputs(outputs)).unwrap();
+        assert_eq!(
+            decision,
+            StagnationDecision::RestartRequested {
+                packet: RestartPacket::new()
+            }
+        );
         assert_eq!(
             metrics.reason_codes,
             vec![REASON_CONSECUTIVE_REPEAT.to_string()]
@@ -243,15 +249,18 @@ mod tests {
         let output = pattern.repeat(11);
         let (decision, metrics) =
             evaluate_runtime_stagnation_guard(&inputs(vec![output.as_str()])).unwrap();
-        assert!(metrics.reason_codes.contains(&REASON_NGRAM_REPEAT.to_string()));
+        assert!(
+            metrics
+                .reason_codes
+                .contains(&REASON_NGRAM_REPEAT.to_string())
+        );
         assert_ne!(decision, StagnationDecision::Continue);
     }
 
     #[test]
     fn below_threshold_continues() {
         let outputs = vec!["第一轮输出", "第二轮输出", "第三轮输出"];
-        let (decision, metrics) =
-            evaluate_runtime_stagnation_guard(&inputs(outputs)).unwrap();
+        let (decision, metrics) = evaluate_runtime_stagnation_guard(&inputs(outputs)).unwrap();
         assert_eq!(decision, StagnationDecision::Continue);
         assert!(metrics.reason_codes.is_empty());
     }
@@ -287,8 +296,7 @@ mod tests {
     fn threshold_boundary_is_strict_greater_than() {
         // Exactly 10 repeats (== threshold) does not trigger.
         let outputs = vec!["相同内容"; 10];
-        let (decision, metrics) =
-            evaluate_runtime_stagnation_guard(&inputs(outputs)).unwrap();
+        let (decision, metrics) = evaluate_runtime_stagnation_guard(&inputs(outputs)).unwrap();
         assert_eq!(decision, StagnationDecision::Continue);
         assert_eq!(metrics.max_consecutive_repeated_content, 10);
         assert!(metrics.reason_codes.is_empty());
@@ -303,10 +311,7 @@ mod tests {
 
     #[test]
     fn chinese_and_ascii_tokens_normalize() {
-        assert_eq!(
-            normalize_text("Hello世界! 你好"),
-            "hello世界 你好"
-        );
+        assert_eq!(normalize_text("Hello世界! 你好"), "hello世界 你好");
         let tokens = tokenize("ABC def");
         assert_eq!(tokens, vec!["abc".to_string(), "def".to_string()]);
     }

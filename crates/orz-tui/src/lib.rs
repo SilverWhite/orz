@@ -28,7 +28,7 @@ pub mod title;
 pub mod view_model;
 pub mod widgets;
 
-pub use runner::{run, run_replay, replay_to_screen, TuiConfig, TuiError};
+pub use runner::{TuiConfig, TuiError, replay_to_screen, run, run_replay};
 
 /// Single source of truth for the permission-dialog countdown: the host
 /// denies at this timeout, so the TUI's dialog shows the same deadline

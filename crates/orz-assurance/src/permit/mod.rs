@@ -299,8 +299,14 @@ impl PermitStore {
         }
         let expires_at = (selected_now + chrono::Duration::seconds(ttl)).min(envelope.expires_at);
 
-        let permit_id = format!("PERMIT-{}", uuid::Uuid::new_v4().simple().to_string().to_uppercase());
-        let receipt_id = format!("SAPR-{}", uuid::Uuid::new_v4().simple().to_string().to_uppercase());
+        let permit_id = format!(
+            "PERMIT-{}",
+            uuid::Uuid::new_v4().simple().to_string().to_uppercase()
+        );
+        let receipt_id = format!(
+            "SAPR-{}",
+            uuid::Uuid::new_v4().simple().to_string().to_uppercase()
+        );
         let binding = PermitBinding {
             action_sha256: action_sha256.to_string(),
             target_sha256: target_sha256.to_string(),
@@ -371,7 +377,8 @@ impl PermitStore {
         let consumed_path = dir.join(format!("{}.consumed.json", issued.permit_id));
         let claim_path = dir.join(format!("{}.consumption.claim", issued.permit_id));
         if consumed_path.exists() {
-            let existing: SensitiveActionPermit = serde_json::from_slice(&std::fs::read(&consumed_path)?)?;
+            let existing: SensitiveActionPermit =
+                serde_json::from_slice(&std::fs::read(&consumed_path)?)?;
             return Err(PermitError::AlreadyConsumed {
                 receipt_id: existing.receipt_id,
             });
@@ -384,7 +391,10 @@ impl PermitStore {
         let receipt = SensitiveActionPermit::new(
             signer,
             envelope,
-            format!("SAPR-{}", uuid::Uuid::new_v4().simple().to_string().to_uppercase()),
+            format!(
+                "SAPR-{}",
+                uuid::Uuid::new_v4().simple().to_string().to_uppercase()
+            ),
             issued.permit_id.clone(),
             PermitState::Consumed,
             selected_now,
@@ -452,7 +462,10 @@ pub fn verify_sensitive_action_permit(
 
     // Schema consts (sensitive-action-permit-v0.1.schema.json).
     if receipt.schema_version != SCHEMA_VERSION {
-        errors.push(format!("schema_version mismatch: {}", receipt.schema_version));
+        errors.push(format!(
+            "schema_version mismatch: {}",
+            receipt.schema_version
+        ));
     }
     if receipt.receipt_kind != RECEIPT_KIND {
         errors.push(format!("receipt_kind mismatch: {}", receipt.receipt_kind));
@@ -590,7 +603,11 @@ pub fn verify_sensitive_action_permit(
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn validate_sha256(value: &str, label: &str) -> Result<(), PermitError> {
-    if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+    if value.len() == 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
         Ok(())
     } else {
         Err(PermitError::InvalidSha256 {
@@ -688,7 +705,8 @@ mod tests {
         assert_eq!(receipt.integrity.signature.len(), 43); // base64url of 32 bytes
         assert!(receipt.integrity.key_id.starts_with("KEY-"));
 
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &receipt, None);
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &receipt, None);
         assert!(verification.valid, "{:?}", verification.errors);
 
         // Artifact written.
@@ -731,13 +749,22 @@ mod tests {
             Some(sha256_hex(&canonical_json(&issued).unwrap()).as_str())
         );
 
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &consumed, Some(&issued));
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &consumed, Some(&issued));
         assert!(verification.valid, "{:?}", verification.errors);
 
         // Claim + consumed artifacts exist.
         let dir_path = dir.path().join("one_shot_permit");
-        assert!(dir_path.join(format!("{}.consumption.claim", issued.permit_id)).exists());
-        assert!(dir_path.join(format!("{}.consumed.json", issued.permit_id)).exists());
+        assert!(
+            dir_path
+                .join(format!("{}.consumption.claim", issued.permit_id))
+                .exists()
+        );
+        assert!(
+            dir_path
+                .join(format!("{}.consumed.json", issued.permit_id))
+                .exists()
+        );
 
         // Second consume must fail (already consumed / claimed).
         let err = store
@@ -755,7 +782,8 @@ mod tests {
         assert!(matches!(err, PermitError::AlreadyConsumed { .. }));
 
         // Issued receipt itself remains verifiable and unmodified.
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &issued, None);
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &issued, None);
         assert!(verification.valid);
     }
 
@@ -812,18 +840,22 @@ mod tests {
         // Tamper with the signature.
         let mut tampered = receipt.clone();
         tampered.integrity.signature = "A".repeat(43);
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &tampered, None);
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &tampered, None);
         assert!(!verification.valid);
         assert!(verification.errors.iter().any(|e| e.contains("signature")));
 
         // Tamper with the binding after signing.
         receipt.binding.attempt = 2;
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &receipt, None);
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &receipt, None);
         assert!(!verification.valid);
-        assert!(verification
-            .errors
-            .iter()
-            .any(|e| e == "permit signed payload digest mismatch"));
+        assert!(
+            verification
+                .errors
+                .iter()
+                .any(|e| e == "permit signed payload digest mismatch")
+        );
     }
 
     #[test]
@@ -835,12 +867,15 @@ mod tests {
 
         // Issued receipt must not carry an issued-permit digest (schema allOf).
         issued.issued_permit_sha256 = Some("a".repeat(64));
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &issued, None);
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &issued, None);
         assert!(!verification.valid);
-        assert!(verification
-            .errors
-            .iter()
-            .any(|e| e == "issued permit must not reference an issued receipt"));
+        assert!(
+            verification
+                .errors
+                .iter()
+                .any(|e| e == "issued permit must not reference an issued receipt")
+        );
 
         // Consumed receipt must carry one.
         let mut consumed = store
@@ -856,12 +891,15 @@ mod tests {
             )
             .unwrap();
         consumed.issued_permit_sha256 = None;
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &consumed, None);
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &consumed, None);
         assert!(!verification.valid);
-        assert!(verification
-            .errors
-            .iter()
-            .any(|e| e == "consumed permit lacks issued-receipt digest"));
+        assert!(
+            verification
+                .errors
+                .iter()
+                .any(|e| e == "consumed permit lacks issued-receipt digest")
+        );
     }
 
     #[test]
@@ -906,8 +944,14 @@ mod tests {
             .iter()
             .filter(|r| matches!(r, Err(PermitError::ConsumptionClaimed)))
             .count();
-        assert_eq!(successes, 1, "exactly one consume must succeed: {results:?}");
-        assert_eq!(claimed, 1, "the racing consume must hit the claim: {results:?}");
+        assert_eq!(
+            successes, 1,
+            "exactly one consume must succeed: {results:?}"
+        );
+        assert_eq!(
+            claimed, 1,
+            "the racing consume must hit the claim: {results:?}"
+        );
     }
 
     #[test]
@@ -937,9 +981,15 @@ mod tests {
         let receipt = issue_one(&store, Utc::now());
 
         let other_signer = HmacSha256Signer::from_secret(b"some-other-install-key-9876543210");
-        let verification = verify_sensitive_action_permit(&other_signer, &test_envelope(), &receipt, None);
+        let verification =
+            verify_sensitive_action_permit(&other_signer, &test_envelope(), &receipt, None);
         assert!(!verification.valid);
-        assert!(verification.errors.iter().any(|e| e == "permit integrity key mismatch"));
+        assert!(
+            verification
+                .errors
+                .iter()
+                .any(|e| e == "permit integrity key mismatch")
+        );
     }
 
     #[test]
@@ -952,25 +1002,65 @@ mod tests {
 
         // Non-hex digest.
         let err = store
-            .issue(&s, &envelope, "xyz", &test_sha(2), &test_sha(3), &test_sha(4), 1, 300, Some(now))
+            .issue(
+                &s,
+                &envelope,
+                "xyz",
+                &test_sha(2),
+                &test_sha(3),
+                &test_sha(4),
+                1,
+                300,
+                Some(now),
+            )
             .unwrap_err();
         assert!(matches!(err, PermitError::InvalidSha256 { .. }));
 
         // Uppercase hex digest (Python pattern is lowercase-only).
         let err = store
-            .issue(&s, &envelope, &test_sha(1).to_uppercase(), &test_sha(2), &test_sha(3), &test_sha(4), 1, 300, Some(now))
+            .issue(
+                &s,
+                &envelope,
+                &test_sha(1).to_uppercase(),
+                &test_sha(2),
+                &test_sha(3),
+                &test_sha(4),
+                1,
+                300,
+                Some(now),
+            )
             .unwrap_err();
         assert!(matches!(err, PermitError::InvalidSha256 { .. }));
 
         // Zero attempt.
         let err = store
-            .issue(&s, &envelope, &test_sha(1), &test_sha(2), &test_sha(3), &test_sha(4), 0, 300, Some(now))
+            .issue(
+                &s,
+                &envelope,
+                &test_sha(1),
+                &test_sha(2),
+                &test_sha(3),
+                &test_sha(4),
+                0,
+                300,
+                Some(now),
+            )
             .unwrap_err();
         assert!(matches!(err, PermitError::InvalidAttempt));
 
         // Zero TTL.
         let err = store
-            .issue(&s, &envelope, &test_sha(1), &test_sha(2), &test_sha(3), &test_sha(4), 1, 0, Some(now))
+            .issue(
+                &s,
+                &envelope,
+                &test_sha(1),
+                &test_sha(2),
+                &test_sha(3),
+                &test_sha(4),
+                1,
+                0,
+                Some(now),
+            )
             .unwrap_err();
         assert!(matches!(err, PermitError::InvalidTtl));
     }
@@ -999,7 +1089,9 @@ mod tests {
         // Receipt timestamps are serialised at microsecond precision, so the
         // parsed expiry must equal the envelope expiry within 1 µs.
         let parsed = parse_utc(&receipt.expires_at).unwrap();
-        let delta_micros = (envelope.expires_at - parsed).num_microseconds().unwrap_or(0);
+        let delta_micros = (envelope.expires_at - parsed)
+            .num_microseconds()
+            .unwrap_or(0);
         assert!(
             (0..=1).contains(&delta_micros),
             "permit expiry must be clamped to the envelope expiry (delta {delta_micros}µs)"
@@ -1055,12 +1147,20 @@ mod tests {
                 Some(now + chrono::Duration::seconds(10)),
             )
             .unwrap();
-        let verification = verify_sensitive_action_permit(&signer(), &test_envelope(), &consumed, Some(&issued_b));
+        let verification =
+            verify_sensitive_action_permit(&signer(), &test_envelope(), &consumed, Some(&issued_b));
         assert!(!verification.valid);
-        assert!(verification.errors.iter().any(|e| e == "consumed permit ID mismatch"));
-        assert!(verification
-            .errors
-            .iter()
-            .any(|e| e == "consumed permit issued-receipt digest mismatch"));
+        assert!(
+            verification
+                .errors
+                .iter()
+                .any(|e| e == "consumed permit ID mismatch")
+        );
+        assert!(
+            verification
+                .errors
+                .iter()
+                .any(|e| e == "consumed permit issued-receipt digest mismatch")
+        );
     }
 }

@@ -2,9 +2,9 @@
 //! path into a `TestBackend` and dump it as text (mirrors orz-tui's
 //! `snapshot.rs` pattern, wide-char continuation cells skipped).
 
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
 use orz_tui::theme::str_width;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 use crate::app::CodexApp;
 use crate::widgets::render_frame;
@@ -54,6 +54,9 @@ mod tests {
         assert_eq!(a.lines().count(), 24);
         // Wide chars render as one glyph (no continuation-cell gaps).
         assert!(a.contains("测试"), "{a}");
-        assert!(!a.contains("测 试"), "no space injected between CJK chars: {a}");
+        assert!(
+            !a.contains("测 试"),
+            "no space injected between CJK chars: {a}"
+        );
     }
 }

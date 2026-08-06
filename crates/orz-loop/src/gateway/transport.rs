@@ -18,6 +18,7 @@
 //! stays deterministic (FakeProvider is the acceptance path).
 
 use async_openai::{
+    Client,
     config::OpenAIConfig,
     error::{ApiError, OpenAIError},
     types::chat::{
@@ -31,14 +32,16 @@ use async_openai::{
         CreateChatCompletionResponse, CreateChatCompletionStreamResponse, FinishReason,
         FunctionCallStream, FunctionObject,
     },
-    Client,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::model::{FinishReason as OurFinishReason, GatewayError, ModelConfig, ModelGateway, ModelRequest, ModelResponse, ToolCall};
+use super::model::{
+    FinishReason as OurFinishReason, GatewayError, ModelConfig, ModelGateway, ModelRequest,
+    ModelResponse, ToolCall,
+};
 
 /// Default DeepSeek API base (OpenAI-compatible).
 pub const DEFAULT_DEEPSEEK_API_BASE: &str = "https://api.deepseek.com";
@@ -167,7 +170,8 @@ impl DeepSeekTransport {
                     ),
                 };
                 tool_calls.push(ToolCall {
-                    name: name.ok_or_else(|| GatewayError::Parse("missing tool name".to_string()))?,
+                    name: name
+                        .ok_or_else(|| GatewayError::Parse("missing tool name".to_string()))?,
                     arguments: arguments
                         .as_deref()
                         .and_then(|a| serde_json::from_str(a).ok())
@@ -187,12 +191,8 @@ impl DeepSeekTransport {
     fn map_error(&self, e: OpenAIError) -> GatewayError {
         match e {
             OpenAIError::Reqwest(e) => GatewayError::Transport(e.to_string()),
-            OpenAIError::ApiError(api) => {
-                GatewayError::Model(format_api_error(&api))
-            }
-            OpenAIError::JSONDeserialize(e, raw) => {
-                GatewayError::Parse(format!("{e}: {raw}"))
-            }
+            OpenAIError::ApiError(api) => GatewayError::Model(format_api_error(&api)),
+            OpenAIError::JSONDeserialize(e, raw) => GatewayError::Parse(format!("{e}: {raw}")),
             OpenAIError::StreamError(e) => GatewayError::Transport(e.to_string()),
             OpenAIError::InvalidArgument(msg) => GatewayError::Model(msg),
             OpenAIError::FileSaveError(msg) => GatewayError::Transport(msg),
@@ -224,9 +224,7 @@ fn map_message(message: &super::model::Message) -> ChatCompletionRequestMessage 
     match message.role {
         super::model::Role::System => {
             ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(
-                    message.content.clone(),
-                ),
+                content: ChatCompletionRequestSystemMessageContent::Text(message.content.clone()),
                 name: None,
             })
         }
@@ -370,8 +368,7 @@ impl ModelGateway for DeepSeekTransport {
             let Some(item) = item else {
                 break;
             };
-            let chunk: CreateChatCompletionStreamResponse =
-                item.map_err(|e| self.map_error(e))?;
+            let chunk: CreateChatCompletionStreamResponse = item.map_err(|e| self.map_error(e))?;
             for choice in &chunk.choices {
                 apply_delta(
                     &choice.delta,
@@ -442,7 +439,10 @@ fn apply_tool_call_chunk(
     chunk: &ChatCompletionMessageToolCallChunk,
     tool_calls: &mut Vec<(u32, StreamToolCall)>,
 ) {
-    let entry = match tool_calls.iter_mut().find(|(index, _)| *index == chunk.index) {
+    let entry = match tool_calls
+        .iter_mut()
+        .find(|(index, _)| *index == chunk.index)
+    {
         Some(e) => e,
         None => {
             tool_calls.push((chunk.index, StreamToolCall::default()));
@@ -593,10 +593,7 @@ mod tests {
         assert_eq!(calls[0]["id"], "call-1");
         assert_eq!(calls[0]["type"], "function");
         assert_eq!(calls[0]["function"]["name"], "read_file");
-        assert_eq!(
-            calls[0]["function"]["arguments"],
-            r#"{"path":"a.txt"}"#
-        );
+        assert_eq!(calls[0]["function"]["arguments"], r#"{"path":"a.txt"}"#);
         // The tool result pairs with the declaration.
         assert_eq!(messages[2]["role"], "tool");
         assert_eq!(messages[2]["tool_call_id"], "call-1");
@@ -676,15 +673,14 @@ mod tests {
     fn stream_aggregation_concatenates_chunks_and_tool_calls() {
         // Two text chunks + a two-chunk tool call, out of order by index
         // (chunk index 1 arrives before chunk index 0's continuation).
-        let delta = |content: Option<&str>, tool_calls: Option<Value>| {
-            ChatCompletionStreamResponseDelta {
+        let delta =
+            |content: Option<&str>, tool_calls: Option<Value>| ChatCompletionStreamResponseDelta {
                 content: content.map(|s| s.to_string()),
                 function_call: None,
                 tool_calls: tool_calls.map(|v| serde_json::from_value(v).unwrap()),
                 role: None,
                 refusal: None,
-            }
-        };
+            };
         let mut text_parts = Vec::new();
         let mut tool_calls: Vec<(u32, StreamToolCall)> = Vec::new();
         let mut chunks = Vec::new();
@@ -717,7 +713,10 @@ mod tests {
             &mut emit,
         );
         apply_delta(
-            &delta(None, Some(serde_json::json!([{"index": 1, "function": {"arguments": "\"b.txt\"}"}}]))),
+            &delta(
+                None,
+                Some(serde_json::json!([{"index": 1, "function": {"arguments": "\"b.txt\"}"}}])),
+            ),
             &mut text_parts,
             &mut tool_calls,
             &mut emit,
@@ -817,7 +816,8 @@ mod tests {
             .lines()
             .find_map(|l| {
                 let (k, v) = l.split_once(':')?;
-                k.trim().eq_ignore_ascii_case("content-length")
+                k.trim()
+                    .eq_ignore_ascii_case("content-length")
                     .then(|| v.trim().parse::<usize>().ok())
                     .flatten()
             })
@@ -829,7 +829,8 @@ mod tests {
             }
             buf.extend_from_slice(&tmp[..n]);
         }
-        let body = String::from_utf8_lossy(&buf[header_end..header_end + content_length]).to_string();
+        let body =
+            String::from_utf8_lossy(&buf[header_end..header_end + content_length]).to_string();
         let first_line = headers.lines().next().unwrap_or("").to_string();
 
         let response = handler(&first_line, &body);
@@ -949,9 +950,18 @@ mod tests {
         };
         let body = format!(
             "{}{}{}{}data: [DONE]\n\n",
-            frame(r#"{"role":"assistant","tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]}"#, None),
-            frame(r#"{"tool_calls":[{"index":1,"id":"call-2","type":"function","function":{"name":"grep","arguments":"{\"path\":"}}]}"#, None),
-            frame(r#"{"tool_calls":[{"index":1,"function":{"arguments":"\"b.txt\"}"}}]}"#, None),
+            frame(
+                r#"{"role":"assistant","tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]}"#,
+                None
+            ),
+            frame(
+                r#"{"tool_calls":[{"index":1,"id":"call-2","type":"function","function":{"name":"grep","arguments":"{\"path\":"}}]}"#,
+                None
+            ),
+            frame(
+                r#"{"tool_calls":[{"index":1,"function":{"arguments":"\"b.txt\"}"}}]}"#,
+                None
+            ),
             // A real provider always terminates the stream with a
             // finish_reason block (D1-1).
             frame(r#"{}"#, Some("tool_calls")),
@@ -969,10 +979,16 @@ mod tests {
         assert!(chunks.is_empty(), "tool-call round: no text chunks");
         assert_eq!(r.tool_calls.len(), 2);
         assert_eq!(r.tool_calls[0].name, "read_file");
-        assert_eq!(r.tool_calls[0].arguments, serde_json::json!({"path": "a.txt"}));
+        assert_eq!(
+            r.tool_calls[0].arguments,
+            serde_json::json!({"path": "a.txt"})
+        );
         assert_eq!(r.tool_calls[0].call_id, "call-1");
         assert_eq!(r.tool_calls[1].name, "grep");
-        assert_eq!(r.tool_calls[1].arguments, serde_json::json!({"path": "b.txt"}));
+        assert_eq!(
+            r.tool_calls[1].arguments,
+            serde_json::json!({"path": "b.txt"})
+        );
         assert_eq!(r.tool_calls[1].call_id, "call-2");
         assert_eq!(r.finish_reason, OurFinishReason::ToolCalls);
     }
@@ -1040,7 +1056,9 @@ mod tests {
         });
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), Some(&cancel), &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), Some(&cancel), &mut |c| {
+                chunks.push(c.to_string())
+            })
             .await
             .unwrap_err();
         assert!(
@@ -1069,7 +1087,9 @@ mod tests {
         cancel.cancel();
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), Some(&cancel), &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), Some(&cancel), &mut |c| {
+                chunks.push(c.to_string())
+            })
             .await
             .unwrap_err();
         assert!(

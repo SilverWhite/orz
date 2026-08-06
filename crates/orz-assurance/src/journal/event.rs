@@ -80,8 +80,7 @@ impl EventType {
 
 impl std::fmt::Display for EventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self)
-            .unwrap_or_else(|_| "unknown".into());
+        let s = serde_json::to_string(self).unwrap_or_else(|_| "unknown".into());
         // Strip JSON quotes
         write!(f, "{}", s.trim_matches('"'))
     }

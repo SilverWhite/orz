@@ -33,14 +33,10 @@ fn sort_json_keys(value: serde_json::Value) -> serde_json::Value {
                 .map(|(k, v)| (k, sort_json_keys(v)))
                 .collect();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
-            serde_json::Value::Object(
-                entries.into_iter().collect()
-            )
+            serde_json::Value::Object(entries.into_iter().collect())
         }
         serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(
-                arr.into_iter().map(sort_json_keys).collect()
-            )
+            serde_json::Value::Array(arr.into_iter().map(sort_json_keys).collect())
         }
         other => other,
     }
@@ -276,18 +272,27 @@ mod tests {
     fn valid_chain_passes_validation() {
         let events = vec![
             make_event(
-                "RUN-TEST", 0, EventType::RunStarted,
-                "abcd1234", None,
+                "RUN-TEST",
+                0,
+                EventType::RunStarted,
+                "abcd1234",
+                None,
                 serde_json::json!({"step": "start"}),
             ),
             make_event(
-                "RUN-TEST", 1, EventType::PromptSubmitted,
-                "abcd1234", Some("REPLACED_BY_SEAL"),
+                "RUN-TEST",
+                1,
+                EventType::PromptSubmitted,
+                "abcd1234",
+                Some("REPLACED_BY_SEAL"),
                 serde_json::json!({"prompt": "hello"}),
             ),
             make_event(
-                "RUN-TEST", 2, EventType::RunFinished,
-                "abcd1234", Some("REPLACED_BY_SEAL"),
+                "RUN-TEST",
+                2,
+                EventType::RunFinished,
+                "abcd1234",
+                Some("REPLACED_BY_SEAL"),
                 serde_json::json!({"status": "ok"}),
             ),
         ];
@@ -312,13 +317,19 @@ mod tests {
     fn tampered_payload_detected() {
         let mut events = vec![
             make_event(
-                "RUN-TEST", 0, EventType::RunStarted,
-                "abcd1234", None,
+                "RUN-TEST",
+                0,
+                EventType::RunStarted,
+                "abcd1234",
+                None,
                 serde_json::json!({"step": "start"}),
             ),
             make_event(
-                "RUN-TEST", 1, EventType::RunFinished,
-                "abcd1234", Some("PLACEHOLDER"),
+                "RUN-TEST",
+                1,
+                EventType::RunFinished,
+                "abcd1234",
+                Some("PLACEHOLDER"),
                 serde_json::json!({"status": "ok"}),
             ),
         ];
@@ -353,13 +364,19 @@ mod tests {
     fn broken_chain_detected() {
         let events = vec![
             make_event(
-                "RUN-TEST", 0, EventType::RunStarted,
-                "abcd1234", None,
+                "RUN-TEST",
+                0,
+                EventType::RunStarted,
+                "abcd1234",
+                None,
                 serde_json::json!({"step": "start"}),
             ),
             make_event(
-                "RUN-TEST", 1, EventType::RunFinished,
-                "abcd1234", Some("wrong_previous_hash_64_chars___________________________"),
+                "RUN-TEST",
+                1,
+                EventType::RunFinished,
+                "abcd1234",
+                Some("wrong_previous_hash_64_chars___________________________"),
                 serde_json::json!({"status": "ok"}),
             ),
         ];
@@ -367,7 +384,10 @@ mod tests {
         let result = validate_chain(&events, "RUN-TEST", "abcd1234", true);
         assert!(!result.valid);
         assert!(
-            result.errors.iter().any(|e| e.contains("previous_event_sha256")),
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("previous_event_sha256")),
             "should detect chain break: {:?}",
             result.errors
         );
@@ -375,13 +395,14 @@ mod tests {
 
     #[test]
     fn missing_terminal_event_is_error() {
-        let events = vec![
-            make_event(
-                "RUN-TEST", 0, EventType::RunStarted,
-                "abcd1234", None,
-                serde_json::json!({"step": "start"}),
-            ),
-        ];
+        let events = vec![make_event(
+            "RUN-TEST",
+            0,
+            EventType::RunStarted,
+            "abcd1234",
+            None,
+            serde_json::json!({"step": "start"}),
+        )];
 
         let result = validate_chain(&events, "RUN-TEST", "abcd1234", true);
         assert!(!result.valid);

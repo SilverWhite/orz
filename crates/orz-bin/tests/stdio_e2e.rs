@@ -42,7 +42,8 @@ fn roundtrip(
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).expect("read response frame");
-        let response: serde_json::Value = serde_json::from_str(&line).expect("parse response frame");
+        let response: serde_json::Value =
+            serde_json::from_str(&line).expect("parse response frame");
         if response.get("id") == Some(&serde_json::Value::from(id)) {
             return response;
         }
@@ -135,7 +136,11 @@ fn session_new_and_prompt_over_real_frames() {
     let events_path = run_dirs[0].join("events.jsonl");
 
     let replay = orz_assurance::replay_journal(&events_path, None, None, true);
-    assert!(replay.valid, "stdio path journal invalid: {:?}", replay.errors);
+    assert!(
+        replay.valid,
+        "stdio path journal invalid: {:?}",
+        replay.errors
+    );
     // preflight + started + prompt_submitted + orientation + tool_availability
     // + model_output + counterexample_gate + model_output + stagnation
     // + finished (§4.6 gate round)

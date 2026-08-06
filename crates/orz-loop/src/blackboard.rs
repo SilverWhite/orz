@@ -148,7 +148,9 @@ mod tests {
         {
             let mut w = bb.write();
             w.gate_log.gate_decisions.push("IPG: pass".into());
-            w.gate_log.orientation_checks.push("checkpoint: no stagnation".into());
+            w.gate_log
+                .orientation_checks
+                .push("checkpoint: no stagnation".into());
         }
         let r = bb.read();
         assert_eq!(r.gate_log.gate_decisions.len(), 1);

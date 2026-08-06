@@ -119,7 +119,10 @@ mod tests {
     fn builtin_registry_resolves() {
         let reg = CommandRegistry::with_builtins();
         assert_eq!(reg.get("/help").unwrap().name_zh, "帮助");
-        assert_eq!(reg.get("/toggle-markers").unwrap().description_zh, "显示/隐藏右侧标记栏");
+        assert_eq!(
+            reg.get("/toggle-markers").unwrap().description_zh,
+            "显示/隐藏右侧标记栏"
+        );
         assert_eq!(reg.get("/nope"), None);
     }
 
@@ -127,7 +130,10 @@ mod tests {
     fn prefix_search_is_deterministic() {
         let reg = CommandRegistry::with_builtins();
         let toggles: Vec<&str> = reg.search("/toggle").iter().map(|d| d.slash).collect();
-        assert_eq!(toggles, ["/toggle-events", "/toggle-explorer", "/toggle-markers"]);
+        assert_eq!(
+            toggles,
+            ["/toggle-events", "/toggle-explorer", "/toggle-markers"]
+        );
         assert!(reg.search("/x").is_empty());
     }
 

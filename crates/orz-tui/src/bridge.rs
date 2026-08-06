@@ -33,10 +33,7 @@ fn get_i64(payload: &Value, key: &str) -> i64 {
 
 /// Extract an optional string field.
 fn get_opt_str(payload: &Value, key: &str) -> Option<String> {
-    payload
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    payload.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 /// Extract a string list field (array of strings, or JSON-encoded strings).
@@ -269,32 +266,95 @@ mod tests {
             (EventType::RunFinished, json!({"status": "completed"})),
             (EventType::RunFailed, json!({"error": "boom"})),
             (EventType::RunCancelled, json!({"reason": "user"})),
-            (EventType::RunInvalidated, json!({"status": "restart_requested"})),
-            (EventType::PromptSubmitted, json!({"prompt": "hi", "character_count": 2})),
+            (
+                EventType::RunInvalidated,
+                json!({"status": "restart_requested"}),
+            ),
+            (
+                EventType::PromptSubmitted,
+                json!({"prompt": "hi", "character_count": 2}),
+            ),
             (EventType::ModelRequest, json!({})),
             (EventType::ModelResponseReceived, json!({"tool_calls": []})),
-            (EventType::ModelOutput, json!({"text": "ok", "tool_calls": [], "finish_reason": "stop"})),
+            (
+                EventType::ModelOutput,
+                json!({"text": "ok", "tool_calls": [], "finish_reason": "stop"}),
+            ),
             (EventType::AcpInitialize, json!({"protocol_version": 1})),
             (EventType::AcpSessionCreated, json!({"session_id": "s"})),
-            (EventType::ToolProposal, json!({"tool": "bash", "call_id": "c", "input_summary": "ls"})),
-            (EventType::PermissionRequested, json!({"tool": "bash", "risk": "SandboxEscape", "call_id": "c"})),
-            (EventType::PermissionDecision, json!({"tool": "bash", "decision": "deny"})),
-            (EventType::ToolStarted, json!({"tool": "read_file", "call_id": "c"})),
-            (EventType::ToolCompleted, json!({"tool": "read_file", "call_id": "c", "exit_code": 0})),
-            (EventType::OrientationCheckpoint, json!({"checkpoint_id": "ORIENT-1", "trigger": "pre_handoff", "step_index": 0})),
-            (EventType::RuntimeStagnationGuard, json!({"decision": "continue", "reason_codes": ["REPEATED_CONTENT"]})),
-            (EventType::ToolAvailabilityCheck, json!({"available": 3, "unavailable": 0, "degraded": 0, "unprobed": 1, "gate_decision": "allow"})),
+            (
+                EventType::ToolProposal,
+                json!({"tool": "bash", "call_id": "c", "input_summary": "ls"}),
+            ),
+            (
+                EventType::PermissionRequested,
+                json!({"tool": "bash", "risk": "SandboxEscape", "call_id": "c"}),
+            ),
+            (
+                EventType::PermissionDecision,
+                json!({"tool": "bash", "decision": "deny"}),
+            ),
+            (
+                EventType::ToolStarted,
+                json!({"tool": "read_file", "call_id": "c"}),
+            ),
+            (
+                EventType::ToolCompleted,
+                json!({"tool": "read_file", "call_id": "c", "exit_code": 0}),
+            ),
+            (
+                EventType::OrientationCheckpoint,
+                json!({"checkpoint_id": "ORIENT-1", "trigger": "pre_handoff", "step_index": 0}),
+            ),
+            (
+                EventType::RuntimeStagnationGuard,
+                json!({"decision": "continue", "reason_codes": ["REPEATED_CONTENT"]}),
+            ),
+            (
+                EventType::ToolAvailabilityCheck,
+                json!({"available": 3, "unavailable": 0, "degraded": 0, "unprobed": 1, "gate_decision": "allow"}),
+            ),
             (EventType::ToolBeliefStagnation, json!({"tool": "bash"})),
-            (EventType::InstructionProvenanceGate, json!({"decision": "block", "entries": 1})),
-            (EventType::GateDecision, json!({"gate": "instruction_provenance_gate", "decision": "block", "tools": ["bash"]})),
-            (EventType::NeutralInquiry, json!({"trigger_reason": "rounds"})),
-            (EventType::CounterexampleGate, json!({"position": "final_answer", "once_only": true})),
-            (EventType::RetrievalCompletionCheck, json!({"role": "internal_retrieval", "decision": "yes"})),
-            (EventType::SnapshotCreated, json!({"tool": "edit_file", "targets": ["lib.rs"], "snapshot_hash": "abc"})),
-            (EventType::SnapshotRestored, json!({"snapshot_hash": "abc", "restored": ["lib.rs"]})),
-            (EventType::ArtifactRegistered, json!({"artifact_path": "p", "artifact_sha256": "h"})),
-            (EventType::PlanProposed, json!({"plan_id": "PLAN-1", "task_id": "T", "sections": 4})),
-            (EventType::PlanApproved, json!({"plan_id": "PLAN-1", "authority": "user", "decision": "approve", "execution_policy": "manual"})),
+            (
+                EventType::InstructionProvenanceGate,
+                json!({"decision": "block", "entries": 1}),
+            ),
+            (
+                EventType::GateDecision,
+                json!({"gate": "instruction_provenance_gate", "decision": "block", "tools": ["bash"]}),
+            ),
+            (
+                EventType::NeutralInquiry,
+                json!({"trigger_reason": "rounds"}),
+            ),
+            (
+                EventType::CounterexampleGate,
+                json!({"position": "final_answer", "once_only": true}),
+            ),
+            (
+                EventType::RetrievalCompletionCheck,
+                json!({"role": "internal_retrieval", "decision": "yes"}),
+            ),
+            (
+                EventType::SnapshotCreated,
+                json!({"tool": "edit_file", "targets": ["lib.rs"], "snapshot_hash": "abc"}),
+            ),
+            (
+                EventType::SnapshotRestored,
+                json!({"snapshot_hash": "abc", "restored": ["lib.rs"]}),
+            ),
+            (
+                EventType::ArtifactRegistered,
+                json!({"artifact_path": "p", "artifact_sha256": "h"}),
+            ),
+            (
+                EventType::PlanProposed,
+                json!({"plan_id": "PLAN-1", "task_id": "T", "sections": 4}),
+            ),
+            (
+                EventType::PlanApproved,
+                json!({"plan_id": "PLAN-1", "authority": "user", "decision": "approve", "execution_policy": "manual"}),
+            ),
             (EventType::PlanRejected, json!({"plan_id": "PLAN-1"})),
             (EventType::ActionApproved, json!({"action_id": "A"})),
         ];
@@ -318,7 +378,11 @@ mod tests {
                 "finish_reason": "tool_calls",
             }),
         );
-        let TuiEvent::ModelOutput { text, tool_calls, finish_reason } = run_event_to_tui(&ev)
+        let TuiEvent::ModelOutput {
+            text,
+            tool_calls,
+            finish_reason,
+        } = run_event_to_tui(&ev)
         else {
             panic!("expected ModelOutput");
         };
@@ -333,7 +397,10 @@ mod tests {
     fn missing_payload_fields_degrade_gracefully() {
         // Empty payload — every getter must fall back, never panic.
         let ev = make_event(EventType::ModelOutput, json!({}));
-        let TuiEvent::ModelOutput { text, tool_calls, .. } = run_event_to_tui(&ev) else {
+        let TuiEvent::ModelOutput {
+            text, tool_calls, ..
+        } = run_event_to_tui(&ev)
+        else {
             panic!("expected ModelOutput");
         };
         assert_eq!(text, "");
@@ -368,8 +435,11 @@ mod tests {
             EventType::SnapshotCreated,
             json!({"tool": "edit_file", "targets": ["a"], "snapshot_hash": "h"}),
         );
-        let TuiEvent::SnapshotCreated { snapshot_hash, snapshot_error, .. } =
-            run_event_to_tui(&ok)
+        let TuiEvent::SnapshotCreated {
+            snapshot_hash,
+            snapshot_error,
+            ..
+        } = run_event_to_tui(&ok)
         else {
             panic!("expected SnapshotCreated");
         };
@@ -380,8 +450,11 @@ mod tests {
             EventType::SnapshotCreated,
             json!({"tool": "edit_file", "targets": ["a"], "snapshot_error": "disk full"}),
         );
-        let TuiEvent::SnapshotCreated { snapshot_hash, snapshot_error, .. } =
-            run_event_to_tui(&err)
+        let TuiEvent::SnapshotCreated {
+            snapshot_hash,
+            snapshot_error,
+            ..
+        } = run_event_to_tui(&err)
         else {
             panic!("expected SnapshotCreated");
         };

@@ -5,13 +5,13 @@
 //! the renderer never touches explorer/properties/find/markers/snapshots.
 //! Width/CJK helpers are reused from orz-tui (`theme` module — not copied).
 
+use orz_tui::theme::{sanitize_text, truncate_to_width};
 use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
-use orz_tui::theme::{sanitize_text, truncate_to_width};
 
 use crate::app::{ApprovalDialog, CodexApp, Role, RunState};
 
@@ -22,10 +22,7 @@ pub const MIN_HEIGHT: u16 = 24;
 
 /// Render the app to the terminal (pure over the app state — snapshot tests
 /// drive it with a TestBackend).
-pub fn render_frame<B: Backend>(
-    terminal: &mut Terminal<B>,
-    app: &CodexApp,
-) -> std::io::Result<()> {
+pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, app: &CodexApp) -> std::io::Result<()> {
     terminal.draw(|frame| render_into(frame, app))?;
     Ok(())
 }
@@ -86,7 +83,12 @@ fn message_line(msg: &crate::app::MessageEntry, width: usize) -> Line<'static> {
     let text = truncate_to_width(&sanitize_text(&msg.text), width as u16, "…");
     match msg.role {
         Role::User => Line::from(vec![
-            Span::styled("你: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "你: ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(text),
         ])
         .alignment(Alignment::Right),
@@ -106,11 +108,8 @@ fn message_line(msg: &crate::app::MessageEntry, width: usize) -> Line<'static> {
             }
             Line::from(spans).alignment(Alignment::Left)
         }
-        Role::System => Line::from(vec![Span::styled(
-            text,
-            Style::default().fg(Color::Yellow),
-        )])
-        .alignment(Alignment::Center),
+        Role::System => Line::from(vec![Span::styled(text, Style::default().fg(Color::Yellow))])
+            .alignment(Alignment::Center),
     }
 }
 
@@ -133,10 +132,7 @@ fn render_input(frame: &mut Frame<'_>, area: Rect, app: &CodexApp) {
 
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &CodexApp) {
     let mut spans = vec![
-        Span::styled(
-            "状态: ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("状态: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(app.status.label(), status_style(app.status)),
     ];
     if let Some(turn) = &app.turn_id {
@@ -178,7 +174,10 @@ fn render_approval_dialog(frame: &mut Frame<'_>, area: Rect, dialog: &ApprovalDi
 
     let mut body = vec![Line::from(format!(
         "工具: {}",
-        params.get("tool_name").and_then(|v| v.as_str()).unwrap_or("?")
+        params
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
     ))];
     let description = params
         .get("description")
@@ -243,7 +242,10 @@ fn render_approval_dialog(frame: &mut Frame<'_>, area: Rect, dialog: &ApprovalDi
         width: overlay.width.saturating_sub(2),
         height: overlay.height.saturating_sub(2),
     };
-    frame.render_widget(Paragraph::new(body).wrap(ratatui::widgets::Wrap { trim: false }), inner);
+    frame.render_widget(
+        Paragraph::new(body).wrap(ratatui::widgets::Wrap { trim: false }),
+        inner,
+    );
 }
 
 #[cfg(test)]
@@ -282,7 +284,10 @@ mod tests {
         let rendered = render_to_string(&mut app, 100, 30);
         assert!(rendered.contains("你好"), "{rendered}");
         assert!(rendered.contains("正在回答"), "{rendered}");
-        assert!(rendered.contains("▍"), "streaming marker present: {rendered}");
+        assert!(
+            rendered.contains("▍"),
+            "streaming marker present: {rendered}"
+        );
         assert_no_assurance_panels(&rendered);
     }
 
@@ -290,7 +295,12 @@ mod tests {
     fn completed_turn_shows_status_and_agent_message() {
         let mut app = CodexApp::new();
         app.submit_prompt("你好".to_owned());
-        app.on_item_completed("turn_1".into(), "item_1".into(), "终局答案。".into(), "agentMessage".into());
+        app.on_item_completed(
+            "turn_1".into(),
+            "item_1".into(),
+            "终局答案。".into(),
+            "agentMessage".into(),
+        );
         app.on_turn_completed("turn_1".into(), "completed".into(), None);
         let rendered = render_to_string(&mut app, 100, 30);
         assert!(rendered.contains("终局答案。"), "{rendered}");
@@ -330,17 +340,28 @@ mod tests {
     fn user_messages_are_right_aligned_agent_left() {
         let mut app = CodexApp::new();
         app.submit_prompt("右对齐的我".to_owned());
-        app.on_item_completed("turn_1".into(), "item_1".into(), "左对齐的它".into(), "agentMessage".into());
+        app.on_item_completed(
+            "turn_1".into(),
+            "item_1".into(),
+            "左对齐的它".into(),
+            "agentMessage".into(),
+        );
         let rendered = render_to_string(&mut app, 100, 30);
         // The user line is padded to the right edge (indent of the last
         // line's prefix + text near the right side).
         let lines: Vec<&str> = rendered.lines().collect();
-        let user_line = lines.iter().find(|l| l.contains("右对齐的我")).expect("user message");
+        let user_line = lines
+            .iter()
+            .find(|l| l.contains("右对齐的我"))
+            .expect("user message");
         assert!(
             user_line.trim_end().ends_with('\u{6211}'),
             "user line flush right: {user_line:?}"
         );
-        let agent_line = lines.iter().find(|l| l.contains("左对齐的它")).expect("agent message");
+        let agent_line = lines
+            .iter()
+            .find(|l| l.contains("左对齐的它"))
+            .expect("agent message");
         // The agent line carries the 2-space prefix and hugs the left edge
         // (no right padding — the user line carries it instead).
         assert!(

@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crossterm::event::{Event, KeyEventKind};
 use futures::StreamExt;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 use agent_client_protocol as acp;
 
@@ -20,7 +20,7 @@ use orz_host::acp_server::AcpServer;
 use orz_host::session::TrustPolicy;
 use orz_loop::gateway::model::ModelGateway;
 
-use crate::acp_client::{connect_inprocess, ClientMsg, InProcessClient};
+use crate::acp_client::{ClientMsg, InProcessClient, connect_inprocess};
 use crate::app::{KeyOutcome, PendingPermission, PermissionOutcome, TuiApp};
 use crate::events::TuiEvent;
 use crate::input::handle_key;
@@ -104,9 +104,12 @@ impl std::error::Error for TuiError {}
 
 /// Replay a journal through the projection and compose the screen — pure,
 /// headless (used by `--replay` and tests).
-pub fn replay_to_screen(path: &Path, width: u16, height: u16) -> Result<(Vec<String>, bool), TuiError> {
-    let src = ReplaySource::new(path.to_path_buf())
-        .map_err(|e| TuiError::Replay(e.to_string()))?;
+pub fn replay_to_screen(
+    path: &Path,
+    width: u16,
+    height: u16,
+) -> Result<(Vec<String>, bool), TuiError> {
+    let src = ReplaySource::new(path.to_path_buf()).map_err(|e| TuiError::Replay(e.to_string()))?;
     let valid = src.valid;
     let mut app = TuiApp::new();
     let mut src = Box::new(src) as Box<dyn EventSource>;
@@ -584,15 +587,13 @@ fn show_permission(
         Some(Box::new(move |outcome| {
             let response = match outcome {
                 PermissionOutcome::AllowOnce => {
-                    acp::RequestPermissionResponse::new(
-                        acp::RequestPermissionOutcome::Selected(
-                            acp::SelectedPermissionOutcome::new(allow_once_id),
-                        ),
-                    )
+                    acp::RequestPermissionResponse::new(acp::RequestPermissionOutcome::Selected(
+                        acp::SelectedPermissionOutcome::new(allow_once_id),
+                    ))
                 }
-                PermissionOutcome::Cancelled => acp::RequestPermissionResponse::new(
-                    acp::RequestPermissionOutcome::Cancelled,
-                ),
+                PermissionOutcome::Cancelled => {
+                    acp::RequestPermissionResponse::new(acp::RequestPermissionOutcome::Cancelled)
+                }
             };
             let _ = respond.send(response);
         })),
@@ -693,8 +694,7 @@ mod tests {
         assert!(app.dialog.is_none(), "expired dialog dismissed");
         assert!(app.pending_permission.is_none());
         assert_eq!(
-            app.status.items[5].label,
-            "运行中",
+            app.status.items[5].label, "运行中",
             "the run continues past the timeout — status stays honest"
         );
     }
@@ -742,16 +742,16 @@ mod tests {
                     .items
                     .iter()
                     .filter_map(|i| match i {
-                        crate::view_model::ContentItem::Message(m)
-                            if m.role == "系统" =>
-                        {
+                        crate::view_model::ContentItem::Message(m) if m.role == "系统" => {
                             Some(m.content.clone())
                         }
                         _ => None,
                     })
                     .collect();
                 assert!(
-                    joined.iter().any(|m| m.contains("停止请求已发送（正在取消）")),
+                    joined
+                        .iter()
+                        .any(|m| m.contains("停止请求已发送（正在取消）")),
                     "immediate feedback: {joined:?}"
                 );
 
@@ -788,10 +788,7 @@ mod tests {
                     .join("events.jsonl");
                 let replay = orz_assurance::replay_journal(&events_path, None, None, true);
                 assert!(replay.valid, "journal invalid: {:?}", replay.errors);
-                assert_eq!(
-                    replay.terminal_event.as_deref(),
-                    Some("run_cancelled")
-                );
+                assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
 
                 let _ = std::fs::remove_dir_all(&base);
             })
@@ -820,9 +817,9 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&base);
                 std::fs::create_dir_all(&base).unwrap();
 
-                let server = Arc::new(AcpServer::with_gateway(Arc::new(
-                    FakeProvider::new(vec![ScriptedResponse::text("完成。")]),
-                )));
+                let server = Arc::new(AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("完成。"),
+                ]))));
                 let mut client = connect_inprocess(server, TrustPolicy::Skip);
                 let mut app = TuiApp::new();
                 let mut tail = TailState::new();
@@ -987,13 +984,15 @@ mod tests {
             .run_until(async {
                 let base = runner_base("restore");
                 std::fs::write(base.join("a.txt"), "v1").unwrap();
-                let store =
-                    orz_assurance::session::snapshot::SnapshotStore::new(
-                        base.join(".gsa").join("snapshots"),
-                        base.clone(),
-                    )
+                let store = orz_assurance::session::snapshot::SnapshotStore::new(
+                    base.join(".gsa").join("snapshots"),
+                    base.clone(),
+                )
+                .unwrap();
+                let record = store
+                    .track(&[std::path::PathBuf::from("a.txt")])
+                    .await
                     .unwrap();
-                let record = store.track(&[std::path::PathBuf::from("a.txt")]).await.unwrap();
                 std::fs::write(base.join("a.txt"), "v2").unwrap();
 
                 let server = Arc::new(AcpServer::new());
@@ -1015,7 +1014,8 @@ mod tests {
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 let msgs = system_messages(&app);
                 assert!(
-                    msgs.iter().any(|m| m.contains("[快照恢复]") && m.contains("1 个文件")),
+                    msgs.iter()
+                        .any(|m| m.contains("[快照恢复]") && m.contains("1 个文件")),
                     "report surfaced: {msgs:?}"
                 );
                 assert_eq!(app.status.items[5].label, "空闲");
@@ -1034,13 +1034,15 @@ mod tests {
             .run_until(async {
                 let base = runner_base("autosess");
                 std::fs::write(base.join("a.txt"), "v1").unwrap();
-                let store =
-                    orz_assurance::session::snapshot::SnapshotStore::new(
-                        base.join(".gsa").join("snapshots"),
-                        base.clone(),
-                    )
+                let store = orz_assurance::session::snapshot::SnapshotStore::new(
+                    base.join(".gsa").join("snapshots"),
+                    base.clone(),
+                )
+                .unwrap();
+                let record = store
+                    .track(&[std::path::PathBuf::from("a.txt")])
+                    .await
                     .unwrap();
-                let record = store.track(&[std::path::PathBuf::from("a.txt")]).await.unwrap();
 
                 let server = Arc::new(AcpServer::new());
                 let mut client = connect_inprocess(server.clone(), TrustPolicy::Skip);
@@ -1101,7 +1103,9 @@ mod tests {
                 // The host records the failure in the RST journal and
                 // returns the original store error — the TUI surfaces it.
                 assert!(
-                    system_messages(&app).iter().any(|m| m.contains("[快照恢复] 失败")),
+                    system_messages(&app)
+                        .iter()
+                        .any(|m| m.contains("[快照恢复] 失败")),
                     "error surfaced"
                 );
                 assert_eq!(app.status.items[5].label, "空闲", "status recovers");
@@ -1206,13 +1210,16 @@ mod tests {
                 assert_eq!(std::fs::read_to_string(base.join("a.txt")).unwrap(), "v2");
 
                 // The run journal carries the snapshot_created hash.
-                let run_dir = base
-                    .join(".gsa")
-                    .join("runs")
-                    .join(format!(
-                        "RUN-{}-0",
-                        client.session_id.as_ref().unwrap().chars().take(8).collect::<String>()
-                    ));
+                let run_dir = base.join(".gsa").join("runs").join(format!(
+                    "RUN-{}-0",
+                    client
+                        .session_id
+                        .as_ref()
+                        .unwrap()
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                ));
                 let content = std::fs::read_to_string(run_dir.join("events.jsonl")).unwrap();
                 let mut hash: Option<String> = None;
                 for line in content.lines() {

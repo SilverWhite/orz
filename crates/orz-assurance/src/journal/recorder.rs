@@ -71,10 +71,7 @@ impl JournalRecorder {
         let writer_task = JournalWriterTask::new(journal_dir.join("events.jsonl"), rx);
         tokio::spawn(writer_task.run());
 
-        JournalRecorder {
-            tx,
-            journal_dir,
-        }
+        JournalRecorder { tx, journal_dir }
     }
 
     /// Record an event to the journal.
@@ -122,9 +119,7 @@ impl JournalRecorder {
             })
             .await
             .map_err(|_| JournalRecorderError::Closed)?;
-        ack_rx
-            .await
-            .unwrap_or(Err(JournalRecorderError::Closed))
+        ack_rx.await.unwrap_or(Err(JournalRecorderError::Closed))
     }
 
     /// Flush all buffered writes to disk and fsync.
@@ -134,7 +129,9 @@ impl JournalRecorder {
         self.tx
             .blocking_send(JournalCmd::Flush { ack: ack_tx })
             .map_err(|_| JournalRecorderError::Closed)?;
-        ack_rx.blocking_recv().unwrap_or(Err(JournalRecorderError::Closed))
+        ack_rx
+            .blocking_recv()
+            .unwrap_or(Err(JournalRecorderError::Closed))
     }
 
     /// Async version of `flush()`.
@@ -157,7 +154,9 @@ impl JournalRecorder {
         self.tx
             .blocking_send(JournalCmd::Shutdown { ack: ack_tx })
             .map_err(|_| JournalRecorderError::Closed)?;
-        ack_rx.blocking_recv().unwrap_or(Err(JournalRecorderError::Closed))
+        ack_rx
+            .blocking_recv()
+            .unwrap_or(Err(JournalRecorderError::Closed))
     }
 
     /// Async version of `shutdown()` — safe to call from within a Tokio runtime.
@@ -236,7 +235,10 @@ impl JournalWriterTask {
     }
 
     /// Write one event as a JSONL line and fsync.
-    fn write_event(file: &mut BufWriter<File>, event: &RunEvent) -> Result<(), JournalRecorderError> {
+    fn write_event(
+        file: &mut BufWriter<File>,
+        event: &RunEvent,
+    ) -> Result<(), JournalRecorderError> {
         // Serialize to compact JSON (matching Python: sort_keys + compact separators)
         let mut buf = Vec::new();
         let mut ser = serde_json::Serializer::new(&mut buf);
@@ -266,9 +268,8 @@ impl JournalWriterTask {
                             "journal append refused after terminal event (seq {})",
                             event.sequence
                         );
-                        let _ = ack.send(Err(JournalRecorderError::TerminalAppended(
-                            event.sequence,
-                        )));
+                        let _ =
+                            ack.send(Err(JournalRecorderError::TerminalAppended(event.sequence)));
                         continue;
                     }
                     match Self::ensure_file(&mut self) {
@@ -293,11 +294,10 @@ impl JournalWriterTask {
                 }
                 Flush { ack } => {
                     let result = match self.file.as_mut() {
-                        Some(file) => {
-                            file.flush()
-                                .and_then(|_| file.get_ref().sync_all())
-                                .map_err(JournalRecorderError::from)
-                        }
+                        Some(file) => file
+                            .flush()
+                            .and_then(|_| file.get_ref().sync_all())
+                            .map_err(JournalRecorderError::from),
                         None => Ok(()),
                     };
                     let _ = ack.send(result);
@@ -305,11 +305,10 @@ impl JournalWriterTask {
                 Shutdown { ack } => {
                     self.closed = true;
                     let result = match self.file.as_mut() {
-                        Some(file) => {
-                            file.flush()
-                                .and_then(|_| file.get_ref().sync_all())
-                                .map_err(JournalRecorderError::from)
-                        }
+                        Some(file) => file
+                            .flush()
+                            .and_then(|_| file.get_ref().sync_all())
+                            .map_err(JournalRecorderError::from),
                         None => Ok(()),
                     };
                     let _ = ack.send(result);
@@ -331,14 +330,20 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("orz-journal-test-{}-{}", std::process::id(), n));
+        let dir =
+            std::env::temp_dir().join(format!("orz-journal-test-{}-{}", std::process::id(), n));
         // Ensure clean start
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    fn make_event(run_id: &str, seq: u64, event_type: EventType, previous: Option<String>) -> RunEvent {
+    fn make_event(
+        run_id: &str,
+        seq: u64,
+        event_type: EventType,
+        previous: Option<String>,
+    ) -> RunEvent {
         RunEvent::new(
             run_id.into(),
             seq,
@@ -392,12 +397,8 @@ mod tests {
 
         // The chain must replay valid — a placeholder previous hash would
         // fail here (see 2026-08-04 review P0-1).
-        let replay = super::super::verifier::replay_journal(
-            &events_path,
-            Some("RUN-CHAIN"),
-            None,
-            true,
-        );
+        let replay =
+            super::super::verifier::replay_journal(&events_path, Some("RUN-CHAIN"), None, true);
         assert!(replay.valid, "chain broken: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
@@ -489,14 +490,10 @@ mod tests {
         let r1 = JournalRecorder::new(dir.clone());
         let r2 = r1.clone();
 
-        r1.record(make_event(
-            "RUN-CLONE", 0, EventType::RunStarted, None,
-        ))
-        .unwrap();
-        r2.record(make_event(
-            "RUN-CLONE", 1, EventType::RunFinished, None,
-        ))
-        .unwrap();
+        r1.record(make_event("RUN-CLONE", 0, EventType::RunStarted, None))
+            .unwrap();
+        r2.record(make_event("RUN-CLONE", 1, EventType::RunFinished, None))
+            .unwrap();
 
         r2.shutdown().unwrap(); // shutdown via clone
 

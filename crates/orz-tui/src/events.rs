@@ -24,17 +24,38 @@ pub type OptionId = String;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TuiEvent {
     // ── lifecycle ──
-    RunPreflight { timestamp: String },
-    RunStarted { prompt: String, timestamp: String },
-    RunFinished { status: String },
-    RunFailed { error: String },
-    RunCancelled { reason: String },
-    RunInvalidated { status: String },
+    RunPreflight {
+        timestamp: String,
+    },
+    RunStarted {
+        prompt: String,
+        timestamp: String,
+    },
+    RunFinished {
+        status: String,
+    },
+    RunFailed {
+        error: String,
+    },
+    RunCancelled {
+        reason: String,
+    },
+    RunInvalidated {
+        status: String,
+    },
 
     // ── prompt / model ──
-    PromptSubmitted { prompt: String, character_count: u64 },
-    ModelRequest { provider: String, model_id: String },
-    ModelResponseReceived { tool_calls: Vec<ToolCallInfo> },
+    PromptSubmitted {
+        prompt: String,
+        character_count: u64,
+    },
+    ModelRequest {
+        provider: String,
+        model_id: String,
+    },
+    ModelResponseReceived {
+        tool_calls: Vec<ToolCallInfo>,
+    },
     ModelOutput {
         text: String,
         tool_calls: Vec<ToolCallInfo>,
@@ -42,8 +63,12 @@ pub enum TuiEvent {
     },
 
     // ── ACP lifecycle ──
-    AcpInitialize { protocol_version: i64 },
-    AcpSessionCreated { session_id: String },
+    AcpInitialize {
+        protocol_version: i64,
+    },
+    AcpSessionCreated {
+        session_id: String,
+    },
 
     // ── tools ──
     ToolProposal {
@@ -56,7 +81,10 @@ pub enum TuiEvent {
         risk: String,
         call_id: String,
     },
-    PermissionDecision { tool: String, decision: String },
+    PermissionDecision {
+        tool: String,
+        decision: String,
+    },
     ToolStarted {
         tool: String,
         call_id: String,
@@ -87,7 +115,9 @@ pub enum TuiEvent {
         unprobed: u64,
         gate_decision: String,
     },
-    ToolBeliefStagnation { tool: String },
+    ToolBeliefStagnation {
+        tool: String,
+    },
     InstructionProvenanceGate {
         decision: String,
         entries: u64,
@@ -100,12 +130,17 @@ pub enum TuiEvent {
     },
 
     // ── inquiry gates (§4.6) ──
-    NeutralInquiry { trigger_reason: String },
+    NeutralInquiry {
+        trigger_reason: String,
+    },
     CounterexampleGate {
         position: String,
         model_response: Option<String>,
     },
-    RetrievalCompletionCheck { role: String, decision: String },
+    RetrievalCompletionCheck {
+        role: String,
+        decision: String,
+    },
 
     // ── IP5 snapshot ──
     SnapshotCreated {
@@ -141,16 +176,27 @@ pub enum TuiEvent {
         decision: String,
         execution_policy: String,
     },
-    PlanRejected { plan_id: String },
-    ActionApproved { action_id: String },
+    PlanRejected {
+        plan_id: String,
+    },
+    ActionApproved {
+        action_id: String,
+    },
 
     // ── synthetic (TUI-owned, not in the run-event schema) ──
     /// Streaming text chunk — accumulates into the current model card.
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     /// Generic status-bar label update.
-    StatusUpdate { label: String, ok: bool },
+    StatusUpdate {
+        label: String,
+        ok: bool,
+    },
     /// An event_type the bridge did not recognize (Python degrade rule).
-    Unknown { event_type: String },
+    Unknown {
+        event_type: String,
+    },
 }
 
 impl TuiEvent {
@@ -222,8 +268,12 @@ mod tests {
     #[test]
     fn kind_strings_are_snake_case() {
         for ev in [
-            TuiEvent::RunPreflight { timestamp: String::new() },
-            TuiEvent::RunFinished { status: "completed".into() },
+            TuiEvent::RunPreflight {
+                timestamp: String::new(),
+            },
+            TuiEvent::RunFinished {
+                status: "completed".into(),
+            },
             TuiEvent::ToolAvailabilityCheck {
                 available: 0,
                 unavailable: 0,
@@ -237,8 +287,12 @@ mod tests {
                 snapshot_hash: None,
                 snapshot_error: None,
             },
-            TuiEvent::TextDelta { text: String::new() },
-            TuiEvent::Unknown { event_type: "weird".into() },
+            TuiEvent::TextDelta {
+                text: String::new(),
+            },
+            TuiEvent::Unknown {
+                event_type: "weird".into(),
+            },
         ] {
             let k = ev.kind();
             assert!(!k.contains(' '), "kind {k} must not contain spaces");
@@ -248,11 +302,22 @@ mod tests {
 
     #[test]
     fn terminal_states_are_terminal() {
-        assert!(TuiEvent::RunFinished { status: "completed".into() }.is_terminal());
+        assert!(
+            TuiEvent::RunFinished {
+                status: "completed".into()
+            }
+            .is_terminal()
+        );
         assert!(TuiEvent::RunFailed { error: "x".into() }.is_terminal());
         assert!(TuiEvent::RunCancelled { reason: "x".into() }.is_terminal());
         assert!(TuiEvent::RunInvalidated { status: "x".into() }.is_terminal());
-        assert!(!TuiEvent::RunStarted { prompt: "x".into(), timestamp: String::new() }.is_terminal());
+        assert!(
+            !TuiEvent::RunStarted {
+                prompt: "x".into(),
+                timestamp: String::new()
+            }
+            .is_terminal()
+        );
         assert!(!TuiEvent::TextDelta { text: "x".into() }.is_terminal());
     }
 }

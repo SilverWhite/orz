@@ -26,9 +26,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orz_host::codex_app::{
-    read_json_message, write_json_message, CodexError, CodexServerParts, JsonMessage,
+    CodexError, CodexServerParts, JsonMessage, read_json_message, write_json_message,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::BufReader;
 use tokio::sync::{mpsc, oneshot};
 
@@ -58,7 +58,10 @@ pub enum CodexClientError {
 pub enum ClientMsg {
     /// Permission request (server→client request); answer via
     /// [`CodexClient::answer_approval`].
-    ApprovalRequest { id: Value, params: Value },
+    ApprovalRequest {
+        id: Value,
+        params: Value,
+    },
     /// Streamed agent text (`item/started` with empty text or `item/delta`).
     ItemDelta {
         thread_id: String,
@@ -80,8 +83,12 @@ pub enum ClientMsg {
         status: String,
         error: Option<String>,
     },
-    ThreadStarted { thread_id: String },
-    ThreadClosed { thread_id: String },
+    ThreadStarted {
+        thread_id: String,
+    },
+    ThreadClosed {
+        thread_id: String,
+    },
 }
 
 /// In-process app-server JSON-RPC client.
@@ -160,7 +167,10 @@ impl CodexClient {
             .send(JsonMessage::notify("initialized", json!({})))
             .map_err(|_| CodexClientError::Closed)?;
         let result = self
-            .call("thread/start", json!({ "ephemeral": true, "sandbox": "workspace-write" }))
+            .call(
+                "thread/start",
+                json!({ "ephemeral": true, "sandbox": "workspace-write" }),
+            )
             .await?;
         let thread_id = result
             .get("thread")
@@ -177,10 +187,7 @@ impl CodexClient {
 
     /// Start a turn on the active thread. Returns the turn id.
     pub async fn start_turn(&mut self, text: &str) -> Result<String, CodexClientError> {
-        let thread_id = self
-            .thread_id
-            .as_ref()
-            .ok_or(CodexClientError::NoThread)?;
+        let thread_id = self.thread_id.as_ref().ok_or(CodexClientError::NoThread)?;
         let result = self
             .call(
                 "turn/start",
@@ -229,9 +236,10 @@ impl CodexClient {
     /// Answer an `approval/request` with the simple decision
     /// (`allow_once` / `allow` / `deny`).
     pub fn answer_approval(&self, id: &Value, decision: &str) {
-        let _ = self
-            .tx
-            .send(JsonMessage::response(id.clone(), json!({ "decision": decision })));
+        let _ = self.tx.send(JsonMessage::response(
+            id.clone(),
+            json!({ "decision": decision }),
+        ));
     }
 
     /// Take the next server→client message.
@@ -314,34 +322,37 @@ fn dispatch(
                     .map(|s| ClientMsg::ThreadStarted {
                         thread_id: s.to_owned(),
                     }),
-                "thread/closed" => params
-                    .get("threadId")
-                    .and_then(Value::as_str)
-                    .map(|s| ClientMsg::ThreadClosed {
+                "thread/closed" => params.get("threadId").and_then(Value::as_str).map(|s| {
+                    ClientMsg::ThreadClosed {
                         thread_id: s.to_owned(),
-                    }),
-                "item/started" | "item/delta" => item_parts(&params).map(
-                    |(thread_id, turn_id, item_id, text)| ClientMsg::ItemDelta {
-                        thread_id,
-                        turn_id,
-                        item_id,
-                        text,
-                    },
-                ),
-                "item/completed" => item_parts(&params).map(
-                    |(thread_id, turn_id, item_id, text)| ClientMsg::ItemCompleted {
-                        thread_id,
-                        turn_id,
-                        item_id,
-                        text,
-                        kind: params
-                            .get("item")
-                            .and_then(|i| i.get("type"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned(),
-                    },
-                ),
+                    }
+                }),
+                "item/started" | "item/delta" => {
+                    item_parts(&params).map(|(thread_id, turn_id, item_id, text)| {
+                        ClientMsg::ItemDelta {
+                            thread_id,
+                            turn_id,
+                            item_id,
+                            text,
+                        }
+                    })
+                }
+                "item/completed" => {
+                    item_parts(&params).map(|(thread_id, turn_id, item_id, text)| {
+                        ClientMsg::ItemCompleted {
+                            thread_id,
+                            turn_id,
+                            item_id,
+                            text,
+                            kind: params
+                                .get("item")
+                                .and_then(|i| i.get("type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_owned(),
+                        }
+                    })
+                }
                 "turn/completed" => turn_completed_msg(&params),
                 _ => None,
             };
@@ -488,9 +499,12 @@ mod tests {
                 let (text, tid) = loop {
                     match client.recv().await.expect("connection alive") {
                         ClientMsg::ItemDelta { text, .. } => delta_text.push_str(&text),
-                        ClientMsg::ItemCompleted { kind, text, turn_id: tid, .. }
-                            if kind == "agentMessage" =>
-                        {
+                        ClientMsg::ItemCompleted {
+                            kind,
+                            text,
+                            turn_id: tid,
+                            ..
+                        } if kind == "agentMessage" => {
                             break (text, tid);
                         }
                         _ => {}
@@ -506,7 +520,10 @@ mod tests {
                 };
                 assert_eq!(status, "completed");
                 assert!(error.is_none());
-                assert_eq!(journal_terminal(&base, &thread_id.chars().take(8).collect::<String>()), "run_finished");
+                assert_eq!(
+                    journal_terminal(&base, &thread_id.chars().take(8).collect::<String>()),
+                    "run_finished"
+                );
             })
             .await;
     }
@@ -596,10 +613,7 @@ mod tests {
                 assert!(matches!(err, CodexClientError::NoThread), "{err:?}");
                 client.initialize_and_start_thread().await.unwrap();
                 // An unknown method → -32601 surfaces as a Server error.
-                let err = client
-                    .call("nope/nope", json!({}))
-                    .await
-                    .unwrap_err();
+                let err = client.call("nope/nope", json!({})).await.unwrap_err();
                 assert!(
                     matches!(err, CodexClientError::Server { code: -32601, .. }),
                     "{err:?}"

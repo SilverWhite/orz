@@ -10,7 +10,9 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use super::model::{FinishReason, GatewayError, ModelGateway, ModelRequest, ModelResponse, ToolCall};
+use super::model::{
+    FinishReason, GatewayError, ModelGateway, ModelRequest, ModelResponse, ToolCall,
+};
 
 /// One scripted response step.
 #[derive(Debug, Clone)]

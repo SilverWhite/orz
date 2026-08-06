@@ -62,8 +62,9 @@ impl JobObjectSupervisor {
             use std::mem::size_of;
             use std::os::windows::io::FromRawHandle;
             use windows::Win32::System::JobObjects::{
-                CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
             };
 
             unsafe {
@@ -71,7 +72,8 @@ impl JobObjectSupervisor {
                     .map_err(|e| SandboxError::Windows(format!("CreateJobObjectW: {e}")))?;
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
                 info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let info_ptr = &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const core::ffi::c_void;
+                let info_ptr = &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+                    as *const core::ffi::c_void;
                 if let Err(e) = SetInformationJobObject(
                     job,
                     JobObjectExtendedLimitInformation,
@@ -79,7 +81,9 @@ impl JobObjectSupervisor {
                     size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 ) {
                     let _ = windows::Win32::Foundation::CloseHandle(job);
-                    return Err(SandboxError::Windows(format!("SetInformationJobObject: {e}")));
+                    return Err(SandboxError::Windows(format!(
+                        "SetInformationJobObject: {e}"
+                    )));
                 }
                 let handle = std::os::windows::io::OwnedHandle::from_raw_handle(job.0);
                 Ok(Self {
@@ -146,8 +150,9 @@ impl JobObjectSupervisor {
             unsafe {
                 let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)
                     .map_err(|e| SandboxError::Windows(format!("OpenProcess({pid}): {e}")))?;
-                let result = AssignProcessToJobObject(job, process)
-                    .map_err(|e| SandboxError::Windows(format!("AssignProcessToJobObject({pid}): {e}")));
+                let result = AssignProcessToJobObject(job, process).map_err(|e| {
+                    SandboxError::Windows(format!("AssignProcessToJobObject({pid}): {e}"))
+                });
                 let _ = windows::Win32::Foundation::CloseHandle(process);
                 result
             }
@@ -215,7 +220,9 @@ impl JobObjectSupervisor {
             .unwrap()
             .as_ref()
             .map(|h| HANDLE(h.as_raw_handle()))
-            .ok_or(SandboxError::Windows("job object already closed".to_string()))
+            .ok_or(SandboxError::Windows(
+                "job object already closed".to_string(),
+            ))
     }
 }
 
@@ -227,7 +234,7 @@ impl JobObjectSupervisor {
 fn resume_main_thread(pid: u32) -> Result<(), SandboxError> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD,
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
     use windows::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
@@ -272,7 +279,10 @@ mod tests {
     use super::*;
 
     #[cfg(windows)]
-    fn wait_for_exit(child: &mut Child, timeout: std::time::Duration) -> Option<std::process::ExitStatus> {
+    fn wait_for_exit(
+        child: &mut Child,
+        timeout: std::time::Duration,
+    ) -> Option<std::process::ExitStatus> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             if let Some(status) = child.try_wait().unwrap() {
@@ -305,7 +315,9 @@ mod tests {
     #[test]
     fn contained_process_is_assigned_and_dies_on_close() {
         let supervisor = JobObjectSupervisor::new().unwrap();
-        let mut child = supervisor.spawn_contained(&mut long_running_command()).unwrap();
+        let mut child = supervisor
+            .spawn_contained(&mut long_running_command())
+            .unwrap();
         let pid = child.id();
         assert!(supervisor.is_assigned(pid).unwrap());
 

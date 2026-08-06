@@ -49,7 +49,10 @@ mod tests {
 
     #[test]
     fn internal_retrieval_routes() {
-        assert_eq!(route("retrieve_project_docs"), DispatchTarget::InternalRetrieval);
+        assert_eq!(
+            route("retrieve_project_docs"),
+            DispatchTarget::InternalRetrieval
+        );
         assert_eq!(
             route("retrieve_project_source_ledger"),
             DispatchTarget::InternalRetrieval
@@ -78,7 +81,13 @@ mod tests {
     #[test]
     fn non_retrieval_matches_stay_on_host() {
         // Phase 1's all-to-host behavior holds for every non-retrieval name.
-        for name in ["plan_task", "analyze_results", "read_file", "write_file", "bash"] {
+        for name in [
+            "plan_task",
+            "analyze_results",
+            "read_file",
+            "write_file",
+            "bash",
+        ] {
             assert_eq!(route(name), DispatchTarget::Host, "{name}");
         }
     }

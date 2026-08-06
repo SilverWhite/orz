@@ -8,16 +8,16 @@
 //!
 //! No Grok crate depends on orz-loop.
 
-pub mod host;
-pub mod blackboard;
-pub mod relay;
-pub mod gateway;
 pub mod agents;
-pub mod prompt;
-pub mod tool;
-pub mod orientation;
-pub mod inquiry;
+pub mod blackboard;
 pub mod controller;
+pub mod gateway;
+pub mod host;
+pub mod inquiry;
+pub mod orientation;
+pub mod prompt;
+pub mod relay;
+pub mod tool;
 
 // Re-export core types
 pub use controller::AgentLoopController;

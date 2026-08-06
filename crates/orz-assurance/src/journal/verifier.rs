@@ -39,7 +39,10 @@ pub fn replay_journal(
     let mut errors: Vec<String> = Vec::new();
 
     if !journal_path.is_file() {
-        errors.push(format!("journal file not found: {}", journal_path.display()));
+        errors.push(format!(
+            "journal file not found: {}",
+            journal_path.display()
+        ));
         return ReplayResult {
             valid: false,
             run_id: String::new(),
@@ -131,9 +134,7 @@ pub fn replay_journal(
         last_event_sha256: chain_result.last_event_sha256,
         terminal_event: chain_result.terminal_event,
         errors,
-        limitations: vec![
-            "Replay verifies mechanics and does not score model correctness.".into(),
-        ],
+        limitations: vec!["Replay verifies mechanics and does not score model correctness.".into()],
     }
 }
 
@@ -227,7 +228,10 @@ mod tests {
         let result = replay_journal(&dir.join("events.jsonl"), None, None, true);
         assert!(!result.valid, "should detect tampering");
         assert!(
-            result.errors.iter().any(|e| e.contains("payload digest") || e.contains("event digest")),
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("payload digest") || e.contains("event digest")),
             "errors: {:?}",
             result.errors
         );

@@ -17,4 +17,7 @@ pub mod model;
 pub mod transport;
 
 pub use fake::{FakeProvider, ScriptedResponse};
-pub use model::{FinishReason, GatewayError, Message, ModelConfig, ModelGateway, ModelRequest, ModelResponse, Role, ToolCall};
+pub use model::{
+    FinishReason, GatewayError, Message, ModelConfig, ModelGateway, ModelRequest, ModelResponse,
+    Role, ToolCall,
+};

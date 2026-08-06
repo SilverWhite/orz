@@ -180,10 +180,7 @@ mod tests {
         let mut registry = HashMap::new();
         registry.insert("read_file".to_string(), Some(true));
         registry.insert("bash".to_string(), Some(true));
-        let report = probe_tool_availability(
-            &[spec("read_file"), spec("bash")],
-            &registry,
-        );
+        let report = probe_tool_availability(&[spec("read_file"), spec("bash")], &registry);
         assert_eq!(gate_decision(&report), GateDecision::Pass);
     }
 
@@ -193,10 +190,8 @@ mod tests {
         registry.insert("read_file".to_string(), Some(false));
         registry.insert("bash".to_string(), None);
         registry.insert("grep".to_string(), Some(true));
-        let report = probe_tool_availability(
-            &[spec("read_file"), spec("bash"), spec("grep")],
-            &registry,
-        );
+        let report =
+            probe_tool_availability(&[spec("read_file"), spec("bash"), spec("grep")], &registry);
         assert!(matches!(gate_decision(&report), GateDecision::Block { .. }));
     }
 

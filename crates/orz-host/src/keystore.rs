@@ -210,8 +210,7 @@ impl WindowsDpapiInstallationKeyStore {
                 schema_version: "0.1.0-draft".to_string(),
                 metadata_kind: "installation_key_metadata".to_string(),
                 key_id: key_id.clone(),
-                created_at: Utc::now()
-                    .to_rfc3339_opts(SecondsFormat::Secs, true),
+                created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
                 key_algorithm: "hmac-sha256".to_string(),
                 key_bytes: KEY_BYTES as u32,
                 storage: STORAGE_ID.to_string(),
@@ -233,7 +232,10 @@ impl WindowsDpapiInstallationKeyStore {
             let _ = std::fs::remove_file(root.join(METADATA_NAME));
             return Err(e);
         }
-        Ok(Self { root: root.to_path_buf(), key_id })
+        Ok(Self {
+            root: root.to_path_buf(),
+            key_id,
+        })
     }
 
     pub fn load(root: &Path) -> Result<Self, KeystoreError> {
@@ -336,9 +338,9 @@ impl PermitSigner for WindowsDpapiInstallationKeyStore {
 
 #[cfg(windows)]
 mod dpapi {
-    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     };
     use windows::core::w;
 
@@ -351,7 +353,10 @@ mod dpapi {
 
     /// CryptProtectData with the fixed keystore entropy, UI forbidden.
     /// Returns the ciphertext (caller keeps `plaintext` alive during the call).
-    pub(super) fn protect(plaintext: &[u8], entropy: &[u8]) -> Result<Vec<u8>, super::KeystoreError> {
+    pub(super) fn protect(
+        plaintext: &[u8],
+        entropy: &[u8],
+    ) -> Result<Vec<u8>, super::KeystoreError> {
         let input = blob(plaintext);
         let ent = blob(entropy);
         let mut output = CRYPT_INTEGER_BLOB::default();
@@ -376,7 +381,10 @@ mod dpapi {
     }
 
     /// CryptUnprotectData with the fixed keystore entropy.
-    pub(super) fn unprotect(ciphertext: &[u8], entropy: &[u8]) -> Result<Vec<u8>, super::KeystoreError> {
+    pub(super) fn unprotect(
+        ciphertext: &[u8],
+        entropy: &[u8],
+    ) -> Result<Vec<u8>, super::KeystoreError> {
         let input = blob(ciphertext);
         let ent = blob(entropy);
         let mut output = CRYPT_INTEGER_BLOB::default();
@@ -390,7 +398,9 @@ mod dpapi {
                 CRYPTPROTECT_UI_FORBIDDEN,
                 &mut output,
             )
-            .map_err(|e| super::KeystoreError::Windows(format!("CryptUnprotectData failed: {e}")))?;
+            .map_err(|e| {
+                super::KeystoreError::Windows(format!("CryptUnprotectData failed: {e}"))
+            })?;
         }
         let result =
             unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
@@ -403,11 +413,17 @@ mod dpapi {
 
 #[cfg(not(windows))]
 mod dpapi {
-    pub(super) fn protect(_plaintext: &[u8], _entropy: &[u8]) -> Result<Vec<u8>, super::KeystoreError> {
+    pub(super) fn protect(
+        _plaintext: &[u8],
+        _entropy: &[u8],
+    ) -> Result<Vec<u8>, super::KeystoreError> {
         Err(super::KeystoreError::DpapiUnavailable)
     }
 
-    pub(super) fn unprotect(_ciphertext: &[u8], _entropy: &[u8]) -> Result<Vec<u8>, super::KeystoreError> {
+    pub(super) fn unprotect(
+        _ciphertext: &[u8],
+        _entropy: &[u8],
+    ) -> Result<Vec<u8>, super::KeystoreError> {
         Err(super::KeystoreError::DpapiUnavailable)
     }
 }
@@ -421,11 +437,8 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "orz-keystore-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("orz-keystore-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -502,7 +515,9 @@ mod tests {
         blob[last] ^= 0x01;
         std::fs::write(&blob_path, &blob).unwrap();
         assert!(matches!(
-            WindowsDpapiInstallationKeyStore::load(&dir).unwrap().sign(payload),
+            WindowsDpapiInstallationKeyStore::load(&dir)
+                .unwrap()
+                .sign(payload),
             Err(PermitError::Signing(_))
         ));
 

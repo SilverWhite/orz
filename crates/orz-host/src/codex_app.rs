@@ -60,7 +60,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -182,8 +182,7 @@ pub async fn write_json_message<W: AsyncWrite + Unpin>(
     w: &mut W,
     msg: &JsonMessage,
 ) -> Result<(), CodexError> {
-    let mut buf =
-        serde_json::to_vec(msg).map_err(|e| CodexError::Malformed(e.to_string()))?;
+    let mut buf = serde_json::to_vec(msg).map_err(|e| CodexError::Malformed(e.to_string()))?;
     buf.push(b'\n');
     w.write_all(&buf).await?;
     w.flush().await?;
@@ -295,9 +294,12 @@ impl CodexAppServer {
         });
         // Approvals travel over the codex channel (hub path — no ACP-typed
         // gateway generalization needed; slice #12).
-        server.acp.set_hub_permission(Arc::new(
-            CodexPermissionTransport::with_timeout(server.broker.clone(), permission_timeout),
-        ));
+        server
+            .acp
+            .set_hub_permission(Arc::new(CodexPermissionTransport::with_timeout(
+                server.broker.clone(),
+                permission_timeout,
+            )));
         // Text deltas arrive as ACP client messages; the translation task
         // turns them into `item/started`/`item/delta` notifications.
         let (gateway_tx, gateway_rx) = mpsc::unbounded_channel();
@@ -402,18 +404,11 @@ impl CodexAppServer {
         // No state is kept — `initialize` order is lenient (audit §5).
     }
 
-    async fn handle_thread_start(
-        &self,
-        id: &Value,
-        params: Value,
-    ) -> Result<(), DispatchError> {
+    async fn handle_thread_start(&self, id: &Value, params: Value) -> Result<(), DispatchError> {
         // Sandbox fail-closed (v1): only workspace-write. read-only would
         // need a permission override; danger-full-access a yolo mode — both
         // recorded as future slices.
-        let sandbox = params
-            .get("sandbox")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let sandbox = params.get("sandbox").and_then(Value::as_str).unwrap_or("");
         if sandbox != "workspace-write" {
             return Err(DispatchError::invalid_params(format!(
                 "unsupported sandbox {sandbox:?} — v1 accepts only \"workspace-write\""
@@ -473,9 +468,9 @@ impl CodexAppServer {
 
         let (turn_id, user_item) = {
             let mut threads = self.threads.lock().unwrap();
-            let entry = threads
-                .get_mut(thread_id)
-                .ok_or_else(|| DispatchError::invalid_params(format!("unknown thread {thread_id}")))?;
+            let entry = threads.get_mut(thread_id).ok_or_else(|| {
+                DispatchError::invalid_params(format!("unknown thread {thread_id}"))
+            })?;
             if entry.active_turn.is_some() {
                 return Err(DispatchError::conflict(format!(
                     "a turn is already running on thread {thread_id}"
@@ -496,9 +491,13 @@ impl CodexAppServer {
 
         // Fixture order: response → turn/started.
         let turn = json!({ "id": turn_id, "status": "inProgress", "items": [], "error": null });
-        self.send_response(id.clone(), json!({ "turn": turn.clone() })).await;
-        self.send_notify("turn/started", json!({ "turn": turn, "threadId": thread_id }))
+        self.send_response(id.clone(), json!({ "turn": turn.clone() }))
             .await;
+        self.send_notify(
+            "turn/started",
+            json!({ "turn": turn, "threadId": thread_id }),
+        )
+        .await;
         // Echo the user's input as an item (extension beyond the observed
         // base surface — only agentMessage items were captured; the client
         // is type-tolerant and also renders its own submissions).
@@ -525,11 +524,7 @@ impl CodexAppServer {
         Ok(())
     }
 
-    async fn handle_turn_interrupt(
-        &self,
-        id: &Value,
-        params: Value,
-    ) -> Result<(), DispatchError> {
+    async fn handle_turn_interrupt(&self, id: &Value, params: Value) -> Result<(), DispatchError> {
         let thread_id = params
             .get("threadId")
             .and_then(Value::as_str)
@@ -539,7 +534,9 @@ impl CodexAppServer {
             let threads = self.threads.lock().unwrap();
             threads
                 .get(thread_id)
-                .ok_or_else(|| DispatchError::invalid_params(format!("unknown thread {thread_id}")))?
+                .ok_or_else(|| {
+                    DispatchError::invalid_params(format!("unknown thread {thread_id}"))
+                })?
                 .active_turn
                 .clone()
         };
@@ -587,7 +584,10 @@ impl CodexAppServer {
         // close anyway. The id is retired: re-creating it would restart
         // prompt_count at 0 and append onto the old journals (P1-2).
         self.threads.lock().unwrap().remove(thread_id);
-        self.retired_threads.lock().unwrap().insert(thread_id.to_owned());
+        self.retired_threads
+            .lock()
+            .unwrap()
+            .insert(thread_id.to_owned());
         self.acp.close_session(thread_id);
         Ok(())
     }
@@ -597,12 +597,7 @@ impl CodexAppServer {
     /// Journal is the source of truth: the controller already wrote
     /// `run_finished` / `run_cancelled` / `run_failed`; this only translates
     /// the terminal to the codex shape.
-    async fn finish_turn(
-        &self,
-        thread_id: &str,
-        turn_id: &str,
-        outcome: Result<Value, AcpError>,
-    ) {
+    async fn finish_turn(&self, thread_id: &str, turn_id: &str, outcome: Result<Value, AcpError>) {
         let agent_item = {
             let threads = self.threads.lock().unwrap();
             threads
@@ -817,11 +812,10 @@ pub async fn run_codex_server(
                 // Malformed line — answer -32700 (id null; the frame was
                 // unparseable) and keep the connection alive.
                 tracing::debug!("codex inbound parse error: {e}");
-                let _ = server.tx_out.send(JsonMessage::error(
-                    Value::Null,
-                    PARSE_ERROR,
-                    "parse error",
-                ));
+                let _ =
+                    server
+                        .tx_out
+                        .send(JsonMessage::error(Value::Null, PARSE_ERROR, "parse error"));
             }
         }
     }
@@ -840,11 +834,8 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "orz-codex-app-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("orz-codex-app-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -940,9 +931,7 @@ mod tests {
     }
 
     fn error_code(msg: &JsonMessage) -> i64 {
-        msg.error
-            .as_ref()
-            .expect("error response carries error")["code"]
+        msg.error.as_ref().expect("error response carries error")["code"]
             .as_i64()
             .unwrap()
     }
@@ -960,7 +949,10 @@ mod tests {
     fn journal_terminal(base: &Path, thread_id: &str, n: u64) -> String {
         let path = run_dir(base, thread_id, n);
         let replay = orz_assurance::replay_journal(&path, None, None, true);
-        assert!(replay.valid, "journal {path:?} must be a valid chain: {replay:?}");
+        assert!(
+            replay.valid,
+            "journal {path:?} must be a valid chain: {replay:?}"
+        );
         replay.terminal_event.expect("journal has a terminal event")
     }
 
@@ -995,7 +987,10 @@ mod tests {
         assert_eq!(response_of(&started)["thread"]["id"], json!(thread_id));
         // Interleaved streaming from other threads is skipped.
         let notified = recv_until(r, "thread/started").await;
-        assert_eq!(notified.params.as_ref().unwrap()["thread"]["id"], json!(thread_id));
+        assert_eq!(
+            notified.params.as_ref().unwrap()["thread"]["id"],
+            json!(thread_id)
+        );
     }
 
     async fn run_turn(
@@ -1052,7 +1047,8 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let parts = CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
+                let parts =
+                    CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
                 let (mut w, mut r) = connect(parts).await;
                 w.write_all(b"{not-json}\n").await.unwrap();
                 let msg = recv(&mut r).await;
@@ -1061,7 +1057,11 @@ mod tests {
                 assert!(msg.id.is_none());
                 assert_eq!(error_code(&msg), PARSE_ERROR);
                 // The connection survives a malformed line.
-                send(&mut w, &JsonMessage::request(json!(0), "initialize", json!({}))).await;
+                send(
+                    &mut w,
+                    &JsonMessage::request(json!(0), "initialize", json!({})),
+                )
+                .await;
                 let init = recv(&mut r).await;
                 assert!(init.result.is_some());
             })
@@ -1184,8 +1184,11 @@ mod tests {
                     ScriptedResponse::text("第一轮草稿。"),
                     ScriptedResponse::text("终局答案。"),
                 ];
-                let parts =
-                    CodexAppServer::new_parts(server_with(fake(script)), base.clone(), TrustPolicy::Skip);
+                let parts = CodexAppServer::new_parts(
+                    server_with(fake(script)),
+                    base.clone(),
+                    TrustPolicy::Skip,
+                );
                 let (mut w, mut r) = connect(parts).await;
                 initialize_and_start_thread(&mut w, &mut r, "thr_happy").await;
 
@@ -1195,7 +1198,10 @@ mod tests {
                 // User input echo (extension type — client tolerant).
                 let user_item = recv(&mut r).await;
                 assert_eq!(user_item.method.as_deref(), Some("item/completed"));
-                assert_eq!(user_item.params.as_ref().unwrap()["item"]["type"], "userMessage");
+                assert_eq!(
+                    user_item.params.as_ref().unwrap()["item"]["type"],
+                    "userMessage"
+                );
                 assert_eq!(user_item.params.as_ref().unwrap()["item"]["text"], "你好");
 
                 // Streaming: item/started then item/delta chunks, in order.
@@ -1233,7 +1239,10 @@ mod tests {
 
                 let completed = recv(&mut r).await;
                 assert_eq!(completed.method.as_deref(), Some("turn/completed"));
-                assert_eq!(completed.params.as_ref().unwrap()["turn"]["status"], "completed");
+                assert_eq!(
+                    completed.params.as_ref().unwrap()["turn"]["status"],
+                    "completed"
+                );
                 assert_eq!(completed.params.as_ref().unwrap()["turn"]["id"], "turn_1");
                 // Fixture parity: error is null in the terminal turn object.
                 assert!(completed.params.as_ref().unwrap()["turn"]["error"].is_null());
@@ -1266,7 +1275,9 @@ mod tests {
                     match msg.method.as_deref() {
                         Some("item/delta") => {
                             all.push_str(
-                                msg.params.as_ref().unwrap()["item"]["text"].as_str().unwrap(),
+                                msg.params.as_ref().unwrap()["item"]["text"]
+                                    .as_str()
+                                    .unwrap(),
                             );
                         }
                         Some("item/completed")
@@ -1296,7 +1307,9 @@ mod tests {
                     ScriptedResponse::text("慢速终答。"),
                 ];
                 let parts = CodexAppServer::new_parts(
-                    server_with(fake(script).with_chunk_delay(std::time::Duration::from_millis(60))),
+                    server_with(
+                        fake(script).with_chunk_delay(std::time::Duration::from_millis(60)),
+                    ),
                     base.clone(),
                     TrustPolicy::Skip,
                 );
@@ -1341,7 +1354,8 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let parts = CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
+                let parts =
+                    CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
                 let (mut w, mut r) = connect(parts).await;
                 initialize_and_start_thread(&mut w, &mut r, "thr_idle").await;
                 send(
@@ -1481,8 +1495,11 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let parts =
-                    CodexAppServer::new_parts(server_with(fake(bash_script())), base.clone(), TrustPolicy::Skip);
+                let parts = CodexAppServer::new_parts(
+                    server_with(fake(bash_script())),
+                    base.clone(),
+                    TrustPolicy::Skip,
+                );
                 let (mut w, mut r) = connect(parts).await;
                 initialize_and_start_thread(&mut w, &mut r, "thr_perm").await;
                 run_turn(&mut w, &mut r, "thr_perm", "运行 dir").await;
@@ -1499,13 +1516,22 @@ mod tests {
                 assert_eq!(params["scope"], "write");
 
                 // Allow once → the tool executes.
-                send(&mut w, &JsonMessage::response(id, json!({ "decision": "allow_once" })))
-                    .await;
+                send(
+                    &mut w,
+                    &JsonMessage::response(id, json!({ "decision": "allow_once" })),
+                )
+                .await;
                 let completed = recv_until(&mut r, "turn/completed").await;
-                assert_eq!(completed.params.as_ref().unwrap()["turn"]["status"], "completed");
+                assert_eq!(
+                    completed.params.as_ref().unwrap()["turn"]["status"],
+                    "completed"
+                );
 
                 let events = journal_events(&base, "thr_perm", 0);
-                assert!(events.contains("\"tool_started\""), "tool executed: {events}");
+                assert!(
+                    events.contains("\"tool_started\""),
+                    "tool executed: {events}"
+                );
                 assert!(events.contains("\"tool_completed\""));
                 assert!(
                     !events.contains("Tool not found"),
@@ -1521,15 +1547,21 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let parts =
-                    CodexAppServer::new_parts(server_with(fake(bash_script())), base.clone(), TrustPolicy::Skip);
+                let parts = CodexAppServer::new_parts(
+                    server_with(fake(bash_script())),
+                    base.clone(),
+                    TrustPolicy::Skip,
+                );
                 let (mut w, mut r) = connect(parts).await;
                 initialize_and_start_thread(&mut w, &mut r, "thr_deny").await;
                 run_turn(&mut w, &mut r, "thr_deny", "运行 dir").await;
                 let approval = recv_until(&mut r, "approval/request").await;
                 send(
                     &mut w,
-                    &JsonMessage::response(approval.id.clone().unwrap(), json!({ "decision": "deny" })),
+                    &JsonMessage::response(
+                        approval.id.clone().unwrap(),
+                        json!({ "decision": "deny" }),
+                    ),
                 )
                 .await;
                 recv_until(&mut r, "turn/completed").await;
@@ -1565,8 +1597,11 @@ mod tests {
                     ScriptedResponse::text("两轮工具执行完成。"),
                     ScriptedResponse::text("两轮工具执行完成。"),
                 ];
-                let parts =
-                    CodexAppServer::new_parts(server_with(fake(script)), base.clone(), TrustPolicy::Skip);
+                let parts = CodexAppServer::new_parts(
+                    server_with(fake(script)),
+                    base.clone(),
+                    TrustPolicy::Skip,
+                );
                 let (mut w, mut r) = connect(parts).await;
                 initialize_and_start_thread(&mut w, &mut r, "thr_always").await;
                 run_turn(&mut w, &mut r, "thr_always", "两次 dir").await;
@@ -1574,11 +1609,17 @@ mod tests {
                 let approval = recv_until(&mut r, "approval/request").await;
                 send(
                     &mut w,
-                    &JsonMessage::response(approval.id.clone().unwrap(), json!({ "decision": "allow" })),
+                    &JsonMessage::response(
+                        approval.id.clone().unwrap(),
+                        json!({ "decision": "allow" }),
+                    ),
                 )
                 .await;
                 let completed = recv_until(&mut r, "turn/completed").await;
-                assert_eq!(completed.params.as_ref().unwrap()["turn"]["status"], "completed");
+                assert_eq!(
+                    completed.params.as_ref().unwrap()["turn"]["status"],
+                    "completed"
+                );
                 let events = journal_events(&base, "thr_always", 0);
                 // Both tool calls executed; exactly ONE interactive prompt
                 // (the second identical bash auto-allows via the persisted
@@ -1641,7 +1682,8 @@ mod tests {
                 // Give the server a beat to finish the run and the journal.
                 tokio::time::sleep(std::time::Duration::from_millis(900)).await;
                 let replay = orz_assurance::replay_journal(
-                    &base.join(".gsa")
+                    &base
+                        .join(".gsa")
                         .join("runs")
                         .join("RUN-thr_eof-0")
                         .join("events.jsonl"),

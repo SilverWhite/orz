@@ -205,8 +205,13 @@ mod tests {
     #[test]
     fn fake_source_drains() {
         let mut src = FakeSource::new();
-        src.push(TuiEvent::RunPreflight { timestamp: String::new() });
-        src.push(TuiEvent::RunStarted { prompt: "q".into(), timestamp: String::new() });
+        src.push(TuiEvent::RunPreflight {
+            timestamp: String::new(),
+        });
+        src.push(TuiEvent::RunStarted {
+            prompt: "q".into(),
+            timestamp: String::new(),
+        });
         assert!(src.is_active());
         let drained = src.poll();
         assert_eq!(drained.len(), 2);

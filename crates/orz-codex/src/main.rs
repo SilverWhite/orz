@@ -92,8 +92,12 @@ fn build_gateway() -> Arc<dyn ModelGateway> {
                     arguments: serde_json::json!({ "command": "dir" }),
                     call_id: "call-2".to_string(),
                 }]),
-                ScriptedResponse::text("完成（fake 演示：read_file 已执行，run_terminal_cmd 需审批）。"),
-                ScriptedResponse::text("完成（fake 演示：read_file 已执行，run_terminal_cmd 需审批）。"),
+                ScriptedResponse::text(
+                    "完成（fake 演示：read_file 已执行，run_terminal_cmd 需审批）。",
+                ),
+                ScriptedResponse::text(
+                    "完成（fake 演示：read_file 已执行，run_terminal_cmd 需审批）。",
+                ),
             ])
             .with_chunk_delay(Duration::from_millis(120)),
         )

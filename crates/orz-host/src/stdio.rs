@@ -83,7 +83,11 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
             ClientRequest::PromptRequest(args) => {
                 let session_id = args.session_id.0.as_ref().to_string();
                 let prompt = extract_prompt_text(&args.prompt);
-                match self.server.handle_session_prompt(&session_id, &prompt).await {
+                match self
+                    .server
+                    .handle_session_prompt(&session_id, &prompt)
+                    .await
+                {
                     Ok(_) => Ok(AgentResponse::PromptResponse(PromptResponse::new(
                         StopReason::EndTurn,
                     ))),

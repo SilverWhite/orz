@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orz_host::session::{bootstrap_session, SessionHandle};
+use orz_host::session::{SessionHandle, bootstrap_session};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{Message, ModelGateway, Role, ToolCall};
 
@@ -47,7 +47,9 @@ fn main() {
 
     let prompt = parse_prompt(&args).unwrap_or_else(|e| {
         eprintln!("error: {e}");
-        eprintln!("usage: orz -p \"<prompt>\"  (or --prompt <prompt>; --stdio for ACP; bare orz for TUI)");
+        eprintln!(
+            "usage: orz -p \"<prompt>\"  (or --prompt <prompt>; --stdio for ACP; bare orz for TUI)"
+        );
         std::process::exit(2);
     });
 
@@ -129,10 +131,7 @@ fn run_tui() {
         }
     };
     let local = tokio::task::LocalSet::new();
-    let cfg = orz_tui::TuiConfig {
-        cwd,
-        replay: None,
-    };
+    let cfg = orz_tui::TuiConfig { cwd, replay: None };
     let result = local.block_on(&rt, orz_tui::run(cfg, build_gateway()));
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -167,9 +166,9 @@ fn run_stdio() {
     };
     let local = tokio::task::LocalSet::new();
     let result = local.block_on(&rt, async {
-        let server = std::sync::Arc::new(
-            orz_host::acp_server::AcpServer::with_gateway(build_gateway()),
-        );
+        let server = std::sync::Arc::new(orz_host::acp_server::AcpServer::with_gateway(
+            build_gateway(),
+        ));
         orz_host::stdio::run_stdio_server(server).await
     });
     if let Err(e) = result {
@@ -267,8 +266,7 @@ async fn run_plan_phase(
     gateway: &Arc<dyn ModelGateway>,
 ) -> Result<(), String> {
     let mut sm = orz_assurance::plan::PlanStateMachine::new();
-    sm.enter_planning(None)
-        .map_err(|e| format!("plan: {e}"))?;
+    sm.enter_planning(None).map_err(|e| format!("plan: {e}"))?;
     let artifact = plan_artifact_from_prompt(run_id, prompt);
     let verification = orz_assurance::plan::verify_plan_artifact(&artifact);
     if !verification.valid {
@@ -397,7 +395,11 @@ async fn record_plan_event(
     );
     orz_assurance::seal_event(&mut event).map_err(|e| e.to_string())?;
     let hash = event.event_sha256.clone();
-    handle.journal.record_async(event).await.map_err(|e| e.to_string())?;
+    handle
+        .journal
+        .record_async(event)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(hash)
 }
 
@@ -420,7 +422,10 @@ fn plan_artifact_from_prompt(run_id: &str, prompt: &str) -> orz_assurance::plan:
         vec![
             section("前期调查", &format!("任务背景：{prompt}")),
             section("具体计划", &format!("按提示执行：{prompt}")),
-            section("具体设计", "使用内置工具链（read_file / run_terminal_cmd / grep）"),
+            section(
+                "具体设计",
+                "使用内置工具链（read_file / run_terminal_cmd / grep）",
+            ),
             section("实施方案", &format!("直接执行提示：{prompt}")),
         ],
     )
@@ -449,37 +454,43 @@ fn chrono_utc_now() -> String {
 /// demo-path-only artifact of the scripted provider).
 fn build_gateway() -> Arc<dyn ModelGateway> {
     if std::env::var("ORZ_FAKE_TOOL").is_ok() {
-        Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![
-                ToolCall {
-                    name: "read_file".to_string(),
-                    arguments: serde_json::json!({"target_file": "rust-toolchain.toml"}),
-                    call_id: "call-1".to_string(),
-                },
-                ToolCall {
-                    name: "bash".to_string(),
-                    arguments: serde_json::json!({"command": "dir"}),
-                    call_id: "call-2".to_string(),
-                },
-            ]),
-            ScriptedResponse::tool_calls(vec![
-                ToolCall {
-                    name: "read_file".to_string(),
-                    arguments: serde_json::json!({"target_file": "rust-toolchain.toml"}),
-                    call_id: "call-1".to_string(),
-                },
-                ToolCall {
-                    name: "bash".to_string(),
-                    arguments: serde_json::json!({"command": "dir"}),
-                    call_id: "call-2".to_string(),
-                },
-            ]),
-            ScriptedResponse::text("完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。"),
-            ScriptedResponse::text("完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。"),
-        ])
-        // Streaming slice: pace the chunks so the TUI demo streams visibly
-        // (tool-call rounds have no text → no chunks → no delay).
-        .with_chunk_delay(std::time::Duration::from_millis(250)))
+        Arc::new(
+            FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![
+                    ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({"target_file": "rust-toolchain.toml"}),
+                        call_id: "call-1".to_string(),
+                    },
+                    ToolCall {
+                        name: "bash".to_string(),
+                        arguments: serde_json::json!({"command": "dir"}),
+                        call_id: "call-2".to_string(),
+                    },
+                ]),
+                ScriptedResponse::tool_calls(vec![
+                    ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({"target_file": "rust-toolchain.toml"}),
+                        call_id: "call-1".to_string(),
+                    },
+                    ToolCall {
+                        name: "bash".to_string(),
+                        arguments: serde_json::json!({"command": "dir"}),
+                        call_id: "call-2".to_string(),
+                    },
+                ]),
+                ScriptedResponse::text(
+                    "完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。",
+                ),
+                ScriptedResponse::text(
+                    "完成（fake 工具路径：read_file 已执行，bash 被权限门拒绝）。",
+                ),
+            ])
+            // Streaming slice: pace the chunks so the TUI demo streams visibly
+            // (tool-call rounds have no text → no chunks → no delay).
+            .with_chunk_delay(std::time::Duration::from_millis(250)),
+        )
     } else {
         Arc::new(FakeProvider::from_texts(vec![
             "(fake) 已收到请求。",
@@ -521,8 +532,12 @@ async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Erro
     // Journals land in `{cwd}/.gsa/runs/{run_id}/`. Workspace trust is
     // enforced (fail-closed): the current directory must carry repo-local
     // trust config or be recorded in the trust store.
-    let handle = bootstrap_session(&run_id, Some(cwd.clone()), orz_host::session::TrustPolicy::Enforce)
-        .await?;
+    let handle = bootstrap_session(
+        &run_id,
+        Some(cwd.clone()),
+        orz_host::session::TrustPolicy::Enforce,
+    )
+    .await?;
 
     // Phase 3 wiring: real OrzHost (GrokBuild toolset + trust) behind the
     // IP6 permission bridge. Headless (`None` gateway): Read auto-allows,
@@ -611,8 +626,15 @@ mod tests {
         let mut prev_hash = handle.last_event_sha256.clone();
         // Empty script — the gate round exhausts on the first call.
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(Vec::new()));
-        let err = run_plan_phase(&handle, &mut seq, &mut prev_hash, "RUN-PLAN-FAIL", "hi", &gateway)
-            .await;
+        let err = run_plan_phase(
+            &handle,
+            &mut seq,
+            &mut prev_hash,
+            "RUN-PLAN-FAIL",
+            "hi",
+            &gateway,
+        )
+        .await;
         assert!(err.is_err(), "gate round must fail on an empty script");
         record_plan_failure(&handle, seq, prev_hash.clone(), err.unwrap_err().as_str()).await;
         handle.journal.shutdown_async().await.unwrap();

@@ -167,8 +167,8 @@ pub fn discover_snapshots(cwd: &Path) -> Vec<SnapshotEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use orz_assurance::journal::{EventType, Redaction, RunEvent};
+    use std::path::PathBuf;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -187,11 +187,7 @@ mod tests {
     /// A sealed journal line, mirroring the payload shape the loop records
     /// (orz-loop controller.rs: snapshot_hash | snapshot_error, tool,
     /// targets).
-    fn sealed_line(
-        run_id: &str,
-        event_type: EventType,
-        payload: serde_json::Value,
-    ) -> String {
+    fn sealed_line(run_id: &str, event_type: EventType, payload: serde_json::Value) -> String {
         let mut ev = RunEvent::new(
             run_id.to_string(),
             0,
@@ -209,11 +205,7 @@ mod tests {
 
     fn write_journal(run_dir: &Path, lines: &[String]) {
         std::fs::create_dir_all(run_dir).unwrap();
-        std::fs::write(
-            run_dir.join("events.jsonl"),
-            lines.concat(),
-        )
-        .unwrap();
+        std::fs::write(run_dir.join("events.jsonl"), lines.concat()).unwrap();
     }
 
     fn created(tool: &str, targets: &[&str], hash: &str) -> serde_json::Value {
@@ -231,10 +223,22 @@ mod tests {
         write_journal(
             &runs.join("RUN-a1b2c3d4-0"),
             &[
-                sealed_line("RUN-a1b2c3d4-0", EventType::RunStarted, serde_json::json!({"prompt": "x"})),
-                sealed_line("RUN-a1b2c3d4-0", EventType::SnapshotCreated, created("search_replace", &["lib.rs"], "a".repeat(64).as_str())),
+                sealed_line(
+                    "RUN-a1b2c3d4-0",
+                    EventType::RunStarted,
+                    serde_json::json!({"prompt": "x"}),
+                ),
+                sealed_line(
+                    "RUN-a1b2c3d4-0",
+                    EventType::SnapshotCreated,
+                    created("search_replace", &["lib.rs"], "a".repeat(64).as_str()),
+                ),
                 "not json at all\n".to_string(), // malformed — skipped
-                sealed_line("RUN-a1b2c3d4-0", EventType::ModelOutput, serde_json::json!({"content": "x"})),
+                sealed_line(
+                    "RUN-a1b2c3d4-0",
+                    EventType::ModelOutput,
+                    serde_json::json!({"content": "x"}),
+                ),
             ],
         );
         // A snapshot_error event carries no hash — nothing to restore.
@@ -310,7 +314,11 @@ mod tests {
             let run_id = format!("{sid}-{n}");
             write_journal(
                 &runs.join(&run_id),
-                &[sealed_line(&run_id, EventType::SnapshotCreated, created("edit_file", &["a.txt"], &"c".repeat(64)))],
+                &[sealed_line(
+                    &run_id,
+                    EventType::SnapshotCreated,
+                    created("edit_file", &["a.txt"], &"c".repeat(64)),
+                )],
             );
         }
         let found = discover_snapshots(&dir);
@@ -330,14 +338,24 @@ mod tests {
         write_journal(
             &runs.join(run_id),
             &[
-                sealed_line(run_id, EventType::SnapshotCreated, created("write_file", &["a.txt"], &with_manifest)),
-                sealed_line(run_id, EventType::SnapshotCreated, created("write_file", &["b.txt"], &without_manifest)),
+                sealed_line(
+                    run_id,
+                    EventType::SnapshotCreated,
+                    created("write_file", &["a.txt"], &with_manifest),
+                ),
+                sealed_line(
+                    run_id,
+                    EventType::SnapshotCreated,
+                    created("write_file", &["b.txt"], &without_manifest),
+                ),
             ],
         );
         // Canonical manifest shape: a JSON array of SnapshotEntry.
         std::fs::create_dir_all(snapshots.join("manifests")).unwrap();
         std::fs::write(
-            snapshots.join("manifests").join(format!("{with_manifest}.json")),
+            snapshots
+                .join("manifests")
+                .join(format!("{with_manifest}.json")),
             serde_json::json!([
                 {"path": "a.txt", "object_sha256": "abc", "size": 1, "mtime_nanos": 0},
                 {"path": "sub/b.txt", "object_sha256": "def", "size": 2, "mtime_nanos": 0},

@@ -435,33 +435,21 @@ mod tests {
         let mut a = TuiApp::new();
         // Esc → Cancelled.
         let fired = cell();
-        a.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        a.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         handle_key(&mut a, key(KeyCode::Esc, M::NONE));
         assert_eq!(fired.get(), Some(PermissionOutcome::Cancelled));
         assert_eq!(a.focus, Focus::Chat);
 
         // Tab to Cancel, Enter → Cancelled.
         let fired = cell();
-        a.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        a.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         handle_key(&mut a, key(KeyCode::Tab, M::NONE));
         handle_key(&mut a, key(KeyCode::Enter, M::NONE));
         assert_eq!(fired.get(), Some(PermissionOutcome::Cancelled));
 
         // Default Enter → AllowOnce.
         let fired = cell();
-        a.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        a.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         handle_key(&mut a, key(KeyCode::Enter, M::NONE));
         assert_eq!(fired.get(), Some(PermissionOutcome::AllowOnce));
     }
@@ -524,10 +512,7 @@ mod tests {
         let mut a = TuiApp::new();
         a.cwd = dir.clone();
         handle_key(&mut a, key(KeyCode::Char('s'), M::ALT));
-        assert!(matches!(
-            a.modal,
-            Some(crate::modals::Modal::Snapshots(_))
-        ));
+        assert!(matches!(a.modal, Some(crate::modals::Modal::Snapshots(_))));
         assert_eq!(a.focus, Focus::Modal);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -548,10 +533,7 @@ mod tests {
         a.input.textarea.set_text("/snapshots");
         let outcome = handle_key(&mut a, key(KeyCode::Enter, M::NONE));
         assert_eq!(outcome, KeyOutcome::Continue);
-        assert!(matches!(
-            a.modal,
-            Some(crate::modals::Modal::Snapshots(_))
-        ));
+        assert!(matches!(a.modal, Some(crate::modals::Modal::Snapshots(_))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -718,7 +700,10 @@ mod tests {
         assert!(a.explorer.tree[0].expanded);
         handle_key(&mut a, key(KeyCode::Down, M::NONE));
         handle_key(&mut a, key(KeyCode::Enter, M::NONE));
-        assert_eq!(a.nav_back.last().map(String::as_str), Some("file:///x/lib.rs"));
+        assert_eq!(
+            a.nav_back.last().map(String::as_str),
+            Some("file:///x/lib.rs")
+        );
         assert!(
             a.content.items.iter().any(|i| {
                 matches!(

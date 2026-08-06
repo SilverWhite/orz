@@ -147,7 +147,10 @@ impl SnapshotStore {
             root,
             worktree,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
-            excluded_dirs: DEFAULT_EXCLUDED_DIRS.iter().map(|s| s.to_string()).collect(),
+            excluded_dirs: DEFAULT_EXCLUDED_DIRS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             semaphore: Arc::new(Semaphore::new(1)),
         })
     }
@@ -174,7 +177,11 @@ impl SnapshotStore {
 
     /// Snapshot an explicit file list (relative to the worktree).
     pub async fn track(&self, paths: &[PathBuf]) -> Result<SnapshotRecord, SnapshotError> {
-        let _guard = self.semaphore.acquire().await.map_err(std::io::Error::other)?;
+        let _guard = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(std::io::Error::other)?;
         let mut entries = Vec::new();
         for path in paths {
             let full = self.resolve(path)?;
@@ -189,7 +196,11 @@ impl SnapshotStore {
 
     /// Snapshot the whole worktree (with exclusion rules).
     pub async fn track_worktree(&self) -> Result<SnapshotRecord, SnapshotError> {
-        let _guard = self.semaphore.acquire().await.map_err(std::io::Error::other)?;
+        let _guard = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(std::io::Error::other)?;
         let mut entries = Vec::new();
         let mut stack = vec![self.worktree.clone()];
         while let Some(dir) = stack.pop() {
@@ -212,7 +223,10 @@ impl SnapshotStore {
     }
 
     /// Verify the worktree state against a snapshot hash.
-    pub async fn verify(&self, snapshot_hash: &str) -> Result<SnapshotVerifyOutcome, SnapshotError> {
+    pub async fn verify(
+        &self,
+        snapshot_hash: &str,
+    ) -> Result<SnapshotVerifyOutcome, SnapshotError> {
         let manifest = self.load_manifest(snapshot_hash)?;
         let mut changed = Vec::new();
         for entry in manifest {
@@ -230,8 +244,15 @@ impl SnapshotStore {
     }
 
     /// Restore every file in a snapshot back into the worktree.
-    pub async fn restore(&self, snapshot_hash: &str) -> Result<SnapshotRestoreOutcome, SnapshotError> {
-        let _guard = self.semaphore.acquire().await.map_err(std::io::Error::other)?;
+    pub async fn restore(
+        &self,
+        snapshot_hash: &str,
+    ) -> Result<SnapshotRestoreOutcome, SnapshotError> {
+        let _guard = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(std::io::Error::other)?;
         let manifest = self.load_manifest(snapshot_hash)?;
         let mut restored = Vec::new();
         for entry in manifest {
@@ -251,7 +272,11 @@ impl SnapshotStore {
         snapshot_hash: &str,
         paths: &[PathBuf],
     ) -> Result<SnapshotRestoreOutcome, SnapshotError> {
-        let _guard = self.semaphore.acquire().await.map_err(std::io::Error::other)?;
+        let _guard = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(std::io::Error::other)?;
         let manifest = self.load_manifest(snapshot_hash)?;
         let mut wanted = Vec::new();
         for p in paths {
@@ -301,7 +326,9 @@ impl SnapshotStore {
             match component {
                 Component::Normal(part) => clean.push(part),
                 Component::CurDir => {}
-                Component::ParentDir => return Err(SnapshotError::OutsideWorktree(rel.to_path_buf())),
+                Component::ParentDir => {
+                    return Err(SnapshotError::OutsideWorktree(rel.to_path_buf()));
+                }
                 _ => return Err(SnapshotError::OutsideWorktree(rel.to_path_buf())),
             }
         }
@@ -311,14 +338,22 @@ impl SnapshotStore {
     /// Worktree-relative, `/`-separated string for a path inside the worktree.
     fn relative(&self, path: &Path) -> String {
         match path.strip_prefix(&self.worktree) {
-            Ok(rel) => rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
+            Ok(rel) => rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
             Err(_) => path.to_string_lossy().replace('\\', "/"),
         }
     }
 
     /// Capture one file: content-addressed object + manifest entry.
     /// Returns `None` for missing files, excluded sizes, or directories.
-    fn capture_file(&self, full: &Path, rel: &Path) -> Result<Option<SnapshotEntry>, SnapshotError> {
+    fn capture_file(
+        &self,
+        full: &Path,
+        rel: &Path,
+    ) -> Result<Option<SnapshotEntry>, SnapshotError> {
         if !full.exists() {
             return Ok(None);
         }
@@ -340,7 +375,11 @@ impl SnapshotStore {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
         Ok(Some(SnapshotEntry {
-            path: rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
+            path: rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
             object_sha256: hash,
             size: meta.len(),
             mtime_nanos: mtime,
@@ -368,18 +407,17 @@ impl SnapshotStore {
     }
 
     fn load_manifest(&self, snapshot_hash: &str) -> Result<Vec<SnapshotEntry>, SnapshotError> {
-        if !snapshot_hash
-            .chars()
-            .all(|c| c.is_ascii_hexdigit())
-            || snapshot_hash.len() != 64
-        {
+        if !snapshot_hash.chars().all(|c| c.is_ascii_hexdigit()) || snapshot_hash.len() != 64 {
             return Err(SnapshotError::InvalidHash(snapshot_hash.to_string()));
         }
-        let manifest_path = self.root.join("manifests").join(format!("{snapshot_hash}.json"));
+        let manifest_path = self
+            .root
+            .join("manifests")
+            .join(format!("{snapshot_hash}.json"));
         let bytes = std::fs::read(&manifest_path)
             .map_err(|_| SnapshotError::NotFound(snapshot_hash.to_string()))?;
-        let entries: Vec<SnapshotEntry> =
-            serde_json::from_slice(&bytes).map_err(|e| SnapshotError::CorruptManifest(e.to_string()))?;
+        let entries: Vec<SnapshotEntry> = serde_json::from_slice(&bytes)
+            .map_err(|e| SnapshotError::CorruptManifest(e.to_string()))?;
         Ok(entries)
     }
 
@@ -442,14 +480,25 @@ mod tests {
         std::fs::write(worktree.join("sub/b.txt"), "world").unwrap();
 
         let store = store_in(dir.path());
-        let record = store.track(&[PathBuf::from("a.txt"), PathBuf::from("sub/b.txt")]).await.unwrap();
+        let record = store
+            .track(&[PathBuf::from("a.txt"), PathBuf::from("sub/b.txt")])
+            .await
+            .unwrap();
         assert_eq!(record.entries.len(), 2);
         assert_eq!(record.snapshot_hash.len(), 64);
 
         // Deterministic: same content → same snapshot hash, and manifests dir has it.
-        let again = store.track(&[PathBuf::from("sub/b.txt"), PathBuf::from("a.txt")]).await.unwrap();
+        let again = store
+            .track(&[PathBuf::from("sub/b.txt"), PathBuf::from("a.txt")])
+            .await
+            .unwrap();
         assert_eq!(again.snapshot_hash, record.snapshot_hash);
-        assert!(store.list_snapshots().unwrap().contains(&record.snapshot_hash));
+        assert!(
+            store
+                .list_snapshots()
+                .unwrap()
+                .contains(&record.snapshot_hash)
+        );
     }
 
     #[tokio::test]
@@ -462,18 +511,26 @@ mod tests {
 
         let store = store_in(dir.path());
         let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
-        assert_eq!(store.verify(&record.snapshot_hash).await.unwrap(), SnapshotVerifyOutcome::Clean);
+        assert_eq!(
+            store.verify(&record.snapshot_hash).await.unwrap(),
+            SnapshotVerifyOutcome::Clean
+        );
 
         std::fs::write(&file, "mutated").unwrap();
         match store.verify(&record.snapshot_hash).await.unwrap() {
-            SnapshotVerifyOutcome::Changed { changed } => assert_eq!(changed, vec!["a.txt".to_string()]),
+            SnapshotVerifyOutcome::Changed { changed } => {
+                assert_eq!(changed, vec!["a.txt".to_string()])
+            }
             SnapshotVerifyOutcome::Clean => panic!("expected change"),
         }
 
         let outcome = store.restore(&record.snapshot_hash).await.unwrap();
         assert_eq!(outcome.restored, vec!["a.txt".to_string()]);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "original");
-        assert_eq!(store.verify(&record.snapshot_hash).await.unwrap(), SnapshotVerifyOutcome::Clean);
+        assert_eq!(
+            store.verify(&record.snapshot_hash).await.unwrap(),
+            SnapshotVerifyOutcome::Clean
+        );
     }
 
     #[tokio::test]
@@ -485,14 +542,26 @@ mod tests {
         std::fs::write(worktree.join("b.txt"), "b0").unwrap();
 
         let store = store_in(dir.path());
-        let record = store.track(&[PathBuf::from("a.txt"), PathBuf::from("b.txt")]).await.unwrap();
+        let record = store
+            .track(&[PathBuf::from("a.txt"), PathBuf::from("b.txt")])
+            .await
+            .unwrap();
         std::fs::write(worktree.join("a.txt"), "a1").unwrap();
         std::fs::write(worktree.join("b.txt"), "b1").unwrap();
 
-        let outcome = store.revert(&record.snapshot_hash, &[PathBuf::from("a.txt")]).await.unwrap();
+        let outcome = store
+            .revert(&record.snapshot_hash, &[PathBuf::from("a.txt")])
+            .await
+            .unwrap();
         assert_eq!(outcome.restored, vec!["a.txt".to_string()]);
-        assert_eq!(std::fs::read_to_string(worktree.join("a.txt")).unwrap(), "a0");
-        assert_eq!(std::fs::read_to_string(worktree.join("b.txt")).unwrap(), "b1");
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("a.txt")).unwrap(),
+            "a0"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("b.txt")).unwrap(),
+            "b1"
+        );
     }
 
     #[tokio::test]
@@ -529,7 +598,10 @@ mod tests {
         let worktree = dir.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
         let store = store_in(dir.path());
-        let err = store.track(&[PathBuf::from("../escape.txt")]).await.unwrap_err();
+        let err = store
+            .track(&[PathBuf::from("../escape.txt")])
+            .await
+            .unwrap_err();
         assert!(matches!(err, SnapshotError::OutsideWorktree(_)));
     }
 
@@ -553,7 +625,10 @@ mod tests {
         std::fs::write(&file, "v1").unwrap();
 
         let store = store_in(dir.path());
-        let record = store.track(&[PathBuf::from("deep/nested/a.txt")]).await.unwrap();
+        let record = store
+            .track(&[PathBuf::from("deep/nested/a.txt")])
+            .await
+            .unwrap();
 
         // Delete the file (simulates destructive mutation) then restore.
         std::fs::remove_file(&file).unwrap();

@@ -225,7 +225,10 @@ mod tests {
         assert_eq!(parse_completion_decision("  no — 还需要 PDF 全文"), "no");
         assert_eq!(parse_completion_decision("Uncertain"), "uncertain");
         assert_eq!(parse_completion_decision("不确定"), "not_detected");
-        assert_eq!(parse_completion_decision("[DOC] design.md\n检索完成"), "not_detected");
+        assert_eq!(
+            parse_completion_decision("[DOC] design.md\n检索完成"),
+            "not_detected"
+        );
         assert_eq!(parse_completion_decision(""), "not_detected");
         // "not yet" starts with "no" — semantically a negative answer (not
         // sufficient), so the hit is correct, not a false positive.

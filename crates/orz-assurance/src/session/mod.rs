@@ -14,4 +14,6 @@
 
 pub mod snapshot;
 
-pub use snapshot::{SnapshotError, SnapshotRecord, SnapshotRestoreOutcome, SnapshotStore, SnapshotVerifyOutcome};
+pub use snapshot::{
+    SnapshotError, SnapshotRecord, SnapshotRestoreOutcome, SnapshotStore, SnapshotVerifyOutcome,
+};

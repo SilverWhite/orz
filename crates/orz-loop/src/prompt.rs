@@ -169,17 +169,19 @@ mod tests {
 
         // RETRIEVAL_COMPLETION_CHECK — Python precedent verbatim.
         assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.starts_with("[RETRIEVAL_COMPLETION_CHECK v0.1]"));
-        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK
-            .contains("子代理检索任务已完成。关闭前请确认："));
-        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK
-            .contains("是否已经获得完成当前主任务所需的内容？"));
-        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK
-            .contains("不自动扩展为新子代理或无限补检索"));
+        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.contains("子代理检索任务已完成。关闭前请确认："));
+        assert!(
+            RETRIEVAL_COMPLETION_CHECK_BLOCK.contains("是否已经获得完成当前主任务所需的内容？")
+        );
+        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.contains("不自动扩展为新子代理或无限补检索"));
         assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.ends_with("[/RETRIEVAL_COMPLETION_CHECK]"));
 
         // COUNTEREXAMPLE_GATE — final-answer variant carries the once-only note.
         assert!(COUNTEREXAMPLE_GATE_BLOCK.starts_with("[COUNTEREXAMPLE_GATE v0.1]"));
-        assert!(COUNTEREXAMPLE_GATE_BLOCK.contains("最终回答即将输出。请对即将输出的结论做最后一次反例自查："));
+        assert!(
+            COUNTEREXAMPLE_GATE_BLOCK
+                .contains("最终回答即将输出。请对即将输出的结论做最后一次反例自查：")
+        );
         assert!(COUNTEREXAMPLE_GATE_BLOCK.contains("1. 是否存在未验证的前提？"));
         assert!(COUNTEREXAMPLE_GATE_BLOCK.contains("2. 是否存在可推翻结论的已知证据？"));
         assert!(COUNTEREXAMPLE_GATE_BLOCK.contains("3. 结论强度是否超出证据支持？"));
@@ -204,7 +206,9 @@ mod tests {
         assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_BLOCK));
         assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_PLAN_BLOCK));
         // Leading/trailing whitespace tolerated.
-        assert!(is_injected_block_text(&format!("  {INFO_SUFFICIENCY_BLOCK}\n")));
+        assert!(is_injected_block_text(&format!(
+            "  {INFO_SUFFICIENCY_BLOCK}\n"
+        )));
         // Ordinary model/user text must never match.
         assert!(!is_injected_block_text("完成"));
         assert!(!is_injected_block_text("[INFO_SUFFICIENCY v0.1] 部分拷贝"));

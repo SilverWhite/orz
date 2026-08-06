@@ -12,7 +12,7 @@ use orz_tools::computer::local::file_system::LocalFs;
 use orz_tools::computer::local::terminal::LocalTerminalBackend;
 use orz_tools::computer::types::{AsyncFileSystem, TerminalBackend};
 use orz_tools::registry::types::{
-    FinalizedToolset, SessionContext, ToolServerConfig, ToolRegistryBuilder,
+    FinalizedToolset, SessionContext, ToolRegistryBuilder, ToolServerConfig,
 };
 
 /// Build a finalized toolset for a session working directory.

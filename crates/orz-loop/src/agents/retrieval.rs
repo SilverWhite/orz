@@ -64,12 +64,14 @@ impl RetrievalSubagent {
         completion_check_block: Option<&str>,
     ) -> Result<ModelResponse, GatewayError> {
         let messages = completion_check_block
-            .map(|block| vec![Message {
-                role: Role::User,
-                content: block.to_string(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }])
+            .map(|block| {
+                vec![Message {
+                    role: Role::User,
+                    content: block.to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                }]
+            })
             .unwrap_or_default();
         let response = self
             .gateway
@@ -145,7 +147,13 @@ mod tests {
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md", "gate.rs"]);
         assert_eq!(r.internal_ret.source_ledger, vec!["docs/index"]);
-        assert!(r.internal_ret.response.as_deref().unwrap().contains("检索完成"));
+        assert!(
+            r.internal_ret
+                .response
+                .as_deref()
+                .unwrap()
+                .contains("检索完成")
+        );
         // External section untouched.
         assert!(r.external_ret.web_sources.is_empty());
     }
@@ -165,7 +173,10 @@ mod tests {
         subagent.run_retrieval(&bb, &spec, None).await.unwrap();
 
         let r = bb.read();
-        assert_eq!(r.external_ret.web_sources, vec!["https://example.com/paper"]);
+        assert_eq!(
+            r.external_ret.web_sources,
+            vec!["https://example.com/paper"]
+        );
         // Internal section untouched.
         assert!(r.internal_ret.project_docs.is_empty());
     }
@@ -187,7 +198,9 @@ mod tests {
         // §4.6.1: the close-time completion check rides in the subagent's
         // request messages; the [DOC]/[SOURCE] parse stays on the response
         // side. FakeProvider retains requests, so the injection is assertable.
-        let fake = Arc::new(FakeProvider::from_texts(vec!["[DOC] a.md\nyes，已获得全部内容"]));
+        let fake = Arc::new(FakeProvider::from_texts(vec![
+            "[DOC] a.md\nyes，已获得全部内容",
+        ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let bb = Arc::new(SharedBlackboard::new());
         let subagent = RetrievalSubagent::new(SubagentRole::InternalRetrieval, gateway.clone());
@@ -197,7 +210,11 @@ mod tests {
             budget_turns: 1,
         };
         subagent
-            .run_retrieval(&bb, &spec, Some(crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK))
+            .run_retrieval(
+                &bb,
+                &spec,
+                Some(crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK),
+            )
             .await
             .unwrap();
 

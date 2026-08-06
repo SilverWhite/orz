@@ -299,9 +299,7 @@ pub fn handle_key(app: &mut CodexApp, key: KeyEvent) -> KeyOutcome {
         return match key.code {
             // Ctrl+C / Ctrl+Z stay live while the dialog is open (the status
             // line advertises them; review D3-2).
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                KeyOutcome::Quit
-            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => KeyOutcome::Quit,
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 KeyOutcome::Interrupt
             }
@@ -387,7 +385,12 @@ mod tests {
     fn completion_replaces_accumulated_text_and_seals() {
         let mut app = CodexApp::new();
         app.on_item_delta("turn_1".into(), "item_1".into(), "草稿".into());
-        app.on_item_completed("turn_1".into(), "item_1".into(), "终局答案。".into(), "agentMessage".into());
+        app.on_item_completed(
+            "turn_1".into(),
+            "item_1".into(),
+            "终局答案。".into(),
+            "agentMessage".into(),
+        );
         assert_eq!(app.messages[0].text, "终局答案。");
         assert!(!app.messages[0].streaming);
         // A late delta for the sealed item is dropped.
@@ -399,7 +402,12 @@ mod tests {
     #[test]
     fn completion_without_stream_creates_message_directly() {
         let mut app = CodexApp::new();
-        app.on_item_completed("turn_1".into(), "item_2".into(), "空输出直接封存".into(), "agentMessage".into());
+        app.on_item_completed(
+            "turn_1".into(),
+            "item_2".into(),
+            "空输出直接封存".into(),
+            "agentMessage".into(),
+        );
         assert_eq!(app.messages.len(), 1);
         assert!(!app.messages[0].streaming);
     }
@@ -407,8 +415,16 @@ mod tests {
     #[test]
     fn user_message_echo_items_are_ignored() {
         let mut app = CodexApp::new();
-        app.on_item_completed("turn_1".into(), "item_1".into(), "你好".into(), "userMessage".into());
-        assert!(app.messages.is_empty(), "the app renders its own submissions");
+        app.on_item_completed(
+            "turn_1".into(),
+            "item_1".into(),
+            "你好".into(),
+            "userMessage".into(),
+        );
+        assert!(
+            app.messages.is_empty(),
+            "the app renders its own submissions"
+        );
     }
 
     #[test]
@@ -436,7 +452,10 @@ mod tests {
     #[test]
     fn approval_dialog_cycles_and_decides() {
         let mut app = CodexApp::new();
-        app.on_approval_request(serde_json::json!(7), serde_json::json!({ "tool_name": "x" }));
+        app.on_approval_request(
+            serde_json::json!(7),
+            serde_json::json!({ "tool_name": "x" }),
+        );
         assert_eq!(app.status, RunState::WaitingApproval);
         let dialog = app.dialog.as_ref().unwrap();
         assert_eq!(dialog.decision(), "allow_once");
@@ -445,7 +464,11 @@ mod tests {
         app.dialog.as_mut().unwrap().cycle(1);
         assert_eq!(app.dialog.as_ref().unwrap().decision(), "deny");
         app.dialog.as_mut().unwrap().cycle(1);
-        assert_eq!(app.dialog.as_ref().unwrap().decision(), "allow_once", "wraps around");
+        assert_eq!(
+            app.dialog.as_ref().unwrap().decision(),
+            "allow_once",
+            "wraps around"
+        );
         app.answer_approval();
         assert!(app.dialog.is_none());
         assert_eq!(app.status, RunState::Running);

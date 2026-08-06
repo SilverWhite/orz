@@ -8,14 +8,14 @@
 //!   No Grok crate depends on orz-host.
 
 pub mod acp_server;
-pub mod session;
 pub mod approval;
-pub mod stdio;
-pub mod tools;
-pub mod permission;
-pub mod keystore;
 pub mod codex_app;
 pub mod codex_permission;
+pub mod keystore;
+pub mod permission;
+pub mod session;
+pub mod stdio;
+pub mod tools;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -229,9 +229,9 @@ impl LoopHost for OrzHost {
         };
         let notification = acp::SessionNotification::new(
             acp::SessionId::new(session_id.clone()),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                acp::ContentBlock::Text(acp::TextContent::new(text.to_string())),
-            )),
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new(text.to_string()),
+            ))),
         );
         // Fire-and-forget: the `acp::Agent::session_notification` trait method
         // is `#[async_trait(?Send)]` (its future is not Send), so it cannot be
@@ -277,9 +277,9 @@ impl LoopHost for OrzHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orz_loop::AgentLoopController;
     use orz_loop::gateway::fake::FakeProvider;
     use orz_loop::gateway::model::ModelGateway;
-    use orz_loop::AgentLoopController;
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -287,11 +287,8 @@ mod tests {
 
     fn test_dir() -> std::path::PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "orz-host-lib-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("orz-host-lib-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -302,9 +299,8 @@ mod tests {
         OnceLock::new();
 
     fn shared_toolset() -> &'static Arc<orz_tools::registry::types::FinalizedToolset> {
-        SHARED_TOOLSET.get_or_init(|| {
-            tools::build_toolset(&std::env::temp_dir()).expect("shared toolset")
-        })
+        SHARED_TOOLSET
+            .get_or_init(|| tools::build_toolset(&std::env::temp_dir()).expect("shared toolset"))
     }
 
     #[tokio::test]
@@ -350,8 +346,8 @@ mod tests {
     async fn orz_host_full_loophost_chain() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.join(".gsa").join("runs").join("RUN-T"));
-        let host = OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted)
-            .expect("host build");
+        let host =
+            OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted).expect("host build");
 
         // Two texts — the counterexample gate (§4.6) intercepts the first.
         let gateway: Arc<dyn ModelGateway> =
@@ -430,12 +426,8 @@ mod tests {
             "key id: {}",
             permit.integrity.key_id
         );
-        let verification = verify_sensitive_action_permit(
-            host.permit_signer().as_ref(),
-            &envelope,
-            &permit,
-            None,
-        );
+        let verification =
+            verify_sensitive_action_permit(host.permit_signer().as_ref(), &envelope, &permit, None);
         assert!(verification.valid, "{:?}", verification.errors);
         let artifact = dir
             .join(".gsa")

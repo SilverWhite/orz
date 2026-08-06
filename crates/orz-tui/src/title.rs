@@ -88,7 +88,8 @@ mod tests {
             ("预检", "orz — 预检…"),
             ("恢复中", "orz — 恢复中"),
         ] {
-            app.status.set_run_state(state, state == "完成" || state == "已取消");
+            app.status
+                .set_run_state(state, state == "完成" || state == "已取消");
             assert_eq!(title_for(&app), expect, "state {state}");
         }
     }

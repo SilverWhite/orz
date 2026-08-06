@@ -5,15 +5,13 @@
 
 use std::io;
 
-use ratatui::backend::Backend;
 use ratatui::Terminal;
+use ratatui::backend::Backend;
 
 use crate::dialogs::{Dialog, DialogAction};
 use crate::events::TuiEvent;
 use crate::theme::{MIN_HEIGHT, MIN_WIDTH};
-use crate::view_model::{
-    ChatInputState, ContentMarker, ContentPane, MenuBar, StatusBar, Toolbar,
-};
+use crate::view_model::{ChatInputState, ContentMarker, ContentPane, MenuBar, StatusBar, Toolbar};
 
 /// Hard floor below which the layout cannot render (soft floor is
 /// MIN_WIDTH×MIN_HEIGHT from the design doc).
@@ -76,8 +74,7 @@ impl PendingPermission {
     /// truth — `orz_host::permission::PERMISSION_PROMPT_TIMEOUT`); a few ms
     /// of drift between the two timers is benign (Phase 3 slice #7).
     pub fn remaining(&self) -> Option<std::time::Duration> {
-        crate::PERMISSION_PROMPT_TIMEOUT
-            .checked_sub(self.opened_at.elapsed())
+        crate::PERMISSION_PROMPT_TIMEOUT.checked_sub(self.opened_at.elapsed())
     }
 }
 
@@ -315,7 +312,9 @@ impl TuiApp {
             "工具权限请求",
             message,
             vec![
-                DialogAction::AllowOnce { option_id: "allow-once".into() },
+                DialogAction::AllowOnce {
+                    option_id: "allow-once".into(),
+                },
                 DialogAction::Cancel,
             ],
         );
@@ -372,9 +371,9 @@ impl TuiApp {
             return false;
         }
         let model = self.status.items[4].label.clone();
-        self.modal = Some(crate::modals::Modal::Help(
-            crate::modals::HelpOverlay::new(&model),
-        ));
+        self.modal = Some(crate::modals::Modal::Help(crate::modals::HelpOverlay::new(
+            &model,
+        )));
         self.focus = Focus::Modal;
         true
     }
@@ -424,7 +423,8 @@ impl TuiApp {
 
     pub fn snapshots_select_next(&mut self) {
         if let Some(crate::modals::Modal::Snapshots(s)) = &mut self.modal
-            && !s.confirm // review P3-4: lock the selection mid-confirm
+            && !s.confirm
+        // review P3-4: lock the selection mid-confirm
         {
             s.select_next();
         }
@@ -464,10 +464,9 @@ impl TuiApp {
                 s.confirm = true;
                 return false;
             }
-            Some(crate::modals::Modal::Snapshots(s)) => s
-                .entries
-                .get(s.selected)
-                .map(|e| e.hash.clone()),
+            Some(crate::modals::Modal::Snapshots(s)) => {
+                s.entries.get(s.selected).map(|e| e.hash.clone())
+            }
             _ => None,
         };
         if self.running || self.restoring {
@@ -489,8 +488,7 @@ impl TuiApp {
     }
 
     fn queue_modal_refusal(&mut self) {
-        self.content
-            .add_system_message("请先处理权限请求", false);
+        self.content.add_system_message("请先处理权限请求", false);
     }
 
     /// Close the modal, returning to chat, then present a queued permission
@@ -626,7 +624,8 @@ impl TuiApp {
     /// (v1: /open and the explorer file rows share this path).
     pub fn open_uri(&mut self, uri: &str) {
         self.push_uri(uri);
-        self.content.add_system_message(&format!("[打开] {uri}"), false);
+        self.content
+            .add_system_message(&format!("[打开] {uri}"), false);
     }
 
     /// Push an object URI onto the back stack (v1: /open records only).
@@ -639,7 +638,8 @@ impl TuiApp {
     pub fn nav_backward(&mut self) -> Option<String> {
         let uri = self.nav_back.pop()?;
         self.nav_forward.push(uri.clone());
-        self.toolbar.set_enabled("前进", !self.nav_forward.is_empty());
+        self.toolbar
+            .set_enabled("前进", !self.nav_forward.is_empty());
         self.toolbar.set_enabled("后退", !self.nav_back.is_empty());
         Some(uri)
     }
@@ -647,7 +647,8 @@ impl TuiApp {
     pub fn nav_forward_move(&mut self) -> Option<String> {
         let uri = self.nav_forward.pop()?;
         self.nav_back.push(uri.clone());
-        self.toolbar.set_enabled("前进", !self.nav_forward.is_empty());
+        self.toolbar
+            .set_enabled("前进", !self.nav_forward.is_empty());
         self.toolbar.set_enabled("后退", !self.nav_back.is_empty());
         Some(uri)
     }
@@ -760,11 +761,7 @@ mod tests {
     fn dialog_focus_and_confirm() {
         let mut app = TuiApp::new();
         let fired = fired_cell();
-        app.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         assert_eq!(app.focus, Focus::Dialog);
         assert!(app.dialog.is_some());
         assert_eq!(app.status.items[5].label, "等待审批");
@@ -780,11 +777,7 @@ mod tests {
     fn esc_cancel_fires_cancelled() {
         let mut app = TuiApp::new();
         let fired = fired_cell();
-        app.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         // Select Cancel via key path (dialog.select_next + confirm).
         app.dialog.as_mut().unwrap().select_next();
         app.confirm_dialog();
@@ -798,11 +791,7 @@ mod tests {
         let mut app = TuiApp::new();
         let first = fired_cell();
         let second = fired_cell();
-        app.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&first)),
-        ));
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&first))));
         app.show_permission_dialog(PendingPermission::new(
             "edit_file",
             "lib.rs",
@@ -829,11 +818,7 @@ mod tests {
         // dialog must not overwrite it back to 空闲.
         let mut app = TuiApp::new();
         let fired = fired_cell();
-        app.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         app.status.set_run_state("完成", true);
         app.dismiss_permission_dialog("运行已结束");
         assert_eq!(app.status.items[5].label, "完成");
@@ -896,7 +881,10 @@ mod tests {
         // max_events_log = 0 must not panic (review P3 #5).
         let mut app = TuiApp::new();
         app.max_events_log = 0;
-        app.accept_event(TuiEvent::StatusUpdate { label: "x".into(), ok: true });
+        app.accept_event(TuiEvent::StatusUpdate {
+            label: "x".into(),
+            ok: true,
+        });
         assert!(app.events_log.is_empty());
     }
 
@@ -925,16 +913,10 @@ mod tests {
         let mut app = TuiApp::new();
         assert!(app.open_help());
         assert_eq!(app.focus, Focus::Modal);
-        assert!(matches!(
-            app.modal,
-            Some(crate::modals::Modal::Help(_))
-        ));
+        assert!(matches!(app.modal, Some(crate::modals::Modal::Help(_))));
         // Reopening replaces the current modal (one at a time).
         assert!(app.open_find());
-        assert!(matches!(
-            app.modal,
-            Some(crate::modals::Modal::Find(_))
-        ));
+        assert!(matches!(app.modal, Some(crate::modals::Modal::Find(_))));
         assert!(app.open_properties());
         assert!(matches!(
             app.modal,
@@ -957,11 +939,7 @@ mod tests {
         app.open_find();
         // A permission request arriving under a modal queues (the modal
         // must not be silently dropped).
-        app.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         assert_eq!(app.permission_queue.len(), 1);
         assert!(app.modal.is_some(), "modal stays up");
         assert!(app.dialog.is_none(), "permission never renders under modal");
@@ -1078,7 +1056,10 @@ mod tests {
         assert!(app.pending_restore.is_none());
         // Second Enter: restore intent armed, modal closed, focus back.
         assert!(app.snapshots_confirm());
-        assert_eq!(app.pending_restore.as_deref(), Some("a".repeat(64).as_str()));
+        assert_eq!(
+            app.pending_restore.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
         assert!(app.modal.is_none());
         assert_eq!(app.focus, Focus::Chat);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1111,7 +1092,10 @@ mod tests {
         app.running = true;
         app.open_snapshots();
         app.snapshots_confirm(); // first Enter arms confirm
-        assert!(!app.snapshots_confirm(), "second Enter refused while running");
+        assert!(
+            !app.snapshots_confirm(),
+            "second Enter refused while running"
+        );
         assert!(app.pending_restore.is_none());
         assert!(system_has(&app, "请等待完成后再恢复"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1152,11 +1136,7 @@ mod tests {
         app.open_snapshots();
         // A permission request arriving under the selector queues (the
         // existing modal-guard invariant, slice #9).
-        app.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         assert_eq!(app.permission_queue.len(), 1);
         assert!(app.modal.is_some(), "modal stays up");
         assert!(app.dialog.is_none(), "permission never renders under modal");
@@ -1202,7 +1182,8 @@ mod tests {
         let mut app = TuiApp::new();
         app.content.add_user_message("审查 session 列表");
         app.content.add_model_message("来源可见性", 1, false);
-        app.content.add_or_update_tool_trace("read_file", "session.json", "运行中");
+        app.content
+            .add_or_update_tool_trace("read_file", "session.json", "运行中");
         app.open_find();
         let crate::modals::Modal::Find(find) = app.modal.as_mut().unwrap() else {
             panic!("find modal");
@@ -1255,7 +1236,10 @@ mod tests {
         let msgs = app.execute_find();
         let joined = msgs.join(" ");
         assert!(joined.contains("1 处匹配"), "{joined}");
-        assert!(joined.contains("标记栏已隐藏"), "hint when marker hidden: {joined}");
+        assert!(
+            joined.contains("标记栏已隐藏"),
+            "hint when marker hidden: {joined}"
+        );
 
         // Marker visible → no hint.
         let mut app2 = TuiApp::new();
@@ -1268,8 +1252,7 @@ mod tests {
         find.query.set_text("关键词");
         let msgs = app2.execute_find();
         assert!(
-            msgs.join(" ").contains("1 处匹配")
-                && !msgs.join(" ").contains("标记栏已隐藏"),
+            msgs.join(" ").contains("1 处匹配") && !msgs.join(" ").contains("标记栏已隐藏"),
             "no hint when marker visible: {msgs:?}"
         );
     }
@@ -1285,7 +1268,10 @@ mod tests {
         find.query.set_text("([");
         find.use_regex = true;
         let msgs = app.execute_find();
-        assert!(msgs.iter().any(|m| m.contains("正则表达式错误")), "{msgs:?}");
+        assert!(
+            msgs.iter().any(|m| m.contains("正则表达式错误")),
+            "{msgs:?}"
+        );
         assert!(app.modal.is_none());
         assert!(app.marker.markers.is_empty(), "no markers on failed search");
     }
@@ -1315,7 +1301,12 @@ mod tests {
         app.status.set_run_state("完成", true);
         let sheet = crate::modals::PropertiesSheet::from_app(&app);
         assert_eq!(
-            sheet.sheet.tabs.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            sheet
+                .sheet
+                .tabs
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
             ["常规", "溯源", "可见性", "依赖", "验证", "历史"]
         );
         let general = &sheet.sheet.tabs[0];
@@ -1326,7 +1317,10 @@ mod tests {
                 .any(|(k, v)| k == "会话 ID" && v == "S-ABC")
         );
         assert!(
-            general.fields.iter().any(|(k, v)| k == "状态" && v == "完成")
+            general
+                .fields
+                .iter()
+                .any(|(k, v)| k == "状态" && v == "完成")
         );
     }
 
@@ -1377,11 +1371,7 @@ mod tests {
 
         let mut app = TuiApp::new();
         let fired = fired_cell();
-        app.show_permission_dialog(PendingPermission::new(
-            "bash",
-            "dir",
-            Some(respond(&fired)),
-        ));
+        app.show_permission_dialog(PendingPermission::new("bash", "dir", Some(respond(&fired))));
         // Backdate AFTER presentation — `present_permission` re-stamps the
         // open instant (the countdown starts when the dialog is shown).
         let expired = app.pending_permission.as_mut().unwrap();
@@ -1401,9 +1391,7 @@ mod tests {
             .items
             .iter()
             .filter_map(|i| match i {
-                crate::view_model::ContentItem::Message(m)
-                    if m.role == "系统" =>
-                {
+                crate::view_model::ContentItem::Message(m) if m.role == "系统" => {
                     Some(m.content.clone())
                 }
                 _ => None,

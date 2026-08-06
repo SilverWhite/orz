@@ -9,8 +9,8 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -103,11 +103,7 @@ pub fn peek_first_prompt(path: &Path) -> Option<String> {
     None
 }
 
-fn tail_loop(
-    path: &Path,
-    tx: mpsc::UnboundedSender<RunEvent>,
-    stop: Arc<AtomicBool>,
-) {
+fn tail_loop(path: &Path, tx: mpsc::UnboundedSender<RunEvent>, stop: Arc<AtomicBool>) {
     let mut file: Option<File> = None;
     let mut offset: u64 = 0;
     let mut pending: Vec<u8> = Vec::new();
@@ -158,10 +154,8 @@ fn tail_loop(
                 pending.extend_from_slice(&buf[..n]);
                 // split() keeps the trailing partial as the last element;
                 // copy out so the borrow on `pending` ends before we clear.
-                let mut lines: Vec<Vec<u8>> = pending
-                    .split(|b| *b == b'\n')
-                    .map(|l| l.to_vec())
-                    .collect();
+                let mut lines: Vec<Vec<u8>> =
+                    pending.split(|b| *b == b'\n').map(|l| l.to_vec()).collect();
                 let partial = lines.pop();
                 pending.clear();
                 for line in lines {
@@ -205,10 +199,7 @@ mod tests {
     use std::time::Duration;
 
     fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "orz-tui-tail-{name}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("orz-tui-tail-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

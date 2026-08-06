@@ -22,14 +22,10 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.gate_block = None;
             app.status.set_run_state("运行中", true);
             if !prompt.is_empty()
-                && !app
-                    .content
-                    .items
-                    .iter()
-                    .any(|item| {
-                        matches!(item, crate::view_model::ContentItem::Message(m)
+                && !app.content.items.iter().any(|item| {
+                    matches!(item, crate::view_model::ContentItem::Message(m)
                             if m.role == "用户" && m.content == prompt)
-                    })
+                })
             {
                 app.content.add_user_message(&prompt);
             }
@@ -44,7 +40,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.content.current_model_index = None;
             app.status.set_run_state("完成", true);
             app.content.collapse_non_warnings();
-            app.content.add_system_message(&format!("运行完成（{status}）"), false);
+            app.content
+                .add_system_message(&format!("运行完成（{status}）"), false);
             vec![format!("运行完成: {status}")]
         }
         TuiEvent::RunFailed { error } => {
@@ -52,7 +49,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.content.current_model_index = None;
             app.status.set_run_state("失败", false);
             app.content.collapse_non_warnings();
-            app.content.add_system_message(&format!("[错误] {error}"), true);
+            app.content
+                .add_system_message(&format!("[错误] {error}"), true);
             vec![format!("运行失败: {error}")]
         }
         TuiEvent::RunCancelled { reason } => {
@@ -60,7 +58,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.content.current_model_index = None;
             app.status.set_run_state("已取消", true);
             app.content.collapse_non_warnings();
-            app.content.add_system_message(&format!("运行已取消（{reason}）"), false);
+            app.content
+                .add_system_message(&format!("运行已取消（{reason}）"), false);
             vec!["运行已取消".into()]
         }
         TuiEvent::RunInvalidated { status } => {
@@ -112,7 +111,11 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             // ToolProposal in the tool loop, so model_output carries them).
             for tc in &tool_calls {
                 let target = summarize_arguments(&tc.arguments);
-                let detail = if tc.name == "bash" { target.clone() } else { "...".into() };
+                let detail = if tc.name == "bash" {
+                    target.clone()
+                } else {
+                    "...".into()
+                };
                 app.content
                     .add_or_update_tool_trace(&tc.name, &target, &detail);
             }
@@ -184,9 +187,12 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::ToolStarted { tool, target, .. } => {
             let t = target.unwrap_or_default();
-            let detail = if t.is_empty() { "运行中".into() } else { t.clone() };
-            app.content
-                .add_or_update_tool_trace(&tool, &t, &detail);
+            let detail = if t.is_empty() {
+                "运行中".into()
+            } else {
+                t.clone()
+            };
+            app.content.add_or_update_tool_trace(&tool, &t, &detail);
             app.toolbar.set_enabled("停止", true);
             vec![format!("工具开始: {tool}")]
         }
@@ -277,10 +283,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
                 .filter(|r| !r.is_empty())
                 .map(|r| format!("：{r}"))
                 .unwrap_or_default();
-            app.content.add_system_message(
-                &format!("[反例询问] {position}{suffix}"),
-                false,
-            );
+            app.content
+                .add_system_message(&format!("[反例询问] {position}{suffix}"), false);
             vec![format!("反例询问: {position}")]
         }
         TuiEvent::RetrievalCompletionCheck { role, decision } => {
@@ -297,10 +301,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             ..
         } => {
             if let Some(err) = snapshot_error {
-                app.content.add_system_message(
-                    &format!("[快照] {tool}: 失败（{err}）"),
-                    true,
-                );
+                app.content
+                    .add_system_message(&format!("[快照] {tool}: 失败（{err}）"), true);
                 vec![format!("快照失败: {tool}")]
             } else if let Some(hash) = snapshot_hash {
                 let short: String = hash.chars().take(8).collect();
@@ -319,10 +321,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             ..
         } => {
             if let Some(err) = snapshot_error {
-                app.content.add_system_message(
-                    &format!("[快照恢复] 失败（{err}）"),
-                    true,
-                );
+                app.content
+                    .add_system_message(&format!("[快照恢复] 失败（{err}）"), true);
                 vec![format!("快照恢复失败: {err}")]
             } else {
                 let short: String = snapshot_hash
@@ -346,23 +346,17 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
 
         // ── plan mode ──
         TuiEvent::PlanProposed {
-            plan_id,
-            sections,
-            ..
+            plan_id, sections, ..
         } => {
             app.content
                 .add_system_message(&format!("[计划] {plan_id}（{sections} 节）"), false);
             vec![format!("计划已提出: {plan_id}")]
         }
         TuiEvent::PlanApproved {
-            plan_id,
-            authority,
-            ..
+            plan_id, authority, ..
         } => {
-            app.content.add_system_message(
-                &format!("[计划] {plan_id} 已批准（{authority}）"),
-                false,
-            );
+            app.content
+                .add_system_message(&format!("[计划] {plan_id} 已批准（{authority}）"), false);
             vec![format!("计划已批准: {plan_id}")]
         }
         TuiEvent::PlanRejected { plan_id } => {
@@ -393,7 +387,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
                     &format!("[验证] 日志链{}", if ok { "有效" } else { "无效" }),
                     !ok,
                 );
-                app.status.set_run_state(if ok { "完成" } else { "失败" }, ok);
+                app.status
+                    .set_run_state(if ok { "完成" } else { "失败" }, ok);
             } else {
                 app.status.update_item(&label, ok);
             }
@@ -489,9 +484,11 @@ mod tests {
         });
         assert_eq!(a.content.tool_trace_names(), vec!["bash"]);
         // A model card exists (empty text, but tool round in progress).
-        let has_model_card = a.content.items.iter().any(|i| {
-            matches!(i, ContentItem::Message(m) if m.role == "模型")
-        });
+        let has_model_card = a
+            .content
+            .items
+            .iter()
+            .any(|i| matches!(i, ContentItem::Message(m) if m.role == "模型"));
         assert!(has_model_card);
     }
 
@@ -517,8 +514,12 @@ mod tests {
     #[test]
     fn text_delta_then_model_output_no_duplicate_card() {
         let mut a = app();
-        a.accept_event(TuiEvent::TextDelta { text: "流式".into() });
-        a.accept_event(TuiEvent::TextDelta { text: "文本".into() });
+        a.accept_event(TuiEvent::TextDelta {
+            text: "流式".into(),
+        });
+        a.accept_event(TuiEvent::TextDelta {
+            text: "文本".into(),
+        });
         a.accept_event(TuiEvent::ModelOutput {
             text: "流式文本".into(),
             tool_calls: vec![],
@@ -556,7 +557,9 @@ mod tests {
         a.accept_event(TuiEvent::RunFinished {
             status: "completed".into(),
         });
-        a.accept_event(TuiEvent::TextDelta { text: "新轮回答".into() });
+        a.accept_event(TuiEvent::TextDelta {
+            text: "新轮回答".into(),
+        });
         let model_cards: Vec<&str> = a
             .content
             .items
@@ -688,7 +691,9 @@ mod tests {
             finish_reason: "stop".into(),
         });
         assert!(!a.content.items[1].collapsed());
-        a.accept_event(TuiEvent::RunFinished { status: "completed".into() });
+        a.accept_event(TuiEvent::RunFinished {
+            status: "completed".into(),
+        });
         assert!(!a.running);
         assert!(a.content.items[0].collapsed());
         assert!(a.content.items[1].collapsed());
@@ -724,7 +729,9 @@ mod tests {
             decision: "approve".into(),
             execution_policy: "manual".into(),
         });
-        a.accept_event(TuiEvent::PlanRejected { plan_id: "PLAN-2".into() });
+        a.accept_event(TuiEvent::PlanRejected {
+            plan_id: "PLAN-2".into(),
+        });
         let msgs: Vec<&str> = a
             .content
             .items
@@ -742,7 +749,9 @@ mod tests {
     #[test]
     fn unknown_event_is_warning_card() {
         let mut a = app();
-        a.accept_event(TuiEvent::Unknown { event_type: "weird".into() });
+        a.accept_event(TuiEvent::Unknown {
+            event_type: "weird".into(),
+        });
         let ContentItem::Message(m) = &a.content.items[0] else {
             panic!("expected card");
         };
@@ -769,131 +778,194 @@ mod tests {
     type Case = (TuiEvent, fn(&TuiApp) -> bool);
     #[test]
     fn remaining_mapping_rows_produce_expected_effects() {
-        let cases: Vec<Case> = vec![
-            (
-                TuiEvent::RunPreflight { timestamp: String::new() },
-                |a| a.status.items[5].label == "预检" && a.content.items.len() == 1,
-            ),
-            (
-                TuiEvent::RunFailed { error: "崩溃".into() },
-                |a| {
-                    !a.running
-                        && a.status.items[5].label == "失败"
-                        && a.content.items.iter().any(|i| {
-                            matches!(i, ContentItem::Message(m)
+        let cases: Vec<Case> =
+            vec![
+                (
+                    TuiEvent::RunPreflight {
+                        timestamp: String::new(),
+                    },
+                    |a| a.status.items[5].label == "预检" && a.content.items.len() == 1,
+                ),
+                (
+                    TuiEvent::RunFailed {
+                        error: "崩溃".into(),
+                    },
+                    |a| {
+                        !a.running
+                            && a.status.items[5].label == "失败"
+                            && a.content.items.iter().any(|i| {
+                                matches!(i, ContentItem::Message(m)
                                 if m.warning && m.content.contains("崩溃"))
-                        })
-                },
-            ),
-            (
-                TuiEvent::RunCancelled { reason: "user".into() },
-                |a| !a.running && a.status.items[5].label == "已取消",
-            ),
-            (
-                TuiEvent::RunInvalidated { status: "stagnation".into() },
-                |a| !a.running && a.status.items[5].label == "无效",
-            ),
-            (
-                TuiEvent::ModelRequest { provider: "fake".into(), model_id: "deepseek".into() },
-                |a| a.status.items[4].label == "deepseek",
-            ),
-            (
-                // No content card — a status message only.
-                TuiEvent::ModelResponseReceived { tool_calls: vec![] },
-                |a| a.events_log.iter().any(|e| e == "model_response_received"),
-            ),
-            (
-                TuiEvent::AcpInitialize { protocol_version: 1 },
-                |a| a.events_log.iter().any(|e| e == "acp_initialize"),
-            ),
-            (
-                TuiEvent::AcpSessionCreated { session_id: "S-1".into() },
-                |a| a.content.items.iter().any(|i| {
-                    matches!(i, ContentItem::Message(m)
+                            })
+                    },
+                ),
+                (
+                    TuiEvent::RunCancelled {
+                        reason: "user".into(),
+                    },
+                    |a| !a.running && a.status.items[5].label == "已取消",
+                ),
+                (
+                    TuiEvent::RunInvalidated {
+                        status: "stagnation".into(),
+                    },
+                    |a| !a.running && a.status.items[5].label == "无效",
+                ),
+                (
+                    TuiEvent::ModelRequest {
+                        provider: "fake".into(),
+                        model_id: "deepseek".into(),
+                    },
+                    |a| a.status.items[4].label == "deepseek",
+                ),
+                (
+                    // No content card — a status message only.
+                    TuiEvent::ModelResponseReceived { tool_calls: vec![] },
+                    |a| a.events_log.iter().any(|e| e == "model_response_received"),
+                ),
+                (
+                    TuiEvent::AcpInitialize {
+                        protocol_version: 1,
+                    },
+                    |a| a.events_log.iter().any(|e| e == "acp_initialize"),
+                ),
+                (
+                    TuiEvent::AcpSessionCreated {
+                        session_id: "S-1".into(),
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
+                            matches!(i, ContentItem::Message(m)
                         if m.content.contains("S-1"))
-                }),
-            ),
-            (
-                TuiEvent::ToolProposal {
-                    tool_name: "bash".into(),
-                    call_id: "c".into(),
-                    input_summary: "dir".into(),
-                },
-                |a| a.content.tool_trace_names() == vec!["bash"],
-            ),
-            (
-                TuiEvent::OrientationCheckpoint {
-                    checkpoint_id: "ORIENT-1".into(),
-                    trigger: "pre_handoff".into(),
-                    step_index: 3,
-                },
-                |a| a.content.items.iter().any(|i| {
+                        })
+                    },
+                ),
+                (
+                    TuiEvent::ToolProposal {
+                        tool_name: "bash".into(),
+                        call_id: "c".into(),
+                        input_summary: "dir".into(),
+                    },
+                    |a| a.content.tool_trace_names() == vec!["bash"],
+                ),
+                (
+                    TuiEvent::OrientationCheckpoint {
+                        checkpoint_id: "ORIENT-1".into(),
+                        trigger: "pre_handoff".into(),
+                        step_index: 3,
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("step 3"))
-                }),
-            ),
-            (
-                TuiEvent::RuntimeStagnationGuard {
-                    decision: "restart_requested".into(),
-                    reason_codes: vec!["REPEATED_CONTENT".into()],
-                },
-                |a| a.content.items.iter().any(|i| {
-                    matches!(i, ContentItem::Message(m)
+                })
+                    },
+                ),
+                (
+                    TuiEvent::RuntimeStagnationGuard {
+                        decision: "restart_requested".into(),
+                        reason_codes: vec!["REPEATED_CONTENT".into()],
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
+                            matches!(i, ContentItem::Message(m)
                         if m.warning && m.content.contains("停滞"))
-                }),
-            ),
-            (
-                TuiEvent::ToolBeliefStagnation { tool: "bash".into() },
-                |a| a.content.items.iter().any(|i| {
+                        })
+                    },
+                ),
+                (
+                    TuiEvent::ToolBeliefStagnation {
+                        tool: "bash".into(),
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("工具信念停滞"))
-                }),
-            ),
-            (
-                TuiEvent::InstructionProvenanceGate { decision: "block".into(), entries: 1 },
-                |a| a.status.items[5].label == "失败" && a.content.items.iter().any(|i| {
+                })
+                    },
+                ),
+                (
+                    TuiEvent::InstructionProvenanceGate {
+                        decision: "block".into(),
+                        entries: 1,
+                    },
+                    |a| {
+                        a.status.items[5].label == "失败" && a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("IPG"))
-                }),
-            ),
-            (
-                TuiEvent::NeutralInquiry { trigger_reason: "rounds".into() },
-                |a| a.content.items.iter().any(|i| {
+                })
+                    },
+                ),
+                (
+                    TuiEvent::NeutralInquiry {
+                        trigger_reason: "rounds".into(),
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("中立问询"))
-                }),
-            ),
-            (
-                TuiEvent::CounterexampleGate { position: "final_answer".into(), model_response: None },
-                |a| a.content.items.iter().any(|i| {
+                })
+                    },
+                ),
+                (
+                    TuiEvent::CounterexampleGate {
+                        position: "final_answer".into(),
+                        model_response: None,
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("反例询问"))
-                }),
-            ),
-            (
-                TuiEvent::RetrievalCompletionCheck { role: "internal_retrieval".into(), decision: "yes".into() },
-                |a| a.content.items.iter().any(|i| {
+                })
+                    },
+                ),
+                (
+                    TuiEvent::RetrievalCompletionCheck {
+                        role: "internal_retrieval".into(),
+                        decision: "yes".into(),
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("检索完成确认"))
-                }),
-            ),
-            (
-                TuiEvent::ArtifactRegistered { artifact_path: "p.json".into(), artifact_sha256: "h".into() },
-                |a| a.content.items.iter().any(|i| {
+                })
+                    },
+                ),
+                (
+                    TuiEvent::ArtifactRegistered {
+                        artifact_path: "p.json".into(),
+                        artifact_sha256: "h".into(),
+                    },
+                    |a| {
+                        a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("p.json"))
-                }),
-            ),
-            (
-                TuiEvent::ActionApproved { action_id: "A-1".into() },
-                |a| a.content.items.iter().any(|i| {
-                    matches!(i, ContentItem::Message(m) if m.content.contains("A-1"))
-                }),
-            ),
-            (
-                TuiEvent::StatusUpdate { label: "验证".into(), ok: true },
-                |a| a.status.items[5].label == "完成" && a.content.items.iter().any(|i| {
+                })
+                    },
+                ),
+                (
+                    TuiEvent::ActionApproved {
+                        action_id: "A-1".into(),
+                    },
+                    |a| {
+                        a.content.items.iter().any(
+                            |i| matches!(i, ContentItem::Message(m) if m.content.contains("A-1")),
+                        )
+                    },
+                ),
+                (
+                    TuiEvent::StatusUpdate {
+                        label: "验证".into(),
+                        ok: true,
+                    },
+                    |a| {
+                        a.status.items[5].label == "完成" && a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("日志链有效"))
-                }),
-            ),
-        ];
+                })
+                    },
+                ),
+            ];
         for (i, (event, check)) in cases.iter().enumerate() {
             let mut a = app();
             a.accept_event(event.clone());
-            assert!(check(&a), "mapping row #{i} ({}) produced no expected effect", event.kind());
+            assert!(
+                check(&a),
+                "mapping row #{i} ({}) produced no expected effect",
+                event.kind()
+            );
         }
     }
 
@@ -903,12 +975,28 @@ mod tests {
     fn consecutive_turns_each_get_their_own_model_card() {
         let mut a = app();
         // Turn 1.
-        a.accept_event(TuiEvent::PromptSubmitted { prompt: "问题1".into(), character_count: 3 });
-        a.accept_event(TuiEvent::ModelOutput { text: "回答1".into(), tool_calls: vec![], finish_reason: "stop".into() });
-        a.accept_event(TuiEvent::RunFinished { status: "completed".into() });
+        a.accept_event(TuiEvent::PromptSubmitted {
+            prompt: "问题1".into(),
+            character_count: 3,
+        });
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "回答1".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
+        a.accept_event(TuiEvent::RunFinished {
+            status: "completed".into(),
+        });
         // Turn 2.
-        a.accept_event(TuiEvent::PromptSubmitted { prompt: "问题2".into(), character_count: 3 });
-        a.accept_event(TuiEvent::ModelOutput { text: "回答2".into(), tool_calls: vec![], finish_reason: "stop".into() });
+        a.accept_event(TuiEvent::PromptSubmitted {
+            prompt: "问题2".into(),
+            character_count: 3,
+        });
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "回答2".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
         let model_texts: Vec<&str> = a
             .content
             .items
@@ -918,14 +1006,26 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(model_texts, vec!["回答1", "回答2"], "turn-2 output must not be dropped");
+        assert_eq!(
+            model_texts,
+            vec!["回答1", "回答2"],
+            "turn-2 output must not be dropped"
+        );
 
         // Streaming dedupe still works: TextDelta accumulation then the full
         // text must not create a duplicate card.
         let mut a = app();
-        a.accept_event(TuiEvent::TextDelta { text: "流式".into() });
-        a.accept_event(TuiEvent::TextDelta { text: "文本".into() });
-        a.accept_event(TuiEvent::ModelOutput { text: "流式文本".into(), tool_calls: vec![], finish_reason: "stop".into() });
+        a.accept_event(TuiEvent::TextDelta {
+            text: "流式".into(),
+        });
+        a.accept_event(TuiEvent::TextDelta {
+            text: "文本".into(),
+        });
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "流式文本".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
         let model_cards = a
             .content
             .items

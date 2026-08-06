@@ -23,8 +23,8 @@ use agent_client_protocol as acp;
 use agent_client_protocol::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
 use orz_loop::host::{PermitDecision, PermitError, RiskClass};
 use orz_workspace::permission::{
-    spawn_permission_manager_with_hub, AccessKind, ClientType, Decision, PermissionHandle,
-    PermissionHookTransport,
+    AccessKind, ClientType, Decision, PermissionHandle, PermissionHookTransport,
+    spawn_permission_manager_with_hub,
 };
 use xai_acp_lib::AcpAgentGatewaySender;
 
@@ -85,17 +85,20 @@ impl PermissionBridge {
             gateway,
             abs_cwd.clone(),
             ClientType::Generic,
-            None, // no managed rules — prompt policy decides; headless Ask → Deny
+            None,       // no managed rules — prompt policy decides; headless Ask → Deny
             Vec::new(), // deny_read_globs — the provider carries these for
-                        // subagent inheritance only; enforcement lives in
-                        // `access_in_scope` below (P1).
+            // subagent inheritance only; enforcement lives in
+            // `access_in_scope` below (P1).
             Vec::new(), // web_fetch_allowed_domains
             false,      // initial_yolo — headless: yolo never on (IP6)
             None,       // client_identifier
             false,      // remember_tool_approvals
             hub,        // interactive prompter — codex app-server (slice #12)
         );
-        Ok(Self { handle, cwd: abs_cwd })
+        Ok(Self {
+            handle,
+            cwd: abs_cwd,
+        })
     }
 
     /// Request permission for a tool call (LoopHost `request_permission`).
@@ -198,8 +201,7 @@ pub(crate) fn dead_gateway() -> AcpAgentGatewaySender {
 fn path_under(base: &Path, path: &Path) -> bool {
     let base_parts = components_lower(&strip_verbatim_prefix(base));
     let path_parts = components_lower(&strip_verbatim_prefix(path));
-    path_parts.len() >= base_parts.len()
-        && base_parts.iter().zip(&path_parts).all(|(a, b)| a == b)
+    path_parts.len() >= base_parts.len() && base_parts.iter().zip(&path_parts).all(|(a, b)| a == b)
 }
 
 /// `dunce::canonicalize` keeps the `\\?\`-prefixed (verbatim) extended form
@@ -238,7 +240,10 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
             name: tool.to_string(),
             input: args.clone(),
         }
-    } else if matches!(tool, "run_terminal_cmd" | "bash" | "sh" | "cmd" | "powershell" | "pwsh") {
+    } else if matches!(
+        tool,
+        "run_terminal_cmd" | "bash" | "sh" | "cmd" | "powershell" | "pwsh"
+    ) {
         // GrokBuild's terminal tool is `run_terminal_cmd`; the controller's
         // risk classifier also recognizes the `bash` alias (P2-1 fix).
         AccessKind::Bash(
@@ -302,11 +307,8 @@ mod tests {
 
     fn test_dir() -> std::path::PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "orz-permission-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("orz-permission-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -343,7 +345,11 @@ mod tests {
             .unwrap()
         })
         .await;
-        assert_eq!(decision, PermitDecision::Deny, "headless Ask must fail closed");
+        assert_eq!(
+            decision,
+            PermitDecision::Deny,
+            "headless Ask must fail closed"
+        );
     }
 
     #[tokio::test]
@@ -398,8 +404,14 @@ mod tests {
 
     #[test]
     fn path_under_component_wise_and_case_insensitive() {
-        assert!(path_under(Path::new("D:\\CLI\\orz"), Path::new("D:\\CLI\\orz\\a\\b")));
-        assert!(path_under(Path::new("D:\\CLI\\orz"), Path::new("d:\\cli\\ORZ\\x")));
+        assert!(path_under(
+            Path::new("D:\\CLI\\orz"),
+            Path::new("D:\\CLI\\orz\\a\\b")
+        ));
+        assert!(path_under(
+            Path::new("D:\\CLI\\orz"),
+            Path::new("d:\\cli\\ORZ\\x")
+        ));
         // Windows canonicalize returns `\\?\`-prefixed paths — must compare
         // equal to the plain cwd (regression: real files were all denied).
         assert!(path_under(
@@ -411,8 +423,14 @@ mod tests {
             Path::new(r"\\?\D:\CLI\orz\a")
         ));
         // Boundary: a sibling with a shared prefix must NOT match.
-        assert!(!path_under(Path::new("D:\\CLI\\orz"), Path::new("D:\\CLI\\orz2\\x")));
-        assert!(!path_under(Path::new("D:\\CLI\\orz"), Path::new("C:\\CLI\\orz\\x")));
+        assert!(!path_under(
+            Path::new("D:\\CLI\\orz"),
+            Path::new("D:\\CLI\\orz2\\x")
+        ));
+        assert!(!path_under(
+            Path::new("D:\\CLI\\orz"),
+            Path::new("C:\\CLI\\orz\\x")
+        ));
     }
 
     /// Bridge-scope unit test: build the bridge over a real temp cwd and
@@ -447,7 +465,10 @@ mod tests {
         }
 
         // Relative path inside cwd → allowed (auto).
-        assert_eq!(read_req(&bridge, "inside/a.txt").await, PermitDecision::AllowOnce);
+        assert_eq!(
+            read_req(&bridge, "inside/a.txt").await,
+            PermitDecision::AllowOnce
+        );
         // Absolute path inside cwd → allowed.
         let abs_in = dir.join("inside").join("a.txt");
         assert_eq!(
@@ -455,7 +476,10 @@ mod tests {
             PermitDecision::AllowOnce
         );
         // `..` escaping cwd → denied.
-        assert_eq!(read_req(&bridge, "../outside-escape.txt").await, PermitDecision::Deny);
+        assert_eq!(
+            read_req(&bridge, "../outside-escape.txt").await,
+            PermitDecision::Deny
+        );
         // Absolute path outside cwd → denied (the P1 hole).
         assert_eq!(
             read_req(&bridge, &outside.join("secret.txt").to_string_lossy()).await,
@@ -463,8 +487,14 @@ mod tests {
         );
         // The runtime's own `.gsa` tree → denied.
         assert_eq!(
-            read_req(&bridge, &dir.join(".gsa").join("runs").join("events.jsonl").to_string_lossy())
-                .await,
+            read_req(
+                &bridge,
+                &dir.join(".gsa")
+                    .join("runs")
+                    .join("events.jsonl")
+                    .to_string_lossy()
+            )
+            .await,
             PermitDecision::Deny
         );
 

@@ -5,9 +5,7 @@
 //! emits exactly one checkpoint per turn (interval 1). Cooldown is deferred
 //! to Phase 3.
 
-use orz_assurance::orientation::checkpoint::{
-    build_checkpoint, Checkpoint, CheckpointTrigger,
-};
+use orz_assurance::orientation::checkpoint::{Checkpoint, CheckpointTrigger, build_checkpoint};
 
 /// Monitors agent orientation and emits checkpoint events.
 #[derive(Debug, Clone)]

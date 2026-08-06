@@ -62,12 +62,16 @@ impl HelpOverlay {
     /// registry (single source of truth); 模型 reads the current adapter
     /// label from the status bar.
     pub fn new(model_label: &str) -> Self {
-        let commands: Vec<(String, String)> =
-            crate::commands::CommandRegistry::with_builtins()
-                .search("/") // all builtins, deterministic slash order
-                .into_iter()
-                .map(|d| (d.slash.to_string(), format!("{} — {}", d.name_zh, d.description_zh)))
-                .collect();
+        let commands: Vec<(String, String)> = crate::commands::CommandRegistry::with_builtins()
+            .search("/") // all builtins, deterministic slash order
+            .into_iter()
+            .map(|d| {
+                (
+                    d.slash.to_string(),
+                    format!("{} — {}", d.name_zh, d.description_zh),
+                )
+            })
+            .collect();
         Self {
             sheet: TabbedSheet::new(
                 "帮助",
@@ -111,7 +115,10 @@ impl HelpOverlay {
                         name: "审批".into(),
                         fields: vec![
                             ("Plan 审批".into(), "计划提出后批准执行".into()),
-                            ("Action 审批".into(), "工具权限对话框（允许一次/取消）".into()),
+                            (
+                                "Action 审批".into(),
+                                "工具权限对话框（允许一次/取消）".into(),
+                            ),
                             ("审批策略".into(), "手动".into()),
                             ("Ctrl+Z".into(), "取消当前运行".into()),
                         ],
@@ -212,7 +219,10 @@ impl PropertiesSheet {
                     Tab {
                         name: "常规".into(),
                         fields: vec![
-                            ("会话 ID".into(), app.session_id.clone().unwrap_or_else(|| "—".into())),
+                            (
+                                "会话 ID".into(),
+                                app.session_id.clone().unwrap_or_else(|| "—".into()),
+                            ),
                             ("工作目录".into(), app.cwd.display().to_string()),
                             ("运行目录".into(), runs_dir.display().to_string()),
                             ("提示数".into(), app.turn_counter.to_string()),
@@ -237,16 +247,21 @@ impl PropertiesSheet {
                         fields: vec![
                             (
                                 "探索器".into(),
-                                if app.show_explorer { "显示".into() } else { "隐藏".into() },
+                                if app.show_explorer {
+                                    "显示".into()
+                                } else {
+                                    "隐藏".into()
+                                },
                             ),
                             (
                                 "标记栏".into(),
-                                if app.show_marker { "显示".into() } else { "隐藏".into() },
+                                if app.show_marker {
+                                    "显示".into()
+                                } else {
+                                    "隐藏".into()
+                                },
                             ),
-                            (
-                                "事件日志上限".into(),
-                                app.max_events_log.to_string(),
-                            ),
+                            ("事件日志上限".into(), app.max_events_log.to_string()),
                         ],
                         content: None,
                     },
@@ -340,7 +355,21 @@ mod tests {
 
     #[test]
     fn sheet_tabs_cycle_wraparound() {
-        let mut sheet = TabbedSheet::new("t", vec![Tab { name: "a".into(), fields: vec![], content: None }, Tab { name: "b".into(), fields: vec![], content: None }]);
+        let mut sheet = TabbedSheet::new(
+            "t",
+            vec![
+                Tab {
+                    name: "a".into(),
+                    fields: vec![],
+                    content: None,
+                },
+                Tab {
+                    name: "b".into(),
+                    fields: vec![],
+                    content: None,
+                },
+            ],
+        );
         assert_eq!(sheet.active, 0);
         sheet.next_tab();
         assert_eq!(sheet.active, 1);
@@ -355,7 +384,11 @@ mod tests {
     fn help_has_six_frozen_tabs_and_command_list() {
         let help = HelpOverlay::new("off");
         assert_eq!(
-            help.sheet.tabs.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            help.sheet
+                .tabs
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
             ["快捷键", "命令", "模型", "审批", "终端", "来源"]
         );
         // 命令 tab derives from the registry (9 builtins incl. /properties
@@ -373,8 +406,14 @@ mod tests {
         // discoverability — the session list has no other entry point) and
         // the snapshot selector trigger (slice #10 — Alt+S).
         let shortcuts = help.sheet.tabs[0].content.as_ref().unwrap();
-        assert!(shortcuts.contains("双 Esc"), "double-Esc discoverable in Help");
-        assert!(shortcuts.contains("Alt+S"), "snapshot selector discoverable in Help");
+        assert!(
+            shortcuts.contains("双 Esc"),
+            "double-Esc discoverable in Help"
+        );
+        assert!(
+            shortcuts.contains("Alt+S"),
+            "snapshot selector discoverable in Help"
+        );
     }
 
     #[test]

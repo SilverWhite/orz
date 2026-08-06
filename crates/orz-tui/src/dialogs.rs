@@ -53,8 +53,7 @@ impl Dialog {
 
     pub fn select_prev(&mut self) {
         if !self.actions.is_empty() {
-            self.selected =
-                (self.selected + self.actions.len() - 1) % self.actions.len();
+            self.selected = (self.selected + self.actions.len() - 1) % self.actions.len();
         }
     }
 
@@ -73,7 +72,9 @@ mod tests {
             "工具权限请求",
             vec!["bash".into()],
             vec![
-                DialogAction::AllowOnce { option_id: "allow-once".into() },
+                DialogAction::AllowOnce {
+                    option_id: "allow-once".into(),
+                },
                 DialogAction::Cancel,
             ],
         );
@@ -88,7 +89,13 @@ mod tests {
 
     #[test]
     fn labels_are_chinese() {
-        assert_eq!(DialogAction::AllowOnce { option_id: "x".into() }.label(), "允许一次");
+        assert_eq!(
+            DialogAction::AllowOnce {
+                option_id: "x".into()
+            }
+            .label(),
+            "允许一次"
+        );
         assert_eq!(DialogAction::Cancel.label(), "取消");
         assert_eq!(DialogAction::Ok.label(), "确定");
     }

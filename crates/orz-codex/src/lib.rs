@@ -21,5 +21,5 @@ pub mod snapshot;
 pub mod widgets;
 
 pub use app::{CodexApp, RunState};
-pub use client::{CodexClient, ClientMsg};
-pub use runner::{run, TuiConfig, TuiError};
+pub use client::{ClientMsg, CodexClient};
+pub use runner::{TuiConfig, TuiError, run};
