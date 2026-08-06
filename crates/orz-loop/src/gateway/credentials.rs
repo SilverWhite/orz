@@ -30,10 +30,10 @@ impl std::error::Error for CredentialError {}
 /// Returns a `CredentialError` on any failure (incl. non-Windows).
 #[cfg(windows)]
 pub fn read_agent_api_key() -> Result<String, CredentialError> {
-    use windows::core::PCWSTR;
     use windows::Win32::Security::Credentials::{
-        CREDENTIALW, CRED_TYPE_GENERIC, CredFree, CredReadW,
+        CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
     };
+    use windows::core::PCWSTR;
 
     let target: Vec<u16> = AGENT_CREDENTIAL_TARGET
         .encode_utf16()
@@ -61,11 +61,13 @@ pub fn read_agent_api_key() -> Result<String, CredentialError> {
     }
 
     let cred = unsafe { &*pcred };
-    let blob =
-        unsafe { std::slice::from_raw_parts(cred.CredentialBlob, cred.CredentialBlobSize as usize) };
+    let blob = unsafe {
+        std::slice::from_raw_parts(cred.CredentialBlob, cred.CredentialBlobSize as usize)
+    };
     // The credential blob is UTF-16-LE encoded text (the API key).
     let mut key = match std::char::decode_utf16(
-        blob.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])),
+        blob.chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]])),
     )
     .collect::<Result<String, _>>()
     {

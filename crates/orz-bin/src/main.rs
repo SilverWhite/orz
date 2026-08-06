@@ -17,6 +17,22 @@ use orz_loop::gateway::model::{Message, ModelGateway, Role, ToolCall};
 fn main() {
     // Minimal arg parsing (no clap yet — Phase 2+ adds the real CLI)
     let args: Vec<String> = std::env::args().collect();
+    // `--real`: real DeepSeek transport for every entry (TUI / -p / --plan /
+    // --stdio). Env flag so build_gateway stays the single decision point —
+    // mirrors the `--fake-provider` → ORZ_FAKE_TOOL precedent. Fail-closed
+    // lives in build_gateway: no credential → error exit, never a fake
+    // fallback (alpha test ruling 2026-08-06).
+    if args.iter().any(|a| a == "--real") {
+        if args.iter().any(|a| a == "--fake-provider") {
+            eprintln!("error: --real and --fake-provider are mutually exclusive");
+            std::process::exit(2);
+        }
+        // SAFETY: single-threaded before any runtime starts (edition 2024 —
+        // run_tui's --fake-provider precedent).
+        unsafe {
+            std::env::set_var("ORZ_REAL", "1");
+        }
+    }
     if args.iter().any(|a| a == "--stdio") {
         run_stdio();
         return;
@@ -49,6 +65,9 @@ fn main() {
         eprintln!("error: {e}");
         eprintln!(
             "usage: orz -p \"<prompt>\"  (or --prompt <prompt>; --stdio for ACP; bare orz for TUI)"
+        );
+        eprintln!(
+            "       --real selects the real DeepSeek transport (ADR-0006 credential registry)"
         );
         std::process::exit(2);
     });
@@ -453,6 +472,23 @@ fn chrono_utc_now() -> String {
 /// a tool_calls response whose text is None → `model_response` is "" — a
 /// demo-path-only artifact of the scripted provider).
 fn build_gateway() -> Arc<dyn ModelGateway> {
+    // `--real` (main sets ORZ_REAL for every entry): the real DeepSeek
+    // transport. Fail-closed — missing credentials exit(2) with the ADR-0006
+    // target named, never a silent FakeProvider fallback.
+    if std::env::var("ORZ_REAL").is_ok() {
+        match orz_loop::gateway::transport::real_gateway_from_credentials() {
+            Ok(gateway) => return gateway,
+            Err(e) => {
+                eprintln!("error: --real requires a DeepSeek API key");
+                eprintln!(
+                    "       target: {} (Windows Credential Manager, ADR-0006)",
+                    orz_loop::gateway::credentials::AGENT_CREDENTIAL_TARGET
+                );
+                eprintln!("       {e}");
+                std::process::exit(2);
+            }
+        }
+    }
     if std::env::var("ORZ_FAKE_TOOL").is_ok() {
         Arc::new(
             FakeProvider::new(vec![

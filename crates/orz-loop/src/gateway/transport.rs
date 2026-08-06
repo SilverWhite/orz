@@ -36,6 +36,7 @@ use async_openai::{
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use super::model::{
@@ -45,6 +46,27 @@ use super::model::{
 
 /// Default DeepSeek API base (OpenAI-compatible).
 pub const DEFAULT_DEEPSEEK_API_BASE: &str = "https://api.deepseek.com";
+
+/// Main-agent model id (single source of truth — the live test and the
+/// production `--real` gateway share it, so a model change cannot drift
+/// between the two).
+pub const MAIN_AGENT_MODEL: &str = "deepseek-v4-flash";
+
+/// Build the production real-model gateway from the ADR-0006 credential
+/// registry (main-agent target `orz-deepseek/agent`).
+///
+/// Alpha-test ruling (2026-08-06): the `--real` CLI flag (orz / orz-codex)
+/// is the only production consumer; the live test reads the credential
+/// directly. Fail-closed — any credential failure is returned, never a
+/// silent FakeProvider fallback; the binaries surface the error and exit.
+pub fn real_gateway_from_credentials()
+-> Result<Arc<dyn ModelGateway>, crate::gateway::credentials::CredentialError> {
+    let key = crate::gateway::credentials::read_agent_api_key()?;
+    Ok(Arc::new(DeepSeekTransport::deepseek_v4(
+        key,
+        MAIN_AGENT_MODEL,
+    )))
+}
 
 /// Real model transport over the OpenAI-compatible chat completions API.
 #[derive(Debug, Clone)]
@@ -1117,7 +1139,7 @@ mod tests {
                 return;
             }
         };
-        let t = DeepSeekTransport::deepseek_v4(key, "deepseek-v4-flash");
+        let t = DeepSeekTransport::deepseek_v4(key, MAIN_AGENT_MODEL);
         let r = t
             .generate(ModelRequest {
                 system: "You are a test assistant. Reply with exactly OK".to_string(),
