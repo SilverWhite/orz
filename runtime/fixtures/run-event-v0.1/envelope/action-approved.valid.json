@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-CONF-ACTION-APPROVED",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "action_approved",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.1.schema.json",
+  "payload": {
+    "action_id": "ACT-1",
+    "plan_id": "PLAN-RUN-CONF-0001"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

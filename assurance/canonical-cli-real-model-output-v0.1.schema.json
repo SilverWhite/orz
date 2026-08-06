@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/canonical-cli-real-model-output-v0.1.schema.json",
+  "title": "Canonical guarded CLI real model_output event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "answer_packet_sha256",
+    "structured_output_valid",
+    "raw_content_persisted",
+    "real_network_used"
+  ],
+  "properties": {
+    "answer_packet_sha256": { "$ref": "#/$defs/sha256" },
+    "structured_output_valid": { "type": "boolean" },
+    "raw_content_persisted": { "type": "boolean" },
+    "real_network_used": { "type": "boolean" },
+    "api_error": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

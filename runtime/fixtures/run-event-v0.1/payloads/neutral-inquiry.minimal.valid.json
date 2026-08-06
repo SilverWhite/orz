@@ -1,0 +1,25 @@
+{
+  "trigger_reason": "rounds",
+  "counters": {
+    "main": {
+      "output_repeats": 0,
+      "tool_calls": 0,
+      "actions": 0,
+      "rounds": 9
+    },
+    "internal": {
+      "output_repeats": 0,
+      "tool_calls": 0,
+      "actions": 0,
+      "rounds": 0
+    },
+    "external": {
+      "output_repeats": 0,
+      "tool_calls": 0,
+      "actions": 0,
+      "rounds": 0
+    }
+  },
+  "message_block": "[INFO_SUFFICIENCY v0.1] 当前进展是否已覆盖完成主任务所需内容？",
+  "block_present": true
+}

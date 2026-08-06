@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-completed-event-payload-v0.1.schema.json",
+  "title": "tool_completed runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id"
+  ],
+  "properties": {
+    "tool": { "type": "string" },
+    "call_id": { "type": "string" },
+    "target": { "enum": ["internal_retrieval", "external_retrieval"] },
+    "exit_code": { "type": ["integer", "null"] },
+    "status": { "const": "error" },
+    "error": { "type": "string" }
+  }
+}

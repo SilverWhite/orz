@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/gate-decision-event-payload-v0.1.schema.json",
+  "title": "gate_decision runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "gate",
+    "decision"
+  ],
+  "properties": {
+    "gate": { "type": "string" },
+    "decision": {
+      "enum": ["pass", "warn", "block", "defer", "not_applicable", "stop"]
+    },
+    "tools": { "type": "array", "items": { "type": "string" } },
+    "reason": { "type": "string" },
+    "tool_rounds": { "type": "integer", "minimum": 0 }
+  }
+}

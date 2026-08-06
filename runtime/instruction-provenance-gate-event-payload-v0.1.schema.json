@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/instruction-provenance-gate-event-payload-v0.1.schema.json",
+  "title": "instruction_provenance_gate runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision",
+    "entries"
+  ],
+  "properties": {
+    "decision": { "enum": ["pass", "warn", "block", "defer", "not_applicable"] },
+    "entries": { "type": "integer", "minimum": 1 }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-CONF-RETRIEVAL-COMPLETION-CHECK",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "retrieval_completion_check",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.1.schema.json",
+  "payload": {
+    "role": "internal_retrieval",
+    "tool": "search",
+    "decision": "yes",
+    "response": "found",
+    "neutral_only": true,
+    "new_subagent_requested": false,
+    "global_review_requested": false,
+    "claim_strength_effect": "none"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

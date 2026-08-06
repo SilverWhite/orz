@@ -1,0 +1,10 @@
+{
+  "adapter_id": "deepseek",
+  "provider": "deepseek",
+  "model_id": "deepseek-v4-pro",
+  "real_network_allowed": false,
+  "source_visibility_gate_required": true,
+  "instruction_provenance_gate_applied": true,
+  "tool_availability_gate_applied": true,
+  "task_contract_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

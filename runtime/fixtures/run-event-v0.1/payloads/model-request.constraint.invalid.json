@@ -1,0 +1,9 @@
+{
+  "model_id": "deepseek-v4-pro",
+  "message_order": [
+    "system"
+  ],
+  "real_network_used": true,
+  "tool_calls_allowed": false,
+  "task_contract_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

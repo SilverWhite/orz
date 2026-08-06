@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/canonical-cli-fake-model-request-v0.1.schema.json",
+  "title": "Canonical guarded CLI fake model_request event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "model_id",
+    "message_order",
+    "real_network_used",
+    "tool_calls_allowed",
+    "task_contract_sha256"
+  ],
+  "properties": {
+    "provider": { "type": "string", "minLength": 1 },
+    "model_id": { "type": "string", "minLength": 1 },
+    "message_order": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "real_network_used": { "const": false },
+    "tool_calls_allowed": { "type": "boolean" },
+    "task_contract_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

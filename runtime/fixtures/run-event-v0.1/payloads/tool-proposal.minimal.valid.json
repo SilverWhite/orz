@@ -1,0 +1,5 @@
+{
+  "tool": "bash",
+  "call_id": "call-1",
+  "input_summary": "ls"
+}

@@ -1,0 +1,10 @@
+{
+  "tool_belief_stagnation_receipt_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "decision": "continue",
+  "reason_codes": [],
+  "mismatch_count": 0,
+  "public_output_only": true,
+  "asks_model_if_stuck": false,
+  "hidden_chain_of_thought_saved": false,
+  "extra": true
+}

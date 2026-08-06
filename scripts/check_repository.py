@@ -1842,6 +1842,185 @@ def check_repository() -> dict[str, Any]:
                 f"runtime/examples/{example_name}",
             )
         )
+    run_event_fixture_root = ROOT / "runtime/fixtures/run-event-v0.1"
+    run_event_payload_root = run_event_fixture_root / "payloads"
+    run_event_envelope_root = run_event_fixture_root / "envelope"
+    run_event_payload_schema_by_slug = {
+        "run-preflight": ROOT / "runtime/run-preflight-event-payload-v0.1.schema.json",
+        "run-started": ROOT / "runtime/run-started-event-payload-v0.1.schema.json",
+        "prompt-submitted": ROOT / "runtime/prompt-submitted-event-payload-v0.1.schema.json",
+        "model-request": ROOT / "runtime/model-request-event-payload-v0.1.schema.json",
+        "model-response-received": ROOT / "runtime/model-response-received-event-payload-v0.1.schema.json",
+        "model-output": ROOT / "runtime/model-output-event-payload-v0.1.schema.json",
+        "acp-initialize": ROOT / "runtime/acp-initialize-event-payload-v0.1.schema.json",
+        "acp-session-created": ROOT / "runtime/acp-session-created-event-payload-v0.1.schema.json",
+        "tool-proposal": ROOT / "runtime/tool-proposal-event-payload-v0.1.schema.json",
+        "permission-requested": ROOT / "runtime/permission-requested-event-payload-v0.1.schema.json",
+        "permission-decision": ROOT / "runtime/permission-decision-event-payload-v0.1.schema.json",
+        "tool-started": ROOT / "runtime/tool-started-event-payload-v0.1.schema.json",
+        "tool-completed": ROOT / "runtime/tool-completed-event-payload-v0.1.schema.json",
+        "orientation-checkpoint": assurance_root / "orientation-checkpoint-event-payload-v0.1.schema.json",
+        "runtime-stagnation-guard": assurance_root / "runtime-stagnation-guard-event-payload-v0.1.schema.json",
+        "tool-availability-check": assurance_root / "tool-availability-check-event-payload-v0.1.schema.json",
+        "tool-belief-stagnation": assurance_root / "tool-belief-stagnation-event-payload-v0.1.schema.json",
+        "instruction-provenance-gate": ROOT / "runtime/instruction-provenance-gate-event-payload-v0.1.schema.json",
+        "gate-decision": ROOT / "runtime/gate-decision-event-payload-v0.1.schema.json",
+        "neutral-inquiry": ROOT / "runtime/neutral-inquiry-event-payload-v0.1.schema.json",
+        "counterexample-gate": ROOT / "runtime/counterexample-gate-event-payload-v0.1.schema.json",
+        "retrieval-completion-check": ROOT / "runtime/retrieval-completion-check-event-payload-v0.1.schema.json",
+        "snapshot-created": ROOT / "runtime/snapshot-created-event-payload-v0.1.schema.json",
+        "snapshot-restored": ROOT / "runtime/snapshot-restored-event-payload-v0.1.schema.json",
+        "artifact-registered": ROOT / "runtime/artifact-registered-event-payload-v0.1.schema.json",
+        "plan-proposed": ROOT / "runtime/plan-proposed-event-payload-v0.1.schema.json",
+        "plan-approved": ROOT / "runtime/plan-approved-event-payload-v0.1.schema.json",
+        "plan-rejected": ROOT / "runtime/plan-rejected-event-payload-v0.1.schema.json",
+        "action-approved": ROOT / "runtime/action-approved-event-payload-v0.1.schema.json",
+        "run-finished": ROOT / "runtime/run-finished-event-payload-v0.1.schema.json",
+        "run-failed": ROOT / "runtime/run-failed-event-payload-v0.1.schema.json",
+        "run-cancelled": ROOT / "runtime/run-cancelled-event-payload-v0.1.schema.json",
+        "run-invalidated": ROOT / "runtime/run-invalidated-event-payload-v0.1.schema.json",
+    }
+    run_event_envelope_schema = ROOT / "runtime/run-event-v0.1.schema.json"
+    run_event_payload_positive_contracts = {
+        run_event_payload_root / f"{slug}.minimal.valid.json": schema
+        for slug, schema in run_event_payload_schema_by_slug.items()
+    }
+    run_event_payload_negative_contracts = {
+        run_event_payload_root / f"{slug}.constraint.invalid.json": schema
+        for slug, schema in run_event_payload_schema_by_slug.items()
+    }
+    for instance_path, schema_path in run_event_payload_positive_contracts.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(instance_path),
+                schema_path,
+                f"runtime/fixtures/run-event-v0.1/payloads/{instance_path.name}",
+            )
+        )
+    for instance_path, schema_path in run_event_payload_negative_contracts.items():
+        validator = Draft202012Validator(
+            _load_json(schema_path), format_checker=FormatChecker()
+        )
+        validation_errors = list(validator.iter_errors(_load_json(instance_path)))
+        if not validation_errors:
+            errors.append(
+                "negative run-event payload fixture unexpectedly validated: "
+                f"{instance_path.relative_to(ROOT)}"
+            )
+    counts["run_event_payload_positive_contracts"] = len(
+        run_event_payload_positive_contracts
+    )
+    counts["run_event_payload_negative_contracts"] = len(
+        run_event_payload_negative_contracts
+    )
+
+    run_event_envelope_positive_contracts = {
+        run_event_envelope_root / f"{slug}.valid.json": run_event_envelope_schema
+        for slug in run_event_payload_schema_by_slug
+    }
+    run_event_envelope_positive_contracts[
+        run_event_envelope_root / "chained-run-finished.valid.json"
+    ] = run_event_envelope_schema
+    for instance_path, schema_path in run_event_envelope_positive_contracts.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(instance_path),
+                schema_path,
+                f"runtime/fixtures/run-event-v0.1/envelope/{instance_path.name}",
+            )
+        )
+    counts["run_event_envelope_positive_contracts"] = len(
+        run_event_envelope_positive_contracts
+    )
+    run_event_envelope_negative_contracts = {
+        "bad-schema-version.invalid.json",
+        "bad-run-id.invalid.json",
+        "bad-event-id.invalid.json",
+        "missing-required-payload-schema.invalid.json",
+        "negative-sequence.invalid.json",
+        "bad-sha256-pattern.invalid.json",
+        "unknown-event-type.invalid.json",
+        "seq0-non-null-previous.invalid.json",
+        "seq1-null-previous.invalid.json",
+        "bad-redaction.invalid.json",
+        "non-object-payload.invalid.json",
+        "additional-properties.invalid.json",
+        "missing-timestamp.invalid.json",
+    }
+    for bad_name in run_event_envelope_negative_contracts:
+        validator = Draft202012Validator(
+            _load_json(run_event_envelope_schema), format_checker=FormatChecker()
+        )
+        validation_errors = list(
+            validator.iter_errors(_load_json(run_event_envelope_root / bad_name))
+        )
+        if not validation_errors:
+            errors.append(
+                "negative run-event envelope fixture unexpectedly validated: "
+                f"{run_event_envelope_root.relative_to(ROOT)}/{bad_name}"
+            )
+    counts["run_event_envelope_negative_contracts"] = len(
+        run_event_envelope_negative_contracts
+    )
+
+    # Completeness hard assertions: every generated fixture must be covered by
+    # a mapping above — a fixture added without a mapping is a silent gap.
+    payload_fixture_names = {path.name for path in run_event_payload_root.glob("*.json")}
+    expected_payload_names = {
+        path.name
+        for path in list(run_event_payload_positive_contracts)
+        + list(run_event_payload_negative_contracts)
+    }
+    if payload_fixture_names != expected_payload_names:
+        errors.append(
+            "run-event payload fixture set diverges from mappings: "
+            f"unmapped={sorted(payload_fixture_names - expected_payload_names)} "
+            f"missing={sorted(expected_payload_names - payload_fixture_names)}"
+        )
+    envelope_fixture_names = {path.name for path in run_event_envelope_root.glob("*.json")}
+    expected_envelope_names = {
+        path.name for path in run_event_envelope_positive_contracts
+    } | run_event_envelope_negative_contracts
+    if envelope_fixture_names != expected_envelope_names:
+        errors.append(
+            "run-event envelope fixture set diverges from mappings: "
+            f"unmapped={sorted(envelope_fixture_names - expected_envelope_names)} "
+            f"missing={sorted(expected_envelope_names - envelope_fixture_names)}"
+        )
+    counts["run_event_reference_fixtures"] = len(payload_fixture_names) + len(
+        envelope_fixture_names
+    )
+    for required_path in (
+        ROOT / "architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md",
+        ROOT / "scripts/generate_run_event_fixtures.py",
+        ROOT / "runtime/tests/test_run_event_conformance.py",
+        run_event_fixture_root / "README.md",
+    ):
+        if not required_path.is_file():
+            errors.append(
+                f"missing run-event reference-spec file: {required_path.relative_to(ROOT)}"
+            )
+    counts["run_event_reference_spec"] = 1
+
+    canonical_cli_fixture_root = assurance_root / "fixtures/canonical_cli"
+    for name in (
+        "canonical-cli-preflight",
+        "canonical-cli-run-started",
+        "canonical-cli-fake-model-request",
+        "canonical-cli-real-model-request",
+        "canonical-cli-fake-model-output",
+        "canonical-cli-real-model-output",
+        "canonical-cli-terminal",
+    ):
+        errors.extend(
+            _validate_instance(
+                _load_json(canonical_cli_fixture_root / f"{name}.minimal.valid.json"),
+                assurance_root / f"{name}-v0.1.schema.json",
+                f"assurance/fixtures/canonical_cli/{name}.minimal.valid.json",
+            )
+        )
+    counts["canonical_cli_payload_positive_contracts"] = 7
+
     progress_fixture_root = ROOT / "runtime/fixtures/global-progress-sentinel-v0.1"
     progress_fixtures = {
         "input.json": "global-progress-input-v0.1.schema.json",

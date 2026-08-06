@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/plan-proposed-event-payload-v0.1.schema.json",
+  "title": "plan_proposed runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_id",
+    "task_id",
+    "sections"
+  ],
+  "properties": {
+    "plan_id": { "type": "string", "pattern": "^PLAN-" },
+    "task_id": { "type": "string", "pattern": "^TASK-" },
+    "sections": { "type": "integer", "minimum": 0 }
+  }
+}

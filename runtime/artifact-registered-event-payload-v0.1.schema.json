@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/artifact-registered-event-payload-v0.1.schema.json",
+  "title": "artifact_registered runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_path"
+  ],
+  "properties": {
+    "artifact_path": { "type": "string", "minLength": 1 },
+    "artifact_sha256": { "$ref": "#/$defs/sha256" },
+    "artifact_kind": { "type": "string" },
+    "metadata_only": { "type": "boolean" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

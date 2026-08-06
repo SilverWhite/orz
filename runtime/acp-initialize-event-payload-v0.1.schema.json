@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/acp-initialize-event-payload-v0.1.schema.json",
+  "title": "acp_initialize runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version"
+  ],
+  "properties": {
+    "protocol_version": { "type": ["string", "integer"] }
+  }
+}

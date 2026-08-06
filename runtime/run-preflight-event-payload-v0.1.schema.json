@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/run-preflight-event-payload-v0.1.schema.json",
+  "title": "run_preflight runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "created_at",
+    "schema_version"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "pattern": "^(RUN|RST)-[A-Za-z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "schema_version": { "const": "0.1.0-draft" }
+  }
+}

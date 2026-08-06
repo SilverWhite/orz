@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/model-response-received-event-payload-v0.1.schema.json",
+  "title": "model_response_received runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool_calls"
+  ],
+  "properties": {
+    "tool_calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "arguments", "call_id"],
+        "properties": {
+          "name": { "type": "string" },
+          "arguments": { "type": ["string", "object", "null"] },
+          "call_id": { "type": "string" }
+        }
+      }
+    },
+    "response_sha256": { "$ref": "#/$defs/sha256" },
+    "response_summary_sha256": {
+      "anyOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "const": "" }
+      ]
+    },
+    "finish_reason": { "type": "string" },
+    "token_count": { "type": "integer", "minimum": 0 },
+    "output_format": { "type": "string" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

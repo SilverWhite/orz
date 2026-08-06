@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/model-output-event-payload-v0.1.schema.json",
+  "title": "model_output runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "text",
+    "tool_calls",
+    "finish_reason"
+  ],
+  "properties": {
+    "text": { "type": ["string", "null"] },
+    "tool_calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "arguments", "call_id"],
+        "properties": {
+          "name": { "type": "string" },
+          "arguments": { "type": ["string", "object", "null"] },
+          "call_id": { "type": "string" }
+        }
+      }
+    },
+    "finish_reason": { "enum": ["stop", "tool_calls", "length"] }
+  }
+}

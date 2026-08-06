@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/permission-requested-event-payload-v0.1.schema.json",
+  "title": "permission_requested runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "risk",
+    "call_id"
+  ],
+  "properties": {
+    "tool": { "type": "string" },
+    "risk": { "enum": ["ReadOnly", "LocalMutation", "NetworkCall", "SandboxEscape"] },
+    "call_id": { "type": "string" }
+  }
+}

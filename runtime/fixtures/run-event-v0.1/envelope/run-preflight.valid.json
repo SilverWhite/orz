@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-CONF-RUN-PREFLIGHT",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "run_preflight",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.1.schema.json",
+  "payload": {
+    "run_id": "RUN-CONF-0001",
+    "created_at": "2026-08-06T00:00:00Z",
+    "schema_version": "0.1.0-draft"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

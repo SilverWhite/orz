@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/canonical-cli-run-started-v0.1.schema.json",
+  "title": "Canonical guarded CLI run_started event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "task_contract_sha256",
+    "run_root"
+  ],
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9._-]*$" },
+    "task_contract_sha256": { "$ref": "#/$defs/sha256" },
+    "run_root": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

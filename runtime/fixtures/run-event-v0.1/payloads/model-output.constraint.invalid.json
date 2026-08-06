@@ -1,0 +1,11 @@
+{
+  "text": "ok",
+  "tool_calls": [
+    {
+      "name": "read_file",
+      "arguments": 123,
+      "call_id": "call-1"
+    }
+  ],
+  "finish_reason": "stop"
+}

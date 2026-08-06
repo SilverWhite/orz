@@ -1,0 +1,13 @@
+{
+  "runtime_stagnation_guard_receipt_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "decision": "stop",
+  "action": "none",
+  "reason_codes": [],
+  "public_output_count": 3,
+  "retry_count": 0,
+  "retry_budget": 1,
+  "restart_packet_sha256": null,
+  "public_output_only": true,
+  "asks_model_if_stuck": false,
+  "hidden_chain_of_thought_saved": false
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/action-approved-event-payload-v0.1.schema.json",
+  "title": "action_approved runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action_id"
+  ],
+  "properties": {
+    "action_id": { "type": "string" },
+    "plan_id": { "type": "string", "pattern": "^PLAN-" }
+  }
+}

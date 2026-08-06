@@ -1,0 +1,10 @@
+{
+  "role": "internal_retrieval",
+  "tool": "search",
+  "decision": "maybe",
+  "response": "found",
+  "neutral_only": true,
+  "new_subagent_requested": false,
+  "global_review_requested": false,
+  "claim_strength_effect": "none"
+}

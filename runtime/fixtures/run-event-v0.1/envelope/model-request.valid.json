@@ -1,0 +1,25 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-CONF-MODEL-REQUEST",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "model_request",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.1.schema.json",
+  "payload": {
+    "provider": "deepseek",
+    "model_id": "deepseek-v4-pro",
+    "message_order": [
+      "system",
+      "user"
+    ],
+    "real_network_used": true,
+    "tool_calls_allowed": false,
+    "task_contract_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

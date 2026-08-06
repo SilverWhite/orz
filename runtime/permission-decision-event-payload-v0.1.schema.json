@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/permission-decision-event-payload-v0.1.schema.json",
+  "title": "permission_decision runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "decision"
+  ],
+  "properties": {
+    "tool": { "type": "string" },
+    "decision": { "enum": ["allow_once", "allow_always", "deny", "defer"] }
+  }
+}

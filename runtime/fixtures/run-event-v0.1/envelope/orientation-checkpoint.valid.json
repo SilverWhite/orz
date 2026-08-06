@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-CONF-ORIENTATION-CHECKPOINT",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "orientation_checkpoint",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.1.schema.json",
+  "payload": {
+    "checkpoint_id": "ORIENT-CONF-0001",
+    "orientation_checkpoint_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "task_id": "TASK1",
+    "step_index": 0,
+    "neutral_orientation_only": true,
+    "counterexample_queue_invoked": false,
+    "claim_strength_effect": "none"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

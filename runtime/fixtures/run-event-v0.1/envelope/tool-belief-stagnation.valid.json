@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-CONF-TOOL-BELIEF-STAGNATION",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "tool_belief_stagnation",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.1.schema.json",
+  "payload": {
+    "tool_belief_stagnation_receipt_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "decision": "continue",
+    "reason_codes": [],
+    "mismatch_count": 0,
+    "public_output_only": true,
+    "asks_model_if_stuck": false,
+    "hidden_chain_of_thought_saved": false
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

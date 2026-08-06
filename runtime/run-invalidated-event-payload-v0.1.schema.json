@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/run-invalidated-event-payload-v0.1.schema.json",
+  "title": "run_invalidated runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status"
+  ],
+  "properties": {
+    "status": { "enum": ["restart_requested", "handoff_required"] },
+    "turn_count": { "type": "integer", "minimum": 0 },
+    "tool_rounds": { "type": "integer", "minimum": 0 }
+  }
+}

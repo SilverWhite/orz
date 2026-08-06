@@ -1,0 +1,11 @@
+{
+  "provider": "fake-deepseek-shaped",
+  "model_id": "deepseek-v4-pro",
+  "message_order": [
+    "task",
+    "task_contract_digest"
+  ],
+  "real_network_used": false,
+  "tool_calls_allowed": false,
+  "task_contract_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

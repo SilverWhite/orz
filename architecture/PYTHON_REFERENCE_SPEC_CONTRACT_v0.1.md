@@ -1,0 +1,143 @@
+# Python Reference-Spec Contract v0.1
+
+**状态**: 事实/设计约束（2026-08-06，Phase 3 slice #14 定稿）。本文件把 FORK 架构文档 §7 声明的"Python 项目 = reference spec + conformance suite + schema authority"物化为可执行的契约：权威范围、schema 注册表、轨标识约定、豁免登记、同步纪律与变更流程。
+
+## 1. 目的与范围
+
+Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产 runtime 是 Rust（`D:\CLI\orz`）。Python 的六个角色（对照 `FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md` §7 与 `README.md`）：
+
+| 角色 | 落地 |
+|---|---|
+| Assurance spec reference（金版） | 本文档 + `runtime/*.schema.json`（run-event envelope + 33 事件 payload）+ `assurance/*.schema.json`（receipt/contract 体系） |
+| Conformance test suite | `runtime/tests/test_run_event_conformance.py` + `assurance/tests/`（test_p0_contracts 等）+ CI 门禁 `scripts/check_repository.py` |
+| Design documents | `architecture/`、`docs/`、`adr/`（本文档属于此角色且是 schema 契约的注册表） |
+| Offline verification | `assurance/canonical_cli.py`（保留为离线验证路径；其 payload 走 `canonical-cli-*` 独立轨） |
+| Rapid prototyping | 新 gate/行为先在 Python 实现验证，再移植 Rust（约定） |
+| Schema authority | `runtime/*-v0.1.schema.json` 与 `assurance/*-v0.1.schema.json` 是 JSON Schema 的规范定义；Rust 复制/镜像 |
+
+范围：本契约管辖 **run-event 事件体系**（envelope + 33 事件 payload schema 及其实例）。非 run-event 的 schema（P0-P5 contract、GPS、codex-app-server 等）各有既有契约文档，不在本文管束内。
+
+## 2. 权威层次
+
+- **Rust 生产实现 = payload 形状第一权威**：24 个新 payload schema 的形状取自 Rust 构造点（`orz/crates/orz-loop/src/controller.rs`、`orz/crates/orz-host/src/session.rs`、`orz/crates/orz-bin/src/main.rs`）。Rust 是唯一生产运行时，其实际产出是 conformance 的最终裁判（#7 交叉验证落地时以此为准）。
+- **Python = schema 文件权威**：形状一旦固化为 schema 文件，修订必须走 §9 变更流程。
+- **payload_schema 字符串 = 轨标识**：同一事件类型在不同轨可以有不同的 payload 形状；`payload_schema` 字段值标识轨。reference-spec 只对 Rust 轨（及各自声明轨）的 shapes 做符合性承诺。
+
+## 3. run-event envelope 契约
+
+`runtime/run-event-v0.1.schema.json` 是唯一事实源（本文件不复制定义，只摘录约束要点）：
+
+- 33 事件 enum（清单见 §4）；13 个 required 字段；`additionalProperties: false`；`schema_version` const `"0.1.0-draft"`。
+- `sequence == 0` 时 `previous_event_sha256` 必须为 `null`，否则必须为 sha256（allOf if/else）。
+- `run_id` pattern `^(RUN|RST)-[A-Za-z0-9._-]+$`（RST- 为 restore run）；`event_id` pattern `^EVT-[A-Za-z0-9._-]+$`；sha256 pattern `^[a-f0-9]{64}$`（小写）。
+- `payload` 为自由 object；形状由 §4 的 payload schema 约束，关联仅靠 `payload_schema` 字符串约定（无 $ref 硬接线）。
+- 已知环境事实：jsonschema 4.26 的 `format: date-time` 检查对任意字符串放行（实测 no-op）——envelope 的 timestamp 格式在 conformance 层不强制（结构性约束仍生效）。
+
+## 4. Schema authority 清单（33 事件 ↔ payload schema 文件）
+
+命名惯例 `<slug>-event-payload-v0.1.schema.json`（event_type snake_case → kebab-case），文件在 `runtime/`；`$id` 域 `https://local.scientific-assurance.invalid/schema/<文件名>`；draft/2020-12；`type: object`；`additionalProperties: false`；**无 `schema_version` 字段**（envelope 已管）。哈希字段用本地 `$defs.sha256`。
+
+| event_type | 文件（runtime/ 除非注明） | 形状权威 |
+|---|---|---|
+| run_preflight | run-preflight-event-payload-v0.1 | Rust session.rs:136-156 |
+| run_started | run-started-event-payload-v0.1 | Rust controller.rs:308-313 |
+| prompt_submitted | prompt-submitted-event-payload-v0.1 | Rust controller.rs:314-322 |
+| model_request | model-request-event-payload-v0.1 | 参考形状（TUI bridge 消费面） |
+| model_response_received | model-response-received-event-payload-v0.1 | 参考形状 |
+| model_output | model-output-event-payload-v0.1 | Rust controller.rs:433-452 |
+| acp_initialize | acp-initialize-event-payload-v0.1 | 参考形状（protocol_version 双类型） |
+| acp_session_created | acp-session-created-event-payload-v0.1 | 参考形状 |
+| tool_proposal | tool-proposal-event-payload-v0.1 | 参考形状 |
+| permission_requested | permission-requested-event-payload-v0.1 | Rust controller.rs:952-961 |
+| permission_decision | permission-decision-event-payload-v0.1 | Rust controller.rs:966-979 |
+| tool_started | tool-started-event-payload-v0.1 | Rust controller.rs:829-836, 1042-1050 |
+| tool_completed | tool-completed-event-payload-v0.1 | Rust controller.rs:862/900/1053/1071 |
+| orientation_checkpoint | assurance/orientation-checkpoint-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
+| runtime_stagnation_guard | assurance/runtime-stagnation-guard-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
+| tool_availability_check | assurance/tool-availability-check-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
+| tool_belief_stagnation | assurance/tool-belief-stagnation-event-payload-v0.1 | 既有（assurance 轨，见 §6） |
+| instruction_provenance_gate | instruction-provenance-gate-event-payload-v0.1 | Rust controller.rs:530-539 |
+| gate_decision | gate-decision-event-payload-v0.1 | Rust controller.rs:542-549, 654-663（decision 含 `"stop"`） |
+| neutral_inquiry | neutral-inquiry-event-payload-v0.1 | 既有（runtime 轨，Rust controller.rs:781-793 对齐） |
+| counterexample_gate | counterexample-gate-event-payload-v0.1 | 既有（runtime 轨） |
+| retrieval_completion_check | retrieval-completion-check-event-payload-v0.1 | 既有（runtime 轨） |
+| snapshot_created | snapshot-created-event-payload-v0.1 | 既有（runtime 轨） |
+| snapshot_restored | snapshot-restored-event-payload-v0.1 | 既有（runtime 轨） |
+| artifact_registered | artifact-registered-event-payload-v0.1 | 参考形状 |
+| plan_proposed | plan-proposed-event-payload-v0.1 | Rust main.rs:324-335（plan_id `^PLAN-`、task_id `^TASK-`） |
+| plan_approved | plan-approved-event-payload-v0.1 | Rust main.rs:341-353 |
+| plan_rejected | plan-rejected-event-payload-v0.1 | 参考形状 |
+| action_approved | action-approved-event-payload-v0.1 | 参考形状 |
+| run_finished | run-finished-event-payload-v0.1 | Rust controller.rs:729-738 + acp_server.rs:547-549（required 仅 status） |
+| run_failed | run-failed-event-payload-v0.1 | Rust controller.rs:240-250, main.rs:362-375, acp_server.rs:577-580 |
+| run_cancelled | run-cancelled-event-payload-v0.1 | Rust controller.rs:240-250（reason 现仅 user_cancelled，可扩展） |
+| run_invalidated | run-invalidated-event-payload-v0.1 | Rust controller.rs:721-738 |
+
+实例（fixtures）由 `scripts/generate_run_event_fixtures.py` 生成（幂等），落于 `runtime/fixtures/run-event-v0.1/{payloads,envelope}/`；映射与完整性断言在 `runtime/tests/test_run_event_conformance.py` 与 `scripts/check_repository.py`（双处重复沿 p0 先例，硬断言防漏挂）。
+
+## 5. payload_schema 字符串 ↔ 文件名约定
+
+- **Rust 轨**：全事件 `payload_schema` 字段值统一为 `"run-event-v0.1.schema.json"`（envelope 文件名）——`controller.rs:1151`（EventWriter::record）、`main.rs:393`（record_plan_event）、`session.rs:152`（run_preflight）三处一致。payload schema 文件名与事件的映射由本文件 §4 注册表 + 测试断言保障，**不依赖** Rust 字段值。未来若 Rust 改用 payload 文件名，须同步本契约。
+- **canonical-cli 轨**（`canonical_cli.py`）：`canonical-cli-preflight-v0.1` / `canonical-cli-run-started-v0.1` / `canonical-cli-fake-model-request-v0.1` / `canonical-cli-real-model-request-v0.1` / `canonical-cli-fake-model-output-v0.1` / `canonical-cli-real-model-output-v0.1` / `canonical-cli-terminal-v0.1`——2026-08-06 补齐 schema 文件（`assurance/canonical-cli-*-v0.1.schema.json`），闭合此前"字符串指向不存在文件"的完整性漏洞。轨内另有 5 个非 canonical-cli-* 字符串（`instruction-provenance-gate-receipt-v0.1` / `tool-availability-check-event-payload-v0.1` / `orientation-checkpoint-event-payload-v0.1` / `source-visibility-gate-receipt-v0.1` / `canonical-cli-answer-packet-v0.1`），指向的文件均存在，分属 receipt/既有 payload 体系。
+- **normalizer 轨**（`grok_event_normalizer.py`）：单一字符串 `grok-runtime-normalized-v0.1`（无 schema 文件，其输出经 envelope schema 校验——test_grok_event_normalizer）。
+- **orientation 轨**（`orientation_runtime_journal.py`）：`orientation-stagnation-preflight-v0.1` / `orientation-stagnation-run-started-v0.1`；且该模块以完整文件名（带 `.schema.json` 后缀，如 `"tool-availability-check-event-payload-v0.1.schema.json"`，`:35`）引用 payload schema，而 canonical_cli 用去后缀形式（`canonical_cli.py:926`）——两处写法不一致（已知，§7）。
+- **deepseek runtime adapter 轨**（`deepseek_runtime_adapter.py:60`）：`deepseek-runtime-normalized-v0.1`，产出 run_preflight/run_started（`:117/:131`）。
+- **runtime preflight 轨**（`runtime_preflight.py:70`）：`gsa-runtime-preflight-projection-v0.1.schema.json#runtime_event_payload`——**第三形态**：带 `#` JSON-pointer fragment，既非纯轨标识也非纯文件名引用，产 run_preflight/run_started/run_finished（`:271/:284/:297`）。
+- **cli session lifecycle 轨**（`cli_session_lifecycle.py:14,288-291`）：`cli-session-lifecycle-event-v0.2.schema.json`——以 run-event envelope 产出 6 个 33-enum 事件类型（run_started/model_request/model_output/run_finished/run_failed/run_cancelled），但 payload 为 lifecycle 形状（与 §4 不同）。
+- **注册表范围声明**：本表登记已知全部 run-event 产出方；`#7` 交叉验证按 **payload_schema 字符串**（而非 event_type）选择校验 schema，未登记的新产出方必须先入本表。
+- **envelope 轨标识**：`payload_schema` 值不带 `.schema.json` 后缀的（`canonical-cli-*`、`grok-runtime-normalized-v0.1`、`orientation-stagnation-*`、`deepseek-runtime-normalized-v0.1`）是轨标识而非文件名引用；带后缀或 fragment 的是文件名/指针引用。
+
+## 6. 豁免登记
+
+正式登记的 shape 偏差（conformance 时对 Rust 轨豁免或分别校验）：
+
+1. **Phase 2 接受清单（2026-08-04）**：journal payload 字段形状与 Python no-model fixture 不同（真实 agent 数据）——conformance 豁免；以 Rust 轨 shapes（§4）为准。
+2. **text_delta live-only**（Phase 3 slice #6）：`agent_message_chunk` 通知不入 journal，无对应事件——envelope 无此项，无需 schema。
+3. **4 个 assurance/ 既有 payload schema 与 Rust 构造形状分歧**（2026-08-06 登记）：
+
+| 事件 | assurance 轨 schema（§4 权威） | Rust 构造形状 |
+|---|---|---|
+| orientation_checkpoint | required 7 字段（checkpoint_id/…/claim_strength_effect，const true/false/"none"） | `{checkpoint_id, trigger, step_index, message_block}` |
+| tool_availability_check | 7 字段（…_report_sha256 + _count × 4 + context_block_injected + model_must_not_guess const true） | `{available, unavailable, degraded, unprobed, gate_decision}` |
+| runtime_stagnation_guard | 11 字段（receipt_sha256/decision/action/reason_codes/…/三个 const） | `{decision, reason_codes, max_consecutive_repeated_content, max_ngram_repeat}` |
+| tool_belief_stagnation | 7 字段（receipt_sha256/decision/reason_codes/mismatch_count/三个 const） | （Rust 生产不构造） |
+
+决议：**本 slice 不改这 4 个 schema**（修改会破坏 `orientation_runtime_journal.py` 验证与既有 p0 映射）。它们的轨归属（Rust 对齐 or 双轨并存）留给 #7 交叉验证 slice 裁决。
+
+4. **gate_decision.decision 含 `"stop"`**（tool_rounds_limit 变体，controller.rs:654-663）——已纳入 schema enum，非豁免。
+5. **run_finished 双变体**（controller.rs 带 turn_count/tool_rounds vs acp_server.rs restore 路径仅 status）——schema required 仅 `{status}`，兼容。
+
+## 7. 已知缺口
+
+- **8 个参考形状事件**（§4 标注"参考形状"）：Rust 生产不构造（acp_initialize/acp_session_created/tool_proposal/model_request/model_response_received/artifact_registered/plan_rejected/action_approved），schema 以 TUI bridge.rs 消费字段为最低面 + normalizer 词汇为 optional 收录——**非定论**，若未来 Rust 构造形状不同须按 §9 修订。
+- **canonical_cli 自身缺口**：其 orientation_checkpoint payload `{checkpoint_sha256, trigger_step, task_contract_sha256}`（canonical_cli.py:940-944）与 assurance orientation-checkpoint schema（`{checkpoint_id, orientation_checkpoint_sha256, task_id, ...}`）**形状不吻合**——canonical_cli 声明了该 payload_schema 字符串但 payload 不满足 schema，属其内部一致性问题，登记。
+- **跨轨词汇表分轨**：permission_requested 的 `risk` 是 Rust `RiskClass` 的 Debug 串（PascalCase：ReadOnly/LocalMutation/NetworkCall/SandboxEscape）；Python 侧 `instruction_gate.py` 的 risk_class（normal/sensitive/external_side_effect）是另一套词汇——分属不同轨，互不换算，勿混淆。
+- **TUI 事件模型**（`orz-tui/src/events.rs`）声明"与 run-event schema 独立但镜像"——仅事件种类镜像，字段形状以本契约 §4 为准。
+- **payload_schema 后缀写法不一致**（§5 orientation 轨带后缀 vs canonical-cli 轨去后缀）。
+- **jsonschema date-time no-op**（§3 环境事实）。
+- **#7 未完成**：Rust↔Python 交叉验证（真实 journal → envelope + payload schema 校验 + 链校验）——本契约的最终验证器。
+
+## 8. Rust 镜像同步纪律
+
+- `orz/crates/orz-assurance/src/journal/event.rs` 头部注释声明镜像 `runtime/run-event-v0.1.schema.json`——envelope enum（33 事件）与 payload 形状同步是本契约的组成部分。
+- 新增/改名事件类型：envelope enum + §4 注册表 + fixtures + 测试断言四者同步（`test_all_33_event_types_covered` 与 `test_payload_schema_file_convention` 自动捕获漂移）。
+- Rust 侧 payload 构造点的形状变更必须先过 §9 流程，禁止先行改形状再补契约。
+
+## 9. 变更流程
+
+1. 修改/新增 `runtime/` 或 `assurance/` 的 schema 文件（Python 侧先行）。
+2. 更新 `scripts/generate_run_event_fixtures.py` 内嵌形状 → 重生成 fixtures。
+3. 同步 `runtime/tests/test_run_event_conformance.py` 与 `scripts/check_repository.py` 的映射。
+4. 跑 conformance 测试 + `check_repository.py`（两者任一失败即阻断）。
+5. 更新本文档 §4 注册表 / §6 豁免 / §7 缺口。
+6. Rust 侧核对构造点（event.rs 镜像 + controller.rs/main.rs/session.rs 形状），需要时同步修改。
+
+## 10. 参考
+
+- `architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`（§5 Phase 3 item 5/7，权威设计）
+- `architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md`（§7 Python 六角色）
+- `runtime/run-event-v0.1.schema.json`（envelope 事实源）+ `runtime/*-event-payload-v0.1.schema.json`（24 个 2026-08-06 新建 + 5 个既有）
+- `assurance/*-event-payload-v0.1.schema.json`（4 个既有）+ `assurance/canonical-cli-*-v0.1.schema.json`（7 个 2026-08-06 补齐）
+- `runtime/fixtures/run-event-v0.1/`（fixtures + README）、`assurance/fixtures/canonical_cli/`
+- `runtime/tests/test_run_event_conformance.py`、`scripts/generate_run_event_fixtures.py`、`scripts/check_repository.py`
+- 相关记忆：`fusion-phase-tracking.md`（Phase 3 slice #14）

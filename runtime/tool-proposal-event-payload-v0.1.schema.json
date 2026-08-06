@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-proposal-event-payload-v0.1.schema.json",
+  "title": "tool_proposal runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id"
+  ],
+  "properties": {
+    "tool": { "type": "string" },
+    "call_id": { "type": "string" },
+    "input_summary": { "type": "string" },
+    "tool_call_count": { "type": "integer", "minimum": 0 }
+  }
+}

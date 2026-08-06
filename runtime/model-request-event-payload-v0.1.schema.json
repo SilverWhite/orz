@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/model-request-event-payload-v0.1.schema.json",
+  "title": "model_request runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "model_id"
+  ],
+  "properties": {
+    "provider": { "type": "string" },
+    "model_id": { "type": "string" },
+    "message_order": { "type": "array", "items": { "type": "string" } },
+    "real_network_used": { "type": "boolean" },
+    "tool_calls_allowed": { "type": "boolean" },
+    "task_contract_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

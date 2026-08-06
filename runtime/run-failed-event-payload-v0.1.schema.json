@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/run-failed-event-payload-v0.1.schema.json",
+  "title": "run_failed runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "error"
+  ],
+  "properties": {
+    "error": { "type": "string", "minLength": 1 }
+  }
+}

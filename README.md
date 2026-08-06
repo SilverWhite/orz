@@ -40,6 +40,7 @@ Python assurance spec（`assurance/`）保留为 conformance suite、schema auth
 - [`architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md)：五源融合设计语言（Codex/Gemini/OpenCode/Goose + Grok）。
 - [`architecture/AGENT_LOOP_REDESIGN_v0.1.md`](architecture/AGENT_LOOP_REDESIGN_v0.1.md)：Pro/Flash 双 Agent + Blackboard + MechanicalRelay + 检索子代理设计。
 - [`architecture/PHASE2_POST_PLANA_REVIEW_v0.1.md`](architecture/PHASE2_POST_PLANA_REVIEW_v0.1.md)：Plan A 编译修复后审查 — 4 个伪代码 bug 已全部修正。
+- [`architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md`](architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md)：**Python reference-spec 契约** — Python 六角色落地、run-event 33 事件 payload schema 注册表（Rust 构造点第一权威）、payload_schema 轨标识约定、豁免登记、Rust 镜像同步纪律与变更流程。fixtures 生成器 `scripts/generate_run_event_fixtures.py` + conformance 测试 `runtime/tests/test_run_event_conformance.py`。
 
 ## 实施 (Rust)
 

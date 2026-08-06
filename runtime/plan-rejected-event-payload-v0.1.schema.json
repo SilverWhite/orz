@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/plan-rejected-event-payload-v0.1.schema.json",
+  "title": "plan_rejected runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_id"
+  ],
+  "properties": {
+    "plan_id": { "type": "string", "pattern": "^PLAN-" },
+    "authority": { "type": "string" },
+    "reason": { "type": "string" }
+  }
+}

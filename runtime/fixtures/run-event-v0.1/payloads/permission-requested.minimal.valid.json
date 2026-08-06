@@ -1,0 +1,5 @@
+{
+  "tool": "bash",
+  "risk": "SandboxEscape",
+  "call_id": "call-1"
+}

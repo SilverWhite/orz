@@ -1,0 +1,27 @@
+{
+  "schema_version": "0.1.0-draft",
+  "run_id": "RUN-CONF-RUNTIME-STAGNATION-GUARD",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "runtime_stagnation_guard",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.1.schema.json",
+  "payload": {
+    "runtime_stagnation_guard_receipt_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "decision": "continue",
+    "action": "none",
+    "reason_codes": [],
+    "public_output_count": 3,
+    "retry_count": 0,
+    "retry_budget": 1,
+    "restart_packet_sha256": null,
+    "public_output_only": true,
+    "asks_model_if_stuck": false,
+    "hidden_chain_of_thought_saved": false
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

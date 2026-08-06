@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/plan-approved-event-payload-v0.1.schema.json",
+  "title": "plan_approved runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_id",
+    "authority",
+    "decision",
+    "execution_policy"
+  ],
+  "properties": {
+    "plan_id": { "type": "string", "pattern": "^PLAN-" },
+    "authority": { "type": "string" },
+    "decision": { "enum": ["approve", "revise", "reject"] },
+    "execution_policy": { "type": "string" }
+  }
+}

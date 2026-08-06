@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/acp-session-created-event-payload-v0.1.schema.json",
+  "title": "acp_session_created runtime event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id"
+  ],
+  "properties": {
+    "session_id": { "type": "string" },
+    "session_id_hash": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}
