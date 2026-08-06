@@ -769,6 +769,13 @@ pub struct CreateChatCompletionRequest {
     /// to browse and compare available models.
     pub model: String,
 
+    /// DeepSeek thinking-mode switch (our-forks addition). `{"type":
+    /// "disabled"}` forces the non-thinking path — V4 defaults to thinking
+    /// ON, which can burn the entire token budget on `reasoning_content`
+    /// with an empty `content`. Serialized only when `Some`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
+
     /// Output types that you would like the model to generate. Most models are capable of generating
     /// text, which is the default:
     ///
@@ -1004,6 +1011,19 @@ pub struct CreateChatCompletionRequest {
     ///  Developer-defined tags and values used for filtering completions in the [dashboard](https://platform.openai.com/chat-completions).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Metadata>, // nullable: true
+}
+
+/// DeepSeek thinking-mode extension (our-forks addition).
+///
+/// `{"type": "disabled"}` forces the non-thinking path on DeepSeek V4 —
+/// thinking is ON by default and can consume the entire token budget on
+/// `reasoning_content`, leaving `content` empty (live probe 2026-08-06:
+/// 57k reasoning chars, 0 content chars). Absent stays absent on the wire
+/// for providers without the extension.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ThinkingConfig {
+    #[serde(rename = "type")]
+    pub thinking_type: String,
 }
 
 /// Options for streaming response. Only set this when you set `stream: true`.

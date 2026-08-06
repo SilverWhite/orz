@@ -153,6 +153,15 @@ impl DeepSeekTransport {
             messages,
             tools,
             max_tokens: Some(self.config.max_tokens.min(request.max_tokens)),
+            // IP1 (thinking:disabled) — the real implementation. DeepSeek V4
+            // defaults to thinking ON: an unset field leaves the model
+            // burning its token budget on `reasoning_content` with an empty
+            // `content` (polyglot probe 2026-08-06: 15k–57k reasoning chars,
+            // 0 content chars, finish=length). The explicit disable routes
+            // all output to `content` (9.8s vs 201s on the same task).
+            thinking: Some(async_openai::types::chat::ThinkingConfig {
+                thinking_type: "disabled".to_string(),
+            }),
             ..Default::default()
         }
     }
@@ -538,19 +547,22 @@ mod tests {
     }
 
     #[test]
-    fn build_request_omits_thinking_ip1() {
+    fn build_request_forces_thinking_disabled_ip1() {
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
         let req = t.build_request(&request());
         let json = serde_json::to_value(&req).unwrap();
-        // IP1: the serialized request surface must never contain a thinking
-        // option nor any reasoning knob the fork exposes (reasoning_effort
-        // stays None via `..Default::default()` — asserted so a future
-        // mistake cannot silently enable it). `reasoning_content` is a
-        // CONTENT field (replay of what the model already produced), not a
-        // knob — it stays legal; request() above carries None and must
-        // therefore be absent from the wire.
+        // IP1 (thinking:disabled) — the real implementation: DeepSeek V4
+        // defaults to thinking ON, which can leave `content` empty while
+        // burning the whole budget on `reasoning_content`. The request must
+        // carry an explicit `thinking: {"type": "disabled"}` (2026-08-06
+        // polyglot probe: 15k–57k reasoning chars, 0 content chars,
+        // finish=length; disabled → 9.8s full answer). No reasoning knob
+        // may ever be set (reasoning_effort stays None via
+        // `..Default::default()` — asserted so a future mistake cannot
+        // silently enable it). `reasoning_content` replay is a CONTENT
+        // field (what the model already produced), not a knob.
         let s = json.to_string();
-        assert!(!s.contains("thinking"), "{s}");
+        assert_eq!(json["thinking"]["type"], "disabled", "{s}");
         assert!(!s.contains("reasoning_effort"), "{s}");
         assert!(!s.contains("reasoning_content"), "{s}");
         assert_eq!(json["model"], "deepseek-v4-flash");
@@ -1004,7 +1016,13 @@ mod tests {
     async fn generate_real_http_roundtrip() {
         let base = spawn_mock(|_line, body| {
             assert!(body.contains("\"stream\":false") || !body.contains("\"stream\":true"));
-            assert!(!body.contains("thinking"), "IP1 on the wire");
+            // IP1 (thinking:disabled) on the wire — V4 defaults to thinking
+            // ON; the explicit disable routes all output to `content`
+            // (2026-08-06 polyglot probe).
+            assert!(
+                body.contains("\"thinking\":{\"type\":\"disabled\"}"),
+                "explicit thinking disable on the wire: {body}"
+            );
             // The system prompt leads the conversation on the wire (D1-1).
             assert!(body.contains("\"role\":\"system\""), "{body}");
             assert!(body.contains("\"content\":\"sys\""), "{body}");
