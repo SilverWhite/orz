@@ -1006,7 +1006,15 @@ impl AgentLoopController {
                     .push(format!("permission: deny (tool {})", tc.name));
             }
             let result = ToolResult {
-                output: "denied by permission gate".to_string(),
+                // Explicit unavailability semantics (P3, 2026-08-06 polyglot
+                // findings): the tool is NOT available under the current
+                // policy — naming the tool and telling the model not to
+                // retry stops the retry loops that burned the whole tool
+                // budget on denied tools (web_search×4 etc.).
+                output: format!(
+                    "tool '{tool_name}' denied by permission gate — this tool is NOT available in the current policy; do not retry it. Use only the tools listed as available.",
+                    tool_name = tc.name,
+                ),
                 exit_code: Some(1),
             };
             // Replay the denial as a tool message — the provider protocol
@@ -1573,6 +1581,11 @@ mod tests {
         assert!(
             tool_msg.content.contains("denied"),
             "denial surfaced to the model: {:?}",
+            tool_msg.content
+        );
+        assert!(
+            tool_msg.content.contains("do not retry"),
+            "unavailability semantics (P3): {:?}",
             tool_msg.content
         );
 
