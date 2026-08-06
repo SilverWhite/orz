@@ -22,6 +22,13 @@
 //! manager-side timeout (`request_permission_via_hub` awaits without bound),
 //! so the transport enforces `PERMISSION_PROMPT_TIMEOUT` itself — and the
 //! `PermissionBridge::request` wrapper additionally bounds the whole call.
+//!
+//! Read-only sandbox (slice #16, `docs/CODEX_FALLBACK_TUI_SLICE_16`): a
+//! read-only thread's bridge short-circuits non-read risk classes BEFORE the
+//! manager — the hub (and this approval wire) is never reached for those
+//! requests; the denial is journaled by the controller as
+//! `PermissionDecision{deny}`. Read-class tools keep auto-allowing (no
+//! approval either).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

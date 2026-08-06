@@ -35,7 +35,7 @@ use orz_loop::host::{
 };
 
 use crate::keystore::MemoryInstallationKeyStore;
-use crate::permission::PermissionBridge;
+use crate::permission::{PermissionBridge, PermissionPolicy};
 use crate::tools::ToolsetRegistry;
 use orz_workspace::permission::PermissionHookTransport;
 
@@ -187,11 +187,36 @@ impl OrzHost {
         gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
         hub: Option<Arc<dyn PermissionHookTransport>>,
     ) -> Result<Self, String> {
+        Self::with_bridge_and_hub_policy(
+            session_id,
+            journal,
+            cwd,
+            workspace_trust,
+            gateway,
+            hub,
+            PermissionPolicy::Interactive,
+        )
+    }
+
+    /// `with_bridge_and_hub` variant that additionally fixes the per-session
+    /// permission policy (slice #16): a codex read-only thread passes
+    /// `PermissionPolicy::ReadOnly` — mutations/network are denied without
+    /// prompting; `Interactive` keeps the historical behavior.
+    pub fn with_bridge_and_hub_policy(
+        session_id: &str,
+        journal: JournalRecorder,
+        cwd: &Path,
+        workspace_trust: WorkspaceTrust,
+        gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
+        hub: Option<Arc<dyn PermissionHookTransport>>,
+        policy: PermissionPolicy,
+    ) -> Result<Self, String> {
         // Clone the live-client sender before handing the original to the
         // bridge — the streamed text-delta path uses its own sender clone
         // (the permission manager gets the original).
         let live_gateway = gateway.clone();
-        let bridge = PermissionBridge::spawn_with_hub(session_id, gateway, hub, cwd)?;
+        let bridge =
+            PermissionBridge::spawn_with_hub_and_policy(session_id, gateway, hub, cwd, policy)?;
         let mut host = Self::with_permission(journal, cwd, workspace_trust, Some(bridge))?;
         host.session_id = Some(session_id.to_string());
         host.gateway = live_gateway;

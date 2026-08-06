@@ -33,20 +33,30 @@
 //!   running to journal completion (the journal is the source of truth);
 //! - one active turn per thread (`-32001` on a second `turn/start`).
 //!
-//! Decided v1 boundaries (recorded in the slice audit doc):
-//! - sandbox fail-closed: only `workspace-write` is accepted; `read-only`
-//!   (needs a permission override) and `danger-full-access` (needs yolo) are
-//!   future slices. The own-product fallback TUI always sends
-//!   `workspace-write`, so its usability is unaffected.
+//! Decided v1 boundaries (recorded in the slice audit docs):
+//! - sandbox (slice #16): `workspace-write` → `PermissionPolicy::Interactive`
+//!   (reads auto-allow, mutations prompt); `read-only` →
+//!   `PermissionPolicy::ReadOnly` (reads auto-allow, mutations/network are
+//!   denied without prompting — "a write never happens"); any other value
+//!   (incl. `danger-full-access`, which would need a yolo mode) is a `-32602`
+//!   fail-closed reject. Policy is stored per-session (session == thread on
+//!   this surface), so Interactive and ReadOnly threads coexist on one server.
+//! - thread resume (slice #16 closure): real-protocol "resume" = a second
+//!   `turn/start` on the same threadId — already implemented and test-locked
+//!   (`interrupt_produces_interrupted_terminal_and_next_turn_succeeds`); a
+//!   *second* `thread/start` on a live thread is refused (`-32001`). No
+//!   `thread/resume` method exists in the repo's fixtures — adding one would
+//!   violate fixture parity, and cross-connection resume would corrupt the
+//!   append-only hash-chained journals (P1-2).
 //! - `ephemeral` is accepted but informational: journals still write — the
 //!   assurance layer runs silently and completely regardless.
 //! - turn/item ids are per-thread counters (`turn_1`, `item_1`, …).
 //! - thread ids are opaque server-generated strings (`thr-{uuid}` — a random
 //!   component keeps separate runs in the same cwd from reusing run dirs,
 //!   implementation review P1-2) unless the client supplies one; a *known*
-//!   client-supplied id is a `-32001` conflict (thread resume is a future
-//!   slice; a *retired* one is refused — re-creating it would append onto
-//!   the old journals).
+//!   client-supplied id is a `-32001` conflict (a second `thread/start` on a
+//!   live thread; `turn/start` is how you resume); a *retired* one is refused
+//!   — re-creating it would append onto the old journals.
 //! - user input is echoed as an `item/completed {type:"userMessage"}` (only
 //!   `agentMessage` items were observed in the repo's captures — the client
 //!   is type-tolerant; the TUI also renders its own submissions).
@@ -66,6 +76,7 @@ use tokio::sync::mpsc;
 
 use crate::acp_server::{AcpError, AcpServer};
 use crate::codex_permission::{CodexPermissionBroker, CodexPermissionTransport};
+use crate::permission::PermissionPolicy;
 use crate::session::TrustPolicy;
 
 // ── JSON-RPC framing ─────────────────────────────────────────────────────
@@ -405,22 +416,30 @@ impl CodexAppServer {
     }
 
     async fn handle_thread_start(&self, id: &Value, params: Value) -> Result<(), DispatchError> {
-        // Sandbox fail-closed (v1): only workspace-write. read-only would
-        // need a permission override; danger-full-access a yolo mode — both
-        // recorded as future slices.
-        let sandbox = params.get("sandbox").and_then(Value::as_str).unwrap_or("");
-        if sandbox != "workspace-write" {
-            return Err(DispatchError::invalid_params(format!(
-                "unsupported sandbox {sandbox:?} — v1 accepts only \"workspace-write\""
-            )));
-        }
+        // Sandbox (slice #16): workspace-write → interactive prompts;
+        // read-only → the ReadOnly permission policy (mutations/network are
+        // silently denied). Anything else — including danger-full-access,
+        // which would need a yolo mode — fails closed.
+        let policy = match params.get("sandbox").and_then(Value::as_str).unwrap_or("") {
+            "workspace-write" => PermissionPolicy::Interactive,
+            "read-only" => PermissionPolicy::ReadOnly,
+            other => {
+                return Err(DispatchError::invalid_params(format!(
+                    "unsupported sandbox {other:?} — accepted: \"workspace-write\", \"read-only\""
+                )));
+            }
+        };
         // `ephemeral` is accepted but informational: journals still write —
         // the assurance layer runs silently and completely regardless (§2.4).
         let thread_id = match params.get("threadId").and_then(Value::as_str) {
             Some(tid) => {
                 if self.threads.lock().unwrap().contains_key(tid) {
+                    // Real-protocol "resume" is a second `turn/start` on this
+                    // thread (fixture-pinned); a second `thread/start` on a
+                    // live thread is refused (slice #16 closure — see module
+                    // doc).
                     return Err(DispatchError::conflict(format!(
-                        "thread {tid} already exists — resume is not supported in v1"
+                        "thread {tid} already exists — a second thread/start on a live thread is refused; turn/start resumes it"
                     )));
                 }
                 if self.retired_threads.lock().unwrap().contains(tid) {
@@ -433,7 +452,12 @@ impl CodexAppServer {
             None => generate_thread_id(),
         };
         self.acp
-            .handle_session_new(&thread_id, Some(self.cwd.clone()), self.trust_policy)
+            .handle_session_new_with_policy(
+                &thread_id,
+                Some(self.cwd.clone()),
+                self.trust_policy,
+                policy,
+            )
             .await
             .map_err(|e| DispatchError::invalid_params(e.to_string()))?;
         self.threads
@@ -964,6 +988,7 @@ mod tests {
         w: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
         r: &mut BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
         thread_id: &str,
+        sandbox: &str,
     ) {
         send(w, &JsonMessage::request(json!(0), "initialize", json!({}))).await;
         let init = recv_until_id(r, &json!(0)).await;
@@ -979,7 +1004,7 @@ mod tests {
             &JsonMessage::request(
                 json!(1),
                 "thread/start",
-                json!({ "ephemeral": true, "sandbox": "workspace-write", "threadId": thread_id }),
+                json!({ "ephemeral": true, "sandbox": sandbox, "threadId": thread_id }),
             ),
         )
         .await;
@@ -1112,13 +1137,14 @@ mod tests {
                 let parts = CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
                 let (mut w, mut r) = connect(parts).await;
 
-                // read-only sandbox → fail-closed -32602 (v1 boundary).
+                // danger-full-access → fail-closed -32602 (v1 boundary —
+                // would need a yolo mode, still future).
                 send(
                     &mut w,
                     &JsonMessage::request(
                         json!(1),
                         "thread/start",
-                        json!({ "ephemeral": true, "sandbox": "read-only" }),
+                        json!({ "ephemeral": true, "sandbox": "danger-full-access" }),
                     ),
                 )
                 .await;
@@ -1126,25 +1152,47 @@ mod tests {
                 assert_eq!(msg.id, Some(json!(1)));
                 assert_eq!(error_code(&msg), INVALID_PARAMS);
 
-                // danger-full-access → fail-closed too.
+                // An unknown sandbox value fails closed too.
                 send(
                     &mut w,
                     &JsonMessage::request(
                         json!(2),
                         "thread/start",
-                        json!({ "ephemeral": true, "sandbox": "danger-full-access" }),
+                        json!({ "ephemeral": true, "sandbox": "surprise" }),
                     ),
                 )
                 .await;
                 let msg = recv(&mut r).await;
                 assert_eq!(error_code(&msg), INVALID_PARAMS);
 
-                // workspace-write with a client-supplied id: response then
+                // read-only sandbox (slice #16) is now accepted: response then
                 // thread/started (fixture order), idle status shape.
                 send(
                     &mut w,
                     &JsonMessage::request(
                         json!(3),
+                        "thread/start",
+                        json!({ "ephemeral": true, "sandbox": "read-only", "threadId": "thr_ro" }),
+                    ),
+                )
+                .await;
+                let response = recv(&mut r).await;
+                assert_eq!(
+                    response_of(&response),
+                    json!({ "thread": { "id": "thr_ro" } })
+                );
+                let notified = recv(&mut r).await;
+                assert_eq!(notified.method.as_deref(), Some("thread/started"));
+                assert_eq!(
+                    notified.params.as_ref().unwrap()["thread"]["status"]["type"],
+                    "idle"
+                );
+
+                // workspace-write with a client-supplied id: same shapes.
+                send(
+                    &mut w,
+                    &JsonMessage::request(
+                        json!(4),
                         "thread/start",
                         json!({ "ephemeral": true, "sandbox": "workspace-write", "threadId": "thr_t" }),
                     ),
@@ -1154,16 +1202,12 @@ mod tests {
                 assert_eq!(response_of(&response), json!({ "thread": { "id": "thr_t" } }));
                 let notified = recv(&mut r).await;
                 assert_eq!(notified.method.as_deref(), Some("thread/started"));
-                assert_eq!(
-                    notified.params.as_ref().unwrap()["thread"]["status"]["type"],
-                    "idle"
-                );
 
                 // Duplicate client-supplied id → -32001 conflict.
                 send(
                     &mut w,
                     &JsonMessage::request(
-                        json!(4),
+                        json!(5),
                         "thread/start",
                         json!({ "ephemeral": true, "sandbox": "workspace-write", "threadId": "thr_t" }),
                     ),
@@ -1190,7 +1234,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_happy").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_happy", "workspace-write").await;
 
                 let turn = run_turn(&mut w, &mut r, "thr_happy", "你好").await;
                 assert_eq!(turn["id"], "turn_1");
@@ -1267,7 +1311,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_chunks").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_chunks", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_chunks", "x").await;
                 let mut all = String::new();
                 loop {
@@ -1314,7 +1358,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_int").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_int", "workspace-write").await;
                 let turn = run_turn(&mut w, &mut r, "thr_int", "取消我").await;
 
                 // Interrupt mid-run: immediate result, terminal comes later.
@@ -1357,7 +1401,7 @@ mod tests {
                 let parts =
                     CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_idle").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_idle", "workspace-write").await;
                 send(
                     &mut w,
                     &JsonMessage::request(
@@ -1397,7 +1441,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_busy").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_busy", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_busy", "占线").await;
                 // turn/start while a turn runs → -32001 (skip the running
                 // turn's streamed traffic to the conflict response).
@@ -1431,7 +1475,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_fail").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_fail", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_fail", "会失败").await;
                 let completed = recv_until(&mut r, "turn/completed").await;
                 let turn = completed.params.as_ref().unwrap()["turn"].clone();
@@ -1456,7 +1500,7 @@ mod tests {
                 let parts = CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
                 let server = parts.server.clone();
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_close").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_close", "workspace-write").await;
 
                 send(
                     &mut w,
@@ -1501,7 +1545,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_perm").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_perm", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_perm", "运行 dir").await;
 
                 // The hub payload arrives as a server→client request (skip
@@ -1553,7 +1597,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_deny").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_deny", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_deny", "运行 dir").await;
                 let approval = recv_until(&mut r, "approval/request").await;
                 send(
@@ -1571,6 +1615,196 @@ mod tests {
                     "denied tool must never start: {events}"
                 );
                 assert!(events.contains("\"deny\""), "denial is journaled: {events}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn read_only_sandbox_allows_read_and_denies_mutation_without_prompt() {
+        // Slice #16 read-only sandbox: reads auto-allow and execute; the
+        // mutation is denied by the policy BEFORE the hub sees it — no
+        // approval/request ever reaches the wire ("a write never happens").
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                std::fs::write(base.join("a.txt"), "hello").unwrap();
+                let script = vec![
+                    ScriptedResponse::tool_calls(vec![
+                        ToolCall {
+                            name: "read_file".to_string(),
+                            arguments: serde_json::json!({ "target_file": "a.txt" }),
+                            call_id: "call-1".to_string(),
+                        },
+                        ToolCall {
+                            name: "run_terminal_cmd".to_string(),
+                            arguments: serde_json::json!({ "command": "dir" }),
+                            call_id: "call-2".to_string(),
+                        },
+                    ]),
+                    ScriptedResponse::text("完成（只读沙箱）。"),
+                    ScriptedResponse::text("完成（只读沙箱）。"),
+                ];
+                let parts = CodexAppServer::new_parts(
+                    server_with(fake(script)),
+                    base.clone(),
+                    TrustPolicy::Skip,
+                );
+                let (mut w, mut r) = connect(parts).await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_ro", "read-only").await;
+                run_turn(&mut w, &mut r, "thr_ro", "读文件").await;
+
+                // Drain to the terminal, asserting no approval/request ever
+                // appears on the wire. Any terminal (incl. failed) breaks the
+                // loop — a run failure asserts below instead of timing out.
+                let mut approval_count = 0u32;
+                let mut status = String::new();
+                tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                    loop {
+                        let msg = recv(&mut r).await;
+                        if msg.method.as_deref() == Some("approval/request") {
+                            approval_count += 1;
+                        }
+                        if msg.method.as_deref() == Some("turn/completed") {
+                            status = msg.params.as_ref().unwrap()["turn"]["status"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned();
+                            break;
+                        }
+                    }
+                })
+                .await
+                .expect("turn terminates");
+                assert_eq!(
+                    approval_count, 0,
+                    "read-only sandbox must deny mutations without prompting"
+                );
+                assert_eq!(status, "completed", "run must complete after the denial");
+
+                let events = journal_events(&base, "thr_ro", 0);
+                assert_eq!(
+                    events.matches("\"tool_started\"").count(),
+                    1,
+                    "exactly the read executed: {events}"
+                );
+                assert!(events.contains("\"read_file\""), "read executed: {events}");
+                assert!(
+                    events.contains("\"run_terminal_cmd\""),
+                    "the mutation was requested: {events}"
+                );
+                assert!(events.contains("\"deny\""), "denial journaled: {events}");
+                assert_eq!(journal_terminal(&base, "thr_ro", 0), "run_finished");
+            })
+            .await;
+    }
+
+    // NOTE (slice #16 test adaptation, final): the NetworkCall deny ruling
+    // (web_fetch/web_search denied under read-only) is pinned at the bridge
+    // unit level — `permission::tests::read_only_policy_denies_non_read_before_manager`.
+    // An app-level E2E is architecturally infeasible: web tools are
+    // retrieval-shaped and `route()` (orz-loop/relay.rs) sends them to the
+    // ExternalRetrieval subagent BEFORE `run_host_tool` — the permission
+    // bridge is never reached for them (verified: a scripted `web_fetch`
+    // call fails in the subagent path, never reaching the policy gate; the
+    // design review's "permission precedes dispatch" claim holds for
+    // Host-class tools only). Recorded in the slice audit doc §4.
+
+    #[tokio::test]
+    async fn read_only_and_workspace_write_threads_coexist() {
+        // One server, two threads with different sandboxes: the
+        // workspace-write thread prompts exactly once (answered allow-once);
+        // the read-only thread's same-class tool is denied without prompting.
+        // Exactly one approval total, and it belongs to the ww thread.
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // Interleave-safe for concurrent pulls from the shared
+                // gateway: A calls, B calls, then two text rounds each.
+                let script = vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "run_terminal_cmd".to_string(),
+                        arguments: serde_json::json!({ "command": "echo ro" }),
+                        call_id: "call-ro".to_string(),
+                    }]),
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "run_terminal_cmd".to_string(),
+                        arguments: serde_json::json!({ "command": "echo ww" }),
+                        call_id: "call-ww".to_string(),
+                    }]),
+                    ScriptedResponse::text("草稿 A"),
+                    ScriptedResponse::text("草稿 B"),
+                    ScriptedResponse::text("终答 A"),
+                    ScriptedResponse::text("终答 B"),
+                ];
+                let parts = CodexAppServer::new_parts(
+                    server_with(
+                        fake(script).with_chunk_delay(std::time::Duration::from_millis(40)),
+                    ),
+                    base.clone(),
+                    TrustPolicy::Skip,
+                );
+                let (mut w, mut r) = connect(parts).await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_ro", "read-only").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_ww", "workspace-write").await;
+                run_turn(&mut w, &mut r, "thr_ro", "一").await;
+                run_turn(&mut w, &mut r, "thr_ww", "二").await;
+
+                // Drain to both terminals; answer the single approval the
+                // moment it arrives (a pending approval blocks its turn).
+                let mut approvals: Vec<JsonMessage> = Vec::new();
+                let mut completed = 0u32;
+                tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                    while completed < 2 {
+                        let msg = recv(&mut r).await;
+                        if msg.method.as_deref() == Some("approval/request") {
+                            let id = msg.id.clone();
+                            approvals.push(msg);
+                            send(
+                                &mut w,
+                                &JsonMessage::response(
+                                    id.unwrap(),
+                                    json!({ "decision": "allow_once" }),
+                                ),
+                            )
+                            .await;
+                        } else if msg.method.as_deref() == Some("turn/completed")
+                            && msg.params.as_ref().unwrap()["turn"]["status"] == "completed"
+                        {
+                            completed += 1;
+                        }
+                    }
+                })
+                .await
+                .expect("both turns complete");
+                assert_eq!(
+                    approvals.len(),
+                    1,
+                    "exactly one approval across the two sandboxes"
+                );
+                assert_eq!(
+                    approvals[0].params.as_ref().unwrap()["bash_command"],
+                    "echo ww",
+                    "the approval belongs to the workspace-write thread"
+                );
+
+                // Journals: the read-only thread never started its tool;
+                // the workspace-write thread executed it.
+                let ro_events = journal_events(&base, "thr_ro", 0);
+                assert!(
+                    !ro_events.contains("\"tool_started\""),
+                    "read-only thread never writes: {ro_events}"
+                );
+                assert!(
+                    ro_events.contains("\"deny\""),
+                    "denial journaled: {ro_events}"
+                );
+                assert_eq!(journal_terminal(&base, "thr_ro", 0), "run_finished");
+                let ww_events = journal_events(&base, "thr_ww", 0);
+                assert!(
+                    ww_events.contains("\"tool_started\""),
+                    "workspace-write thread executed: {ww_events}"
+                );
+                assert_eq!(journal_terminal(&base, "thr_ww", 0), "run_finished");
             })
             .await;
     }
@@ -1603,7 +1837,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_always").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_always", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_always", "两次 dir").await;
 
                 let approval = recv_until(&mut r, "approval/request").await;
@@ -1645,7 +1879,7 @@ mod tests {
                     std::time::Duration::from_millis(80),
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_to").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_to", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_to", "运行 dir").await;
                 let _approval = recv_until(&mut r, "approval/request").await;
                 // Never answer — the transport times out and fails closed.
@@ -1674,7 +1908,7 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_eof").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_eof", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_eof", "别断开").await;
                 // Drop the client transport mid-turn (EOF — never a terminal).
                 drop(r);
@@ -1758,7 +1992,7 @@ mod tests {
                 let base = test_dir();
                 let parts = CodexAppServer::new_parts(server_with(fake(vec![])), base, TrustPolicy::Skip);
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_retire").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_retire", "workspace-write").await;
                 send(&mut w, &JsonMessage::request(json!(3), "thread/unsubscribe", json!({ "threadId": "thr_retire" }))).await;
                 recv(&mut r).await; // unsubscribe response
                 recv(&mut r).await; // thread/closed
@@ -1794,8 +2028,8 @@ mod tests {
                     TrustPolicy::Skip,
                 );
                 let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_one").await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_two").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_one", "workspace-write").await;
+                initialize_and_start_thread(&mut w, &mut r, "thr_two", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_one", "一").await;
                 run_turn(&mut w, &mut r, "thr_two", "二").await;
 

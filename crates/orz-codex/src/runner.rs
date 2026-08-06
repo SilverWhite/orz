@@ -40,12 +40,16 @@ const QUIT_DRAIN: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub struct TuiConfig {
     pub cwd: PathBuf,
+    /// Thread sandbox (slice #16): `"workspace-write"` (default, interactive
+    /// prompts) or `"read-only"` (mutations silently denied server-side).
+    pub sandbox: String,
 }
 
 impl Default for TuiConfig {
     fn default() -> Self {
         Self {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            sandbox: "workspace-write".to_owned(),
         }
     }
 }
@@ -67,6 +71,7 @@ pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<()
     // silently inside the host).
     let acp = Arc::new(AcpServer::with_gateway(gateway));
     let parts = CodexAppServer::new_parts(acp, config.cwd, TrustPolicy::Enforce);
+    let sandbox = config.sandbox;
     let mut client = CodexClient::connect_inprocess(parts);
     let mut app = CodexApp::new();
 
@@ -90,7 +95,7 @@ pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<()
             return Err(TuiError::Io(e));
         }
     };
-    let result = run_loop(&mut terminal, &mut client, &mut app).await;
+    let result = run_loop(&mut terminal, &mut client, &mut app, &sandbox).await;
     if alt_screen {
         let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     }
@@ -104,6 +109,7 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     client: &mut CodexClient,
     app: &mut CodexApp,
+    sandbox: &str,
 ) -> Result<(), TuiError> {
     let mut ticker = interval(TICK);
     let mut keys = EventStream::new();
@@ -123,7 +129,7 @@ async fn run_loop(
                     Some(Ok(Event::Key(k))) if k.kind == KeyEventKind::Press => {
                         match handle_key(app, k) {
                             KeyOutcome::Continue => {}
-                            KeyOutcome::Prompt(text) => do_prompt(client, app, text).await,
+                            KeyOutcome::Prompt(text) => do_prompt(client, app, text, sandbox).await,
                             KeyOutcome::Interrupt => do_interrupt(client, app).await,
                             KeyOutcome::AnswerApproval(decision) => do_answer(app, client, decision),
                             KeyOutcome::Quit => {
@@ -154,12 +160,15 @@ async fn run_loop(
 }
 
 /// Submit a prompt: initialize the thread on first use, then start the turn.
-async fn do_prompt(client: &mut CodexClient, app: &mut CodexApp, text: String) {
+///
+/// `sandbox` fixes the thread's permission policy (slice #16) and only
+/// matters at thread creation — later prompts reuse the active thread.
+async fn do_prompt(client: &mut CodexClient, app: &mut CodexApp, text: String, sandbox: &str) {
     if !app.submit_prompt(text.clone()) {
         return; // rejected while running — hint already shown
     }
     if app.thread_id.is_none() {
-        match client.initialize_and_start_thread().await {
+        match client.initialize_and_start_thread(sandbox).await {
             Ok(thread_id) => app.thread_id = Some(thread_id),
             Err(e) => {
                 app.session_failed(format!("会话启动失败: {e}"));
@@ -306,7 +315,17 @@ mod tests {
 
     /// The runner's submit path minus the terminal.
     async fn submit(client: &mut CodexClient, app: &mut CodexApp, text: &str) {
-        do_prompt(client, app, text.to_owned()).await;
+        submit_with_sandbox(client, app, text, "workspace-write").await;
+    }
+
+    /// `submit` with an explicit thread sandbox (slice #16 read-only tests).
+    async fn submit_with_sandbox(
+        client: &mut CodexClient,
+        app: &mut CodexApp,
+        text: &str,
+        sandbox: &str,
+    ) {
+        do_prompt(client, app, text.to_owned(), sandbox).await;
     }
 
     async fn recv_until_turn_completed(client: &mut CodexClient, app: &mut CodexApp) {
@@ -494,6 +513,45 @@ mod tests {
                 .unwrap();
                 assert!(!events2.contains("\"tool_started\""), "{events2}");
                 assert!(events2.contains("\"deny\""), "{events2}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn read_only_sandbox_prompt_denies_bash_without_dialog() {
+        // Slice #16: under `--sandbox read-only` the mutation is denied
+        // server-side before the hub — the app never enters WaitingApproval
+        // (no dialog) and the run completes normally.
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let (mut client, mut app) = harness(bash_script(), &base);
+                submit_with_sandbox(&mut client, &mut app, "运行 dir", "read-only").await;
+                let mut approval_seen = false;
+                loop {
+                    let msg = client.msg_rx.recv().await.expect("connection alive");
+                    match &msg {
+                        ClientMsg::ApprovalRequest { .. } => approval_seen = true,
+                        ClientMsg::TurnCompleted { .. } => {
+                            apply_msg(&mut app, msg);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(!approval_seen, "no approval dialog under read-only sandbox");
+                assert_eq!(app.status, RunState::Completed);
+                assert_ne!(app.status, RunState::WaitingApproval);
+                let thread8: String = app.thread_id.as_ref().unwrap().chars().take(8).collect();
+                let events = std::fs::read_to_string(
+                    base.join(".gsa")
+                        .join("runs")
+                        .join(format!("RUN-{thread8}-0"))
+                        .join("events.jsonl"),
+                )
+                .unwrap();
+                assert!(!events.contains("\"tool_started\""), "{events}");
+                assert!(events.contains("\"deny\""), "{events}");
             })
             .await;
     }

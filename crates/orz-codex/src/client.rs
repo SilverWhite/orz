@@ -161,7 +161,14 @@ impl CodexClient {
 
     /// `initialize` (id 0) → `initialized` → `thread/start` and wait for the
     /// server-generated thread id. Returns the thread id.
-    pub async fn initialize_and_start_thread(&mut self) -> Result<String, CodexClientError> {
+    ///
+    /// `sandbox` is passed through verbatim to `thread/start` (slice #16):
+    /// `"workspace-write"` (interactive prompts) or `"read-only"` (mutations
+    /// silently denied server-side).
+    pub async fn initialize_and_start_thread(
+        &mut self,
+        sandbox: &str,
+    ) -> Result<String, CodexClientError> {
         let _ = self.call("initialize", json!({})).await?;
         self.tx
             .send(JsonMessage::notify("initialized", json!({})))
@@ -169,7 +176,7 @@ impl CodexClient {
         let result = self
             .call(
                 "thread/start",
-                json!({ "ephemeral": true, "sandbox": "workspace-write" }),
+                json!({ "ephemeral": true, "sandbox": sandbox }),
             )
             .await?;
         let thread_id = result
@@ -483,7 +490,10 @@ mod tests {
                     ],
                     &base,
                 ));
-                let thread_id = client.initialize_and_start_thread().await.unwrap();
+                let thread_id = client
+                    .initialize_and_start_thread("workspace-write")
+                    .await
+                    .unwrap();
                 assert!(thread_id.starts_with("thr-"));
                 let started = recv_until(&mut client, "thread/started").await;
                 let ClientMsg::ThreadStarted { thread_id: tid } = started else {
@@ -534,7 +544,10 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let mut client = CodexClient::connect_inprocess(parts(bash_script(), &base));
-                let thread_id = client.initialize_and_start_thread().await.unwrap();
+                let thread_id = client
+                    .initialize_and_start_thread("workspace-write")
+                    .await
+                    .unwrap();
                 let turn_id = client.start_turn("运行 dir").await.unwrap();
 
                 let approval = recv_until(&mut client, "approval/request").await;
@@ -567,6 +580,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_only_sandbox_denies_bash_without_approval() {
+        // Slice #16: a read-only thread's mutation is denied server-side —
+        // no approval/request ever surfaces on the wire.
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let mut client = CodexClient::connect_inprocess(parts(bash_script(), &base));
+                let thread_id = client
+                    .initialize_and_start_thread("read-only")
+                    .await
+                    .unwrap();
+                let turn_id = client.start_turn("运行 dir").await.unwrap();
+
+                let mut approvals = 0u32;
+                let status = loop {
+                    match client.recv().await.expect("connection alive") {
+                        ClientMsg::ApprovalRequest { .. } => approvals += 1,
+                        ClientMsg::TurnCompleted { status, .. } => break status,
+                        _ => {}
+                    }
+                };
+                assert_eq!(approvals, 0, "read-only sandbox must not prompt");
+                assert_eq!(status, "completed");
+                assert_eq!(turn_id, "turn_1");
+                let suffix: String = thread_id.chars().take(8).collect();
+                let events = std::fs::read_to_string(
+                    base.join(".gsa")
+                        .join("runs")
+                        .join(format!("RUN-{suffix}-0"))
+                        .join("events.jsonl"),
+                )
+                .expect("journal must exist");
+                assert!(!events.contains("\"tool_started\""), "{events}");
+                assert!(events.contains("\"deny\""), "denial journaled: {events}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn read_only_sandbox_executes_read_tools() {
+        // Slice #16: read-class tools still auto-allow and execute under the
+        // read-only sandbox (the sandbox's point is "no writes", not "no
+        // work").
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                std::fs::write(base.join("a.txt"), "hello").unwrap();
+                let script = vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({ "target_file": "a.txt" }),
+                        call_id: "call-1".to_string(),
+                    }]),
+                    ScriptedResponse::text("完成（读取）。"),
+                    ScriptedResponse::text("完成（读取）。"),
+                ];
+                let mut client = CodexClient::connect_inprocess(parts(script, &base));
+                let thread_id = client
+                    .initialize_and_start_thread("read-only")
+                    .await
+                    .unwrap();
+                client.start_turn("读文件").await.unwrap();
+
+                let mut approvals = 0u32;
+                let status = loop {
+                    match client.recv().await.expect("connection alive") {
+                        ClientMsg::ApprovalRequest { .. } => approvals += 1,
+                        ClientMsg::TurnCompleted { status, .. } => break status,
+                        _ => {}
+                    }
+                };
+                assert_eq!(approvals, 0, "reads never prompt");
+                assert_eq!(status, "completed");
+                let suffix: String = thread_id.chars().take(8).collect();
+                let events = std::fs::read_to_string(
+                    base.join(".gsa")
+                        .join("runs")
+                        .join(format!("RUN-{suffix}-0"))
+                        .join("events.jsonl"),
+                )
+                .expect("journal must exist");
+                assert!(
+                    events.contains("\"tool_started\""),
+                    "read executed: {events}"
+                );
+                assert!(events.contains("\"read_file\""), "{events}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
     async fn interrupt_produces_interrupted_terminal() {
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -578,7 +682,10 @@ mod tests {
                     ],
                     &base,
                 ));
-                client.initialize_and_start_thread().await.unwrap();
+                client
+                    .initialize_and_start_thread("workspace-write")
+                    .await
+                    .unwrap();
                 client.start_turn("取消我").await.unwrap();
                 // Let the run actually start (first chunk), then interrupt.
                 let mut saw_delta = false;
@@ -611,7 +718,10 @@ mod tests {
                 // turn/start without a thread → server -32602.
                 let err = client.start_turn("x").await.unwrap_err();
                 assert!(matches!(err, CodexClientError::NoThread), "{err:?}");
-                client.initialize_and_start_thread().await.unwrap();
+                client
+                    .initialize_and_start_thread("workspace-write")
+                    .await
+                    .unwrap();
                 // An unknown method → -32601 surfaces as a Server error.
                 let err = client.call("nope/nope", json!({})).await.unwrap_err();
                 assert!(
@@ -628,7 +738,10 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let mut client = CodexClient::connect_inprocess(parts(vec![], &base));
-                client.initialize_and_start_thread().await.unwrap();
+                client
+                    .initialize_and_start_thread("workspace-write")
+                    .await
+                    .unwrap();
                 client.close_thread().await.unwrap();
                 let closed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     loop {

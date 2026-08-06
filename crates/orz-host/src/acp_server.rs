@@ -15,6 +15,7 @@ use orz_assurance::{EventType, JournalRecorderError, Redaction, RunEvent, seal_e
 use orz_loop::AgentLoopController;
 use orz_workspace::permission::PermissionHookTransport;
 
+use crate::permission::PermissionPolicy;
 use crate::session::{SessionError, bootstrap_session};
 
 /// Errors from the ACP server layer.
@@ -118,6 +119,11 @@ fn scope_strings(scope: &[PathBuf]) -> Vec<String> {
 struct StoredSession {
     base_dir: PathBuf,
     trust_policy: crate::session::TrustPolicy,
+    /// Per-session permission policy (slice #16): a codex thread created with
+    /// `sandbox: "read-only"` runs every prompt under `PermissionPolicy::ReadOnly`
+    /// — session == thread on the codex surface, so the policy rides the
+    /// session object and coexists with Interactive threads sharing the server.
+    policy: PermissionPolicy,
     /// Prompt counter — each prompt gets a unique run id (`RUN-{suffix}-{n}`).
     prompt_count: u64,
     /// Restore counter — each user-initiated restore is its own run with a
@@ -296,13 +302,31 @@ impl AcpServer {
         base_dir: Option<PathBuf>,
         trust_policy: crate::session::TrustPolicy,
     ) -> Result<serde_json::Value, AcpError> {
+        self.handle_session_new_with_policy(session_id, base_dir, trust_policy, Default::default())
+            .await
+    }
+
+    /// `handle_session_new` variant that additionally fixes the session's
+    /// permission policy (slice #16): the codex app-server passes
+    /// `PermissionPolicy::ReadOnly` for `sandbox: "read-only"` threads and the
+    /// default `Interactive` otherwise; every other caller keeps the
+    /// no-policy behavior.
+    pub async fn handle_session_new_with_policy(
+        &self,
+        session_id: &str,
+        base_dir: Option<PathBuf>,
+        trust_policy: crate::session::TrustPolicy,
+        policy: PermissionPolicy,
+    ) -> Result<serde_json::Value, AcpError> {
         // Journals are created per-run at `session/prompt` time — the session
-        // itself only records where and under what trust policy runs live.
+        // itself only records where, under what trust policy, and under what
+        // permission policy runs live.
         self.sessions.lock().unwrap().insert(
             session_id.to_string(),
             StoredSession {
                 base_dir: base_dir.unwrap_or_else(|| PathBuf::from(".")),
                 trust_policy,
+                policy,
                 prompt_count: 0,
                 restore_count: 0,
             },
@@ -329,14 +353,19 @@ impl AcpServer {
         // the run fails (untrusted cwd, model error), so a retried prompt gets
         // a fresh run dir — reusing a failed run's dir would append to its
         // journal and corrupt the chain (2026-08-05 orz-tui review P2-2).
-        let (base_dir, trust_policy, prompt_number) = {
+        let (base_dir, trust_policy, policy, prompt_number) = {
             let mut sessions = self.sessions.lock().unwrap();
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
             let n = session.prompt_count;
             session.prompt_count += 1;
-            (session.base_dir.clone(), session.trust_policy, n)
+            (
+                session.base_dir.clone(),
+                session.trust_policy,
+                session.policy,
+                n,
+            )
         };
 
         let suffix: String = session_id.chars().take(8).collect();
@@ -394,7 +423,7 @@ impl AcpServer {
         // (`None` gateway) fails closed: Read auto-allows, Bash → Deny.
         // (PermissionBridge spawns the manager actor via spawn_local, so
         // this path must run inside a LocalSet — the stdio server does.)
-        let host = self.build_host(&handle, session_id, &base_dir)?;
+        let host = self.build_host(&handle, session_id, &base_dir, policy)?;
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
@@ -606,12 +635,15 @@ impl AcpServer {
     ///
     /// The bridge consumes the outbound ACP gateway when one is wired
     /// (`--stdio`); otherwise a fail-closed dead gateway — Read auto-allows,
-    /// Bash `Ask` → `Deny` (IP6 headless semantics).
+    /// Bash `Ask` → `Deny` (IP6 headless semantics). `policy` fixes the
+    /// bridge's per-session behavior (slice #16): a read-only session denies
+    /// mutation/network without prompting.
     fn build_host(
         &self,
         handle: &crate::session::SessionHandle,
         session_id: &str,
         base_dir: &std::path::Path,
+        policy: PermissionPolicy,
     ) -> Result<crate::OrzHost, AcpError> {
         // The permission manager requires an absolute cwd (AbsPathBuf) —
         // canonicalize, falling back to the raw path on failure. dunce strips
@@ -619,13 +651,14 @@ impl AcpServer {
         let cwd = dunce::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
         // P1 permit keystore: the session's DPAPI-backed signer (or the
         // test-only memory store under TrustPolicy::Skip).
-        Ok(crate::OrzHost::with_bridge_and_hub(
+        Ok(crate::OrzHost::with_bridge_and_hub_policy(
             session_id,
             handle.journal.clone(),
             &cwd,
             handle.workspace_trust,
             self.gateway(),
             self.hub_permission.lock().unwrap().clone(),
+            policy,
         )
         .map_err(AcpError::Host)?
         .with_permit_signer(handle.permit_signer.clone()))
@@ -1019,6 +1052,104 @@ mod tests {
                 );
 
                 let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// Slice #16: the policy stored on `handle_session_new_with_policy`
+    /// flows into the prompt path. An always-approving hub makes this
+    /// decisive: under the default Interactive policy the bash executes;
+    /// under ReadOnly it is denied BEFORE the hub sees it (no ToolStarted).
+    #[tokio::test]
+    async fn session_prompt_respects_session_policy() {
+        /// Test-only transport that approves everything (the Interactive
+        /// control's manager decision must be `Allow`).
+        struct AlwaysAllowTransport;
+        #[async_trait::async_trait]
+        impl PermissionHookTransport for AlwaysAllowTransport {
+            async fn request_permission(
+                &self,
+                _payload: serde_json::Value,
+            ) -> Result<serde_json::Value, String> {
+                Ok(serde_json::json!({ "outcome": "approve" }))
+            }
+        }
+
+        async fn run_bash_prompt(server: &AcpServer, session: &str, base: &Path) -> Vec<EventType> {
+            let result = server
+                .handle_session_prompt(session, "执行命令")
+                .await
+                .unwrap();
+            assert_eq!(result["status"], "completed");
+            run_events(base)
+                .iter()
+                .map(|e| e.event_type.clone())
+                .collect()
+        }
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base_ro = test_dir();
+                let base_ww = test_dir();
+                // Two sequential prompts share the one FakeProvider — the
+                // script must cover both runs (each run pulls 3 items:
+                // tool_calls + gate text + final text).
+                let script = vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "bash".to_string(),
+                        arguments: serde_json::json!({"command": "dir"}),
+                        call_id: "call-1".to_string(),
+                    }]),
+                    ScriptedResponse::text("完成。"),
+                    ScriptedResponse::text("完成。"),
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "bash".to_string(),
+                        arguments: serde_json::json!({"command": "dir"}),
+                        call_id: "call-2".to_string(),
+                    }]),
+                    ScriptedResponse::text("完成。"),
+                    ScriptedResponse::text("完成。"),
+                ];
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(script)));
+                server.set_gateway(dead_gateway());
+                server.set_hub_permission(Arc::new(AlwaysAllowTransport));
+
+                // ReadOnly session: the policy short-circuits the bash
+                // BEFORE the hub — denied, never started.
+                server
+                    .handle_session_new_with_policy(
+                        "sess-ro",
+                        Some(base_ro.clone()),
+                        crate::session::TrustPolicy::Skip,
+                        PermissionPolicy::ReadOnly,
+                    )
+                    .await
+                    .unwrap();
+                let ro_types = run_bash_prompt(&server, "sess-ro", &base_ro).await;
+                assert!(
+                    !ro_types.contains(&EventType::ToolStarted),
+                    "read-only session must deny the mutation: {ro_types:?}"
+                );
+
+                // Interactive session (default): the always-allow hub means
+                // the tool executes — proving the policy, not the hub,
+                // decided the read-only case.
+                server
+                    .handle_session_new(
+                        "sess-ww",
+                        Some(base_ww.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let ww_types = run_bash_prompt(&server, "sess-ww", &base_ww).await;
+                assert!(
+                    ww_types.contains(&EventType::ToolStarted),
+                    "interactive session with allow-all hub must execute: {ww_types:?}"
+                );
+
+                let _ = std::fs::remove_dir_all(&base_ro);
+                let _ = std::fs::remove_dir_all(&base_ww);
             })
             .await
     }

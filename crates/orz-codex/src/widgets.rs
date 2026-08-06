@@ -186,6 +186,19 @@ fn render_approval_dialog(frame: &mut Frame<'_>, area: Rect, dialog: &ApprovalDi
     if !description.is_empty() {
         body.push(Line::from(format!("描述: {description}")));
     }
+    // Scope line (slice #16): the hub payload carries `scope` ("read" |
+    // "write"); a missing/unknown value renders verbatim when present, and
+    // nothing when absent. The wire's `tool_call_id` is deliberately NOT
+    // rendered — it is a correlation id with no user decision value (the
+    // params are fully preserved server-side).
+    if let Some(scope) = params.get("scope").and_then(|v| v.as_str()) {
+        let label = match scope {
+            "read" => "读",
+            "write" => "写",
+            other => other,
+        };
+        body.push(Line::from(format!("范围: {label}")));
+    }
     if let Some(cmd) = params.get("bash_command").and_then(|v| v.as_str()) {
         body.push(Line::from(format!("命令: {cmd}")));
     }
@@ -317,16 +330,53 @@ mod tests {
                 "tool_name": "run_terminal_command",
                 "description": "Run a terminal command",
                 "bash_command": "dir",
+                "scope": "write",
             }),
         );
         let rendered = render_to_string(&mut app, 100, 30);
         assert!(rendered.contains("工具权限请求"), "{rendered}");
         assert!(rendered.contains("run_terminal_command"), "{rendered}");
         assert!(rendered.contains("dir"), "{rendered}");
+        // Slice #16: the scope is rendered as a Chinese label; the wire's
+        // tool_call_id is NOT (no user decision value).
+        assert!(rendered.contains("范围: 写"), "{rendered}");
+        assert!(!rendered.contains("tool_call_id"), "{rendered}");
         assert!(rendered.contains("[允许一次]"), "{rendered}");
         assert!(rendered.contains("自动拒绝"), "{rendered}");
         assert!(rendered.contains("状态: 等待审批"), "{rendered}");
         assert_no_assurance_panels(&rendered);
+    }
+
+    #[test]
+    fn approval_dialog_read_scope_renders_chinese_label() {
+        let mut app = CodexApp::new();
+        app.on_approval_request(
+            serde_json::json!(1),
+            serde_json::json!({
+                "tool_name": "read_file",
+                "description": "Read a file",
+                "scope": "read",
+            }),
+        );
+        let rendered = render_to_string(&mut app, 100, 30);
+        assert!(rendered.contains("范围: 读"), "{rendered}");
+    }
+
+    #[test]
+    fn approval_dialog_without_scope_renders_tolerantly() {
+        // A payload without `scope` (older hub shapes, future fields) must
+        // render without the scope line and without crashing.
+        let mut app = CodexApp::new();
+        app.on_approval_request(
+            serde_json::json!(1),
+            serde_json::json!({
+                "tool_name": "run_terminal_command",
+                "description": "Run a terminal command",
+            }),
+        );
+        let rendered = render_to_string(&mut app, 100, 30);
+        assert!(rendered.contains("工具权限请求"), "{rendered}");
+        assert!(!rendered.contains("范围:"), "{rendered}");
     }
 
     #[test]

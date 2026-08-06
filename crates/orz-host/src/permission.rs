@@ -39,11 +39,32 @@ use xai_acp_lib::AcpAgentGatewaySender;
 /// (the host's deny wins, the dialog's respond send fails silently).
 pub const PERMISSION_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Per-session permission policy (Phase 3 slice #16 — codex app-server
+/// `sandbox` surface).
+///
+/// `Interactive` is the historical behavior: reads auto-allow, everything
+/// else prompts (or fails closed headless). `ReadOnly` is the codex
+/// read-only sandbox: read-class tools auto-allow, every other risk class is
+/// denied *before* the manager sees the request — no prompt, no approval
+/// wire, no `tool_started` ("a write never happens").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PermissionPolicy {
+    /// Normal prompt-decides behavior (reads auto-allow; the rest prompts).
+    #[default]
+    Interactive,
+    /// Read-only sandbox — mutation/network/escape requests fail closed
+    /// without prompting.
+    ReadOnly,
+}
+
 /// Grok permission manager wrapped for the LoopHost contract.
 pub struct PermissionBridge {
     handle: PermissionHandle,
     /// Session working directory — the scope Read auto-allow is confined to.
     cwd: orz_paths::AbsPathBuf,
+    /// Policy for this bridge (Interactive by default; ReadOnly for codex
+    /// read-only sandbox threads).
+    policy: PermissionPolicy,
 }
 
 impl PermissionBridge {
@@ -60,7 +81,13 @@ impl PermissionBridge {
         gateway: Option<AcpAgentGatewaySender>,
         cwd: &std::path::Path,
     ) -> Result<Self, String> {
-        Self::spawn_with_hub(session_id, gateway, None, cwd)
+        Self::spawn_with_hub_and_policy(
+            session_id,
+            gateway,
+            None,
+            cwd,
+            PermissionPolicy::Interactive,
+        )
     }
 
     /// Variant that threads an interactive permission transport (`hub`).
@@ -76,6 +103,25 @@ impl PermissionBridge {
         gateway: Option<AcpAgentGatewaySender>,
         hub: Option<Arc<dyn PermissionHookTransport>>,
         cwd: &std::path::Path,
+    ) -> Result<Self, String> {
+        Self::spawn_with_hub_and_policy(
+            session_id,
+            gateway,
+            hub,
+            cwd,
+            PermissionPolicy::Interactive,
+        )
+    }
+
+    /// Variant that additionally fixes the per-session permission policy
+    /// (slice #16): `spawn_with_hub` keeps the historical Interactive
+    /// behavior; a codex read-only thread passes `PermissionPolicy::ReadOnly`.
+    pub fn spawn_with_hub_and_policy(
+        session_id: &str,
+        gateway: Option<AcpAgentGatewaySender>,
+        hub: Option<Arc<dyn PermissionHookTransport>>,
+        cwd: &std::path::Path,
+        policy: PermissionPolicy,
     ) -> Result<Self, String> {
         let gateway = gateway.unwrap_or_else(dead_gateway);
         let abs_cwd = orz_paths::AbsPathBuf::new(cwd.to_path_buf())
@@ -98,16 +144,33 @@ impl PermissionBridge {
         Ok(Self {
             handle,
             cwd: abs_cwd,
+            policy,
         })
     }
 
     /// Request permission for a tool call (LoopHost `request_permission`).
     pub async fn request(
         &self,
-        _risk: RiskClass,
+        risk: RiskClass,
         tool: &str,
         args: &serde_json::Value,
     ) -> Result<PermitDecision, PermitError> {
+        // Read-only sandbox: only read-class accesses may proceed — and they
+        // auto-allow below. Anything else (mutation, network, escape, MCP)
+        // is denied before the manager sees the request: no prompt, no
+        // approval wire, no `tool_started` (slice #16; the denial is
+        // journaled as a PermissionDecision by the caller).
+        //
+        // MCP names (`{server}__{tool}`) are always denied: their risk class
+        // derives from a prefix match on the FULL name, so a server named
+        // `read_*`/`list_*`/`grep*` would classify as ReadOnly and slip past
+        // the policy gate (design review D2-1 — currently unreachable: no MCP
+        // config in the toolset, but the gate must not depend on that).
+        if self.policy == PermissionPolicy::ReadOnly
+            && (risk != RiskClass::ReadOnly || tool.contains("__"))
+        {
+            return Ok(PermitDecision::Deny);
+        }
         let access = access_kind(tool, args);
         // P1: the provider auto-allows Read regardless of path — confine it
         // to the session cwd (and away from the runtime's own `.gsa` tree)
@@ -439,6 +502,7 @@ mod tests {
         PermissionBridge {
             handle: PermissionHandle::allow_all(),
             cwd: orz_paths::AbsPathBuf::new(dir.to_path_buf()).unwrap(),
+            policy: PermissionPolicy::Interactive,
         }
     }
 
@@ -512,6 +576,127 @@ mod tests {
         assert!(bridge.access_in_scope(&AccessKind::Bash("dir".to_string())));
         assert!(bridge.access_in_scope(&AccessKind::WebFetch("https://x".to_string())));
         assert!(bridge.access_in_scope(&AccessKind::Edit("write: x".to_string())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── ReadOnly policy (slice #16) ──────────────────────────────────────
+
+    /// Build a bridge with an allow-all manager under the given policy — the
+    /// manager would auto-allow *everything*, so any Deny proves the
+    /// policy/short-circuit decided it before the manager saw the request.
+    fn bridge_with_policy(dir: &std::path::Path, policy: PermissionPolicy) -> PermissionBridge {
+        PermissionBridge {
+            handle: PermissionHandle::allow_all(),
+            cwd: orz_paths::AbsPathBuf::new(dir.to_path_buf()).unwrap(),
+            policy,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_only_policy_denies_non_read_before_manager() {
+        let dir = test_dir();
+        std::fs::create_dir_all(dir.join("inside")).unwrap();
+        std::fs::write(dir.join("inside").join("a.txt"), "x").unwrap();
+        let outside = test_dir(); // sibling temp dir — outside cwd
+        let bridge = bridge_with_policy(&dir, PermissionPolicy::ReadOnly);
+
+        // Non-read risk classes → denied without touching the manager
+        // (allow_all would have said yes to every one of these). NOTE: the
+        // controller classifies `run_terminal_cmd` as LocalMutation (only the
+        // `bash` alias is SandboxEscape — orz-loop/tool.rs); either label
+        // exercises the same short-circuit, and the real-link risk labels are
+        // pinned by the codex_app E2E tests (review D2-4).
+        for (risk, tool, args) in [
+            (
+                RiskClass::SandboxEscape,
+                "bash",
+                serde_json::json!({"command": "dir"}),
+            ),
+            (
+                RiskClass::NetworkCall,
+                "web_fetch",
+                serde_json::json!({"url": "https://x"}),
+            ),
+            (
+                RiskClass::LocalMutation,
+                "search_replace",
+                serde_json::json!({"path": "a.txt"}),
+            ),
+        ] {
+            let decision = bridge.request(risk, tool, &args).await.unwrap();
+            assert_eq!(
+                decision,
+                PermitDecision::Deny,
+                "{tool} must be denied under ReadOnly policy"
+            );
+        }
+
+        // MCP tools are always denied under ReadOnly — even when the server
+        // prefix would classify as read-class (the risk classifier prefix-
+        // matches the FULL name, so a server named `read_*`/`list_*`/`grep*`
+        // would otherwise slip past the policy gate; review D2-1). The `__`
+        // separator marks MCP names (access_kind below).
+        let decision = bridge
+            .request(
+                RiskClass::ReadOnly,
+                "read_server__extract",
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            decision,
+            PermitDecision::Deny,
+            "MCP names must never bypass the read-only gate"
+        );
+
+        // Read within the cwd → auto-allowed (the manager's allow_all path).
+        let decision = bridge
+            .request(
+                RiskClass::ReadOnly,
+                "read_file",
+                &serde_json::json!({"target_file": "inside/a.txt"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::AllowOnce);
+
+        // Read outside the cwd → still denied by the P1 scope check.
+        let decision = bridge
+            .request(
+                RiskClass::ReadOnly,
+                "read_file",
+                &serde_json::json!({"target_file": outside.join("x.txt").to_string_lossy()}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::Deny);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[tokio::test]
+    async fn interactive_policy_is_default_and_unaffected() {
+        // Default policy is Interactive (the zero-arg constructor path) —
+        // `spawn` and `spawn_with_hub` must not change historical behavior.
+        assert_eq!(PermissionPolicy::default(), PermissionPolicy::Interactive);
+
+        let dir = test_dir();
+        let bridge = bridge_with_policy(&dir, PermissionPolicy::Interactive);
+
+        // Under Interactive, a bash request reaches the allow-all manager →
+        // AllowOnce (proof: the policy short-circuit is policy-gated, not
+        // tool-gated).
+        let decision = bridge
+            .request(
+                RiskClass::SandboxEscape,
+                "run_terminal_cmd",
+                &serde_json::json!({"command": "dir"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::AllowOnce);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

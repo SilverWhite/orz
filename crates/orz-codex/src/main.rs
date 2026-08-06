@@ -17,6 +17,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut fake_provider = false;
+    let mut sandbox = "workspace-write";
 
     let mut i = 0;
     while i < args.len() {
@@ -29,6 +30,21 @@ fn main() {
                     eprintln!("--run-root requires a directory");
                     print_help();
                     return;
+                }
+            }
+            "--sandbox" => {
+                i += 1;
+                if let Some(value) = args.get(i) {
+                    if !matches!(value.as_str(), "read-only" | "workspace-write") {
+                        eprintln!("--sandbox accepts \"read-only\" or \"workspace-write\"");
+                        print_help();
+                        std::process::exit(2);
+                    }
+                    sandbox = value;
+                } else {
+                    eprintln!("--sandbox requires a value");
+                    print_help();
+                    std::process::exit(2);
                 }
             }
             "--fake-provider" => fake_provider = true,
@@ -57,7 +73,10 @@ fn main() {
         .build()
         .expect("tokio runtime");
     let local = tokio::task::LocalSet::new();
-    let config = orz_codex::TuiConfig { cwd };
+    let config = orz_codex::TuiConfig {
+        cwd,
+        sandbox: sandbox.to_owned(),
+    };
     if let Err(e) = local.block_on(&runtime, orz_codex::run(config, build_gateway())) {
         eprintln!("orz-codex: {e}");
         std::process::exit(1);
@@ -68,10 +87,13 @@ fn print_help() {
     println!(
         "orz-codex — Codex 风格兜底 TUI（设计 §2.4）\n\
          \n\
-         usage: orz-codex [--run-root <dir>] [--fake-provider]\n\
+         usage: orz-codex [--run-root <dir>] [--sandbox <mode>] [--fake-provider]\n\
          \n\
-         --fake-provider   用脚本化假模型演示（工具 + 审批流）\n\
-         --run-root <dir>  会话工作目录（默认当前目录）"
+         --fake-provider       用脚本化假模型演示（工具 + 审批流）\n\
+         --run-root <dir>      会话工作目录（默认当前目录）\n\
+         --sandbox <mode>      线程沙箱：workspace-write（默认，交互审批）| read-only\n\
+                               （只读工具自动放行，写/网络静默拒绝；仅线程创建时生效，\n\
+                               后续 prompt 复用活动线程，切换需重启）"
     );
 }
 
