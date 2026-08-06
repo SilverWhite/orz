@@ -153,6 +153,13 @@ PAYLOAD_GOOD: dict[str, dict] = {
             {"name": "read_file", "arguments": {"path": "a.txt"}, "call_id": "call-1"}
         ],
         "finish_reason": "tool_calls",
+        # D-6 usage observation (FIX_PLAN 2026-08-06) + F-06 incomplete
+        # marker (2026-08-07 review): the Rust construction point emits
+        # reasoning_tokens/completion_tokens on every model output; the
+        # optional "incomplete" marks an aborted stream's partial output.
+        "reasoning_tokens": 10,
+        "completion_tokens": 42,
+        "incomplete": False,
     },
     "acp_initialize": {"protocol_version": 1},
     "acp_session_created": {"session_id": "sess-1"},

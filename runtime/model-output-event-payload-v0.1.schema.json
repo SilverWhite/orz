@@ -24,6 +24,9 @@
         }
       }
     },
-    "finish_reason": { "enum": ["stop", "tool_calls", "length"] }
+    "finish_reason": { "enum": ["stop", "tool_calls", "length"] },
+    "reasoning_tokens": { "type": ["integer", "null"] },
+    "completion_tokens": { "type": ["integer", "null"] },
+    "incomplete": { "type": "boolean" }
   }
 }

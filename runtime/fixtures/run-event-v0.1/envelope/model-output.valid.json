@@ -19,7 +19,10 @@
         "call_id": "call-1"
       }
     ],
-    "finish_reason": "tool_calls"
+    "finish_reason": "tool_calls",
+    "reasoning_tokens": 10,
+    "completion_tokens": 42,
+    "incomplete": false
   },
   "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "redaction": "none",
