@@ -45,7 +45,7 @@ Python assurance spec（`assurance/`）保留为 conformance suite、schema auth
 - **仓库**：`D:\CLI\orz`（本地 fork of Grok Build `500129c7`；2026-08-04 由 `B:\orz` 迁移，B 盘空间不足）
 - **分支**：`feat/fusion-architecture`（70 crate workspace, `cargo check` 绿色）
 - **设计符合性**：详见[审查报告](#) — v0.2 设计与实施高度一致
-- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，Phase 3 Slice #1-11 完成（自研 390 tests：loop 71 / host 48 / assurance 95 / tui 174 / bin 2）；剩余：严格 Clippy/零死代码收尾（orz-telemetry/orz-announcements/orz-config-types 保留待裁）、Python reference-spec、conformance suite 验证（含 payload schema good/bad fixtures 补齐）、Codex 兜底 TUI（设计 §2.4 已设计，Slice #12 排期——用户裁决：独立二进制名、默认不启用）
+- **跟踪项**：`memory/fusion-phase-tracking.md` — Phase 1/2 完成，**Phase 3 Slice #1-12 完成**（自研 440 tests：loop 71 / host 71 / assurance 95 / tui 174 / bin 2 / **codex 27**）；Slice #12 = **Codex 兜底 TUI**（§2.4 双 TUI 策略兜底侧：orz-host Codex app-server JSON-RPC 面 + 独立二进制 `orz-codex`——用户裁决：独立二进制名、默认不启用、互斥显示；审计记录 `docs/CODEX_FALLBACK_TUI_SLICE_12_2026-08-06.md`）；剩余：严格 Clippy/零死代码收尾（orz-telemetry/orz-announcements/orz-config-types 保留待裁）、Python reference-spec、conformance suite 验证（含 payload schema good/bad fixtures 补齐）、reasoning_content 回放缺口（live 验证后 fork 补丁）
 
 ## 当前文件 (Python assurance spec + 架构 + 协议)
 
