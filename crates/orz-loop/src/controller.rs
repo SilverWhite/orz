@@ -1005,10 +1005,23 @@ impl AgentLoopController {
                     .gate_decisions
                     .push(format!("permission: deny (tool {})", tc.name));
             }
-            return Ok(ToolResult {
+            let result = ToolResult {
                 output: "denied by permission gate".to_string(),
                 exit_code: Some(1),
+            };
+            // Replay the denial as a tool message — the provider protocol
+            // requires a tool message answering each declared call, even a
+            // refused one. Skipping it breaks the next round with a 400
+            // (2026-08-06 polyglot probe: denied search_replace left the
+            // assistant declaration unanswered → invalid_request_error).
+            messages.push(Message {
+                role: Role::Tool,
+                content: result.output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
             });
+            return Ok(result);
         }
 
         // IP5: pre-mutation snapshot — record the pre-tool worktree state of
@@ -1485,6 +1498,83 @@ mod tests {
         assert_eq!(round2[2].role, Role::Tool);
         assert_eq!(round2[2].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(round2[3].role, Role::Assistant, "text summary kept");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn denied_tool_round_replays_tool_message() {
+        // A denied tool call must still be answered with a tool message —
+        // the provider protocol requires a tool message per declared
+        // tool_call_id, refused or not. Skipping it 400s the next round
+        // (2026-08-06 polyglot probe: denied search_replace → the real API
+        // rejected the declaration with invalid_request_error).
+        struct DenyHost {
+            journal: JournalRecorder,
+        }
+        #[async_trait]
+        impl LoopHost for DenyHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::Deny)
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _args: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                unreachable!("denied tools never execute");
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = DenyHost { journal };
+
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("search_replace", "call-9")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-DENY", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // Denied: no tool_started/completed in the journal (fail-closed
+        // evidence discipline), but the round still terminated cleanly.
+        let types = event_types(&dir);
+        assert!(!types.contains(&EventType::ToolStarted));
+        assert!(!types.contains(&EventType::ToolCompleted));
+        assert!(types.contains(&EventType::RunFinished));
+
+        // Protocol: the next request answers the denied declaration with a
+        // tool message carrying the same call_id.
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "round 2 request exists: {received:?}");
+        let round2 = &received[1].messages;
+        let tool_msg = round2
+            .iter()
+            .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-9"))
+            .expect("denied call answered with a tool message");
+        assert!(
+            tool_msg.content.contains("denied"),
+            "denial surfaced to the model: {:?}",
+            tool_msg.content
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

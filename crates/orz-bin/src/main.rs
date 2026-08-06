@@ -33,6 +33,15 @@ fn main() {
             std::env::set_var("ORZ_REAL", "1");
         }
     }
+    // `--allow-write` (2026-08-06 polyglot harness): headless runs grant
+    // local file edits (Benchmark policy — reads + search_replace/write
+    // auto-allow; bash/network still fail closed). Explicit opt-in; the
+    // TUI/stdio interactive paths never read this env.
+    if args.iter().any(|a| a == "--allow-write") {
+        unsafe {
+            std::env::set_var("ORZ_ALLOW_WRITE", "1");
+        }
+    }
     if args.iter().any(|a| a == "--stdio") {
         run_stdio();
         return;
@@ -68,6 +77,9 @@ fn main() {
         );
         eprintln!(
             "       --real selects the real DeepSeek transport (ADR-0006 credential registry)"
+        );
+        eprintln!(
+            "       --allow-write grants headless local file edits (harness; bash/network still denied)"
         );
         std::process::exit(2);
     });
@@ -602,17 +614,27 @@ async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Erro
 
 /// Build the Phase 3 CLI host: OrzHost + IP6 permission bridge with a
 /// fail-closed dead gateway (headless — no ACP client to answer prompts).
+/// `--allow-write` (ORZ_ALLOW_WRITE, harness opt-in) switches the bridge to
+/// the Benchmark policy: reads + local file edits auto-allow, bash/network
+/// still fail closed.
 fn build_cli_host(
     handle: &SessionHandle,
     session_id: &str,
     cwd: &Path,
 ) -> Result<orz_host::OrzHost, String> {
-    Ok(orz_host::OrzHost::with_bridge(
+    let policy = if std::env::var("ORZ_ALLOW_WRITE").is_ok() {
+        orz_host::permission::PermissionPolicy::Benchmark
+    } else {
+        orz_host::permission::PermissionPolicy::Interactive
+    };
+    Ok(orz_host::OrzHost::with_bridge_and_hub_policy(
         session_id,
         handle.journal.clone(),
         cwd,
         handle.workspace_trust,
         None,
+        None,
+        policy,
     )?
     // P1 permit keystore — the session's DPAPI-backed signer.
     .with_permit_signer(handle.permit_signer.clone()))

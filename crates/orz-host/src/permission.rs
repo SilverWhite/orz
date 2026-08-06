@@ -46,7 +46,11 @@ pub const PERMISSION_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
 /// else prompts (or fails closed headless). `ReadOnly` is the codex
 /// read-only sandbox: read-class tools auto-allow, every other risk class is
 /// denied *before* the manager sees the request — no prompt, no approval
-/// wire, no `tool_started` ("a write never happens").
+/// wire, no `tool_started` ("a write never happens"). `Benchmark` is the
+/// headless benchmark/automation policy (2026-08-06 polyglot harness):
+/// read-class and local-mutation tools auto-allow — the loop can edit files
+/// without a client — while network and shell-escape fail closed like
+/// ReadOnly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PermissionPolicy {
     /// Normal prompt-decides behavior (reads auto-allow; the rest prompts).
@@ -55,6 +59,19 @@ pub enum PermissionPolicy {
     /// Read-only sandbox — mutation/network/escape requests fail closed
     /// without prompting.
     ReadOnly,
+    /// Headless benchmark — read + local file edits auto-allow; network and
+    /// shell-escape fail closed without prompting.
+    Benchmark,
+}
+
+/// Shell-execution tool names (Benchmark policy exclusion — the controller
+/// classifies `run_terminal_cmd` as LocalMutation, so the policy needs an
+/// explicit name-level exclusion; `bash` is SandboxEscape already).
+fn is_shell_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "bash" | "cmd" | "powershell" | "pwsh" | "run_terminal_cmd"
+    )
 }
 
 /// Grok permission manager wrapped for the LoopHost contract.
@@ -170,6 +187,28 @@ impl PermissionBridge {
             && (risk != RiskClass::ReadOnly || tool.contains("__"))
         {
             return Ok(PermitDecision::Deny);
+        }
+        // Benchmark (2026-08-06): local edits auto-allow (the harness has no
+        // client to answer prompts); network and shell-escape fail closed
+        // before the manager sees the request — same shape as ReadOnly.
+        // MCP names are always denied (same prefix-spoof rationale as
+        // ReadOnly above). Shell tools classify LocalMutation in the
+        // controller (`run_terminal_cmd` is the GrokBuild bash name), so
+        // they need an explicit exclusion here — Benchmark grants file
+        // edits, never shell execution.
+        if self.policy == PermissionPolicy::Benchmark {
+            match risk {
+                RiskClass::ReadOnly => {}
+                RiskClass::LocalMutation => {
+                    if tool.contains("__") || is_shell_tool(tool) {
+                        return Ok(PermitDecision::Deny);
+                    }
+                    return Ok(PermitDecision::AllowOnce);
+                }
+                RiskClass::NetworkCall | RiskClass::SandboxEscape => {
+                    return Ok(PermitDecision::Deny);
+                }
+            }
         }
         let access = access_kind(tool, args);
         // P1: the provider auto-allows Read regardless of path — confine it
@@ -674,6 +713,84 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    // ── Benchmark policy (2026-08-06 polyglot harness) ──────────────────
+
+    #[tokio::test]
+    async fn benchmark_policy_allows_local_mutation_denies_network_and_shell() {
+        let dir = test_dir();
+        std::fs::create_dir_all(dir.join("inside")).unwrap();
+        std::fs::write(dir.join("inside").join("a.txt"), "x").unwrap();
+        let bridge = bridge_with_policy(&dir, PermissionPolicy::Benchmark);
+
+        // Local edits auto-allow — the loop must be able to modify files
+        // with no client to answer prompts.
+        let decision = bridge
+            .request(
+                RiskClass::LocalMutation,
+                "search_replace",
+                &serde_json::json!({"path": "a.txt"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            decision,
+            PermitDecision::AllowOnce,
+            "search_replace must auto-allow under Benchmark policy"
+        );
+
+        // Shell execution stays fail-closed — `run_terminal_cmd` classifies
+        // LocalMutation in the controller but is the GrokBuild bash name;
+        // Benchmark grants file edits, never shell.
+        for (risk, tool, args) in [
+            (
+                RiskClass::SandboxEscape,
+                "bash",
+                serde_json::json!({"command": "dir"}),
+            ),
+            (
+                RiskClass::LocalMutation,
+                "run_terminal_cmd",
+                serde_json::json!({"command": "dir"}),
+            ),
+            (
+                RiskClass::NetworkCall,
+                "web_fetch",
+                serde_json::json!({"url": "https://x"}),
+            ),
+        ] {
+            let decision = bridge.request(risk, tool, &args).await.unwrap();
+            assert_eq!(
+                decision,
+                PermitDecision::Deny,
+                "{tool} must be denied under Benchmark policy"
+            );
+        }
+
+        // MCP names never auto-allow mutation.
+        let decision = bridge
+            .request(
+                RiskClass::LocalMutation,
+                "write_server__write",
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::Deny);
+
+        // Reads still auto-allow (manager path).
+        let decision = bridge
+            .request(
+                RiskClass::ReadOnly,
+                "read_file",
+                &serde_json::json!({"target_file": "inside/a.txt"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::AllowOnce);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
