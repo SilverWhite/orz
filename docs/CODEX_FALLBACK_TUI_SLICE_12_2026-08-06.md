@@ -1,7 +1,7 @@
 # Codex Fallback TUI — Phase 3 Slice #12 审计记录
 
 **日期**: 2026-08-06
-**状态**: 完成并已提交（orz `1903ba3` → `cli/feat/fusion-architecture`；主仓库收尾 docs → `origin/main`，推送用户手动）
+**状态**: 完成并已提交推送（orz `1903ba3` → `cli/feat/fusion-architecture`；主仓库 `a82a651` → `origin/main`；推送用户手动 2026-08-06；**交互冒烟用户实测通过**）
 **范围**: 设计 §2.4 双 TUI 策略的兜底侧——orz-host 新增 Codex app-server JSON-RPC 面 + 新二进制 `orz-codex`（Codex 风格轻量 TUI）。
 **测试**: orz-host 48→**71**（+23：codex_app 17 / codex_permission 6）、orz-codex 新 crate **27**；自研 390→**440**。clippy 零新增（基线对比：修掉存量 `unused Arc` 1 个，新增 0 个）。
 
