@@ -1100,19 +1100,23 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "live transport — set ORZ_TEST_LIVE=1 with ORZ_TEST_API_KEY"]
+    #[ignore = "live transport — set ORZ_TEST_LIVE=1 (API key from Windows Credential Manager, ADR-0006)"]
     async fn live_chat_completion_roundtrip() {
         // Double gate: `#[ignore]` keeps the offline suite deterministic AND
-        // the body bails unless both markers are set — so `--ignored`
-        // without an explicit opt-in cannot silently pass (2026-08-06
-        // conformance review D2-1).
+        // the body bails unless the marker is set — so `--ignored` without
+        // an explicit opt-in cannot silently pass (2026-08-06 conformance
+        // review D2-1). The API key comes from the Windows Credential
+        // Manager (`orz-deepseek/agent`, ADR-0006) — no env-var injection.
         if std::env::var("ORZ_TEST_LIVE").as_deref() != Ok("1") {
             return;
         }
-        let key = std::env::var("ORZ_TEST_API_KEY").unwrap_or_default();
-        if key.is_empty() {
-            return;
-        }
+        let key = match crate::gateway::credentials::read_agent_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                eprintln!("live test skipped: {e}");
+                return;
+            }
+        };
         let t = DeepSeekTransport::deepseek_v4(key, "deepseek-v4-flash");
         let r = t
             .generate(ModelRequest {

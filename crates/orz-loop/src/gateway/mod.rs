@@ -12,6 +12,7 @@
 //! reqwest + hand-written SSE fallback. Transport interface must stay
 //! identical under either backend.
 
+pub mod credentials;
 pub mod fake;
 pub mod model;
 pub mod transport;
