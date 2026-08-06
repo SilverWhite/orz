@@ -376,7 +376,7 @@ def build_deepseek_live_run_fn(
     run_root: str,
     run_id: str | None = None,
     prompt_text: str,
-    credential_target: str = "FEP-Agent/DeepSeek",
+    credential_target: str = "orz-deepseek/agent",
     timeout_seconds: int = 60,
 ) -> Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]]:
     """Build a direct DeepSeek run function for the TUI event source."""

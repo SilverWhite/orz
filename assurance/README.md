@@ -185,7 +185,7 @@ stagnation guard 输入，也不复制到 receipt；抽取结果可作为后续 
 
 `deepseek_api_observation.py` 与 `scripts/invoke_deepseek_public_output_observation.ps1` 新增 direct DeepSeek API
 one-shot 观测路径。PowerShell launcher 采用两阶段 Plan/Execute：Plan 不读取凭据、不联网；Execute 需要固定确认 token，
-从 Windows Credential Manager `FEP-Agent/DeepSeek` 读取凭据，向 `https://api.deepseek.com/chat/completions`
+从 Windows Credential Manager `orz-deepseek/agent` 读取凭据，向 `https://api.deepseek.com/chat/completions`
 发起一次 `deepseek-v4-pro` marker 请求，随后只保存 public assistant 文本、marker 是否匹配、usage 元数据和可选 private reasoning digest。
 Python 投影脚本再复用 runner public-output extraction、orientation/stagnation integration 和 runtime journal verifier。
 这仍不是真实 runner adapter，也不证明模型能力或重复停滞恢复能力。

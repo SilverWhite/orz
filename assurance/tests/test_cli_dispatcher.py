@@ -796,7 +796,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "alpha",
                 "real-call",
                 "--run-root", str(self.run_root),
-                "--credential-target", "FEP-Agent/Missing",
+                "--credential-target", "orz-deepseek/missing",
                 "--json",
             ]
         )

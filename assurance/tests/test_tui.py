@@ -2463,11 +2463,11 @@ class BuildLiveRunFnRealAdapterTests(unittest.TestCase):
             run_fn = build_live_run_fn(
                 run_root="/tmp/test", ask="test",
                 real_adapter=True,
-                credential_target="FEP-Agent/Custom-Target",
+                credential_target="orz-deepseek/custom-target",
             )
             run_fn(lambda evt: None)
             _, kwargs = mock_real.call_args
-            self.assertEqual(kwargs["credential_target"], "FEP-Agent/Custom-Target")
+            self.assertEqual(kwargs["credential_target"], "orz-deepseek/custom-target")
 
     def test_real_adapter_on_event_streams_through_bridge(self) -> None:
         """Events from the real path are correctly mapped by the bridge."""

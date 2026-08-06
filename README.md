@@ -83,7 +83,7 @@ Python assurance spec（`assurance/`）保留为 conformance suite、schema auth
 - [`assurance/runner_public_output.py`](assurance/runner_public_output.py)：真实 runner 前的公开输出抽取夹具；只把 public assistant 输出送入 `public_outputs`，私有 reasoning/redacted metadata 只能保留 digest 且不得复制文本。
 - [`assurance/deepseek_api_observation.py`](assurance/deepseek_api_observation.py)：direct DeepSeek API one-shot 观测投影；消费单次受控 API result，把公开 assistant 输出接入 extraction、orientation/stagnation 和 runtime journal，不保存 credential、raw response 或隐藏 reasoning 文本。
 - [`assurance/deepseek_stream_observation.py`](assurance/deepseek_stream_observation.py)：DeepSeek-shaped streaming fixture；把 public `delta.content`、private reasoning digest 和 terminal metadata 投影到 runner output stream，并用重复 public delta 验证 restart projection。
-- [`scripts/invoke_deepseek_public_output_observation.ps1`](scripts/invoke_deepseek_public_output_observation.ps1)：两阶段真实 DeepSeek API 观测 launcher；先生成离线 plan，执行时从 Windows Credential Manager `FEP-Agent/DeepSeek` 读取凭据并只发起一次固定 marker 请求。
+- [`scripts/invoke_deepseek_public_output_observation.ps1`](scripts/invoke_deepseek_public_output_observation.ps1)：两阶段真实 DeepSeek API 观测 launcher；先生成离线 plan，执行时从 Windows Credential Manager `orz-deepseek/agent` 读取凭据并只发起一次固定 marker 请求。
 - [`docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md`](docs/P2_DOCKER_SANDBOX_AUDIT_2026-07-24.md)：P2 Docker 实测、Windows native fail-closed 状态、限制与正反例收敛策略。
 - [`docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md`](docs/P2_5_GUARDED_EXECUTION_AUDIT_2026-07-24.md)：P1 envelope、P2 selector、无模型 action、宿主/容器进程追踪、HMAC 回执与残留复核的端到端实测。
 - [`docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md`](docs/P3_INSTRUCTION_AUTHORITY_AUDIT_2026-07-25.md)：P3 来源不可提权、内核动作授权、能力子集委派与 digest-bound 一次性许可的测试和限制。

@@ -183,10 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         help="For --runtime grok ACP runs, use the local loopback fake provider fixture.",
     )
     parser.add_argument(
-        "--credential-target", type=str, default="FEP-Agent/DeepSeek",
+        "--credential-target", type=str, default="orz-deepseek/agent",
         metavar="TARGET",
         help="Windows Credential Manager target name for DeepSeek API key "
-             "(default: FEP-Agent/DeepSeek)",
+             "(default: orz-deepseek/agent; registry ADR-0006)",
     )
     parser.add_argument(
         "--run-root", type=str, default=None,

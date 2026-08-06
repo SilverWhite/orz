@@ -71,7 +71,7 @@ try {
         self.assertNotIn("$env:lif_deepseek_api_key", lowered)
         self.assertNotIn("--debug-file", lowered)
         self.assertNotIn("'--debug'", lowered)
-        self.assertIn("$credentialTarget = 'FEP-Agent/DeepSeek'", source)
+        self.assertIn("$credentialTarget = 'orz-deepseek/agent'", source)
         self.assertIn("$credentialEnvironmentName = 'LIF_DEEPSEEK_API_KEY'", source)
         self.assertIn("CredRead(target, CRED_TYPE_GENERIC", source)
         self.assertIn("CredFree(pointer)", source)
