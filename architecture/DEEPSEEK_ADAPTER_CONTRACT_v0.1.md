@@ -32,16 +32,24 @@ Anthropic 兼容入口会把未知模型名自动映射为 `deepseek-v4-flash`�
 
 ### 2.2 Thinking 与工具调用
 
-thinking 默认开启；官方只提供 `high`/`max` 两档有效 effort，兼容值可能被映射。为了保持 resolved configuration 可审计，profile 只接受显式 `high` 或 `max`。
+thinking 默认开启；官方提供 `low`/`high`/`max` 三档 effort（2026-08 初补齐；`medium`→`high`、`xhigh`→`max` 静默映射）。为了保持 resolved configuration 可审计，profile 只接受显式档位。
+
+**运行裁决（2026-08-07，FIX_PLAN D-6）**：orz 采用 `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + `max_tokens: 160_000`（三实例统一：主 agent + 两检索子代理）。160K 是总量（128K 思考 + 32K content 的期望分配；DeepSeek 无子预算参数，上限 384K）。实测校准（2026-08-07 live probe）：首个 reasoning delta ~559ms、content 首 delta ~30s（满负荷 thinking 下 content 迟到是常态，不是挂死）、每轮 `usage.completion_tokens_details.reasoning_tokens` 可得。例外（2026-08-07 审查 F-07）：`-p` plan gate 是快速预检轮（max_tokens=1024），经 `ModelRequest.thinking` 请求级覆盖**显式禁用** thinking——快决策轮不做深度推理，避免 1024 预算被思考吃光触发空 content 链 ×3。
 
 thinking 模式会忽略 `temperature`、`top_p`、`presence_penalty` 和 `frequency_penalty`，且不返回错误。本地 preflight 因此拒绝同时声明这些参数，避免把未执行的 sampling 设置写入 provenance。
 
-thinking 模式发生 tool call 时，assistant 的完整 `reasoning_content` 必须在后续请求中回传，否则 API 返回 400。adapter 必须：
+**空 content 重试链（D-6）**：满负荷 thinking 可能烧光预算留下空 content（finish=length、零输出）。区分两类空 content：
+
+1. 工具轮 `content==''` + 有 tool_calls = **合法**（官方样例），不重试；
+2. 最终轮 `content==''` + finish=length = **异常** → 字节级重试一次（同一请求；DeepSeek 要求带原 `reasoning_content` 回传）→ 仍空则 `thinking: disabled` 降级重试一次（等价 effort=none）→ 链终点仍空则显式失败（「预算耗尽零输出」，非静默）。
+
+thinking 模式发生 tool call 时，assistant 的完整 `reasoning_content` 必须在后续请求中回传，否则 API 返回 400（**空串回传 200、空对象/缺失 400**——回放保留 `""` 而非 null/缺省）。adapter 必须：
 
 1. 在 provider-private transcript 中保留原值；
 2. 在普通 journal 只记录存在性、长度与 digest，不记录原文；
 3. 在每次带 tool result 的后续请求前机械确认对应 assistant message 仍含 `reasoning_content`；
-4. 不把该字段当作 EvidenceKernel 的 reasoning precommitment。
+4. 不把该字段当作 EvidenceKernel 的 reasoning precommitment；
+5. `reasoning_content` 回放逻辑单点化（一个适配层）——DeepSeek 可能放宽回放要求（LangChain 2026-06 记录），未来反转时单点可控。
 
 ### 2.3 Anthropic 兼容层
 
