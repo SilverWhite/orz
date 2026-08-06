@@ -44,7 +44,7 @@
     "response_content_sha256": { "$ref": "#/$defs/sha256" },
     "private_reasoning_content_sha256": { "$ref": "#/$defs/sha256" },
     "credential_source": { "const": "windows-credential-manager-current-user" },
-    "credential_target": { "const": "FEP-Agent/DeepSeek" },
+    "credential_target": { "const": "orz-deepseek/agent" },
     "credential_value_recorded": { "const": false },
     "raw_response_recorded": { "const": false },
     "usage": {

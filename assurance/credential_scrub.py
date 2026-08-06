@@ -31,7 +31,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-from .deepseek_adapter import _read_windows_credential
+from .deepseek_adapter import DEFAULT_CREDENTIAL_TARGET, _read_windows_credential
 from .errors import AssuranceError
 from .utils import utc_now
 
@@ -113,7 +113,7 @@ class CredentialGuard:
 
     Usage::
 
-        with CredentialGuard("FEP-Agent/DeepSeek") as api_key:
+        with CredentialGuard(DEFAULT_CREDENTIAL_TARGET) as api_key:
             call_some_api(api_key)
         # api_key is scrubbed here (even if an exception occurred)
 

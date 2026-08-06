@@ -353,7 +353,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                     "--run-id", "RUN-GROK-REAL-ACP-CLI-TEST-001",
                     "--ask", "reply with a fixed marker",
                     "--real-deepseek",
-                    "--credential-target", "FEP-Agent/DeepSeek-Test",
+                    "--credential-target", "orz-deepseek/agent-Test",
                     "--json",
                 ]
             )
@@ -362,7 +362,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertTrue(receipt["valid"])
         self.assertNotIn("TEST-SECRET-DO-NOT-SERIALIZE", output.getvalue())
-        mock_read_credential.assert_called_once_with("FEP-Agent/DeepSeek-Test")
+        mock_read_credential.assert_called_once_with("orz-deepseek/agent-Test")
         request = mock_run.call_args.args[0]
         self.assertFalse(request.fake_provider)
         self.assertEqual(request.model_id, "lif-deepseek-v4-pro")
@@ -751,7 +751,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                     "--run-root", str(self.run_root),
                     "--ask", "Return exactly: GSA_ALPHA_REAL_CALL_OK",
                     "--run-id", "RUN-GSA-ALPHA-REAL-TEST-001",
-                    "--credential-target", "FEP-Agent/DeepSeek-Test",
+                    "--credential-target", "orz-deepseek/agent-Test",
                     "--json",
                 ]
             )
@@ -770,7 +770,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertTrue(receipt["checks"]["builtin_tools_enabled"])
         self.assertTrue(receipt["checks"]["retrieval_off"])
         self.assertTrue(receipt["checks"]["no_secret_serialized"])
-        mock_read_credential.assert_called_once_with("FEP-Agent/DeepSeek-Test")
+        mock_read_credential.assert_called_once_with("orz-deepseek/agent-Test")
         request = mock_run.call_args.args[0]
         self.assertFalse(request.fake_provider)
         self.assertEqual(request.model_id, "lif-deepseek-v4-pro")
@@ -848,7 +848,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                     "--transport", "direct-deepseek",
                     "--run-root", str(self.run_root),
                     "--ask", "Return exactly: GSA_ALPHA_REAL_CALL_OK",
-                    "--credential-target", "FEP-Agent/DeepSeek-Test",
+                    "--credential-target", "orz-deepseek/agent-Test",
                     "--json",
                 ]
         )
@@ -869,7 +869,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         mock_direct.assert_called_once()
         request = mock_direct.call_args.args[0]
         self.assertEqual(request.prompt_text, "Return exactly: GSA_ALPHA_REAL_CALL_OK")
-        self.assertEqual(request.credential_target, "FEP-Agent/DeepSeek-Test")
+        self.assertEqual(request.credential_target, "orz-deepseek/agent-Test")
         self.assertEqual(request.run_root, self.run_root / "grok-real-acp")
         self.assertEqual(mock_direct.call_args.kwargs["credential_reader"]("ignored"), "TEST-DIRECT-SECRET")
 
@@ -895,7 +895,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "--run-root", str(self.run_root),
                 "--ask", "Return marker",
                 "--run-id", "RUN-DEEPSEEK-DIRECT-CLI-TEST-001",
-                "--credential-target", "FEP-Agent/DeepSeek-Test",
+                "--credential-target", "orz-deepseek/agent-Test",
                 "--json",
             ]
         )
@@ -905,7 +905,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         mock_direct.assert_called_once_with(
             run_root=self.run_root,
             prompt_text="Return marker",
-            credential_target="FEP-Agent/DeepSeek-Test",
+            credential_target="orz-deepseek/agent-Test",
             run_id="RUN-DEEPSEEK-DIRECT-CLI-TEST-001",
             timeout_seconds=60,
         )
@@ -1099,7 +1099,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
                 "--real",
                 "--run", "Return marker",
                 "--run-root", str(self.run_root),
-                "--credential-target", "FEP-Agent/DeepSeek-Test",
+                "--credential-target", "orz-deepseek/agent-Test",
             ]
         )
 
@@ -1109,7 +1109,7 @@ class GsaCliDispatcherTests(unittest.TestCase):
         self.assertIn("deepseek", forwarded)
         self.assertIn("--real", forwarded)
         self.assertIn("--credential-target", forwarded)
-        self.assertIn("FEP-Agent/DeepSeek-Test", forwarded)
+        self.assertIn("orz-deepseek/agent-Test", forwarded)
 
     def test_tui_runtime_deepseek_requires_real(self) -> None:
         error_output = StringIO()

@@ -16,7 +16,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$credentialTarget = 'FEP-Agent/DeepSeek'
+$credentialTarget = 'orz-deepseek/agent'
 $credentialEnvironmentName = 'LIF_DEEPSEEK_API_KEY'
 $modelAlias = 'lif-deepseek-v4-pro'
 $modelName = 'deepseek-v4-pro'

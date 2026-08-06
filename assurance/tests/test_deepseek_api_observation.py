@@ -36,7 +36,7 @@ def _api_result() -> dict[str, object]:
         "response_content_sha256": sha256_bytes(public_text.encode("utf-8")),
         "private_reasoning_content_sha256": "a" * 64,
         "credential_source": "windows-credential-manager-current-user",
-        "credential_target": "FEP-Agent/DeepSeek",
+        "credential_target": "orz-deepseek/agent",
         "credential_value_recorded": False,
         "raw_response_recorded": False,
         "usage": {
@@ -141,7 +141,7 @@ class DeepSeekApiObservationTests(unittest.TestCase):
         source = LAUNCHER.read_text(encoding="utf-8")
         lowered = source.lower()
         self.assertIn("[ValidateSet('Plan', 'Execute')]", source)
-        self.assertIn("$credentialTarget = 'FEP-Agent/DeepSeek'", source)
+        self.assertIn("$credentialTarget = 'orz-deepseek/agent'", source)
         self.assertIn("$endpoint = 'https://api.deepseek.com/chat/completions'", source)
         self.assertIn("CredRead(target, CRED_TYPE_GENERIC", source)
         self.assertIn("CredFree(pointer)", source)

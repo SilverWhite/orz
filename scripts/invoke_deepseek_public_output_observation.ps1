@@ -14,7 +14,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$credentialTarget = 'FEP-Agent/DeepSeek'
+$credentialTarget = 'orz-deepseek/agent'
 $modelName = 'deepseek-v4-pro'
 $endpoint = 'https://api.deepseek.com/chat/completions'
 $marker = 'LIF_DEEPSEEK_PUBLIC_OUTPUT_OBSERVATION_OK'

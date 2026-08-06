@@ -176,7 +176,7 @@ class GrokTuiWiringTests(unittest.TestCase):
             run_root=str(self.run_root),
             run_id="RUN-DEEPSEEK-TUI-TEST-001",
             prompt_text="Return marker",
-            credential_target="FEP-Agent/DeepSeek-Test",
+            credential_target="orz-deepseek/agent-Test",
         )
 
         receipt = run_fn(lambda event: emitted.append(event))
@@ -189,7 +189,7 @@ class GrokTuiWiringTests(unittest.TestCase):
         mock_run.assert_called_once_with(
             run_root=self.run_root,
             prompt_text="Return marker",
-            credential_target="FEP-Agent/DeepSeek-Test",
+            credential_target="orz-deepseek/agent-Test",
             run_id="RUN-DEEPSEEK-TUI-TEST-001",
             timeout_seconds=60,
         )
@@ -292,14 +292,14 @@ class GrokTuiWiringTests(unittest.TestCase):
                             "--real",
                             "--run", "hello",
                             "--run-root", str(self.run_root),
-                            "--credential-target", "FEP-Agent/DeepSeek-Test",
+                            "--credential-target", "orz-deepseek/agent-Test",
                         ])
 
         self.assertEqual(exit_code, 0)
         build_run.assert_called_once_with(
             run_root=str(self.run_root),
             prompt_text="hello",
-            credential_target="FEP-Agent/DeepSeek-Test",
+            credential_target="orz-deepseek/agent-Test",
         )
         source_cls.assert_called_once_with(
             run_fn=run_fn,

@@ -29,7 +29,7 @@
       "required": ["provider", "target", "value_recorded"],
       "properties": {
         "provider": { "const": "windows-credential-manager-current-user" },
-        "target": { "const": "FEP-Agent/DeepSeek" },
+        "target": { "const": "orz-deepseek/agent" },
         "value_recorded": { "const": false }
       }
     },

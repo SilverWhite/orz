@@ -24,7 +24,7 @@ class DeepSeekRuntimeAdapterTests(unittest.TestCase):
 
     def test_direct_runtime_writes_receipt_and_normalized_events_without_secret(self) -> None:
         def credential_reader(target: str) -> str:
-            self.assertEqual(target, "FEP-Agent/DeepSeek-Test")
+            self.assertEqual(target, "orz-deepseek/agent-Test")
             return "TEST-DEEPSEEK-RUNTIME-SECRET"
 
         def api_caller(api_key: str, messages: list[dict[str, str]], **kwargs: object) -> dict:
@@ -50,7 +50,7 @@ class DeepSeekRuntimeAdapterTests(unittest.TestCase):
                 run_root=self.run_root,
                 run_id="RUN-DEEPSEEK-DIRECT-TEST-001",
                 prompt_text="Return marker",
-                credential_target="FEP-Agent/DeepSeek-Test",
+                credential_target="orz-deepseek/agent-Test",
             ),
             credential_reader=credential_reader,
             api_caller=api_caller,

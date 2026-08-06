@@ -1,6 +1,7 @@
 """Real DeepSeek adapter for the canonical guarded CLI.
 
-Reads the API key from Windows Credential Manager (target: FEP-Agent/DeepSeek),
+Reads the API key from Windows Credential Manager (target: orz-deepseek/agent,
+# registered in adr/ADR-0006-credential-target-registry.md),
 calls the DeepSeek API exactly once, and projects only public assistant output
 into the gate pipeline.  Never persists raw credential, raw response, or hidden
 reasoning text to disk.
@@ -20,7 +21,7 @@ from .errors import AssuranceError
 from .utils import canonical_bytes, sha256_bytes, utc_now
 
 DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
-DEFAULT_CREDENTIAL_TARGET = "FEP-Agent/DeepSeek"
+DEFAULT_CREDENTIAL_TARGET = "orz-deepseek/agent"
 DEFAULT_MODEL = "deepseek-v4-pro"
 
 

@@ -130,19 +130,19 @@ class CredentialGuardTests(unittest.TestCase):
     @patch("assurance.credential_scrub._read_windows_credential")
     def test_guard_reads_and_scrubs(self, mock_read: Mock) -> None:
         mock_read.return_value = "sk-test-key-12345678901234567890"
-        with CredentialGuard("FEP-Agent/DeepSeek") as key:
+        with CredentialGuard("orz-deepseek/agent") as key:
             self.assertEqual(key, "sk-test-key-12345678901234567890")
         # After exit, the returned string should be scrubbed (empty)
         audit = get_scrub_audit()
         self.assertEqual(len(audit), 1)
         self.assertTrue(audit[0]["scrub_succeeded"])
-        self.assertEqual(audit[0]["credential_target"], "FEP-Agent/DeepSeek")
+        self.assertEqual(audit[0]["credential_target"], "orz-deepseek/agent")
 
     @patch("assurance.credential_scrub._read_windows_credential")
     def test_guard_scrubs_on_exception(self, mock_read: Mock) -> None:
         mock_read.return_value = "sk-test-key-12345678901234567890"
         with self.assertRaises(ValueError):
-            with CredentialGuard("FEP-Agent/DeepSeek") as key:
+            with CredentialGuard("orz-deepseek/agent") as key:
                 self.assertTrue(len(key) > 0)
                 raise ValueError("simulated error")
         # Scrub audit should still be recorded
@@ -185,7 +185,7 @@ class CredentialGuardTests(unittest.TestCase):
     @patch("assurance.credential_scrub._read_windows_credential")
     def test_guard_exited_twice_is_idempotent(self, mock_read: Mock) -> None:
         mock_read.return_value = "sk-test-key-12345678901234567890"
-        guard = CredentialGuard("FEP-Agent/DeepSeek")
+        guard = CredentialGuard("orz-deepseek/agent")
         with guard:
             pass
         # Manually call __exit__ again — should be a no-op
@@ -764,7 +764,7 @@ class CredentialGuardAuditCompletenessTests(unittest.TestCase):
     @patch("assurance.credential_scrub._read_windows_credential")
     def test_audit_records_scrub_method(self, mock_read: Mock) -> None:
         mock_read.return_value = "sk-test-key-12345678901234567890"
-        with CredentialGuard("FEP-Agent/DeepSeek"):
+        with CredentialGuard("orz-deepseek/agent"):
             pass
         audit = get_scrub_audit()
         self.assertEqual(audit[0]["scrub_method"], "python-string-overwrite")
@@ -772,7 +772,7 @@ class CredentialGuardAuditCompletenessTests(unittest.TestCase):
     @patch("assurance.credential_scrub._read_windows_credential")
     def test_audit_records_timestamps(self, mock_read: Mock) -> None:
         mock_read.return_value = "sk-test-key-12345678901234567890"
-        with CredentialGuard("FEP-Agent/DeepSeek"):
+        with CredentialGuard("orz-deepseek/agent"):
             pass
         audit = get_scrub_audit()
         self.assertNotEqual(audit[0]["acquired_at"], "")

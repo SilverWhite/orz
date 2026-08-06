@@ -9,6 +9,8 @@ from typing import Any, Sequence
 import uuid
 
 from .canonical_cli import (
+    DEFAULT_CREDENTIAL_TARGET,
+
     run_canonical_guarded_cli,
     run_canonical_guarded_cli_real,
     verify_canonical_guarded_cli_run,
@@ -1591,7 +1593,7 @@ def _run_interactive(args: argparse.Namespace) -> int:
     fake_provider = bool(getattr(args, "fake_provider", False))
     auto_approve = bool(getattr(args, "auto_approve", False))
     acp_permission_mode = "auto_allow_once" if auto_approve else "interactive"
-    credential_target = getattr(args, "credential_target", None) or "FEP-Agent/DeepSeek"
+    credential_target = getattr(args, "credential_target", None) or DEFAULT_CREDENTIAL_TARGET
 
     # ── Real-provider setup (opt-in) ──────────────────────────────────
     provider_environment: dict[str, str] = {}
@@ -1780,7 +1782,7 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument("question", help="The question to ask (natural language).")
     ask.add_argument(
         "--credential-target",
-        default="FEP-Agent/DeepSeek",
+        default=DEFAULT_CREDENTIAL_TARGET,
         help="Windows Credential Manager target for the API key.",
     )
     ask.add_argument("--max-tokens", type=int, default=4096)
@@ -1834,7 +1836,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--credential-target",
-        default="FEP-Agent/DeepSeek",
+        default=DEFAULT_CREDENTIAL_TARGET,
         help="Windows Credential Manager target name for the DeepSeek API key.",
     )
     run.add_argument(
@@ -1979,7 +1981,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     grok_run.add_argument(
         "--credential-target",
-        default="FEP-Agent/DeepSeek",
+        default=DEFAULT_CREDENTIAL_TARGET,
         help="Windows Credential Manager target for --real-deepseek.",
     )
     grok_run.add_argument(
@@ -2034,7 +2036,7 @@ def _parser() -> argparse.ArgumentParser:
     deepseek_run.add_argument("--run-id")
     deepseek_run.add_argument(
         "--credential-target",
-        default="FEP-Agent/DeepSeek",
+        default=DEFAULT_CREDENTIAL_TARGET,
         help="Windows Credential Manager target name for the DeepSeek API key.",
     )
     deepseek_run.add_argument(
@@ -2144,7 +2146,7 @@ def _parser() -> argparse.ArgumentParser:
     alpha_real.add_argument("--run-id")
     alpha_real.add_argument(
         "--credential-target",
-        default="FEP-Agent/DeepSeek",
+        default=DEFAULT_CREDENTIAL_TARGET,
         help="Windows Credential Manager target containing the DeepSeek API key.",
     )
     alpha_real.add_argument(
@@ -2252,7 +2254,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     tui.add_argument(
         "--credential-target",
-        default="FEP-Agent/DeepSeek",
+        default=DEFAULT_CREDENTIAL_TARGET,
         help="Windows Credential Manager target name for the DeepSeek API key.",
     )
     tui.add_argument(
@@ -2306,7 +2308,7 @@ def _parser() -> argparse.ArgumentParser:
     chat.add_argument("--run-id")
     chat.add_argument(
         "--credential-target",
-        default="FEP-Agent/DeepSeek",
+        default=DEFAULT_CREDENTIAL_TARGET,
         help="Windows Credential Manager target for the DeepSeek API key.",
     )
     chat.add_argument(

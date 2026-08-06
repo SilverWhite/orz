@@ -446,7 +446,7 @@ class ExternalRetrievalDispatcherTests(unittest.TestCase):
         """Default credential target matches the registered target."""
         self.assertEqual(
             DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET,
-            "FEP-Agent/DeepSeek-Retrieval",
+            "orz-deepseek/1",
         )
 
     def test_result_is_schema_valid_with_search_results(self) -> None:

@@ -42,7 +42,7 @@ SUBAGENT_CAPABILITIES = [
 
 # Independent API key for internal project-document retrieval.
 # Stored in Windows Credential Manager under this target name.
-DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET = "deepseek-retrieval-subagent"
+DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET = "orz-deepseek/2"
 
 # ═══════════════════════════════════════════════════════════════════
 # Subagent Registry — canonical enumeration of all retrieval subagents
@@ -69,7 +69,7 @@ RETRIEVAL_SUBAGENT_REGISTRY = {
             "outbound network requests."
         ),
         "dispatch_fn_name": "dispatch_retrieval_subagent",
-        "credential_target_default": "deepseek-retrieval-subagent",
+        "credential_target_default": "orz-deepseek/2",
         "allowed_source_categories": [
             "documentation",
             "code_repository",
@@ -88,7 +88,7 @@ RETRIEVAL_SUBAGENT_REGISTRY = {
             "search and result-processing are separate, auditable steps."
         ),
         "dispatch_fn_name": "dispatch_external_retrieval_subagent",
-        "credential_target_default": "FEP-Agent/DeepSeek-Retrieval",
+        "credential_target_default": "orz-deepseek/1",
         "allowed_source_categories": [
             "academic_paper",
             "web_page",
@@ -1464,7 +1464,7 @@ def dispatch_retrieval_subagent_online(
     """Convenience wrapper: internal retrieval with the registered credential target.
 
     Uses ``DEFAULT_INTERNAL_RETRIEVAL_CREDENTIAL_TARGET``
-    (``deepseek-retrieval-subagent``) as the credential target, matching
+    (``orz-deepseek/2``) as the credential target, matching
     the Gap Register §8.1 registration.  This is the production entry
     point — it will attempt a real DeepSeek API call and fall back to
     offline mode if the credential is not configured.
@@ -1483,7 +1483,7 @@ def dispatch_retrieval_subagent_online(
 
 # ── external retrieval adapter ──
 
-DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET = "FEP-Agent/DeepSeek-Retrieval"
+DEFAULT_EXTERNAL_RETRIEVAL_CREDENTIAL_TARGET = "orz-deepseek/1"
 
 EXTERNAL_SOURCE_CATEGORIES: list[str] = [
     "academic_paper",
