@@ -20,6 +20,9 @@ pub struct ScriptedResponse {
     pub text: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: FinishReason,
+    /// Reasoning content (DeepSeek) — scriptable so tests can lock the
+    /// replay path without a real model.
+    pub reasoning_content: Option<String>,
 }
 
 impl ScriptedResponse {
@@ -29,6 +32,7 @@ impl ScriptedResponse {
             text: Some(text.into()),
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Stop,
+            reasoning_content: None,
         }
     }
 
@@ -38,7 +42,15 @@ impl ScriptedResponse {
             text: None,
             tool_calls,
             finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
         }
+    }
+
+    /// Attach reasoning content (the DeepSeek field replayed with the
+    /// assistant declaration).
+    pub fn with_reasoning(mut self, reasoning: impl Into<String>) -> Self {
+        self.reasoning_content = Some(reasoning.into());
+        self
     }
 }
 
@@ -107,6 +119,7 @@ impl ModelGateway for FakeProvider {
             text: next.text,
             tool_calls: next.tool_calls,
             finish_reason: next.finish_reason,
+            reasoning_content: next.reasoning_content,
         })
     }
 
@@ -127,6 +140,7 @@ impl ModelGateway for FakeProvider {
             text: next.text,
             tool_calls: next.tool_calls,
             finish_reason: next.finish_reason,
+            reasoning_content: next.reasoning_content,
         };
         // Split on char boundaries (CJK-safe) — concatenating the chunks must
         // reproduce the full text exactly (Python text_delta invariant).
@@ -167,6 +181,7 @@ mod tests {
                 content: "hello".to_string(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning_content: None,
             }],
             tools: Vec::new(),
             max_tokens: 128,

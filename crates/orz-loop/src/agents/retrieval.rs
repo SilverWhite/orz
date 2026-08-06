@@ -70,6 +70,7 @@ impl RetrievalSubagent {
                     content: block.to_string(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning_content: None,
                 }]
             })
             .unwrap_or_default();

@@ -354,6 +354,7 @@ impl AgentLoopController {
             content: prompt.to_string(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning_content: None,
         }];
         let mut tool_rounds = 0u32;
         let mut last_text: Option<String> = None;
@@ -511,6 +512,7 @@ impl AgentLoopController {
                         content: COUNTEREXAMPLE_GATE_BLOCK.to_string(),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
+                        reasoning_content: None,
                     });
                     counterexample_fired = true;
                     continue;
@@ -525,6 +527,7 @@ impl AgentLoopController {
                         content: text,
                         tool_call_id: None,
                         tool_calls: Vec::new(),
+                        reasoning_content: None,
                     });
                 }
                 last_text = response.text;
@@ -578,11 +581,15 @@ impl AgentLoopController {
             // the provider protocol requires each tool message's
             // `tool_call_id` to match a declaration in the history, and
             // DeepSeek rejects unmatched ids (2026-08-06 design review D2-1).
+            // The reasoning content rides the same declaration message —
+            // DeepSeek expects it replayed with the assistant turn
+            // (alpha-test 2026-08-06 closure).
             messages.push(Message {
                 role: Role::Assistant,
                 content: String::new(),
                 tool_call_id: None,
                 tool_calls: response.tool_calls.clone(),
+                reasoning_content: response.reasoning_content.clone(),
             });
             let mut assistant_parts: Vec<String> = Vec::new();
             for tc in &response.tool_calls {
@@ -651,6 +658,7 @@ impl AgentLoopController {
                     content: assistant_parts.join("\n"),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning_content: None,
                 });
             }
 
@@ -800,6 +808,7 @@ impl AgentLoopController {
             content: INFO_SUFFICIENCY_BLOCK.to_string(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning_content: None,
         });
         // Trigger-instant reset across all three instances (D5) — a counter
         // near its threshold must not re-fire on the next round.
@@ -938,6 +947,7 @@ impl AgentLoopController {
             // call_id travels from the model's request through the journal.
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
+            reasoning_content: None,
         });
         let _ = host;
         Ok(result)
@@ -1110,6 +1120,7 @@ impl AgentLoopController {
             content: result.output.clone(),
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
+            reasoning_content: None,
         });
         Ok(result)
     }
@@ -1474,6 +1485,52 @@ mod tests {
         assert_eq!(round2[2].role, Role::Tool);
         assert_eq!(round2[2].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(round2[3].role, Role::Assistant, "text summary kept");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn tool_round_replays_reasoning_content_on_declaration() {
+        // DeepSeek returns reasoning_content on every completion; the
+        // assistant declaration replayed before the tool result must carry it
+        // back, or the provider's multi-turn context is incomplete
+        // (alpha-test 2026-08-06 closure — live probe showed 318 chars even
+        // without a thinking option).
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "file contents".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-1")])
+                .with_reasoning("need to read the file first"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "读文件", "RUN-REASON", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "round 2 request exists: {received:?}");
+        let round2 = &received[1].messages;
+        // user + assistant declaration (with reasoning) + tool result + text.
+        assert_eq!(round2.len(), 4, "protocol shape: {round2:?}");
+        assert_eq!(round2[1].role, Role::Assistant);
+        assert_eq!(
+            round2[1].reasoning_content.as_deref(),
+            Some("need to read the file first"),
+            "reasoning rides the declaration message"
+        );
+        assert_eq!(round2[1].tool_calls.len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

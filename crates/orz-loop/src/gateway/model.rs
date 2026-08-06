@@ -37,12 +37,18 @@ pub enum Role {
 /// call declarations must be replayed before their tool results, or the
 /// provider rejects the round as an unmatched `tool_call_id`
 /// (2026-08-06 design review D2-1).
+/// `reasoning_content` is only set on `Role::Assistant` messages — DeepSeek
+/// returns it on every completion and expects it replayed on multi-turn
+/// conversations (alpha-test 2026-08-06: live probe showed 318 chars even
+/// without a thinking option); the transport echoes it back on the
+/// declaration message.
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: Role,
     pub content: String,
     pub tool_call_id: Option<String>,
     pub tool_calls: Vec<ToolCall>,
+    pub reasoning_content: Option<String>,
 }
 
 /// A tool call requested by the model.
@@ -76,6 +82,10 @@ pub struct ModelResponse {
     pub text: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: FinishReason,
+    /// Reasoning content (DeepSeek) — echoed on the assistant message the
+    /// controller replays before tool results, so the next request carries
+    /// the full assistant turn (alpha-test 2026-08-06 closure).
+    pub reasoning_content: Option<String>,
 }
 
 impl ModelResponse {
@@ -84,6 +94,7 @@ impl ModelResponse {
             text: Some(text.into()),
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Stop,
+            reasoning_content: None,
         }
     }
 
@@ -92,6 +103,7 @@ impl ModelResponse {
             text: None,
             tool_calls,
             finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
         }
     }
 }

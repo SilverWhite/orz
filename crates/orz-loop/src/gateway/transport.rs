@@ -207,6 +207,10 @@ impl DeepSeekTransport {
             text,
             tool_calls,
             finish_reason: map_finish_reason(choice.finish_reason),
+            // DeepSeek returns reasoning_content on every completion (even
+            // without a thinking option — live probe 2026-08-06); it is
+            // preserved so the controller can replay it on the next request.
+            reasoning_content: message.reasoning_content.clone(),
         })
     }
 
@@ -291,6 +295,10 @@ fn map_message(message: &super::model::Message) -> ChatCompletionRequestMessage 
             };
             ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
                 content,
+                // DeepSeek expects the assistant's reasoning content replayed
+                // on multi-turn conversations (alpha-test 2026-08-06 closure;
+                // fork field our-forks addition).
+                reasoning_content: message.reasoning_content.clone(),
                 name: None,
                 refusal: None,
                 audio: None,
@@ -360,6 +368,10 @@ impl ModelGateway for DeepSeekTransport {
             .map_err(|e| self.map_error(e))?;
 
         let mut text_parts: Vec<String> = Vec::new();
+        // DeepSeek interleaves reasoning_content deltas with content deltas;
+        // accumulated separately, then joined verbatim onto the response
+        // (alpha-test 2026-08-06 closure).
+        let mut reasoning_parts: Vec<String> = Vec::new();
         // Ordered by first-seen chunk index; the provider sends each call's
         // deltas in order, so Vec append + final sort keeps call order stable.
         let mut tool_calls: Vec<(u32, StreamToolCall)> = Vec::new();
@@ -395,6 +407,7 @@ impl ModelGateway for DeepSeekTransport {
                 apply_delta(
                     &choice.delta,
                     &mut text_parts,
+                    &mut reasoning_parts,
                     &mut tool_calls,
                     &mut |text| on_chunk(text),
                 );
@@ -430,10 +443,17 @@ impl ModelGateway for DeepSeekTransport {
             })
             .collect::<Vec<_>>();
 
+        let reasoning_content = if reasoning_parts.is_empty() {
+            None
+        } else {
+            Some(reasoning_parts.concat())
+        };
+
         Ok(ModelResponse {
             text,
             tool_calls,
             finish_reason,
+            reasoning_content,
         })
     }
 }
@@ -441,6 +461,7 @@ impl ModelGateway for DeepSeekTransport {
 fn apply_delta(
     delta: &ChatCompletionStreamResponseDelta,
     text_parts: &mut Vec<String>,
+    reasoning_parts: &mut Vec<String>,
     tool_calls: &mut Vec<(u32, StreamToolCall)>,
     on_chunk: &mut dyn FnMut(&str),
 ) {
@@ -449,6 +470,13 @@ fn apply_delta(
     {
         text_parts.push(content.clone());
         on_chunk(content);
+    }
+    if let Some(reasoning) = &delta.reasoning_content
+        && !reasoning.is_empty()
+    {
+        // Reasoning deltas are joined verbatim; they are never delivered as
+        // live text deltas (TUI shows answers, not chains of thought).
+        reasoning_parts.push(reasoning.clone());
     }
     if let Some(chunks) = &delta.tool_calls {
         for tc in chunks {
@@ -502,6 +530,7 @@ mod tests {
                 content: "hi".to_string(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning_content: None,
             }],
             tools: Vec::new(),
             max_tokens: 512,
@@ -516,12 +545,40 @@ mod tests {
         // IP1: the serialized request surface must never contain a thinking
         // option nor any reasoning knob the fork exposes (reasoning_effort
         // stays None via `..Default::default()` — asserted so a future
-        // mistake cannot silently enable it).
+        // mistake cannot silently enable it). `reasoning_content` is a
+        // CONTENT field (replay of what the model already produced), not a
+        // knob — it stays legal; request() above carries None and must
+        // therefore be absent from the wire.
         let s = json.to_string();
         assert!(!s.contains("thinking"), "{s}");
-        assert!(!s.contains("reasoning"), "{s}");
+        assert!(!s.contains("reasoning_effort"), "{s}");
+        assert!(!s.contains("reasoning_content"), "{s}");
         assert_eq!(json["model"], "deepseek-v4-flash");
         assert!(!s.contains("\"stream\":"));
+    }
+
+    #[test]
+    fn build_request_replays_assistant_reasoning_content() {
+        // DeepSeek returns reasoning_content on every completion and expects
+        // it replayed with the assistant turn (alpha-test 2026-08-06 closure);
+        // the declaration message carries it verbatim on the next request.
+        let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
+        let req = t.build_request(&ModelRequest {
+            system: String::new(),
+            messages: vec![Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: Some("thinking-about-the-tool".to_string()),
+            }],
+            tools: Vec::new(),
+            max_tokens: 512,
+        });
+        let json = serde_json::to_value(&req).unwrap();
+        let messages = json["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["reasoning_content"], "thinking-about-the-tool");
     }
 
     #[test]
@@ -550,12 +607,14 @@ mod tests {
                     content: "read it".to_string(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning_content: None,
                 },
                 Message {
                     role: Role::Tool,
                     content: "ok".to_string(),
                     tool_call_id: Some("call-9".to_string()),
                     tool_calls: Vec::new(),
+                    reasoning_content: None,
                 },
             ],
             tools: Vec::new(),
@@ -584,6 +643,7 @@ mod tests {
                     content: "list files".to_string(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning_content: None,
                 },
                 Message {
                     role: Role::Assistant,
@@ -594,12 +654,14 @@ mod tests {
                         arguments: serde_json::json!({"path": "a.txt"}),
                         call_id: "call-1".to_string(),
                     }],
+                    reasoning_content: None,
                 },
                 Message {
                     role: Role::Tool,
                     content: "ok".to_string(),
                     tool_call_id: Some("call-1".to_string()),
                     tool_calls: Vec::new(),
+                    reasoning_content: None,
                 },
             ],
             tools: Vec::new(),
@@ -673,6 +735,38 @@ mod tests {
             serde_json::json!({"path": "a.txt"})
         );
         assert_eq!(r.finish_reason, OurFinishReason::ToolCalls);
+        // reasoning_content absent → None (absent-optional, not empty string).
+        assert_eq!(r.reasoning_content, None);
+    }
+
+    #[test]
+    fn from_response_extracts_reasoning_content() {
+        // DeepSeek returns reasoning_content on every completion even without
+        // a thinking option (live probe 2026-08-06 — 318 chars on a plain
+        // prompt); the transport must preserve it for replay.
+        let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
+        let body: CreateChatCompletionResponse = serde_json::from_value(serde_json::json!({
+            "id": "x",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "deepseek-v4-flash",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "done",
+                    "reasoning_content": "need to read the file first"
+                },
+                "finish_reason": "stop"
+            }]
+        }))
+        .unwrap();
+        let r = t.from_response(&body).unwrap();
+        assert_eq!(
+            r.reasoning_content.as_deref(),
+            Some("need to read the file first")
+        );
+        assert_eq!(r.text.as_deref(), Some("done"));
     }
 
     #[test]
@@ -694,58 +788,72 @@ mod tests {
     #[allow(deprecated)] // full struct construction: `function_call` is deprecated-but-required
     fn stream_aggregation_concatenates_chunks_and_tool_calls() {
         // Two text chunks + a two-chunk tool call, out of order by index
-        // (chunk index 1 arrives before chunk index 0's continuation).
-        let delta =
-            |content: Option<&str>, tool_calls: Option<Value>| ChatCompletionStreamResponseDelta {
+        // (chunk index 1 arrives before chunk index 0's continuation), plus
+        // reasoning deltas interleaved with content (DeepSeek shape).
+        let delta = |content: Option<&str>, reasoning: Option<&str>, tool_calls: Option<Value>| {
+            ChatCompletionStreamResponseDelta {
                 content: content.map(|s| s.to_string()),
+                reasoning_content: reasoning.map(|s| s.to_string()),
                 function_call: None,
                 tool_calls: tool_calls.map(|v| serde_json::from_value(v).unwrap()),
                 role: None,
                 refusal: None,
-            };
+            }
+        };
         let mut text_parts = Vec::new();
+        let mut reasoning_parts: Vec<String> = Vec::new();
         let mut tool_calls: Vec<(u32, StreamToolCall)> = Vec::new();
         let mut chunks = Vec::new();
         let mut emit = |c: &str| chunks.push(c.to_string());
 
         apply_delta(
-            &delta(Some("Hel"), None),
+            &delta(Some("Hel"), Some("think-"), None),
             &mut text_parts,
+            &mut reasoning_parts,
             &mut tool_calls,
             &mut emit,
         );
         apply_delta(
             &delta(
                 None,
+                None,
                 Some(serde_json::json!([{"index": 1, "id": "call-2",
                     "function": {"name": "grep", "arguments": "{\"path\":"}}])),
             ),
             &mut text_parts,
+            &mut reasoning_parts,
             &mut tool_calls,
             &mut emit,
         );
         apply_delta(
             &delta(
                 Some("lo!"),
+                Some("ing-about-the-tool"),
                 Some(serde_json::json!([{"index": 0, "id": "call-1",
                     "function": {"name": "read_file", "arguments": "{\"path\":\"a.txt\"}"}}])),
             ),
             &mut text_parts,
+            &mut reasoning_parts,
             &mut tool_calls,
             &mut emit,
         );
         apply_delta(
             &delta(
                 None,
+                None,
                 Some(serde_json::json!([{"index": 1, "function": {"arguments": "\"b.txt\"}"}}])),
             ),
             &mut text_parts,
+            &mut reasoning_parts,
             &mut tool_calls,
             &mut emit,
         );
 
         assert_eq!(text_parts, vec!["Hel", "lo!"]);
         assert_eq!(chunks, vec!["Hel", "lo!"]);
+        // Reasoning deltas accumulate verbatim — never delivered as live text
+        // deltas (TUI shows answers, not chains of thought).
+        assert_eq!(reasoning_parts, vec!["think-", "ing-about-the-tool"]);
         tool_calls.sort_by_key(|(index, _)| *index);
         assert_eq!(tool_calls.len(), 2);
         assert_eq!(tool_calls[0].1.name, "read_file");
@@ -1148,6 +1256,7 @@ mod tests {
                     content: "ping".to_string(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning_content: None,
                 }],
                 tools: Vec::new(),
                 max_tokens: 32,
