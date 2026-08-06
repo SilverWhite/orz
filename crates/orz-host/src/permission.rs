@@ -21,7 +21,6 @@ use std::time::Duration;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
-use orz_assurance::journal::JournalRecorder;
 use orz_loop::host::{PermitDecision, PermitError, RiskClass};
 use orz_workspace::permission::{
     spawn_permission_manager_with_hub, AccessKind, ClientType, Decision, PermissionHandle,
@@ -43,7 +42,6 @@ pub const PERMISSION_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
 /// Grok permission manager wrapped for the LoopHost contract.
 pub struct PermissionBridge {
     handle: PermissionHandle,
-    journal: JournalRecorder,
     /// Session working directory — the scope Read auto-allow is confined to.
     cwd: orz_paths::AbsPathBuf,
 }
@@ -61,9 +59,8 @@ impl PermissionBridge {
         session_id: &str,
         gateway: Option<AcpAgentGatewaySender>,
         cwd: &std::path::Path,
-        journal: JournalRecorder,
     ) -> Result<Self, String> {
-        Self::spawn_with_hub(session_id, gateway, None, cwd, journal)
+        Self::spawn_with_hub(session_id, gateway, None, cwd)
     }
 
     /// Variant that threads an interactive permission transport (`hub`).
@@ -79,7 +76,6 @@ impl PermissionBridge {
         gateway: Option<AcpAgentGatewaySender>,
         hub: Option<Arc<dyn PermissionHookTransport>>,
         cwd: &std::path::Path,
-        journal: JournalRecorder,
     ) -> Result<Self, String> {
         let gateway = gateway.unwrap_or_else(dead_gateway);
         let abs_cwd = orz_paths::AbsPathBuf::new(cwd.to_path_buf())
@@ -99,7 +95,7 @@ impl PermissionBridge {
             false,      // remember_tool_approvals
             hub,        // interactive prompter — codex app-server (slice #12)
         );
-        Ok(Self { handle, journal, cwd: abs_cwd })
+        Ok(Self { handle, cwd: abs_cwd })
     }
 
     /// Request permission for a tool call (LoopHost `request_permission`).
@@ -168,7 +164,7 @@ impl PermissionBridge {
         } else {
             normalize_lexical(&self.cwd.join(path).to_path_buf())
         };
-        let canonical = std::fs::canonicalize(&resolved).unwrap_or(resolved);
+        let canonical = dunce::canonicalize(&resolved).unwrap_or(resolved);
         path_under(self.cwd.as_path(), &canonical)
             && !path_under(&self.cwd.join(".gsa").to_path_buf(), &canonical)
     }
@@ -206,10 +202,10 @@ fn path_under(base: &Path, path: &Path) -> bool {
         && base_parts.iter().zip(&path_parts).all(|(a, b)| a == b)
 }
 
-/// `std::fs::canonicalize` on Windows returns `\\?\`-prefixed (verbatim)
-/// extended-length paths — strip that prefix so a canonicalized target
-/// compares against the plain session cwd. `\\?\UNC\server\share` maps back
-/// to `\\server\share`.
+/// `dunce::canonicalize` keeps the `\\?\`-prefixed (verbatim) extended form
+/// for paths it cannot safely simplify (>260 chars, reserved device names) —
+/// strip that prefix so such a canonicalized target compares against the
+/// plain session cwd. `\\?\UNC\server\share` maps back to `\\server\share`.
 fn strip_verbatim_prefix(p: &Path) -> PathBuf {
     #[cfg(windows)]
     {
@@ -327,8 +323,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let dir = test_dir();
-                let journal = JournalRecorder::new(dir.join("j"));
-                let bridge = PermissionBridge::spawn("sess-test", None, &dir, journal).unwrap();
+                let bridge = PermissionBridge::spawn("sess-test", None, &dir).unwrap();
                 f(bridge).await
             })
             .await
@@ -423,10 +418,8 @@ mod tests {
     /// Bridge-scope unit test: build the bridge over a real temp cwd and
     /// check `access_in_scope` directly (no manager actor involved).
     fn bridge_over(dir: &std::path::Path) -> PermissionBridge {
-        let journal = JournalRecorder::new(dir.join("j"));
         PermissionBridge {
             handle: PermissionHandle::allow_all(),
-            journal,
             cwd: orz_paths::AbsPathBuf::new(dir.to_path_buf()).unwrap(),
         }
     }

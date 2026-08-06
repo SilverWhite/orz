@@ -9,12 +9,8 @@ mod flags;
 pub use flags::*;
 mod memory;
 pub use memory::*;
-mod mcp;
-pub use mcp::*;
-mod permission;
-pub use permission::*;
-mod pool;
-pub use pool::*;
+// Dead modules cut in fusion cleanup (Slice #13): `mcp`/`permission`/`pool` —
+// zero references workspace-wide; only re-exported here.
 use serde::{Deserialize, Serialize};
 use orz_announcements::RemoteAnnouncement;
 /// A remote `campaigns[]` entry: an `id` gate plus a full-power

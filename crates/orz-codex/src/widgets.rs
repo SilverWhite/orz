@@ -337,7 +337,7 @@ mod tests {
         let lines: Vec<&str> = rendered.lines().collect();
         let user_line = lines.iter().find(|l| l.contains("右对齐的我")).expect("user message");
         assert!(
-            user_line.trim_end().chars().last().unwrap() == '我',
+            user_line.trim_end().ends_with('\u{6211}'),
             "user line flush right: {user_line:?}"
         );
         let agent_line = lines.iter().find(|l| l.contains("左对齐的它")).expect("agent message");

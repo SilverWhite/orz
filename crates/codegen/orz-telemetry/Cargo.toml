@@ -26,9 +26,6 @@ tracing-subscriber = { workspace = true, features = [
     "time",
 ] }
 chrono = { workspace = true }
-git2 = { version = "0.20", default-features = false, features = [
-    "vendored-libgit2",
-] }
 reqwest = { workspace = true }
 url = { workspace = true }
 orz-env = { workspace = true }
@@ -37,16 +34,6 @@ xai-mixpanel = { workspace = true }
 orz-config = { workspace = true }
 xai-token-estimation = { workspace = true }
 dirs = { workspace = true }
-sentry = { version = "0.42.0", default-features = false, features = [
-    "panic",
-    "anyhow",
-    "tracing",
-    "backtrace",
-    "contexts",
-    "reqwest",
-    "rustls",
-    "debug-images",
-] }
 # Single cross-edge: `events::ToolCallCompleted.outcome` reuses
 # `xai_file_utils::events::types::ToolOutcome` so the local event log and
 # the product telemetry event share the same enum surface. Semantically this enum
@@ -57,7 +44,6 @@ xai-file-utils = { path = "../xai-file-utils" }
 # mapping lives next to the trace-upload lifecycle events it labels.
 whoami = { workspace = true }
 uuid = { workspace = true, features = ["v5", "v7"] }
-obfstr = { workspace = true, optional = true }
 mid = "4.0.0"
 tokio = { workspace = true, features = ["macros", "sync", "rt"] }
 parking_lot = { workspace = true }

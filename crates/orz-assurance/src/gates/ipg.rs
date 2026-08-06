@@ -16,8 +16,6 @@ use crate::GateDecision;
 
 /// Instruction source type — matches Python `ALL_SOURCE_TYPES`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum SourceType {
     Platform,
     User,
@@ -46,8 +44,6 @@ impl SourceType {
 
 /// Workspace trust observation state (Python `observed_trusted` / `not_observed`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum WorkspaceTrust {
     ObservedTrusted,
     NotObserved,
@@ -55,8 +51,6 @@ pub enum WorkspaceTrust {
 
 /// Instruction kind — data-only sources may not issue user/system prompts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum InstructionKind {
     UserPrompt,
     SystemPrompt,
@@ -65,8 +59,6 @@ pub enum InstructionKind {
 
 /// Severity of an injection pattern hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum Severity {
     Block,
     Defer,

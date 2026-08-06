@@ -25,6 +25,8 @@ xai-tool-runtime = { path = "../common/xai-tool-runtime" }
 
 # Runtime
 tokio = { workspace = true, features = ["full"] }
+# Path canonicalization without Windows `\\?\` verbatim prefixes (clippy.toml ban).
+dunce = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

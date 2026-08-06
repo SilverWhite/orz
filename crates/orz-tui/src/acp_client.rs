@@ -89,6 +89,143 @@ impl acp::Client for TuiClientHandler {
     }
 }
 
+/// The wired client: connection + message channel + session state.
+pub struct InProcessClient {
+    pub conn: Arc<acp::ClientSideConnection>,
+    pub msg_rx: mpsc::UnboundedReceiver<ClientMsg>,
+    msg_tx: mpsc::UnboundedSender<ClientMsg>,
+    pub session_id: Option<String>,
+    pub prompt_count: u32,
+}
+
+/// Wire the TUI client to the in-process AcpServer and spawn the three
+/// driver tasks (client IO, agent IO, outbound gateway). Must run inside a
+/// LocalSet (`spawn_local`).
+pub fn connect_inprocess(server: Arc<AcpServer>, policy: TrustPolicy) -> InProcessClient {
+    // Crossed duplex pairs: (client→agent) and (agent→client).
+    let (client_write, agent_read) = tokio::io::duplex(1 << 16);
+    let (agent_write, client_read) = tokio::io::duplex(1 << 16);
+
+    let (msg_tx, msg_rx) = mpsc::unbounded_channel();
+
+    // Client side — the TUI.
+    let handler = TuiClientHandler { msg_tx: msg_tx.clone() };
+    let (conn, client_io) = acp::ClientSideConnection::new(
+        handler,
+        client_write.compat_write(),
+        client_read.compat(),
+        |fut| {
+            tokio::task::spawn_local(fut);
+        },
+    );
+
+    // Agent side — reuses the host's stdio handler over the duplex.
+    let agent_handler = StdioAgentHandler::with_trust_policy(server.clone(), policy);
+    let (agent_conn, agent_io) = acp::AgentSideConnection::new(
+        agent_handler,
+        agent_write.compat_write(),
+        agent_read.compat(),
+        |fut| {
+            tokio::task::spawn_local(fut);
+        },
+    );
+
+    // Outbound gateway — permission prompts travel this path.
+    let (sender, receiver) = acp_gateway::<acp::AgentSide, _>(agent_conn);
+    server.set_gateway(sender);
+
+    tokio::task::spawn_local(client_io);
+    tokio::task::spawn_local(agent_io);
+    tokio::task::spawn_local(receiver.run());
+
+    InProcessClient {
+        conn: Arc::new(conn),
+        msg_rx,
+        msg_tx,
+        session_id: None,
+        prompt_count: 0,
+    }
+}
+
+impl InProcessClient {
+    /// initialize + session/new; returns the agent-generated session id.
+    pub async fn start_session(&mut self, cwd: PathBuf) -> acp::Result<String> {
+        let _init = self
+            .conn
+            .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::LATEST))
+            .await?;
+        let ns = self
+            .conn
+            .new_session(acp::NewSessionRequest::new(cwd))
+            .await?;
+        let session_id = ns.session_id.0.to_string();
+        self.session_id = Some(session_id.clone());
+        self.prompt_count = 0;
+        Ok(session_id)
+    }
+
+    /// The journal path the host will write for the NEXT prompt
+    /// (`{cwd}/.gsa/runs/RUN-{session8}-{n}/events.jsonl` — run-id scheme
+    /// from acp_server.rs `handle_session_prompt`).
+    pub fn run_dir_for_next_prompt(&self, cwd: &Path) -> Option<PathBuf> {
+        let session_id = self.session_id.as_ref()?;
+        let first8: String = session_id.chars().take(8).collect();
+        let n = self.prompt_count;
+        Some(
+            cwd.join(".gsa")
+                .join("runs")
+                .join(format!("RUN-{first8}-{n}"))
+                .join("events.jsonl"),
+        )
+    }
+
+    /// Send one prompt and await the full run (blocks until the turn ends —
+    /// callers spawn this as a task; live rendering comes from the tail).
+    pub async fn prompt(&self, text: &str) -> acp::Result<acp::PromptResponse> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or_else(|| acp::Error::new(acp::ErrorCode::InternalError.into(), "no session started"))?;
+        self.conn
+            .prompt(acp::PromptRequest::new(
+                session_id,
+                vec![acp::ContentBlock::Text(acp::TextContent::new(text))],
+            ))
+            .await
+    }
+
+    /// Send the ACP `session/cancel` notification (Phase 3 slice #7). The
+    /// host cancels the in-flight run cooperatively; idle or already-finished
+    /// sessions make this a benign no-op.
+    pub async fn request_cancel(&self) {
+        let Some(session_id) = self.session_id.clone() else {
+            return;
+        };
+        let _ = self
+            .conn
+            .cancel(acp::CancelNotification::new(session_id))
+            .await;
+    }
+
+    /// Spawn the prompt as a local task; reports completion on the channel.
+    ///
+    /// `seq` stamps the completion with the caller's prompt counter — the
+    /// generation guard against stale completions after a cancel.
+    pub fn spawn_prompt(&self, session_id: String, text: String, seq: u32) {
+        let conn = self.conn.clone();
+        let msg_tx = self.msg_tx.clone();
+        tokio::task::spawn_local(async move {
+            let result = conn
+                .prompt(acp::PromptRequest::new(
+                    session_id,
+                    vec![acp::ContentBlock::Text(acp::TextContent::new(&text))],
+                ))
+                .await;
+            let _ = msg_tx.send(ClientMsg::PromptCompleted { seq, result });
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,10 +331,7 @@ mod tests {
 
                 // Await the run completion.
                 let completed = loop {
-                    match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result, .. } => break result,
-                        _ => {}
-                    }
+                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");
 
@@ -354,10 +488,7 @@ mod tests {
                 let seq = client.prompt_count;
                 client.spawn_prompt(session_id.clone(), "问题一".into(), seq);
                 let done = loop {
-                    match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result, .. } => break result,
-                        _ => {}
-                    }
+                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
                 };
                 assert!(done.is_ok(), "prompt 1 failed: {done:?}");
 
@@ -367,10 +498,7 @@ mod tests {
                 let seq = client.prompt_count;
                 client.spawn_prompt(session_id, "问题二".into(), seq);
                 let done = loop {
-                    match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result, .. } => break result,
-                        _ => {}
-                    }
+                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
                 };
                 assert!(done.is_ok(), "prompt 2 failed: {done:?}");
 
@@ -408,10 +536,7 @@ mod tests {
                     .unwrap();
 
                 let completed = loop {
-                    match client.msg_rx.recv().await.unwrap() {
-                        ClientMsg::PromptCompleted { result, .. } => break result,
-                        _ => {}
-                    }
+                    if let ClientMsg::PromptCompleted { result, .. } = client.msg_rx.recv().await.unwrap() { break result }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");
 
@@ -582,142 +707,5 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await;
-    }
-}
-
-/// The wired client: connection + message channel + session state.
-pub struct InProcessClient {
-    pub conn: Arc<acp::ClientSideConnection>,
-    pub msg_rx: mpsc::UnboundedReceiver<ClientMsg>,
-    msg_tx: mpsc::UnboundedSender<ClientMsg>,
-    pub session_id: Option<String>,
-    pub prompt_count: u32,
-}
-
-/// Wire the TUI client to the in-process AcpServer and spawn the three
-/// driver tasks (client IO, agent IO, outbound gateway). Must run inside a
-/// LocalSet (`spawn_local`).
-pub fn connect_inprocess(server: Arc<AcpServer>, policy: TrustPolicy) -> InProcessClient {
-    // Crossed duplex pairs: (client→agent) and (agent→client).
-    let (client_write, agent_read) = tokio::io::duplex(1 << 16);
-    let (agent_write, client_read) = tokio::io::duplex(1 << 16);
-
-    let (msg_tx, msg_rx) = mpsc::unbounded_channel();
-
-    // Client side — the TUI.
-    let handler = TuiClientHandler { msg_tx: msg_tx.clone() };
-    let (conn, client_io) = acp::ClientSideConnection::new(
-        handler,
-        client_write.compat_write(),
-        client_read.compat(),
-        |fut| {
-            tokio::task::spawn_local(fut);
-        },
-    );
-
-    // Agent side — reuses the host's stdio handler over the duplex.
-    let agent_handler = StdioAgentHandler::with_trust_policy(server.clone(), policy);
-    let (agent_conn, agent_io) = acp::AgentSideConnection::new(
-        agent_handler,
-        agent_write.compat_write(),
-        agent_read.compat(),
-        |fut| {
-            tokio::task::spawn_local(fut);
-        },
-    );
-
-    // Outbound gateway — permission prompts travel this path.
-    let (sender, receiver) = acp_gateway::<acp::AgentSide, _>(agent_conn);
-    server.set_gateway(sender);
-
-    tokio::task::spawn_local(client_io);
-    tokio::task::spawn_local(agent_io);
-    tokio::task::spawn_local(receiver.run());
-
-    InProcessClient {
-        conn: Arc::new(conn),
-        msg_rx,
-        msg_tx,
-        session_id: None,
-        prompt_count: 0,
-    }
-}
-
-impl InProcessClient {
-    /// initialize + session/new; returns the agent-generated session id.
-    pub async fn start_session(&mut self, cwd: PathBuf) -> acp::Result<String> {
-        let _init = self
-            .conn
-            .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::LATEST))
-            .await?;
-        let ns = self
-            .conn
-            .new_session(acp::NewSessionRequest::new(cwd))
-            .await?;
-        let session_id = ns.session_id.0.to_string();
-        self.session_id = Some(session_id.clone());
-        self.prompt_count = 0;
-        Ok(session_id)
-    }
-
-    /// The journal path the host will write for the NEXT prompt
-    /// (`{cwd}/.gsa/runs/RUN-{session8}-{n}/events.jsonl` — run-id scheme
-    /// from acp_server.rs `handle_session_prompt`).
-    pub fn run_dir_for_next_prompt(&self, cwd: &Path) -> Option<PathBuf> {
-        let session_id = self.session_id.as_ref()?;
-        let first8: String = session_id.chars().take(8).collect();
-        let n = self.prompt_count;
-        Some(
-            cwd.join(".gsa")
-                .join("runs")
-                .join(format!("RUN-{first8}-{n}"))
-                .join("events.jsonl"),
-        )
-    }
-
-    /// Send one prompt and await the full run (blocks until the turn ends —
-    /// callers spawn this as a task; live rendering comes from the tail).
-    pub async fn prompt(&self, text: &str) -> acp::Result<acp::PromptResponse> {
-        let session_id = self
-            .session_id
-            .clone()
-            .ok_or_else(|| acp::Error::new(acp::ErrorCode::InternalError.into(), "no session started"))?;
-        self.conn
-            .prompt(acp::PromptRequest::new(
-                session_id,
-                vec![acp::ContentBlock::Text(acp::TextContent::new(text))],
-            ))
-            .await
-    }
-
-    /// Send the ACP `session/cancel` notification (Phase 3 slice #7). The
-    /// host cancels the in-flight run cooperatively; idle or already-finished
-    /// sessions make this a benign no-op.
-    pub async fn request_cancel(&self) {
-        let Some(session_id) = self.session_id.clone() else {
-            return;
-        };
-        let _ = self
-            .conn
-            .cancel(acp::CancelNotification::new(session_id))
-            .await;
-    }
-
-    /// Spawn the prompt as a local task; reports completion on the channel.
-    ///
-    /// `seq` stamps the completion with the caller's prompt counter — the
-    /// generation guard against stale completions after a cancel.
-    pub fn spawn_prompt(&self, session_id: String, text: String, seq: u32) {
-        let conn = self.conn.clone();
-        let msg_tx = self.msg_tx.clone();
-        tokio::task::spawn_local(async move {
-            let result = conn
-                .prompt(acp::PromptRequest::new(
-                    session_id,
-                    vec![acp::ContentBlock::Text(acp::TextContent::new(&text))],
-                ))
-                .await;
-            let _ = msg_tx.send(ClientMsg::PromptCompleted { seq, result });
-        });
     }
 }

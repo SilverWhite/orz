@@ -223,11 +223,23 @@ pub unsafe fn install_namespace_lockdown_filter() -> std::io::Result<()> {
     ns_lockdown::install(&mut filter)
 }
 
+/// No-op stub on non-Linux: no filter is installed.
+///
+/// # Safety
+/// Safe to call with any arguments — the stub performs no work and holds no
+/// unsafe state. The Linux implementation (seccomp/BPF install) carries the
+/// real contract; this build simply has no network filter to install.
 #[cfg(not(target_os = "linux"))]
 pub unsafe fn install_child_network_filter() -> std::io::Result<()> {
     Ok(())
 }
 
+/// No-op stub on non-Linux: no namespace lockdown is applied.
+///
+/// # Safety
+/// Safe to call with any arguments — the stub performs no work and holds no
+/// unsafe state. The Linux implementation (mount/ns lockdown) carries the
+/// real contract; this build simply has no namespace lockdown to install.
 #[cfg(not(target_os = "linux"))]
 pub unsafe fn install_namespace_lockdown_filter() -> std::io::Result<()> {
     Ok(())

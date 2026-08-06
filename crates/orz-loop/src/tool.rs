@@ -78,9 +78,10 @@ impl ToolDispatcher {
     /// (no snapshot — nothing statically knowable to track).
     ///
     /// Out-of-scope paths are dropped, not errors:
-    /// - absolute paths outside the worktree (evidence is worktree-scoped),
+    /// - absolute paths outside the worktree (evidence is worktree-scoped);
     /// - relative paths with `..` / verbatim components (resolve() would
     ///   reject them with OutsideWorktree).
+    ///
     /// Absolute paths inside the worktree are converted to relative.
     pub fn snapshot_targets(worktree: &Path, tool_name: &str, args: &serde_json::Value) -> Vec<PathBuf> {
         if !Self::modifies_files(tool_name) {
@@ -88,13 +89,11 @@ impl ToolDispatcher {
         }
         let mut targets = Vec::new();
         for key in ["file_path", "path", "target_directory"] {
-            if let Some(value) = args.get(key).and_then(|v| v.as_str()) {
-                if let Some(rel) = Self::relative_target(worktree, value) {
-                    if !targets.contains(&rel) {
+            if let Some(value) = args.get(key).and_then(|v| v.as_str())
+                && let Some(rel) = Self::relative_target(worktree, value)
+                    && !targets.contains(&rel) {
                         targets.push(rel);
                     }
-                }
-            }
         }
         targets
     }

@@ -765,9 +765,11 @@ mod tests {
     /// Per-mapping-row coverage (review P2-4): every event type not already
     /// exercised by a dedicated test must at least produce its expected card
     /// or status effect without panicking.
+    /// (event, predicate) — the predicate asserts the expected projection.
+    type Case = (TuiEvent, fn(&TuiApp) -> bool);
     #[test]
     fn remaining_mapping_rows_produce_expected_effects() {
-        let cases: Vec<(TuiEvent, fn(&TuiApp) -> bool)> = vec![
+        let cases: Vec<Case> = vec![
             (
                 TuiEvent::RunPreflight { timestamp: String::new() },
                 |a| a.status.items[5].label == "预检" && a.content.items.len() == 1,

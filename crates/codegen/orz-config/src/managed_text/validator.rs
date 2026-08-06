@@ -160,16 +160,20 @@ fn teardown_child(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    #[cfg(unix)]
     use super::*;
 
+    #[cfg(unix)] // used only by the unix-gated fault-injection tests below
     struct InjectedOps {
         attach_fails: bool,
         wait_fails: bool,
         teardown_called: AtomicBool,
     }
 
+    #[cfg(unix)]
     impl ProcessOps for InjectedOps {
         fn attach_group(
             &self,

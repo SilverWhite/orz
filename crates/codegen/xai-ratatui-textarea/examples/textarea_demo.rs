@@ -128,7 +128,7 @@ impl FileSearch {
                         })
                 })
                 .collect();
-            scored.sort_by(|a, b| b.score.cmp(&a.score));
+            scored.sort_by_key(|s| std::cmp::Reverse(s.score));
             scored.truncate(MAX_RESULTS);
             self.results = scored;
         }

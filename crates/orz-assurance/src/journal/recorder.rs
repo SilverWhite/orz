@@ -23,7 +23,8 @@ enum JournalCmd {
     /// Record a single event (blocking send — event must not be lost).
     /// The ack reports the write result, including terminal-state refusal.
     WriteEvent {
-        event: RunEvent,
+        // Boxed — `RunEvent` is large; the enum travels the writer channel.
+        event: Box<RunEvent>,
         ack: oneshot::Sender<Result<(), JournalRecorderError>>,
     },
     /// Flush all buffered writes to disk and fsync.
@@ -97,7 +98,7 @@ impl JournalRecorder {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .blocking_send(JournalCmd::WriteEvent {
-                event,
+                event: Box::new(event),
                 ack: ack_tx,
             })
             .map_err(|_| JournalRecorderError::Closed)?;
@@ -116,7 +117,7 @@ impl JournalRecorder {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .send(JournalCmd::WriteEvent {
-                event,
+                event: Box::new(event),
                 ack: ack_tx,
             })
             .await

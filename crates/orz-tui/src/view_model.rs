@@ -118,10 +118,10 @@ impl ContentPane {
         let Some(idx) = self.current_model_index else {
             return;
         };
-        if let Some(ContentItem::Message(msg)) = self.items.get_mut(idx) {
-            if msg.role == "模型" {
-                msg.content.push_str(&Self::sanitize(text));
-            }
+        if let Some(ContentItem::Message(msg)) = self.items.get_mut(idx)
+            && msg.role == "模型"
+        {
+            msg.content.push_str(&Self::sanitize(text));
         }
     }
 
@@ -130,14 +130,14 @@ impl ContentPane {
     /// `add_or_update_tool_trace`).
     pub fn add_or_update_tool_trace(&mut self, tool_name: &str, target: &str, detail: &str) {
         for item in &mut self.items {
-            if let ContentItem::ToolTrace(trace) = item {
-                if trace.tool_name == tool_name {
-                    trace.entries.push(ToolEntry {
-                        target: Self::sanitize(target),
-                        detail: Self::sanitize(detail),
-                    });
-                    return;
-                }
+            if let ContentItem::ToolTrace(trace) = item
+                && trace.tool_name == tool_name
+            {
+                trace.entries.push(ToolEntry {
+                    target: Self::sanitize(target),
+                    detail: Self::sanitize(detail),
+                });
+                return;
             }
         }
         let mut trace = ToolTraceLine {
@@ -155,13 +155,13 @@ impl ContentPane {
     /// Update the latest entry's detail for *tool_name* (tool completion).
     pub fn update_tool_latest(&mut self, tool_name: &str, detail: &str) {
         for item in &mut self.items {
-            if let ContentItem::ToolTrace(trace) = item {
-                if trace.tool_name == tool_name {
-                    if let Some(last) = trace.entries.last_mut() {
-                        last.detail = Self::sanitize(detail);
-                    }
-                    return;
+            if let ContentItem::ToolTrace(trace) = item
+                && trace.tool_name == tool_name
+            {
+                if let Some(last) = trace.entries.last_mut() {
+                    last.detail = Self::sanitize(detail);
                 }
+                return;
             }
         }
     }

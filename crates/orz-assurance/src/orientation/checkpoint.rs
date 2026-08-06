@@ -39,8 +39,6 @@ pub const FORBIDDEN_ORIENTATION_FIELDS: [&str; 5] = [
 
 /// Checkpoint trigger — schema enum `["fixed_step_interval", "pre_handoff"]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum CheckpointTrigger {
     FixedStepInterval { step_index: u64 },
     PreHandoff { step_index: u64 },

@@ -949,12 +949,6 @@ mod tests {
         }
     }
 
-    fn make_scoped_ctx(scope: orz_tools::util::ProcessScope) -> RunContext<'static> {
-        RunContext {
-            process_scope: Some(scope),
-            ..make_ctx()
-        }
-    }
 
     #[tokio::test]
     #[cfg(unix)]

@@ -5133,7 +5133,7 @@ mod tests {
             "Expected wrapping to produce at least 2 lines, got {} lines. \
              Line ranges: {:?}",
             lines.len(),
-            &*lines,
+            *lines,
         );
     }
 
@@ -5157,7 +5157,7 @@ mod tests {
             2,
             "Expected 2 wrapped lines, got {}. Ranges: {:?}",
             lines.len(),
-            &*lines,
+            *lines,
         );
     }
 
@@ -5196,7 +5196,7 @@ mod tests {
                 lines.len(),
                 2,
                 "Should wrap into 2 lines, got {:?}",
-                &*lines
+                *lines
             );
         }
 
@@ -5241,7 +5241,7 @@ mod tests {
             "Element with internal \\n should NOT create extra visual lines. \
              Got {} lines: {:?}",
             lines.len(),
-            &*lines,
+            *lines,
         );
     }
 

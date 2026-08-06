@@ -26,7 +26,7 @@ pub fn compose_screen(app: &TuiApp, width: u16, height: u16) -> Vec<String> {
     // Row 0 — menu bar.
     lines.push(pad_right(&app.menu_bar.items.join(" "), w as u16));
     // Row 1 — toolbar (right-aligned 命令.../查找... group with a gap).
-    lines.push(render_toolbar(&app, w));
+    lines.push(render_toolbar(app, w));
     // Body. Each visible side column shares its junction column with the
     // content pane's adjacent border, so the content pane gains one column
     // per visible side column (region width == w by construction).
@@ -57,17 +57,17 @@ pub fn compose_screen(app: &TuiApp, width: u16, height: u16) -> Vec<String> {
     // Dialog overlay — replace the base frame's lines inside the centered
     // box (base content stays visible around it: centered modal retaining
     // context, SESSION_PERSISTENCE doc).
-    if let Some(dialog) = &app.dialog {
-        if let Some((d_x, d_y, d_w, _d_h)) = dialog_area(width, height) {
-            // Permission-dialog countdown (Phase 3 slice #7): derived at
-            // render time from the pending request's open instant — no state
-            // mutation on the 50ms tick.
-            let countdown = app.pending_permission.as_ref().and_then(|pp| {
-                pp.remaining().map(|r| format!("剩余 {}s", r.as_secs()))
-            });
-            let overlay = compose_dialog_overlay(dialog, d_w, countdown);
-            blend_overlay(&mut lines, overlay, d_x, d_y, d_w);
-        }
+    if let Some(dialog) = &app.dialog
+        && let Some((d_x, d_y, d_w, _d_h)) = dialog_area(width, height)
+    {
+        // Permission-dialog countdown (Phase 3 slice #7): derived at
+        // render time from the pending request's open instant — no state
+        // mutation on the 50ms tick.
+        let countdown = app.pending_permission.as_ref().and_then(|pp| {
+            pp.remaining().map(|r| format!("剩余 {}s", r.as_secs()))
+        });
+        let overlay = compose_dialog_overlay(dialog, d_w, countdown);
+        blend_overlay(&mut lines, overlay, d_x, d_y, d_w);
     }
     lines
 }
@@ -137,7 +137,7 @@ fn render_toolbar(_app: &TuiApp, w: usize) -> String {
     let right_w = str_width(&right) as usize;
     let gap = w.saturating_sub(left_w + right_w + 4).max(4);
     pad_right(
-        &format!("{left}{}{right}", " ".repeat(gap as usize)),
+        &format!("{left}{}{right}", " ".repeat(gap)),
         w as u16,
     )
 }
@@ -260,7 +260,7 @@ fn render_chat_message(msg: &ChatMessage, width: u16) -> Vec<String> {
     if msg.turn > 0 {
         title.push_str(&format!(" · turn {}", msg.turn));
     }
-    let fill_w = inner.saturating_sub(str_width(&title) as usize + 2).max(0);
+    let fill_w = inner.saturating_sub(str_width(&title) as usize + 2);
     let title_row = format!("┌{title} {}{}", "─".repeat(fill_w), "┐");
     lines.push(pad_right(&title_row, width));
 
@@ -299,7 +299,11 @@ fn format_chat_content(content: &str, width: usize) -> Vec<String> {
                 in_code_block = false;
             } else {
                 in_code_block = true;
-                code_lang = line[3..].trim().to_string();
+                code_lang = line
+                    .strip_prefix("```")
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
             }
             continue;
         }
@@ -326,13 +330,13 @@ fn format_chat_content(content: &str, width: usize) -> Vec<String> {
             continue;
         }
         // Ordered lists.
-        if line.len() > 2 {
-            if let Some(dot) = line.find(". ") {
-                let (num, rest) = line.split_at(dot);
-                if !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()) {
-                    lines.push(format!("  {num}. {}", strip_bold(rest[2..].trim())));
-                    continue;
-                }
+        if line.len() > 2
+            && let Some(dot) = line.find(". ")
+        {
+            let (num, rest) = line.split_at(dot);
+            if !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()) {
+                lines.push(format!("  {num}. {}", strip_bold(rest[2..].trim())));
+                continue;
             }
         }
         // Regular paragraph.

@@ -622,8 +622,9 @@ impl AcpServer {
         base_dir: &std::path::Path,
     ) -> Result<crate::OrzHost, AcpError> {
         // The permission manager requires an absolute cwd (AbsPathBuf) —
-        // canonicalize, falling back to the raw path on failure.
-        let cwd = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
+        // canonicalize, falling back to the raw path on failure. dunce strips
+        // the `\\?\` verbatim prefix on Windows (clippy.toml ban on std).
+        let cwd = dunce::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
         // P1 permit keystore: the session's DPAPI-backed signer (or the
         // test-only memory store under TrustPolicy::Skip).
         Ok(crate::OrzHost::with_bridge_and_hub(
@@ -701,7 +702,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     /// Paths of every run journal under `base`, in creation order.
-    fn all_run_events_paths(base: &PathBuf) -> Vec<PathBuf> {
+    fn all_run_events_paths(base: &Path) -> Vec<PathBuf> {
         let runs_dir = base.join(".gsa").join("runs");
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
             .unwrap()
@@ -716,7 +717,7 @@ mod tests {
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// Typed events of the single run journal under `base`.
-    fn run_events(base: &PathBuf) -> Vec<orz_assurance::RunEvent> {
+    fn run_events(base: &Path) -> Vec<orz_assurance::RunEvent> {
         let runs_dir = base.join(".gsa").join("runs");
         let run_dirs: Vec<PathBuf> = std::fs::read_dir(&runs_dir)
             .unwrap()

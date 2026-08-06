@@ -134,10 +134,9 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
 
     let mut commands = Vec::new();
     for node in command_nodes {
-        if let Some(cmd) = parse_plain_command_from_node(node, src) {
+        {
+            let cmd = parse_plain_command_from_node(node, src)?;
             commands.push(cmd);
-        } else {
-            return None;
         }
     }
     Some(commands)
@@ -995,15 +994,14 @@ fn parse_plain_command_from_node(cmd: Node, src: &str) -> Option<PlainCommand> {
                 let stripped = raw_string
                     .strip_prefix('\'')
                     .and_then(|s| s.strip_suffix('\''));
-                if let Some(s) = stripped {
+                {
+                    let s = stripped?;
                     if span_start.is_none() {
                         span_start = Some(child.start_byte());
                     }
                     span_end = Some(child.end_byte());
 
                     words.push(s.to_owned());
-                } else {
-                    return None;
                 }
             }
             "concatenation" => {

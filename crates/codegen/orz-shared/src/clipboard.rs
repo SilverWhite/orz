@@ -1193,7 +1193,7 @@ mod platform {
 #[cfg(not(target_os = "macos"))]
 mod platform {
     use super::ImageData;
-    use std::process::{Command, Stdio};
+    
 
     /// No subprocess-free pasteboard probe exists off-macOS.
     pub(super) fn clipboard_image_snapshot() -> (Option<u64>, bool) {
@@ -1982,6 +1982,10 @@ mod platform {
 
     // -- Public API ----------------------------------------------------------
 
+    // On non-Linux the only fall-through path is the arboard `Err` arm, which
+    // reassigns `arboard_error` before the read below — the `None` initializer
+    // is dead there. Linux keeps it for the wl-paste fall-through path.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_assignments))]
     pub fn get_text() -> anyhow::Result<Option<String>> {
         let mut arboard_error = None;
         match arboard_get_text() {
@@ -2095,6 +2099,8 @@ mod platform {
         outcome
     }
 
+    // Same non-Linux dead-`None`-initializer rationale as `get_text`.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_assignments))]
     pub fn get_image() -> anyhow::Result<Option<ImageData>> {
         let mut arboard_error = None;
         match arboard_get_image() {

@@ -5,10 +5,7 @@ use std::collections::HashMap;
 
 /// Mixpanel client (stub - analytics disabled).
 #[derive(Clone)]
-pub struct Mixpanel {
-    token: String,
-    client: reqwest::Client,
-}
+pub struct Mixpanel;
 
 /// Error type for Mixpanel operations.
 #[derive(Debug, thiserror::Error)]
@@ -20,12 +17,12 @@ pub enum Error {
 }
 
 impl Mixpanel {
-    pub fn new(token: impl Into<String>) -> Self {
-        Self { token: token.into(), client: reqwest::Client::new() }
+    pub fn new(_token: impl Into<String>) -> Self {
+        Self
     }
 
-    pub fn with_client(token: impl Into<String>, client: reqwest::Client) -> Self {
-        Self { token: token.into(), client }
+    pub fn with_client(_token: impl Into<String>, _client: reqwest::Client) -> Self {
+        Self
     }
 
     pub async fn track(

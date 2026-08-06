@@ -359,7 +359,7 @@ mod tests {
         // The projection renders it as a warning card without panicking.
         let mut app = crate::app::TuiApp::new();
         app.accept_event(ev);
-        assert!(app.content.items[0].collapsed() == false);
+        assert!(!app.content.items[0].collapsed());
     }
 
     #[test]

@@ -300,7 +300,7 @@ async fn handle_new_file_creation(
 
     let tool_output_for_prompt = format!(
         "The file {} has been created. Here's the content:\n\n{snippet}",
-        &input.file_path,
+        input.file_path,
     );
 
     let edits = vec![SearchReplaceEditDetail {
@@ -320,7 +320,7 @@ async fn handle_new_file_creation(
             tool_output_for_prompt,
             tool_output_for_prompt_concise: Some(format!(
                 "The file {} has been created.",
-                &input.file_path
+                input.file_path
             )),
             absolute_path: path.to_path_buf(),
             edits: SearchReplaceEditContextInformation { details: edits },
@@ -440,19 +440,19 @@ async fn handle_replacement(
         );
         let default_msg = format!(
             "The file {} has been updated. Here's a relevant snippet of the edited file:\n\n{snippet}",
-            &input.file_path,
+            input.file_path,
         );
-        let concise_msg = format!("The file {} has been updated.", &input.file_path);
+        let concise_msg = format!("The file {} has been updated.", input.file_path);
         (default_msg, concise_msg)
     } else {
         let default_msg = format!(
             "All {} occurrences of the specified string were successfully replaced in {}.",
             new_positions.len(),
-            &input.file_path,
+            input.file_path,
         );
         let concise_msg = format!(
             "The file {} has been updated. All occurrences were successfully replaced.",
-            &input.file_path,
+            input.file_path,
         );
         (default_msg, concise_msg)
     };

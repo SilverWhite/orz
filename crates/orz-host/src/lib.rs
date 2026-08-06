@@ -191,8 +191,7 @@ impl OrzHost {
         // bridge — the streamed text-delta path uses its own sender clone
         // (the permission manager gets the original).
         let live_gateway = gateway.clone();
-        let bridge =
-            PermissionBridge::spawn_with_hub(session_id, gateway, hub, cwd, journal.clone())?;
+        let bridge = PermissionBridge::spawn_with_hub(session_id, gateway, hub, cwd)?;
         let mut host = Self::with_permission(journal, cwd, workspace_trust, Some(bridge))?;
         host.session_id = Some(session_id.to_string());
         host.gateway = live_gateway;

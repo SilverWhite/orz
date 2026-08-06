@@ -907,11 +907,10 @@ pub fn validate_compacted_history(items: &[ConversationItem]) -> Vec<String> {
                     seen_ids.insert(&tc.id);
                 }
             }
-            ConversationItem::ToolResult(tr) => {
-                if !seen_ids.contains(tr.tool_call_id.as_str()) {
+            ConversationItem::ToolResult(tr)
+                if !seen_ids.contains(tr.tool_call_id.as_str()) => {
                     invalid_ids.push(tr.tool_call_id.clone());
                 }
-            }
             _ => {}
         }
     }

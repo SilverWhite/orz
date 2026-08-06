@@ -119,7 +119,7 @@ mod tests {
             gh
         };
         #[cfg(windows)]
-        let gh = {
+        let _gh = {
             let gh = dir.path().join("gh.cmd");
             std::fs::write(&gh, "@echo off\r\nexit /b 0\r\n").unwrap();
             gh

@@ -304,21 +304,6 @@ async fn shell_pipe_command_works() {
     assert_eq!(pre_result.decision, HookDecision::Allow);
 }
 
-fn make_envelope(event: HookEventName, payload: HookPayload) -> HookEventEnvelope {
-    HookEventEnvelope {
-        hook_event_name: event,
-        session_id: "test-session".into(),
-        cwd: "/tmp".into(),
-        workspace_root: "/tmp".into(),
-        timestamp: "2025-01-01T00:00:00Z".into(),
-        transcript_path: None,
-        client_identifier: None,
-        prompt_id: None,
-        permission_mode: None,
-        payload,
-    }
-}
-
 /// Each new event type: write hook file → load → dispatch → verify the
 /// command fires and receives the correct JSON envelope on stdin.
 ///

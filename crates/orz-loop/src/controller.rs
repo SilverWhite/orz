@@ -259,7 +259,7 @@ impl AgentLoopController {
     /// `cancel` is polled at cooperative checkpoints (Phase 3 slice #7).
     async fn run_turn_inner(
         &self,
-        mut writer: &mut EventWriter<'_>,
+        writer: &mut EventWriter<'_>,
         host: &dyn LoopHost,
         prompt: &str,
         run_id: &str,
@@ -999,40 +999,40 @@ impl AgentLoopController {
         // Evidence layer, not a gate: a snapshot failure is journaled
         // (`snapshot_error`) and does not block the tool. Tools without
         // statically knowable targets (e.g. bash) produce no snapshot.
-        if let Some(store) = &self.snapshot_store {
-            if ToolDispatcher::modifies_files(&tc.name) {
-                let targets =
-                    ToolDispatcher::snapshot_targets(store.worktree(), &tc.name, &tc.arguments);
-                if !targets.is_empty() {
-                    let target_strs: Vec<String> = targets
-                        .iter()
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .collect();
-                    match store.track(&targets).await {
-                        Ok(record) => {
-                            writer
-                                .record(
-                                    EventType::SnapshotCreated,
-                                    serde_json::json!({
-                                        "tool": tc.name,
-                                        "targets": target_strs,
-                                        "snapshot_hash": record.snapshot_hash,
-                                    }),
-                                )
-                                .await?;
-                        }
-                        Err(e) => {
-                            writer
-                                .record(
-                                    EventType::SnapshotCreated,
-                                    serde_json::json!({
-                                        "tool": tc.name,
-                                        "targets": target_strs,
-                                        "snapshot_error": e.to_string(),
-                                    }),
-                                )
-                                .await?;
-                        }
+        if let Some(store) = &self.snapshot_store
+            && ToolDispatcher::modifies_files(&tc.name)
+        {
+            let targets =
+                ToolDispatcher::snapshot_targets(store.worktree(), &tc.name, &tc.arguments);
+            if !targets.is_empty() {
+                let target_strs: Vec<String> = targets
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                match store.track(&targets).await {
+                    Ok(record) => {
+                        writer
+                            .record(
+                                EventType::SnapshotCreated,
+                                serde_json::json!({
+                                    "tool": tc.name,
+                                    "targets": target_strs,
+                                    "snapshot_hash": record.snapshot_hash,
+                                }),
+                            )
+                            .await?;
+                    }
+                    Err(e) => {
+                        writer
+                            .record(
+                                EventType::SnapshotCreated,
+                                serde_json::json!({
+                                    "tool": tc.name,
+                                    "targets": target_strs,
+                                    "snapshot_error": e.to_string(),
+                                }),
+                            )
+                            .await?;
                     }
                 }
             }
@@ -1143,10 +1143,10 @@ impl<'a> EventWriter<'a> {
         payload: serde_json::Value,
     ) -> Result<(), AgentLoopError> {
         let mut event = RunEvent::new(
-            self.run_id.clone().into(),
+            self.run_id.clone(),
             self.seq,
             event_type,
-            self.manifest_sha256.clone().into(),
+            self.manifest_sha256.clone(),
             self.prev_hash.clone(),
             "run-event-v0.1.schema.json".into(),
             payload,
@@ -1186,7 +1186,7 @@ mod tests {
     use crate::host::{LoopHost, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Minimal LoopHost for testing the controller.
@@ -1259,7 +1259,7 @@ mod tests {
         }
     }
 
-    fn events(dir: &PathBuf) -> Vec<RunEvent> {
+    fn events(dir: &Path) -> Vec<RunEvent> {
         let content = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
         content
             .lines()
@@ -1267,7 +1267,7 @@ mod tests {
             .collect()
     }
 
-    fn event_types(dir: &PathBuf) -> Vec<EventType> {
+    fn event_types(dir: &Path) -> Vec<EventType> {
         events(dir).into_iter().map(|e| e.event_type).collect()
     }
 

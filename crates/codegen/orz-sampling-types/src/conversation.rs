@@ -1508,13 +1508,12 @@ pub fn upgrade_legacy_reasoning(
                         }));
                     }
                 }
-                rs::OutputItem::CodeInterpreterCall(ci) => {
-                    if sibling_btc_ids_seen.insert(ci.id.clone()) {
+                rs::OutputItem::CodeInterpreterCall(ci)
+                    if sibling_btc_ids_seen.insert(ci.id.clone()) => {
                         siblings.push(ConversationItem::BackendToolCall(BackendToolCallItem {
                             kind: BackendToolKind::CodeInterpreter(ci),
                         }));
                     }
-                }
                 _ => {}
             }
         }

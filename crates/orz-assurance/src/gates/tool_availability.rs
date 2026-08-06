@@ -17,8 +17,6 @@ use crate::GateDecision;
 
 /// Tool capability categories (Python `CAPABILITY_ENUM`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum Capability {
     Search,
     FileRead,
@@ -33,8 +31,6 @@ pub enum Capability {
 
 /// Probe result status (Python `VALID_STATUSES`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum ProbeStatus {
     Available,
     Unavailable,

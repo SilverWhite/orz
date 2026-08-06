@@ -165,12 +165,12 @@ pub fn validate_chain(
                 "non-first event {idx} has null previous_event_sha256"
             )),
             (_, Some(actual)) => {
-                if let Some(expected) = previous {
-                    if actual != expected {
-                        errors.push(format!(
-                            "previous_event_sha256 mismatch at event {idx}: expected {expected}, got {actual}"
-                        ));
-                    }
+                if let Some(expected) = previous
+                    && actual != expected
+                {
+                    errors.push(format!(
+                        "previous_event_sha256 mismatch at event {idx}: expected {expected}, got {actual}"
+                    ));
                 }
             }
         }
@@ -282,12 +282,12 @@ mod tests {
             ),
             make_event(
                 "RUN-TEST", 1, EventType::PromptSubmitted,
-                "abcd1234", Some(&"REPLACED_BY_SEAL"),
+                "abcd1234", Some("REPLACED_BY_SEAL"),
                 serde_json::json!({"prompt": "hello"}),
             ),
             make_event(
                 "RUN-TEST", 2, EventType::RunFinished,
-                "abcd1234", Some(&"REPLACED_BY_SEAL"),
+                "abcd1234", Some("REPLACED_BY_SEAL"),
                 serde_json::json!({"status": "ok"}),
             ),
         ];
@@ -318,7 +318,7 @@ mod tests {
             ),
             make_event(
                 "RUN-TEST", 1, EventType::RunFinished,
-                "abcd1234", Some(&"PLACEHOLDER"),
+                "abcd1234", Some("PLACEHOLDER"),
                 serde_json::json!({"status": "ok"}),
             ),
         ];

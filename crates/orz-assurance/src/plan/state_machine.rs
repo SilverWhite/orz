@@ -16,8 +16,6 @@ use super::artifact::PlanArtifact;
 
 /// Plan lifecycle states (8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum PlanState {
     Idle,
     Planning,

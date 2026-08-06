@@ -30,7 +30,7 @@ impl OrientationMonitor {
 
     /// Whether a checkpoint should fire at the current step.
     pub fn should_fire(&self) -> bool {
-        self.step % self.interval == 0
+        self.step.is_multiple_of(self.interval)
     }
 
     /// Build the checkpoint for the current step and advance the counter.

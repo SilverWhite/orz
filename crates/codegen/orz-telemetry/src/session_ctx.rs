@@ -67,16 +67,9 @@ tokio::task_local! {
     static TELEMETRY_CTX: Arc<TelemetryCtx>;
 }
 
-/// The `session_id` field name the debug-log firehose router keys on:
-/// `debug_log::SessionIdVisitor` stashes a `SessionId` extension on any span
-/// carrying this field — the span *name* is not load-bearing for routing. Shared
-/// so the `info_span!` here and the router in `debug_log` can't silently drift; a
-/// rename trips `session_span_exposes_router_field` below.
-pub(crate) const SESSION_ID_FIELD: &str = "session_id";
-
-/// Build the per-session tracing span the firehose router routes by. The field
-/// name MUST be the literal `session_id` (tracing field names can't come from a
-/// const); the test below pins it against [`SESSION_ID_FIELD`].
+/// The per-session tracing span's `session_id` field name. The field name MUST
+/// be the literal `session_id` (tracing field names can't come from a const);
+/// the test below pins it so the span shape can't silently drift.
 fn session_span(session_id: &str) -> tracing::Span {
     tracing::info_span!("session", session_id = %session_id)
 }
@@ -258,8 +251,8 @@ mod tests {
                 .metadata()
                 .expect("session span must have metadata under an enabling subscriber");
             assert!(
-                meta.fields().field(SESSION_ID_FIELD).is_some(),
-                "session span must expose `{SESSION_ID_FIELD}` for debug-log routing",
+                meta.fields().field("session_id").is_some(),
+                "session span must expose `session_id` for tracing-field routing",
             );
         });
     }

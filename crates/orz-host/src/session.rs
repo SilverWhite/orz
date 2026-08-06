@@ -234,7 +234,7 @@ mod tests {
         // IP5: store scoped to the session worktree, root under `.gsa`.
         assert_eq!(handle.snapshot_store.worktree(), &base);
         assert!(
-            handle.snapshot_store.root().starts_with(&base.join(".gsa")),
+            handle.snapshot_store.root().starts_with(base.join(".gsa")),
             "store root: {}",
             handle.snapshot_store.root().display()
         );

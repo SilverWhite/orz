@@ -288,13 +288,13 @@ mod tests {
             .append(true)
             .open(&path)
             .unwrap();
-        f.write_all(line[..split_at].as_bytes()).unwrap();
+        f.write_all(&line.as_bytes()[..split_at]).unwrap();
         f.sync_all().unwrap();
         std::thread::sleep(Duration::from_millis(120));
         assert!(tail.poll().is_empty(), "partial line must not be parsed");
 
         // Complete the line with its newline.
-        f.write_all(line[split_at..].as_bytes()).unwrap();
+        f.write_all(&line.as_bytes()[split_at..]).unwrap();
         f.write_all(b"\n").unwrap();
         f.sync_all().unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);

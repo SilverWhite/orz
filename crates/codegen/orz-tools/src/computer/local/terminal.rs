@@ -517,6 +517,9 @@ struct LocalTerminalActor {
     /// Whether persistent shell state is enabled.
     persistent_shell: bool,
 
+    // Read only by `#[cfg(unix)]` paths (static shell login-env capture);
+    // Windows builds legitimately never read it.
+    #[cfg_attr(windows, allow(dead_code))]
     login_shell_capture: bool,
 
     /// Per-backend `find`→`bfs` / `grep`→`ugrep` shadow enable state, resolved
@@ -1860,7 +1863,7 @@ impl LocalTerminalActor {
     }
 
     async fn shutdown_all(&mut self) {
-        for (_, process) in self.processes.iter_mut() {
+        for process in self.processes.values_mut() {
             send_sigkill_to_group(process);
             // Abort the state dump reader so its spawn_blocking thread
             // doesn't outlive the actor.
@@ -3142,7 +3145,7 @@ fn spawn_shell_command(
     };
 
     #[cfg(not(unix))]
-    let mut build_cmd = |with_breakaway: bool| {
+    let build_cmd = |with_breakaway: bool| {
         use windows::Win32::System::Threading::{
             CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW,
         };

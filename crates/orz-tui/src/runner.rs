@@ -46,10 +46,10 @@ fn find_newest_run_dir(cwd: &Path, session8: &str) -> Option<PathBuf> {
         let Some(rest) = name.strip_prefix(&prefix) else {
             continue;
         };
-        if let Ok(n) = rest.parse::<u64>() {
-            if best.as_ref().is_none_or(|(b, _)| n > *b) {
-                best = Some((n, e.path().join("events.jsonl")));
-            }
+        if let Ok(n) = rest.parse::<u64>()
+            && best.as_ref().is_none_or(|(b, _)| n > *b)
+        {
+            best = Some((n, e.path().join("events.jsonl")));
         }
     }
     best.map(|(_, p)| p)

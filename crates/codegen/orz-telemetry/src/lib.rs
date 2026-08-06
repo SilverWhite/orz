@@ -6,15 +6,17 @@
 //! that only want event tracking + inference metrics no longer pull in
 //! Mixpanel/HTTP/identity dependencies.
 
-mod appender;
+//! Dead modules removed in fusion cleanup (Slice #13): `appender`,
+//! `context`, `debug_log`, `hooks_log`, `prompt_timing`, `sampling_log`,
+//! `sentry`, `unified_log` — none reachable from live code (enums/events/
+//! external/instrumentation/memory_log/memory_telemetry/session_ctx/
+//! session_metrics/client/config/http/id/otel_layer/otlp_http/redact_common).
+
 pub mod client;
 pub mod config;
-pub mod context;
-pub mod debug_log;
 pub mod enums;
 pub mod events;
 pub mod external;
-pub mod hooks_log;
 pub mod http;
 pub mod id;
 pub mod instrumentation;
@@ -22,13 +24,9 @@ pub mod memory_log;
 pub mod memory_telemetry;
 pub mod otel_layer;
 pub(crate) mod otlp_http;
-pub mod prompt_timing;
 pub(crate) mod redact_common;
-pub mod sampling_log;
-pub mod sentry;
 pub mod session_ctx;
 pub mod session_metrics;
-pub mod unified_log;
 
 pub use client::{
     Metadata, TelemetryClient, UserContext, init, init_if_needed, is_enabled,
