@@ -1,13 +1,71 @@
 //! Model gateway contract — request/response types + trait.
 //!
-//! IP1 (thinking:disabled): `ModelRequest` intentionally has no thinking
-//! option — the request surface cannot express it, so no provider backend can
-//! enable chain-of-thought by accident.
+//! Thinking policy (IP1 → D-6, FIX_PLAN 2026-08-06): thinking is carried by
+//! `ModelConfig::thinking` (a transport-level knob — `ModelRequest` stays
+//! thinking-free so a caller cannot enable it by accident). The restored
+//! max-config is `enabled` + effort `max` + 160K budget, decided after the
+//! 2026-08-07 live probe (reasoning deltas flow ~0.5s after connect; content
+//! arrives ~30s later on hard tasks; `usage.reasoning_tokens` is reported
+//! per round). The empty-final-content retry chain lives in the transport.
+
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::host::ToolDef;
+
+/// Transport retry/timeout policy (D-7, FIX_PLAN 2026-08-06 — absorbing the
+/// Claude Code retry stack; values are the decided defaults, all parameterized
+/// so a consumer can tighten/loosen without code change).
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    /// Max retries on the non-streaming `create` path (bounded backoff; the
+    /// fork's own loop is additionally window-capped by `request_retry_window`
+    /// — the lower bound wins). 10 = Claude Code's maxConsecutive-scale cap.
+    pub request_max_retries: u32,
+    /// Backoff window cap for the non-streaming path (32s = Claude Code).
+    pub request_retry_window: Duration,
+    /// Single-request wall-clock timeout for the non-streaming path
+    /// (18min level — F-03, 2026-08-07: the 160K max-config thinking budget
+    /// can legitimately exceed 10min; 18min covers slow thinking plus
+    /// network jitter. Non-streaming paths only — streaming paths are
+    /// governed by the idle watchdog + total budget.)
+    pub request_timeout: Duration,
+    /// Stream idle watchdog: after this much silence, warn (20s, Claude Code).
+    pub stream_idle_warn: Duration,
+    /// Stream idle watchdog: after this much silence, hard abort (90s, Claude
+    /// Code). Slow thinking with progress is NOT a timeout — only a dead wire.
+    pub stream_idle_timeout: Duration,
+    /// Total stream budget (auxiliary, generous — a relaxed backstop on top
+    /// of the idle watchdog; full 160K thinking could exceed 10min).
+    pub stream_total_timeout: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            request_max_retries: 10,
+            request_retry_window: Duration::from_secs(32),
+            request_timeout: Duration::from_secs(18 * 60),
+            stream_idle_warn: Duration::from_secs(20),
+            stream_idle_timeout: Duration::from_secs(90),
+            stream_total_timeout: Duration::from_secs(30 * 60),
+        }
+    }
+}
+
+/// Thinking mode for the provider request (D-6, FIX_PLAN 2026-08-06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThinkingMode {
+    /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "max"`
+    /// (the restored max-config; default).
+    #[default]
+    EnabledMax,
+    /// DeepSeek `thinking: {type: "disabled"}` — all output routed to
+    /// `content` (the P2-era mitigation; kept for parity/tests).
+    Disabled,
+}
 
 /// Configuration for a single model provider endpoint.
 #[derive(Debug, Clone)]
@@ -17,6 +75,10 @@ pub struct ModelConfig {
     pub api_base: String,
     pub api_key: String,
     pub max_tokens: u32,
+    /// Retry/timeout policy (D-7). Defaults are the decided values.
+    pub retry: RetryPolicy,
+    /// Thinking policy (D-6). Defaults to the restored max-config.
+    pub thinking: ThinkingMode,
 }
 
 /// Conversation role for a message.
@@ -67,13 +129,20 @@ pub enum FinishReason {
     Length,
 }
 
-/// Request sent to the model. No thinking field — see module doc (IP1).
+/// Request sent to the model. `thinking` is normally transport-level config
+/// (IP1: the controller does not decide thinking silently) — the optional
+/// override exists for explicitly marked fast-preflight rounds (2026-08-07
+/// review F-07: the `-p` plan gate, max_tokens=1024, must not run the
+/// thinking-max empty-content chain). `None` = the transport's `ModelConfig`
+/// default; call sites that set it override deliberately.
 #[derive(Debug, Clone)]
 pub struct ModelRequest {
     pub system: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolDef>,
     pub max_tokens: u32,
+    /// Per-request thinking override; `None` = transport config default.
+    pub thinking: Option<ThinkingMode>,
 }
 
 /// Structured model response.
@@ -86,6 +155,13 @@ pub struct ModelResponse {
     /// controller replays before tool results, so the next request carries
     /// the full assistant turn (alpha-test 2026-08-06 closure).
     pub reasoning_content: Option<String>,
+    /// Token usage observation (D-6): reasoning tokens for this completion,
+    /// when the provider reports them (DeepSeek `usage.completion_tokens_
+    /// details.reasoning_tokens`). Journaled for budget/latency calibration —
+    /// the 160K budget decision rolls back on the data.
+    pub reasoning_tokens: Option<u32>,
+    /// Total completion tokens for this response (usage.completion_tokens).
+    pub completion_tokens: Option<u32>,
 }
 
 impl ModelResponse {
@@ -95,6 +171,8 @@ impl ModelResponse {
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Stop,
             reasoning_content: None,
+            reasoning_tokens: None,
+            completion_tokens: None,
         }
     }
 
@@ -104,6 +182,8 @@ impl ModelResponse {
             tool_calls,
             finish_reason: FinishReason::ToolCalls,
             reasoning_content: None,
+            reasoning_tokens: None,
+            completion_tokens: None,
         }
     }
 }
@@ -122,6 +202,11 @@ pub enum GatewayError {
     /// the run ends with `run_cancelled`, not a spurious failure.
     #[error("generation cancelled")]
     Cancelled,
+    /// Wall-clock timeout or idle watchdog fired (D-7, FIX_PLAN 2026-08-06).
+    /// Strictly distinct from `Cancelled`: a timeout is a transport failure
+    /// (the loop surfaces it as a model error), never a user cancel.
+    #[error("generation timed out: {0}")]
+    Timeout(String),
 }
 
 /// The model gateway contract. `generate` takes the full request and returns
@@ -182,6 +267,7 @@ mod tests {
                     messages: Vec::new(),
                     tools: Vec::new(),
                     max_tokens: 0,
+                    thinking: None,
                 },
                 None,
                 &mut |c| chunks.push(c.to_string()),

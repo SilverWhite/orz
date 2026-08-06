@@ -1019,7 +1019,11 @@ pub struct CreateChatCompletionRequest {
 /// thinking is ON by default and can consume the entire token budget on
 /// `reasoning_content`, leaving `content` empty (live probe 2026-08-06:
 /// 57k reasoning chars, 0 content chars). Absent stays absent on the wire
-/// for providers without the extension.
+/// for providers without the extension. The max-config (D-6) is expressed
+/// with `{"type": "enabled"}` plus the REQUEST-LEVEL `reasoning_effort`
+/// field (a separate `CreateChatCompletionRequest` field — the 2026-08-07
+/// live probe sent `reasoning_effort: "max"` at the top level and the
+/// provider honored it).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ThinkingConfig {
     #[serde(rename = "type")]

@@ -13,6 +13,8 @@ orz-assurance = { path = "../orz-assurance" }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
 async-openai = { workspace = true, features = ["chat-completion"] }
+# Bounded backoff for the transport retry policy (D-7, FIX_PLAN 2026-08-06)
+backoff = { version = "0.4", features = ["tokio"] }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,3 +26,8 @@ tracing = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 # Credential Manager API-key read (credentials.rs, ADR-0006)
 windows = { workspace = true }
+
+[dev-dependencies]
+# Live probe (probe_thinking_max.rs) — raw HTTP for full JSON visibility
+# (fork's typed CompletionUsage drops usage.reasoning_tokens).
+reqwest = { workspace = true }

@@ -246,6 +246,12 @@ impl PermissionBridge {
         })
     }
 
+    /// The session's permission policy (IP2a, FIX_PLAN 2026-08-06 D-3) —
+    /// consumed by the loop's name-level tool availability projection.
+    pub fn policy(&self) -> PermissionPolicy {
+        self.policy
+    }
+
     /// P1 scope check for read-class accesses.
     ///
     /// The permission manager auto-allows `Read`/`Grep` unconditionally

@@ -5,6 +5,8 @@
 //!
 //! See: INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2 §3.4
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use orz_assurance::journal::JournalRecorder;
 use serde_json::Value;
@@ -16,6 +18,26 @@ pub enum RiskClass {
     LocalMutation,
     NetworkCall,
     SandboxEscape,
+}
+
+/// Session permission policy (IP2a, FIX_PLAN 2026-08-06 D-3) — the policy
+/// the host's permission bridge enforces for this session. The loop uses it
+/// for the NAME-LEVEL tool-availability projection: tools the policy refuses
+/// outright (e.g. network/shell under Benchmark) are filtered from the
+/// model-visible tool declarations, so the model never attempts them.
+/// Mirrors orz-host's `PermissionPolicy` (defined here to avoid a
+/// loop→host dependency; the host maps its policy onto this enum).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolPolicy {
+    /// Normal prompt-decides behavior — all tools are declared; denial is
+    /// scope/argument-level at permission time.
+    #[default]
+    Interactive,
+    /// Read-only sandbox — only read-class tools are declared.
+    ReadOnly,
+    /// Headless benchmark — read + local file edits declared; network and
+    /// shell-escape excluded by name.
+    Benchmark,
 }
 
 /// Result returned by a tool invocation.
@@ -132,6 +154,43 @@ pub struct ToolDef {
     pub parameters: Value,
 }
 
+/// F-09 (2026-08-07 review): default wall-clock cap for the fixed test
+/// command (30min — user decision: context size is the priority, not wall
+/// time; the cap only catches true hangs). Hosts may override per
+/// `TestRunner::timeout`.
+pub const RUN_TESTS_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// F-09: cap on the test output the host collects (tail kept) — bounds
+/// session memory against pathological test output.
+pub const RUN_TESTS_OUTPUT_CAP: usize = 1024 * 1024;
+
+/// F-09: cap on the test output injected into the conversation (tail kept —
+/// test frameworks put their summary at the end). The full (capped) output
+/// stays on disk; the model fetches it via read_file when it wants more.
+pub const RUN_TESTS_CONTEXT_CAP: usize = 32 * 1024;
+
+/// A fixed test-runner command (D-9, FIX_PLAN 2026-08-06) — the Aider-model
+/// feedback loop inside a single run. The host owns the command (the model
+/// never sees the test files, only stdout/stderr/exit code via the
+/// `run_tests` tool); the harness injects it.
+#[derive(Debug, Clone)]
+pub struct TestRunner {
+    /// argv-style command (e.g. `["python", "-m", "pytest", "<hidden-tests>/x_test.py", "-q"]`).
+    pub command: Vec<String>,
+    /// Wall-clock cap for one execution (None = `RUN_TESTS_TIMEOUT`).
+    pub timeout: Option<Duration>,
+}
+
+/// Result of running the fixed test command.
+#[derive(Debug, Clone)]
+pub struct TestRunResult {
+    pub output: String,
+    pub exit_code: Option<i32>,
+    /// Path of the full (capped) output written by the host — readable via
+    /// `read_file`; `None` when the host could not write it (or timed out).
+    pub full_output_path: Option<String>,
+}
+
 /// Trait for looking up tools by name.
 pub trait ToolRegistry: Send + Sync {
     fn get(&self, name: &str) -> Option<ToolDef>;
@@ -156,6 +215,31 @@ pub trait LoopHost: Send + Sync {
     /// Defaults to `not_observed` (fail-closed); orz-host overrides.
     fn workspace_trust(&self) -> orz_assurance::gates::ipg::WorkspaceTrust {
         orz_assurance::gates::ipg::WorkspaceTrust::NotObserved
+    }
+
+    /// Session permission policy (IP2a) — drives the name-level tool
+    /// availability projection: tools the policy refuses outright are
+    /// filtered from the model-visible declarations. Defaults to
+    /// `Interactive` (all tools declared; scope-level denial at permission
+    /// time); orz-host maps its `PermissionPolicy` onto this.
+    fn tool_policy(&self) -> ToolPolicy {
+        ToolPolicy::Interactive
+    }
+
+    /// D-9 (FIX_PLAN 2026-08-06): a fixed test-runner command the model can
+    /// invoke via the `run_tests` tool (Aider `--test-cmd` semantics) —
+    /// stdout/stderr/exit code are fed back inside the same run. The tests
+    /// themselves stay hidden (outside the workspace; the model never reads
+    /// them). `None` (default) omits the tool entirely.
+    fn test_runner(&self) -> Option<TestRunner> {
+        None
+    }
+
+    /// D-9: execute the host's fixed test command. Only called when
+    /// `test_runner()` returned `Some`. The host runs the command in the
+    /// session cwd with the injected argv — never a model-supplied command.
+    async fn run_tests(&self) -> Result<TestRunResult, ToolError> {
+        Err(ToolError::NotFound("no test runner configured".into()))
     }
 
     /// Execute a tool call.

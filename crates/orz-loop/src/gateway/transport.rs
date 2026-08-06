@@ -9,10 +9,11 @@
 //! non-streaming `create` path only — the stream path does not retry
 //! (recorded D3-2, 2026-08-06 design review).
 //!
-//! IP1 (thinking:disabled): the typed request built here never carries a
-//! thinking/reasoning option — `ModelRequest` cannot express one, and the
-//! builder surface we touch sets no such field. The `build_request` test
-//! locks the serialized surface against the word `thinking`.
+//! Thinking (IP1 → D-6, FIX_PLAN 2026-08-06): the restored max-config is
+//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + 160K budget
+//! (default); `ThinkingMode::Disabled` keeps the P2-era mitigation (all
+//! output to `content`) for parity/tests/benchmarks. `ModelRequest` carries
+//! no thinking knob — `ModelConfig::thinking` is the single switch.
 //!
 //! Live tests are gated behind `ORZ_TEST_LIVE=1` so the offline test suite
 //! stays deterministic (FakeProvider is the acceptance path).
@@ -27,10 +28,11 @@ use async_openai::{
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
         ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
-        ChatCompletionRequestUserMessageContent, ChatCompletionStreamResponseDelta,
-        ChatCompletionTool, ChatCompletionTools, CreateChatCompletionRequest,
-        CreateChatCompletionResponse, CreateChatCompletionStreamResponse, FinishReason,
-        FunctionCallStream, FunctionObject,
+        ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
+        ChatCompletionStreamResponseDelta, ChatCompletionTool, ChatCompletionTools,
+        CreateChatCompletionRequest, CreateChatCompletionResponse,
+        CreateChatCompletionStreamResponse, FinishReason, FunctionCallStream, FunctionObject,
+        ReasoningEffort,
     },
 };
 use async_trait::async_trait;
@@ -41,7 +43,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::model::{
     FinishReason as OurFinishReason, GatewayError, ModelConfig, ModelGateway, ModelRequest,
-    ModelResponse, ToolCall,
+    ModelResponse, ThinkingMode, ToolCall,
 };
 
 /// Default DeepSeek API base (OpenAI-compatible).
@@ -87,23 +89,95 @@ impl DeepSeekTransport {
                 model_id: model_id.into(),
                 api_base: DEFAULT_DEEPSEEK_API_BASE.to_string(),
                 api_key: api_key.into(),
-                max_tokens: 4096,
+                // D-6: 160K total budget (128K thinking + 32K content target
+                // split; DeepSeek has no sub-budget parameter — 160K is the
+                // whole-token cap, 384K is the legal max). Calibrated by the
+                // 2026-08-07 live probe.
+                max_tokens: 160_000,
+                retry: Default::default(),
+                thinking: Default::default(),
             },
         }
     }
 
     fn client(&self) -> Client<OpenAIConfig> {
+        let policy = &self.config.retry;
+        // D-7: bounded backoff — 32s window cap on top of the fork's retry
+        // loop, plus a hard retry-count cap. The fork default is a 15-minute
+        // window; a stuck upstream must not hold the request for 15 minutes.
+        let backoff = backoff::ExponentialBackoff {
+            max_elapsed_time: Some(policy.request_retry_window),
+            ..Default::default()
+        };
         Client::with_config(
             OpenAIConfig::new()
                 .with_api_key(self.config.api_key.clone())
                 .with_api_base(self.config.api_base.clone()),
         )
+        .with_backoff(backoff)
+        .with_max_retries(policy.request_max_retries)
+    }
+
+    /// Whether a response is an abnormal empty-content case (D-6): the
+    /// final round produced NO text AND NO tool calls — the thinking budget
+    /// ate everything (finish=length with zero content) or the model
+    /// returned nothing at all. Tool rounds (content='' + tool_calls) are
+    /// legal and never retried.
+    fn empty_content_abnormal(response: &ModelResponse) -> bool {
+        response.text.is_none() && response.tool_calls.is_empty()
+    }
+
+    /// F-07 (2026-08-07 review): effective thinking for a request — the
+    /// per-request override (explicit fast-preflight rounds) or the
+    /// transport config default.
+    fn effective_thinking(&self, request: &ModelRequest) -> ThinkingMode {
+        request.thinking.unwrap_or(self.config.thinking)
+    }
+
+    /// One raw create attempt with the given thinking mode.
+    async fn create_once(
+        &self,
+        request: &ModelRequest,
+        thinking: ThinkingMode,
+    ) -> Result<ModelResponse, GatewayError> {
+        let client = self.client();
+        let mut req = self.build_request(request);
+        req.thinking = Some(async_openai::types::chat::ThinkingConfig {
+            thinking_type: match thinking {
+                ThinkingMode::EnabledMax => "enabled".to_string(),
+                ThinkingMode::Disabled => "disabled".to_string(),
+            },
+        });
+        // D-6 retry chain: the degraded attempt drops the reasoning knob.
+        if thinking == ThinkingMode::Disabled {
+            req.reasoning_effort = None;
+        }
+        // D-7: single-request wall-clock timeout (10min level) — the fork's
+        // create path has no read timeout of its own (P8).
+        let response = tokio::time::timeout(
+            self.config.retry.request_timeout,
+            client.chat().create(req),
+        )
+        .await
+        .map_err(|_| {
+            GatewayError::Timeout(format!(
+                "non-streaming create exceeded {:?}",
+                self.config.retry.request_timeout
+            ))
+        })?
+        .map_err(|e| self.map_error(e))?;
+        self.from_response(&response)
     }
 
     /// Model request → typed chat completion request.
     ///
-    /// IP1: no thinking/reasoning option is ever set — the builder surface
-    /// used here has none, and `ModelRequest` cannot express one.
+    /// D-6 (FIX_PLAN 2026-08-06): thinking is restored — `EnabledMax` sends
+    /// `thinking: {type: "enabled"}` + top-level `reasoning_effort: "max"`
+    /// (wire shape validated by the 2026-08-07 live probe: 559ms to the
+    /// first reasoning delta, ~30s to content on a hard task, per-round
+    /// `usage.reasoning_tokens`). `Disabled` keeps the P2-era mitigation
+    /// (all output to `content`).
+    ///
     /// `stream` is left unset: `create` / `create_stream` validate and
     /// set it themselves.
     ///
@@ -148,19 +222,34 @@ impl DeepSeekTransport {
                     .collect::<Vec<_>>(),
             )
         };
+        let (thinking, reasoning_effort) = match self.config.thinking {
+            ThinkingMode::EnabledMax => (
+                Some(async_openai::types::chat::ThinkingConfig {
+                    thinking_type: "enabled".to_string(),
+                }),
+                Some(ReasoningEffort::Max),
+            ),
+            ThinkingMode::Disabled => (
+                Some(async_openai::types::chat::ThinkingConfig {
+                    thinking_type: "disabled".to_string(),
+                }),
+                None,
+            ),
+        };
         CreateChatCompletionRequest {
             model: self.config.model_id.clone(),
             messages,
             tools,
             max_tokens: Some(self.config.max_tokens.min(request.max_tokens)),
-            // IP1 (thinking:disabled) — the real implementation. DeepSeek V4
-            // defaults to thinking ON: an unset field leaves the model
-            // burning its token budget on `reasoning_content` with an empty
-            // `content` (polyglot probe 2026-08-06: 15k–57k reasoning chars,
-            // 0 content chars, finish=length). The explicit disable routes
-            // all output to `content` (9.8s vs 201s on the same task).
-            thinking: Some(async_openai::types::chat::ThinkingConfig {
-                thinking_type: "disabled".to_string(),
+            thinking,
+            reasoning_effort,
+            // D-6 usage observation: request the aggregate usage in the final
+            // stream chunk (DeepSeek honors OpenAI-style
+            // stream_options.include_usage) so reasoning_tokens are
+            // observable on the streaming path too.
+            stream_options: Some(ChatCompletionStreamOptions {
+                include_usage: Some(true),
+                include_obfuscation: None,
             }),
             ..Default::default()
         }
@@ -220,6 +309,15 @@ impl DeepSeekTransport {
             // without a thinking option — live probe 2026-08-06); it is
             // preserved so the controller can replay it on the next request.
             reasoning_content: message.reasoning_content.clone(),
+            // D-6 usage observation: reasoning_tokens + completion_tokens
+            // feed budget/latency calibration (the 160K decision rolls back
+            // on the data).
+            reasoning_tokens: body
+                .usage
+                .as_ref()
+                .and_then(|u| u.completion_tokens_details.as_ref())
+                .and_then(|d| d.reasoning_tokens),
+            completion_tokens: body.usage.as_ref().map(|u| u.completion_tokens),
         })
     }
 
@@ -233,6 +331,223 @@ impl DeepSeekTransport {
             OpenAIError::FileSaveError(msg) => GatewayError::Transport(msg),
             OpenAIError::FileReadError(msg) => GatewayError::Transport(msg),
         }
+    }
+
+    async fn stream_once(
+        &self,
+        request: &ModelRequest,
+        thinking: ThinkingMode,
+        cancel: Option<&CancellationToken>,
+        on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ModelResponse, GatewayError> {
+        // Pre-cancel check (2026-08-06 implementation review P2-2): an
+        // already-cancelled run must not open a connection at all.
+        if cancel.is_some_and(|c| c.is_cancelled()) {
+            return Err(GatewayError::Cancelled);
+        }
+        let client = self.client();
+        let mut req = self.build_request(request);
+        req.thinking = Some(async_openai::types::chat::ThinkingConfig {
+            thinking_type: match thinking {
+                ThinkingMode::EnabledMax => "enabled".to_string(),
+                ThinkingMode::Disabled => "disabled".to_string(),
+            },
+        });
+        if thinking == ThinkingMode::Disabled {
+            req.reasoning_effort = None;
+        }
+        // F-08 (2026-08-07 review): the HTTP/TLS handshake sits OUTSIDE the
+        // select! watchdog loop — a TCP connection accepted but never
+        // answering would hang forever with no timeout and no cancel. Wrap
+        // the handshake in the idle-timeout: no response headers within
+        // that window is a dead wire (the idle watchdog's 90s semantics —
+        // headers arrive long before the first data chunk even under slow
+        // thinking).
+        let mut stream = tokio::time::timeout(
+            self.config.retry.stream_idle_timeout,
+            client.chat().create_stream(req),
+        )
+        .await
+        .map_err(|_| {
+            GatewayError::Timeout(
+                "stream handshake hung — no response headers within the idle timeout"
+                    .to_string(),
+            )
+        })?
+        .map_err(|e| self.map_error(e))?;
+
+        let mut text_parts: Vec<String> = Vec::new();
+        // DeepSeek interleaves reasoning_content deltas with content deltas;
+        // accumulated separately, then joined verbatim onto the response
+        // (alpha-test 2026-08-06 closure).
+        let mut reasoning_parts: Vec<String> = Vec::new();
+        // Ordered by first-seen chunk index; the provider sends each call's
+        // deltas in order, so Vec append + final sort keeps call order stable.
+        let mut tool_calls: Vec<(u32, StreamToolCall)> = Vec::new();
+        let mut finish_reason = OurFinishReason::Stop;
+        // The provider always terminates a well-formed stream with a
+        // finish_reason block; an EOF without one is a truncated stream
+        // (proxy drop, deploy switch, overload) and must not be journaled
+        // as a completed answer (2026-08-06 design review D1-1).
+        let mut saw_finish_reason = false;
+        // D-6 usage observation on the streaming path: DeepSeek emits the
+        // usage summary in the FINAL stream chunk (choices empty) when
+        // `stream_options.include_usage` is set; without it, usage is absent
+        // and the response reports `None` (reasoning-token calibration falls
+        // back to the non-streaming path / journal).
+        let mut stream_usage: Option<async_openai::types::chat::CompletionUsage> = None;
+
+        // D-7 (FIX_PLAN 2026-08-06) — stream idle watchdog + total budget:
+        //  - idle_warn (20s): log once per silence stretch that the wire is
+        //    quiet (slow thinking with progress is NOT a timeout — only a
+        //    dead wire is; the 2026-08-07 live probe showed a max-effort
+        //    stream with reasoning deltas flowing 0.5s after connect).
+        //  - idle_timeout (90s): hard abort on complete silence (TCP timeouts
+        //    cannot catch a hung keep-alive connection).
+        //  - total budget (30min): auxiliary backstop over the whole stream.
+        // All parameterized via `ModelConfig::retry`.
+        let idle_warn = self.config.retry.stream_idle_warn;
+        let idle_timeout = self.config.retry.stream_idle_timeout;
+        let total_deadline = tokio::time::Instant::now() + self.config.retry.stream_total_timeout;
+        let mut last_activity = tokio::time::Instant::now();
+        let mut warned = false;
+
+        loop {
+            // Cooperative cancellation checkpoint (Phase 3 slice #11, P3-7;
+            // 2026-08-06 design review D1-2): `select!` wakes the moment the
+            // token fires — polling would leave `/stop` dead while the wire
+            // is stalled (the fork's reqwest client has no read timeout) —
+            // and returning drops the stream, whose spawned task sees the rx
+            // end and closes the connection (the abort-by-drop path; the
+            // provider may keep generating up to one frame — recorded as the
+            // inherent boundary of cooperative cancellation). Timeout and
+            // cancel stay strictly distinct (D-7): the timeout fires only on
+            // wire silence, never on a user cancel.
+            let item = match cancel {
+                Some(c) => tokio::select! {
+                    biased;
+                    _ = c.cancelled() => return Err(GatewayError::Cancelled),
+                    _ = tokio::time::sleep_until(last_activity + idle_timeout) => {
+                        return Err(GatewayError::Timeout(format!(
+                            "stream idle: no data for {idle_timeout:?}"
+                        )));
+                    }
+                    _ = tokio::time::sleep_until(total_deadline) => {
+                        return Err(GatewayError::Timeout(format!(
+                            "stream total budget {:?} exceeded",
+                            self.config.retry.stream_total_timeout
+                        )));
+                    }
+                    _ = tokio::time::sleep_until(last_activity + idle_warn), if !warned => {
+                        tracing::warn!(
+                            "stream idle {idle_warn:?}: no data since last chunk — waiting (abort at {idle_timeout:?})"
+                        );
+                        warned = true;
+                        continue;
+                    }
+                    item = stream.next() => item,
+                },
+                None => tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep_until(last_activity + idle_timeout) => {
+                        return Err(GatewayError::Timeout(format!(
+                            "stream idle: no data for {idle_timeout:?}"
+                        )));
+                    }
+                    _ = tokio::time::sleep_until(total_deadline) => {
+                        return Err(GatewayError::Timeout(format!(
+                            "stream total budget {:?} exceeded",
+                            self.config.retry.stream_total_timeout
+                        )));
+                    }
+                    _ = tokio::time::sleep_until(last_activity + idle_warn), if !warned => {
+                        tracing::warn!(
+                            "stream idle {idle_warn:?}: no data since last chunk — waiting (abort at {idle_timeout:?})"
+                        );
+                        warned = true;
+                        continue;
+                    }
+                    item = stream.next() => item,
+                },
+            };
+            let Some(item) = item else {
+                break;
+            };
+            warned = false;
+            last_activity = tokio::time::Instant::now();
+            let chunk: CreateChatCompletionStreamResponse = item.map_err(|e| self.map_error(e))?;
+            // D-6: the final chunk carries the aggregate usage (choices
+            // empty, usage populated) when include_usage is honored.
+            if let Some(u) = &chunk.usage {
+                stream_usage = Some(u.clone());
+            }
+            for choice in &chunk.choices {
+                apply_delta(
+                    &choice.delta,
+                    &mut text_parts,
+                    &mut reasoning_parts,
+                    &mut tool_calls,
+                    &mut |text| on_chunk(text),
+                );
+                if let Some(fr) = choice.finish_reason {
+                    saw_finish_reason = true;
+                    finish_reason = map_finish_reason(Some(fr));
+                }
+            }
+        }
+
+        // D1-1: a stream that ended without a finish_reason was truncated —
+        // surfacing it as an error keeps the journal honest (no half-answer
+        // recorded as a completed `stop`).
+        if !saw_finish_reason {
+            return Err(GatewayError::Transport(
+                "stream ended without finish_reason".to_string(),
+            ));
+        }
+
+        let text = if text_parts.is_empty() {
+            None
+        } else {
+            Some(text_parts.concat())
+        };
+
+        tool_calls.sort_by_key(|(index, _)| *index);
+        let tool_calls = tool_calls
+            .into_iter()
+            .map(|(_, t)| ToolCall {
+                name: t.name,
+                arguments: serde_json::from_str(&t.arguments).unwrap_or(Value::Null),
+                call_id: t.call_id,
+            })
+            .collect::<Vec<_>>();
+
+        // D-6 (FIX_PLAN 2026-08-06): tool rounds MUST replay
+        // `reasoning_content` — DeepSeek 400s on omission, and empty string
+        // is the norm (59% of tool rounds; empty-object/missing breaks the
+        // replay). Empty reasoning on a tool round keeps the wire shape
+        // identical to the non-streaming path (`Some("")`), which preserves
+        // `""` verbatim (2026-08-07 review F-01).
+        let reasoning_content = if !reasoning_parts.is_empty() {
+            Some(reasoning_parts.concat())
+        } else if !tool_calls.is_empty() {
+            Some(String::new())
+        } else {
+            None
+        };
+
+        Ok(ModelResponse {
+            text,
+            tool_calls,
+            finish_reason,
+            reasoning_content,
+            // D-6 usage observation from the final stream chunk (None when
+            // the provider did not honor include_usage).
+            reasoning_tokens: stream_usage
+                .as_ref()
+                .and_then(|u| u.completion_tokens_details.as_ref())
+                .and_then(|d| d.reasoning_tokens),
+            completion_tokens: stream_usage.as_ref().map(|u| u.completion_tokens),
+        })
     }
 }
 
@@ -349,121 +664,74 @@ struct StreamToolCall {
 #[async_trait]
 impl ModelGateway for DeepSeekTransport {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
-        let client = self.client();
-        let response = client
-            .chat()
-            .create(self.build_request(&request))
-            .await
-            .map_err(|e| self.map_error(e))?;
-        self.from_response(&response)
+        // D-6 empty-content retry chain: thinking max can legitimately burn
+        // the whole budget on reasoning_content and leave content empty
+        // (finish=length, zero output). The chain:
+        //   1. normal request (thinking per config);
+        //   2. byte-identical retry ONCE (same messages, same config — the
+        //      provider's reasoning allocation varies run to run);
+        //   3. thinking DISABLED degraded retry once (all output routed to
+        //      content);
+        //   4. chain end still empty → explicit termination reason, never a
+        //      silent blank.
+        // Tool rounds (empty content + tool_calls) are legal and skip the
+        // chain entirely.
+        let first = self.create_once(&request, self.effective_thinking(&request)).await?;
+        if !Self::empty_content_abnormal(&first) {
+            return Ok(first);
+        }
+        let second = self.create_once(&request, self.effective_thinking(&request)).await?;
+        if !Self::empty_content_abnormal(&second) {
+            return Ok(second);
+        }
+        let degraded = self
+            .create_once(&request, ThinkingMode::Disabled)
+            .await?;
+        if !Self::empty_content_abnormal(&degraded) {
+            return Ok(degraded);
+        }
+        Err(GatewayError::Model(
+            "budget exhausted with zero output — thinking max retry chain \
+             (byte-identical retry + thinking-disabled degrade) all produced \
+             empty content"
+                .to_string(),
+        ))
     }
-
     async fn generate_stream(
         &self,
         request: ModelRequest,
         cancel: Option<&CancellationToken>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
-        // Pre-cancel check (2026-08-06 implementation review P2-2): an
-        // already-cancelled run must not open a connection at all.
-        if cancel.is_some_and(|c| c.is_cancelled()) {
-            return Err(GatewayError::Cancelled);
+        // D-6 empty-content retry chain on the streaming path (same shape as
+        // `generate`): normal → byte-identical retry → thinking-disabled
+        // degrade. Only ZERO-OUTPUT streams are re-attempted — a stream
+        // that produced any chunk is never retried (D-7 已见输出不重试:
+        // re-sending would duplicate tool execution).
+        let first = self
+            .stream_once(&request, self.effective_thinking(&request), cancel, on_chunk)
+            .await?;
+        if !Self::empty_content_abnormal(&first) {
+            return Ok(first);
         }
-        let client = self.client();
-        let mut stream = client
-            .chat()
-            .create_stream(self.build_request(&request))
-            .await
-            .map_err(|e| self.map_error(e))?;
-
-        let mut text_parts: Vec<String> = Vec::new();
-        // DeepSeek interleaves reasoning_content deltas with content deltas;
-        // accumulated separately, then joined verbatim onto the response
-        // (alpha-test 2026-08-06 closure).
-        let mut reasoning_parts: Vec<String> = Vec::new();
-        // Ordered by first-seen chunk index; the provider sends each call's
-        // deltas in order, so Vec append + final sort keeps call order stable.
-        let mut tool_calls: Vec<(u32, StreamToolCall)> = Vec::new();
-        let mut finish_reason = OurFinishReason::Stop;
-        // The provider always terminates a well-formed stream with a
-        // finish_reason block; an EOF without one is a truncated stream
-        // (proxy drop, deploy switch, overload) and must not be journaled
-        // as a completed answer (2026-08-06 design review D1-1).
-        let mut saw_finish_reason = false;
-
-        loop {
-            // Cooperative cancellation checkpoint (Phase 3 slice #11, P3-7;
-            // 2026-08-06 design review D1-2): `select!` wakes the moment the
-            // token fires — polling would leave `/stop` dead while the wire
-            // is stalled (the fork's reqwest client has no read timeout) —
-            // and returning drops the stream, whose spawned task sees the rx
-            // end and closes the connection (the abort-by-drop path; the
-            // provider may keep generating up to one frame — recorded as the
-            // inherent boundary of cooperative cancellation).
-            let item = match cancel {
-                Some(c) => tokio::select! {
-                    biased;
-                    _ = c.cancelled() => return Err(GatewayError::Cancelled),
-                    item = stream.next() => item,
-                },
-                None => stream.next().await,
-            };
-            let Some(item) = item else {
-                break;
-            };
-            let chunk: CreateChatCompletionStreamResponse = item.map_err(|e| self.map_error(e))?;
-            for choice in &chunk.choices {
-                apply_delta(
-                    &choice.delta,
-                    &mut text_parts,
-                    &mut reasoning_parts,
-                    &mut tool_calls,
-                    &mut |text| on_chunk(text),
-                );
-                if let Some(fr) = choice.finish_reason {
-                    saw_finish_reason = true;
-                    finish_reason = map_finish_reason(Some(fr));
-                }
-            }
+        let second = self
+            .stream_once(&request, self.effective_thinking(&request), cancel, on_chunk)
+            .await?;
+        if !Self::empty_content_abnormal(&second) {
+            return Ok(second);
         }
-
-        // D1-1: a stream that ended without a finish_reason was truncated —
-        // surfacing it as an error keeps the journal honest (no half-answer
-        // recorded as a completed `stop`).
-        if !saw_finish_reason {
-            return Err(GatewayError::Transport(
-                "stream ended without finish_reason".to_string(),
-            ));
+        let degraded = self
+            .stream_once(&request, ThinkingMode::Disabled, cancel, on_chunk)
+            .await?;
+        if !Self::empty_content_abnormal(&degraded) {
+            return Ok(degraded);
         }
-
-        let text = if text_parts.is_empty() {
-            None
-        } else {
-            Some(text_parts.concat())
-        };
-
-        tool_calls.sort_by_key(|(index, _)| *index);
-        let tool_calls = tool_calls
-            .into_iter()
-            .map(|(_, t)| ToolCall {
-                name: t.name,
-                arguments: serde_json::from_str(&t.arguments).unwrap_or(Value::Null),
-                call_id: t.call_id,
-            })
-            .collect::<Vec<_>>();
-
-        let reasoning_content = if reasoning_parts.is_empty() {
-            None
-        } else {
-            Some(reasoning_parts.concat())
-        };
-
-        Ok(ModelResponse {
-            text,
-            tool_calls,
-            finish_reason,
-            reasoning_content,
-        })
+        Err(GatewayError::Model(
+            "budget exhausted with zero output — thinking max retry chain \
+             (byte-identical retry + thinking-disabled degrade) all produced \
+             empty content"
+                .to_string(),
+        ))
     }
 }
 
@@ -528,7 +796,7 @@ fn apply_function_chunk(function: &FunctionCallStream, state: &mut StreamToolCal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::model::{Message, Role};
+    use crate::gateway::model::{Message, RetryPolicy, Role};
     use std::sync::Arc;
 
     fn request() -> ModelRequest {
@@ -543,30 +811,56 @@ mod tests {
             }],
             tools: Vec::new(),
             max_tokens: 512,
+            thinking: None,
         }
     }
 
     #[test]
-    fn build_request_forces_thinking_disabled_ip1() {
+    fn build_request_sets_thinking_enabled_max_d6() {
+        // D-6 (FIX_PLAN 2026-08-06) — the restored max-config: thinking
+        // enabled + reasoning_effort "max" + 160K budget, decided after the
+        // 2026-08-07 live probe (559ms to first reasoning delta, ~30s to
+        // content, per-round usage.reasoning_tokens). The 160K budget is
+        // the whole-token cap; the stream requests include_usage so
+        // reasoning tokens are observable on the streaming path.
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
+        let mut req = request();
+        // The request-level max_tokens is the min-cap over the config's 160K
+        // — a request asking for MORE than the config cap gets the cap, a
+        // request asking for less (e.g. gate rounds at 1024) gets less.
+        req.max_tokens = 200_000;
+        let json = serde_json::to_value(t.build_request(&req)).unwrap();
+        let s = json.to_string();
+        assert_eq!(json["thinking"]["type"], "enabled", "{s}");
+        assert_eq!(json["reasoning_effort"], "max", "{s}");
+        assert_eq!(
+            json["max_tokens"], 160_000,
+            "config 160K caps the request-level budget: {s}"
+        );
+        assert_eq!(
+            json["stream_options"]["include_usage"],
+            true,
+            "include_usage requested for reasoning_tokens observation: {s}"
+        );
+        assert_eq!(json["model"], "deepseek-v4-flash");
+    }
+
+    #[test]
+    fn build_request_thinking_disabled_routes_all_output_to_content() {
+        // The P2-era mitigation stays reachable: `ThinkingMode::Disabled`
+        // sends the explicit disable (all output to `content`, no reasoning
+        // knob) — kept for parity/tests/benchmarks that want the fast path.
+        let t = DeepSeekTransport {
+            config: ModelConfig {
+                thinking: ThinkingMode::Disabled,
+                ..DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config
+            },
+        };
         let req = t.build_request(&request());
         let json = serde_json::to_value(&req).unwrap();
-        // IP1 (thinking:disabled) — the real implementation: DeepSeek V4
-        // defaults to thinking ON, which can leave `content` empty while
-        // burning the whole budget on `reasoning_content`. The request must
-        // carry an explicit `thinking: {"type": "disabled"}` (2026-08-06
-        // polyglot probe: 15k–57k reasoning chars, 0 content chars,
-        // finish=length; disabled → 9.8s full answer). No reasoning knob
-        // may ever be set (reasoning_effort stays None via
-        // `..Default::default()` — asserted so a future mistake cannot
-        // silently enable it). `reasoning_content` replay is a CONTENT
-        // field (what the model already produced), not a knob.
         let s = json.to_string();
         assert_eq!(json["thinking"]["type"], "disabled", "{s}");
         assert!(!s.contains("reasoning_effort"), "{s}");
-        assert!(!s.contains("reasoning_content"), "{s}");
-        assert_eq!(json["model"], "deepseek-v4-flash");
-        assert!(!s.contains("\"stream\":"));
     }
 
     #[test]
@@ -586,6 +880,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_tokens: 512,
+            thinking: None,
         });
         let json = serde_json::to_value(&req).unwrap();
         let messages = json["messages"].as_array().unwrap();
@@ -631,6 +926,7 @@ mod tests {
             ],
             tools: Vec::new(),
             max_tokens: 512,
+            thinking: None,
         });
         let json = serde_json::to_value(&req).unwrap();
         let messages = json["messages"].as_array().unwrap();
@@ -678,6 +974,7 @@ mod tests {
             ],
             tools: Vec::new(),
             max_tokens: 512,
+            thinking: None,
         });
         let json = serde_json::to_value(&req).unwrap();
         let messages = json["messages"].as_array().unwrap();
@@ -707,6 +1004,7 @@ mod tests {
                 parameters: serde_json::json!({"type": "object"}),
             }],
             max_tokens: 512,
+            thinking: None,
         });
         let json = serde_json::to_value(&req).unwrap();
         let tools = json["tools"].as_array().unwrap();
@@ -891,6 +1189,11 @@ mod tests {
         /// `frame_delay` between them (streaming visibility / cancel tests).
         body: String,
         frame_delay: std::time::Duration,
+        /// Sleep before writing ANY bytes (simulates a stalled upstream —
+        /// timeout/watchdog tests). The client's `request_timeout` /
+        /// `stream_idle_timeout` must be shorter than this for the test to
+        /// observe a timeout.
+        pre_delay: std::time::Duration,
     }
 
     impl MockResponse {
@@ -900,6 +1203,14 @@ mod tests {
                 content_type: "application/json",
                 body: body.into(),
                 frame_delay: std::time::Duration::ZERO,
+                pre_delay: std::time::Duration::ZERO,
+            }
+        }
+
+        fn json_delayed(status: u16, body: impl Into<String>, pre_delay: std::time::Duration) -> Self {
+            Self {
+                pre_delay,
+                ..Self::json(status, body)
             }
         }
 
@@ -909,6 +1220,7 @@ mod tests {
                 content_type: "text/event-stream",
                 body: frames.join(""),
                 frame_delay,
+                pre_delay: std::time::Duration::ZERO,
             }
         }
     }
@@ -976,6 +1288,11 @@ mod tests {
         let first_line = headers.lines().next().unwrap_or("").to_string();
 
         let response = handler(&first_line, &body);
+        // Simulate a stalled upstream: sleep before writing anything, so the
+        // client-side timeout/watchdog fires first.
+        if !response.pre_delay.is_zero() {
+            tokio::time::sleep(response.pre_delay).await;
+        }
         let head = format!(
             "HTTP/1.1 {} OK\r\ncontent-type: {}\r\nconnection: close\r\ncontent-length: {}\r\n\r\n",
             response.status,
@@ -1001,6 +1318,20 @@ mod tests {
 
     /// A transport pointed at the mock server.
     fn mock_transport(base_url: &str) -> DeepSeekTransport {
+        mock_transport_with_retry(base_url, Default::default())
+    }
+
+    /// A transport pointed at the mock server with an explicit retry policy
+    /// (timeout/watchdog tests need short budgets).
+    fn mock_transport_with_retry(base_url: &str, retry: RetryPolicy) -> DeepSeekTransport {
+        mock_transport_with_retry_thinking(base_url, retry, ThinkingMode::Disabled)
+    }
+
+    fn mock_transport_with_retry_thinking(
+        base_url: &str,
+        retry: RetryPolicy,
+        thinking: ThinkingMode,
+    ) -> DeepSeekTransport {
         DeepSeekTransport {
             config: ModelConfig {
                 provider: "deepseek".to_string(),
@@ -1008,6 +1339,8 @@ mod tests {
                 api_base: base_url.to_string(),
                 api_key: "sk-test".to_string(),
                 max_tokens: 4096,
+                retry,
+                thinking,
             },
         }
     }
@@ -1016,12 +1349,16 @@ mod tests {
     async fn generate_real_http_roundtrip() {
         let base = spawn_mock(|_line, body| {
             assert!(body.contains("\"stream\":false") || !body.contains("\"stream\":true"));
-            // IP1 (thinking:disabled) on the wire — V4 defaults to thinking
-            // ON; the explicit disable routes all output to `content`
-            // (2026-08-06 polyglot probe).
+            // D-6 Disabled mode on the wire — the mock transport is built
+            // with `ThinkingMode::Disabled` (all output to `content`), so
+            // the wire must carry the explicit disable + NO reasoning knob.
             assert!(
                 body.contains("\"thinking\":{\"type\":\"disabled\"}"),
                 "explicit thinking disable on the wire: {body}"
+            );
+            assert!(
+                !body.contains("reasoning_effort"),
+                "Disabled mode must not set reasoning_effort: {body}"
             );
             // The system prompt leads the conversation on the wire (D1-1).
             assert!(body.contains("\"role\":\"system\""), "{body}");
@@ -1053,6 +1390,115 @@ mod tests {
             matches!(&err, GatewayError::Model(m) if m.contains("model does not exist") && m.contains("model_not_found")),
             "unexpected error: {err:?}"
         );
+    }
+
+    // ── D-6 empty-content retry chain ─────────────────────────────────────
+
+    fn empty_finish_length_response() -> String {
+        // finish=length with NO content — the abnormal zero-output case
+        // (thinking budget ate everything).
+        r#"{"id":"x","object":"chat.completion","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":null},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":400,"completion_tokens_details":{"reasoning_tokens":395},"total_tokens":410}}"#
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn generate_empty_content_retries_then_degrades() {
+        // D-6: abnormal empty content (finish=length, zero output) retries
+        // byte-identically, then degrades to thinking-disabled; the chain
+        // yields the degraded response instead of erroring.
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < 2 {
+                assert!(
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"max\""),
+                    "attempts 1-2 use the max config: {body}"
+                );
+                MockResponse::json(200, empty_finish_length_response())
+            } else {
+                assert!(
+                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
+                    "degraded attempt drops reasoning: {body}"
+                );
+                MockResponse::json(
+                    200,
+                    r#"{"id":"x","object":"chat.completion","created":0,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"降级答案"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#,
+                )
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let r = t.generate(request()).await.unwrap();
+        assert_eq!(r.text.as_deref(), Some("降级答案"));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "1 normal + 1 byte-identical retry + 1 degraded"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_empty_content_chain_end_errors_explicitly() {
+        // D-6: the chain end (all three attempts empty) surfaces an explicit
+        // termination reason — never a silent blank response.
+        let base = spawn_mock(|_line, _body| {
+            MockResponse::json(200, empty_finish_length_response())
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let err = t.generate(request()).await.unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Model(m) if m.contains("zero output")),
+            "chain end must error explicitly: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_tool_round_empty_content_is_not_retried() {
+        // D-6: a tool round (empty content + tool_calls) is LEGAL — the
+        // chain must not treat it as abnormal.
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::json(
+                200,
+                r#"{"id":"x","object":"chat.completion","created":0,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#,
+            )
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let r = t.generate(request()).await.unwrap();
+        assert_eq!(r.tool_calls.len(), 1);
+        assert_eq!(r.tool_calls[0].name, "read_file");
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "tool rounds are legal — no retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_extracts_reasoning_tokens_from_usage() {
+        // D-6 usage observation: reasoning_tokens come from
+        // usage.completion_tokens_details.reasoning_tokens on every round.
+        let base = spawn_mock(|_line, _body| {
+            MockResponse::json(200, empty_finish_length_response())
+        })
+        .await;
+        let t = mock_transport(&base);
+        let r = t.generate(request()).await.unwrap_err();
+        // The chain retried and errored — but we assert the extraction on a
+        // direct from_response instead (deterministic).
+        let _ = r;
+        let parsed = t
+            .from_response(
+                &serde_json::from_str(&empty_finish_length_response()).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(parsed.reasoning_tokens, Some(395));
+        assert_eq!(parsed.completion_tokens, Some(400));
     }
 
     #[tokio::test]
@@ -1138,6 +1584,47 @@ mod tests {
             serde_json::json!({"path": "b.txt"})
         );
         assert_eq!(r.tool_calls[1].call_id, "call-2");
+        assert_eq!(r.finish_reason, OurFinishReason::ToolCalls);
+    }
+
+    #[tokio::test]
+    async fn generate_stream_tool_round_preserves_empty_reasoning() {
+        // D-6 (2026-08-07 review F-01): the provider emits ONLY empty
+        // `reasoning_content` deltas on a tool round (the 59% norm). The
+        // replay message must carry `Some("")` — folding it to None would
+        // omit the field and DeepSeek 400s on the next request. This locks
+        // the streaming path to the non-streaming path's `Some("")` shape.
+        let frame = |delta: &str, finish: Option<&str>| {
+            let finish = finish
+                .map(|f| format!("\"{f}\""))
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":{finish}}}]}}\n\n",
+            )
+        };
+        let body = format!(
+            "{}{}{}data: [DONE]\n\n",
+            frame(
+                r#"{"role":"assistant","reasoning_content":"","tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{}"}}]}"#,
+                None
+            ),
+            frame(r#"{"reasoning_content":""}"#, None),
+            frame(r#"{}"#, Some("tool_calls")),
+        );
+        let base = spawn_mock(move |_line, _body| {
+            MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport(&base);
+        let mut chunks = Vec::new();
+        let r = t
+            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert!(chunks.is_empty(), "tool-call round: no text chunks");
+        assert_eq!(r.tool_calls.len(), 1);
+        assert_eq!(r.tool_calls[0].call_id, "call-1");
+        assert_eq!(r.reasoning_content, Some(String::new()));
         assert_eq!(r.finish_reason, OurFinishReason::ToolCalls);
     }
 
@@ -1247,6 +1734,206 @@ mod tests {
         assert!(chunks.is_empty());
     }
 
+    // ── D-7 timeout / retry discipline (FIX_PLAN 2026-08-06, P1/LOOP-16) ───
+
+    fn short_retry_policy() -> RetryPolicy {
+        RetryPolicy {
+            request_max_retries: 10,
+            request_retry_window: std::time::Duration::from_secs(32),
+            // NOTE: `request_timeout` wraps the WHOLE create call including
+            // its retries — for retry-cap tests it must exceed the backoff
+            // accumulation, or the timeout fires first (observed 2026-08-07).
+            request_timeout: std::time::Duration::from_secs(60),
+            stream_idle_warn: std::time::Duration::from_millis(50),
+            stream_idle_timeout: std::time::Duration::from_millis(150),
+            stream_total_timeout: std::time::Duration::from_millis(500),
+        }
+    }
+
+    /// Timeout-focused policy: tiny budgets so the watchdog fires fast.
+    fn short_timeout_policy() -> RetryPolicy {
+        RetryPolicy {
+            request_max_retries: 10,
+            request_retry_window: std::time::Duration::from_secs(32),
+            request_timeout: std::time::Duration::from_millis(300),
+            stream_idle_warn: std::time::Duration::from_millis(50),
+            stream_idle_timeout: std::time::Duration::from_millis(150),
+            stream_total_timeout: std::time::Duration::from_millis(500),
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_non_streaming_request_timeout() {
+        // D-7: the non-streaming path must not block forever on a stalled
+        // upstream — `request_timeout` fires and surfaces as `Timeout`
+        // (strictly distinct from `Cancelled`).
+        let base = spawn_mock(|_line, _body| {
+            MockResponse::json_delayed(
+                200,
+                r#"{"id":"x","object":"chat.completion","created":0,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"late"},"finish_reason":"stop"}]}"#,
+                std::time::Duration::from_secs(2),
+            )
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_timeout_policy());
+        let err = t.generate(request()).await.unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Timeout(m) if m.contains("exceeded")),
+            "stalled create must time out, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_bounded_retries_on_5xx() {
+        // D-7 / LOOP-16: retries are capped by `request_max_retries` — a
+        // stuck upstream (persistent 500) must fail after the cap instead of
+        // retrying until the backoff window expires. Uses a SMALL cap (3) so
+        // the test is fast; the retry-cap semantics are identical at 10.
+        let policy = RetryPolicy {
+            request_max_retries: 3,
+            ..short_retry_policy()
+        };
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::json(
+                500,
+                r#"{"error":{"message":"boom","type":"server_error","code":null}}"#,
+            )
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, policy);
+        let err = t.generate(request()).await.unwrap_err();
+        assert!(
+            matches!(err, GatewayError::Model(_)),
+            "persistent 5xx must fail after retry cap: {err:?}"
+        );
+        // max_retries=3 → exactly 4 total attempts (1 + 3 retries).
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 4, "retry cap violated: {n} attempts for max_retries=3");
+    }
+
+    #[tokio::test]
+    async fn generate_retry_window_caps_before_max_retries() {
+        // D-7: the backoff window is an INDEPENDENT bound — a tight window
+        // stops retries before `request_max_retries` is reached (a stuck
+        // upstream must not hold the request for the full retry sequence).
+        let policy = RetryPolicy {
+            request_max_retries: 10,
+            request_retry_window: std::time::Duration::from_millis(250),
+            ..short_retry_policy()
+        };
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::json(
+                500,
+                r#"{"error":{"message":"boom","type":"server_error","code":null}}"#,
+            )
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, policy);
+        let err = t.generate(request()).await.unwrap_err();
+        assert!(
+            matches!(err, GatewayError::Model(_)),
+            "persistent 5xx must fail once the window expires: {err:?}"
+        );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            n <= 4,
+            "window must cap attempts well below max_retries=10: {n}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_429_retry_then_success() {
+        // D-7: transient 429 retries with backoff, then succeeds — the
+        // bounded loop must not give up on the first 429.
+        let attempts = std::sync::atomic::AtomicU32::new(0);
+        let base = spawn_mock(move |_line, _body| {
+            let n = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < 2 {
+                MockResponse::json(
+                    429,
+                    r#"{"error":{"message":"rate limited","type":"rate_limit_error","code":"rate_limit_exceeded"}}"#,
+                )
+            } else {
+                MockResponse::json(
+                    200,
+                    r#"{"id":"x","object":"chat.completion","created":0,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok-after-429"},"finish_reason":"stop"}]}"#,
+                )
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let r = t.generate(request()).await.unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok-after-429"));
+    }
+
+    #[tokio::test]
+    async fn generate_stream_idle_watchdog_aborts_silence() {
+        // D-7: the idle watchdog aborts a stream that goes completely silent
+        // (no data at all past `stream_idle_timeout`) — slow thinking with
+        // progress is not a timeout, a dead wire is.
+        let base = spawn_mock(|_line, _body| {
+            MockResponse::json_delayed(
+                200,
+                r#"{"id":"x","object":"chat.completion","created":0,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"never-arrives"},"finish_reason":"stop"}]}"#,
+                std::time::Duration::from_secs(2),
+            )
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_timeout_policy());
+        let mut chunks = Vec::new();
+        let err = t
+            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Timeout(m) if m.contains("idle")),
+            "silent stream must abort via idle watchdog, got {err:?}"
+        );
+        assert!(chunks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn generate_stream_total_budget_backstop() {
+        // D-7: the total budget is an auxiliary backstop over the whole
+        // stream — even with periodic data, a stream that never terminates
+        // within the budget errors instead of running forever.
+        let frame = |delta: &str| {
+            format!(
+                "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":null}}]}}\n\n",
+            )
+        };
+        // 10 frames × 100ms = 1s of flowing data (100ms > 0, so the wire is
+        // alive; 100ms < 150ms idle_timeout, so the idle watchdog never
+        // fires) — but the total budget (500ms) caps the whole stream first.
+        let mut body = String::new();
+        for i in 0..10 {
+            body.push_str(&frame(&format!(r#"{{"role":"assistant","content":"f{i}"}}"#)));
+        }
+        body.push_str("data: [DONE]\n\n");
+        let base = spawn_mock(move |_line, _body| {
+            MockResponse::sse(vec![&body], std::time::Duration::from_millis(100))
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_timeout_policy());
+        let mut chunks = Vec::new();
+        let err = t
+            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Timeout(m) if m.contains("total")),
+            "non-terminating stream must hit the total budget, got {err:?}"
+        );
+        // Data did flow before the backstop fired.
+        assert!(!chunks.is_empty());
+    }
+
     #[tokio::test]
     #[ignore = "live transport — set ORZ_TEST_LIVE=1 (API key from Windows Credential Manager, ADR-0006)"]
     async fn live_chat_completion_roundtrip() {
@@ -1278,6 +1965,7 @@ mod tests {
                 }],
                 tools: Vec::new(),
                 max_tokens: 32,
+                thinking: None,
             })
             .await;
         assert!(r.is_ok(), "{r:?}");

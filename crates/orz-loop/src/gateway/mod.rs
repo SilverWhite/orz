@@ -15,6 +15,10 @@
 pub mod credentials;
 pub mod fake;
 pub mod model;
+/// Live probe (FIX_PLAN 2026-08-06 item ①) — raw-JSON measurement of the
+/// thinking-enabled surface; test-only, gated on ORZ_TEST_LIVE=1.
+#[cfg(test)]
+pub mod probe_thinking_max;
 pub mod transport;
 
 pub use fake::{FakeProvider, ScriptedResponse};

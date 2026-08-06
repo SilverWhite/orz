@@ -1,6 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 use std::pin::Pin;
 
+use backoff::backoff::Backoff;
 use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
 use futures::{stream::StreamExt, Stream};
@@ -75,6 +76,11 @@ pub struct Client<C: Config> {
     config: C,
     #[cfg(not(target_family = "wasm"))]
     backoff: backoff::ExponentialBackoff,
+    /// Hard cap on retry attempts (D-7, FIX_PLAN 2026-08-06). `None` keeps
+    /// the historical behavior (window-bounded backoff only); orz sets
+    /// `Some(10)` so a stuck upstream cannot retry past the cap.
+    #[cfg(not(target_family = "wasm"))]
+    max_retries: Option<u32>,
 }
 
 impl<C: Config> Default for Client<C>
@@ -87,6 +93,8 @@ where
             config: C::default(),
             #[cfg(not(target_family = "wasm"))]
             backoff: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
+            max_retries: None,
         }
     }
 }
@@ -110,6 +118,7 @@ impl<C: Config> Client<C> {
             http_client,
             config,
             backoff,
+            max_retries: None,
         }
     }
 
@@ -129,6 +138,8 @@ impl<C: Config> Client<C> {
             config,
             #[cfg(not(target_family = "wasm"))]
             backoff: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
+            max_retries: None,
         }
     }
 
@@ -144,6 +155,15 @@ impl<C: Config> Client<C> {
     #[cfg(not(target_family = "wasm"))]
     pub fn with_backoff(mut self, backoff: backoff::ExponentialBackoff) -> Self {
         self.backoff = backoff;
+        self
+    }
+
+    /// Cap the number of retry attempts (D-7, FIX_PLAN 2026-08-06). The
+    /// default (`None`) keeps the historical window-bounded behavior; orz
+    /// sets `Some(10)` so a stuck upstream cannot retry past the cap.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = Some(max_retries);
         self
     }
 
@@ -547,6 +567,12 @@ impl<C: Config> Client<C> {
     /// request_maker serves one purpose: to be able to create request again
     /// to retry API call after getting rate limited. request_maker is async because
     /// reqwest::multipart::Form is created by async calls to read files for uploads.
+    ///
+    /// Retry discipline (D-7, FIX_PLAN 2026-08-06): bounded by BOTH the
+    /// backoff's elapsed-time window AND the optional `max_retries` cap —
+    /// whichever ends first. The historical `backoff::future::retry` loop
+    /// only bounded on elapsed time; with a default 15-minute window a stuck
+    /// upstream could keep the request alive far past the caller's intent.
     #[cfg(not(target_family = "wasm"))]
     async fn execute_raw<M, Fut>(&self, request_maker: M) -> Result<(Bytes, HeaderMap), OpenAIError>
     where
@@ -554,46 +580,57 @@ impl<C: Config> Client<C> {
         Fut: core::future::Future<Output = Result<reqwest::Request, OpenAIError>>,
     {
         let client = self.http_client.clone();
+        let mut backoff = self.backoff.clone();
+        backoff.reset();
+        let mut retry_count: u32 = 0;
 
-        backoff::future::retry(self.backoff.clone(), || async {
-            let request = request_maker().await.map_err(backoff::Error::Permanent)?;
+        loop {
+            let request = request_maker().await?;
             let response = client
                 .execute(request)
                 .await
-                .map_err(OpenAIError::Reqwest)
-                .map_err(backoff::Error::Permanent)?;
+                .map_err(OpenAIError::Reqwest)?;
 
             let status = response.status();
 
             match read_response(response).await {
-                Ok((bytes, headers)) => Ok((bytes, headers)),
+                Ok((bytes, headers)) => return Ok((bytes, headers)),
                 Err(e) => {
-                    match e {
+                    let transient = match &e {
                         OpenAIError::ApiError(api_error) => {
                             if status.is_server_error() {
-                                Err(backoff::Error::Transient {
-                                    err: OpenAIError::ApiError(api_error),
-                                    retry_after: None,
-                                })
+                                true
                             } else if status.as_u16() == 429
                                 && api_error.r#type != Some("insufficient_quota".to_string())
                             {
                                 // Rate limited retry...
                                 tracing::warn!("Rate limited: {}", api_error.message);
-                                Err(backoff::Error::Transient {
-                                    err: OpenAIError::ApiError(api_error),
-                                    retry_after: None,
-                                })
+                                true
                             } else {
-                                Err(backoff::Error::Permanent(OpenAIError::ApiError(api_error)))
+                                false
                             }
                         }
-                        _ => Err(backoff::Error::Permanent(e)),
+                        _ => false,
+                    };
+                    if !transient {
+                        return Err(e);
+                    }
+                    if self.max_retries.is_some_and(|m| retry_count >= m) {
+                        tracing::warn!(
+                            "retry cap reached ({} retries): giving up: {e}",
+                            retry_count
+                        );
+                        return Err(e);
+                    }
+                    retry_count += 1;
+                    match backoff.next_backoff() {
+                        Some(delay) => tokio::time::sleep(delay).await,
+                        // Elapsed-time window exhausted — no further retries.
+                        None => return Err(e),
                     }
                 }
             }
-        })
-        .await
+        }
     }
 
     /// Execute a HTTP request (WASM version - single attempt, no retry)

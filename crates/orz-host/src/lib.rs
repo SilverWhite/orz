@@ -62,6 +62,12 @@ pub struct OrzHost {
     /// Live-client outbound gateway (clone; the original goes to the
     /// permission bridge). `None` = headless — deltas are no-ops.
     gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
+    /// D-9 (FIX_PLAN 2026-08-06): fixed test-runner command (Aider-model
+    /// feedback loop) — `Some` declares the `run_tests` tool to the model;
+    /// the command is host-owned and the test files stay hidden.
+    test_runner: Option<orz_loop::host::TestRunner>,
+    /// Session working directory — the run_tests command's cwd.
+    cwd: PathBuf,
 }
 
 impl OrzHost {
@@ -104,7 +110,17 @@ impl OrzHost {
             permit_store_root: cwd.join(".gsa"),
             session_id: None,
             gateway: None,
+            test_runner: None,
+            cwd: cwd.to_path_buf(),
         })
+    }
+
+    /// D-9 (FIX_PLAN 2026-08-06): inject a fixed test-runner command —
+    /// declares the `run_tests` tool (Aider-model feedback loop). The
+    /// command is host-owned argv; the test files stay hidden from the model.
+    pub fn with_test_runner(mut self, runner: Option<orz_loop::host::TestRunner>) -> Self {
+        self.test_runner = runner;
+        self
     }
 
     /// Inject the session's keystore-backed permit signer (see
@@ -229,6 +245,27 @@ impl OrzHost {
     }
 }
 
+/// F-09 (2026-08-07 review): collect a streamed pipe with a hard cap — the
+/// TAIL is kept (test summaries live at the end); leading bytes are dropped
+/// on overflow so pathological output cannot blow session memory. A closed
+/// or failed pipe simply ends the collection.
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(mut reader: R, buf: &mut Vec<u8>) {
+    use tokio::io::AsyncReadExt;
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > orz_loop::host::RUN_TESTS_OUTPUT_CAP {
+                    let excess = buf.len() - orz_loop::host::RUN_TESTS_OUTPUT_CAP;
+                    buf.drain(..excess);
+                }
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl LoopHost for OrzHost {
     fn journal(&self) -> &JournalRecorder {
@@ -241,6 +278,115 @@ impl LoopHost for OrzHost {
 
     fn workspace_trust(&self) -> WorkspaceTrust {
         self.workspace_trust
+    }
+
+    /// IP2a (FIX_PLAN 2026-08-06 D-3): map the bridge's session permission
+    /// policy onto the loop's `ToolPolicy` — the loop filters policy-refused
+    /// tools out of the model-visible declarations. A missing bridge (no
+    /// policy known) maps to `Interactive` for the DECLARATION projection
+    /// only; execution still fails closed through `request_permission`
+    /// (LoopHost default → Deny), so nothing is auto-allowed by this.
+    fn tool_policy(&self) -> orz_loop::host::ToolPolicy {
+        use orz_loop::host::ToolPolicy;
+        match self.permission.as_ref().map(|b| b.policy()) {
+            Some(PermissionPolicy::ReadOnly) => ToolPolicy::ReadOnly,
+            Some(PermissionPolicy::Benchmark) => ToolPolicy::Benchmark,
+            _ => ToolPolicy::Interactive,
+        }
+    }
+
+    /// D-9 (FIX_PLAN 2026-08-06): the injected fixed test-runner command.
+    fn test_runner(&self) -> Option<orz_loop::host::TestRunner> {
+        self.test_runner.clone()
+    }
+
+    /// D-9: run the FIXED test command in the session cwd. The model never
+    /// supplies argv — the command is host-owned; stdout/stderr/exit code
+    /// feed back to the model (Aider-model loop).
+    async fn run_tests(&self) -> Result<orz_loop::host::TestRunResult, ToolError> {
+        let Some(runner) = self.test_runner.clone() else {
+            return Err(ToolError::NotFound("no test runner configured".into()));
+        };
+        if runner.command.is_empty() {
+            return Err(ToolError::ExecutionFailed("empty test command".into()));
+        }
+        let timeout = runner.timeout.unwrap_or(orz_loop::host::RUN_TESTS_TIMEOUT);
+        // F-09 (2026-08-07 review): bounded execution + context gating. The
+        // command runs under a wall-clock cap (default 30min — the cap only
+        // catches true hangs; context size, not wall time, is the priority);
+        // a hung child is killed. Output is collected with a TAIL cap (1MB)
+        // so pathological output cannot blow session memory; the full
+        // (capped) output is written to a file the model can read
+        // (read_file), and the controller injects only the final 32KB into
+        // the conversation.
+        let mut child = tokio::process::Command::new(&runner.command[0])
+            .args(&runner.command[1..])
+            .current_dir(&self.cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| ToolError::ExecutionFailed(format!("test runner spawn: {e}")))?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            ToolError::ExecutionFailed("test runner stdout pipe unavailable".into())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            ToolError::ExecutionFailed("test runner stderr pipe unavailable".into())
+        })?;
+        let mut out_buf = Vec::<u8>::new();
+        let mut err_buf = Vec::<u8>::new();
+        let collect = async {
+            tokio::join!(
+                read_capped(stdout, &mut out_buf),
+                read_capped(stderr, &mut err_buf),
+            );
+            child.wait().await
+        };
+        let status = match tokio::time::timeout(timeout, collect).await {
+            Ok(status) => status
+                .map_err(|e| ToolError::ExecutionFailed(format!("test runner wait: {e}")))?,
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Ok(orz_loop::host::TestRunResult {
+                    output: format!(
+                        "[test runner TIMED OUT after {timeout:?} — process killed; \
+                         partial output follows]\n{}",
+                        String::from_utf8_lossy(&out_buf),
+                    ),
+                    exit_code: None,
+                    full_output_path: None,
+                });
+            }
+        };
+        let mut text = String::from_utf8_lossy(&out_buf).into_owned();
+        if !err_buf.is_empty() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&String::from_utf8_lossy(&err_buf));
+        }
+        // F-09: write the full (capped) output to a file the model can read
+        // (read_file) — the conversation only carries the final 32KB.
+        let gsa_dir = self.cwd.join(".gsa");
+        let full_output_path = match std::fs::create_dir_all(&gsa_dir)
+            .and_then(|()| std::fs::write(gsa_dir.join("run_tests_output.txt"), &text))
+        {
+            Ok(()) => Some(
+                gsa_dir
+                    .join("run_tests_output.txt")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            Err(e) => {
+                tracing::warn!("run_tests: full output file write failed: {e}");
+                None
+            }
+        };
+        Ok(orz_loop::host::TestRunResult {
+            output: text,
+            exit_code: status.code(),
+            full_output_path,
+        })
     }
 
     /// Forward a streamed model text chunk to the live ACP client as an

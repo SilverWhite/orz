@@ -10,8 +10,20 @@
 //! system context); the constants live here per design §4.6.6.
 
 /// Base system prompt — runtime-neutral orientation.
+///
+/// D-1 (FIX_PLAN 2026-08-06): the citation rule lives here (the main-agent
+/// prompt is the carrier — NOT a project doc / CLAUDE.md / index; those are
+/// dev-directory documents unrelated to the binary). One rule + an inline
+/// marker, no structured template (the main agent works alone — no helper
+/// subagent, so the burden must be minimal). The rule blocks hallucinated
+/// attributions ("参考自某处" claims without a locatable source — P7's
+/// false "Python 移植" record is the direct precedent) and the inline
+/// markers are mechanically checkable (grep `[来源:`).
 pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent workbench。\
-遵循注入的 assurance 上下文块执行任务；工具可用性由运行时声明，不得自行推断。";
+遵循注入的 assurance 上下文块执行任务；工具可用性由运行时声明，不得自行推断。\
+\n引用纪律：凡基于外部依据、参考实现或内部文档的引用，必须在引用处附带内联标记 \
+`[来源: 路径:行号]`；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。\
+内部文档引用用 文档ID §节/锚点 而非裸行号（行号会漂移）。";
 
 /// Neutral inquiry block — IP2c, fired after a retrieval round completes when
 /// any of the 4 判定点 crosses its threshold (§4.6.5, verbatim).
@@ -63,6 +75,82 @@ pub fn is_injected_block_text(content: &str) -> bool {
         || content == RETRIEVAL_COMPLETION_CHECK_BLOCK
         || content == COUNTEREXAMPLE_GATE_BLOCK
         || content == COUNTEREXAMPLE_GATE_PLAN_BLOCK
+        || content.starts_with(TOOL_POLICY_BREAKER_PREFIX)
+        || content.starts_with(TOOL_ROUND_BUDGET_PREFIX)
+}
+
+/// D-8 (FIX_PLAN 2026-08-06): prefix for the mechanically injected tool-round
+/// budget declarations (session budget + per-round remaining + exhaustion).
+/// Counted as injected text — never stagnation input.
+///
+/// Deliberately matches the versioned marker form (`[TOOL_ROUND_BUDGET v0.1]`)
+/// as well as the bare form — the previous constant ended in `]` and never
+/// matched the versioned messages (2026-08-07 review F-04). The closing tag
+/// `[/TOOL_ROUND_BUDGET]` does not match (starts with `[/`).
+pub const TOOL_ROUND_BUDGET_PREFIX: &str = "[TOOL_ROUND_BUDGET";
+
+/// IP2a denial-circuit-breaker message (D-3, FIX_PLAN 2026-08-06): injected
+/// into the conversation after 3 consecutive policy denials in one run — the
+/// model has been retrying a refused tool (polyglot probe P3: `web_search`×4
+/// burned a third of the round budget). It tells the model to switch
+/// strategy, names the refused tool, and is counted as injected text (never
+/// stagnation input). The total-denial ceiling message is a stronger variant.
+pub const TOOL_POLICY_BREAKER_PREFIX: &str = "[TOOL_POLICY_BREAKER]";
+
+pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
+    format!(
+        "{TOOL_POLICY_BREAKER_PREFIX} v0.1\n\
+        Consecutive tool calls have been refused by the session permission policy \
+        ({consecutive} in a row, last: '{tool_name}'). The refused tool is NOT \
+        available under the current policy — do not retry it. Switch strategy: \
+        use only the tools declared as available, or state that the task cannot \
+        be completed under the current policy.\n\
+        [/TOOL_POLICY_BREAKER]"
+    )
+}
+
+pub fn tool_policy_ceiling_block(total: u32) -> String {
+    format!(
+        "{TOOL_POLICY_BREAKER_PREFIX} v0.1 CEILING\n\
+        The total number of refused tool calls this run has reached {total} \
+        (conservative ceiling). No further refused-tool retries are productive — \
+        end the attempt or switch to an available tool immediately.\n\
+        [/TOOL_POLICY_BREAKER]"
+    )
+}
+
+/// D-8 (FIX_PLAN 2026-08-06): session-level budget declaration — injected
+/// into the system prompt once per run (BUDGET + REMAINING initial value).
+/// The model does not guess or drift the remaining count.
+pub fn tool_round_budget_session_block(budget: u32, remaining: u32) -> String {
+    format!(
+        "{TOOL_ROUND_BUDGET_PREFIX} v0.1]\n\
+         BUDGET: {budget} tool rounds per turn\n\
+         REMAINING: {remaining}\n\
+         After each tool round the controller reports the updated \
+         remaining count. Finish your work within the budget; if it \
+         is exhausted the run ends with a partial result.\n\
+         [/TOOL_ROUND_BUDGET]"
+    )
+}
+
+/// D-8: per-round mechanical re-declaration of the remaining budget.
+pub fn tool_round_budget_remaining_block(remaining: u32) -> String {
+    format!(
+        "{TOOL_ROUND_BUDGET_PREFIX} v0.1] REMAINING: {remaining} tool rounds left\n\
+         [/TOOL_ROUND_BUDGET]"
+    )
+}
+
+/// D-8: budget-exhaustion notice — the run ends after this round with a
+/// partial result; the model must not call more tools.
+pub fn tool_round_budget_exhaustion_block(budget: u32) -> String {
+    format!(
+        "{TOOL_ROUND_BUDGET_PREFIX} v0.1] The {budget}-round budget is \
+         exhausted — the run is ending. Report your best partial \
+         result now; do NOT call more tools.\n\
+         [/TOOL_ROUND_BUDGET]"
+    )
 }
 
 /// Tool availability context block format — aligned with Python
@@ -159,6 +247,25 @@ mod tests {
     }
 
     #[test]
+    fn base_system_prompt_carries_d1_citation_rule() {
+        // D-1 (FIX_PLAN 2026-08-06): the citation rule lives in the main
+        // agent prompt (the binary's carrier) — inline marker `[来源: 路径:行号]`,
+        // no bare line numbers for internal docs (they drift).
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("[来源: 路径:行号]"),
+            "citation marker in the main-agent prompt"
+        );
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("不得凭记忆声称"),
+            "no-memory-citation rule present"
+        );
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("文档ID §节/锚点"),
+            "internal docs cite by section, not line number"
+        );
+    }
+
+    #[test]
     fn inquiry_blocks_match_design_doc_verbatim() {
         // INFO_SUFFICIENCY — design doc §4.6.5 verbatim.
         assert!(INFO_SUFFICIENCY_BLOCK.starts_with("[INFO_SUFFICIENCY v0.1]"));
@@ -205,6 +312,15 @@ mod tests {
         assert!(is_injected_block_text(RETRIEVAL_COMPLETION_CHECK_BLOCK));
         assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_BLOCK));
         assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_PLAN_BLOCK));
+        // D-3 breaker + D-8 budget blocks (FIX_PLAN 2026-08-06) — budget
+        // blocks use the versioned marker form; the prefix must match it
+        // (2026-08-07 review F-04: the constant previously ended in `]` and
+        // never matched the `[TOOL_ROUND_BUDGET v0.1]` messages).
+        assert!(is_injected_block_text(&tool_policy_breaker_block("web_search", 3)));
+        assert!(is_injected_block_text(&tool_policy_ceiling_block(10)));
+        assert!(is_injected_block_text(&tool_round_budget_session_block(40, 40)));
+        assert!(is_injected_block_text(&tool_round_budget_remaining_block(38)));
+        assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(40)));
         // Leading/trailing whitespace tolerated.
         assert!(is_injected_block_text(&format!(
             "  {INFO_SUFFICIENCY_BLOCK}\n"
@@ -212,6 +328,8 @@ mod tests {
         // Ordinary model/user text must never match.
         assert!(!is_injected_block_text("完成"));
         assert!(!is_injected_block_text("[INFO_SUFFICIENCY v0.1] 部分拷贝"));
+        // A closing tag alone must never match (starts with `[/`).
+        assert!(!is_injected_block_text("[/TOOL_ROUND_BUDGET]"));
         assert!(!is_injected_block_text(""));
     }
 }

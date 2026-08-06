@@ -310,8 +310,15 @@ async fn run_plan_phase(
     // it becomes a blocking link of the plan approval gate chain once
     // plans are model-generated. The shared gateway's script order is
     // gate round first, then the execution turn.
+    //
+    // P8 (FIX_PLAN 2026-08-06, D-7): this used the non-streaming `generate`,
+    // which carried no read timeout — a stalled wire could block `-p`
+    // indefinitely. All model rounds now go through `generate_stream` (the
+    // idle watchdog / total budget live there); the gate's text deltas go
+    // nowhere (deltas are never journaled).
     let gate_response = gateway
-        .generate(orz_loop::gateway::model::ModelRequest {
+        .generate_stream(
+            orz_loop::gateway::model::ModelRequest {
             system: orz_loop::prompt::BASE_SYSTEM_PROMPT.to_string(),
             messages: vec![
                 Message {
@@ -330,8 +337,17 @@ async fn run_plan_phase(
                 },
             ],
             tools: Vec::new(),
+            // F-07 (2026-08-07 review): the gate is a FAST preflight round
+            // (max_tokens=1024) — under the default thinking-max config the
+            // reasoning would eat the whole budget and force the empty-
+            // content retry chain (up to 3 model calls per `-p`). Explicit
+            // override: thinking disabled, all output routed to content.
             max_tokens: 1024,
-        })
+            thinking: Some(orz_loop::gateway::model::ThinkingMode::Disabled),
+            },
+            None,
+            &mut |_| {},
+        )
         .await
         .map_err(|e| format!("plan gate: {e}"))?;
     let h0 = record_plan_event(
@@ -617,6 +633,11 @@ async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Erro
 /// `--allow-write` (ORZ_ALLOW_WRITE, harness opt-in) switches the bridge to
 /// the Benchmark policy: reads + local file edits auto-allow, bash/network
 /// still fail closed.
+///
+/// D-9 (FIX_PLAN 2026-08-06): `ORZ_TEST_RUNNER` (harness opt-in) injects a
+/// fixed test command — the `run_tests` tool appears in the model's tool
+/// declarations and runs the host-owned command (Aider-model feedback loop;
+/// test files stay hidden).
 fn build_cli_host(
     handle: &SessionHandle,
     session_id: &str,
@@ -627,6 +648,14 @@ fn build_cli_host(
     } else {
         orz_host::permission::PermissionPolicy::Interactive
     };
+    let test_runner = std::env::var("ORZ_TEST_RUNNER").ok().map(|cmd| {
+        // argv-style: split on spaces (the harness builds the command; the
+        // test path is injected as a single token).
+        orz_loop::host::TestRunner {
+            command: cmd.split_whitespace().map(str::to_string).collect(),
+            timeout: None,
+        }
+    });
     Ok(orz_host::OrzHost::with_bridge_and_hub_policy(
         session_id,
         handle.journal.clone(),
@@ -637,7 +666,9 @@ fn build_cli_host(
         policy,
     )?
     // P1 permit keystore — the session's DPAPI-backed signer.
-    .with_permit_signer(handle.permit_signer.clone()))
+    .with_permit_signer(handle.permit_signer.clone())
+    // D-9: fixed test-runner command (harness feedback loop).
+    .with_test_runner(test_runner))
 }
 
 /// Short timestamp-based suffix for the run ID (no uuid dep in orz-bin yet).

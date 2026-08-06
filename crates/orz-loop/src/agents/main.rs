@@ -43,6 +43,7 @@ impl MainAgent {
                     messages,
                     tools,
                     max_tokens,
+                    thinking: None,
                 },
                 cancel,
                 on_chunk,

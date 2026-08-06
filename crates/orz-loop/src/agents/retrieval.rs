@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::blackboard::{InternalRetSection, SharedBlackboard};
 use crate::gateway::model::{GatewayError, Message, ModelGateway, ModelResponse, Role};
 
@@ -62,6 +64,7 @@ impl RetrievalSubagent {
         blackboard: &Arc<SharedBlackboard>,
         spec: &SubagentSpec,
         completion_check_block: Option<&str>,
+        cancel: Option<&CancellationToken>,
     ) -> Result<ModelResponse, GatewayError> {
         let messages = completion_check_block
             .map(|block| {
@@ -76,16 +79,38 @@ impl RetrievalSubagent {
             .unwrap_or_default();
         let response = self
             .gateway
-            .generate(crate::gateway::model::ModelRequest {
-                system: format!(
-                    "Retrieval subagent ({role}). Goal: {goal}",
-                    role = self.section_name(),
-                    goal = spec.goal,
-                ),
-                messages,
-                tools: Vec::new(),
-                max_tokens: 1024,
-            })
+            .generate_stream(
+                crate::gateway::model::ModelRequest {
+                    system: format!(
+                        "Retrieval subagent ({role}). Goal: {goal}\n\
+                         Citation rule (D-1, FIX_PLAN 2026-08-06): any claim based on \
+                         external evidence, a reference implementation, or internal \
+                         docs must carry an inline `[来源: 路径:行号]` marker at the \
+                         citing site; content without a locatable source must not be \
+                         cited — never claim '参考自某处' from memory. Internal docs \
+                         cite as 文档ID §节/锚点, not bare line numbers (they drift).",
+                        role = self.section_name(),
+                        goal = spec.goal,
+                    ),
+                    messages,
+                    tools: Vec::new(),
+                    // D-6 (FIX_PLAN 2026-08-06): retrieval subagents get the
+                    // full 160K budget too — a thinking subagent with a 1024
+                    // token cap would spend everything on reasoning and die
+                    // before producing output (the Anthropic subagent 8K
+                    // hard-cap lesson, FIX_PLAN §3).
+                    max_tokens: 160_000,
+                    thinking: None,
+                },
+                cancel,
+                // F-03 (2026-08-07 review): subagents went streaming — the
+                // idle watchdog / total budget / cancel wiring live on the
+                // streaming path (a non-streaming 10min wall clock could
+                // falsely kill a legitimately slow 160K thinking round, and
+                // Ctrl+C mid-retrieval had no effect). Subagent text has no
+                // live consumer, so the deltas are discarded.
+                &mut |_| {},
+            )
             .await?;
 
         let text = response.text.clone().unwrap_or_default();
@@ -143,7 +168,7 @@ mod tests {
             goal: "找到设计文档".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec, None).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md", "gate.rs"]);
@@ -171,7 +196,7 @@ mod tests {
             goal: "检索论文".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec, None).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(
@@ -215,6 +240,7 @@ mod tests {
                 &bb,
                 &spec,
                 Some(crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK),
+                None,
             )
             .await
             .unwrap();

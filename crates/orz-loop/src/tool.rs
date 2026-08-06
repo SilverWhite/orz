@@ -19,7 +19,7 @@ use orz_assurance::gates::ipg::{
     evaluate_instruction_provenance_gate,
 };
 
-use crate::host::RiskClass;
+use crate::host::{RiskClass, ToolPolicy};
 
 /// Dispatches tool calls with pre/post assurance checks.
 #[derive(Debug, Clone, Default)]
@@ -68,6 +68,43 @@ impl ToolDispatcher {
     /// knowable from the call arguments.
     pub fn modifies_files(tool_name: &str) -> bool {
         matches!(Self::risk_class(tool_name), RiskClass::LocalMutation)
+    }
+
+    /// Shell-execution tool names (IP2a, FIX_PLAN 2026-08-06 D-3): the
+    /// controller classifies `run_terminal_cmd` as LocalMutation, so policy
+    /// filtering needs an explicit name-level exclusion; `bash` is
+    /// SandboxEscape already. Mirrors orz-host's `is_shell_tool`.
+    fn is_shell_tool(tool: &str) -> bool {
+        matches!(
+            tool,
+            "bash" | "cmd" | "powershell" | "pwsh" | "run_terminal_cmd"
+        )
+    }
+
+    /// IP2a (D-3): whether the session policy refuses the tool by NAME —
+    /// the name-level denial layer. Policy-refused tools are FILTERED from
+    /// the model-visible tool declarations at session bootstrap (the model
+    /// never sees them, so it never attempts them — the polyglot probe
+    /// burned whole rounds on `web_search`/`web_fetch` under Benchmark).
+    ///
+    /// `Interactive` refuses nothing by name (denial is scope/argument-level
+    /// at permission time); `ReadOnly` declares read-class tools only;
+    /// `Benchmark` declares read + local file edits, excluding shell and
+    /// network/escape. MCP names (`{server}__{tool}`) are always refused
+    /// (prefix-spoof defense, slice #16 D2-1).
+    pub fn policy_refuses(policy: ToolPolicy, tool: &str) -> bool {
+        if tool.contains("__") {
+            return true;
+        }
+        match policy {
+            ToolPolicy::Interactive => false,
+            ToolPolicy::ReadOnly => Self::risk_class(tool) != RiskClass::ReadOnly,
+            ToolPolicy::Benchmark => match Self::risk_class(tool) {
+                RiskClass::ReadOnly => false,
+                RiskClass::LocalMutation => Self::is_shell_tool(tool),
+                RiskClass::NetworkCall | RiskClass::SandboxEscape => true,
+            },
+        }
     }
 
     /// IP5: extract the mutation tool's target paths from its arguments,

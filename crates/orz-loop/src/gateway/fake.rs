@@ -120,6 +120,8 @@ impl ModelGateway for FakeProvider {
             tool_calls: next.tool_calls,
             finish_reason: next.finish_reason,
             reasoning_content: next.reasoning_content,
+            reasoning_tokens: None,
+            completion_tokens: None,
         })
     }
 
@@ -141,6 +143,8 @@ impl ModelGateway for FakeProvider {
             tool_calls: next.tool_calls,
             finish_reason: next.finish_reason,
             reasoning_content: next.reasoning_content,
+            reasoning_tokens: None,
+            completion_tokens: None,
         };
         // Split on char boundaries (CJK-safe) — concatenating the chunks must
         // reproduce the full text exactly (Python text_delta invariant).
@@ -185,6 +189,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_tokens: 128,
+            thinking: None,
         }
     }
 

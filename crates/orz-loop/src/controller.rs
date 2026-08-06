@@ -39,7 +39,7 @@ use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole, SubagentSpec};
 use crate::blackboard::SharedBlackboard;
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{FinishReason, Message, ModelGateway, Role, ToolCall};
-use crate::host::{LoopHost, PermitDecision, ToolResult};
+use crate::host::{LoopHost, PermitDecision, ToolDef, ToolResult};
 use crate::inquiry::{DEFAULT_THRESHOLDS, InquiryCounters, parse_completion_decision};
 use crate::orientation::OrientationMonitor;
 use crate::prompt::{
@@ -50,7 +50,18 @@ use crate::relay::{DispatchTarget, route};
 use crate::tool::ToolDispatcher;
 
 /// Cap on model↔tool rounds per turn (anti-runaway backstop).
-pub const MAX_TOOL_ROUNDS: u32 = 8;
+///
+/// D-8 (FIX_PLAN 2026-08-06, P7/LOOP-14): 8 → 40, decided by ADR-0008.
+/// The old 8 was recorded (P7) as "a port of the Python reference
+/// implementation's cap" — that record was INACCURATE (LOOP-14 cross-check:
+/// Python uses max_turns=20/max_tool_calls=0); 8 was in fact the Grok
+/// ecosystem default (mcp-grok maxTurns=8). 40 is the decided value; the
+/// model is told the budget explicitly and informed of the remaining rounds
+/// after each tool round (mechanical, controller-injected — the model does
+/// not guess). Anti-runaway protection is layered: the global round budget
+/// is the backstop, the consecutive-denial circuit breaker (IP2a/D-3) is
+/// the primary control.
+pub const MAX_TOOL_ROUNDS: u32 = 40;
 
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
@@ -102,6 +113,55 @@ pub struct AgentLoopController {
     /// P3-5, 2026-08-05). User-paced TUIs are naturally safe (turn gaps
     /// ≫ 50ms) — this covers automated clients.
     pacing_rounds: std::sync::atomic::AtomicU32,
+    /// IP2a denial circuit breaker (D-3, FIX_PLAN 2026-08-06): consecutive
+    /// policy denials in the current run. Mutex since `run_turn_inner` is
+    /// `&self` and a turn may run on any thread; reset at turn start.
+    denial_state: Mutex<DenialState>,
+}
+
+/// IP2a denial counter state (D-3): consecutive denials trigger a strategy
+/// switch message at 3; a total ceiling of 10 per run caps refusal loops.
+#[derive(Debug, Default)]
+struct DenialState {
+    consecutive: u32,
+    total: u32,
+}
+
+/// IP2a circuit-breaker thresholds (D-3 — the 3/10 industry consensus values
+/// shared by Claude Code's maxConsecutive and Codex's guardian).
+pub const DENIAL_BREAKER_CONSECUTIVE: u32 = 3;
+pub const DENIAL_CEILING_TOTAL: u32 = 10;
+
+/// F-09 (2026-08-07 review): the mechanical gate over what enters the model
+/// context from a `run_tests` call — a fixed completion reminder plus the
+/// FINAL output (tail-capped at RUN_TESTS_CONTEXT_CAP; test frameworks put
+/// their summary at the end). The full (capped) output was written to disk
+/// by the host; the model reads it via read_file when it needs more.
+fn compose_test_output_message(result: &crate::host::TestRunResult) -> String {
+    let reminder = match result.exit_code {
+        Some(code) => format!("[test-run complete] exit_code={code}"),
+        None => "[test-run complete] exit_code=none (no status — timed out?)".to_string(),
+    };
+    let Some(path) = result.full_output_path.as_deref() else {
+        // No file on disk (timeout path or write failure): inject the whole
+        // (already capped) output rather than lose it.
+        return format!("{reminder}\n{}", result.output);
+    };
+    if result.output.len() > crate::host::RUN_TESTS_CONTEXT_CAP {
+        // Byte-slicing must not split a UTF-8 char — step to the next
+        // char boundary.
+        let mut start = result.output.len() - crate::host::RUN_TESTS_CONTEXT_CAP;
+        while start < result.output.len() && !result.output.is_char_boundary(start) {
+            start += 1;
+        }
+        format!(
+            "{reminder}\n[test-run output capped at final {}KB; full output: {path}]\n{}",
+            crate::host::RUN_TESTS_CONTEXT_CAP / 1024,
+            &result.output[start..],
+        )
+    } else {
+        format!("{reminder}\n[full output: {path}]\n{}", result.output)
+    }
 }
 
 impl AgentLoopController {
@@ -129,6 +189,7 @@ impl AgentLoopController {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
+            denial_state: Mutex::new(DenialState::default()),
         }
     }
 
@@ -155,6 +216,7 @@ impl AgentLoopController {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
+            denial_state: Mutex::new(DenialState::default()),
         }
     }
 
@@ -272,13 +334,47 @@ impl AgentLoopController {
         _run_manifest_sha256: &str,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<String, AgentLoopError> {
+        // IP2a: the denial circuit breaker is per-run — a fresh turn starts
+        // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
+        *self.denial_state.lock().unwrap() = DenialState::default();
+
         let workspace_trust = host.workspace_trust();
 
         // 1. tool_availability_check — mechanical probe over the host
         // registry, BEFORE run_started (Python conformance: the probe must
         // precede run_started; the model never sees tool state before the
         // availability gate has run).
-        let tool_defs = host.tools_registry().list();
+        //
+        // IP2a (FIX_PLAN 2026-08-06 D-3): the probe is SESSION-POLICY-AWARE —
+        // tools the policy refuses by name are filtered out of the model's
+        // visible declarations entirely (the model never sees them, so it
+        // never attempts them; polyglot probe P3 burned whole rounds on
+        // `web_search`×4 under Benchmark). The availability block then
+        // reflects the policy-filtered set.
+        let policy = host.tool_policy();
+        let mut tool_defs: Vec<ToolDef> = host
+            .tools_registry()
+            .list()
+            .into_iter()
+            .filter(|t| !ToolDispatcher::policy_refuses(policy, &t.name))
+            .collect();
+        // D-9 (FIX_PLAN 2026-08-06): when the host carries a fixed test
+        // runner, the `run_tests` tool is declared to the model — the
+        // Aider-model feedback loop inside a single run (stdout/stderr/exit
+        // code only; the test files stay hidden).
+        if host.test_runner().is_some()
+            && !tool_defs.iter().any(|t| t.name == "run_tests")
+        {
+            tool_defs.push(ToolDef {
+                name: "run_tests".to_string(),
+                description: "Run the task's hidden test suite and return \
+                     stdout/stderr/exit code. Use this to verify your \
+                     implementation — the test files are NOT visible to you, \
+                     only the run result. No arguments."
+                    .to_string(),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+            });
+        }
         let specs: Vec<ToolSpec> = tool_defs
             .iter()
             .map(|t| {
@@ -292,7 +388,9 @@ impl AgentLoopController {
             .collect();
         let mut probe_registry: HashMap<String, Option<bool>> = HashMap::new();
         for t in &tool_defs {
-            // Headless mapping: every advertised tool is available.
+            // Every tool that survived policy filtering is available (the
+            // probe is mechanical over the registry — the policy IS the
+            // availability).
             probe_registry.insert(t.name.clone(), Some(true));
         }
         let report = probe_tool_availability(&specs, &probe_registry);
@@ -357,7 +455,15 @@ impl AgentLoopController {
             reasoning_content: None,
         }];
         let mut tool_rounds = 0u32;
+        // The `None` seed is required by Rust's initialization rules (the
+        // value is overwritten on every break path before the read at the
+        // end — clippy's unused_assignments is a false positive here).
+        #[allow(unused_assignments)]
         let mut last_text: Option<String> = None;
+        // D-8: after the budget is exhausted the model gets ONE final
+        // no-tools round to report a partial result; if it still requests
+        // tools, the run ends there (no execution of post-budget calls).
+        let mut budget_exhausted = false;
         // §4.6 wiring state: the final-answer counterexample gate fires once
         // per run; inquiry counters are per-agent instances (main + the two
         // retrieval subagents), local to the turn (D11 — counters reset each
@@ -408,12 +514,20 @@ impl AgentLoopController {
                 &report.degraded,
                 &report.unprobed,
             );
+            // D-8 (FIX_PLAN 2026-08-06): the round budget is declared to the
+            // model up front — it does not guess or drift. The remaining
+            // count is re-declared mechanically after every tool round.
+            let budget_block = crate::prompt::tool_round_budget_session_block(
+                self.max_tool_rounds,
+                self.max_tool_rounds.saturating_sub(tool_rounds),
+            );
             let system = self
                 .main_agent
                 .prompt_builder
-                .build_system_prompt(Some(&avail_block));
+                .build_system_prompt(Some(&format!("{avail_block}\n\n{budget_block}")));
 
-            let response = self
+            let mut partial_text: Vec<String> = Vec::new();
+            let response = match self
                 .main_agent
                 .run_round(
                     &system,
@@ -421,16 +535,52 @@ impl AgentLoopController {
                     tool_defs.clone(),
                     self.main_agent_max_tokens(),
                     cancel,
-                    &mut |chunk| host.on_text_delta(chunk),
+                    &mut |chunk| {
+                        // F-06 (2026-08-07 review): accumulate the streamed
+                        // content deltas — on an abort (watchdog/timeout)
+                        // the partial output must still reach the journal.
+                        partial_text.push(chunk.to_string());
+                        host.on_text_delta(chunk);
+                    },
                 )
                 .await
+            {
+                Ok(r) => r,
                 // Phase 3 slice #11 (P3-7): a cancellation observed mid-stream
                 // is a cancel, not a model failure — it must end the run with
                 // `run_cancelled`, not a spurious `run_failed`.
-                .map_err(|e| match e {
-                    crate::gateway::model::GatewayError::Cancelled => AgentLoopError::Cancelled,
-                    other => AgentLoopError::Model(other.to_string()),
-                })?;
+                Err(crate::gateway::model::GatewayError::Cancelled) => {
+                    return Err(AgentLoopError::Cancelled);
+                }
+                Err(other) => {
+                    // F-06 (D-7 "保留输出 + incomplete 标记 + 明确终止原因"): a
+                    // stream that aborted after producing partial content
+                    // must not lose it from the audit trail — journal it as
+                    // an incomplete model output BEFORE the terminal event
+                    // records the failure. Previously the partial text went
+                    // only to live deltas; the journal had a run_failed with
+                    // no trace of what was produced (2026-08-07 review).
+                    if !partial_text.is_empty() {
+                        writer
+                            .record(
+                                EventType::ModelOutput,
+                                serde_json::json!({
+                                    "text": partial_text.concat(),
+                                    "tool_calls": [],
+                                    // No natural finish reached — closest
+                                    // enum value; the terminal run_failed
+                                    // carries the real abort reason.
+                                    "finish_reason": "length",
+                                    "reasoning_tokens": null,
+                                    "completion_tokens": null,
+                                    "incomplete": true,
+                                }),
+                            )
+                            .await?;
+                    }
+                    return Err(AgentLoopError::Model(other.to_string()));
+                }
+            };
 
             // Cooperative cancellation checkpoint (Phase 3 slice #7): a
             // cancelled run may omit this round's `model_output` — the chain
@@ -456,6 +606,11 @@ impl AgentLoopController {
                             FinishReason::ToolCalls => "tool_calls",
                             FinishReason::Length => "length",
                         },
+                        // D-6 usage observation — reasoning tokens per round
+                        // calibrate the 160K budget decision (data → whether
+                        // the budget rolls back).
+                        "reasoning_tokens": response.reasoning_tokens,
+                        "completion_tokens": response.completion_tokens,
                     }),
                 )
                 .await?;
@@ -486,6 +641,25 @@ impl AgentLoopController {
                     .max_consecutive_repeated_content
                     .max(output_metrics.max_ngram_repeat),
             );
+
+            // D-8: the post-exhaustion final round may only produce TEXT — a
+            // tool request there is refused (no execution after the budget is
+            // gone) and the run ends with the partial result. Checked BEFORE
+            // the final-answer path so the exhaustion round never triggers
+            // the counterexample gate's extra model round.
+            if budget_exhausted {
+                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: text,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                }
+                last_text = response.text;
+                break;
+            }
 
             if response.tool_calls.is_empty() {
                 // §4.6.1/4.6.2: the first no-tool-call response is a
@@ -606,6 +780,7 @@ impl AgentLoopController {
                             tc,
                             &mut messages,
                             prompt,
+                            cancel,
                         )
                         .await?
                     }
@@ -663,9 +838,23 @@ impl AgentLoopController {
             }
 
             tool_rounds += 1;
+            // D-8: mechanically re-declare the remaining budget after each
+            // tool round — the model does not guess or drift (the previous
+            // round's `[TOOL_ROUND_BUDGET]` text is already in history).
+            messages.push(Message {
+                role: Role::User,
+                content: crate::prompt::tool_round_budget_remaining_block(
+                    self.max_tool_rounds.saturating_sub(tool_rounds),
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
             if tool_rounds >= self.max_tool_rounds {
                 // Anti-runaway backstop — mark the truncation so the journal
-                // records why pending tool calls were dropped.
+                // records why pending tool calls were dropped. D-8: the cap
+                // is a backstop, not a target — the run gets ONE final
+                // no-tools round to report its partial result, then ends.
                 writer
                     .record(
                         EventType::GateDecision,
@@ -674,10 +863,20 @@ impl AgentLoopController {
                             "decision": "stop",
                             "reason": "max_tool_rounds_reached",
                             "tool_rounds": tool_rounds,
+                            "max_tool_rounds": self.max_tool_rounds,
                         }),
                     )
                     .await?;
-                break;
+                messages.push(Message {
+                    role: Role::User,
+                    content: crate::prompt::tool_round_budget_exhaustion_block(
+                        self.max_tool_rounds,
+                    ),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                budget_exhausted = true;
             }
         }
 
@@ -753,8 +952,11 @@ impl AgentLoopController {
     }
 
     /// Default max tokens for the main agent (configurable later).
+    /// D-6 (FIX_PLAN 2026-08-06): 160K total budget (the transport's
+    /// `ModelConfig::max_tokens` is the cap; this request-level value is
+    /// min-capped by it — equal here so the full budget is available).
     fn main_agent_max_tokens(&self) -> u32 {
-        4096
+        160_000
     }
 
     /// §4.6.3 IP3b/IP3c: after a retrieval round completes, check the inquiry
@@ -819,6 +1021,10 @@ impl AgentLoopController {
     }
 
     /// Run a retrieval subagent for a retrieval-shaped tool call.
+    /// (2026-08-07 review F-03: the run's cancel token is threaded through —
+    /// 8 args is the documented cost; a context struct would churn all
+    /// call sites for no readability gain.)
+    #[allow(clippy::too_many_arguments)]
     async fn run_retrieval_subagent(
         &self,
         host: &dyn LoopHost,
@@ -827,6 +1033,7 @@ impl AgentLoopController {
         tc: &ToolCall,
         messages: &mut Vec<Message>,
         prompt: &str,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<ToolResult, AgentLoopError> {
         let (role, target_name) = match target {
             DispatchTarget::InternalRetrieval => {
@@ -869,11 +1076,20 @@ impl AgentLoopController {
                 &self.blackboard,
                 &spec,
                 Some(RETRIEVAL_COMPLETION_CHECK_BLOCK),
+                // F-03 (2026-08-07 review): the run's cancel token flows into
+                // the subagent's stream — Ctrl+C mid-retrieval now stops the
+                // round instead of waiting for the request to complete.
+                cancel,
             )
             .await
         {
             Ok(response) => {
-                let output = response.text.unwrap_or_default();
+                // IP2a (D-3): 失败必显式 — a subagent that returned no text
+                // must not leave a blank tool message for the model.
+                let output = response
+                    .text
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| format!("retrieval '{target_name}' returned no text"));
                 writer
                     .record(
                         EventType::ToolCompleted,
@@ -965,6 +1181,62 @@ impl AgentLoopController {
         _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         messages: &mut Vec<Message>,
     ) -> Result<ToolResult, AgentLoopError> {
+        // D-9 (FIX_PLAN 2026-08-06): `run_tests` executes the host's FIXED
+        // command — the model supplies no argv, so the permission gate is
+        // skipped by design (the command itself is host-owned and hidden;
+        // the tool is only declared when the host carries a test runner).
+        // The execution still leaves an audit trail: ToolStarted/
+        // ToolCompleted mirror the permission-gated path — the tool event
+        // chain is the audit surface (D-5; 2026-08-07 review F-02: this
+        // path previously recorded zero journal events).
+        if tc.name == "run_tests" {
+            let fixed_command: Option<String> = host
+                .test_runner()
+                .map(|r| r.command.join(" "));
+            writer
+                .record(
+                    EventType::ToolStarted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "fixed_command": fixed_command,
+                    }),
+                )
+                .await?;
+            let result = host
+                .run_tests()
+                .await
+                .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": result.exit_code,
+                        "full_output_path": result.full_output_path,
+                    }),
+                )
+                .await?;
+            let tool_result = ToolResult {
+                // F-09 (2026-08-07 review): mechanical context gate — only
+                // the completion reminder + the final output (tail-capped)
+                // enter the conversation; the full (capped) output is on
+                // disk and the model reads it via read_file when it wants
+                // more than the tail.
+                output: compose_test_output_message(&result),
+                exit_code: result.exit_code,
+            };
+            messages.push(Message {
+                role: Role::Tool,
+                content: tool_result.output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(tool_result);
+        }
+
         // Permission gate.
         let risk = ToolDispatcher::risk_class(&tc.name);
         writer
@@ -1004,6 +1276,39 @@ impl AgentLoopController {
                 w.gate_log
                     .gate_decisions
                     .push(format!("permission: deny (tool {})", tc.name));
+            }
+            // IP2a circuit breaker (D-3): track consecutive + total denials
+            // this run. At 3 consecutive → inject a strategy-switch message
+            // (the model has been retrying a refused tool); at the 10 total
+            // ceiling → inject a stronger stop message. A successful call
+            // resets the consecutive counter (see below).
+            let mut denial = self.denial_state.lock().unwrap();
+            denial.consecutive += 1;
+            denial.total += 1;
+            let breaker_triggered = denial.consecutive >= DENIAL_BREAKER_CONSECUTIVE;
+            let ceiling_reached = denial.total == DENIAL_CEILING_TOTAL;
+            let breaker_tool = tc.name.clone();
+            if breaker_triggered {
+                denial.consecutive = 0; // injected once per burst
+            }
+            drop(denial);
+            if breaker_triggered || ceiling_reached {
+                messages.push(Message {
+                    role: Role::User,
+                    content: if ceiling_reached {
+                        crate::prompt::tool_policy_ceiling_block(
+                            DENIAL_CEILING_TOTAL,
+                        )
+                    } else {
+                        crate::prompt::tool_policy_breaker_block(
+                            &breaker_tool,
+                            DENIAL_BREAKER_CONSECUTIVE,
+                        )
+                    },
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
             }
             let result = ToolResult {
                 // Explicit unavailability semantics (P3, 2026-08-06 polyglot
@@ -1105,7 +1410,26 @@ impl AgentLoopController {
                     let mut w = self.blackboard.write();
                     w.exec.results.push(format!("[{}] {}", tc.name, res.output));
                 }
-                res
+                // IP2a (D-3): 失败必显式 — a tool result must NEVER be blank
+                // in the conversation (blank tool messages give the model
+                // nothing to react to; a host that returns empty output is
+                // surfaced as an explicit completion marker instead).
+                let output = if res.output.trim().is_empty() {
+                    format!(
+                        "tool '{tool_name}' completed with no output (exit_code={exit:?})",
+                        tool_name = tc.name,
+                        exit = res.exit_code,
+                    )
+                } else {
+                    res.output
+                };
+                // IP2a: a successful call resets the consecutive-denial
+                // counter (D-3 — "成功调用重置计数").
+                self.denial_state.lock().unwrap().consecutive = 0;
+                ToolResult {
+                    output,
+                    exit_code: res.exit_code,
+                }
             }
             Err(e) => {
                 writer
@@ -1225,6 +1549,7 @@ fn chrono_utc_now() -> String {
 mod tests {
     use super::*;
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::{GatewayError, ModelGateway, ModelRequest, ModelResponse};
     use crate::host::{LoopHost, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
@@ -1497,8 +1822,9 @@ mod tests {
         let received = fake.received_requests();
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
-        // user + assistant declaration + tool result + text summary.
-        assert_eq!(round2.len(), 4, "protocol shape: {round2:?}");
+        // user + assistant declaration + tool result + text summary +
+        // D-8 budget re-declaration.
+        assert_eq!(round2.len(), 5, "protocol shape: {round2:?}");
         assert_eq!(round2[1].role, Role::Assistant);
         assert_eq!(round2[1].tool_calls.len(), 1, "declaration replayed");
         assert_eq!(round2[1].tool_calls[0].call_id, "call-1");
@@ -1506,6 +1832,11 @@ mod tests {
         assert_eq!(round2[2].role, Role::Tool);
         assert_eq!(round2[2].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(round2[3].role, Role::Assistant, "text summary kept");
+        assert!(
+            round2[4].content.contains("TOOL_ROUND_BUDGET"),
+            "D-8: remaining-budget re-declaration: {:?}",
+            round2[4]
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1592,6 +1923,296 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── IP2a (FIX_PLAN 2026-08-06 D-3): policy-aware tool projection ──────
+
+    /// A registry advertising the full toolset incl. network/shell tools.
+    struct FullRegistry;
+    impl ToolRegistry for FullRegistry {
+        fn get(&self, name: &str) -> Option<ToolDef> {
+            FullRegistry::list_all().into_iter().find(|t| t.name == name)
+        }
+        fn list(&self) -> Vec<ToolDef> {
+            FullRegistry::list_all()
+        }
+    }
+    impl FullRegistry {
+        fn list_all() -> Vec<ToolDef> {
+            ["read_file", "list_dir", "grep", "search_replace", "web_search", "web_fetch", "bash"]
+                .iter()
+                .map(|n| ToolDef {
+                    name: n.to_string(),
+                    description: format!("tool {n}"),
+                    parameters: serde_json::json!({}),
+                })
+                .collect()
+        }
+    }
+
+    /// A host with a fixed policy + deny-everything permission (execution of
+    /// anything not filtered is refused — the loop's job is the projection).
+    struct PolicyHost {
+        journal: JournalRecorder,
+        policy: crate::host::ToolPolicy,
+    }
+    #[async_trait]
+    impl LoopHost for PolicyHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &FullRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            self.policy
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::Deny)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            unreachable!("denied tools never execute");
+        }
+    }
+
+    #[tokio::test]
+    async fn ip2a_benchmark_policy_filters_network_and_shell_declarations() {
+        // P3 (2026-08-06 polyglot): the model tried `web_search`/`web_fetch`
+        // repeatedly under Benchmark — the tools were declared but the policy
+        // refused them at permission time. IP2a: policy-refused tools are
+        // FILTERED from the model-visible declarations, so the model never
+        // sees (or attempts) them.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = PolicyHost {
+            journal,
+            policy: crate::host::ToolPolicy::Benchmark,
+        };
+
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查一下", "RUN-POLICY", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // The first request's tool declarations exclude web_search/bash —
+        // the model must not even see them under Benchmark.
+        let received = fake.received_requests();
+        let first = &received[0];
+        let declared: Vec<&str> = first
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(
+            !declared.iter().any(|n| *n == "web_search" || *n == "bash"),
+            "network/shell tools must not be declared under Benchmark: {declared:?}"
+        );
+        assert!(
+            declared.contains(&"read_file") && declared.contains(&"search_replace"),
+            "read + local-edit tools stay declared: {declared:?}"
+        );
+        // The availability block reflects the policy-filtered set.
+        let system = first.system.clone();
+        assert!(
+            system.contains("AVAILABLE: grep, list_dir, read_file, search_replace"),
+            "availability block = policy-filtered set: {system}"
+        );
+        assert!(
+            !system.contains("web_search") && !system.contains("bash"),
+            "availability block must not name policy-refused tools: {system}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ip2a_readonly_policy_filters_mutations() {
+        // ReadOnly declares read-class tools only — mutation/network/escape
+        // are invisible to the model.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = PolicyHost {
+            journal,
+            policy: crate::host::ToolPolicy::ReadOnly,
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "只读", "RUN-RO", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let mut declared: Vec<&str> = received[0]
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        declared.sort();
+        assert_eq!(
+            declared,
+            vec!["grep", "list_dir", "read_file"],
+            "ReadOnly declares read-class tools only: {declared:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ip2a_denial_breaker_injects_strategy_switch_message() {
+        // D-3: 3 consecutive denials in one run inject a strategy-switch
+        // message; the 4th denial must NOT re-inject (burst resets the
+        // consecutive counter), and a successful call resets it.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = PolicyHost {
+            journal,
+            policy: crate::host::ToolPolicy::Interactive,
+        };
+        // Three tool rounds, all denied; then a text answer.
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("search_replace", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("search_replace", "call-2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("search_replace", "call-3")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-BREAK", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // Round 4 (after the 3rd denial) carries the injected breaker block.
+        let received = fake.received_requests();
+        let round4 = &received[3];
+        let injected: Vec<&str> = round4
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .map(|m| m.content.as_str())
+            .filter(|c| c.contains("TOOL_POLICY_BREAKER"))
+            .collect();
+        assert!(
+            !injected.is_empty(),
+            "breaker block injected after 3 consecutive denials: {received:?}"
+        );
+        assert!(
+            injected[0].contains("Switch strategy"),
+            "breaker tells the model to switch strategy: {}",
+            injected[0]
+        );
+        // Burst semantics: the breaker is injected ONCE (round 4). Rounds 1–3
+        // (before the 3rd denial) must not carry it; the message persists in
+        // the conversation afterward (history copies), so only the FIRST
+        // appearance matters.
+        for (i, r) in received.iter().enumerate() {
+            let has = r
+                .messages
+                .iter()
+                .filter(|m| m.role == Role::User)
+                .any(|m| m.content.contains("TOOL_POLICY_BREAKER"));
+            if i < 3 {
+                assert!(!has, "no breaker before the 3rd denial (round {i})");
+            } else {
+                assert!(has, "breaker present from round {i} on");
+                break;
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ip2a_successful_call_resets_consecutive_denials() {
+        // D-3: a successful call resets the consecutive counter — denials on
+        // either side of a success must not accumulate into a breaker.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        // A host that denies by call id: allow call-2 (the middle one).
+        struct SelectiveHost {
+            journal: JournalRecorder,
+        }
+        #[async_trait]
+        impl LoopHost for SelectiveHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                if tool == "search_replace" {
+                    Ok(PermitDecision::AllowOnce)
+                } else {
+                    Ok(PermitDecision::Deny)
+                }
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _args: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    output: "ok".to_string(),
+                    exit_code: Some(0),
+                })
+            }
+        }
+        let host = SelectiveHost { journal };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // deny → allow → deny (denied tool: run_terminal_cmd — a HOST
+            // tool, unlike web_search which routes to the external retrieval
+            // subagent; the middle success resets the consecutive count).
+            ScriptedResponse::tool_calls(vec![
+                tool_call("run_terminal_cmd", "call-1"),
+                tool_call("search_replace", "call-2"),
+                tool_call("run_terminal_cmd", "call-3"),
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "混合", "RUN-RESET", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let breaker_count = received
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .filter(|m| m.role == Role::User)
+            .filter(|m| m.content.contains("TOOL_POLICY_BREAKER"))
+            .count();
+        assert_eq!(
+            breaker_count, 0,
+            "success between denials resets the consecutive counter: {received:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn tool_round_replays_reasoning_content_on_declaration() {
         // DeepSeek returns reasoning_content on every completion; the
@@ -1625,8 +2246,9 @@ mod tests {
         let received = fake.received_requests();
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
-        // user + assistant declaration (with reasoning) + tool result + text.
-        assert_eq!(round2.len(), 4, "protocol shape: {round2:?}");
+        // user + assistant declaration (with reasoning) + tool result +
+        // text + D-8 budget re-declaration (5 messages, budget last).
+        assert_eq!(round2.len(), 5, "protocol shape: {round2:?}");
         assert_eq!(round2[1].role, Role::Assistant);
         assert_eq!(
             round2[1].reasoning_content.as_deref(),
@@ -1634,6 +2256,11 @@ mod tests {
             "reasoning rides the declaration message"
         );
         assert_eq!(round2[1].tool_calls.len(), 1);
+        assert!(
+            round2[4].content.contains("TOOL_ROUND_BUDGET"),
+            "D-8: remaining-budget re-declaration after the tool round: {:?}",
+            round2[4]
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1829,6 +2456,261 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── D-9 (FIX_PLAN 2026-08-06): run_tests feedback loop ────────────────
+
+    /// A host exposing a fixed test runner.
+    struct TestRunnerHost {
+        journal: JournalRecorder,
+    }
+    #[async_trait]
+    impl LoopHost for TestRunnerHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &FullRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            crate::host::ToolPolicy::Benchmark
+        }
+        fn test_runner(&self) -> Option<crate::host::TestRunner> {
+            Some(crate::host::TestRunner {
+                command: vec!["pytest-stub".to_string()],
+                timeout: None,
+            })
+        }
+        async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
+            Ok(crate::host::TestRunResult {
+                output: "1 passed".to_string(),
+                exit_code: Some(0),
+                full_output_path: Some("D:/test-output.txt".to_string()),
+            })
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::Deny)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            unreachable!("denied tools never execute");
+        }
+    }
+
+    #[tokio::test]
+    async fn d9_run_tests_tool_declared_and_feeds_back() {
+        // D-9: with a host test runner, the `run_tests` tool is declared to
+        // the model (Benchmark policy keeps it visible — read-class name),
+        // and a call executes the host-owned command, feeding back
+        // stdout/exit code without exposing the test files.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestRunnerHost { journal };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(
+            received[0]
+                .tools
+                .iter()
+                .any(|t| t.name == "run_tests"),
+            "run_tests declared to the model: {:?}",
+            received[0].tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        // The round after the tool call answers the run_tests declaration
+        // with the test output.
+        let round2 = &received[1].messages;
+        let tool_msg = round2
+            .iter()
+            .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-t"))
+            .expect("run_tests call answered with a tool message");
+        // F-09 (2026-08-07 review): the tool message is the gated form —
+        // completion reminder + output + full-output pointer, not raw output.
+        assert!(tool_msg.content.starts_with("[test-run complete] exit_code=0"));
+        assert!(tool_msg.content.contains("1 passed"));
+        assert!(tool_msg.content.contains("D:/test-output.txt"));
+        assert!(
+            !tool_msg.content.contains("test_file"),
+            "test files never exposed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compose_test_output_message_gates_context() {
+        // F-09: small output → reminder + full-output pointer; huge output
+        // → tail-capped injection; no file (timeout) → whole output kept.
+        let small = crate::host::TestRunResult {
+            output: "1 passed".to_string(),
+            exit_code: Some(0),
+            full_output_path: Some("out.txt".to_string()),
+        };
+        let msg = compose_test_output_message(&small);
+        assert!(msg.starts_with("[test-run complete] exit_code=0"));
+        assert!(msg.contains("[full output: out.txt]"));
+        assert!(msg.ends_with("1 passed"));
+
+        let big_out = "x".repeat(crate::host::RUN_TESTS_CONTEXT_CAP + 100);
+        let big = crate::host::TestRunResult {
+            output: big_out,
+            exit_code: Some(1),
+            full_output_path: Some("out.txt".to_string()),
+        };
+        let msg = compose_test_output_message(&big);
+        assert!(msg.contains("capped at final 32KB"));
+        assert!(msg.ends_with(&"x".repeat(crate::host::RUN_TESTS_CONTEXT_CAP)));
+
+        let no_path = crate::host::TestRunResult {
+            output: "partial".to_string(),
+            exit_code: None,
+            full_output_path: None,
+        };
+        let msg = compose_test_output_message(&no_path);
+        assert!(msg.starts_with("[test-run complete] exit_code=none"));
+        assert!(msg.ends_with("partial"));
+    }
+
+    #[tokio::test]
+    async fn round_budget_declared_and_decremented_mechanically() {
+        // D-8 (FIX_PLAN 2026-08-06): the budget is declared in the session
+        // system prompt, and the remaining count is re-declared mechanically
+        // after every tool round — the model does not guess or drift.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "读两次", "RUN-BUDGET", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(received.len() >= 3, "three rounds: {received:?}");
+        // Session declaration: the system prompt carries the budget.
+        assert!(
+            received[0].system.contains("BUDGET: 40"),
+            "budget declared in the session system prompt: {}",
+            received[0].system
+        );
+        // Round 1 after the first tool round: 39 remaining (mechanical).
+        let round2: Vec<&str> = received[1]
+            .messages
+            .iter()
+            .filter(|m| m.content.contains("REMAINING"))
+            .map(|m| m.content.as_str())
+            .collect();
+        assert!(
+            round2.iter().any(|c| c.contains("REMAINING: 39")),
+            "39 remaining after round 1: {round2:?}"
+        );
+        // Round 2: 38 remaining.
+        let round3: Vec<&str> = received[2]
+            .messages
+            .iter()
+            .filter(|m| m.content.contains("REMAINING"))
+            .map(|m| m.content.as_str())
+            .collect();
+        assert!(
+            round3.iter().any(|c| c.contains("REMAINING: 38")),
+            "38 remaining after round 2: {round3:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn round_budget_exhaustion_reports_partial_result() {
+        // D-8: at the cap, the run ends with an explicit budget-exhausted
+        // notice (partial result), not a silent truncation. Uses a tiny
+        // controller-side cap (component injection) so the test is fast.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        // Two tool rounds then text — but the cap is 1, so the run must end
+        // after the first tool round with the exhaustion notice.
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let mut controller = AgentLoopController::with_gateway(gateway);
+        controller.max_tool_rounds = 1;
+        controller
+            .run_turn(&host, "读", "RUN-CAP", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // GateDecision tool_rounds_limit recorded with the cap value.
+        let replay = events(&dir);
+        let cap = replay
+            .iter()
+            .find(|e| e.event_type == EventType::GateDecision)
+            .expect("tool_rounds_limit gate decision recorded");
+        assert_eq!(
+            cap.payload["gate"].as_str(),
+            Some("tool_rounds_limit"),
+            "{:?}",
+            cap.payload
+        );
+        assert_eq!(
+            cap.payload["max_tool_rounds"].as_u64(),
+            Some(1),
+            "cap value recorded: {:?}",
+            cap.payload
+        );
+        // The exhaustion notice was injected into the conversation.
+        let received = fake.received_requests();
+        let last = received.last().unwrap();
+        assert!(
+            last.messages
+                .iter()
+                .any(|m| m.content.contains("exhausted")),
+            "explicit exhaustion notice in the final request: {:?}",
+            last.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn error_path_writes_terminal_run_failed() {
         let dir = test_dir();
@@ -1850,6 +2732,75 @@ mod tests {
         // mid-sequence orphan (2026-08-04 review P1-1).
         let replay =
             orz_assurance::replay_journal(&dir.join("events.jsonl"), Some("RUN-FAIL"), None, true);
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// F-06 (2026-08-07 review): a gateway that streams partial content and
+    /// then aborts mid-stream — the partial output must reach the journal as
+    /// an incomplete `model_output` BEFORE the terminal `run_failed` (D-7
+    /// "保留输出 + incomplete 标记"; previously the partial text went only
+    /// to live deltas and the journal lost it).
+    #[tokio::test]
+    async fn stream_abort_preserves_partial_output_in_journal() {
+        struct PartialThenAbort;
+        #[async_trait]
+        impl ModelGateway for PartialThenAbort {
+            async fn generate(&self, _req: ModelRequest) -> Result<ModelResponse, GatewayError> {
+                Err(GatewayError::Transport("stream aborted mid-way".into()))
+            }
+            async fn generate_stream(
+                &self,
+                _req: ModelRequest,
+                _cancel: Option<&tokio_util::sync::CancellationToken>,
+                on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+            ) -> Result<ModelResponse, GatewayError> {
+                on_chunk("partial answer...");
+                Err(GatewayError::Transport("stream aborted mid-way".into()))
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(PartialThenAbort);
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(&host, "hello", "RUN-PART", MANIFEST, 0, None)
+            .await;
+        assert!(result.is_err(), "expected model error, got {result:?}");
+
+        let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let lines: Vec<serde_json::Value> = events
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let model_outputs: Vec<_> = lines
+            .iter()
+            .filter(|l| l["event_type"] == "model_output")
+            .collect();
+        assert_eq!(
+            model_outputs.len(),
+            1,
+            "exactly one (incomplete) model_output in: {events}"
+        );
+        assert_eq!(model_outputs[0]["payload"]["text"], "partial answer...");
+        assert_eq!(model_outputs[0]["payload"]["incomplete"], true);
+        assert_eq!(lines.last().unwrap()["event_type"], "run_failed");
+
+        // The chain must stay valid — the incomplete record precedes the
+        // terminal event.
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-PART"),
+            None,
+            true,
+        );
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
 
