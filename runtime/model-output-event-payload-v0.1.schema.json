@@ -27,6 +27,8 @@
     "finish_reason": { "enum": ["stop", "tool_calls", "length"] },
     "reasoning_tokens": { "type": ["integer", "null"] },
     "completion_tokens": { "type": ["integer", "null"] },
-    "incomplete": { "type": "boolean" }
+    "incomplete": { "type": "boolean" },
+    "cache_hit_tokens": { "type": ["integer", "null"] },
+    "cache_miss_tokens": { "type": ["integer", "null"] }
   }
 }

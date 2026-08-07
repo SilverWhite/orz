@@ -24,10 +24,11 @@ Polyglot 摸底（2026-08-06）P7：分析型任务（读 3-4 文件 + 多轮 se
 
 ### 2.3 模型可见形态（机械告知，模型不猜不漂移）
 
-- **会话声明**：system prompt 注入 `[TOOL_ROUND_BUDGET v0.1]`（BUDGET + REMAINING 初始值）。
+- **会话声明**：system prompt 注入 `[TOOL_ROUND_BUDGET v0.1]`（**仅 BUDGET**；REMAINING 不进入 system——见下「前缀缓存约束」）。
 - **每轮机械告知**：每个工具轮后控制器注入 `REMAINING: N` 消息（模型可提前收拢——D-8「方便模型提前收拢和记录」）。
 - **到限语义**：预算耗尽后模型获得**一个最终无工具轮**报告 partial result（注入「预算耗尽，报告最佳部分结果，勿再调用工具」）；若该轮仍请求工具则拒绝执行、直接结束。journal 记录 `GateDecision{tool_rounds_limit, max_tool_rounds}`。
 - 预算消息为注入文本（`is_injected_block_text` 前缀匹配），不计入 stagnation 统计。
+- **前缀缓存约束（2026-08-07 修订）**：controller 每轮重建 system prompt，故 system 内**不得含任何随轮次变化的状态**（原 REMAINING 初始值在 system 的形态违反此约束——REMAINING 随 `tool_rounds` 递减致前缀缓存每轮全 miss，实测命中率 17.7%）；system 必须跨轮字节级稳定（测试锁定：`received[i].system == received[i+1].system` + 不含 REMAINING）。REMAINING 全部经**尾部消息**告知（append 于 messages 尾部，不破坏前缀）。首轮初始剩余由模型从 BUDGET 确定性推导（= BUDGET），无漂移。
 
 ### 2.4 记录修正
 
