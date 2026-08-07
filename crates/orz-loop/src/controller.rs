@@ -517,10 +517,11 @@ impl AgentLoopController {
             // D-8 (FIX_PLAN 2026-08-06): the round budget is declared to the
             // model up front — it does not guess or drift. The remaining
             // count is re-declared mechanically after every tool round.
-            let budget_block = crate::prompt::tool_round_budget_session_block(
-                self.max_tool_rounds,
-                self.max_tool_rounds.saturating_sub(tool_rounds),
-            );
+            // Cache-prefix fix (2026-08-07): the session block is static
+            // (BUDGET only) so the rebuilt system prompt is byte-identical
+            // across rounds — the provider's prefix cache keeps hitting.
+            let budget_block =
+                crate::prompt::tool_round_budget_session_block(self.max_tool_rounds);
             let system = self
                 .main_agent
                 .prompt_builder
@@ -573,6 +574,8 @@ impl AgentLoopController {
                                     "finish_reason": "length",
                                     "reasoning_tokens": null,
                                     "completion_tokens": null,
+                                    "cache_hit_tokens": null,
+                                    "cache_miss_tokens": null,
                                     "incomplete": true,
                                 }),
                             )
@@ -611,6 +614,13 @@ impl AgentLoopController {
                         // the budget rolls back).
                         "reasoning_tokens": response.reasoning_tokens,
                         "completion_tokens": response.completion_tokens,
+                        // Cache-hit observation (2026-08-07 fix): per-round
+                        // hit/miss tokens verify the prefix-cache fix — the
+                        // hit rate jumped from ~17% (per-round REMAINING in
+                        // the rebuilt system prompt) to 98%+ steady-state /
+                        // ~80% incl. cold start (live-verified 2026-08-07).
+                        "cache_hit_tokens": response.cache_hit_tokens,
+                        "cache_miss_tokens": response.cache_miss_tokens,
                     }),
                 )
                 .await?;
@@ -766,6 +776,11 @@ impl AgentLoopController {
                 reasoning_content: response.reasoning_content.clone(),
             });
             let mut assistant_parts: Vec<String> = Vec::new();
+            // Pending policy messages (denial breaker/ceiling) — appended
+            // AFTER the tool batch completes so no user message lands
+            // between the assistant declaration and its tool replies
+            // (provider protocol; 2026-08-07 wordy 400 + review P1).
+            let mut pending_policy: Vec<Message> = Vec::new();
             for tc in &response.tool_calls {
                 if cancel.is_some_and(|c| c.is_cancelled()) {
                     return Err(AgentLoopError::Cancelled);
@@ -785,8 +800,13 @@ impl AgentLoopController {
                         .await?
                     }
                     DispatchTarget::Host => {
-                        self.run_host_tool(host, writer, tc, prompt, workspace_trust, &mut messages)
-                            .await?
+                        let (result, policy_msg) =
+                            self.run_host_tool(host, writer, tc, prompt, workspace_trust, &mut messages)
+                                .await?;
+                        if let Some(m) = policy_msg {
+                            pending_policy.push(m);
+                        }
+                        result
                     }
                 };
                 assistant_parts.push(format!("[{}] {}", tc.name, result.output));
@@ -816,14 +836,6 @@ impl AgentLoopController {
                                 .max_consecutive_repeated_content
                                 .max(sub_metrics.max_ngram_repeat),
                         );
-                        self.maybe_fire_neutral_inquiry(
-                            writer,
-                            &mut messages,
-                            &mut main_counters,
-                            &mut internal_counters,
-                            &mut external_counters,
-                        )
-                        .await?;
                     }
                 }
             }
@@ -836,6 +848,23 @@ impl AgentLoopController {
                     reasoning_content: None,
                 });
             }
+            // Post-tool-batch injections — AFTER every tool reply of this
+            // round, so no user message breaks the assistant-declaration →
+            // tool-replies sequence (provider protocol; 2026-08-07 review
+            // P1/P2). Semantics are unchanged: the neutral inquiry fires at
+            // most once per round (counters reset on trigger), so hoisting
+            // it out of the per-tool loop is equivalent.
+            for pm in pending_policy {
+                messages.push(pm);
+            }
+            self.maybe_fire_neutral_inquiry(
+                writer,
+                &mut messages,
+                &mut main_counters,
+                &mut internal_counters,
+                &mut external_counters,
+            )
+            .await?;
 
             tool_rounds += 1;
             // D-8: mechanically re-declare the remaining budget after each
@@ -1180,7 +1209,12 @@ impl AgentLoopController {
         _prompt: &str,
         _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         messages: &mut Vec<Message>,
-    ) -> Result<ToolResult, AgentLoopError> {
+    ) -> Result<(ToolResult, Option<Message>), AgentLoopError> {
+        // The second tuple element is a pending policy message (breaker /
+        // ceiling) that must be injected AFTER the whole tool round — a
+        // Role::User message inserted between the assistant declaration and
+        // the tool replies violates the provider protocol (400, 2026-08-07
+        // wordy). The caller appends it after the tool batch completes.
         // D-9 (FIX_PLAN 2026-08-06): `run_tests` executes the host's FIXED
         // command — the model supplies no argv, so the permission gate is
         // skipped by design (the command itself is host-owned and hidden;
@@ -1234,7 +1268,7 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
-            return Ok(tool_result);
+            return Ok((tool_result, None));
         }
 
         // Permission gate.
@@ -1292,8 +1326,15 @@ impl AgentLoopController {
                 denial.consecutive = 0; // injected once per burst
             }
             drop(denial);
-            if breaker_triggered || ceiling_reached {
-                messages.push(Message {
+            // NOTE (2026-08-07 wordy fix): the breaker/ceiling message is
+            // Role::User and is pushed AFTER the denial Tool message below —
+            // the provider protocol requires the tool messages answering a
+            // tool_calls declaration to IMMEDIATELY follow the assistant
+            // message; a user message inserted between them makes the next
+            // request fail with "insufficient tool messages following
+            // tool_calls message" (400, observed on 3-consecutive-denies).
+            let breaker_message = if breaker_triggered || ceiling_reached {
+                Some(Message {
                     role: Role::User,
                     content: if ceiling_reached {
                         crate::prompt::tool_policy_ceiling_block(
@@ -1308,8 +1349,10 @@ impl AgentLoopController {
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
-                });
-            }
+                })
+            } else {
+                None
+            };
             let result = ToolResult {
                 // Explicit unavailability semantics (P3, 2026-08-06 polyglot
                 // findings): the tool is NOT available under the current
@@ -1334,7 +1377,11 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
-            return Ok(result);
+            // The breaker/ceiling user message is NOT pushed here — it is
+            // returned to the caller, which appends it only after the WHOLE
+            // tool batch (a user message between tool replies would violate
+            // the provider protocol; 2026-08-07 wordy 400 + review P1).
+            return Ok((result, breaker_message));
         }
 
         // IP5: pre-mutation snapshot — record the pre-tool worktree state of
@@ -1467,7 +1514,7 @@ impl AgentLoopController {
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
-        Ok(result)
+        Ok((result, None))
     }
 }
 
@@ -2115,6 +2162,25 @@ mod tests {
             "breaker tells the model to switch strategy: {}",
             injected[0]
         );
+        // 2026-08-07 wordy fix: the breaker (Role::User) must come AFTER the
+        // denial's Tool reply — the provider protocol requires tool messages
+        // to immediately follow the assistant tool_calls declaration; a user
+        // message in between yields a 400 ("insufficient tool messages
+        // following tool_calls message").
+        let breaker_idx = round4
+            .messages
+            .iter()
+            .position(|m| m.content.contains("TOOL_POLICY_BREAKER"))
+            .expect("breaker present");
+        let deny_tool_idx = round4
+            .messages
+            .iter()
+            .position(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-3"))
+            .expect("denial tool reply present");
+        assert!(
+            deny_tool_idx < breaker_idx,
+            "denial tool reply must precede the breaker message: {round4:?}"
+        );
         // Burst semantics: the breaker is injected ONCE (round 4). Rounds 1–3
         // (before the 3rd denial) must not carry it; the message persists in
         // the conversation afterward (history copies), so only the FIRST
@@ -2132,6 +2198,84 @@ mod tests {
                 break;
             }
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review P1 (2026-08-07): with multiple tool calls in ONE round, the
+    /// breaker user message must be injected only AFTER the whole tool batch
+    /// — a user message between the assistant declaration and its tool
+    /// replies breaks the provider protocol (400 "insufficient tool
+    /// messages"). The single-call-per-round script in
+    /// `ip2a_denial_breaker_injects_strategy_switch_message` cannot catch
+    /// this (the breaker always lands after the only tool reply).
+    #[tokio::test]
+    async fn ip2a_breaker_injects_after_whole_tool_batch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = PolicyHost {
+            journal,
+            policy: crate::host::ToolPolicy::Interactive,
+        };
+        // One round declaring FOUR calls, all denied — the 3rd denial trips
+        // the breaker mid-batch; the 4th tool reply must still precede it.
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                tool_call("search_replace", "call-1"),
+                tool_call("search_replace", "call-2"),
+                tool_call("search_replace", "call-3"),
+                tool_call("read_file", "call-4"),
+            ]),
+            // Final-answer rounds (the counterexample gate may consume one).
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-BREAK2", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round2 = &received[1];
+        let last_tool_idx = round2
+            .messages
+            .iter()
+            .rposition(|m| m.role == Role::Tool)
+            .expect("four tool replies present");
+        let breaker_idx = round2
+            .messages
+            .iter()
+            .position(|m| m.content.contains("TOOL_POLICY_BREAKER"))
+            .expect("breaker injected");
+        assert!(
+            last_tool_idx < breaker_idx,
+            "breaker must follow the ENTIRE tool batch (last tool reply at \
+             {last_tool_idx}, breaker at {breaker_idx}): {round2:?}"
+        );
+        // And the tool replies must directly follow the assistant
+        // declaration — no user message in between.
+        let decl_idx = round2
+            .messages
+            .iter()
+            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .expect("declaration present");
+        for (i, m) in round2.messages.iter().enumerate() {
+            if i > decl_idx && i <= last_tool_idx && m.role != Role::Tool {
+                panic!("user message between declaration and tool replies at {i}: {round2:?}");
+            }
+        }
+        assert_eq!(
+            round2
+                .messages
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .count(),
+            4,
+            "all four calls answered: {round2:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2622,6 +2766,19 @@ mod tests {
             received[0].system.contains("BUDGET: 40"),
             "budget declared in the session system prompt: {}",
             received[0].system
+        );
+        // Cache-prefix stability (2026-08-07 fix): the system prompt must be
+        // byte-identical across rounds — per-round state (REMAINING) lives in
+        // trailing messages only, so the provider's prefix cache keeps
+        // hitting instead of missing on every round (~17% hit rate before).
+        assert!(
+            !received[0].system.contains("REMAINING"),
+            "system must not carry per-round state: {}",
+            received[0].system
+        );
+        assert_eq!(
+            received[0].system, received[1].system,
+            "system prompt must be stable across rounds (prefix cache)"
         );
         // Round 1 after the first tool round: 39 remaining (mechanical).
         let round2: Vec<&str> = received[1]

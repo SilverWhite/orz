@@ -120,13 +120,15 @@ pub fn tool_policy_ceiling_block(total: u32) -> String {
 }
 
 /// D-8 (FIX_PLAN 2026-08-06): session-level budget declaration — injected
-/// into the system prompt once per run (BUDGET + REMAINING initial value).
-/// The model does not guess or drift the remaining count.
-pub fn tool_round_budget_session_block(budget: u32, remaining: u32) -> String {
+/// into the system prompt once per run. The remaining count is deliberately
+/// NOT part of the system prompt: the system is rebuilt each round, so any
+/// per-round state inside it breaks the provider's prefix cache on every
+/// round (2026-08-07 fix — hit rate was ~17%; the count is declared by the
+/// trailing `tool_round_budget_remaining_block` messages instead).
+pub fn tool_round_budget_session_block(budget: u32) -> String {
     format!(
         "{TOOL_ROUND_BUDGET_PREFIX} v0.1]\n\
          BUDGET: {budget} tool rounds per turn\n\
-         REMAINING: {remaining}\n\
          After each tool round the controller reports the updated \
          remaining count. Finish your work within the budget; if it \
          is exhausted the run ends with a partial result.\n\
@@ -318,7 +320,7 @@ mod tests {
         // never matched the `[TOOL_ROUND_BUDGET v0.1]` messages).
         assert!(is_injected_block_text(&tool_policy_breaker_block("web_search", 3)));
         assert!(is_injected_block_text(&tool_policy_ceiling_block(10)));
-        assert!(is_injected_block_text(&tool_round_budget_session_block(40, 40)));
+        assert!(is_injected_block_text(&tool_round_budget_session_block(40)));
         assert!(is_injected_block_text(&tool_round_budget_remaining_block(38)));
         assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(40)));
         // Leading/trailing whitespace tolerated.

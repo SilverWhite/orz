@@ -245,6 +245,36 @@ impl OrzHost {
     }
 }
 
+/// Stability fix (2026-08-07): terminate the child AND its process tree.
+/// `tokio::process::Child::kill` (= TerminateProcess) only kills the direct
+/// child — grandchildren that inherited our capture pipes survive as
+/// orphans and keep `read_capped` blocked on EOF forever (the 52-minute
+/// forth hang: harness killed orz, orz's hung pytest held the pipes).
+/// Windows: TaskKill `/T /F` terminates the whole tree (and closes the
+/// pipe handles, releasing the readers). ORDER MATTERS: TaskKill `/T`
+/// walks ParentProcessId links, so it must run while the tree is intact —
+/// killing the parent first reparents the grandchildren (Windows orphans
+/// get reparented to the system process) and `/T` then finds nothing.
+/// Non-Windows: plain kill remains (recorded limitation — the project
+/// runtime is Windows-first).
+async fn kill_process_tree(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    {
+        if let Some(id) = child.id() {
+            let tk = tokio::process::Command::new("taskkill")
+                .args(["/PID", &id.to_string(), "/T", "/F"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            if let Ok(mut tk) = tk {
+                let _ = tk.wait().await;
+            }
+        }
+    }
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
 /// F-09 (2026-08-07 review): collect a streamed pipe with a hard cap — the
 /// TAIL is kept (test summaries live at the end); leading bytes are dropped
 /// on overflow so pathological output cannot blow session memory. A closed
@@ -326,6 +356,28 @@ impl LoopHost for OrzHost {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| ToolError::ExecutionFailed(format!("test runner spawn: {e}")))?;
+        // Stability fix (2026-08-07, design review D2 #3/#4): bind the child
+        // into a kill-on-close Job Object. This closes the original hang
+        // mechanism end-to-end: when orz ITSELF is killed (the harness's
+        // timeout path), the job handle closes with the process and the
+        // kernel terminates the whole contained tree — the orphaned pytest
+        // that held our capture pipes and blocked the harness forever (the
+        // 52-minute forth hang) cannot survive orz. Assigning after spawn
+        // (running) is a millisecond window vs CREATE_SUSPENDED, accepted
+        // and recorded; descendants spawned after assignment inherit the job.
+        // Non-Windows (or job creation failure): Option::None falls back to
+        // the TaskKill tree-kill path below.
+        let supervisor: Option<orz_assurance::sandbox::job_object::JobObjectSupervisor> =
+            orz_assurance::sandbox::job_object::JobObjectSupervisor::new().ok();
+        if let (Some(sup), Some(pid)) = (supervisor.as_ref(), child.id())
+            && let Err(e) = sup.assign_process(pid)
+        {
+            tracing::warn!("run_tests: job-object assignment failed ({e}); \
+                            falling back to TaskKill on timeout");
+            // Note: `supervisor` is deliberately not rebound here — the
+            // assignment failure leaves a live job with no members, which is
+            // harmless to drop; the TaskKill path covers the timeout case.
+        }
         let stdout = child.stdout.take().ok_or_else(|| {
             ToolError::ExecutionFailed("test runner stdout pipe unavailable".into())
         })?;
@@ -345,11 +397,16 @@ impl LoopHost for OrzHost {
             Ok(status) => status
                 .map_err(|e| ToolError::ExecutionFailed(format!("test runner wait: {e}")))?,
             Err(_) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                // Stability fix (2026-08-07): `Child::kill` terminates only
+                // the direct child — grandchildren that inherited our capture
+                // pipes (e.g. a pytest spawned by the runner) survive as
+                // orphans and keep `read_capped` blocked on EOF forever (the
+                // 52-minute forth hang). Kill the whole tree on Windows via
+                // TaskKill; unix keeps the plain kill (recorded limitation).
+                kill_process_tree(&mut child).await;
                 return Ok(orz_loop::host::TestRunResult {
                     output: format!(
-                        "[test runner TIMED OUT after {timeout:?} — process killed; \
+                        "[test runner TIMED OUT after {timeout:?} — process tree killed; \
                          partial output follows]\n{}",
                         String::from_utf8_lossy(&out_buf),
                     ),
@@ -706,5 +763,65 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&dir);
             })
             .await
+    }
+
+    /// Stability fix (2026-08-07): a hung test child plus its grandchildren
+    /// must ALL be terminated on timeout — killing only the direct child
+    /// left an orphan holding the capture pipes (the 52-minute forth hang:
+    /// harness killed orz, orz's hung pytest kept the pipes open, the
+    /// harness's communicate() blocked on EOF forever).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn run_tests_timeout_kills_process_tree() {
+        let dir = test_dir();
+        let pidfile = dir.join("gc.pid");
+        let script = format!(
+            // Child spawns a grandchild that inherits our stdout/stderr
+            // pipes and writes its pid to the pidfile; both then sleep
+            // forever (deadlock-style hang).
+            "import subprocess, sys, time, pathlib, os; \
+             g = subprocess.Popen([sys.executable, '-c', \
+             'import time, pathlib, os; pathlib.Path(r\"{pf}\").write_text(str(os.getpid())); \
+             [time.sleep(1) for _ in range(999999)]'], \
+             stdout=sys.stdout, stderr=sys.stderr); \
+             [time.sleep(1) for _ in range(999999)]",
+            pf = pidfile.display().to_string().replace('\\', "/"),
+        );
+        let runner = orz_loop::host::TestRunner {
+            command: vec!["python".to_string(), "-c".to_string(), script.clone()],
+            timeout: Some(std::time::Duration::from_secs(2)),
+        };
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host")
+        .with_test_runner(Some(runner));
+        let result = host.run_tests().await.expect("run_tests returns a result");
+        assert!(
+            result.output.contains("TIMED OUT"),
+            "expected TIMED OUT marker: {}",
+            result.output
+        );
+        assert_eq!(result.exit_code, None);
+        // Give TaskKill a moment to reap the tree, then verify the
+        // grandchild (the pipe holder) is gone.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let gcid: i64 = std::fs::read_to_string(&pidfile)
+            .expect("grandchild pid written")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        let listing = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {gcid}"), "/NH"])
+            .output()
+            .expect("tasklist runs");
+        let text = String::from_utf8_lossy(&listing.stdout);
+        assert!(
+            !text.contains(&gcid.to_string()),
+            "grandchild {gcid} survived the tree kill: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

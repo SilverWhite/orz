@@ -122,6 +122,8 @@ impl ModelGateway for FakeProvider {
             reasoning_content: next.reasoning_content,
             reasoning_tokens: None,
             completion_tokens: None,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         })
     }
 
@@ -145,6 +147,8 @@ impl ModelGateway for FakeProvider {
             reasoning_content: next.reasoning_content,
             reasoning_tokens: None,
             completion_tokens: None,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         };
         // Split on char boundaries (CJK-safe) — concatenating the chunks must
         // reproduce the full text exactly (Python text_delta invariant).

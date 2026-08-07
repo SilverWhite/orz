@@ -318,6 +318,11 @@ impl DeepSeekTransport {
                 .and_then(|u| u.completion_tokens_details.as_ref())
                 .and_then(|d| d.reasoning_tokens),
             completion_tokens: body.usage.as_ref().map(|u| u.completion_tokens),
+            // Cache-hit observation (2026-08-07 fix): DeepSeek reports
+            // usage.prompt_cache_hit/miss_tokens — journaled to verify the
+            // prefix-cache fix (system no longer carries per-round state).
+            cache_hit_tokens: body.usage.as_ref().and_then(|u| u.prompt_cache_hit_tokens),
+            cache_miss_tokens: body.usage.as_ref().and_then(|u| u.prompt_cache_miss_tokens),
         })
     }
 
@@ -547,6 +552,12 @@ impl DeepSeekTransport {
                 .and_then(|u| u.completion_tokens_details.as_ref())
                 .and_then(|d| d.reasoning_tokens),
             completion_tokens: stream_usage.as_ref().map(|u| u.completion_tokens),
+            cache_hit_tokens: stream_usage
+                .as_ref()
+                .and_then(|u| u.prompt_cache_hit_tokens),
+            cache_miss_tokens: stream_usage
+                .as_ref()
+                .and_then(|u| u.prompt_cache_miss_tokens),
         })
     }
 }

@@ -100,6 +100,15 @@ pub struct CompletionUsage {
     /// Breakdown of tokens used in a completion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
+    /// Prompt tokens served from the provider's prefix cache (DeepSeek
+    /// extension — `usage.prompt_cache_hit_tokens`). orz addition
+    /// (2026-08-07): cache-hit observation for the hit-rate fix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_hit_tokens: Option<u64>,
+    /// Prompt tokens not served from cache (DeepSeek extension —
+    /// `usage.prompt_cache_miss_tokens`). orz addition (2026-08-07).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_miss_tokens: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, Builder, PartialEq)]

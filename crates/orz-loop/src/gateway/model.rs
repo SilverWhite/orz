@@ -162,6 +162,11 @@ pub struct ModelResponse {
     pub reasoning_tokens: Option<u32>,
     /// Total completion tokens for this response (usage.completion_tokens).
     pub completion_tokens: Option<u32>,
+    /// Prompt tokens served from the provider's prefix cache (DeepSeek
+    /// `usage.prompt_cache_hit_tokens`) — 2026-08-07 cache-hit observation.
+    pub cache_hit_tokens: Option<u64>,
+    /// Prompt tokens NOT served from cache (`usage.prompt_cache_miss_tokens`).
+    pub cache_miss_tokens: Option<u64>,
 }
 
 impl ModelResponse {
@@ -173,6 +178,8 @@ impl ModelResponse {
             reasoning_content: None,
             reasoning_tokens: None,
             completion_tokens: None,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         }
     }
 
@@ -184,6 +191,8 @@ impl ModelResponse {
             reasoning_content: None,
             reasoning_tokens: None,
             completion_tokens: None,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         }
     }
 }
