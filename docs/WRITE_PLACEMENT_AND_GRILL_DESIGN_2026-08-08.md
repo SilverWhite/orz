@@ -52,7 +52,7 @@
 **降级链**（安装目录只读场景：Program Files 提权、评测容器 `/usr/local/bin` 易失）：
 1. 安装目录可写 → `{安装目录}/grok-home`
 2. 不可写 → `{cwd}/.gsa/grok-home`（工作区树内，仍受管）
-3. 两者皆不可 → 用户目录（最后手段 + journal 警告）
+3. 两者皆不可 → 用户目录（最后手段 + stderr 警告）
 
 **裁决记录**（本次讨论）：
 - **Q2 落点**：B 类落安装目录（用户 Q5 指示）——不落 `.gsa` symlink 树，评测每 trial 全新问题消解（B 类在评测容器本就易失，任务不需要 MCP/trust 配置）
@@ -97,7 +97,41 @@
 1. ✅ 前置：全量枚举继承 crate 写点（crash-handler/pidfile 等）→ §1 清单已回填（2026-08-08）
 2. ✅ L1：GROK_HOME 注入（orz-bin/orz-codex/orz-tui 启动路径统一函数 `orz_host::grok_home::redirect_grok_home`）+ 降级链 + 测试（EnvVarGuard 先例）+ 文档（2026-08-08，见头部状态）
 3. ✅ Grill：TUI `/grill` + `/grill-finish` 命令（CommandRegistry 单一事实源）+ controller `run_grill_turn`（discard EventWriter + 反例 gate 跳过 + 历史写回）+ 默认模板常量 + `{cwd}/.gsa/grill/<session>.jsonl` 记录 + ReadOnly 工具策略（2026-08-08，见头部状态）
-4. ⬜ ADR 记录（写入策略为不可变决策；grill 为设计补充）
-5. ⬜ memory 更新（Q8 环境事实、裁决记录）
+4. ✅ ADR 记录（写入策略为不可变决策——`adr/ADR-0009-write-placement-policy.md`；grill 为设计补充，不进 ADR）
+5. ✅ memory 更新（Q8 环境事实已记 `disk-space-and-migration`；裁决与实施记录 `fusion-phase-tracking` 2026-08-08 条目）
 
 **明确不做**：L2 同盘检测（视 L1 实测后观察再定）、L3 journal fs_write 审计事件、grill 双模型（盲区已记录，后续补）。
+
+## 5. 审查记录（2026-08-08 三独立代理审查——实施后闭环）
+
+三代理（设计合理性/实现合理性/符合性）审查结论：**无 D1/P1/C1**，核心机制语义正确。已修复项与记录项如下。
+
+### 已修复（代码）
+
+| 项 | 来源 | 修复 |
+|---|---|---|
+| `run_grill_turn` 锁跨 await（std MutexGuard 跨 await 潜在死锁 + `await_holding_lock` 警告） | 实现 P2-2 / 符合性 C2-3 | controller 调用移出 `grill` 锁（messages `mem::take` 出锁、结束写回） |
+| 失败轮吞用户回答（错误路径回答不进 history/JSONL，讨论连续性断裂） | 设计 D2-5 | 错误路径将 user_input 追加进 history + JSONL 记录 `error` 字段；turn 计数仍递增（重试得新 GRILL-* 目录） |
+| `try_claim_dir` 残留探针永久降级安装目录 tier | 设计 D2-1 / 实现 P2-4 | `AlreadyExists` 时删除探针重试一次（自愈；双首启竞争也覆盖） |
+| GRILL-* 目录永不清理（retention 只认 RUN-/RST-，长会话磁盘累积无界） | 设计 D2-4 | retention `prune_run_dirs` 前缀白名单加 `GRILL-`（按 age 同规则清理） |
+| 同 JSONL 多 episode 歧义（finish 后再进入 turn 重启） | 设计 D2-7 | `GrillSession.episode` 单调计数（`AtomicU32`）+ JSONL 记录/terminal 带 episode 字段 |
+| grill 轮 `compaction_whitelist_add` 可执行（ReadOnly 类 auto-allow 却写 .gsa，"写工具禁用"不严密） | 实现 P3-4 | grill 轮不声明该工具 |
+| TUI grill 轮静默冻结（inline await 无渲染） | 实现 P2-1 | await 前 `render_frame`（运行中帧）；do_cancel 在 grill_active 时提示"不可取消"（D2-6） |
+| JSONL 写失败静默吞掉 | 设计 D2-9 | `tracing::warn`（保留"不 fail turn"裁决） |
+| `needless_option_as_deref` ×2 | 符合性 C2-3 | `grill.as_deref_mut()` → `match &mut grill` / `if let Some(g) = &mut grill` |
+
+### 记录项（接受/已知边界）
+
+- **C3-1**：GRILL-* bootstrap 目录含 host 机械 `run_preflight`（无终局开链）——controller 层零事件（discard 实测），TUI tail/snapshot 扫描只认 `RUN-` 前缀不受干扰；retention 现已清理（D2-4）。"零 run-journal 事件"精确含义 = 零 controller 事件（bootstrap 机械 preflight 除外）。
+- **C3-2**：事件注册表现为 34 项（A4-A6 前置提交已加 `context_compressed` 33→34）；本实施零 schema/注册表/fixtures 改动（"零 schema 改动"实质成立）。
+- **C3-3**：JSONL 文件名 `<session8>`（8 字符，run 目录既有惯例）；"推荐"未单列字段——内嵌于 response 全文（模板强制"推荐: ..."）。
+- **C3-4**：controller 保持 stateless-between-turns 契约，模式状态在 host `GrillSession` + TUI `app.grill_active` 两层——语义全达标，结构上状态外移。
+- **C3-5**：模板在首轮 `run_grill_turn`（turn==0）注入（非 `/grill` 命令时刻）——功能等价（会话开始=首轮）。
+- **C3-6**：Q6"temp+rename 原子写"约束继承 crate 既有 B 类写路径；注入机制自身用 `create_new` 独占探针（permit O_EXCL 先例），两者不冲突。
+- **C3-7**：TUI 库级自守卫锚定 `config.cwd`（--run-root 会改变锚点）——生产路径 orz-bin 首行已注入故必为 EnvRespected no-op，不构成实质偏差。
+- **D2-2**（记录）：dev 工作流 `cargo clean` 会清空 `target/debug/grok-home`（B 类状态失忆：config/信任/凭据元数据）——安装目录=current_exe 父目录的固有后果，用户 Q5 指示；治理方案（dev 特判上移）需用户确认，当前记录。
+- **P2-3**（记录）：grill 长会话上下文无界增长（compaction 的轮判定只认工具轮，Q/A 文本属 preamble 永不丢弃；rhythm 压缩依赖 counterexample gate 不触发）——safety 压缩（>250K）对纯文本轮 noop。缓解：/grill-finish 分段、错误路径保留状态可重试（finish 失败不清除 ✓）。
+- **P3-3**（记录）：GRILL_FINISH_PROMPT 以 user_input 身份进 JSONL（terminal 记录已区分阶段）。
+- **P3-5**（记录）：注入块（预算/熔断/中性询问）随 history 持久化进下一轮——无害易混淆。
+- **P3-6**（记录）：ReadOnly deny 测试断言较弱（`x.py` 不存在可能因路径错而非权限拒）——脚本响应固定，无法区分；已由 permission 层单测钉死 ReadOnly 语义。
+- **D3 其他**：Q4 前提可失效（评测/CI 预设 GROK_HOME 时策略静默失效——记录）；untrusted-cwd 也会先创建 `.gsa/grok-home`（无害）；多二进制异目录安装配置分叉；D3-10 模板以 User role 注入（工作正常）；D3-12 grill JSONL 落 A 类工作区（C 盘工作区时仍写 C 盘——已知交互）。

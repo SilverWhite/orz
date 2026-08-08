@@ -41,8 +41,10 @@
 
 - **Q2 落点**：B 类落安装目录——不落 `.gsa` symlink 树（评测每 trial 全新问题消解；
   B 类在评测容器本就易失，任务不需要 MCP/trust 配置）。
-- **Q3 cwd 语义**：`GROK_HOME` 固定于**进程启动时 cwd**（与 `{cwd}/.gsa` 同源；
-  TUI 探索器导航是视图切换不改变运行语义；`--run-root` 不重新锚定）。
+- **Q3 cwd 语义**：`GROK_HOME` 与 `{cwd}/.gsa` **同锚点**——headless（orz-bin/orz-codex）
+  取进程启动时 cwd（注入在 `--run-root` 解析前，不重新锚定）；TUI 取运行根
+  （`config.cwd`，`--run-root` 时即其值；探索器导航是视图切换不改变运行语义）。
+  两路径行为一致（均与 .gsa 同源）。
 - **Q4 显式判定**：env 存在 `GROK_HOME` 即尊重（不加 `ORZ_` 前缀变体——避免两套语义
   破坏继承 crate 读取）；当前无平台注入风险（评测容器只透传 `ORZ_*`）。
 - **Q6 多实例锁竞争**：接受，风险低——原子写 + 独占锁已有先例（daemonize PidFile、
