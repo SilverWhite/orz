@@ -237,36 +237,52 @@ pub enum GatewayError {
 ///
 /// Cheap and lock-free (one relaxed atomic store per stamp); stamping
 /// unconditionally is fine.
-#[derive(Clone, Debug, Default)]
+///
+/// MONOTONIC SOURCE (2026-08-08 review P2-2): elapsed time is measured
+/// against a construction-time [`Instant`] baseline, never wall clock —
+/// a machine suspend or NTP step would otherwise jump `idle()` past the
+/// watchdog window and kill a healthy run on wake.
+#[derive(Clone, Debug)]
 pub struct ActivityClock {
-    last_millis: Arc<std::sync::atomic::AtomicU64>,
+    /// Monotonic baseline taken at construction.
+    start: std::time::Instant,
+    /// `start.elapsed()` in ms at the last stamp.
+    last_elapsed_ms: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ActivityClock {
     pub fn new() -> Self {
         Self {
-            last_millis: Arc::new(std::sync::atomic::AtomicU64::new(Self::now_ms())),
+            start: std::time::Instant::now(),
+            last_elapsed_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
     /// Record an activity instant (called on every event/frame/chunk).
     pub fn stamp(&self) {
-        self.last_millis.store(Self::now_ms(), std::sync::atomic::Ordering::Relaxed);
+        self.last_elapsed_ms.store(
+            self.elapsed_ms(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// Duration since the last stamp — the stall watchdog compares this
     /// against its timeout.
     pub fn idle(&self) -> Duration {
         Duration::from_millis(
-            Self::now_ms().saturating_sub(self.last_millis.load(std::sync::atomic::Ordering::Relaxed)),
+            self.elapsed_ms()
+                .saturating_sub(self.last_elapsed_ms.load(std::sync::atomic::Ordering::Relaxed)),
         )
     }
 
-    fn now_ms() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
+    fn elapsed_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+}
+
+impl Default for ActivityClock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

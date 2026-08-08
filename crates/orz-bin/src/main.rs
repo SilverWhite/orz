@@ -114,6 +114,12 @@ fn main() {
         eprintln!(
             "       --max-wallclock <sec> bounds the whole run (model-invisible; run_invalidated on expiry)"
         );
+        eprintln!(
+            "       stall watchdog: ORZ_STALL_TIMEOUT=<sec> no-activity window (default 360, 0 disables)"
+        );
+        eprintln!(
+            "       per-tool timeout: ORZ_TOOL_TIMEOUT_SECS=<sec> (default 300, 0 disables; interactive escape hatch)"
+        );
         std::process::exit(2);
     });
     // P0-2/P1-1 (2026-08-08 stall guards): resolve the guards once for
@@ -619,7 +625,15 @@ fn max_stall_timeout() -> Result<Option<Duration>, String> {
 }
 
 /// P1-1 (2026-08-08 stall guards): default no-activity watchdog window.
-pub const STALL_TIMEOUT_DEFAULT: Duration = Duration::from_secs(300);
+///
+/// 360s — NOT the plan's literal 5min — to keep the guards deterministic:
+/// the per-tool timeout (`TOOL_CALL_TIMEOUT`, 300s) fires FIRST on a hung
+/// tool, so the tool path always ends with the P0-1 semantics (tree kill +
+/// model continues) and the stall watchdog only ever fires on silence
+/// OUTSIDE a tool call (between-round code, permission waits, retry-chain
+/// backpressure). With equal windows the two guards raced (2026-08-08
+/// review P2-1/D2-1) and a stall win would skip the tree kill entirely.
+pub const STALL_TIMEOUT_DEFAULT: Duration = Duration::from_secs(360);
 
 /// P1-1: the stall watchdog — fires once the heartbeat has been silent
 /// for `timeout`. Polls every 500ms (a poll is cheap; the granularity is
@@ -957,7 +971,19 @@ fn build_cli_host(
             timeout: None,
         }
     });
-    Ok(orz_host::OrzHost::with_bridge_and_hub_policy(
+    // P0-1 (2026-08-08 review D2-3): per-tool timeout escape hatch for the
+    // interactive `-p` path — `ORZ_TOOL_TIMEOUT_SECS` (0 = unbounded).
+    // Interactive users running legitimately long commands (10min builds)
+    // can raise or disable the 5min default without a rebuild; the TUI/
+    // stdio paths keep the host default (documented limitation).
+    let tool_timeout = std::env::var("ORZ_TOOL_TIMEOUT_SECS")
+        .ok()
+        .map(|s| s.trim().parse::<u64>())
+        .transpose()
+        .map_err(|_| "ORZ_TOOL_TIMEOUT_SECS must be a number of seconds".to_string())?
+        .filter(|&s| s > 0)
+        .map(Duration::from_secs);
+    let mut host = orz_host::OrzHost::with_bridge_and_hub_policy(
         session_id,
         handle.journal.clone(),
         cwd,
@@ -969,7 +995,11 @@ fn build_cli_host(
     // P1 permit keystore — the session's DPAPI-backed signer.
     .with_permit_signer(handle.permit_signer.clone())
     // D-9: fixed test-runner command (harness feedback loop).
-    .with_test_runner(test_runner))
+    .with_test_runner(test_runner);
+    if let Some(timeout) = tool_timeout {
+        host = host.with_tool_timeout(timeout);
+    }
+    Ok(host)
 }
 
 /// Short timestamp-based suffix for the run ID (no uuid dep in orz-bin yet).

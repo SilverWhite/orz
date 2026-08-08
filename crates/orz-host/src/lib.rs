@@ -526,7 +526,14 @@ impl LoopHost for OrzHost {
                     timeout = ?self.tool_timeout,
                     "tool call TIMED OUT — killing the tool process tree"
                 );
-                orz_tools::util::global_process_scope().kill_all();
+                // 2026-08-08 review F1 (P1-1/D1-1): `kill_active` — NOT
+                // `kill_all`. The latter latches the global scope closed
+                // (its contract is "call only when the process is genuinely
+                // exiting"); a mid-session latch would kill every LATER
+                // spawn on the spot (terminal.rs ignores `register`'s
+                // return), so one tool timeout would poison all subsequent
+                // bash calls for the whole session.
+                orz_tools::util::global_process_scope().kill_active();
                 return Err(ToolError::Timeout(format!(
                     "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
                      process tree killed; the tool did not complete",
@@ -988,8 +995,13 @@ mod tests {
             &dir,
             WorkspaceTrust::ObservedTrusted,
         )
+        // 2s (not 500ms — 2026-08-08 review P3-6b): under parallel-test CPU
+        // contention the 500ms budget could expire before python even
+        // spawned the grandchild, making the pidfile assertion below panic
+        // spuriously. 2s is comfortably past python's cold start while far
+        // below any real tool window.
         .expect("host")
-        .with_tool_timeout(std::time::Duration::from_millis(500));
+        .with_tool_timeout(std::time::Duration::from_millis(2000));
         let result = host
             .call_tool(
                 "run_terminal_cmd",
@@ -1005,21 +1017,25 @@ mod tests {
             err.to_string().contains("TIMED OUT"),
             "expected TIMED OUT marker: {err}"
         );
-        // The session survives: the next call returns normally (the
-        // toolset's actor must not be wedged by the killed call).
+        // The session survives — including for PROCESS-type tools (2026-08-08
+        // review F1: `kill_active` must not latch the scope, or every later
+        // spawn would die on arrival). The follow-up is a real
+        // `run_terminal_cmd` — the original review flagged that a `read_file`
+        // follow-up (no process) could not catch the latch.
         let follow_up = host
             .call_tool(
-                "read_file",
-                serde_json::json!({"target_file": pidfile}),
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": "echo orz-alive",
+                    "description": "post-timeout liveness",
+                }),
                 "call-t2",
             )
             .await
-            .expect("follow-up call works after the timeout");
+            .expect("process-type tool works after the timeout");
         assert!(
-            follow_up
-                .output
-                .contains(std::fs::read_to_string(&pidfile).unwrap().trim()),
-            "follow-up read_file returned the file: {follow_up:?}"
+            follow_up.output.contains("orz-alive"),
+            "follow-up bash returned the expected output: {follow_up:?}"
         );
         // Give the kill a moment to reap the tree, then verify the
         // grandchild (the pipe holder) is gone.

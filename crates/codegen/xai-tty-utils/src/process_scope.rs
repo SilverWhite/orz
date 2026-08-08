@@ -160,6 +160,30 @@ impl ProcessScope {
     /// Groups whose owner already reaped+dropped them upgrade to `None` and are
     /// skipped — so this never `killpg`s a reused PID.
     pub fn kill_all(&self) {
+        self.kill_enrolled();
+        // Latch closed under the lock: a concurrent `register` either already
+        // pushed (its group was just killed in the loop) or now sees `closed`
+        // and kills its own child — nothing slips through after teardown.
+        self.inner.closed.store(true, Ordering::Relaxed);
+    }
+
+    /// Kill every currently-enrolled process tree WITHOUT latching the scope
+    /// closed (2026-08-08 stall guards, P0-1 review F1): mid-session
+    /// containment — a tool-call timeout must kill the hung tool's tree but
+    /// leave the session able to spawn new commands. Contrast [`kill_all`],
+    /// which latches the scope and is reserved for genuine process exit (a
+    /// session-internal `kill_all` would poison every later spawn: `register`
+    /// kills them on the spot — the "one timeout destroys all future bash"
+    /// failure mode). PID-reuse safety is unaffected: skipped groups are
+    /// exactly those whose owner already reaped them.
+    pub fn kill_active(&self) {
+        self.kill_enrolled();
+    }
+
+    /// Shared kill sweep: kill every still-live enrolled group and clear the
+    /// set. Does NOT touch the `closed` latch (both public variants decide
+    /// that policy themselves).
+    fn kill_enrolled(&self) {
         let mut groups = self.lock();
         for weak in groups.iter() {
             if let Some(group) = weak.upgrade() {
@@ -171,10 +195,6 @@ impl ProcessScope {
         }
         // Every weak has been handled above; clear the set.
         groups.clear();
-        // Latch closed under the lock: a concurrent `register` either already
-        // pushed (its group was just killed in the loop) or now sees `closed`
-        // and kills its own child — nothing slips through after teardown.
-        self.inner.closed.store(true, Ordering::Relaxed);
     }
 
     /// Lock the group set, tolerating a poisoned mutex: the critical sections

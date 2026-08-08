@@ -1967,15 +1967,28 @@ impl AgentLoopController {
                 .await?;
             // P1-1 (2026-08-08 stall guards): a legit long test run (up to
             // the 30min F-09 cap) journals nothing between ToolStarted and
-            // ToolCompleted — the heartbeat keeps the stall watchdog from
-            // firing on legitimate execution.
+            // ToolCompleted — without periodic stamps the stall watchdog
+            // would fire mid-run (2026-08-08 review P1-2/D1-2: the original
+            // before/after stamps only reset the idle counter at the
+            // boundaries; a 30min run idles past the 6min window).
             if let Some(h) = heartbeat {
                 h.stamp();
             }
-            let result = host
-                .run_tests()
-                .await
-                .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            let result = {
+                let fut = host.run_tests();
+                tokio::pin!(fut);
+                loop {
+                    tokio::select! {
+                        r = &mut fut => break r,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                            if let Some(h) = heartbeat {
+                                h.stamp();
+                            }
+                        }
+                    }
+                }
+            }
+            .map_err(|e| AgentLoopError::Session(e.to_string()))?;
             if let Some(h) = heartbeat {
                 h.stamp();
             }
