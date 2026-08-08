@@ -123,3 +123,29 @@ pub fn map_tool_error(err: &xai_tool_runtime::ToolError) -> orz_loop::host::Tool
     // The runtime error carries a name/message; surface it as execution failure.
     orz_loop::host::ToolError::ExecutionFailed(err.to_string())
 }
+
+/// 2026-08-08 blackboard-partition review closure: derive the exit-code
+/// semantics of a structured tool output for the orz-loop `ToolResult`
+/// contract (the controller's edit-action gate keys on `Some(0)` = the edit
+/// actually happened).
+///
+/// - `bash` carries its real exit code (the terminal-backend captures it).
+/// - `search_replace` reports "applied" only via the `EditsApplied` variant;
+///   every other variant (`NoMatchesFound`, `MultipleMatchesFound`,
+///   `FileNotFound`, `InvalidInput`, `FileAlreadyExists`, `FilenameTooLong`)
+///   is an Ok output that changed NOTHING — non-zero, so the "实际变动" gate
+///   stays closed for them.
+/// - every other successful output is `0`.
+pub fn exit_code_from_output(output: &orz_tools::types::output::ToolOutput) -> Option<i32> {
+    use orz_tools::types::output::SearchReplaceOutput;
+    match output {
+        orz_tools::types::output::ToolOutput::Bash(bash) => Some(bash.exit_code),
+        orz_tools::types::output::ToolOutput::SearchReplace(sr) => {
+            Some(match sr {
+                SearchReplaceOutput::EditsApplied(_) => 0,
+                _ => 1,
+            })
+        }
+        _ => Some(0),
+    }
+}

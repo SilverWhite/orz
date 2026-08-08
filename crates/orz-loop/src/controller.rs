@@ -36,7 +36,7 @@ use orz_assurance::{
 use orz_assurance::session::snapshot::SnapshotStore;
 
 use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole, SubagentSpec};
-use crate::blackboard::SharedBlackboard;
+use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{FinishReason, Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PermitDecision, ToolDef, ToolResult};
@@ -62,6 +62,16 @@ use crate::tool::ToolDispatcher;
 /// is the backstop, the consecutive-denial circuit breaker (IP2a/D-3) is
 /// the primary control.
 pub const MAX_TOOL_ROUNDS: u32 = 40;
+
+/// Env override for the global round budget (benchmark harnesses — SWE-bench
+/// exploration burns 60+ rounds; polyglot stays at the default). Parsed at
+/// controller construction; the session-declared budget block follows it, so
+/// the model always sees the real cap. Default (absent/invalid) = 40.
+pub fn max_tool_rounds_override() -> Option<u32> {
+    std::env::var("ORZ_MAX_TOOL_ROUNDS")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
 
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
@@ -137,6 +147,20 @@ pub const DENIAL_CEILING_TOTAL: u32 = 10;
 /// FINAL output (tail-capped at RUN_TESTS_CONTEXT_CAP; test frameworks put
 /// their summary at the end). The full (capped) output was written to disk
 /// by the host; the model reads it via read_file when it needs more.
+/// 2026-08-08 blackboard partition: compact display form of one edit record
+/// — `{file} {old_lines}→{new_lines}行变动`, e.g. `1.py 12→34行变动`
+/// (old_lines == 0 = new-file creation: `1.py 新建(5行)`).
+fn format_edit_record(record: &EditRecord) -> String {
+    if record.old_lines == 0 {
+        format!("{} 新建({}行)", record.file, record.new_lines)
+    } else {
+        format!(
+            "{} {}→{}行变动",
+            record.file, record.old_lines, record.new_lines
+        )
+    }
+}
+
 fn compose_test_output_message(result: &crate::host::TestRunResult) -> String {
     let reminder = match result.exit_code {
         Some(code) => format!("[test-run complete] exit_code={code}"),
@@ -186,7 +210,7 @@ impl AgentLoopController {
             ),
             blackboard: Arc::new(SharedBlackboard::new()),
             orientation_monitor: Mutex::new(OrientationMonitor::new()),
-            max_tool_rounds: MAX_TOOL_ROUNDS,
+            max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
@@ -222,6 +246,95 @@ impl AgentLoopController {
 
     pub fn blackboard(&self) -> &Arc<SharedBlackboard> {
         &self.blackboard
+    }
+
+    /// 2026-08-08 blackboard partition (A3): render one blackboard section
+    /// for the `blackboard_read` tool. `since` (ISO 8601 / RFC 3339 — the
+    /// journal timestamp format) filters timestamped entries; plan has
+    /// current state only (no per-entry timestamps) and exec entries carry
+    /// none — `since` applies to edits and tool_actions.
+    ///
+    /// Review closure (P2-2, 2026-08-08): `since` is parsed as RFC 3339 —
+    /// a bare string compare silently dropped same-instant records when the
+    /// model passed 'Z' or truncated precision. Unparseable values fall
+    /// back to no filtering (read everything), never nothing.
+    fn render_blackboard_section(&self, section: &str, since: Option<&str>) -> String {
+        let since_dt = since.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+        let after_since = |ts: &str| -> bool {
+            match since_dt {
+                None => true,
+                Some(dt) => chrono::DateTime::parse_from_rfc3339(ts)
+                    .map(|t| t >= dt)
+                    // The record's own timestamp unparseable — keep it
+                    // (lenient: never hide records over a filter edge).
+                    .unwrap_or(true),
+            }
+        };
+        let bb = self.blackboard.read();
+        match section {
+            "plan" => {
+                let goal = bb.plan.goal.as_deref().unwrap_or("(no goal set)");
+                let mut lines = vec![format!("goal: {goal}")];
+                if bb.plan.steps.is_empty() {
+                    lines.push("(no steps)".to_string());
+                }
+                for step in &bb.plan.steps {
+                    let status = match step.status {
+                        crate::blackboard::StepStatus::Pending => "pending",
+                        crate::blackboard::StepStatus::InProgress => "in-progress",
+                        crate::blackboard::StepStatus::Completed => "completed",
+                        crate::blackboard::StepStatus::Blocked => "blocked",
+                    };
+                    lines.push(format!("- [{status}] {}", step.description));
+                }
+                lines.join("\n")
+            }
+            "edits" => {
+                let lines: Vec<String> = bb
+                    .edits
+                    .iter()
+                    .filter(|r| after_since(&r.timestamp))
+                    .map(|r| format!("{} {}", r.timestamp, format_edit_record(r)))
+                    .collect();
+                if lines.is_empty() {
+                    "(no edit records)".to_string()
+                } else {
+                    lines.join("\n")
+                }
+            }
+            "tool_actions" => {
+                let mut lines: Vec<String> = Vec::new();
+                for category in ["read", "edit", "terminal", "retrieval", "other"] {
+                    let entries: Vec<String> = bb
+                        .tool_actions
+                        .iter()
+                        .filter(|r| r.category == category)
+                        .filter(|r| after_since(&r.timestamp))
+                        .map(|r| format!("{} {}", r.timestamp, r.tool))
+                        .collect();
+                    if !entries.is_empty() {
+                        lines.push(format!("== {category} =="));
+                        lines.extend(entries);
+                    }
+                }
+                if lines.is_empty() {
+                    "(no tool actions yet)".to_string()
+                } else {
+                    lines.join("\n")
+                }
+            }
+            "exec" => {
+                let mut lines = Vec::new();
+                lines.extend(bb.exec.results.iter().cloned());
+                lines.extend(bb.exec.errors.iter().cloned());
+                if lines.is_empty() {
+                    "(no exec results yet)".to_string()
+                } else {
+                    lines.join("\n")
+                }
+            }
+            other => format!("unknown blackboard section: {other} (expected plan|edits|tool_actions|exec)"),
+        }
     }
 
     /// Run a single turn of the agent loop for a given user prompt.
@@ -373,6 +486,41 @@ impl AgentLoopController {
                      only the run result. No arguments."
                     .to_string(),
                 parameters: serde_json::json!({"type": "object", "properties": {}}),
+            });
+        }
+        // 2026-08-08 blackboard partition (A3): `blackboard_read` is the
+        // model's ON-DEMAND window into the blackboard — declared whenever
+        // the loop runs (the blackboard is always live). The model pulls a
+        // partition (plan / edits / tool_actions / exec) when it needs to
+        // look back; no full render is ever injected uninvited (zero
+        // dilution when not called). ReadOnly risk class → auto-allows
+        // under every policy (Interactive/ReadOnly/Benchmark).
+        if !tool_defs.iter().any(|t| t.name == "blackboard_read") {
+            tool_defs.push(ToolDef {
+                name: "blackboard_read".to_string(),
+                description: "Read a blackboard partition. `section` is one \
+                     of: plan (current goal + step statuses), edits (file-edit \
+                     records: file, line-range delta, timestamp), tool_actions \
+                     (executed tool calls folded by category read/edit/terminal/\
+                     retrieval with timestamps), exec (tool results — the full \
+                     accumulated log; read_file still works for files). Optional \
+                     `since_timestamp` (RFC 3339, e.g. the timestamp this tool \
+                     returned earlier) filters the edits / tool_actions entries \
+                     to those at or after that time. Call this when you need to \
+                     recall what changed or what you did earlier — it costs \
+                     nothing when you do not call it."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "section": {
+                            "type": "string",
+                            "enum": ["plan", "edits", "tool_actions", "exec"],
+                        },
+                        "since_timestamp": {"type": "string"},
+                    },
+                    "required": ["section"],
+                }),
             });
         }
         let specs: Vec<ToolSpec> = tool_defs
@@ -626,18 +774,16 @@ impl AgentLoopController {
                 .await?;
 
             // §4.6.3: per-round output-threshold feed — repeated-content
-            // measure over the conversation (injected inquiry blocks excluded,
-            // D7) plus this response, accumulated as the max.
+            // measure over THIS round's response only (2026-08-08 fix: the
+            // previous implementation measured the whole conversation, so a
+            // long session's structural repetition pushed output_repeats over
+            // the threshold on every round — 59/61 neutral inquiries in a
+            // 82-round Terminal-Bench run fired on output_repeats, defeating
+            // the trigger-instant reset cooldown). Conversation-level
+            // stagnation is covered by runtime_stagnation_guard; this 判定点
+            // is per-round output repetition.
             main_counters.feed_round();
-            let mut output_texts: Vec<String> = messages
-                .iter()
-                .filter(|m| {
-                    matches!(m.role, Role::User | Role::Assistant)
-                        && !m.content.is_empty()
-                        && !is_injected_block_text(&m.content)
-                })
-                .map(|m| m.content.clone())
-                .collect();
+            let mut output_texts: Vec<String> = Vec::new();
             if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
                 output_texts.push(text.clone());
             }
@@ -781,6 +927,10 @@ impl AgentLoopController {
             // between the assistant declaration and its tool replies
             // (provider protocol; 2026-08-07 wordy 400 + review P1).
             let mut pending_policy: Vec<Message> = Vec::new();
+            // 2026-08-08 blackboard partition (A2): snapshot the edit-action
+            // length BEFORE this round's tools — the incremental push after
+            // the batch reports exactly the records this round added.
+            let round_edit_count = self.blackboard.read().edits.len();
             for tc in &response.tool_calls {
                 if cancel.is_some_and(|c| c.is_cancelled()) {
                     return Err(AgentLoopError::Cancelled);
@@ -856,6 +1006,30 @@ impl AgentLoopController {
             // it out of the per-tool loop is equivalent.
             for pm in pending_policy {
                 messages.push(pm);
+            }
+            // 2026-08-08 blackboard partition (A2): incremental push — the
+            // edits this round actually made, replayed as ONE compact user
+            // message right after the tool batch (mechanical, deterministic;
+            // the model sees "本轮发生了什么" — the delta, never the whole
+            // blackboard). Entries before this round were pushed on their
+            // own rounds and are already in history; the blackboard keeps
+            // the full list for blackboard_read look-backs.
+            let round_edits = self.blackboard.read().edits.clone();
+            // `round_edit_count` was the section length BEFORE this round's
+            // tools — it IS the start index of this round's records.
+            let edits_start = round_edit_count.min(round_edits.len());
+            let round_summary: Vec<String> = round_edits[edits_start..]
+                .iter()
+                .map(format_edit_record)
+                .collect();
+            if !round_summary.is_empty() {
+                messages.push(Message {
+                    role: Role::User,
+                    content: format!("[本轮编辑] {}", round_summary.join("；")),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
             }
             self.maybe_fire_neutral_inquiry(
                 writer,
@@ -1178,9 +1352,17 @@ impl AgentLoopController {
         };
 
         // Blackboard: subagent wrote its own section; mirror the result into
-        // the exec section for the main agent's visibility.
+        // the exec section for the main agent's visibility. 2026-08-08
+        // blackboard partition: fold the retrieval dispatch into the
+        // tool-action section (category "retrieval" — subagent calls count
+        // as one semantic action each).
         {
             let mut w = self.blackboard.write();
+            w.tool_actions.push(ToolActionRecord {
+                category: "retrieval",
+                tool: tc.name.clone(),
+                timestamp: chrono_utc_now(),
+            });
             w.exec
                 .results
                 .push(format!("[{}] {}", tc.name, result.output));
@@ -1252,6 +1434,13 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
+            // 2026-08-08 blackboard partition: fold the executed call into
+            // the tool-action section (terminal — a fixed command run).
+            self.blackboard.write().tool_actions.push(ToolActionRecord {
+                category: ToolDispatcher::action_category(&tc.name),
+                tool: tc.name.clone(),
+                timestamp: chrono_utc_now(),
+            });
             let tool_result = ToolResult {
                 // F-09 (2026-08-07 review): mechanical context gate — only
                 // the completion reminder + the final output (tail-capped)
@@ -1438,21 +1627,115 @@ impl AgentLoopController {
                 }),
             )
             .await?;
+        // 2026-08-08 blackboard partition (A3): `blackboard_read` is served
+        // from the controller's own blackboard — no host dispatch. The
+        // permission gate already ran (ReadOnly class auto-allows under
+        // every policy); the event chain is complete (PermissionRequested/
+        // PermissionDecision/ToolStarted above, ToolCompleted below).
+        if tc.name == "blackboard_read" {
+            let section = tc
+                .arguments
+                .get("section")
+                .and_then(|s| s.as_str())
+                .unwrap_or("plan")
+                .to_string();
+            let since = tc.arguments.get("since_timestamp").and_then(|s| s.as_str());
+            let content = self.render_blackboard_section(&section, since);
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                        "section": section,
+                    }),
+                )
+                .await?;
+            self.blackboard.write().tool_actions.push(ToolActionRecord {
+                category: ToolDispatcher::action_category(&tc.name),
+                tool: tc.name.clone(),
+                timestamp: chrono_utc_now(),
+            });
+            let result = ToolResult {
+                output: content,
+                exit_code: Some(0),
+            };
+            messages.push(Message {
+                role: Role::Tool,
+                content: result.output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((result, None));
+        }
         let result = match host
             .call_tool(&tc.name, tc.arguments.clone(), &tc.call_id)
             .await
         {
             Ok(res) => {
+                // 2026-08-08 blackboard partition: a SUCCESSFUL file-edit
+                // tool records its line-range delta — old/new line counts
+                // from the call's old_string/new_string args ("行范围从
+                // old_str/new_str 换行计数计算"; empty old_string = new-file
+                // creation, 0 lines). The record lands in the edit-action
+                // section AND the journal payload (tool_completed.edits);
+                // the event-level timestamp is the time. Non-edit tools
+                // record nothing.
+                let mut edits_payload: Vec<serde_json::Value> = Vec::new();
+                if res.exit_code == Some(0) && ToolDispatcher::is_file_edit(&tc.name) {
+                    let old_lines = tc
+                        .arguments
+                        .get("old_string")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.lines().count())
+                        .unwrap_or(0);
+                    let new_lines = tc
+                        .arguments
+                        .get("new_string")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.lines().count())
+                        .unwrap_or(0);
+                    let file = tc
+                        .arguments
+                        .get("file_path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !file.is_empty() {
+                        let timestamp = chrono_utc_now();
+                        self.blackboard.write().edits.push(EditRecord {
+                            file: file.clone(),
+                            old_lines,
+                            new_lines,
+                            timestamp,
+                        });
+                        edits_payload.push(serde_json::json!({
+                            "file": file,
+                            "old_lines": old_lines,
+                            "new_lines": new_lines,
+                        }));
+                    }
+                }
+                let mut completed_payload = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": res.exit_code,
+                });
+                if !edits_payload.is_empty() {
+                    completed_payload["edits"] = serde_json::Value::Array(edits_payload);
+                }
                 writer
-                    .record(
-                        EventType::ToolCompleted,
-                        serde_json::json!({
-                            "tool": tc.name,
-                            "call_id": tc.call_id,
-                            "exit_code": res.exit_code,
-                        }),
-                    )
+                    .record(EventType::ToolCompleted, completed_payload)
                     .await?;
+                // 2026-08-08 blackboard partition: fold the executed call
+                // into the tool-action section (category from the dispatcher).
+                self.blackboard.write().tool_actions.push(ToolActionRecord {
+                    category: ToolDispatcher::action_category(&tc.name),
+                    tool: tc.name.clone(),
+                    timestamp: chrono_utc_now(),
+                });
                 {
                     let mut w = self.blackboard.write();
                     w.exec.results.push(format!("[{}] {}", tc.name, res.output));
@@ -1490,6 +1773,15 @@ impl AgentLoopController {
                         }),
                     )
                     .await?;
+                // 2026-08-08 blackboard partition: a failed execution still
+                // HAPPENED — fold it into the tool-action section (the
+                // "实际变动" rule applies to edit records, not to the action
+                // ledger).
+                self.blackboard.write().tool_actions.push(ToolActionRecord {
+                    category: ToolDispatcher::action_category(&tc.name),
+                    tool: tc.name.clone(),
+                    timestamp: chrono_utc_now(),
+                });
                 {
                     let mut w = self.blackboard.write();
                     w.exec.errors.push(format!("[{}] {e}", tc.name));
@@ -1888,6 +2180,380 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 2026-08-08 blackboard partition: a successful search_replace call
+    /// records its line-range delta — blackboard edit-action section AND the
+    /// journal tool_completed payload (`edits`), and the incremental push
+    /// replays the round's edits as a compact user message.
+    #[tokio::test]
+    async fn file_edit_records_edit_action_and_journal_payload() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "1.py",
+                    "old_string": "a\nb",   // 2 lines
+                    "new_string": "x\ny\nz", // 3 lines
+                    "replace_all": false,
+                }),
+                call_id: "call-e1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-EDIT", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // Blackboard edit-action section: exactly one record, 2→3 lines.
+        let bb = controller.blackboard();
+        let r = bb.read();
+        assert_eq!(r.edits.len(), 1, "{:?}", r.edits);
+        assert_eq!(r.edits[0].file, "1.py");
+        assert_eq!(r.edits[0].old_lines, 2);
+        assert_eq!(r.edits[0].new_lines, 3);
+        assert!(!r.edits[0].timestamp.is_empty());
+        // Tool-action section: the edit folded into the "edit" category.
+        assert!(
+            r.tool_actions
+                .iter()
+                .any(|t| t.category == "edit" && t.tool == "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+
+        // Journal tool_completed payload carries the structured edit record.
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert_eq!(
+            payloads[0]["edits"],
+            serde_json::json!([{"file": "1.py", "old_lines": 2, "new_lines": 3}]),
+            "{payloads:?}"
+        );
+
+        // Incremental push (A2): the round after the edit round carries the
+        // compact "[本轮编辑]" summary as a user message.
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "{received:?}");
+        let round2 = &received[1].messages;
+        assert!(
+            round2.iter().any(|m| {
+                m.role == Role::User && m.content.contains("[本轮编辑]") && m.content.contains("1.py 2→3行变动")
+            }),
+            "incremental push missing: {round2:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08 blackboard partition: a FAILED edit records no edit-action
+    /// record ("实际变动" 才记) — journal payload stays bare.
+    #[tokio::test]
+    async fn failed_edit_records_no_edit_record() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "no match".to_string(),
+                exit_code: Some(1),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "1.py",
+                    "old_string": "a\nb",
+                    "new_string": "x",
+                }),
+                call_id: "call-e2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-EDIT-FAIL", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        assert!(controller.blackboard().read().edits.is_empty());
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert!(payloads[0].get("edits").is_none(), "{payloads:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08 blackboard partition: non-edit tools record no edit
+    /// records; every executed call still lands in the tool-action section.
+    #[tokio::test]
+    async fn read_tool_records_no_edits_but_folds_action() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "file contents".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "读文件", "RUN-READ", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.edits.is_empty(), "{:?}", r.edits);
+        assert!(
+            r.tool_actions
+                .iter()
+                .any(|t| t.category == "read" && t.tool == "read_file"),
+            "{:?}",
+            r.tool_actions
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08 blackboard partition (A3): `blackboard_read` serves the
+    /// requested partition from the controller's blackboard — an edits
+    /// section after a real edit round returns the record the model needs
+    /// for look-back.
+    #[tokio::test]
+    async fn blackboard_read_serves_edits_partition() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "1.py",
+                    "old_string": "old\nold2",
+                    "new_string": "new\nnew2\nnew3",
+                }),
+                call_id: "call-e3".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "edits"}),
+                call_id: "call-b1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件再看黑板", "RUN-BB", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // ToolCompleted for blackboard_read carries the section it served.
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 2, "{payloads:?}");
+        let read_payload = payloads
+            .iter()
+            .find(|p| p["tool"] == "blackboard_read")
+            .expect("blackboard_read completed");
+        assert_eq!(read_payload["section"], "edits", "{read_payload:?}");
+        assert_eq!(read_payload["exit_code"], 0);
+
+        // The served content — the edit record line (timestamp + "1.py
+        // 2→3行变动") — reaches the model as the tool's reply.
+        let received = fake.received_requests();
+        let round3 = received
+            .iter()
+            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b1")))
+            .expect("round carrying blackboard_read reply");
+        assert!(
+            round3
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b1")
+                    && m.content.contains("1.py 2→3行变动")),
+            "{:?}",
+            round3.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08 review closure (P2-2): `since_timestamp` filtering is
+    /// format-robust — a since in 'Z' or truncated precision must not
+    /// silently drop records (bare string compare would: 'Z' > '+' means
+    /// every "+00:00" record sorts BELOW a "…Z" since). Parsed RFC 3339
+    /// comparison: a since in the far future filters everything, a since in
+    /// the far past keeps everything.
+    #[tokio::test]
+    async fn blackboard_read_since_filters_with_any_rfc3339_form() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "1.py",
+                    "old_string": "old",
+                    "new_string": "new\nnew2",
+                }),
+                call_id: "call-e4".to_string(),
+            }]),
+            // since in Z form, far future — must filter everything out.
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "edits",
+                    "since_timestamp": "2999-01-01T00:00:00Z",
+                }),
+                call_id: "call-b2".to_string(),
+            }]),
+            // since in Z form, far past — must keep everything.
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "edits",
+                    "since_timestamp": "2000-01-01T00:00:00Z",
+                }),
+                call_id: "call-b3".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件并回看", "RUN-BBS", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let far_future = received
+            .iter()
+            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b2")))
+            .expect("call-b2 round");
+        assert!(
+            far_future
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b2")
+                    && m.content.contains("(no edit records)")),
+            "Z-form future since must filter everything: {:?}",
+            far_future.messages
+        );
+
+        let far_past = received
+            .iter()
+            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b3")))
+            .expect("call-b3 round");
+        assert!(
+            far_past
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b3")
+                    && m.content.contains("1.py 1→2行变动")),
+            "Z-form past since must keep the record: {:?}",
+            far_past.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08: unknown sections are surfaced to the model — fail
+    /// loud, not silent (an invalid section must not read like an empty
+    /// partition).
+    #[tokio::test]
+    async fn blackboard_read_unknown_section_surfaces_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "bogus"}),
+                call_id: "call-b4".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "读错误分区", "RUN-BBE", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b4")))
+            .expect("call-b4 round");
+        assert!(
+            round
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b4")
+                    && m.content.contains("unknown blackboard section")),
+            "{:?}",
+            round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn denied_tool_round_replays_tool_message() {
         // A denied tool call must still be answered with a tool message —
@@ -2069,10 +2735,12 @@ mod tests {
             declared.contains(&"read_file") && declared.contains(&"search_replace"),
             "read + local-edit tools stay declared: {declared:?}"
         );
-        // The availability block reflects the policy-filtered set.
+        // The availability block reflects the policy-filtered set
+        // (blackboard_read is always declared — ReadOnly class, allowed
+        // under every policy; 2026-08-08 blackboard partition A3).
         let system = first.system.clone();
         assert!(
-            system.contains("AVAILABLE: grep, list_dir, read_file, search_replace"),
+            system.contains("AVAILABLE: blackboard_read, grep, list_dir, read_file, search_replace"),
             "availability block = policy-filtered set: {system}"
         );
         assert!(
@@ -2110,8 +2778,9 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec!["grep", "list_dir", "read_file"],
-            "ReadOnly declares read-class tools only: {declared:?}"
+            vec!["blackboard_read", "grep", "list_dir", "read_file"],
+            "ReadOnly declares read-class tools only (blackboard_read is \
+             read-class and always declared): {declared:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -3206,6 +3875,57 @@ mod tests {
                 .any(|m| m.content.contains("[INFO_SUFFICIENCY v0.1]"))
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn long_silent_tool_loop_does_not_fire_inquiry_every_round() {
+        // Regression (2026-08-08): output_repeats used to measure the WHOLE
+        // conversation each round, so a long session's structural repetition
+        // (replayed tool results, fixed phrases) kept it above the threshold
+        // right after every trigger-instant reset — 59/61 neutral inquiries
+        // in an 82-round Terminal-Bench run fired on output_repeats. The
+        // 判定点 is per-round output repetition; conversation-level
+        // stagnation is runtime_stagnation_guard's job.
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "FIXED_RESULT_TEXT".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        // 20 silent tool rounds (dna-assembly pattern: no model text, one
+        // tool call per round, same replayed result) + a final answer.
+        let mut script = Vec::new();
+        for i in 0..20u32 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // counterexample gate asks once more before the final answer.
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "任务", "RUN-RG", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let inquiries = events
+            .iter()
+            .filter(|e| e.event_type == EventType::NeutralInquiry)
+            .count();
+        // rounds>8 (×2 in 20 rounds) + tool_calls>10 (×1) — never output_repeats.
+        assert!(
+            inquiries <= 3,
+            "expected <=3 neutral inquiries in 20 silent tool rounds, got {inquiries}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

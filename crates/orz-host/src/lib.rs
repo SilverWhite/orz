@@ -484,7 +484,17 @@ impl LoopHost for OrzHost {
             .map_err(|e| crate::tools::map_tool_error(&e))?;
         Ok(ToolResult {
             output: result.prompt_text,
-            exit_code: None,
+            // 2026-08-08 blackboard-partition review closure (conformance
+            // agent D1-1): the controller's edit-action gate keys on
+            // `exit_code == Some(0)` ("实际变动" 才记). Previously this was
+            // hardcoded `None` — the production shape never reached the
+            // controller and A1/A2 (edit records + incremental push) were
+            // dead in real runs; test hosts fabricating `Some(0)` masked it.
+            // Map the structured output: bash carries its real exit code;
+            // search_replace reports "applied" only via the EditsApplied
+            // variant (NoMatchesFound etc. are Ok outputs that changed
+            // nothing → non-zero); every other successful output is 0.
+            exit_code: crate::tools::exit_code_from_output(&result.output),
         })
     }
 
@@ -566,6 +576,77 @@ mod tests {
             .await
             .expect("read_file call");
         assert!(result.prompt_text.contains("hello orz tools"), "{result:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08 blackboard-partition review closure (conformance D1-1):
+    /// the host derives the ToolResult exit_code from the structured output
+    /// — search_replace reports "applied" only via EditsApplied (Ok outputs
+    /// like FileNotFound/NoMatchesFound changed nothing → non-zero), every
+    /// other successful output is 0. Previously hardcoded `None` made the
+    /// controller's edit-action gate dead in production.
+    #[tokio::test]
+    async fn call_tool_maps_real_exit_codes() {
+        let dir = test_dir();
+        let toolset = shared_toolset();
+
+        // read_file (generic success) → Some(0).
+        let read = dir.join("readme.txt");
+        std::fs::write(&read, "x").unwrap();
+        let ok = toolset
+            .call(
+                "read_file",
+                serde_json::json!({"target_file": read}),
+                "c-r",
+                None,
+            )
+            .await
+            .expect("read_file");
+        assert_eq!(crate::tools::exit_code_from_output(&ok.output), Some(0));
+
+        // search_replace on a missing file — Ok(FileNotFound), changed
+        // nothing → non-zero ("实际变动" gate stays closed).
+        let missing = toolset
+            .call(
+                "search_replace",
+                serde_json::json!({
+                    "file_path": dir.join("nope.txt"),
+                    "old_string": "a",
+                    "new_string": "b",
+                }),
+                "c-m",
+                None,
+            )
+            .await
+            .expect("search_replace on missing file");
+        assert_eq!(
+            crate::tools::exit_code_from_output(&missing.output),
+            Some(1),
+            "a search_replace that applied nothing must be non-zero"
+        );
+
+        // A real applied edit → EditsApplied → Some(0).
+        let target = dir.join("edit.txt");
+        std::fs::write(&target, "before").unwrap();
+        let applied = toolset
+            .call(
+                "search_replace",
+                serde_json::json!({
+                    "file_path": target,
+                    "old_string": "before",
+                    "new_string": "after",
+                }),
+                "c-a",
+                None,
+            )
+            .await
+            .expect("search_replace applied");
+        assert_eq!(
+            crate::tools::exit_code_from_output(&applied.output),
+            Some(0),
+            "an applied edit must be zero"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

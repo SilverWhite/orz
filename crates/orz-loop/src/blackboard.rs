@@ -67,7 +67,34 @@ pub struct GateLog {
     pub orientation_checks: Vec<String>,
 }
 
-/// The full blackboard with all 5 sections.
+/// 编辑动作区 (blackboard partition, 2026-08-08): one deterministic file-edit
+/// record — the line-range delta of a successful file-edit tool call. Written
+/// by the controller after execution ("实际变动" 才记); never model-written.
+/// Timestamps mirror the journal event's timestamp (events carry one, the
+/// in-memory blackboard does not — so the record carries its own).
+#[derive(Debug, Clone)]
+pub struct EditRecord {
+    pub file: String,
+    /// Line count of the tool's `old_string` arg (0 for new-file creation).
+    pub old_lines: usize,
+    /// Line count of the tool's `new_string` arg.
+    pub new_lines: usize,
+    /// ISO 8601 timestamp (journal event timestamp of the tool_completed).
+    pub timestamp: String,
+}
+
+/// 工具动作区 (blackboard partition, 2026-08-08): one classified tool action
+/// per executed tool call, folded by category (read / edit / terminal /
+/// retrieval) and timestamped — the model looks back via blackboard_read.
+/// Denied calls record nothing (the action did not happen).
+#[derive(Debug, Clone)]
+pub struct ToolActionRecord {
+    pub category: &'static str,
+    pub tool: String,
+    pub timestamp: String,
+}
+
+/// The full blackboard with 5 sections + 2 controller-written partitions.
 ///
 /// Read rule: all sections are readable by all agents.
 /// Write rule: each section has a single writer (enforced by convention).
@@ -78,6 +105,10 @@ pub struct Blackboard {
     pub internal_ret: InternalRetSection,
     pub external_ret: ExternalRetSection,
     pub gate_log: GateLog,
+    /// 编辑动作区 — controller-written after successful file edits.
+    pub edits: Vec<EditRecord>,
+    /// 工具动作区 — controller-written per executed tool call.
+    pub tool_actions: Vec<ToolActionRecord>,
 }
 
 impl Blackboard {

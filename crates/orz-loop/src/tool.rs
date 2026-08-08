@@ -51,6 +51,15 @@ impl ToolDispatcher {
             || tool_name.starts_with("list_")
             || tool_name.starts_with("grep")
             || tool_name == "search"
+            // 2026-08-08 review closure (3-agent consensus): `blackboard_read`
+            // reads the controller's blackboard — a pure read with no side
+            // effects. The `blackboard_` prefix misses the `read_`/`list_`/
+            // `grep`/`search` prefixes, so without the explicit name it fell
+            // into LocalMutation: ReadOnly sessions declared it but the
+            // permission gate denied every call, and the tool-action section
+            // folded it under "edit". One fix corrects declaration filter,
+            // permission gate, action category and snapshot exclusion.
+            || tool_name == "blackboard_read"
         {
             RiskClass::ReadOnly
         } else if tool_name.starts_with("web_") {
@@ -68,6 +77,41 @@ impl ToolDispatcher {
     /// knowable from the call arguments.
     pub fn modifies_files(tool_name: &str) -> bool {
         matches!(Self::risk_class(tool_name), RiskClass::LocalMutation)
+    }
+
+    /// 编辑动作区 (2026-08-08 blackboard partition): whether the tool
+    /// performs a FILE edit with a knowable line-range delta — the
+    /// search_replace family (new-file creation via empty `old_string`
+    /// included; the "write 类" of the partition design is search_replace's
+    /// empty-old_string path in this toolset). The edit-action record is
+    /// written only when the call actually succeeded (exit_code == 0).
+    pub fn is_file_edit(tool_name: &str) -> bool {
+        tool_name == "search_replace"
+    }
+
+    /// 工具动作区 (2026-08-08 blackboard partition): fold an executed tool
+    /// call into one of the four categories — read / edit / terminal /
+    /// retrieval. Mirrors the risk-class lattice with shell and network
+    /// refinements; unknown tools fall back to "other" (defensive — the
+    /// controller records what it dispatched).
+    pub fn action_category(tool_name: &str) -> &'static str {
+        if tool_name == "run_tests" {
+            // A fixed test-runner execution — terminal-like (command
+            // execution), not a file edit.
+            "terminal"
+        } else if Self::is_shell_tool(tool_name) {
+            "terminal"
+        } else if Self::risk_class(tool_name) == RiskClass::ReadOnly {
+            "read"
+        } else if tool_name.starts_with("web_") {
+            // External retrieval (web_search/web_fetch) — the retrieval
+            // subagent's sibling on the main agent's toolset.
+            "retrieval"
+        } else if Self::risk_class(tool_name) == RiskClass::LocalMutation {
+            "edit"
+        } else {
+            "other"
+        }
     }
 
     /// Shell-execution tool names (IP2a, FIX_PLAN 2026-08-06 D-3): the
@@ -244,6 +288,43 @@ mod tests {
         });
         let targets = ToolDispatcher::snapshot_targets(worktree, "search_replace", &args);
         assert_eq!(targets, vec![PathBuf::from("target/ok")]);
+    }
+
+    #[test]
+    fn is_file_edit_classification() {
+        assert!(ToolDispatcher::is_file_edit("search_replace"));
+        // Read tools are not edits.
+        assert!(!ToolDispatcher::is_file_edit("read_file"));
+        // Shell / terminal execution is not a file edit.
+        assert!(!ToolDispatcher::is_file_edit("bash"));
+        assert!(!ToolDispatcher::is_file_edit("run_terminal_cmd"));
+        assert!(!ToolDispatcher::is_file_edit("run_tests"));
+        // Network retrieval is not a file edit.
+        assert!(!ToolDispatcher::is_file_edit("web_search"));
+    }
+
+    #[test]
+    fn action_category_classification() {
+        // read
+        assert_eq!(ToolDispatcher::action_category("read_file"), "read");
+        assert_eq!(ToolDispatcher::action_category("grep"), "read");
+        assert_eq!(ToolDispatcher::action_category("list_dir"), "read");
+        // blackboard_read is read-class (2026-08-08 review closure — the
+        // `blackboard_` prefix misses the read_/list_/grep/search prefixes).
+        assert_eq!(ToolDispatcher::action_category("blackboard_read"), "read");
+        assert_eq!(
+            ToolDispatcher::risk_class("blackboard_read"),
+            RiskClass::ReadOnly
+        );
+        // edit
+        assert_eq!(ToolDispatcher::action_category("search_replace"), "edit");
+        // terminal — shell tools and the fixed test runner
+        assert_eq!(ToolDispatcher::action_category("bash"), "terminal");
+        assert_eq!(ToolDispatcher::action_category("run_terminal_cmd"), "terminal");
+        assert_eq!(ToolDispatcher::action_category("run_tests"), "terminal");
+        // retrieval — network tools fold into the retrieval category
+        assert_eq!(ToolDispatcher::action_category("web_search"), "retrieval");
+        assert_eq!(ToolDispatcher::action_category("web_fetch"), "retrieval");
     }
 
     #[test]

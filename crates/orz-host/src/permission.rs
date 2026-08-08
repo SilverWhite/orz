@@ -706,6 +706,21 @@ mod tests {
             .unwrap();
         assert_eq!(decision, PermitDecision::AllowOnce);
 
+        // blackboard_read — the controller classifies it ReadOnly via an
+        // explicit name registration (the `blackboard_` prefix misses the
+        // read_/list_/grep/search prefixes; 2026-08-08 review closure,
+        // orz-loop/tool.rs). It must auto-allow exactly like read_file —
+        // ReadOnly sandboxes declared it AND must be able to call it.
+        let decision = bridge
+            .request(
+                RiskClass::ReadOnly,
+                "blackboard_read",
+                &serde_json::json!({"section": "plan"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::AllowOnce);
+
         // Read outside the cwd → still denied by the P1 scope check.
         let decision = bridge
             .request(

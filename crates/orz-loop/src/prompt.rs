@@ -77,7 +77,20 @@ pub fn is_injected_block_text(content: &str) -> bool {
         || content == COUNTEREXAMPLE_GATE_PLAN_BLOCK
         || content.starts_with(TOOL_POLICY_BREAKER_PREFIX)
         || content.starts_with(TOOL_ROUND_BUDGET_PREFIX)
+        // 2026-08-08 blackboard partition (review closure, P2-1/D2-1): the
+        // incremental-push summary `[本轮编辑] …` is mechanical injected
+        // text — same rule as the blocks above. Without registration it
+        // entered the stagnation guard's public_outputs, and iterating the
+        // same file for ≥11 rounds (a normal edit pattern) tripped
+        // STAGNATION-NGRAM-REPEAT on the message's repeated 3-gram.
+        || content.starts_with(EDIT_ROUND_PUSH_PREFIX)
 }
+
+/// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
+/// message the controller injects after a tool round that made file edits
+/// (`[本轮编辑] 1.py 2→3行变动；…`). Mechanical injected text — never
+/// stagnation input (registered in `is_injected_block_text`).
+pub const EDIT_ROUND_PUSH_PREFIX: &str = "[本轮编辑";
 
 /// D-8 (FIX_PLAN 2026-08-06): prefix for the mechanically injected tool-round
 /// budget declarations (session budget + per-round remaining + exhaustion).
