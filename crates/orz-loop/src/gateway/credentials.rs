@@ -1,10 +1,15 @@
-//! Windows Credential Manager access for API keys (ADR-0006 registry).
+//! Credential access for API keys (ADR-0006 registry).
 //!
 //! Credential target names are registered in the main repo's
 //! `adr/ADR-0006-credential-target-registry.md`; this module reads the
 //! main-agent target (`orz-deepseek/agent`) — the only target the Rust side
-//! needs today (live transport tests). Non-Windows is fail-closed (mirrors
-//! the orz-host keystore's platform posture).
+//! needs today (live transport tests).
+//!
+//! Platform split (ADR-0006 §ext 2026-08-07, Linux container channel):
+//! - Windows: Credential Manager (CredReadW) — unchanged.
+//! - Non-Windows: `ORZ_DEEPSEEK_API_KEY` environment variable. Containers
+//!   have no Credential Manager, and the Terminal-Bench eval harness injects
+//!   the key as env (harbor `--ae`); fail-closed when absent.
 //!
 //! The credential blob is zeroed in place before `CredFree` releases the
 //! buffer — same discipline as the Python GAK-CRED-001 reader.
@@ -95,7 +100,10 @@ pub fn read_agent_api_key() -> Result<String, CredentialError> {
 
 #[cfg(not(windows))]
 pub fn read_agent_api_key() -> Result<String, CredentialError> {
-    Err(CredentialError(
-        "Windows Credential Manager is only available on Windows".into(),
-    ))
+    match std::env::var("ORZ_DEEPSEEK_API_KEY") {
+        Ok(key) if !key.trim().is_empty() => Ok(key),
+        _ => Err(CredentialError(
+            "ORZ_DEEPSEEK_API_KEY is not set (Linux container credential channel)".into(),
+        )),
+    }
 }

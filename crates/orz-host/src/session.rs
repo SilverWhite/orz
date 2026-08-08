@@ -124,9 +124,26 @@ pub async fn bootstrap_session(
     // workspace; an install-level location is a later refinement (2026-08-05
     // review P3-3).
     let permit_signer: Arc<dyn PermitSigner> = match policy {
-        TrustPolicy::Enforce => Arc::new(WindowsDpapiInstallationKeyStore::create_or_load(
-            &base.join("keystore"),
-        )?),
+        TrustPolicy::Enforce => {
+            #[cfg(windows)]
+            {
+                Arc::new(WindowsDpapiInstallationKeyStore::create_or_load(
+                    &base.join("keystore"),
+                )?)
+            }
+            #[cfg(not(windows))]
+            {
+                // No DPAPI outside Windows. In-memory signer: permits stay
+                // process-scoped (fine for container eval — one task per
+                // container — and for non-Windows dev); the workspace-persisted
+                // keystore is a Windows-only refinement (2026-08-07).
+                tracing::warn!(
+                    "Windows DPAPI keystore unavailable on this platform; \
+                     using in-memory permit signer"
+                );
+                Arc::new(MemoryInstallationKeyStore::new())
+            }
+        }
         TrustPolicy::Skip => Arc::new(MemoryInstallationKeyStore::new()),
     };
 

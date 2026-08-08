@@ -227,7 +227,7 @@ pub(super) struct FileIdentity {
 impl FileIdentity {
     /// `None` when the path cannot be opened for identity (Windows handle
     /// failure); callers treat an unidentifiable path as changed (fail-closed).
-    fn from_path(path: &Path, _metadata: &fs::Metadata) -> Option<Self> {
+    fn from_path(path: &Path, metadata: &fs::Metadata) -> Option<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
