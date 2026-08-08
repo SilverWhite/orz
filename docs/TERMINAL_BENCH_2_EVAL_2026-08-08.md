@@ -2,9 +2,11 @@
 
 **自包含交接文档**——新窗口按此继续，勿重开讨论。配套 memory `fusion-phase-tracking.md`（2026-08-08 Terminal-Bench 条目，含完整细节）。
 
+**定位勘误（2026-08-08 深夜）**：当前运行是 pre-beta 探索性工程诊断，主要用于暴露任务薄弱点、运行时挂死和 harness 适配问题，不是正式 benchmark/pass@1。统计口径审计见 `docs/TERMINAL_BENCH_2_EXPLORATORY_SCORE_AUDIT_2026-08-08.md`。
+
 ## 1. 当前成绩
 
-**hard 池累计 12 题 = 10 PASS / 2 FAIL（83%）**——远超论文开源参考线 ~35%（[arXiv:2601.11868](https://arxiv-org.ezproxy.obspm.fr/abs/2601.11868)，ICLR 2026，89 任务：frontier agent 62.9%、Claude Opus 4.5+Terminus 57.8%）。medium 未动（55 池）。
+**探索性混合诊断台账 12 题，按每任务 best-observed = 10 PASS / 2 FAIL（83%）**。其中实际为 **11 个 hard + 1 个 medium**（`custom-memory-heap-crash` 官方难度为 medium）；修正后的 hard 唯一任务 best-observed 为 **9/11（82%）**，第一次获得 verifier 分数的 hard 尝试为 **7/11**，全部有分数 hard 试次为 **9/17**。这些数值用于工程诊断，不与论文完整 89 题、重复运行的 resolution rate 直接比较（[arXiv:2601.11868](https://arxiv.org/abs/2601.11868)）。medium 池尚未系统展开，但已有 regex-log、filter-js-from-html、custom-memory-heap-crash 三项诊断运行。
 
 **首批 7 任务（2026-08-08 早）** = 3 PASS / 3 FAIL / 1 环境问题（hard 2/5 = 40% 当时口径，未含后续）。总成本 ~¥6（余额 67.26→61 区间）。
 
@@ -15,12 +17,12 @@
 | fix-code-vulnerability | hard | ✅ 1.0 | ~15min | 安全类 2/2 |
 | regex-chess | hard | ❌ 0.0 | 3600s 超时 | 真失败（模型未解出） |
 | polyglot-rust-c | hard | ❌ 0.0 | 900s 超时→2×重跑跑完 | 模型解出但测试未过 |
-| dna-assembly | hard | ❌ 0.0 | transport 错误→重跑跑完 | 模型解出但测试未过（**后续 16:02 稳定性验证首过 ✅**） |
+| dna-assembly | hard | ❌ 0.0 | transport 错误→重跑跑完 | 模型解出但测试未过（**后续 16:02 首次出现 verifier PASS，但不构成稳定性证明**） |
 | filter-js-from-html | medium | ⚠️ 环境 | — | verifier Chromium/selenium 启动卡死（任务镜像问题） |
 
-**hard 稳定性验证（2026-08-08 15:13 二进制，A4-A6+C.1/C.2 后）**：cancel-async-tasks ✅ 1.0 / custom-memory-heap-crash ✅ 1.0（run_invalidated 终局但 verifier 判定通过）/ dna-assembly ✅ 1.0（16:02 首过）。
+**混合稳定性/机制诊断（2026-08-08 15:13 二进制，2 hard + 1 medium，A4-A6+C.1/C.2 后）**：cancel-async-tasks（hard）✅ 1.0 / custom-memory-heap-crash（medium）✅ 1.0（run_invalidated 终局但 verifier 判定通过）/ dna-assembly（hard）✅ 1.0（16:02 首过）。其中 dna-assembly 共 5 个有分数试次仅 1 次通过，另有 1 次无分数错误；该 PASS 同时带 `AgentTimeoutError`，只证明最终容器状态曾通过 verifier，不证明运行稳定。
 
-**hard 补样本批 5 题（2026-08-08 晚间，守卫二进制重跑后全过）** = **5/5 PASS**：
+**hard 补样本批 5 题（2026-08-08 晚间，探索性 best-observed）** = **5/5 PASS**：
 
 | 任务 | 判定 | 耗时 | 备注 |
 |---|---|---|---|
@@ -30,7 +32,7 @@
 | feal-differential-cryptanalysis | ✅ 1.0 | 同上 | 密码学强项 |
 | write-compressor | ✅ 1.0 | 14m20s（重跑） | 见 §6 失败→重跑记录 |
 
-**⚠️ 本批关键教训：5 题首跑用的是无守卫旧二进制（17:02 构建，P0-2/P1-1 不在内），write-compressor 因此被 harness 1800s 硬杀（reward 0.0）——重建含守卫二进制后重跑 PASS（§6）**。4/5 首跑 PASS 成绩真实（守卫不影响正确性）。
+**⚠️ 本批关键教训：5 题首跑用的是无守卫旧二进制（17:02 构建，P0-2/P1-1 不在内），write-compressor 因此被 harness 1800s 硬杀（reward 0.0）——重建含守卫二进制后仅重跑 write-compressor 并 PASS（§6）**。前四题在旧二进制上的 verifier PASS 是真实任务结果；因此“选定任务集合 best-observed 5/5”成立，但不能表述为“新守卫二进制 5/5”。
 
 ## 2. 适配架构（全链路已验证）
 
@@ -53,7 +55,7 @@ harbor run -d terminal-bench@2.0 -i <task> -a tb_agents.orz:Orz \
   - `install()`：exec_as_root 装依赖（curl/procps）→ `environment.upload_file` 上传 orz 二进制 → chmod +x → `test -x` 可执行性检查（**orz 无 `--version`**——裸跑进 TUI 需 TTY）
   - `run()`：容器内 `orz -p "<instruction>" --real --allow-write --max-tool-rounds 999` + exit-file 看门狗（harbor 外圈超时兜底）；`ORZ_DEEPSEEK_API_KEY` 经 env 注入（harbor `--env-file`）
   - `populate_context_post_run()`：journal（`.gsa/runs/RUN-*/events.jsonl`，拷出容器）→ **ATIF trajectory.json** 转换（system/agent/tool 事件映射，10 步骤轨迹已验证）
-- **orz Linux 二进制**：`D:\tb-eval\orz-linux\orz`（62.9MB，**musl 静态**，任何容器可跑）；构建脚本 `D:\tb-eval\build_orz.sh` + rust:1.97-slim Docker 镜像 + `CARGO_TARGET_DIR` 挂载（`D:\tb-eval\orz-target` 缓存）
+- **orz Linux 二进制**：`D:\tb-eval\orz-linux\orz`（当前守卫构建约 66.5MB，**musl 静态**，任何容器可跑）；构建脚本 `D:\tb-eval\build_orz.sh` + rust:1.97-slim Docker 镜像 + `CARGO_TARGET_DIR` 挂载（`D:\tb-eval\orz-target` 缓存）
 
 ## 3. 环境（全在 D:，C:/B: 不动——用户裁决）
 
@@ -72,7 +74,7 @@ D:\tb-eval\
 - 数据集：harbor download terminal-bench@2.0（89 任务，缓存 ~/.cache/harbor/tasks）；github 克隆需代理（见 §5）
 - 任务镜像：`alexgshaw/*:20251031`（预构建，Docker Hub 拉取）
 
-## 4. orz 改动清单（2026-08-08，Linux 支持——未提交，用户手动推送惯例）
+## 4. orz 改动清单（2026-08-08，Linux 支持——已提交于 orz `f03faeb`）
 
 | 文件 | 改动 | 性质 |
 |---|---|---|
@@ -107,6 +109,6 @@ D:\tb-eval\
 
 1. **扩大样本**：medium 池 55 个（建议选 5-10 个无浏览器依赖的）——扩大统计基础
 2. **全量 89**：按镜像分组 + 组间 `docker image prune`（D: ~15GB，镜像 5 个任务 ~2-4GB 实测）；预算 ¥30-80、6-10h
-3. **正式分**（与其他架构比较时）：harbor 官方协议即正式分（含 verifier 判定）——与 SWE-bench Phase 3 Docker 评测同属"正式再跑"范畴
-4. **提交推送**（用户手动惯例）：orz 4 处改动 + 主仓索引更新行 + 本文档
+3. **正式分**（进入真人 beta 或与其他架构比较时再做）：Harbor + verifier 是必要执行链，但仅此不足以形成正式可比成绩；还需冻结二进制/adapter/model、使用预声明样本与预算、固定重跑规则，并按完整 89 题或预先固定的代表性样本报告 pass@1、全部试次与置信区间。当前结果继续按探索性诊断使用。
+4. **文档提交/推送**：由用户决定；本次探索性成绩审计与口径勘误保持未提交状态
 5. **清理**：orz-target 构建缓存（~几 GB，可删重建）、jobs/ 旧结果

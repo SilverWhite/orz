@@ -4,10 +4,12 @@
 
 ## 1. 背景与证据
 
-**TB hard 稳定性验证（2026-08-08，3+1 题）**：
+**TB 混合稳定性/挂死机制诊断（2026-08-08，pre-beta 探索性；2 hard + 1 medium，含 dna 重跑）**：
 - cancel-async-tasks ✅ PASS（109 事件，inquiry 1/15 轮，白名单链完整）
-- custom-memory-heap-crash ✅ PASS（228 事件，inquiry 4 次，`run_invalidated` 终局但 verifier 1.0——停滞守卫正常兜底）
-- dna-assembly：16:02 首 PASS（reward 1.0）→ 17:02 正常完成（0.0，模型 clamp 细节错误）
+- custom-memory-heap-crash（官方难度 medium）✅ PASS（228 事件，inquiry 4 次，`run_invalidated` 终局但 verifier 1.0——停滞守卫正常兜底）
+- dna-assembly：16:02 首次出现 PASS（reward 1.0，同时带 AgentTimeoutError）→ 17:02 正常完成（0.0，模型 clamp 细节错误）。该序列用于定位挂死与终局取证，不作为稳定通过证明。
+
+成绩解释与 hard/medium 分类勘误见 `docs/TERMINAL_BENCH_2_EXPLORATORY_SCORE_AUDIT_2026-08-08.md`。
 
 **dna-assembly 16:02 挂死（本计划触发事件）**：
 - orz 完成工作（primers.fasta 正确，verifier ctrf 1/1 passed）但进程 30min 不退出 → harbor AgentTimeoutError 超时杀
