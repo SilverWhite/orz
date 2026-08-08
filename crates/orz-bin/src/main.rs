@@ -69,6 +69,18 @@ fn main() {
         run_tui();
         return;
     }
+    // Headless `-p`/`--plan` diagnostics (2026-08-08): init the same stderr
+    // tracing subscriber as the TUI so transport retries/watchdog events are
+    // visible when a headless run hangs or fails (TB2 dna-assembly hang had
+    // zero stderr because no subscriber existed). `try_init` is idempotent —
+    // the TUI path never reaches here and `run_tui` re-inits harmlessly.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
 
     let prompt = parse_prompt(&args).unwrap_or_else(|e| {
         eprintln!("error: {e}");
