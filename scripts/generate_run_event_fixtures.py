@@ -167,7 +167,19 @@ PAYLOAD_GOOD: dict[str, dict] = {
     "permission_requested": {"tool": "bash", "risk": "SandboxEscape", "call_id": "call-1"},
     "permission_decision": {"tool": "bash", "decision": "deny"},
     "tool_started": {"tool": "read_file", "call_id": "call-1"},
-    "tool_completed": {"tool": "read_file", "call_id": "call-1", "exit_code": 0},
+    "tool_completed": {
+        "tool": "search_replace",
+        "call_id": "call-1",
+        "exit_code": 0,
+        # Blackboard partition (2026-08-08): successful file-edit tools
+        # record their line-range delta — old_lines/new_lines counted from
+        # the tool's old_string/new_string args. Event-level timestamp
+        # carries the time (see docs/INQUIRY_FIX_AND_BLACKBOARD_PARTITION
+        # _2026-08-08.md §4.1).
+        "edits": [
+            {"file": "1.py", "old_lines": 12, "new_lines": 34},
+        ],
+    },
     # Rust-track shapes (slice #17 dual-track adjudication): these three
     # events' payloads are the shapes the Rust loop actually constructs
     # (controller.rs) — the assurance/ schemas of the same basenames remain
@@ -280,7 +292,13 @@ PAYLOAD_BAD: dict[str, dict] = {
     "permission_requested": {"tool": "bash", "risk": "Medium", "call_id": "call-1"},
     "permission_decision": {"tool": "bash", "decision": "maybe"},
     "tool_started": {"tool": "read_file"},
-    "tool_completed": {"tool": "read_file", "call_id": "call-1", "exit_code": 0, "extra": 1},
+    "tool_completed": {
+        "tool": "search_replace",
+        "call_id": "call-1",
+        "exit_code": 0,
+        # Edits entry missing the required `old_lines` field.
+        "edits": [{"file": "1.py", "new_lines": 34}],
+    },
     "orientation_checkpoint": {
         "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
         "trigger": "manual",

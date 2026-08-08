@@ -1,6 +1,11 @@
 {
-  "tool": "read_file",
+  "tool": "search_replace",
   "call_id": "call-1",
   "exit_code": 0,
-  "extra": 1
+  "edits": [
+    {
+      "file": "1.py",
+      "new_lines": 34
+    }
+  ]
 }
