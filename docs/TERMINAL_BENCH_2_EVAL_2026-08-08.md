@@ -4,9 +4,9 @@
 
 ## 1. 当前成绩
 
-**小样本 7 任务 = 3 PASS / 3 FAIL / 1 环境问题**（hard 2/5 = 40%；含 medium 3/6 = 50%）。
-对照论文参考线（[arXiv:2601.11868](https://arxiv-org.ezproxy.obspm.fr/abs/2601.11868)，ICLR 2026，89 任务）：frontier agent（GPT-5.2+Codex CLI）62.9%、Claude Opus 4.5+Terminus 57.8%、**开源模型最高 ~35%**——DeepSeek（非 frontier）+ orz 的 hard 40% 处于开源上游。
-总成本 **~¥6**（余额 67.26→61 区间，7 任务含重跑）。
+**hard 池累计 12 题 = 10 PASS / 2 FAIL（83%）**——远超论文开源参考线 ~35%（[arXiv:2601.11868](https://arxiv-org.ezproxy.obspm.fr/abs/2601.11868)，ICLR 2026，89 任务：frontier agent 62.9%、Claude Opus 4.5+Terminus 57.8%）。medium 未动（55 池）。
+
+**首批 7 任务（2026-08-08 早）** = 3 PASS / 3 FAIL / 1 环境问题（hard 2/5 = 40% 当时口径，未含后续）。总成本 ~¥6（余额 67.26→61 区间）。
 
 | 任务 | 难度 | 判定 | 耗时 | 归因 |
 |---|---|---|---|---|
@@ -15,16 +15,38 @@
 | fix-code-vulnerability | hard | ✅ 1.0 | ~15min | 安全类 2/2 |
 | regex-chess | hard | ❌ 0.0 | 3600s 超时 | 真失败（模型未解出） |
 | polyglot-rust-c | hard | ❌ 0.0 | 900s 超时→2×重跑跑完 | 模型解出但测试未过 |
-| dna-assembly | hard | ❌ 0.0 | transport 错误→重跑跑完 | 模型解出但测试未过 |
+| dna-assembly | hard | ❌ 0.0 | transport 错误→重跑跑完 | 模型解出但测试未过（**后续 16:02 稳定性验证首过 ✅**） |
 | filter-js-from-html | medium | ⚠️ 环境 | — | verifier Chromium/selenium 启动卡死（任务镜像问题） |
+
+**hard 稳定性验证（2026-08-08 15:13 二进制，A4-A6+C.1/C.2 后）**：cancel-async-tasks ✅ 1.0 / custom-memory-heap-crash ✅ 1.0（run_invalidated 终局但 verifier 判定通过）/ dna-assembly ✅ 1.0（16:02 首过）。
+
+**hard 补样本批 5 题（2026-08-08 晚间，守卫二进制重跑后全过）** = **5/5 PASS**：
+
+| 任务 | 判定 | 耗时 | 备注 |
+|---|---|---|---|
+| configure-git-webserver | ✅ 1.0 | 快 | 配置类命中 |
+| sparql-university | ✅ 1.0 | ~10min | 查询类命中（沙箱无 SPARQL 引擎，模型人工推演 30 学生/9 课/11 院系/7 教师） |
+| feal-linear-cryptanalysis | ✅ 1.0 | 11m（双子星 job 合计） | 密码学强项 |
+| feal-differential-cryptanalysis | ✅ 1.0 | 同上 | 密码学强项 |
+| write-compressor | ✅ 1.0 | 14m20s（重跑） | 见 §6 失败→重跑记录 |
+
+**⚠️ 本批关键教训：5 题首跑用的是无守卫旧二进制（17:02 构建，P0-2/P1-1 不在内），write-compressor 因此被 harness 1800s 硬杀（reward 0.0）——重建含守卫二进制后重跑 PASS（§6）**。4/5 首跑 PASS 成绩真实（守卫不影响正确性）。
 
 ## 2. 适配架构（全链路已验证）
 
 ```
 harbor run -d terminal-bench@2.0 -i <task> -a tb_agents.orz:Orz \
   -m deepseek-chat --ak orz_binary=D:/tb-eval/orz-linux/orz \
-  --env-file D:\tb-eval\.env -o D:\tb-eval\jobs --n-concurrent 2
+  --ak gsa_volume=D:/tb-eval/gsa-volumes/<job> \
+  --ak max_wallclock=<agent超时-余量> \
+  --agent-timeout-multiplier 2 \
+  --mounts '[{"type": "bind", "source": "D:/tb-eval/gsa-volumes/<job>", "target": "/orz-gsa"}]' \
+  --env-file D:\tb-eval\.env -o D:\tb-eval\jobs --n-concurrent 2 -y
 ```
+
+**⚠️ 必带 PYTHONPATH**：`PYTHONPATH=D:/tb-eval`（否则 `No module named 'tb_agents'` 启动即失败——2026-08-08 晚实测）。
+**⚠️ 每次评测前必须重建 orz-linux 二进制**（见 §6 stale-binary 教训）：`MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI/orz:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"`（增量 ~1h20m 全量；MSYS_NO_PATHCONV 防 `-w /orz` 被转成 `B:/Git/orz`）。
+- `--ak max_wallclock` 按 job 级全局：900s×2 超时任务分 job 跑（900s 任务 agent 1800s → 1740；1800s 任务 3600s → 3540）
 
 - **Harbor**（Terminal-Bench 2.0 官方 harness，0.20.0 → `D:\tb-eval\venv`，勿动 C: 系统 Python）：容器生命周期 + verifier 判定（CTRF JSON + reward.txt，二进制 reward，只看容器最终状态）
 - **adapter** `D:\tb-eval\tb_agents\orz.py`（自定义 BaseInstalledAgent，`--agent tb_agents.orz:Orz` import path 注册，无需改 factory）：
@@ -78,6 +100,8 @@ D:\tb-eval\
 3. **凭据纪律**：key 写 `.env`（`write_env_key.py` 静默，Ctrl 打印进 transcript 被拒过一次——正确）；容器内 orz 读 `ORZ_DEEPSEEK_API_KEY` env。
 4. **trajectory 转换**：journal→ATIF 为保守映射（10 步轨迹样例 OK）；工具参数/输出截断 8000 字符上限。
 5. **orz 容器内运行参数**：必须 `--allow-write`（SWE-bench harness 同款，否则写工具全 Deny——首次 e2e 失败根因）。
+6. **⚠️ stale-binary 教训（2026-08-08 晚，write-compressor 失败归因）**：5 题补样本批首跑用的是 **17:02 旧二进制**——挂死守卫 P0-2/P1-1 不在内（strings 验证 `max-wallclock`/`ORZ_STALL_TIMEOUT` 0 命中）。orz-bin 的 `--max-wallclock` 是**手写解析**（main.rs:46，非 clap），旧二进制对未知 flag **静默忽略照常运行**——write-compressor 11:58:50 后静默 6 分钟（旧式挂死，无守卫），max_wallclock(1740s) 与 stall(360s) 均缺席，harness 1800s 硬杀（AgentTimeoutError 精确命中）→ reward 0.0。**重建含守卫二进制（20:55，66.5MB，strings 全命中）后重跑：14m20s PASS（8 工具轮，journal 终局 run_finished{completed}，守卫零干扰）**。**教训：评测前必须重建 orz-linux 二进制（构建命令见 §2）**；`--max-wallclock` 静默忽略的坑同样影响 orz.exe 宿主路径（手写解析无报错）。
+7. **Docker daemon 掉线**：2026-08-08 晚 C 盘写满（0 字节剩余）期间 Docker daemon 挂掉（`docker ps`/`logs` 挂起、`harbor run` 报 "Docker daemon is not running"）——与 C 盘满关联（Docker Desktop 日志/配置在 C 盘）。恢复：重启 Docker Desktop 应用（服务需提权，UI 重启即可），~30s 拉起。**任务区产出已全部落 D 盘**（pip 用 `PIP_CACHE_DIR=D:/`、harbor 缓存仅 566K 可忽略），详见 memory `task-area-c-drive-policy.md`。
 
 ## 7. 遗留 / 下一步
 
