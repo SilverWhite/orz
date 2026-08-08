@@ -1,6 +1,6 @@
 # 写入落点策略 + Grill 机制设计（2026-08-08 讨论定稿）
 
-**状态**: 讨论定稿（未实施）。新窗口按此实施，勿重开讨论。配套 memory `fusion-phase-tracking.md`（2026-08-08 条目）。
+**状态**: 讨论定稿；**L1 + Grill 已实施（2026-08-08，未提交）**。**L1**：前置写点枚举（§1 ②③④ 已回填）、`orz-host/src/grok_home.rs`（`redirect_grok_home(cwd)` + `GrokHomePlacement` 四态 + 降级链 + 4 测试）、三入口接线（orz-bin/orz-codex `main` 首行 + orz-tui `runner::run` 库级自守卫，均幂等 + UserFallback stderr 警告）；冒烟 `target/debug/orz.exe -p` → `{安装目录}/grok-home` 创建成功。**Grill**：TUI `/grill`（进入：注入模板一次，`{cwd}/.gsa/grill/SKILL.md` 可覆盖）+ `/grill-finish`（总结轮 + `terminal: finished` 归档 + 状态清除）；controller `run_grill_turn`（复用 run_turn_inner 全循环，EventWriter discard 模式——**零 run-journal 事件**，反例询问 gate 跳过，历史写回跨轮续接）；host `AcpServer::run_grill_turn/finish_grill`（ReadOnly 策略强制——写工具 Deny 无弹窗；GRILL-* bootstrap 目录仅含 host 机械 run_preflight；运行中拒绝）。验证：orz-loop 124 / orz-host 98 / orz-tui 177 / orz-bin 9 / orz-codex 34 全绿（grill 新增 loop 1 / host 2 / tui 3）、clippy 零新增。新窗口按此继续，勿重开讨论。配套 memory `fusion-phase-tracking.md`（2026-08-08 条目）。
 
 ## 背景
 
@@ -15,7 +15,30 @@
 | **C. 系统级（必要性，保留）** | Windows Credential Manager（凭据） | 保留 |
 | 测试 | 生产路径无 temp_dir 写（session.rs:224/retention.rs:231 均为 `#[cfg(test)]`） | 无关 |
 
-**前置工作（实施前必做）**：全量枚举继承 crate 剩余写点（xai-crash-handler 崩溃报告落点、orz-workspace pidfile 单实例锁落点）——"B 类归零"声明以清单为准。
+**前置工作（2026-08-08 实施前已完成）**：全量枚举继承 crate 写点，结论：
+
+**① grok_home 解析器共 2 个实现，均尊重 `GROK_HOME` env（一处注入全清零的关键前提）**：
+- `orz_config::paths.rs:35 grok_home()`——OnceLock 缓存（**注入必须在首次调用前**）+ `GROK_HOME` env + `std::env::home_dir()` fallback；`orz_tools::util::grok_home` 是它的 re-export
+- `xai_fast_worktree::db::resolve_grok_home`（mod.rs:392）——worktree 专用（worktrees 落点），`GROK_HOME` env + `$HOME` env fallback + dunce canonicalize（deliberately standalone，与 orz-config 的 fallback 差异是既有设计）
+
+**② 产品可达 B 类写点（orz-bin 依赖树 + 调用面确认，全部落 grok_home 下）**：
+- 配置：`config.toml`/`requirements.toml`/managed 缓存（orz-config loader/validation/managed_cache + orz-workspace project_config/permission resolution/claude_settings 读取）
+- 信任文件 ×2：`trusted-hook-projects`/`disabled-hooks`（orz-hooks trust.rs）+ **`trusted_folders.toml`（orz-workspace trust.rs:112——orz-host session.rs:80 每 session 调用 folder_trust::decide→persist_trust，产品可达，**新发现**）**
+- 会话状态：`{grok_home}/sessions`（orz-workspace permission/state.rs:194）
+- worktree：`{grok_home}/worktrees/{slug}`（orz-workspace worktree/mod.rs:640/655/704 + session/git.rs:1957，经 xai-fast-worktree 解析）
+- workspace server 数据：`{grok_home}/workspace`（handle.rs:4026）；codebase index（file_system/codebase_index.rs:25）；hub auth（hub_auth.rs:76）
+- sandbox：`sandbox-events.jsonl`（orz-sandbox logging.rs:97）+ bwrap 占位符 `{name}.{pid}`（lib.rs:374，Unix）；hooks 槽 `hooks/`+`hooks-paths/`（orz-config global_hook_sources.rs:319/337）
+- MCP（服务器 spawn 时）：`logs/mcp`（servers.rs:3951）、`mcp_auth_*.lock`（oauth.rs:247）、`credentials.json`（credentials.rs:291）
+- memory.log（orz-telemetry memory_log.rs:112）；memory 目录（orz-memory storage.rs:59，workspace_dir 优先→A 类）
+- 读取面：skills/agents_md/rules（orz-agent prompt）、ripgrep 配置（orz-workspace util/ripgrep.rs:19）、marketplace 缓存
+
+**③ 产品不可达写点（记录在案，接线时按 B 类原则；当前零写盘）**：
+- **xai-crash-handler**：`crash_dir` 由调用者注入（`CrashHandlerConfig`），**零产品调用**（仅自身 tests/README）
+- **orz-workspace daemonize**（workspace_server bin 专用，orz-host 零引用）：pidfile `DEFAULT_PIDFILE_PATH` = Unix `/tmp/workspace-server.pid` / **Windows `C:\Windows\Temp\workspace-server.pid`（C 盘写点！）** + `DEFAULT_LOG_PATH`；若未来启用 workspace server 需改造
+- **orz-agent plugins**（git_install/install_registry/marketplace 克隆写 home 插件目录、hooks_adapter 写 hooks 目录）：**零产品调用**（orz-{loop,host,tui,codex,bin} 零 `orz_agent::plugins` 引用）
+- **orz-mcp servers spawn 面**（start_mcp_servers）：仅 workspace_server bin 调用（当前 toolset 无 MCP，Slice #16 确认）
+
+**④ 产品 crate 直接调用面**：orz-host 只用 orz-workspace 的 `permission`/`trust`/`folder_trust`（其余模块经 workspace_server bin 不可达）；orz-agent/orz-mcp/orz-sandbox/orz-telemetry 仅传递依赖（编译可达、调用不可达）。
 
 ## 2. 写入策略（用户裁决定稿）
 
@@ -71,10 +94,10 @@
 
 ## 4. 实施顺序（新窗口）
 
-1. 前置：全量枚举继承 crate 写点（crash-handler/pidfile 等）→ 更新 §1 清单
-2. L1：GROK_HOME 注入（orz-bin/orz-codex/orz-tui 启动路径统一函数）+ 降级链 + 测试（EnvVarGuard 先例）+ 文档
-3. Grill：TUI `/grill` + `/grill-finish` 命令（CommandRegistry 单一事实源）+ controller grill 模式状态 + 默认模板文件 + `{cwd}/.gsa/grill/<session>.jsonl` 记录 + ReadOnly 工具策略 + 测试
-4. ADR 记录（写入策略为不可变决策；grill 为设计补充）
-5. memory 更新（Q8 环境事实、裁决记录）
+1. ✅ 前置：全量枚举继承 crate 写点（crash-handler/pidfile 等）→ §1 清单已回填（2026-08-08）
+2. ✅ L1：GROK_HOME 注入（orz-bin/orz-codex/orz-tui 启动路径统一函数 `orz_host::grok_home::redirect_grok_home`）+ 降级链 + 测试（EnvVarGuard 先例）+ 文档（2026-08-08，见头部状态）
+3. ✅ Grill：TUI `/grill` + `/grill-finish` 命令（CommandRegistry 单一事实源）+ controller `run_grill_turn`（discard EventWriter + 反例 gate 跳过 + 历史写回）+ 默认模板常量 + `{cwd}/.gsa/grill/<session>.jsonl` 记录 + ReadOnly 工具策略（2026-08-08，见头部状态）
+4. ⬜ ADR 记录（写入策略为不可变决策；grill 为设计补充）
+5. ⬜ memory 更新（Q8 环境事实、裁决记录）
 
 **明确不做**：L2 同盘检测（视 L1 实测后观察再定）、L3 journal fs_write 审计事件、grill 双模型（盲区已记录，后续补）。
