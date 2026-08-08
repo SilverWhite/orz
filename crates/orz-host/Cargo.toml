@@ -41,3 +41,8 @@ ring = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }
+
+[dev-dependencies]
+# A5 retention tests: backdate record mtimes deterministically (workspace
+# dep — already in the lock graph, zero new transitive entries).
+filetime = { workspace = true }

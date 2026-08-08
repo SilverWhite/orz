@@ -83,6 +83,51 @@ pub fn max_tool_rounds_override() -> Option<u32> {
 /// theoretically race (recorded boundary, 2026-08-05 review).
 pub const TEXT_DELTA_PACING: std::time::Duration = std::time::Duration::from_millis(120);
 
+/// A6 §8 C.2 (2026-08-08): default cumulative character cap for the
+/// compaction whitelist (16K — user decision; ≈8K tokens ≈ ~9% of the
+/// 90K compacted target, small enough not to squeeze the kept rounds).
+pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
+
+/// A6 (2026-08-08): explicit context compaction parameters (design §5 A6
+/// 定稿 + §8 C.1 用户裁决).
+///
+/// Rhythm compaction (design §5 A6): trigger when the previous round's
+/// MEASURED prompt tokens exceed `trigger_tokens`, compact toward
+/// `target_tokens`, at least `min_rounds` apart. User decision 2026-08-08:
+/// the rhythm compaction fires ONLY at the "last inter-batch gap" — after
+/// the candidate-answer round (the model's last tool batch is done), just
+/// before the final answer — exactly once, so the run's action sequence is
+/// never interrupted mid-task. `trigger_tokens` 160K (user指示; 150K was
+/// the original design value) and `target_tokens` 90K (user指示: 保留后
+/// 90k 上下文，降低回查压力).
+///
+/// `safety_tokens` is the window guard (design review D1-1, 2026-08-08):
+/// a long action loop must never approach the provider window before the
+/// final-answer gap arrives. Above `safety_tokens` compaction fires at any
+/// inter-batch gap (loop-top, never mid-batch) regardless of rhythm
+/// conditions — the cost of an extra cache miss is trivially smaller than
+/// a window-overflow run failure. A safety compaction resets the round
+/// counter so a later rhythm compaction judges normally (user decision).
+/// Default 250K sits under the ≥300K window (and under the 384K legal max).
+#[derive(Debug, Clone, Copy)]
+pub struct ContextCompactConfig {
+    pub trigger_tokens: u64,
+    pub target_tokens: u64,
+    pub min_rounds: u32,
+    pub safety_tokens: u64,
+}
+
+impl Default for ContextCompactConfig {
+    fn default() -> Self {
+        Self {
+            trigger_tokens: 160_000,
+            target_tokens: 90_000,
+            min_rounds: 20,
+            safety_tokens: 250_000,
+        }
+    }
+}
+
 /// Error during agent loop execution.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentLoopError {
@@ -127,6 +172,19 @@ pub struct AgentLoopController {
     /// policy denials in the current run. Mutex since `run_turn_inner` is
     /// `&self` and a turn may run on any thread; reset at turn start.
     denial_state: Mutex<DenialState>,
+    /// A6 explicit context compaction parameters (settleable for tests).
+    context_compact: ContextCompactConfig,
+    /// A6 §8 C.2 compaction whitelist (user decision 2026-08-08): the
+    /// model-written list of task facts that survive compaction. Written
+    /// only during the FIRST tool batch; resident in the conversation's
+    /// preamble zone (the compaction mechanism skips it); archived
+    /// best-effort to `{journal_dir}/whitelist.jsonl` (A5 retention
+    /// covers it via the run dir).
+    whitelist: Mutex<Vec<String>>,
+    /// Cumulative character cap for the whitelist (16K default —
+    /// user decision; the whitelist must stay a small part of the ~90K
+    /// compacted context).
+    whitelist_cap: usize,
 }
 
 /// IP2a denial counter state (D-3): consecutive denials trigger a strategy
@@ -158,6 +216,104 @@ fn format_edit_record(record: &EditRecord) -> String {
             "{} {}→{}行变动",
             record.file, record.old_lines, record.new_lines
         )
+    }
+}
+
+/// Result of one explicit context compaction (A6).
+struct CompactionStats {
+    rounds_dropped: u32,
+    messages_dropped: usize,
+    messages_kept: usize,
+    estimated_tokens_after: u64,
+    /// Index at which the caller must insert the compaction marker — the
+    /// cut point: after the preamble, before the first kept round.
+    marker_index: usize,
+}
+
+/// A6: estimated tokens of one message — chars/2 (a conservative CJK-aware
+/// guess: CJK ≈ 2 chars/token, English would be ≈ 4 — over-estimating is
+/// the safe direction; the real next-round usage measurement is what the
+/// trigger uses).
+fn estimate_message_tokens(m: &Message) -> u64 {
+    let mut chars = m.content.chars().count() as u64;
+    if let Some(r) = &m.reasoning_content {
+        chars += r.chars().count() as u64;
+    }
+    for tc in &m.tool_calls {
+        chars += tc.name.chars().count() as u64;
+        chars += serde_json::to_string(&tc.arguments)
+            .map(|s| s.chars().count() as u64)
+            .unwrap_or(0);
+    }
+    chars / 2
+}
+
+fn estimate_messages_tokens(messages: &[Message]) -> u64 {
+    messages.iter().map(estimate_message_tokens).sum()
+}
+
+/// A6 (2026-08-08): explicit context compaction — drop complete OLDER tool
+/// rounds so the remaining conversation (preamble + newest rounds) is
+/// estimated under `target_tokens`.
+///
+/// Round = one assistant declaration message (with `tool_calls`) plus every
+/// message up to the next declaration — the provider protocol requires each
+/// surviving tool reply's `tool_call_id` to match a declaration in history
+/// (a round split across the cut would 400 on the next request, 2026-08-06
+/// design review D2-1), so compaction never splits a round. The preamble
+/// (original user prompt, gate blocks) and at least the NEWEST round are
+/// always kept verbatim (精确段保留 — design §5 A6: 最近 K 轮消息原文).
+///
+/// The caller inserts the marker (`context_compressed_marker`) at
+/// `marker_index` and journals the `context_compressed` event.
+fn compact_messages(messages: &mut Vec<Message>, target_tokens: u64) -> CompactionStats {
+    let round_starts: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .map(|(i, _)| i)
+        .collect();
+    let noop = || CompactionStats {
+        rounds_dropped: 0,
+        messages_dropped: 0,
+        messages_kept: messages.len(),
+        estimated_tokens_after: estimate_messages_tokens(messages),
+        marker_index: 0,
+    };
+    if round_starts.is_empty() {
+        return noop();
+    }
+    let preamble_end = round_starts[0];
+    let preamble_tokens = estimate_messages_tokens(&messages[..preamble_end]);
+    let mut round_estimates: Vec<u64> = Vec::with_capacity(round_starts.len());
+    for (k, &start) in round_starts.iter().enumerate() {
+        let end = round_starts.get(k + 1).copied().unwrap_or(messages.len());
+        round_estimates.push(estimate_messages_tokens(&messages[start..end]));
+    }
+    // Walk from the NEWEST round backward, keeping while the total fits the
+    // target; the newest round is always kept even when it alone exceeds it
+    // (recent context stays exact — the target is an estimate anyway).
+    let mut kept_total = preamble_tokens;
+    let mut kept_count = 0usize;
+    for estimate in round_estimates.iter().rev() {
+        if kept_count > 0 && kept_total + estimate > target_tokens {
+            break;
+        }
+        kept_count += 1;
+        kept_total += estimate;
+    }
+    let rounds_dropped = round_starts.len() - kept_count;
+    if rounds_dropped == 0 {
+        return noop();
+    }
+    let cut = round_starts[round_starts.len() - kept_count];
+    let messages_dropped = messages.drain(preamble_end..cut).count();
+    CompactionStats {
+        rounds_dropped: rounds_dropped as u32,
+        messages_dropped,
+        messages_kept: messages.len(),
+        estimated_tokens_after: kept_total,
+        marker_index: preamble_end,
     }
 }
 
@@ -214,6 +370,9 @@ impl AgentLoopController {
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
+            context_compact: ContextCompactConfig::default(),
+            whitelist: Mutex::new(Vec::new()),
+            whitelist_cap: DEFAULT_WHITELIST_CAP,
         }
     }
 
@@ -223,6 +382,182 @@ impl AgentLoopController {
     pub fn with_snapshot_store(mut self, store: Option<Arc<SnapshotStore>>) -> Self {
         self.snapshot_store = store;
         self
+    }
+
+    /// 2026-08-08 blackboard partition (A4): ingest an approved plan —
+    /// goal + step descriptions — into the blackboard plan section (the
+    /// plan-mode state-machine mapping; §4.1: goal、步骤 + 状态). The first
+    /// step is marked in-progress, the rest pending; step transitions are a
+    /// later refinement (steps stay pending until then — the status line is
+    /// byte-stable across rounds, which is exactly what the prefix-cache
+    /// discipline wants). Non-plan runs simply never call this: the status
+    /// line is absent and zero dilution.
+    ///
+    /// The plan section feeds both the resident status line (`[任务状态]`
+    /// block in the system prompt) and the `blackboard_read` plan partition.
+    pub fn with_plan(self, goal: String, steps: Vec<String>) -> Self {
+        use crate::blackboard::StepStatus;
+        {
+            let mut w = self.blackboard.write();
+            w.plan.goal = Some(goal);
+            for (i, desc) in steps.into_iter().enumerate() {
+                w.plan.steps.push(crate::blackboard::PlanStep {
+                    id: format!("step-{}", i + 1),
+                    description: desc,
+                    status: if i == 0 {
+                        StepStatus::InProgress
+                    } else {
+                        StepStatus::Pending
+                    },
+                });
+            }
+        }
+        self
+    }
+
+    /// A6 (2026-08-08): override the explicit context-compaction parameters
+    /// (tests use tiny values; production keeps the design §5 A6 defaults).
+    pub fn with_context_compact(
+        mut self,
+        trigger_tokens: u64,
+        target_tokens: u64,
+        min_rounds: u32,
+        safety_tokens: u64,
+    ) -> Self {
+        self.context_compact = ContextCompactConfig {
+            trigger_tokens,
+            target_tokens,
+            min_rounds,
+            safety_tokens,
+        };
+        self
+    }
+
+    /// A6 §8 C.2 (2026-08-08): override the whitelist character cap
+    /// (tests use small values; production keeps DEFAULT_WHITELIST_CAP).
+    pub fn with_whitelist_cap(mut self, cap: usize) -> Self {
+        self.whitelist_cap = cap;
+        self
+    }
+
+    /// A6 §8 C.2: keep the resident whitelist message in the conversation's
+    /// preamble zone (after the original prompt, before the first tool
+    /// declaration) — the compaction mechanism's always-kept preamble then
+    /// skips it automatically (user decision: 常驻被压缩机制跳过, never
+    /// re-injected at compaction time). New entries update the existing
+    /// whitelist message in place.
+    fn upsert_whitelist_message(&self, messages: &mut Vec<Message>) {
+        let entries = self.whitelist.lock().unwrap();
+        if entries.is_empty() {
+            return;
+        }
+        let content = crate::prompt::build_whitelist_block(&entries);
+        if let Some(i) = messages
+            .iter()
+            .position(|m| m.content.starts_with(crate::prompt::WHITELIST_PREFIX))
+        {
+            messages[i].content = content;
+            return;
+        }
+        let pos = messages
+            .iter()
+            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .unwrap_or(messages.len());
+        messages.insert(
+            pos,
+            Message {
+                role: Role::User,
+                content,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+        );
+    }
+
+    /// A6 §8 C.2: mechanical best-effort archive of a whitelist write to
+    /// `{journal_dir}/whitelist.jsonl` (JSONL: timestamp + content, plain
+    /// text — user decision 明文存档). The run dir is covered by the A5
+    /// retention sweep (7 days), so A5 needs no changes. Runtime compaction
+    /// reads the in-memory list, never this file; an archive failure is
+    /// logged and never blocks the write.
+    ///
+    /// Review decision (2026-08-08): credential-shaped content is scanned
+    /// (`looks_like_api_key`, GAK-CRED-001's detector) before the archive
+    /// append — a hit logs a warning as the audit trail but does NOT block
+    /// the write (best-effort semantics unchanged; the whitelist is
+    /// model-chosen task content, and the scan is a surfaced warning, not
+    /// a gate).
+    fn archive_whitelist_entry(&self, host: &dyn LoopHost, content: &str) {
+        if orz_assurance::credential::looks_like_api_key(content) {
+            tracing::warn!(
+                "whitelist entry looks credential-shaped (archived anyway — \
+                 .gsa is gitignored, retained 7 days by A5)"
+            );
+        }
+        let line = serde_json::json!({
+            "timestamp": chrono_utc_now(),
+            "content": content,
+        });
+        let path = host.journal().journal_dir().join("whitelist.jsonl");
+        let mut line = line.to_string();
+        line.push('\n');
+        if let Err(e) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
+        {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "whitelist archive append failed (best-effort)"
+            );
+        }
+    }
+
+    /// A6 review D2-2 (2026-08-08): one-line MECHANICAL digest of the
+    /// blackboard — total edit records + tool-action counts by category —
+    /// the deterministic「摘要」for the compaction marker (zero model calls;
+    /// dropped rounds dominate the totals, and the exact per-round
+    /// breakdown is available via blackboard_read). Labeled 累计 because it
+    /// covers the session's blackboard, not just the dropped rounds.
+    fn blackboard_summary_line(&self) -> Option<String> {
+        let bb = self.blackboard.read();
+        if bb.edits.is_empty() && bb.tool_actions.is_empty() {
+            return None;
+        }
+        let mut counts = HashMap::new();
+        for action in &bb.tool_actions {
+            *counts.entry(action.category).or_insert(0usize) += 1;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        if !bb.edits.is_empty() {
+            parts.push(format!("编辑 {} 处", bb.edits.len()));
+        }
+        for (category, label) in [
+            ("read", "读"),
+            ("edit", "编辑"),
+            ("terminal", "终端"),
+            ("retrieval", "检索"),
+        ] {
+            if let Some(&n) = counts.get(category) {
+                parts.push(format!("{label} {n}"));
+            }
+        }
+        Some(parts.join("；"))
+    }
+
+    /// A4 (2026-08-08): render the resident 极简状态行 from the blackboard
+    /// plan section — `None` when no plan is set (zero injection). The block
+    /// is a pure function of plan state, so it is byte-identical across
+    /// rounds while the plan is unchanged (prefix-cache discipline).
+    fn render_status_line(&self) -> Option<String> {
+        let bb = self.blackboard.read();
+        if bb.plan.goal.is_none() && bb.plan.steps.is_empty() {
+            return None;
+        }
+        Some(crate::prompt::build_status_line(bb.plan.goal.as_deref(), &bb.plan.steps))
     }
 
     /// Component injection for tests (independent scripted providers).
@@ -241,6 +576,9 @@ impl AgentLoopController {
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
+            context_compact: ContextCompactConfig::default(),
+            whitelist: Mutex::new(Vec::new()),
+            whitelist_cap: DEFAULT_WHITELIST_CAP,
         }
     }
 
@@ -330,6 +668,23 @@ impl AgentLoopController {
                 if lines.is_empty() {
                     "(no exec results yet)".to_string()
                 } else {
+                    // Review D2-2 (2026-08-08): the exec partition renders
+                    // only the most recent entries — the compaction marker
+                    // invites look-backs, and an unbounded render would
+                    // push everything compaction saved back into the
+                    // conversation (a 100-round task's exec log can exceed
+                    // the compaction target by itself). The model narrows
+                    // with `since_timestamp` or reads files directly.
+                    const EXEC_RENDER_CAP: usize = 50;
+                    if lines.len() > EXEC_RENDER_CAP {
+                        let omitted = lines.len() - EXEC_RENDER_CAP;
+                        let head = format!(
+                            "[exec: 共 {} 条，仅显示最近 {EXEC_RENDER_CAP} 条（较早条目省略 {omitted} 条）]",
+                            lines.len(),
+                        );
+                        lines.drain(0..omitted);
+                        lines.insert(0, head);
+                    }
                     lines.join("\n")
                 }
             }
@@ -495,6 +850,38 @@ impl AgentLoopController {
         // look back; no full render is ever injected uninvited (zero
         // dilution when not called). ReadOnly risk class → auto-allows
         // under every policy (Interactive/ReadOnly/Benchmark).
+        // A6 §8 C.2 (2026-08-08): `compaction_whitelist_add` — the model's
+        // tool to mark task facts (background, must-know constraints) that
+        // must survive context compaction. Declared whenever the loop runs
+        // (ReadOnly class → auto-allowed under every policy); the WINDOW is
+        // enforced at call time: only the FIRST tool batch may write.
+        if !tool_defs.iter().any(|t| t.name == "compaction_whitelist_add") {
+            tool_defs.push(ToolDef {
+                name: "compaction_whitelist_add".to_string(),
+                description: "Write an entry to the context-compaction \
+                     whitelist — task background facts and must-know \
+                     constraints you want to survive compaction. The \
+                     content is NOT compressed, stays in the conversation \
+                     for the whole run, and is archived to .gsa (retained \
+                     7 days). Only usable during the FIRST tool batch \
+                     (first round); later calls are refused. Read the key \
+                     files within this batch BEFORE writing — the whitelist \
+                     holds discovered objective facts, not plans, guesses \
+                     or transient state. `content` is the fact to preserve \
+                     (plain text, concise)."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The task fact to preserve.",
+                        },
+                    },
+                    "required": ["content"],
+                }),
+            });
+        }
         if !tool_defs.iter().any(|t| t.name == "blackboard_read") {
             tool_defs.push(ToolDef {
                 name: "blackboard_read".to_string(),
@@ -620,6 +1007,17 @@ impl AgentLoopController {
         let mut main_counters = InquiryCounters::default();
         let mut internal_counters = InquiryCounters::default();
         let mut external_counters = InquiryCounters::default();
+        // A6 (2026-08-08, §8 C.1): explicit context compaction state — the
+        // previous round's MEASURED prompt tokens (provider usage; None
+        // until the first round reports usage), the rounds since the last
+        // compaction (per-turn — the conversation is per-turn too), and
+        // whether the previous round was a TOOL round (declaration +
+        // execution + pushes) — the rhythm compaction fires only in the
+        // gap after the model's LAST tool round (candidate answer round:
+        // `!last_round_had_tools` while `counterexample_fired`).
+        let mut last_prompt_tokens: Option<u64> = None;
+        let mut rounds_since_compact: u32 = 0;
+        let mut last_round_had_tools = false;
 
         loop {
             // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -656,6 +1054,82 @@ impl AgentLoopController {
                 tokio::time::sleep(TEXT_DELTA_PACING).await;
             }
 
+            // A6 (2026-08-08, §8 C.1 用户裁决): explicit context compaction
+            // — triggered by the previous round's MEASURED prompt tokens
+            // (provider usage prompt_tokens; `None` until the first round
+            // reports usage). Two triggers:
+            //   - SAFETY (window guard, review D1-1): measured >
+            //     `safety_tokens` — fires at any inter-batch gap, ignoring
+            //     rhythm conditions; the cost of an extra cache miss is
+            //     trivially cheaper than a window-overflow run failure.
+            //     Resets the round counter so a later rhythm compaction
+            //     judges normally (user decision).
+            //   - RHYTHM: measured > `trigger_tokens` with a ≥ min_rounds
+            //     cooldown, AND the model just finished its LAST tool batch
+            //     (the candidate-answer round — no tool calls — means the
+            //     action sequence is complete and the final answer is next
+            //     behind the counterexample gate). Mid-task gaps (after
+            //     tool rounds) are NEVER compacted — the run's action flow
+            //     stays smooth and stable; the final answer round then runs
+            //     on a compacted context (~90K) with low look-back pressure.
+            //     This gap exists exactly once per run (the gate fires
+            //     once), so the rhythm compaction is at most once.
+            // Compaction keeps the preamble (original prompt + whitelist)
+            // and the newest rounds verbatim; older rounds are dropped
+            // whole (declaration + tool replies + injected pushes stay
+            // paired); the marker tells the model history was compressed
+            // (explicit notice — the model has no metacognition to guess,
+            // design §5 A6) and blackboard_read is the look-back window.
+            let rhythm_gap = !last_round_had_tools && counterexample_fired;
+            let compact_now = match last_prompt_tokens {
+                Some(measured) => {
+                    measured > self.context_compact.safety_tokens
+                        || (rhythm_gap
+                            && measured > self.context_compact.trigger_tokens
+                            && rounds_since_compact >= self.context_compact.min_rounds)
+                }
+                None => false,
+            };
+            if compact_now
+                && let Some(measured) = last_prompt_tokens
+            {
+                let stats = compact_messages(&mut messages, self.context_compact.target_tokens);
+                if stats.rounds_dropped > 0 {
+                    let rounds_since = rounds_since_compact;
+                    rounds_since_compact = 0;
+                    messages.insert(
+                        stats.marker_index,
+                        Message {
+                            role: Role::User,
+                            content: crate::prompt::context_compressed_marker(
+                                stats.rounds_dropped,
+                                measured,
+                                self.blackboard_summary_line().as_deref(),
+                            ),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        },
+                    );
+                    writer
+                        .record(
+                            EventType::ContextCompressed,
+                            serde_json::json!({
+                                "trigger_tokens": measured,
+                                "target_tokens": self.context_compact.target_tokens,
+                                "rounds_since_last_compaction": rounds_since,
+                                "rounds_dropped": stats.rounds_dropped,
+                                "messages_dropped": stats.messages_dropped,
+                                // The marker message was inserted above —
+                                // the final conversation is +1.
+                                "messages_kept": stats.messages_kept + 1,
+                                "estimated_tokens_after": stats.estimated_tokens_after,
+                            }),
+                        )
+                        .await?;
+                }
+            }
+
             let avail_block = build_tool_availability_block(
                 &report.available,
                 &report.unavailable,
@@ -670,10 +1144,22 @@ impl AgentLoopController {
             // across rounds — the provider's prefix cache keeps hitting.
             let budget_block =
                 crate::prompt::tool_round_budget_session_block(self.max_tool_rounds);
+            // A4 (2026-08-08): the resident status line — plan state only
+            // (goal + steps + current), rendered from the blackboard plan
+            // section. Absent when no plan is set; byte-identical across
+            // rounds while the plan is unchanged (same cache discipline as
+            // the budget block). Edit counts are deliberately NOT here:
+            // per-round edit deltas arrive via `[本轮编辑]` and totals via
+            // blackboard_read — a per-round counter in the system prompt
+            // would recreate the 17.7%→98% cache regression (2026-08-07).
+            let mut system_blocks = format!("{avail_block}\n\n{budget_block}");
+            if let Some(status_line) = self.render_status_line() {
+                system_blocks.push_str(&format!("\n\n{status_line}"));
+            }
             let system = self
                 .main_agent
                 .prompt_builder
-                .build_system_prompt(Some(&format!("{avail_block}\n\n{budget_block}")));
+                .build_system_prompt(Some(&system_blocks));
 
             let mut partial_text: Vec<String> = Vec::new();
             let response = match self
@@ -772,6 +1258,14 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
+
+            // A6: track the round — measured prompt tokens feed the next
+            // loop-top trigger check; the round counter is the compaction
+            // cooldown; the tool-round flag gates the rhythm compaction to
+            // the gap after the LAST tool round (§8 C.1).
+            last_prompt_tokens = response.prompt_tokens;
+            rounds_since_compact += 1;
+            last_round_had_tools = !response.tool_calls.is_empty();
 
             // §4.6.3: per-round output-threshold feed — repeated-content
             // measure over THIS round's response only (2026-08-08 fix: the
@@ -951,8 +1445,16 @@ impl AgentLoopController {
                     }
                     DispatchTarget::Host => {
                         let (result, policy_msg) =
-                            self.run_host_tool(host, writer, tc, prompt, workspace_trust, &mut messages)
-                                .await?;
+                            self.run_host_tool(
+                                host,
+                                writer,
+                                tc,
+                                prompt,
+                                workspace_trust,
+                                &mut messages,
+                                tool_rounds,
+                            )
+                            .await?;
                         if let Some(m) = policy_msg {
                             pending_policy.push(m);
                         }
@@ -1383,6 +1885,7 @@ impl AgentLoopController {
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel/run_retrieval_subagent
     async fn run_host_tool(
         &self,
         host: &dyn LoopHost,
@@ -1391,6 +1894,7 @@ impl AgentLoopController {
         _prompt: &str,
         _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         messages: &mut Vec<Message>,
+        tool_rounds: u32,
     ) -> Result<(ToolResult, Option<Message>), AgentLoopError> {
         // The second tuple element is a pending policy message (breaker /
         // ceiling) that must be injected AFTER the whole tool round — a
@@ -1627,6 +2131,114 @@ impl AgentLoopController {
                 }),
             )
             .await?;
+        // A6 §8 C.2 (2026-08-08): `compaction_whitelist_add` — served from
+        // the controller's own whitelist (in-memory + .gsa archive), no
+        // host dispatch. The permission gate already ran (ReadOnly class
+        // auto-allows under every policy); the event chain is complete.
+        // Window (user decision): only the FIRST tool batch may write —
+        // `tool_rounds == 0` while this batch is executing. Cap (user
+        // decision): cumulative 16K chars, configurable.
+        if tc.name == "compaction_whitelist_add" {
+            let content = tc
+                .arguments
+                .get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
+            let window_ok = tool_rounds == 0;
+            let cap_ok = {
+                let w = self.whitelist.lock().unwrap();
+                let used: usize = w.iter().map(|e| e.chars().count()).sum();
+                used + content.chars().count() <= self.whitelist_cap
+            };
+            let refused = if !window_ok {
+                Some("compaction whitelist is only writable during the first tool batch (first round)")
+            } else if content.trim().is_empty() {
+                Some("compaction whitelist entry must not be empty")
+            } else if !cap_ok {
+                Some("compaction whitelist cumulative size cap exceeded")
+            } else {
+                None
+            };
+            if let Some(reason) = refused {
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "status": "error",
+                            "error": reason,
+                        }),
+                    )
+                    .await?;
+                let output = format!("whitelist write refused: {reason}");
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output,
+                        exit_code: Some(1),
+                    },
+                    None,
+                ));
+            }
+            let entry_index = {
+                let mut w = self.whitelist.lock().unwrap();
+                w.push(content.clone());
+                w.len()
+            };
+            let total_chars: usize = self
+                .whitelist
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|e| e.chars().count())
+                .sum();
+            // Archive first (mechanical best-effort), then make the entry
+            // resident in the preamble zone — the compaction mechanism
+            // skips the preamble, so the whitelist survives compaction.
+            self.archive_whitelist_entry(host, &content);
+            self.upsert_whitelist_message(messages);
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                    }),
+                )
+                .await?;
+            self.blackboard.write().tool_actions.push(ToolActionRecord {
+                category: ToolDispatcher::action_category(&tc.name),
+                tool: tc.name.clone(),
+                timestamp: chrono_utc_now(),
+            });
+            let output = format!(
+                "whitelist entry #{entry_index} written (cumulative {total_chars} chars) — \
+                 it will NOT be compressed away and is archived to .gsa"
+            );
+            messages.push(Message {
+                role: Role::Tool,
+                content: output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output,
+                    exit_code: Some(0),
+                },
+                None,
+            ));
+        }
         // 2026-08-08 blackboard partition (A3): `blackboard_read` is served
         // from the controller's own blackboard — no host dispatch. The
         // permission gate already ran (ReadOnly class auto-allows under
@@ -1888,7 +2500,7 @@ fn chrono_utc_now() -> String {
 mod tests {
     use super::*;
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
-    use crate::gateway::model::{GatewayError, ModelGateway, ModelRequest, ModelResponse};
+    use crate::gateway::model::{FinishReason, GatewayError, ModelGateway, ModelRequest, ModelResponse};
     use crate::host::{LoopHost, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
@@ -2258,6 +2870,904 @@ mod tests {
             "incremental push missing: {round2:?}"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A4 (2026-08-08): an ingested plan populates the blackboard plan
+    /// section (goal + steps, first step in-progress) and the resident
+    /// status line appears in the system prompt.
+    #[tokio::test]
+    async fn with_plan_injects_status_line_into_system_prompt() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("调查完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "修复 bug".to_string(),
+            vec!["调查".to_string(), "实施".to_string()],
+        );
+
+        // Plan section written (feeds blackboard_read plan partition too).
+        let bb = controller.blackboard();
+        {
+            let r = bb.read();
+            assert_eq!(r.plan.goal.as_deref(), Some("修复 bug"));
+            assert_eq!(r.plan.steps.len(), 2);
+            assert_eq!(r.plan.steps[0].status, crate::blackboard::StepStatus::InProgress);
+            assert_eq!(r.plan.steps[1].status, crate::blackboard::StepStatus::Pending);
+        }
+
+        controller
+            .run_turn(&host, "请调查", "RUN-PLAN-ST", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(!received.is_empty(), "at least one request");
+        let system = &received[0].system;
+        assert!(
+            system.contains("[任务状态 v0.1]"),
+            "status line in system prompt: {system}"
+        );
+        assert!(system.contains("目标: 修复 bug"));
+        assert!(system.contains("当前第 1 步「调查」"));
+        assert!(system.contains("[/任务状态]"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A4: without a plan the status line is absent — zero dilution for
+    /// non-plan runs.
+    #[tokio::test]
+    async fn no_plan_means_no_status_line() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("ok"),
+            ScriptedResponse::text("ok"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-NOPLAN", MANIFEST, 0, None)
+            .await
+            .unwrap();
+        for request in fake.received_requests() {
+            assert!(
+                !request.system.contains("[任务状态"),
+                "no status line without a plan: {}",
+                request.system
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A4 cache discipline: while the plan state is unchanged, the system
+    /// prompt is byte-identical across rounds — the provider prefix cache
+    /// keeps hitting (2026-08-07 regression discipline).
+    #[tokio::test]
+    async fn status_line_is_byte_stable_across_rounds() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: "call-c1".to_string(),
+            }]),
+            ScriptedResponse::text("第一轮回答"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_plan("任务".to_string(), vec!["步骤一".to_string()]);
+        controller
+            .run_turn(&host, "开始", "RUN-STABLE", MANIFEST, 0, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "{received:?}");
+        assert_eq!(
+            received[0].system, received[1].system,
+            "system prompt must be byte-identical across rounds"
+        );
+        assert!(received[0].system.contains("[任务状态 v0.1]"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6 (2026-08-08): the pure compaction function — drops only the
+    /// OLDEST rounds, keeps the preamble + newest round(s), and every
+    /// surviving tool reply's `tool_call_id` still matches a declaration
+    /// (rounds are never split — the provider 400s on unmatched ids).
+    #[test]
+    fn compact_messages_preserves_pairing_and_drops_oldest_rounds() {
+        let decl = |id: &str| Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: id.to_string(),
+            }],
+            reasoning_content: None,
+        };
+        let tool_reply = |id: &str| Message {
+            role: Role::Tool,
+            content: "tool output".to_string(),
+            tool_call_id: Some(id.to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        };
+        let summary = |text: &str| Message {
+            role: Role::Assistant,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        };
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: "原始提示词".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+            decl("call-1"),
+            tool_reply("call-1"),
+            summary("第一轮总结"),
+            decl("call-2"),
+            tool_reply("call-2"),
+            summary("第二轮总结"),
+            decl("call-3"),
+            tool_reply("call-3"),
+            summary("第三轮总结"),
+        ];
+
+        // Target small enough that only the newest round fits.
+        let stats = compact_messages(&mut messages, 10);
+        assert_eq!(stats.rounds_dropped, 2);
+        assert_eq!(stats.messages_dropped, 6);
+        assert_eq!(stats.marker_index, 1); // after the preamble
+
+        // Preamble + marker slot + newest round (decl + reply + summary).
+        assert_eq!(messages.len(), 4, "{messages:?}");
+        assert_eq!(messages[0].content, "原始提示词");
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[1].tool_calls[0].call_id, "call-3");
+        assert_eq!(messages[2].tool_call_id.as_deref(), Some("call-3"));
+        assert_eq!(messages[3].content, "第三轮总结");
+
+        // Pairing invariant: every tool message's call_id has a declaration.
+        let declared: Vec<&str> = messages
+            .iter()
+            .filter(|m| !m.tool_calls.is_empty())
+            .flat_map(|m| m.tool_calls.iter().map(|t| t.call_id.as_str()))
+            .collect();
+        for m in &messages {
+            if let Some(id) = &m.tool_call_id {
+                assert!(declared.contains(&id.as_str()), "unmatched {id}");
+            }
+        }
+    }
+
+    /// A6: no tool rounds → compaction is a no-op (nothing droppable).
+    #[test]
+    fn compact_messages_noop_without_rounds() {
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: "hi".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        }];
+        let stats = compact_messages(&mut messages, 0);
+        assert_eq!(stats.rounds_dropped, 0);
+        assert_eq!(stats.messages_dropped, 0);
+        assert_eq!(messages.len(), 1);
+    }
+
+    /// A6 (2026-08-08, §8 C.1): the RHYTHM compaction fires at the
+    /// final-answer gap — after the candidate-answer round (the model's
+    /// last tool batch is done, the counterexample gate is injected), just
+    /// before the gate reply — old rounds are dropped, the marker is
+    /// inserted, the pairing survives, and the `context_compressed` event
+    /// is journaled. It does NOT fire after tool rounds (mid-task gaps
+    /// stay uncompacted).
+    #[tokio::test]
+    async fn context_compact_triggers_on_measured_prompt_tokens() {
+        // Host returning a DIFFERENT fat output per call — so the kept
+        // newest round is distinguishable from the dropped oldest round.
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        // Fat per-round outputs (~600 chars → ~300 estimated tokens each
+        // round) so the compact walk keeps only the newest round under the
+        // target; round-1 output is "A"-fat, round-2 output is "B"-fat.
+        let host = SeqHost {
+            journal,
+            outputs: vec!["A".repeat(600), "B".repeat(600)],
+            calls: AtomicU64::new(0),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(5_000), // over the tiny test trigger
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-a1"),
+            tool_call("call-a2"),
+            // The candidate-answer round must also report usage — the
+            // rhythm trigger measures the PREVIOUS round's tokens.
+            ScriptedResponse::text("第一轮完成").with_prompt_tokens(5_000),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 2, 100_000);
+        controller
+            .run_turn(&host, "压缩测试", "RUN-COMPACT", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // The compaction event is journaled.
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "exactly one compaction");
+        assert_eq!(compact_events[0]["trigger_tokens"], 5_000);
+        // Rounds before the gap: 2 tool rounds + 1 candidate-answer round.
+        assert_eq!(compact_events[0]["rounds_since_last_compaction"], 3);
+        assert_eq!(compact_events[0]["rounds_dropped"], 1);
+
+        // Mid-task gaps are NEVER compacted: the round-3 request (after
+        // tool round 2) carries no marker.
+        let received = fake.received_requests();
+        assert!(received.len() >= 4, "{received:?}");
+        let round3 = &received[2].messages;
+        assert!(
+            round3.iter().all(|m| !m.content.starts_with("[前文上下文已压缩")),
+            "no mid-task compaction: {round3:?}"
+        );
+
+        // The FINAL-ANSWER gap (round-4 request, after the candidate
+        // answer + gate) reuses the compacted conversation: preamble +
+        // marker + newest round, pairing intact.
+        let round4 = &received[3].messages;
+        assert!(
+            round4.iter().any(|m| m.content.starts_with("[前文上下文已压缩")),
+            "marker present: {round4:?}"
+        );
+        assert!(
+            round4.iter().any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-a2")),
+            "newest round's tool reply kept: {round4:?}"
+        );
+        assert!(
+            !round4.iter().any(|m| m.tool_call_id.as_deref() == Some("call-a1")),
+            "oldest round dropped: {round4:?}"
+        );
+        // The dropped round's content is gone; the kept round's content is
+        // still there — the two are distinguishable by their fat payloads.
+        assert!(
+            round4.iter().all(|m| !m.content.contains(&"A".repeat(600))),
+            "oldest round's output gone: {round4:?}"
+        );
+        assert!(
+            round4.iter().any(|m| m.content.contains(&"B".repeat(600))),
+            "newest round's output kept: {round4:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6 §8 C.2 (2026-08-08): the whitelist write in the FIRST tool batch
+    /// lands as a resident message in the preamble zone (prompt → whitelist
+    /// → first declaration), is archived to .gsa, and SURVIVES compaction
+    /// (the mechanism skips the always-kept preamble) while older rounds
+    /// are still dropped.
+    #[tokio::test]
+    async fn whitelist_first_batch_writes_resident_and_survives_compaction() {
+        // Host returning a DIFFERENT fat output per call — so the dropped
+        // oldest round is distinguishable from the kept newest round.
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec!["A".repeat(600), "B".repeat(600)],
+            calls: AtomicU64::new(0),
+        };
+        // Two whitelist writes in the SAME first batch — append semantics
+        // in the resident message AND two archive lines (JSONL append).
+        let whitelist_calls = ScriptedResponse::tool_calls(vec![
+            ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "任务背景：修复缓存回归；约束：不改 schema"}),
+                call_id: "call-w1".to_string(),
+            },
+            ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "关键路径：src/controller.rs"}),
+                call_id: "call-w1b".to_string(),
+            },
+        ]);
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(5_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            whitelist_calls,
+            tool_call("call-w2"),
+            tool_call("call-w3"),
+            ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 1, 100_000);
+        controller
+            .run_turn(&host, "修复任务", "RUN-WHITELIST", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // Resident in the preamble zone of the NEXT request: prompt →
+        // whitelist → first tool declaration.
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "{received:?}");
+        let round2 = &received[1].messages;
+        assert_eq!(round2[0].content, "修复任务", "prompt first: {round2:?}");
+        assert!(
+            round2[1].content.starts_with("[压缩白名单 v0.1]"),
+            "whitelist right after the prompt: {round2:?}"
+        );
+        assert!(round2[1].content.contains("任务背景：修复缓存回归"));
+        assert!(
+            round2[1].content.contains("关键路径：src/controller.rs"),
+            "same-batch append: {round2:?}"
+        );
+        assert_eq!(round2[2].role, Role::Assistant, "declaration after: {round2:?}");
+        assert!(!round2[2].tool_calls.is_empty());
+
+        // Archived to .gsa (plain text JSONL, best-effort) — both entries
+        // of the same batch appended as separate lines.
+        let archive = dir.join("whitelist.jsonl");
+        let archive_text = std::fs::read_to_string(&archive).expect("archive exists");
+        assert!(
+            archive_text.contains("任务背景：修复缓存回归"),
+            "archive: {archive_text}"
+        );
+        assert!(
+            archive_text.contains("关键路径：src/controller.rs"),
+            "archive append: {archive_text}"
+        );
+        assert!(archive_text.contains("\"timestamp\""));
+        assert_eq!(
+            archive_text.lines().count(),
+            2,
+            "one JSONL line per write: {archive_text}"
+        );
+
+        // Tool-action section folds it under "other".
+        let bb = controller.blackboard();
+        assert!(
+            bb.read()
+                .tool_actions
+                .iter()
+                .any(|t| t.category == "other" && t.tool == "compaction_whitelist_add"),
+            "{:?}",
+            bb.read().tool_actions
+        );
+
+        // Compaction (final-answer gap) — the whitelist SURVIVES as part
+        // of the always-kept preamble, while the OLDEST round (A-fat) is
+        // dropped and the newest (B-fat) stays.
+        let last = received.last().unwrap();
+        let wl_count = last
+            .messages
+            .iter()
+            .filter(|m| m.content.starts_with("[压缩白名单"))
+            .count();
+        assert_eq!(wl_count, 1, "exactly one whitelist message");
+        assert!(
+            last.messages[0].content == "修复任务"
+                && last.messages[1].content.starts_with("[压缩白名单"),
+            "whitelist survives compaction in preamble: {:?}",
+            last.messages
+        );
+        assert!(
+            last.messages.iter().all(|m| !m.content.contains(&"A".repeat(600))),
+            "oldest round dropped: {:?}",
+            last.messages
+        );
+        assert!(
+            last.messages.iter().any(|m| m.content.contains(&"B".repeat(600))),
+            "newest round kept: {:?}",
+            last.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6 §8 C.2: whitelist writes after the first tool batch are refused —
+    /// explicit error, no state change, complete tool event chain.
+    #[tokio::test]
+    async fn whitelist_later_batch_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let whitelist_call = |id: &str, content: &str| ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "compaction_whitelist_add".to_string(),
+            arguments: serde_json::json!({"content": content}),
+            call_id: id.to_string(),
+        }]);
+        let fake = Arc::new(FakeProvider::new(vec![
+            whitelist_call("call-x1", "首轮条目"),
+            whitelist_call("call-x2", "次轮条目"),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "任务", "RUN-WL-REFUSE", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // Only one entry in the whitelist — the second write was refused.
+        let received = fake.received_requests();
+        assert!(received.len() >= 3, "{received:?}");
+        // Round-2 request: the first-batch write is resident (one entry).
+        let round2 = &received[1].messages;
+        let wl = round2
+            .iter()
+            .find(|m| m.content.starts_with("[压缩白名单"))
+            .expect("whitelist message present");
+        assert!(wl.content.contains("首轮条目"));
+        assert!(!wl.content.contains("次轮条目"), "no second entry: {wl:?}");
+        // Round-3 request: the second-batch write (call-x2) was refused.
+        let round3 = &received[2].messages;
+        let refused = round3
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .find(|m| m.tool_call_id.as_deref() == Some("call-x2"));
+        assert!(
+            refused.is_some_and(|m| m.content.contains("refused") && m.content.contains("first tool batch")),
+            "second-batch write refused: {round3:?}"
+        );
+        // Still one entry after the refusal.
+        let wl_after = round3
+            .iter()
+            .find(|m| m.content.starts_with("[压缩白名单"))
+            .expect("whitelist message present");
+        assert!(wl_after.content.contains("首轮条目"));
+        assert!(!wl_after.content.contains("次轮条目"), "no second entry: {wl_after:?}");
+
+        // Complete event chain: the refusal is journaled as a ToolCompleted
+        // error (evidence).
+        let failed_tool_completed: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
+            .filter(|e| e.payload.get("status").and_then(|s| s.as_str()) == Some("error"))
+            .collect();
+        assert_eq!(failed_tool_completed.len(), 1, "one refused write journaled");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6 §8 C.2: the cumulative character cap refuses oversized whitelists.
+    #[tokio::test]
+    async fn whitelist_cap_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "0123456789ABCDEFGHIJ"}), // 20 chars > cap 10
+                call_id: "call-y1".to_string(),
+            }]),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_whitelist_cap(10);
+        controller
+            .run_turn(&host, "任务", "RUN-WL-CAP", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round2 = &received[1].messages;
+        assert!(
+            round2
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .any(|m| m.content.contains("cap exceeded")),
+            "cap refusal: {round2:?}"
+        );
+        // No whitelist message was created.
+        assert!(
+            round2
+                .iter()
+                .all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message on refusal: {round2:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6 §8 C.2 (conformance D3-5, 2026-08-08): an empty/whitespace
+    /// content is refused — no whitelist message created, complete event
+    /// chain (ToolCompleted error).
+    #[tokio::test]
+    async fn whitelist_empty_content_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "   "}),
+                call_id: "call-z1".to_string(),
+            }]),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "任务", "RUN-WL-EMPTY", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round2 = &received[1].messages;
+        assert!(
+            round2
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .any(|m| m.content.contains("must not be empty")),
+            "empty-content refusal: {round2:?}"
+        );
+        assert!(
+            round2
+                .iter()
+                .all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message on empty refusal: {round2:?}"
+        );
+        let failed: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
+            .filter(|e| e.payload.get("status").and_then(|s| s.as_str()) == Some("error"))
+            .collect();
+        assert_eq!(failed.len(), 1, "refusal journaled");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6 (2026-08-08, §8 C.1): the rhythm compaction fires ONLY in the
+    /// final-answer gap — over-threshold measurements after tool rounds are
+    /// not compacted (action flow stays smooth); the single gap (candidate
+    /// answer + gate) is the only rhythm point.
+    #[tokio::test]
+    async fn context_compact_rhythm_gap_is_the_only_rhythm_point() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        // Fat tool output — so the compact walk has droppable rounds.
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600),
+                exit_code: Some(0),
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(5_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-g1"),
+            tool_call("call-g2"),
+            ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // min_rounds=1 — the cooldown never blocks; only the gap gates.
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 1, 100_000);
+        controller
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-GAP", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        // Exactly one compaction — at the final-answer gap.
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "one gap compaction: {compact_events:?}");
+
+        // Tool-round gaps (requests 2 and 3) are untouched; the gate-reply
+        // request (4) carries the marker.
+        let received = fake.received_requests();
+        assert!(received.len() >= 4, "{received:?}");
+        for request in &received[..3] {
+            assert!(
+                request
+                    .messages
+                    .iter()
+                    .all(|m| !m.content.starts_with("[前文上下文已压缩")),
+                "no compaction at tool-round gaps: {request:?}"
+            );
+        }
+        assert!(
+            received[3]
+                .messages
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩")),
+            "marker at the final-answer gap: {:?}",
+            received[3].messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6: the min-round cooldown suppresses compaction — a trigger token
+    /// count alone is not enough.
+    #[tokio::test]
+    async fn context_compact_respects_min_rounds_cooldown() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(5_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-b1"),
+            tool_call("call-b2"),
+            ScriptedResponse::text("第一轮完成").with_prompt_tokens(5_000),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 5, 100_000); // cooldown longer than the run
+        controller
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-NO", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert!(compact_events.is_empty(), "cooldown suppressed: {compact_events:?}");
+        // No marker in any request.
+        for request in fake.received_requests() {
+            assert!(
+                request
+                    .messages
+                    .iter()
+                    .all(|m| !m.content.contains("[前文上下文已压缩")),
+                "no marker without compaction: {request:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6 window guard (review D1-1, 2026-08-08): measured tokens above
+    /// `safety_tokens` compact IMMEDIATELY — the cooldown is bypassed so a
+    /// high-start task never approaches the provider window while waiting
+    /// for the amortization interval. The guard re-fires on every
+    /// over-safety round (the conversation stays over the line), each time
+    /// journaling the honest (short) rounds_since_last_compaction.
+    #[tokio::test]
+    async fn context_compact_safety_trigger_bypasses_cooldown() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600), // fat rounds — droppable content
+                exit_code: Some(0),
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000), // over the safety gate
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-s1"),
+            tool_call("call-s2"),
+            tool_call("call-s3"),
+            ScriptedResponse::text("第一轮完成"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // Cooldown 20 — far longer than the run — but the safety trigger
+        // (100_000) must fire regardless of the cooldown.
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000);
+        controller
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-SAFE", MANIFEST, 0, None)
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert!(!compact_events.is_empty(), "safety trigger fired");
+        // Every compaction happened FAR before the 20-round cooldown — the
+        // payload honestly reports the bypassed interval.
+        for event in &compact_events {
+            assert!(
+                event["rounds_since_last_compaction"].as_u64().unwrap() < 20,
+                "cooldown bypassed: {event:?}"
+            );
+            assert_eq!(event["trigger_tokens"], 300_000);
+        }
+
+        // The marker reached the request after the first compaction.
+        let received = fake.received_requests();
+        assert!(received.len() >= 3, "{received:?}");
+        assert!(
+            received[2]
+                .messages
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩")),
+            "marker present: {:?}",
+            received[2].messages
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2737,10 +4247,14 @@ mod tests {
         );
         // The availability block reflects the policy-filtered set
         // (blackboard_read is always declared — ReadOnly class, allowed
-        // under every policy; 2026-08-08 blackboard partition A3).
+        // under every policy; 2026-08-08 blackboard partition A3;
+        // compaction_whitelist_add likewise — A6 §8 C.2, in-memory write
+        // only, ReadOnly class).
         let system = first.system.clone();
         assert!(
-            system.contains("AVAILABLE: blackboard_read, grep, list_dir, read_file, search_replace"),
+            system.contains(
+                "AVAILABLE: blackboard_read, compaction_whitelist_add, grep, list_dir, read_file, search_replace"
+            ),
             "availability block = policy-filtered set: {system}"
         );
         assert!(
@@ -2778,9 +4292,16 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec!["blackboard_read", "grep", "list_dir", "read_file"],
-            "ReadOnly declares read-class tools only (blackboard_read is \
-             read-class and always declared): {declared:?}"
+            vec![
+                "blackboard_read",
+                "compaction_whitelist_add",
+                "grep",
+                "list_dir",
+                "read_file",
+            ],
+            "ReadOnly declares read-class tools only (blackboard_read + \
+             compaction_whitelist_add are read-class and always declared): \
+             {declared:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

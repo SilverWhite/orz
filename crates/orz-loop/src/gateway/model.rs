@@ -167,6 +167,13 @@ pub struct ModelResponse {
     pub cache_hit_tokens: Option<u64>,
     /// Prompt tokens NOT served from cache (`usage.prompt_cache_miss_tokens`).
     pub cache_miss_tokens: Option<u64>,
+    /// Total prompt tokens of the request (`usage.prompt_tokens`) — A6
+    /// (2026-08-08): the measured trigger for explicit context compaction
+    /// (design §8 C.1: >160K rhythm at the final-answer gap, >250K safety
+    /// at any gap — user decisions). `hit + miss` would be the same value
+    /// when both are reported, but the total is the direct measure and
+    /// works even when the cache breakdown is absent.
+    pub prompt_tokens: Option<u64>,
 }
 
 impl ModelResponse {
@@ -180,6 +187,7 @@ impl ModelResponse {
             completion_tokens: None,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
+            prompt_tokens: None,
         }
     }
 
@@ -193,6 +201,7 @@ impl ModelResponse {
             completion_tokens: None,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
+            prompt_tokens: None,
         }
     }
 }

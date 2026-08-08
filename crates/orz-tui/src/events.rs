@@ -142,6 +142,13 @@ pub enum TuiEvent {
         decision: String,
     },
 
+    // ── A6 explicit context compaction ──
+    ContextCompressed {
+        trigger_tokens: u64,
+        rounds_dropped: u64,
+        estimated_tokens_after: u64,
+    },
+
     // ── IP5 snapshot ──
     SnapshotCreated {
         tool: String,
@@ -230,6 +237,7 @@ impl TuiEvent {
             TuiEvent::NeutralInquiry { .. } => "neutral_inquiry",
             TuiEvent::CounterexampleGate { .. } => "counterexample_gate",
             TuiEvent::RetrievalCompletionCheck { .. } => "retrieval_completion_check",
+            TuiEvent::ContextCompressed { .. } => "context_compressed",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
             TuiEvent::SnapshotRestored { .. } => "snapshot_restored",
             TuiEvent::ArtifactRegistered { .. } => "artifact_registered",

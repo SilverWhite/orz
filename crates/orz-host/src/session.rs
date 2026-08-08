@@ -109,6 +109,26 @@ pub async fn bootstrap_session(
         WorkspaceTrust::NotObserved
     };
     let base = cwd.join(".gsa");
+    // A5 (2026-08-08): record-tree retention — `.gsa` default 7 days,
+    // configurable via ORZ_RETENTION_DAYS (0 disables). Best-effort: a
+    // sweep failure never fails the session; the current run's dir is
+    // protected by name; the keystore is never swept (deleting the
+    // installation key would silently invalidate every permit signed
+    // under it). Debug value of run journals stands on its own (design
+    // §5 A5) — independent of the compaction design.
+    let retention_days = crate::retention::retention_days();
+    if retention_days > 0 {
+        let cutoff = crate::retention::retention_cutoff(std::time::SystemTime::now(), retention_days);
+        let report = crate::retention::prune_old_records(&base, cutoff, Some(run_id));
+        if !report.removed_run_dirs.is_empty() {
+            tracing::info!(
+                removed_runs = ?report.removed_run_dirs,
+                removed_manifests = ?report.removed_manifests,
+                removed_objects = ?report.removed_objects,
+                "pruned expired .gsa records (retention {retention_days}d)"
+            );
+        }
+    }
     let journal_dir = base.join("runs").join(run_id);
 
     // IP5 pre-mutation snapshot store — session-scoped, root under
@@ -284,6 +304,48 @@ mod tests {
         );
         let signature = handle.permit_signer.sign(b"payload").unwrap();
         assert!(handle.permit_signer.verify(b"payload", &signature));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A5 (2026-08-08): bootstrap runs the record-retention sweep as a
+    /// best-effort side effect — the fresh run dir survives, the keystore
+    /// is never touched, and the sweep failure can never fail the session.
+    /// (The pruning mechanics themselves — age judgment, keep-by-name,
+    /// snapshot object GC — are unit-tested in `retention.rs` with the
+    /// injectable-cutoff seam; this test covers the bootstrap wiring only.)
+    #[tokio::test]
+    async fn bootstrap_runs_retention_sweep_without_harm() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        // A previous session's run dir (fresh mtime — inside the 7-day
+        // window, so it survives) and a keystore with an installation key.
+        std::fs::create_dir_all(gsa.join("runs").join("RUN-EARLIER")).unwrap();
+        std::fs::write(
+            gsa.join("runs").join("RUN-EARLIER").join("events.jsonl"),
+            "{}",
+        )
+        .unwrap();
+        std::fs::create_dir_all(gsa.join("keystore")).unwrap();
+        std::fs::write(gsa.join("keystore").join("installation-key.dpapi"), "key").unwrap();
+
+        let handle = bootstrap_session("RUN-FRESH-B", Some(base.clone()), TrustPolicy::Skip)
+            .await
+            .unwrap();
+        handle.journal.flush_async().await.unwrap();
+
+        // Fresh journal valid; earlier run untouched (within the window);
+        // keystore never swept.
+        let replay = orz_assurance::replay_journal(
+            &handle.journal_dir.join("events.jsonl"),
+            Some("RUN-FRESH-B"),
+            None,
+            false,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert!(gsa.join("runs").join("RUN-EARLIER").exists());
+        assert!(gsa.join("runs").join("RUN-FRESH-B").exists());
+        assert!(gsa.join("keystore").join("installation-key.dpapi").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -55,6 +55,10 @@ pub enum EventType {
     CounterexampleGate,
     RetrievalCompletionCheck,
 
+    // A6 explicit context compaction (2026-08-08 — controller-written;
+    // mirrors run-event schema)
+    ContextCompressed,
+
     // IP5 pre-mutation snapshot (Phase 3, slice #4 wiring)
     SnapshotCreated,
     /// IP5 restore/revert (Phase 3, slice #8 — host restore entry; a restore

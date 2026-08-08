@@ -293,6 +293,26 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("检索完成确认: {role} = {decision}")]
         }
 
+        // ── A6 explicit context compaction ──
+        TuiEvent::ContextCompressed {
+            trigger_tokens,
+            rounds_dropped,
+            estimated_tokens_after,
+        } => {
+            app.content.add_system_message(
+                &format!(
+                    "[上下文压缩] 触发于 {}K tokens，压掉 {rounds_dropped} 轮（估 ~{}K）",
+                    trigger_tokens / 1000,
+                    estimated_tokens_after / 1000,
+                ),
+                true,
+            );
+            vec![format!(
+                "上下文已压缩: {rounds_dropped} 轮（触发 {t}K）",
+                t = trigger_tokens / 1000,
+            )]
+        }
+
         // ── IP5 snapshot ──
         TuiEvent::SnapshotCreated {
             tool,

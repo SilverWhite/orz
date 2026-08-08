@@ -60,6 +60,13 @@ impl ToolDispatcher {
             // folded it under "edit". One fix corrects declaration filter,
             // permission gate, action category and snapshot exclusion.
             || tool_name == "blackboard_read"
+            // A6 §8 C.2 (2026-08-08): `compaction_whitelist_add` writes
+            // ONLY in-memory session state (the whitelist) — no file, no
+            // network, no external side effect — so it is ReadOnly-classed:
+            // declared and auto-allowed under every policy, never snapshot-
+            // triggering. (Its .gsa archive write is a mechanical best-
+            // effort audit append, not a worktree mutation.)
+            || tool_name == "compaction_whitelist_add"
         {
             RiskClass::ReadOnly
         } else if tool_name.starts_with("web_") {
@@ -99,6 +106,11 @@ impl ToolDispatcher {
             // A fixed test-runner execution — terminal-like (command
             // execution), not a file edit.
             "terminal"
+        } else if tool_name == "compaction_whitelist_add" {
+            // A6 §8 C.2: whitelist writes are not a read (ReadOnly class
+            // would fold them under "read") — they are session-state
+            // bookkeeping; "other" is the honest fold.
+            "other"
         } else if Self::is_shell_tool(tool_name) {
             "terminal"
         } else if Self::risk_class(tool_name) == RiskClass::ReadOnly {

@@ -23,7 +23,11 @@ pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent 
 遵循注入的 assurance 上下文块执行任务；工具可用性由运行时声明，不得自行推断。\
 \n引用纪律：凡基于外部依据、参考实现或内部文档的引用，必须在引用处附带内联标记 \
 `[来源: 路径:行号]`；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。\
-内部文档引用用 文档ID §节/锚点 而非裸行号（行号会漂移）。";
+内部文档引用用 文档ID §节/锚点 而非裸行号（行号会漂移）。\
+\n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
+compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
+写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
+不写计划/步骤/推测/临时状态（计划由 plan mode 承载）。";
 
 /// Neutral inquiry block — IP2c, fired after a retrieval round completes when
 /// any of the 4 判定点 crosses its threshold (§4.6.5, verbatim).
@@ -84,6 +88,15 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // same file for ≥11 rounds (a normal edit pattern) tripped
         // STAGNATION-NGRAM-REPEAT on the message's repeated 3-gram.
         || content.starts_with(EDIT_ROUND_PUSH_PREFIX)
+        // A6 (2026-08-08): the context-compaction marker is mechanical
+        // injected text (see `context_compressed_marker`) — never
+        // stagnation input.
+        || content.starts_with(CONTEXT_COMPRESSED_PREFIX)
+        // A6 §8 C.2 (2026-08-08): the resident compaction-whitelist
+        // message repeats every round — mechanical injected text, never
+        // stagnation input (model-written, but a resident framework-
+        // managed block, not per-round model output).
+        || content.starts_with(WHITELIST_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
@@ -91,6 +104,118 @@ pub fn is_injected_block_text(content: &str) -> bool {
 /// (`[本轮编辑] 1.py 2→3行变动；…`). Mechanical injected text — never
 /// stagnation input (registered in `is_injected_block_text`).
 pub const EDIT_ROUND_PUSH_PREFIX: &str = "[本轮编辑";
+
+/// A6 (2026-08-08): prefix of the compaction marker message (`[前文上下文
+/// 已压缩 …]`) the controller inserts at the compaction cut point.
+/// Mechanical injected text — registered in `is_injected_block_text` (the
+/// marker is injected once per compaction and would otherwise pollute the
+/// stagnation guard's ngram stats on repeated compactions).
+pub const CONTEXT_COMPRESSED_PREFIX: &str = "[前文上下文已压缩";
+
+/// A6 §8 C.2 (2026-08-08): prefix of the resident compaction-whitelist
+/// message — the model-written list of task facts that survive compaction
+/// (task background, must-know constraints). The message lives in the
+/// conversation's preamble zone (after the original prompt, before the
+/// first tool declaration), so the compaction mechanism skips it as part
+/// of the always-kept preamble — never re-injected, never strengthened.
+/// Registered in `is_injected_block_text` (it repeats every round and must
+/// not pollute the stagnation guard's ngram stats).
+pub const WHITELIST_PREFIX: &str = "[压缩白名单";
+
+/// A6 §8 C.2: build the resident whitelist message content from the
+/// entry list.
+pub fn build_whitelist_block(entries: &[String]) -> String {
+    let mut lines = vec![format!("{WHITELIST_PREFIX} v0.1]")];
+    for entry in entries {
+        lines.push(entry.clone());
+    }
+    lines.push("[/压缩白名单]".to_string());
+    lines.join("\n")
+}
+
+/// A6: the marker message — tells the model the earlier conversation was
+/// compacted and points it at `blackboard_read` for look-backs (design §5
+/// A6: 压缩段打标「前文上下文已压缩」——同时是回查提示；隐式逼迫不可靠，模型
+/// 无元认知，必须显式告知).
+///
+/// Review D2-2 (2026-08-08): `summary_line` is a one-line MECHANICAL digest
+/// of what the dropped rounds did (edit count + tool-action counts by
+/// category, read from the blackboard — zero model calls, deterministic) —
+/// this is the 「工具结果全文 → 摘要」 of design §5 in its deterministic
+/// form. `None` when the blackboard has nothing to summarize.
+pub fn context_compressed_marker(
+    rounds_dropped: u32,
+    trigger_tokens: u64,
+    summary_line: Option<&str>,
+) -> String {
+    let summary = summary_line
+        .map(|s| format!(" 累计: {s}"))
+        .unwrap_or_default();
+    format!(
+        "{CONTEXT_COMPRESSED_PREFIX} v0.1]\n\
+         前文 {rounds_dropped} 轮已压缩（触发于 {trigger_k}K tokens）。\
+         之前的工具结果全文不再在本对话中；如需回看历史，请调用 \
+         blackboard_read 工具（分区: plan / edits / tool_actions / exec）。\
+         {summary}\n\
+         [/前文上下文已压缩]",
+        trigger_k = trigger_tokens / 1000,
+    )
+}
+
+/// 2026-08-08 blackboard partition (A4): prefix of the resident status line
+/// block (`[任务状态 v0.1]`). Plan-state-derived — injected into the system
+/// prompt ONLY when a plan is set (zero dilution without one).
+pub const STATUS_LINE_PREFIX: &str = "[任务状态";
+
+/// A4 (2026-08-08): build the resident 极简状态行 over the blackboard plan
+/// section — goal + plan summary (total steps, current step, remaining) —
+/// 2-3 lines. Rendered from STABLE plan state only: the controller keeps
+/// the block byte-identical across rounds while the plan is unchanged, so
+/// the rebuilt system prompt keeps its provider prefix-cache hit (2026-08-07
+/// discipline — per-round-varying content lives in trailing messages, e.g.
+/// `[本轮编辑]` / `[TOOL_ROUND_BUDGET] REMAINING`).
+///
+/// Edit counts are deliberately EXCLUDED from the resident block: they
+/// change per edit round, and a per-round-varying system prompt recreates
+/// the 17.7%→98% cache regression (2026-08-07 fix). Per-round edit deltas
+/// already arrive via the `[本轮编辑]` push; totals are one blackboard_read
+/// (edits partition) away.
+pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanStep]) -> String {
+    use crate::blackboard::StepStatus;
+    let goal = goal.unwrap_or("(未设置)");
+    let mut lines = vec![format!("{STATUS_LINE_PREFIX} v0.1]")];
+    if steps.is_empty() {
+        lines.push(format!("目标: {goal}（无计划步骤）"));
+    } else {
+        // Current step = the first in-progress step, falling back to the
+        // first pending one when nothing is marked in-progress yet.
+        let current = steps
+            .iter()
+            .position(|s| s.status == StepStatus::InProgress)
+            .or_else(|| steps.iter().position(|s| s.status == StepStatus::Pending))
+            .map(|i| i + 1);
+        let done = steps
+            .iter()
+            .filter(|s| s.status == StepStatus::Completed)
+            .count();
+        let middle = match current {
+            Some(i) => format!(
+                "当前第 {i} 步「{}」",
+                steps[i - 1].description,
+            ),
+            None => "当前步骤: (无)".to_string(),
+        };
+        lines.push(format!("目标: {goal}"));
+        lines.push(format!(
+            "计划: 共 {} 步，已完成 {}，{middle}，待办 {} 步",
+            steps.len(),
+            done,
+            steps.len() - done,
+        ));
+    }
+    lines.push("[/任务状态]".to_string());
+    lines.join("\n")
+}
 
 /// D-8 (FIX_PLAN 2026-08-06): prefix for the mechanically injected tool-round
 /// budget declarations (session budget + per-round remaining + exhaustion).
@@ -336,6 +461,32 @@ mod tests {
         assert!(is_injected_block_text(&tool_round_budget_session_block(40)));
         assert!(is_injected_block_text(&tool_round_budget_remaining_block(38)));
         assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(40)));
+        // A6 (2026-08-08): the context-compaction marker is mechanical
+        // injected text — never stagnation input.
+        assert!(is_injected_block_text(&context_compressed_marker(4, 152_000, None)));
+        assert!(context_compressed_marker(4, 152_000, None).contains("152K"));
+        assert!(context_compressed_marker(4, 152_000, None).contains("4 轮已压缩"));
+        assert!(context_compressed_marker(4, 152_000, None).contains("blackboard_read"));
+        assert!(context_compressed_marker(4, 152_000, None).starts_with("[前文上下文已压缩 v0.1]"));
+        // D2-2 (2026-08-08): the optional mechanical digest line rides the
+        // same marker (累计 label — session blackboard totals).
+        let with_summary = context_compressed_marker(4, 152_000, Some("编辑 3 处；读 5"));
+        assert!(with_summary.contains("累计: 编辑 3 处；读 5"));
+        // A6 §8 C.2 (2026-08-08): the resident whitelist block is
+        // mechanical injected text and never stagnation input.
+        let whitelist = build_whitelist_block(&[
+            "任务背景：修复 orz 的缓存回归".to_string(),
+            "约束：不改动 schema".to_string(),
+        ]);
+        assert!(whitelist.starts_with("[压缩白名单 v0.1]"));
+        assert!(whitelist.ends_with("[/压缩白名单]"));
+        assert!(whitelist.contains("任务背景：修复 orz 的缓存回归"));
+        assert!(is_injected_block_text(&whitelist));
+        assert!(is_injected_block_text("  [压缩白名单 v0.1]\n条目\n[/压缩白名单]"));
+        assert!(!is_injected_block_text("[/压缩白名单]"));
+        // The base prompt carries the whitelist notice (static — cache-safe).
+        assert!(BASE_SYSTEM_PROMPT.contains("compaction_whitelist_add"));
+        assert!(BASE_SYSTEM_PROMPT.contains("压缩白名单"));
         // Leading/trailing whitespace tolerated.
         assert!(is_injected_block_text(&format!(
             "  {INFO_SUFFICIENCY_BLOCK}\n"
@@ -346,5 +497,60 @@ mod tests {
         // A closing tag alone must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/TOOL_ROUND_BUDGET]"));
         assert!(!is_injected_block_text(""));
+    }
+
+    #[test]
+    fn status_line_renders_goal_steps_and_current() {
+        use crate::blackboard::{PlanStep, StepStatus};
+        let steps = vec![
+            PlanStep {
+                id: "step-1".into(),
+                description: "调查".into(),
+                status: StepStatus::InProgress,
+            },
+            PlanStep {
+                id: "step-2".into(),
+                description: "实施".into(),
+                status: StepStatus::Pending,
+            },
+        ];
+        let line = build_status_line(Some("修复 bug"), &steps);
+        assert!(line.starts_with("[任务状态 v0.1]"));
+        assert!(line.ends_with("[/任务状态]"));
+        assert!(line.contains("目标: 修复 bug"));
+        assert!(line.contains("共 2 步，已完成 0"));
+        assert!(line.contains("当前第 1 步「调查」"));
+        assert!(line.contains("待办 2 步"));
+
+        // No plan section → fallback goal text.
+        let bare = build_status_line(None, &[]);
+        assert!(bare.contains("目标: (未设置)"));
+        assert!(bare.contains("无计划步骤"));
+    }
+
+    #[test]
+    fn status_line_tracks_completed_steps() {
+        use crate::blackboard::{PlanStep, StepStatus};
+        let steps = vec![
+            PlanStep {
+                id: "step-1".into(),
+                description: "调查".into(),
+                status: StepStatus::Completed,
+            },
+            PlanStep {
+                id: "step-2".into(),
+                description: "实施".into(),
+                status: StepStatus::InProgress,
+            },
+            PlanStep {
+                id: "step-3".into(),
+                description: "验证".into(),
+                status: StepStatus::Pending,
+            },
+        ];
+        let line = build_status_line(Some("修复 bug"), &steps);
+        assert!(line.contains("已完成 1"));
+        assert!(line.contains("当前第 2 步「实施」"));
+        assert!(line.contains("待办 2 步"));
     }
 }

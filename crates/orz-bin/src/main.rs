@@ -238,19 +238,43 @@ fn run_plan(prompt: &str) {
 
         // Plan phase — on error the journal must still terminate (review
         // P2-1): record RunFailed continuing the chain, then exit.
-        if let Err(e) =
-            run_plan_phase(&handle, &mut seq, &mut prev_hash, &run_id, prompt, &gateway).await
+        let artifact = match run_plan_phase(
+            &handle,
+            &mut seq,
+            &mut prev_hash,
+            &run_id,
+            prompt,
+            &gateway,
+        )
+        .await
         {
-            record_plan_failure(&handle, seq, prev_hash.clone(), &e).await;
-            let _ = handle.journal.shutdown_async().await;
-            return Err(e);
-        }
+            Ok(artifact) => artifact,
+            Err(e) => {
+                record_plan_failure(&handle, seq, prev_hash.clone(), &e).await;
+                let _ = handle.journal.shutdown_async().await;
+                return Err(e);
+            }
+        };
 
         // Execute under the approved plan — real host + IP6 bridge, sharing
         // the gateway instance (its script continues after the gate round).
         let host = build_cli_host(&handle, &run_id, &cwd)?;
+        // A4 (2026-08-08): the approved plan maps into the blackboard plan
+        // section — goal = the task prompt, steps = the plan sections — so
+        // the resident status line and blackboard_read (plan partition) see
+        // it. The section mapping is deterministic (plan artifacts are
+        // mechanically derived today; model-generated plans later keep the
+        // same ingestion point).
         let controller = orz_loop::AgentLoopController::with_gateway(gateway)
-            .with_snapshot_store(Some(handle.snapshot_store.clone()));
+            .with_snapshot_store(Some(handle.snapshot_store.clone()))
+            .with_plan(
+                prompt.to_string(),
+                artifact
+                    .sections
+                    .iter()
+                    .map(|s| s.title.clone())
+                    .collect(),
+            );
         let (response, _, _) = controller
             .run_turn(
                 &host,
@@ -285,9 +309,10 @@ fn run_plan(prompt: &str) {
 
 /// Plan phase: enter the state machine → counterexample gate round (§4.6.1,
 /// before the plan write) → submit → approve, journaling the plan events and
-/// advancing the chain (`seq`/`prev_hash`). Returns Ok on success; the caller
-/// terminates the journal on error (review P2-1: plan-phase failures must not
-/// leave the journal without a terminal event).
+/// advancing the chain (`seq`/`prev_hash`). Returns the approved artifact on
+/// success (the caller ingests it into the blackboard plan section — A4);
+/// the caller terminates the journal on error (review P2-1: plan-phase
+/// failures must not leave the journal without a terminal event).
 async fn run_plan_phase(
     handle: &orz_host::session::SessionHandle,
     seq: &mut u64,
@@ -295,7 +320,7 @@ async fn run_plan_phase(
     run_id: &str,
     prompt: &str,
     gateway: &Arc<dyn ModelGateway>,
-) -> Result<(), String> {
+) -> Result<orz_assurance::plan::PlanArtifact, String> {
     let mut sm = orz_assurance::plan::PlanStateMachine::new();
     sm.enter_planning(None).map_err(|e| format!("plan: {e}"))?;
     let artifact = plan_artifact_from_prompt(run_id, prompt);
@@ -400,7 +425,7 @@ async fn run_plan_phase(
     .await?;
     *seq += 1;
     *prev_hash = Some(h2);
-    Ok(())
+    Ok(artifact)
 }
 
 /// Record a terminal RunFailed continuing the hash chain — the plan-phase

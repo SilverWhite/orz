@@ -187,6 +187,11 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             role: get_str(p, "role"),
             decision: get_str(p, "decision"),
         },
+        EventType::ContextCompressed => TuiEvent::ContextCompressed {
+            trigger_tokens: get_u64(p, "trigger_tokens"),
+            rounds_dropped: get_u64(p, "rounds_dropped"),
+            estimated_tokens_after: get_u64(p, "estimated_tokens_after"),
+        },
         EventType::SnapshotCreated => TuiEvent::SnapshotCreated {
             tool: get_str(p, "tool"),
             targets: get_str_list(p, "targets"),
@@ -261,6 +266,19 @@ mod tests {
     #[test]
     fn maps_all_event_types_without_panic() {
         let cases = [
+            // A6 (2026-08-08): explicit context compaction.
+            (
+                EventType::ContextCompressed,
+                json!({
+                    "trigger_tokens": 152000,
+                    "target_tokens": 100000,
+                    "rounds_since_last_compaction": 22,
+                    "rounds_dropped": 4,
+                    "messages_dropped": 12,
+                    "messages_kept": 8,
+                    "estimated_tokens_after": 95000,
+                }),
+            ),
             (EventType::RunPreflight, json!({})),
             (EventType::RunStarted, json!({"prompt": "hi"})),
             (EventType::RunFinished, json!({"status": "completed"})),

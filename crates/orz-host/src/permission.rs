@@ -400,6 +400,19 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
                 .unwrap_or_default()
                 .to_string(),
         )
+    } else if tool == "compaction_whitelist_add" || tool == "blackboard_read" {
+        // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
+        // compaction_whitelist_add): NO external side effect — no file, no
+        // network, no worktree mutation (the whitelist's .gsa archive is a
+        // mechanical best-effort audit append inside the run dir). The
+        // risk_class on the controller side already classes them ReadOnly
+        // (declared under every policy); THIS mapping is the permission
+        // gate's half of the same decision — without it `access_kind` fell
+        // into the Edit else-branch and headless/dead-gateway deployments
+        // denied every call deterministically (review P1-1, 2026-08-08:
+        // blackboard_read had the identical latent defect since A3).
+        // `Read(None)` = auto-allowed (read-class), no path restriction.
+        AccessKind::Read(None)
     } else {
         AccessKind::Edit(format!("{tool}: {args}"))
     }
@@ -505,6 +518,17 @@ mod tests {
         assert!(matches!(
             access_kind("server__tool", &serde_json::json!({})),
             AccessKind::MCPTool { .. }
+        ));
+        // Review P1-1 (2026-08-08): controller-owned in-memory tools map to
+        // Read(None) — auto-allowed, no path restriction — NOT the Edit
+        // else-branch (headless deployments denied them deterministically).
+        assert!(matches!(
+            access_kind("compaction_whitelist_add", &serde_json::json!({"content": "x"})),
+            AccessKind::Read(None)
+        ));
+        assert!(matches!(
+            access_kind("blackboard_read", &serde_json::json!({"section": "plan"})),
+            AccessKind::Read(None)
         ));
     }
 
@@ -635,6 +659,45 @@ mod tests {
             cwd: orz_paths::AbsPathBuf::new(dir.to_path_buf()).unwrap(),
             policy,
         }
+    }
+
+    /// Review P1-1 (2026-08-08): controller-owned in-memory tools
+    /// (`blackboard_read` / `compaction_whitelist_add`) auto-allow under
+    /// EVERY policy — ReadOnly/Benchmark policy short-circuits pass them
+    /// (ReadOnly risk class), the bridge maps them to `Read(None)` (no path
+    /// restriction → `access_in_scope` passes), and the read-class manager
+    /// auto-allows (the provider's SAFE_COMMAND path — the same inherited
+    /// behavior `read_file` exercises in production). Without the `Read(None)`
+    /// mapping they fell into the Edit else-branch and headless deployments
+    /// denied them deterministically.
+    #[tokio::test]
+    async fn controller_owned_tools_auto_allow_under_every_policy() {
+        let dir = test_dir();
+        for policy in [
+            PermissionPolicy::Interactive,
+            PermissionPolicy::ReadOnly,
+            PermissionPolicy::Benchmark,
+        ] {
+            let bridge = bridge_with_policy(&dir, policy);
+            for (tool, args) in [
+                ("blackboard_read", serde_json::json!({"section": "plan"})),
+                (
+                    "compaction_whitelist_add",
+                    serde_json::json!({"content": "任务背景"}),
+                ),
+            ] {
+                let decision = bridge
+                    .request(RiskClass::ReadOnly, tool, &args)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    decision,
+                    PermitDecision::AllowOnce,
+                    "{tool} under {policy:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

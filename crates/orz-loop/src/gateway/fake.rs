@@ -23,6 +23,9 @@ pub struct ScriptedResponse {
     /// Reasoning content (DeepSeek) — scriptable so tests can lock the
     /// replay path without a real model.
     pub reasoning_content: Option<String>,
+    /// Measured prompt tokens (A6 — the compaction trigger). `None` = the
+    /// provider did not report usage (no compaction in the default path).
+    pub prompt_tokens: Option<u64>,
 }
 
 impl ScriptedResponse {
@@ -33,6 +36,7 @@ impl ScriptedResponse {
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Stop,
             reasoning_content: None,
+            prompt_tokens: None,
         }
     }
 
@@ -43,6 +47,7 @@ impl ScriptedResponse {
             tool_calls,
             finish_reason: FinishReason::ToolCalls,
             reasoning_content: None,
+            prompt_tokens: None,
         }
     }
 
@@ -50,6 +55,13 @@ impl ScriptedResponse {
     /// assistant declaration).
     pub fn with_reasoning(mut self, reasoning: impl Into<String>) -> Self {
         self.reasoning_content = Some(reasoning.into());
+        self
+    }
+
+    /// Attach a measured prompt-token count (A6 — the compaction trigger
+    /// reads `ModelResponse.prompt_tokens`).
+    pub fn with_prompt_tokens(mut self, tokens: u64) -> Self {
+        self.prompt_tokens = Some(tokens);
         self
     }
 }
@@ -124,6 +136,7 @@ impl ModelGateway for FakeProvider {
             completion_tokens: None,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
+            prompt_tokens: next.prompt_tokens,
         })
     }
 
@@ -149,6 +162,7 @@ impl ModelGateway for FakeProvider {
             completion_tokens: None,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
+            prompt_tokens: next.prompt_tokens,
         };
         // Split on char boundaries (CJK-safe) — concatenating the chunks must
         // reproduce the full text exactly (Python text_delta invariant).

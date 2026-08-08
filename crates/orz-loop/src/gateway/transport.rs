@@ -323,6 +323,9 @@ impl DeepSeekTransport {
             // prefix-cache fix (system no longer carries per-round state).
             cache_hit_tokens: body.usage.as_ref().and_then(|u| u.prompt_cache_hit_tokens),
             cache_miss_tokens: body.usage.as_ref().and_then(|u| u.prompt_cache_miss_tokens),
+            // A6 (2026-08-08): the measured prompt-token total — the trigger
+            // for explicit context compaction.
+            prompt_tokens: body.usage.as_ref().map(|u| u.prompt_tokens as u64),
         })
     }
 
@@ -558,6 +561,9 @@ impl DeepSeekTransport {
             cache_miss_tokens: stream_usage
                 .as_ref()
                 .and_then(|u| u.prompt_cache_miss_tokens),
+            // A6 (2026-08-08): measured prompt-token total from the final
+            // usage chunk — the compaction trigger.
+            prompt_tokens: stream_usage.as_ref().map(|u| u.prompt_tokens as u64),
         })
     }
 }
@@ -1510,6 +1516,9 @@ mod tests {
             .unwrap();
         assert_eq!(parsed.reasoning_tokens, Some(395));
         assert_eq!(parsed.completion_tokens, Some(400));
+        // A6 (2026-08-08): the measured prompt-token total — the explicit
+        // compaction trigger (usage.prompt_tokens).
+        assert_eq!(parsed.prompt_tokens, Some(10));
     }
 
     #[tokio::test]
