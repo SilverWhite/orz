@@ -150,6 +150,18 @@ pub enum AgentLoopError {
 ///
 /// Owns the prompt processing lifecycle. Stateless between turns —
 /// all persistent state lives in the Blackboard and Journal.
+/// Grill-mode turn inputs (2026-08-08 write-placement slice, design §3):
+/// the session's accumulated message history, the user's answer to the
+/// previous question, and the protocol template (injected once, at session
+/// start). Grill turns reuse the full model↔tool loop with a discard
+/// `EventWriter`; the conversation is recorded by the host to
+/// `{cwd}/.gsa/grill/<session>.jsonl`, never into a run journal.
+pub struct GrillTurn<'a> {
+    pub history: &'a mut Vec<Message>,
+    pub user_input: &'a str,
+    pub template: Option<&'a str>,
+}
+
 pub struct AgentLoopController {
     main_agent: MainAgent,
     internal_retrieval: RetrievalSubagent,
@@ -775,7 +787,7 @@ impl AgentLoopController {
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         let journal = host.journal();
         let mut writer = EventWriter::new(
-            journal,
+            Some(journal),
             run_id,
             run_manifest_sha256,
             next_sequence,
@@ -791,6 +803,7 @@ impl AgentLoopController {
                 run_manifest_sha256,
                 cancel,
                 heartbeat,
+                None,
             )
             .await;
         match result {
@@ -822,10 +835,50 @@ impl AgentLoopController {
         }
     }
 
+    /// Grill-mode turn (2026-08-08 write-placement slice, design §3): a
+    /// full model↔tool round with a discard `EventWriter` — the session's
+    /// history persists across turns via `history` (in/out: the complete
+    /// conversation including tool rounds is written back), the host records
+    /// the session to its grill JSONL, and the run journal is never touched.
+    /// Read-only tool policy is enforced by the host's `PermissionBridge`
+    /// (ReadOnly — "先探索代码库" is the protocol's core).
+    pub async fn run_grill_turn(
+        &self,
+        host: &dyn LoopHost,
+        history: &mut Vec<Message>,
+        user_input: &str,
+        template: Option<&str>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<String, AgentLoopError> {
+        let mut writer = EventWriter::new(None, "grill", "", 0, None, None);
+        let mut turn = GrillTurn {
+            history,
+            user_input,
+            template,
+        };
+        self.run_turn_inner(
+            &mut writer,
+            host,
+            user_input,
+            "grill",
+            "",
+            cancel,
+            None,
+            Some(&mut turn),
+        )
+        .await
+    }
+
     /// The turn body — writes all events except the failure terminal.
     /// The caller (`run_turn`) owns the `EventWriter` and finalizes the chain.
     /// `cancel` is polled at cooperative checkpoints (Phase 3 slice #7);
     /// `heartbeat` (P1-1) forwards to the gateway for per-frame stamping.
+    /// `grill` (2026-08-08): `Some` runs a grill-mode turn — the message
+    /// history starts from the session's accumulated conversation (plus the
+    /// once-injected template and the user input), the final-answer
+    /// counterexample gate is skipped, and the full conversation is written
+    /// back into `GrillTurn.history` on success.
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_guards + the grill turn
     async fn run_turn_inner(
         &self,
         writer: &mut EventWriter<'_>,
@@ -835,6 +888,7 @@ impl AgentLoopController {
         _run_manifest_sha256: &str,
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        mut grill: Option<&mut GrillTurn<'_>>,
     ) -> Result<String, AgentLoopError> {
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
@@ -1015,14 +1069,38 @@ impl AgentLoopController {
                 .push(checkpoint.checkpoint_id().to_string());
         }
 
-        // 4. model ↔ tool loop
-        let mut messages: Vec<Message> = vec![Message {
-            role: Role::User,
-            content: prompt.to_string(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-            reasoning_content: None,
-        }];
+        // 4. model ↔ tool loop. Grill mode (2026-08-08) starts from the
+        // session's accumulated conversation: history + once-injected
+        // template + the user's answer to the previous question.
+        let mut messages: Vec<Message> = match grill.as_deref_mut() {
+            Some(g) => {
+                let mut m = g.history.clone();
+                if let Some(tpl) = g.template {
+                    m.push(Message {
+                        role: Role::User,
+                        content: tpl.to_string(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                }
+                m.push(Message {
+                    role: Role::User,
+                    content: g.user_input.to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                m
+            }
+            None => vec![Message {
+                role: Role::User,
+                content: prompt.to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            }],
+        };
         let mut tool_rounds = 0u32;
         // The `None` seed is required by Rust's initialization rules (the
         // value is overwritten on every break path before the read at the
@@ -1355,7 +1433,10 @@ impl AgentLoopController {
                 // conversation; the post-gate response is the final answer
                 // (D6). A post-gate round that returns tool calls continues
                 // the loop normally — the gate never fires again this run.
-                if !counterexample_fired {
+                // Grill mode (2026-08-08): the counterexample gate is a
+                // run-semantic (final answers); a grill question is not one
+                // — skipped.
+                if !counterexample_fired && grill.is_none() {
                     writer
                         .record(
                             EventType::CounterexampleGate,
@@ -1689,6 +1770,13 @@ impl AgentLoopController {
                 }),
             )
             .await?;
+
+        // Grill mode (2026-08-08): persist the full conversation (incl. tool
+        // rounds) as the next turn's history — the session is multi-turn.
+        // Error paths skip this: a failed turn keeps the previous history.
+        if let Some(g) = grill.as_deref_mut() {
+            *g.history = messages;
+        }
 
         Ok(last_text.unwrap_or_default())
     }
@@ -2512,7 +2600,11 @@ impl Default for AgentLoopController {
 
 /// Hash-chained event writer — owns the journal sequence state within a turn.
 struct EventWriter<'a> {
-    journal: &'a JournalRecorder,
+    /// `None` = grill mode (2026-08-08): the turn runs the full model↔tool
+    /// loop but records nothing — the grill session's conversation is
+    /// persisted by the host to `{cwd}/.gsa/grill/<session>.jsonl`, never
+    /// into a run journal (run = single-run integrity unit).
+    journal: Option<&'a JournalRecorder>,
     run_id: String,
     manifest_sha256: String,
     seq: u64,
@@ -2524,7 +2616,7 @@ struct EventWriter<'a> {
 
 impl<'a> EventWriter<'a> {
     fn new(
-        journal: &'a JournalRecorder,
+        journal: Option<&'a JournalRecorder>,
         run_id: &str,
         manifest_sha256: &str,
         seq: u64,
@@ -2546,6 +2638,10 @@ impl<'a> EventWriter<'a> {
         event_type: EventType,
         payload: serde_json::Value,
     ) -> Result<(), AgentLoopError> {
+        // Grill mode: nothing to record — no chain, no heartbeats.
+        let Some(journal) = self.journal else {
+            return Ok(());
+        };
         // P1-1: a journaled event is activity (rounds, gates, tool events).
         if let Some(h) = &self.heartbeat {
             h.stamp();
@@ -2566,7 +2662,7 @@ impl<'a> EventWriter<'a> {
         // Only advance the chain link after the write is accepted — a
         // refused append (Closed/TerminalAppended) must not pollute the
         // caller's bookkeeping (2026-08-04 review P2-7).
-        self.journal.record_async(event).await?;
+        journal.record_async(event).await?;
         self.prev_hash = Some(event_hash);
         self.seq += 1;
         Ok(())
@@ -6053,6 +6149,58 @@ mod tests {
         );
         assert!(types.contains(&EventType::PermissionRequested), "{types:?}");
         assert!(types.contains(&EventType::RunCancelled), "{types:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Grill mode (2026-08-08 write-placement slice, design §3): a grill
+    /// turn runs the full model↔tool loop with a discard `EventWriter` — no
+    /// journal events land on disk, the conversation history is written back
+    /// for the next turn, the template is injected once, and the
+    /// final-answer counterexample gate is skipped (a grill question is not
+    /// a final answer — the gate would force an extra provider round).
+    #[tokio::test]
+    async fn grill_turn_no_journal_history_and_skips_gate() {
+        // Two scripts: if the counterexample gate fired, the model would get
+        // a second round and the final response would be the second script.
+        let provider = FakeProvider::new(vec![
+            ScriptedResponse::text("问题一: 是否考虑……?"),
+            ScriptedResponse::text("问题二: 不应到达"),
+        ]);
+        let controller = AgentLoopController::with_gateway(Arc::new(provider));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+
+        // Turn 1: template injected once + user input + assistant question.
+        let mut history = Vec::new();
+        let response = controller
+            .run_grill_turn(&host, &mut history, "用户回答一", Some("模板"), None)
+            .await
+            .unwrap();
+        assert_eq!(response, "问题一: 是否考虑……?");
+        assert_eq!(history.len(), 3, "template + user input + assistant reply");
+        assert_eq!(history[0].content, "模板");
+        assert_eq!(history[1].content, "用户回答一");
+        assert_eq!(history[2].content, "问题一: 是否考虑……?");
+
+        // Turn 2: no template (session start only), history continues; the
+        // provider's second script is consumed normally.
+        let response2 = controller
+            .run_grill_turn(&host, &mut history, "用户回答二", None, None)
+            .await
+            .unwrap();
+        assert_eq!(response2, "问题二: 不应到达");
+        assert_eq!(history.len(), 5);
+
+        // No run journal was touched (bootstrap dirs belong to the host; the
+        // controller wrote zero events).
+        assert!(
+            !dir.join("events.jsonl").exists(),
+            "grill turns must not write run-journal events"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

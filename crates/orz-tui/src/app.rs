@@ -110,6 +110,14 @@ pub struct TuiApp {
     /// exclusive with the permission dialog.
     pub modal: Option<crate::modals::Modal>,
     pub running: bool,
+    /// Grill mode (2026-08-08 write-placement slice, design §3): while set,
+    /// chat input runs grill turns (full model↔tool loop under the host's
+    /// ReadOnly policy) instead of prompts; the session is recorded to
+    /// `{cwd}/.gsa/grill/<session8>.jsonl`, never a run journal.
+    pub grill_active: bool,
+    /// `/grill-finish` was typed — the runner owns the async summary turn +
+    /// archive (same intent-marking pattern as stop_pending).
+    pub pending_grill_finish: bool,
     /// `/stop` was typed while running — the runner owns the async cancel
     /// (Phase 3 slice #7; app state only marks intent so key handling stays
     /// sync).
@@ -178,6 +186,8 @@ impl TuiApp {
             permission_queue: std::collections::VecDeque::new(),
             modal: None,
             running: false,
+            grill_active: false,
+            pending_grill_finish: false,
             stop_pending: false,
             pending_restore: None,
             restoring: false,
@@ -725,6 +735,30 @@ impl TuiApp {
             "/snapshots" => {
                 if self.open_snapshots() {
                     messages.push("快照已打开".into());
+                }
+            }
+            "/grill" => {
+                if self.running || self.restoring {
+                    messages.push("当前有运行/恢复进行中——请等待完成后再进入 grill 模式".into());
+                } else if self.grill_active {
+                    messages.push("已在 grill 模式（/grill-finish 结束并归档）".into());
+                } else {
+                    self.grill_active = true;
+                    messages.push(
+                        "已进入 grill 模式：一次一问/每问带推荐/先探索代码库；输入即回答，/grill-finish 结束"
+                            .into(),
+                    );
+                }
+            }
+            "/grill-finish" => {
+                if !self.grill_active {
+                    messages.push("未在 grill 模式（/grill 进入）".into());
+                } else if self.running {
+                    messages.push("当前有运行进行中——请等待完成后再结束 grill".into());
+                } else {
+                    // The runner owns the async summary turn + archive.
+                    self.pending_grill_finish = true;
+                    messages.push("正在结束 grill 模式…".into());
                 }
             }
             _ => {
@@ -1410,5 +1444,42 @@ mod tests {
             shown.remaining().unwrap() > Duration::from_secs(299),
             "queued dialog restarts its ~300s countdown on presentation"
         );
+    }
+
+    // ── Grill mode (2026-08-08 write-placement slice, design §3) ──────────
+
+    #[test]
+    fn grill_command_enters_mode_and_finish_marks_intent() {
+        let mut app = TuiApp::new();
+        // Idle: entering grill is allowed.
+        let msgs = app.dispatch_command("/grill");
+        assert!(app.grill_active);
+        assert!(msgs.iter().any(|m| m.contains("已进入 grill 模式")), "{msgs:?}");
+
+        // Re-entry is a no-op hint.
+        let msgs = app.dispatch_command("/grill");
+        assert!(app.grill_active);
+        assert!(msgs.iter().any(|m| m.contains("已在 grill 模式")), "{msgs:?}");
+
+        // /grill-finish marks intent for the runner (async summary turn).
+        let msgs = app.dispatch_command("/grill-finish");
+        assert!(app.pending_grill_finish);
+        assert!(msgs.iter().any(|m| m.contains("正在结束")), "{msgs:?}");
+    }
+
+    #[test]
+    fn grill_commands_refuse_while_running_and_outside_mode() {
+        let mut app = TuiApp::new();
+        // Running: /grill refuses.
+        app.running = true;
+        let msgs = app.dispatch_command("/grill");
+        assert!(!app.grill_active);
+        assert!(msgs.iter().any(|m| m.contains("等待完成")), "{msgs:?}");
+
+        // /grill-finish outside the mode is a hint, no intent.
+        app.running = false;
+        let msgs = app.dispatch_command("/grill-finish");
+        assert!(!app.pending_grill_finish);
+        assert!(msgs.iter().any(|m| m.contains("未在 grill 模式")), "{msgs:?}");
     }
 }

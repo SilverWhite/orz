@@ -16,6 +16,24 @@ use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{Message, ModelGateway, Role, ToolCall};
 
 fn main() {
+    // L1 (2026-08-08 write placement): redirect `$GROK_HOME` off the user
+    // directory to the orz install dir (degradation chain → `{cwd}/.gsa/
+    // grok-home` → user dir). MUST run before any `orz_config::grok_home()`
+    // call (OnceLock — late injection is a no-op). Design:
+    // docs/WRITE_PLACEMENT_AND_GRILL_DESIGN_2026-08-08.md §1/§2.
+    let placement = orz_host::grok_home::redirect_grok_home(
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
+    // Last resort (§2): only the user dir was writable — surface it (rare:
+    // requires the install dir AND `{cwd}/.gsa` both unwritable).
+    if matches!(
+        placement,
+        orz_host::grok_home::GrokHomePlacement::UserFallback
+    ) {
+        eprintln!(
+            "warning: install dir and cwd/.gsa both unwritable — $GROK_HOME stays on the user directory (last resort)"
+        );
+    }
     // Minimal arg parsing (no clap yet — Phase 2+ adds the real CLI)
     let args: Vec<String> = std::env::args().collect();
     // `--real`: real DeepSeek transport for every entry (TUI / -p / --plan /

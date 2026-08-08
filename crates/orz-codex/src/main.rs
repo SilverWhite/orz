@@ -14,6 +14,22 @@ use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{ModelGateway, ToolCall};
 
 fn main() {
+    // L1 (2026-08-08 write placement): redirect `$GROK_HOME` off the user
+    // directory — MUST run before any `orz_config::grok_home()` call
+    // (OnceLock). cwd = process-start cwd, before `--run-root` re-anchors
+    // (design Q3 ruling). Design:
+    // docs/WRITE_PLACEMENT_AND_GRILL_DESIGN_2026-08-08.md §1/§2.
+    let placement = orz_host::grok_home::redirect_grok_home(
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
+    if matches!(
+        placement,
+        orz_host::grok_home::GrokHomePlacement::UserFallback
+    ) {
+        eprintln!(
+            "warning: install dir and cwd/.gsa both unwritable — $GROK_HOME stays on the user directory (last resort)"
+        );
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut fake_provider = false;

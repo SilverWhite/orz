@@ -67,6 +67,18 @@ const BUILTIN: &[CommandDef] = &[
         description_zh: "打开快照选择器（恢复到变更前状态）",
         category: "运行",
     },
+    CommandDef {
+        slash: "/grill",
+        name_zh: "设计拷问",
+        description_zh: "进入 grill 模式（一次一问/带推荐/先探索代码库；只读工具）",
+        category: "设计",
+    },
+    CommandDef {
+        slash: "/grill-finish",
+        name_zh: "结束拷问",
+        description_zh: "结束 grill 模式：输出共享理解总结 + 锁定决策清单并归档",
+        category: "设计",
+    },
 ];
 
 /// Registry with prefix search — slash commands are matched on the slash
@@ -143,5 +155,13 @@ mod tests {
         let defs = reg.get_defaults();
         assert!(defs.iter().any(|d| d.slash == "/help"));
         assert!(defs.iter().any(|d| d.slash == "/status"));
+    }
+
+    #[test]
+    fn grill_commands_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert_eq!(reg.get("/grill").unwrap().name_zh, "设计拷问");
+        assert_eq!(reg.get("/grill-finish").unwrap().name_zh, "结束拷问");
+        assert!(reg.get("/grill").unwrap().category == "设计");
     }
 }

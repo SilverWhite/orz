@@ -138,6 +138,20 @@ pub fn run_replay(path: &Path) -> Result<(), TuiError> {
 /// alternate screen are ALWAYS restored — even when the loop exits on an
 /// error (review P1-1: `?` inside the loop used to skip the teardown).
 pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<(), TuiError> {
+    // L1 (2026-08-08 write placement): library-level self-guard — redirect
+    // `$GROK_HOME` off the user directory before any `orz_config::grok_home()`
+    // call (OnceLock). Idempotent: when an entry already injected (orz-bin
+    // main), this is a no-op `EnvRespected`. Design:
+    // docs/WRITE_PLACEMENT_AND_GRILL_DESIGN_2026-08-08.md §1/§2.
+    let placement = orz_host::grok_home::redirect_grok_home(&config.cwd);
+    if matches!(
+        placement,
+        orz_host::grok_home::GrokHomePlacement::UserFallback
+    ) {
+        eprintln!(
+            "warning: install dir and cwd/.gsa both unwritable — $GROK_HOME stays on the user directory (last resort)"
+        );
+    }
     let server = Arc::new(AcpServer::with_gateway(gateway));
     // The restore path keeps its own handle — connect_inprocess moves the
     // Arc into the agent-side handler (slice #10).
@@ -295,6 +309,12 @@ async fn run_loop(
                                 if std::mem::take(&mut app.stop_pending) {
                                     do_cancel(client, app).await;
                                 }
+                                // `/grill-finish` typed (2026-08-08 grill
+                                // mode) — the runner owns the async summary
+                                // turn + archive.
+                                if std::mem::take(&mut app.pending_grill_finish) {
+                                    do_finish_grill(server, client, app).await?;
+                                }
                                 // A confirmed snapshot restore (slice #10) —
                                 // the runner owns the async restore call.
                                 // The two intents are mutually exclusive by
@@ -323,6 +343,13 @@ async fn run_loop(
                                 if app.running || app.restoring {
                                     app.content.add_system_message(
                                         "当前有运行/恢复进行中——请等待完成", false);
+                                } else if app.grill_active {
+                                    // Grill mode (2026-08-08): chat input is
+                                    // the answer to the previous question —
+                                    // a full model↔tool loop under the host's
+                                    // ReadOnly policy, recorded to the grill
+                                    // JSONL, never a run journal.
+                                    run_grill_prompt(server, client, app, text).await?;
                                 } else {
                                     run_prompt(client, app, &mut tail_state, cwd, text).await?;
                                 }
@@ -553,6 +580,93 @@ async fn do_restore(
     }
     app.status.set_run_state("空闲", true);
     app.restoring = false;
+    Ok(())
+}
+
+/// Grill-mode turn (2026-08-08 write-placement slice, design §3): the
+/// user's answer runs through the host's grill turn (full model↔tool loop
+/// under the ReadOnly policy); the response is projected as a normal model
+/// card. The grill session is NOT a run — no journal tail, no run state —
+/// so `running` is reused as the in-flight guard (a second input cannot
+/// overlap a turn).
+async fn run_grill_prompt(
+    server: &AcpServer,
+    client: &mut InProcessClient,
+    app: &mut TuiApp,
+    text: String,
+) -> Result<(), TuiError> {
+    // Auto-start the session (mirror run_prompt / do_restore).
+    if client.session_id.is_none() {
+        client
+            .start_session(app.cwd.clone())
+            .await
+            .map_err(|e| TuiError::Session(e.to_string()))?;
+        app.accept_event(TuiEvent::AcpSessionCreated {
+            session_id: client.session_id.clone().unwrap_or_default(),
+        });
+    }
+    let session_id = client
+        .session_id
+        .clone()
+        .ok_or_else(|| TuiError::Session("no session id".into()))?;
+
+    app.running = true;
+    app.status.set_run_state("运行中", true);
+    app.accept_event(TuiEvent::PromptSubmitted {
+        prompt: text.clone(),
+        character_count: text.chars().count() as u64,
+    });
+    match server.run_grill_turn(&session_id, &text).await {
+        Ok(response) => {
+            app.accept_event(TuiEvent::ModelOutput {
+                text: response,
+                tool_calls: Vec::new(),
+                finish_reason: "stop".into(),
+            });
+        }
+        Err(e) => {
+            app.content
+                .add_system_message(&format!("[grill] 本轮失败（{e}）"), true);
+        }
+    }
+    app.running = false;
+    app.status.set_run_state("空闲", true);
+    Ok(())
+}
+
+/// `/grill-finish` (2026-08-08): one final summary turn ("共享理解达成" +
+/// locked decision list), then the host archives the session and it is
+/// cleared (design §3).
+async fn do_finish_grill(
+    server: &AcpServer,
+    client: &mut InProcessClient,
+    app: &mut TuiApp,
+) -> Result<(), TuiError> {
+    let Some(session_id) = client.session_id.clone() else {
+        app.content
+            .add_system_message("无活跃会话——grill 无法结束", true);
+        app.grill_active = false;
+        return Ok(());
+    };
+    app.running = true;
+    app.status.set_run_state("运行中", true);
+    match server.finish_grill(&session_id).await {
+        Ok(summary) => {
+            app.accept_event(TuiEvent::ModelOutput {
+                text: summary,
+                tool_calls: Vec::new(),
+                finish_reason: "stop".into(),
+            });
+            app.content.add_system_message("[grill] 会话已归档", false);
+        }
+        Err(e) => {
+            app.content
+                .add_system_message(&format!("[grill] 结束失败（{e}）"), true);
+        }
+    }
+    app.grill_active = false;
+    app.running = false;
+    app.status.set_run_state("空闲", true);
     Ok(())
 }
 

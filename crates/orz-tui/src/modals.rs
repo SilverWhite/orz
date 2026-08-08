@@ -395,10 +395,12 @@ mod tests {
         // and /snapshots — slice #10).
         let commands = &help.sheet.tabs[1];
         let slashes: Vec<&str> = commands.fields.iter().map(|(s, _)| s.as_str()).collect();
-        assert_eq!(slashes.len(), 9);
+        assert_eq!(slashes.len(), 11);
         assert!(slashes.contains(&"/toggle-explorer"));
         assert!(slashes.contains(&"/properties"));
         assert!(slashes.contains(&"/snapshots"));
+        assert!(slashes.contains(&"/grill"));
+        assert!(slashes.contains(&"/grill-finish"));
         // 模型 tab carries the live adapter label.
         let model = &help.sheet.tabs[2];
         assert!(model.fields.iter().any(|(_, v)| v == "off"));

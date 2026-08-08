@@ -11,6 +11,7 @@ pub mod acp_server;
 pub mod approval;
 pub mod codex_app;
 pub mod codex_permission;
+pub mod grok_home;
 pub mod keystore;
 pub mod permission;
 pub mod retention;

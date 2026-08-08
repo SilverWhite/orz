@@ -8,11 +8,13 @@
 //! Full ACP lifecycle (tool calls, permissions, notifications) in Phase 2.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::{EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
+use orz_loop::gateway::model::Message;
 use orz_workspace::permission::PermissionHookTransport;
 
 use crate::permission::PermissionPolicy;
@@ -37,6 +39,65 @@ pub enum AcpError {
 /// `SessionError::Journal` wraps the recorder error, mirroring `session.rs`).
 fn acp_journal_error(e: JournalRecorderError) -> AcpError {
     AcpError::Session(SessionError::Journal(e))
+}
+
+/// Grill protocol template: `{cwd}/.gsa/grill/SKILL.md` when present, else
+/// the built-in default (design §3 — 模板可覆盖，改模板不发版).
+fn load_grill_template(cwd: &Path) -> String {
+    let custom = cwd.join(".gsa").join("grill").join("SKILL.md");
+    match std::fs::read_to_string(&custom) {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => DEFAULT_GRILL_TEMPLATE.to_string(),
+    }
+}
+
+/// Append one grill round to the session JSONL (`{turn, user_input,
+/// response, timestamp}`). Best-effort sync write — grill turns are
+/// user-paced; a failed write must not fail the turn (the conversation
+/// itself is the source of truth).
+fn append_grill_record(log_path: &Path, turn: u64, user_input: &str, response: &str) {
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = writeln!(
+            f,
+            "{}",
+            serde_json::json!({
+                "turn": turn,
+                "user_input": user_input,
+                "response": response,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            })
+        );
+    }
+}
+
+/// Terminal record — `/grill-finish` archives the session with the
+/// "shared understanding reached" summary + locked decision list.
+fn append_grill_terminal(log_path: &Path, summary: &str) {
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = writeln!(
+            f,
+            "{}",
+            serde_json::json!({
+                "terminal": "finished",
+                "summary": summary,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            })
+        );
+    }
 }
 
 /// Chain-aware event recorder for host-authored runs (restore). Mirrors the
@@ -133,6 +194,35 @@ struct StoredSession {
     restore_count: u64,
 }
 
+/// Grill-mode session state (2026-08-08 write-placement slice, design §3):
+/// the accumulated conversation (persists across turns), the turn counter,
+/// and the audit JSONL path. Independent of run journals — a grill session
+/// is recorded to `{cwd}/.gsa/grill/<session8>.jsonl`, never into `.gsa/runs/`
+/// (run = single-run integrity unit; zero run-event schema involvement).
+struct GrillSession {
+    session_id: String,
+    messages: Vec<Message>,
+    turn: u64,
+    log_path: PathBuf,
+}
+
+/// Built-in default grill protocol template (design §3): Socratic
+/// questioning — one question at a time, every question carries a
+/// recommended answer, decision tree depth-first, explore the codebase
+/// first. Overridable via `{cwd}/.gsa/grill/SKILL.md` (改模板不发版).
+const DEFAULT_GRILL_TEMPLATE: &str = "\
+[GRILL 模式] 你是设计拷问者（grill-me 协议，Matt Pocock/MIT）。本次对话是设计讨论：\
+一次只问一个问题；每个问题必须附带你推荐的答案（\"推荐: ...\"）；按决策树深度优先\
+推进；提问前先用只读工具探索代码库（read_file/grep/list_dir）。用户输入即对上一问\
+的回答。[/GRILL 模式]";
+
+/// `/grill-finish` summary instruction — the final turn asks for the
+/// "shared understanding reached" summary + the locked decision list, then
+/// the session is archived.
+const GRILL_FINISH_PROMPT: &str = "\
+[GRILL 结束] 请输出「共享理解达成」总结：本次讨论达成的结论、锁定的决策清单（逐条）、\
+以及仍待定的问题（如有）。[/GRILL 结束]";
+
 /// The ACP server — holds active sessions and dispatches requests.
 pub struct AcpServer {
     sessions: Arc<Mutex<HashMap<String, StoredSession>>>,
@@ -162,6 +252,12 @@ pub struct AcpServer {
     /// approval surface) instead of the ACP gateway. `None` keeps the
     /// gateway path (stdio/TUI).
     hub_permission: Arc<Mutex<Option<Arc<dyn PermissionHookTransport>>>>,
+    /// Grill-mode session (2026-08-08 write-placement slice, design §3):
+    /// `Some` while a `/grill` session is active — at most one at a time,
+    /// bound to the session it started under. Turns run the full model↔tool
+    /// loop under a ReadOnly permission policy and record to the session's
+    /// grill JSONL (never a run journal).
+    grill: Mutex<Option<GrillSession>>,
 }
 
 /// What is in flight for a session under `AcpServer::runs`.
@@ -235,6 +331,7 @@ impl AcpServer {
             runs: Arc::new(Mutex::new(HashMap::new())),
             pending_cancels: Arc::new(Mutex::new(HashMap::new())),
             hub_permission: Arc::new(Mutex::new(None)),
+            grill: Mutex::new(None),
         }
     }
 
@@ -459,6 +556,118 @@ impl AcpServer {
             // cancelled session/prompt), not an internal error.
             Err(e) => Err(AcpError::AgentLoop(e)),
         }
+    }
+
+    /// Grill-mode turn (2026-08-08 write-placement slice, design §3): run
+    /// the user's answer through the full model↔tool loop under a ReadOnly
+    /// permission policy ("先探索代码库" is the protocol's core), persisting
+    /// the session's conversation to `{cwd}/.gsa/grill/<session8>.jsonl`.
+    ///
+    /// Independent of run integrity units: no run journal is touched and no
+    /// run is registered in the in-flight map — a grill turn is not
+    /// cancellable via `session/cancel`, and the TUI sequences it between
+    /// runs (a run in flight → `InvalidRequest`).
+    ///
+    /// The first turn injects the protocol template: `{cwd}/.gsa/grill/
+    /// SKILL.md` when present, else the built-in default (design §3 —
+    /// 改模板不发版).
+    pub async fn run_grill_turn(
+        &self,
+        session_id: &str,
+        user_input: &str,
+    ) -> Result<String, AcpError> {
+        let (base_dir, trust_policy) = {
+            let sessions = self.sessions.lock().unwrap();
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            (session.base_dir.clone(), session.trust_policy)
+        };
+        if self.runs.lock().unwrap().contains_key(session_id) {
+            return Err(AcpError::InvalidRequest(
+                "grill turn rejected: a run is in flight for this session".into(),
+            ));
+        }
+        // Session init + template: `Some` on the first turn (template
+        // injected once — design §3, "会话开始"). A session switch rebinds
+        // the grill session to the new session_id (at most one active).
+        let (run_id, template) = {
+            let mut grill = self.grill.lock().unwrap();
+            let suffix: String = session_id.chars().take(8).collect();
+            let entry = grill.get_or_insert_with(|| GrillSession {
+                session_id: session_id.to_string(),
+                messages: Vec::new(),
+                turn: 0,
+                log_path: base_dir
+                    .join(".gsa")
+                    .join("grill")
+                    .join(format!("{suffix}.jsonl")),
+            });
+            if entry.session_id != session_id {
+                *entry = GrillSession {
+                    session_id: session_id.to_string(),
+                    messages: Vec::new(),
+                    turn: 0,
+                    log_path: base_dir
+                        .join(".gsa")
+                        .join("grill")
+                        .join(format!("{suffix}.jsonl")),
+                };
+            }
+            let tpl = (entry.turn == 0).then(|| load_grill_template(&base_dir));
+            (format!("GRILL-{suffix}-{}", entry.turn), tpl)
+        };
+
+        // Same host shape as a prompt run, but policy is ALWAYS ReadOnly
+        // (write tools Deny before any permission wire — no dialogs).
+        let bootstrap = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await?;
+        let host = self.build_host(&bootstrap, session_id, &base_dir, PermissionPolicy::ReadOnly)?;
+        let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
+            .with_snapshot_store(Some(bootstrap.snapshot_store.clone()));
+
+        let response = {
+            let mut grill = self.grill.lock().unwrap();
+            let entry = grill
+                .as_mut()
+                .expect("grill session initialized above (single-threaded TUI)");
+            controller
+                .run_grill_turn(&host, &mut entry.messages, user_input, template.as_deref(), None)
+                .await
+        }?;
+        let _ = bootstrap.journal.shutdown_async().await;
+
+        // Audit record (best-effort; the JSONL is append-only Q/A/recommendation
+        // log — zero run-event schema involvement, design §3).
+        {
+            let mut grill = self.grill.lock().unwrap();
+            let entry = grill.as_mut().expect("grill session still active");
+            append_grill_record(&entry.log_path, entry.turn, user_input, &response);
+            entry.turn += 1;
+        }
+        Ok(response)
+    }
+
+    /// Grill-mode finish (design §3): one final turn asking for the
+    /// "shared understanding reached" summary + locked decision list, then
+    /// the session is archived (terminal record in the grill JSONL) and
+    /// cleared. No active grill session → `InvalidRequest`.
+    pub async fn finish_grill(&self, session_id: &str) -> Result<String, AcpError> {
+        let active = self
+            .grill
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|g| g.session_id == session_id);
+        if !active {
+            return Err(AcpError::InvalidRequest(
+                "no active grill session for this session id".into(),
+            ));
+        }
+        let response = self.run_grill_turn(session_id, GRILL_FINISH_PROMPT).await?;
+        if let Some(g) = self.grill.lock().unwrap().take() {
+            append_grill_terminal(&g.log_path, &response);
+        }
+        Ok(response)
     }
 
     /// IP5 restore entry (Phase 3, slice #8 — P2-3 closure): restore the
@@ -2035,5 +2244,144 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await
+    }
+
+    #[tokio::test]
+    async fn grill_turn_records_jsonl_archives_and_rejects_while_in_flight() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // Scripts: turn1 → question (gate skipped → exactly one
+                // provider round), turn2 → question, finish → summary.
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("问题一: 是否考虑……?"),
+                    ScriptedResponse::text("问题二: 方案取舍……?"),
+                    ScriptedResponse::text("总结: 决策清单……"),
+                ])));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-grill",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let r1 = server.run_grill_turn("sess-grill", "回答一").await.unwrap();
+                assert_eq!(r1, "问题一: 是否考虑……?");
+                let r2 = server.run_grill_turn("sess-grill", "回答二").await.unwrap();
+                assert_eq!(r2, "问题二: 方案取舍……?");
+
+                // Audit JSONL: one record per turn (Q/A), nothing else.
+                let log = base
+                    .join(".gsa")
+                    .join("grill")
+                    .join("sess-gri.jsonl");
+                let content = std::fs::read_to_string(&log).unwrap();
+                let lines: Vec<&str> = content.lines().collect();
+                assert_eq!(lines.len(), 2, "{content}");
+                assert!(content.contains("\"turn\":0") || content.contains("\"turn\": 0"));
+                assert!(content.contains("回答一"));
+                assert!(content.contains("回答二"));
+
+                // No run-journal events: grill bootstraps a GRILL-* run dir
+                // (host shape) but the controller's discard writer never
+                // writes events.jsonl.
+                let runs_dir = base.join(".gsa").join("runs");
+                let grill_dirs: Vec<String> = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with("GRILL-"))
+                    .collect();
+                // Two turns → two GRILL-* bootstrap dirs. The host bootstrap
+                // mechanically records run_preflight as event 0 (session
+                // lifecycle); the controller's discard writer adds NOTHING —
+                // no model/tool/gate/terminal events ever land here (the
+                // audit trail is the grill JSONL). An open chain without a
+                // terminal is expected: a grill turn is not a run.
+                assert_eq!(grill_dirs.len(), 2, "{grill_dirs:?}");
+                for dir in &grill_dirs {
+                    let content =
+                        std::fs::read_to_string(runs_dir.join(dir).join("events.jsonl")).unwrap();
+                    let evts: Vec<orz_assurance::RunEvent> = content
+                        .lines()
+                        .map(|l| serde_json::from_str(l).unwrap())
+                        .collect();
+                    assert_eq!(
+                        evts.len(),
+                        1,
+                        "GRILL journal must hold only run_preflight: {content}"
+                    );
+                    assert_eq!(evts[0].event_type, EventType::RunPreflight);
+                }
+
+                // A run in flight rejects a grill turn (sequencing guard).
+                {
+                    let mut runs = server.runs.lock().unwrap();
+                    runs.insert(
+                        "sess-grill".to_string(),
+                        RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+                    );
+                }
+                let err = server.run_grill_turn("sess-grill", "回答三").await.unwrap_err();
+                assert!(
+                    matches!(err, AcpError::InvalidRequest(_)),
+                    "{err}"
+                );
+                server.runs.lock().unwrap().remove("sess-grill");
+
+                // finish: summary turn + terminal record + session cleared.
+                let summary = server.finish_grill("sess-grill").await.unwrap();
+                assert_eq!(summary, "总结: 决策清单……");
+                let content2 = std::fs::read_to_string(&log).unwrap();
+                assert!(
+                    content2.contains("\"terminal\":\"finished\"")
+                        || content2.contains("\"terminal\": \"finished\""),
+                    "{content2}"
+                );
+                // Cleared → a second finish is an InvalidRequest.
+                assert!(server.finish_grill("sess-grill").await.is_err());
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn grill_turn_denies_write_tools_under_read_only() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "search_replace".to_string(),
+                        arguments: serde_json::json!({"path": "x.py"}),
+                        call_id: "call-write-1".to_string(),
+                    }]),
+                    ScriptedResponse::text("已检查只读边界，不写入。"),
+                ])));
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-ro",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let response = server.run_grill_turn("sess-ro", "背景").await.unwrap();
+                assert_eq!(response, "已检查只读边界，不写入。");
+
+                // The write tool was denied — no journal (discard) and no
+                // file mutation; the response shows the model acknowledged.
+                assert!(
+                    !base.join("x.py").exists(),
+                    "grill (ReadOnly) must never execute write tools"
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
     }
 }
