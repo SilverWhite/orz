@@ -75,13 +75,35 @@ fn install_dir() -> Option<PathBuf> {
 
 /// Create the dir and prove writability with an exclusive probe file
 /// (`create_dir_all` on an existing dir does not prove ACL-writable).
+///
+/// Self-healing (2026-08-08 review D2-1/P2-4): a stale `.orz-probe` from a
+/// crashed or racing earlier process must not permanently demote a writable
+/// install dir to a lower tier — on `AlreadyExists` the probe is removed and
+/// retried once (two racing first-starts: one wins, the other clears and
+/// reclaims; the probe window is transient).
 fn try_claim_dir(dir: &Path) -> bool {
-    std::fs::create_dir_all(dir).is_ok()
-        && std::fs::File::create_new(dir.join(".orz-probe")).is_ok()
-        && {
-            let _ = std::fs::remove_file(dir.join(".orz-probe"));
+    if !std::fs::create_dir_all(dir).is_ok() {
+        return false;
+    }
+    let probe = dir.join(".orz-probe");
+    match std::fs::File::create_new(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
             true
         }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Stale/racing probe — clear and reclaim once.
+            let _ = std::fs::remove_file(&probe);
+            match std::fs::File::create_new(&probe) {
+                Ok(_) => {
+                    let _ = std::fs::remove_file(&probe);
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    }
 }
 
 fn set_grok_home(path: &Path) {

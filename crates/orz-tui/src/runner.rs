@@ -313,7 +313,7 @@ async fn run_loop(
                                 // mode) — the runner owns the async summary
                                 // turn + archive.
                                 if std::mem::take(&mut app.pending_grill_finish) {
-                                    do_finish_grill(server, client, app).await?;
+                                    do_finish_grill(server, client, app, terminal).await?;
                                 }
                                 // A confirmed snapshot restore (slice #10) —
                                 // the runner owns the async restore call.
@@ -349,7 +349,7 @@ async fn run_loop(
                                     // a full model↔tool loop under the host's
                                     // ReadOnly policy, recorded to the grill
                                     // JSONL, never a run journal.
-                                    run_grill_prompt(server, client, app, text).await?;
+                                    run_grill_prompt(server, client, app, terminal, text).await?;
                                 } else {
                                     run_prompt(client, app, &mut tail_state, cwd, text).await?;
                                 }
@@ -436,6 +436,14 @@ async fn do_cancel(client: &mut InProcessClient, app: &mut TuiApp) {
     if app.restoring {
         app.content
             .add_system_message("恢复进行中——无法取消（恢复无取消令牌）", false);
+        return;
+    }
+    if app.grill_active {
+        // Grill mode (2026-08-08 review D2-6): grill turns carry no cancel
+        // token (they are not runs) — surface that instead of the misleading
+        // "cancelling" path that would do nothing.
+        app.content
+            .add_system_message("grill 轮不可取消——请等待本轮完成", false);
         return;
     }
     if app.running {
@@ -593,6 +601,7 @@ async fn run_grill_prompt(
     server: &AcpServer,
     client: &mut InProcessClient,
     app: &mut TuiApp,
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     text: String,
 ) -> Result<(), TuiError> {
     // Auto-start the session (mirror run_prompt / do_restore).
@@ -616,6 +625,11 @@ async fn run_grill_prompt(
         prompt: text.clone(),
         character_count: text.chars().count() as u64,
     });
+    // 2026-08-08 review P2-1: the grill turn awaits INLINE (host direct
+    // call — no journal tail, no select polling), so render the 运行中 frame
+    // BEFORE the await — otherwise the UI freezes silently for the whole
+    // round (a multi-tool exploration can take minutes).
+    render_frame(terminal, app).map_err(TuiError::from)?;
     match server.run_grill_turn(&session_id, &text).await {
         Ok(response) => {
             app.accept_event(TuiEvent::ModelOutput {
@@ -641,6 +655,7 @@ async fn do_finish_grill(
     server: &AcpServer,
     client: &mut InProcessClient,
     app: &mut TuiApp,
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> Result<(), TuiError> {
     let Some(session_id) = client.session_id.clone() else {
         app.content
@@ -650,6 +665,9 @@ async fn do_finish_grill(
     };
     app.running = true;
     app.status.set_run_state("运行中", true);
+    // Same inline-await freeze as run_grill_prompt — render the summary
+    // turn's 运行中 frame before the await (review P2-1).
+    render_frame(terminal, app).map_err(TuiError::from)?;
     match server.finish_grill(&session_id).await {
         Ok(summary) => {
             app.accept_event(TuiEvent::ModelOutput {

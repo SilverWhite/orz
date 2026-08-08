@@ -10,11 +10,12 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::{EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
-use orz_loop::gateway::model::Message;
+use orz_loop::gateway::model::{Message, Role};
 use orz_workspace::permission::PermissionHookTransport;
 
 use crate::permission::PermissionPolicy;
@@ -51,52 +52,68 @@ fn load_grill_template(cwd: &Path) -> String {
     }
 }
 
-/// Append one grill round to the session JSONL (`{turn, user_input,
-/// response, timestamp}`). Best-effort sync write — grill turns are
-/// user-paced; a failed write must not fail the turn (the conversation
-/// itself is the source of truth).
-fn append_grill_record(log_path: &Path, turn: u64, user_input: &str, response: &str) {
+/// Append one grill round to the session JSONL (`{episode, turn,
+/// user_input, response, error?, timestamp}`). Best-effort sync write —
+/// grill turns are user-paced; a failed write must not fail the turn (the
+/// conversation itself is the source of truth), but the failure is
+/// surfaced via tracing (2026-08-08 review D2-9).
+fn append_grill_record(
+    log_path: &Path,
+    episode: u32,
+    turn: u64,
+    user_input: &str,
+    response: &str,
+    error: Option<&str>,
+) {
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)
     {
-        let _ = writeln!(
-            f,
-            "{}",
-            serde_json::json!({
+        Ok(mut f) => {
+            let mut record = serde_json::json!({
+                "episode": episode,
                 "turn": turn,
                 "user_input": user_input,
                 "response": response,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
-            })
-        );
+            });
+            if let Some(err) = error {
+                record["error"] = serde_json::json!(err);
+            }
+            let _ = writeln!(f, "{record}");
+        }
+        Err(e) => tracing::warn!("grill JSONL append failed: {e}"),
     }
 }
 
 /// Terminal record — `/grill-finish` archives the session with the
 /// "shared understanding reached" summary + locked decision list.
-fn append_grill_terminal(log_path: &Path, summary: &str) {
+fn append_grill_terminal(log_path: &Path, episode: u32, summary: &str) {
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)
     {
-        let _ = writeln!(
-            f,
-            "{}",
-            serde_json::json!({
-                "terminal": "finished",
-                "summary": summary,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            })
-        );
+        Ok(mut f) => {
+            let _ = writeln!(
+                f,
+                "{}",
+                serde_json::json!({
+                    "terminal": "finished",
+                    "episode": episode,
+                    "summary": summary,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                })
+            );
+        }
+        Err(e) => tracing::warn!("grill JSONL terminal append failed: {e}"),
     }
 }
 
@@ -203,6 +220,10 @@ struct GrillSession {
     session_id: String,
     messages: Vec<Message>,
     turn: u64,
+    /// Monotonic episode number (2026-08-08 review D2-7): a finished grill
+    /// session followed by a new `/grill` reuses the same session JSONL —
+    /// the episode field disambiguates turn numbering across episodes.
+    episode: u32,
     log_path: PathBuf,
 }
 
@@ -258,6 +279,10 @@ pub struct AcpServer {
     /// loop under a ReadOnly permission policy and record to the session's
     /// grill JSONL (never a run journal).
     grill: Mutex<Option<GrillSession>>,
+    /// Monotonic grill-episode counter (review D2-7): never reused, so each
+    /// `/grill` episode is distinguishable in the shared session JSONL even
+    /// after a finish/clear (turn numbers restart per episode).
+    grill_episode: AtomicU32,
 }
 
 /// What is in flight for a session under `AcpServer::runs`.
@@ -332,6 +357,7 @@ impl AcpServer {
             pending_cancels: Arc::new(Mutex::new(HashMap::new())),
             hub_permission: Arc::new(Mutex::new(None)),
             grill: Mutex::new(None),
+            grill_episode: AtomicU32::new(0),
         }
     }
 
@@ -598,6 +624,7 @@ impl AcpServer {
                 session_id: session_id.to_string(),
                 messages: Vec::new(),
                 turn: 0,
+                episode: self.grill_episode.fetch_add(1, Ordering::SeqCst) + 1,
                 log_path: base_dir
                     .join(".gsa")
                     .join("grill")
@@ -608,6 +635,7 @@ impl AcpServer {
                     session_id: session_id.to_string(),
                     messages: Vec::new(),
                     turn: 0,
+                    episode: self.grill_episode.fetch_add(1, Ordering::SeqCst) + 1,
                     log_path: base_dir
                         .join(".gsa")
                         .join("grill")
@@ -625,26 +653,69 @@ impl AcpServer {
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
             .with_snapshot_store(Some(bootstrap.snapshot_store.clone()));
 
-        let response = {
+        // 2026-08-08 review P2-2: the turn runs OUTSIDE the `grill` lock —
+        // no std MutexGuard lives across an await (a concurrent caller
+        // would deadlock the single-threaded LocalSet). The messages are
+        // taken out and written back after the turn.
+        let mut messages = {
             let mut grill = self.grill.lock().unwrap();
             let entry = grill
                 .as_mut()
                 .expect("grill session initialized above (single-threaded TUI)");
-            controller
-                .run_grill_turn(&host, &mut entry.messages, user_input, template.as_deref(), None)
-                .await
-        }?;
+            std::mem::take(&mut entry.messages)
+        };
+        let result = controller
+            .run_grill_turn(&host, &mut messages, user_input, template.as_deref(), None)
+            .await;
         let _ = bootstrap.journal.shutdown_async().await;
 
-        // Audit record (best-effort; the JSONL is append-only Q/A/recommendation
-        // log — zero run-event schema involvement, design §3).
-        {
-            let mut grill = self.grill.lock().unwrap();
-            let entry = grill.as_mut().expect("grill session still active");
-            append_grill_record(&entry.log_path, entry.turn, user_input, &response);
-            entry.turn += 1;
+        match result {
+            Ok(response) => {
+                // Audit record (best-effort; the JSONL is append-only
+                // Q/A/recommendation log — zero run-event schema involvement,
+                // design §3).
+                let mut grill = self.grill.lock().unwrap();
+                let entry = grill.as_mut().expect("grill session still active");
+                entry.messages = messages;
+                append_grill_record(
+                    &entry.log_path,
+                    entry.episode,
+                    entry.turn,
+                    user_input,
+                    &response,
+                    None,
+                );
+                entry.turn += 1;
+                Ok(response)
+            }
+            Err(e) => {
+                // 2026-08-08 review D2-5: a failed turn must not silently
+                // eat the user's answer — the conversation stays continuous
+                // (the answer is appended to the history) and the failure is
+                // audited in the JSONL. The turn counter advances so a retry
+                // gets a fresh GRILL-* dir (no duplicated seq-0 preflight).
+                let mut grill = self.grill.lock().unwrap();
+                let entry = grill.as_mut().expect("grill session still active");
+                messages.push(Message {
+                    role: Role::User,
+                    content: user_input.to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                entry.messages = messages;
+                append_grill_record(
+                    &entry.log_path,
+                    entry.episode,
+                    entry.turn,
+                    user_input,
+                    "",
+                    Some(&e.to_string()),
+                );
+                entry.turn += 1;
+                Err(AcpError::AgentLoop(e))
+            }
         }
-        Ok(response)
     }
 
     /// Grill-mode finish (design §3): one final turn asking for the
@@ -665,7 +736,7 @@ impl AcpServer {
         }
         let response = self.run_grill_turn(session_id, GRILL_FINISH_PROMPT).await?;
         if let Some(g) = self.grill.lock().unwrap().take() {
-            append_grill_terminal(&g.log_path, &response);
+            append_grill_terminal(&g.log_path, g.episode, &response);
         }
         Ok(response)
     }

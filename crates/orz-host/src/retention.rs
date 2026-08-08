@@ -108,7 +108,12 @@ fn prune_run_dirs(
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !(name.starts_with("RUN-") || name.starts_with("RST-")) {
+        // `GRILL-` (2026-08-08 grill mode): each grill turn bootstraps a
+        // dir holding only the mechanical run_preflight (open chain — a
+        // grill turn is not a run); swept by age like RUN-/RST- so long
+        // grill sessions cannot accumulate unbounded .gsa dirs.
+        if !(name.starts_with("RUN-") || name.starts_with("RST-") || name.starts_with("GRILL-"))
+        {
             continue;
         }
         if keep_run_id.is_some_and(|k| k == name) {

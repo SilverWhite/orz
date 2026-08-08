@@ -943,7 +943,11 @@ impl AgentLoopController {
         // must survive context compaction. Declared whenever the loop runs
         // (ReadOnly class → auto-allowed under every policy); the WINDOW is
         // enforced at call time: only the FIRST tool batch may write.
-        if !tool_defs.iter().any(|t| t.name == "compaction_whitelist_add") {
+        // Grill mode (2026-08-08 review P3-4): `compaction_whitelist_add`
+        // is ReadOnly-class (auto-allows under every policy) yet WRITES to
+        // `.gsa` — the grill promise is "read-only tools only", so it is
+        // not declared in grill turns.
+        if grill.is_none() && !tool_defs.iter().any(|t| t.name == "compaction_whitelist_add") {
             tool_defs.push(ToolDef {
                 name: "compaction_whitelist_add".to_string(),
                 description: "Write an entry to the context-compaction \
@@ -1072,7 +1076,7 @@ impl AgentLoopController {
         // 4. model ↔ tool loop. Grill mode (2026-08-08) starts from the
         // session's accumulated conversation: history + once-injected
         // template + the user's answer to the previous question.
-        let mut messages: Vec<Message> = match grill.as_deref_mut() {
+        let mut messages: Vec<Message> = match &mut grill {
             Some(g) => {
                 let mut m = g.history.clone();
                 if let Some(tpl) = g.template {
@@ -1774,7 +1778,7 @@ impl AgentLoopController {
         // Grill mode (2026-08-08): persist the full conversation (incl. tool
         // rounds) as the next turn's history — the session is multi-turn.
         // Error paths skip this: a failed turn keeps the previous history.
-        if let Some(g) = grill.as_deref_mut() {
+        if let Some(g) = &mut grill {
             *g.history = messages;
         }
 
