@@ -1,6 +1,12 @@
 # TB hard B 组 5 题验证批（2026-08-09 计划定稿，待执行）
 
-**状态**: 计划定稿（未执行）。**目标**：验证当前修改（orz `502ff84`：L1 GROK_HOME 注入 + 三代理审查修复）的可用性——**守卫+无回归为主**，解题正确性作为附带观察。新窗口按此执行，勿重开讨论。
+**状态**: ✅ **已执行完成（2026-08-09）**。**目标**：验证当前修改（orz `502ff84`：L1 GROK_HOME 注入 + 三代理审查修复）的可用性——**守卫+无回归为主**，解题正确性作为附带观察。新窗口按此执行，勿重开讨论。
+
+## 执行结果（2026-08-09）
+
+**1/5 PASS**（model-extraction-relu-logits ✅ 1.0；gpt2-codegolf / make-doom-for-mips / path-tracing / train-fasttext ❌ 0.0）。**守卫+无回归验证目标达成**：5/5 无挂死无硬杀、wallclock 首次真实触发且优雅收尾（path-tracing 59min 满预算）、stall 零触发、restart_requested ×2 为存量机制正常工作、L1 注入零干扰（journal 实时落卷 + .gsa 结构正常）、headless 零行为变化。全部 5 题同一新二进制（00:42 构建 33m46s 增量、strings 验证 max-wallclock/grok-home 命中）。明细已回填 `TERMINAL_BENCH_2_EVAL` §1 台账。
+
+执行记录：Job A（3×900s 题共用卷 b3-900s，wallclock 1740，29m23s）/ Job B（path-tracing 独立卷，wallclock 3540，60m04s）/ Job C（train-fasttext 独立卷，wallclock 7140，9m40s）。环境注记：Job C 首次 Bash 后台启动被 harness 偶发 kill（harbor 进程死、容器孤儿——docker rm 清理后重启成功）；PowerShell 5.1 传参剥离 `--mounts` JSON 内嵌双引号（JSONDecodeError char 2）——**mounts 参数必须走 Bash 单引号**。
 
 ## 1. 背景与决策（用户 2026-08-09 裁决）
 

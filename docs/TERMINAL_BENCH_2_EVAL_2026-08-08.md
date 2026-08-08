@@ -34,6 +34,18 @@
 
 **⚠️ 本批关键教训：5 题首跑用的是无守卫旧二进制（17:02 构建，P0-2/P1-1 不在内），write-compressor 因此被 harness 1800s 硬杀（reward 0.0）——重建含守卫二进制后仅重跑 write-compressor 并 PASS（§6）**。前四题在旧二进制上的 verifier PASS 是真实任务结果；因此“选定任务集合 best-observed 5/5”成立，但不能表述为“新守卫二进制 5/5”。
 
+**B 组 5 题验证批（2026-08-09，守卫二进制 00:42 重建含 502ff84；探索性 best-observed 首跑）** = **1/5 PASS**。本批核心目标为**守卫+无回归验证**（验证 L1 GROK_HOME 注入 + 三代理审查修复可用性），解题正确性为附带观察。计划：`docs/TB_HARD_BATCH5_VALIDATION_2026-08-09.md`。
+
+| 任务 | 难度 | 判定 | 耗时（journal） | 终局/归因 |
+|---|---|---|---|---|
+| model-extraction-relu-logits | hard | ✅ 1.0 | 20.4min | run_invalidated{restart_requested} 但工作产物已落盘，verifier 1.0（停滞守卫兜底先例，同 custom-memory-heap-crash） |
+| gpt2-codegolf | hard | ❌ 0.0 | 18.5min | run_finished{completed}，5 工具轮收工未解出 |
+| make-doom-for-mips | hard | ❌ 0.0 | 6.7min | run_invalidated{restart_requested}，35 工具轮快速迭代后内容停滞触发 restart |
+| path-tracing | hard | ❌ 0.0 | 59.0min | **run_invalidated{wallclock}——P0-2 max_wallclock 首次真实触发**：3540s 满预算优雅收尾（FIFO flush→文件恢复链→run_invalidated 写入→退出 0），harbor 报 completed 非硬杀，归因合理（1800s 任务 ×2 倍率预算真实耗尽）非误杀 |
+| train-fasttext | hard | ❌ 0.0 | 8.7min | run_finished{completed}，11 工具轮未解出 |
+
+**守卫+无回归验证结论（本批核心目标）**：**5/5 无挂死、无 harness 硬杀**（n_errored=0 / n_cancelled=0，全部正常完成）；wallclock 兜底真实生效且优雅收尾（path-tracing）；stall 零触发；restart_requested ×2 为存量内容停滞机制正常工作（其中 1 次带 verifier 1.0）；L1 GROK_HOME 注入零干扰（5 题 journal 全部实时落 `--mounts` 卷、`.gsa/runs/RUN-*` + whitelist 结构正常、无注入相关报错）；headless `-p` 路径零行为变化（grill 分支隔离验证）。**全部 5 题同一新二进制**（00:42 构建 66.5MB，strings 验证 `max-wallclock`×3 / `grok-home` 命中；stale-binary 教训遵守）。环境：镜像 5/5 预拉、Docker 正常、Job A 3 题共用卷 b3-900s（trial-uuid 子目录区分）、Job B/C 独立卷。
+
 ## 2. 适配架构（全链路已验证）
 
 ```
