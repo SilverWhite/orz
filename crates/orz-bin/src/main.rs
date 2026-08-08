@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use orz_host::session::{SessionHandle, bootstrap_session};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
@@ -40,6 +41,23 @@ fn main() {
     if args.iter().any(|a| a == "--allow-write") {
         unsafe {
             std::env::set_var("ORZ_ALLOW_WRITE", "1");
+        }
+    }
+    // P0-2 (2026-08-08 stall guards): `--max-wallclock <sec>` → env
+    // (precedent: `--allow-write` → `ORZ_ALLOW_WRITE`). Model-invisible
+    // total-time budget for headless runs; on expiry the run ends itself
+    // with a `run_invalidated{status: wallclock}` terminal instead of the
+    // harness's process-out hard kill (no terminal, no journal).
+    if let Some(pos) = args.iter().position(|a| a == "--max-wallclock") {
+        let secs = match args.get(pos + 1) {
+            Some(s) => s.clone(),
+            None => {
+                eprintln!("error: --max-wallclock requires a number of seconds");
+                std::process::exit(2);
+            }
+        };
+        unsafe {
+            std::env::set_var("ORZ_MAX_WALLCLOCK", secs);
         }
     }
     if args.iter().any(|a| a == "--stdio") {
@@ -93,11 +111,25 @@ fn main() {
         eprintln!(
             "       --allow-write grants headless local file edits (harness; bash/network still denied)"
         );
+        eprintln!(
+            "       --max-wallclock <sec> bounds the whole run (model-invisible; run_invalidated on expiry)"
+        );
+        std::process::exit(2);
+    });
+    // P0-2/P1-1 (2026-08-08 stall guards): resolve the guards once for
+    // every headless entry — a malformed value is fail-closed (exit 2),
+    // never a silently disabled guard.
+    let wallclock = max_wallclock().unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    });
+    let stall_timeout = max_stall_timeout().unwrap_or_else(|e| {
+        eprintln!("error: {e}");
         std::process::exit(2);
     });
 
     if args.iter().any(|a| a == "--plan") {
-        run_plan(&prompt);
+        run_plan(&prompt, wallclock, stall_timeout);
         return;
     }
 
@@ -113,7 +145,7 @@ fn main() {
     };
 
     let local = tokio::task::LocalSet::new();
-    let result = local.block_on(&rt, run(&prompt));
+    let result = local.block_on(&rt, run(&prompt, wallclock, stall_timeout));
 
     match result {
         Ok((response, events_path)) => {
@@ -223,7 +255,15 @@ fn run_stdio() {
 /// Plan-mode entry: walk the plan state machine (enter → submit → approve),
 /// journal the plan events, then execute the turn under the approved plan.
 /// Demonstrates the plan/action two-level approval separation end-to-end.
-fn run_plan(prompt: &str) {
+///
+/// P0-2/P1-1 (2026-08-08 stall guards): `wallclock` bounds the plan phase
+/// AND the execution turn (bootstrap excluded); the stall watchdog ends the
+/// run on window-long silence (journal events, model wire frames and tool
+/// execution all keep the heartbeat alive — the plan gate's own stream
+/// included). On either expiry the run future is dropped and a graceful
+/// `run_invalidated{status: wallclock|stall}` terminal is recorded
+/// continuing the chain from the file.
+fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Duration>) {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -244,66 +284,105 @@ fn run_plan(prompt: &str) {
         .await
         .map_err(|e| e.to_string())?;
 
-        let mut seq = handle.next_sequence;
-        let mut prev_hash = handle.last_event_sha256.clone();
-        let gateway = build_gateway();
+        // P1-1: the heartbeat covers the plan gate round too — its stream
+        // frames must keep the watchdog armed during a long gate think.
+        let heartbeat = orz_loop::gateway::model::ActivityClock::new();
+        let work = async {
+            let mut seq = handle.next_sequence;
+            let mut prev_hash = handle.last_event_sha256.clone();
+            let gateway = build_gateway();
 
-        // Plan phase — on error the journal must still terminate (review
-        // P2-1): record RunFailed continuing the chain, then exit.
-        let artifact = match run_plan_phase(
-            &handle,
-            &mut seq,
-            &mut prev_hash,
-            &run_id,
-            prompt,
-            &gateway,
-        )
-        .await
-        {
-            Ok(artifact) => artifact,
-            Err(e) => {
-                record_plan_failure(&handle, seq, prev_hash.clone(), &e).await;
-                let _ = handle.journal.shutdown_async().await;
-                return Err(e);
-            }
-        };
-
-        // Execute under the approved plan — real host + IP6 bridge, sharing
-        // the gateway instance (its script continues after the gate round).
-        let host = build_cli_host(&handle, &run_id, &cwd)?;
-        // A4 (2026-08-08): the approved plan maps into the blackboard plan
-        // section — goal = the task prompt, steps = the plan sections — so
-        // the resident status line and blackboard_read (plan partition) see
-        // it. The section mapping is deterministic (plan artifacts are
-        // mechanically derived today; model-generated plans later keep the
-        // same ingestion point).
-        let controller = orz_loop::AgentLoopController::with_gateway(gateway)
-            .with_snapshot_store(Some(handle.snapshot_store.clone()))
-            .with_plan(
-                prompt.to_string(),
-                artifact
-                    .sections
-                    .iter()
-                    .map(|s| s.title.clone())
-                    .collect(),
-            );
-        let (response, _, _) = controller
-            .run_turn(
-                &host,
+            // Plan phase — on error the journal must still terminate
+            // (review P2-1): record RunFailed continuing the chain, then
+            // exit.
+            let artifact = match run_plan_phase(
+                &handle,
+                &mut seq,
+                &mut prev_hash,
+                &run_id,
                 prompt,
-                &handle.run_id,
-                &handle.run_manifest_sha256,
-                seq,
-                prev_hash,
+                &gateway,
+                &heartbeat,
             )
             .await
-            .map_err(|e| e.to_string())?;
-        handle
-            .journal
-            .shutdown_async()
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok::<_, String>((response, handle.journal_dir.join("events.jsonl")))
+            {
+                Ok(artifact) => artifact,
+                Err(e) => {
+                    record_plan_failure(&handle, seq, prev_hash.clone(), &e).await;
+                    let _ = handle.journal.shutdown_async().await;
+                    return Err(e);
+                }
+            };
+
+            // Execute under the approved plan — real host + IP6 bridge,
+            // sharing the gateway instance (its script continues after the
+            // gate round).
+            let host = build_cli_host(&handle, &run_id, &cwd)?;
+            // A4 (2026-08-08): the approved plan maps into the blackboard
+            // plan section — goal = the task prompt, steps = the plan
+            // sections — so the resident status line and blackboard_read
+            // (plan partition) see it. The section mapping is deterministic
+            // (plan artifacts are mechanically derived today; model-generated
+            // plans later keep the same ingestion point).
+            let controller = orz_loop::AgentLoopController::with_gateway(gateway)
+                .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                .with_plan(
+                    prompt.to_string(),
+                    artifact
+                        .sections
+                        .iter()
+                        .map(|s| s.title.clone())
+                        .collect(),
+                );
+            let (response, _, _) = controller
+                .run_turn_with_guards(
+                    &host,
+                    prompt,
+                    &handle.run_id,
+                    &handle.run_manifest_sha256,
+                    seq,
+                    prev_hash,
+                    None,
+                    Some(&heartbeat),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            handle
+                .journal
+                .shutdown_async()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>((response, handle.journal_dir.join("events.jsonl")))
+        };
+        let guarded = async {
+            match stall_timeout {
+                Some(timeout) => tokio::select! {
+                    r = work => r,
+                    _ = stall_fire(&heartbeat, timeout) => {
+                        tracing::warn!(?timeout, "stall watchdog fired — no activity for the window");
+                        let note = record_guard_terminal(&handle, "stall").await?;
+                        let _ = handle.journal.shutdown_async().await;
+                        Ok::<_, String>((note, handle.journal_dir.join("events.jsonl")))
+                    }
+                },
+                None => work.await,
+            }
+        };
+        match wallclock {
+            Some(budget) => match tokio::time::timeout(budget, guarded).await {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!(
+                        ?budget,
+                        "max-wallclock reached — recording run_invalidated terminal"
+                    );
+                    let note = record_guard_terminal(&handle, "wallclock").await?;
+                    let _ = handle.journal.shutdown_async().await;
+                    Ok::<_, String>((note, handle.journal_dir.join("events.jsonl")))
+                }
+            },
+            None => guarded.await,
+        }
     });
 
     match result {
@@ -332,6 +411,7 @@ async fn run_plan_phase(
     run_id: &str,
     prompt: &str,
     gateway: &Arc<dyn ModelGateway>,
+    heartbeat: &orz_loop::gateway::model::ActivityClock,
 ) -> Result<orz_assurance::plan::PlanArtifact, String> {
     let mut sm = orz_assurance::plan::PlanStateMachine::new();
     sm.enter_planning(None).map_err(|e| format!("plan: {e}"))?;
@@ -383,6 +463,9 @@ async fn run_plan_phase(
             thinking: Some(orz_loop::gateway::model::ThinkingMode::Disabled),
             },
             None,
+            // P1-1 (2026-08-08 stall guards): the gate's own wire frames
+            // keep the stall heartbeat alive.
+            Some(heartbeat),
             &mut |_| {},
         )
         .await
@@ -487,6 +570,132 @@ async fn record_plan_event(
         .await
         .map_err(|e| e.to_string())?;
     Ok(hash)
+}
+
+/// Parse the max-wallclock budget from a raw value (`ORZ_MAX_WALLCLOCK`).
+/// `None`/`0` = unbounded (default); anything non-numeric is an error
+/// (fail-closed — a typo must not silently disable the guard).
+fn parse_max_wallclock(raw: Option<String>) -> Result<Option<Duration>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    let secs: u64 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("ORZ_MAX_WALLCLOCK must be a number of seconds, got {raw:?}"))?;
+    if secs == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(Duration::from_secs(secs)))
+    }
+}
+
+/// The resolved max-wallclock budget (from `--max-wallclock` → env).
+fn max_wallclock() -> Result<Option<Duration>, String> {
+    parse_max_wallclock(std::env::var("ORZ_MAX_WALLCLOCK").ok())
+}
+
+/// Parse the stall-watchdog timeout from `ORZ_STALL_TIMEOUT` (seconds).
+/// Missing = the 5min default; `0` = disabled. Non-numeric is an error
+/// (fail-closed — a typo must not silently disable the guard).
+fn parse_max_stall_timeout(raw: Option<String>) -> Result<Option<Duration>, String> {
+    let Some(raw) = raw else {
+        return Ok(Some(STALL_TIMEOUT_DEFAULT));
+    };
+    let secs: u64 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("ORZ_STALL_TIMEOUT must be a number of seconds, got {raw:?}"))?;
+    if secs == 0 {
+        // 0 = explicitly disabled.
+        Ok(None)
+    } else {
+        Ok(Some(Duration::from_secs(secs)))
+    }
+}
+
+/// The resolved stall watchdog timeout (from `ORZ_STALL_TIMEOUT`, default
+/// 5min, `0` disables).
+fn max_stall_timeout() -> Result<Option<Duration>, String> {
+    parse_max_stall_timeout(std::env::var("ORZ_STALL_TIMEOUT").ok())
+}
+
+/// P1-1 (2026-08-08 stall guards): default no-activity watchdog window.
+pub const STALL_TIMEOUT_DEFAULT: Duration = Duration::from_secs(300);
+
+/// P1-1: the stall watchdog — fires once the heartbeat has been silent
+/// for `timeout`. Polls every 500ms (a poll is cheap; the granularity is
+/// irrelevant at the 5min scale).
+async fn stall_fire(heartbeat: &orz_loop::gateway::model::ActivityClock, timeout: Duration) {
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if heartbeat.idle() >= timeout {
+            return;
+        }
+    }
+}
+
+/// P0-2/P1-1 (2026-08-08 stall guards): graceful guard terminal — the run
+/// future was dropped by the wallclock deadline or the stall watchdog, so
+/// the caller-owned chain state (inside the controller's `EventWriter`) is
+/// lost. Recover the chain position from the journal FILE and append
+/// `run_invalidated{status: <guard>}` so the journal ends on a terminal
+/// event and replays valid.
+///
+/// Ordering: `flush_async` FIRST — the recorder channel is FIFO, so every
+/// event the dropped controller queued lands before the flush completes;
+/// reading the file afterwards yields a consistent chain end. The write
+/// goes through `record_plan_event` (same `run-event-v0.1.schema.json`
+/// payload schema as the controller's writer) so the hash chain, event_id
+/// derivation (`{:03}`) and terminal semantics all match the production
+/// path.
+///
+/// If the file ALREADY ends on a terminal event (the run finished in the
+/// same instant the guard fired — a benign select race), nothing is
+/// written and a note is returned instead of an error.
+async fn record_guard_terminal(
+    handle: &orz_host::session::SessionHandle,
+    status: &str,
+) -> Result<String, String> {
+    handle
+        .journal
+        .flush_async()
+        .await
+        .map_err(|e| format!("{status}: journal flush: {e}"))?;
+    let content = std::fs::read_to_string(handle.journal_dir.join("events.jsonl"))
+        .map_err(|e| format!("{status}: read journal: {e}"))?;
+    let last = content
+        .lines()
+        .last()
+        .ok_or_else(|| format!("{status}: empty journal"))?;
+    let last: serde_json::Value =
+        serde_json::from_str(last).map_err(|e| format!("{status}: parse last event: {e}"))?;
+    let last_type = last["event_type"].as_str().unwrap_or_default();
+    if matches!(
+        last_type,
+        "run_finished" | "run_failed" | "run_cancelled" | "run_invalidated"
+    ) {
+        return Ok(format!(
+            "({status}) guard fired but the run already terminated ({last_type}) — no extra event"
+        ));
+    }
+    let seq = last["sequence"]
+        .as_u64()
+        .ok_or_else(|| format!("{status}: last event has no sequence"))?
+        + 1;
+    let prev_hash = last["event_sha256"]
+        .as_str()
+        .ok_or_else(|| format!("{status}: last event has no event_sha256"))?
+        .to_string();
+    record_plan_event(
+        handle,
+        seq,
+        Some(prev_hash),
+        orz_assurance::EventType::RunInvalidated,
+        serde_json::json!({"status": status}),
+    )
+    .await?;
+    Ok(format!(
+        "({status}) guard fired — run_invalidated{{status: {status}}}"
+    ))
 }
 
 /// Derive a 4-section plan artifact from the prompt (Phase 2 minimal shape).
@@ -628,7 +837,22 @@ fn parse_prompt(args: &[String]) -> Result<String, String> {
 }
 
 /// Bootstrap a session and run one turn, returning the response and journal path.
-async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
+///
+/// P0-2/P1-1 (2026-08-08 stall guards): `wallclock` bounds the WHOLE run
+/// (bootstrap excluded — it is local and fast) and the stall watchdog ends
+/// the run when the process goes silent (no journal event, no model wire
+/// frame, no tool execution) for its window. On either expiry the run
+/// future is dropped and the caller records a graceful
+/// `run_invalidated{status: wallclock|stall}` terminal continuing the
+/// chain from the file — the harness's process-out hard kill (no terminal,
+/// no journal) becomes a graceful end (terminal + journal). Both guards
+/// are model-invisible (time pressure induces premature completion — the
+/// plan's explicit exclusion).
+async fn run(
+    prompt: &str,
+    wallclock: Option<Duration>,
+    stall_timeout: Option<Duration>,
+) -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
     let run_id = format!("RUN-CLI-{}", timestamp_suffix());
     let cwd = std::env::current_dir()?;
 
@@ -642,27 +866,67 @@ async fn run(prompt: &str) -> Result<(String, PathBuf), Box<dyn std::error::Erro
     )
     .await?;
 
-    // Phase 3 wiring: real OrzHost (GrokBuild toolset + trust) behind the
-    // IP6 permission bridge. Headless (`None` gateway): Read auto-allows,
-    // Bash Ask → Deny.
-    let host = build_cli_host(&handle, &run_id, &cwd)?;
+    // P1-1: the heartbeat is threaded into the controller (journal events
+    // + model rounds + tool execution stamp it) and the gateway (the
+    // transport stamps it on every wire frame — reasoning deltas included,
+    // which the controller never sees).
+    let heartbeat = orz_loop::gateway::model::ActivityClock::new();
+    let work = async {
+        // Phase 3 wiring: real OrzHost (GrokBuild toolset + trust) behind
+        // the IP6 permission bridge. Headless (`None` gateway): Read
+        // auto-allows, Bash Ask → Deny.
+        let host = build_cli_host(&handle, &run_id, &cwd)?;
 
-    let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
-        .with_snapshot_store(Some(handle.snapshot_store.clone()));
-    let (response, _, _) = controller
-        .run_turn(
-            &host,
-            prompt,
-            &handle.run_id,
-            &handle.run_manifest_sha256,
-            handle.next_sequence,
-            handle.last_event_sha256.clone(),
-        )
-        .await?;
+        let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
+            .with_snapshot_store(Some(handle.snapshot_store.clone()));
+        let (response, _, _) = controller
+            .run_turn_with_guards(
+                &host,
+                prompt,
+                &handle.run_id,
+                &handle.run_manifest_sha256,
+                handle.next_sequence,
+                handle.last_event_sha256.clone(),
+                None,
+                Some(&heartbeat),
+            )
+            .await?;
 
-    handle.journal.shutdown_async().await?;
+        handle.journal.shutdown_async().await?;
 
-    Ok((response, handle.journal_dir.join("events.jsonl")))
+        Ok::<_, Box<dyn std::error::Error>>((response, handle.journal_dir.join("events.jsonl")))
+    };
+    // Compose the guards: the stall watchdog wraps the work (dropping it on
+    // silence); the wallclock wraps the whole thing (dropping it at the
+    // deadline). Whichever fires first records its own terminal — the
+    // already-terminated check in `record_guard_terminal` absorbs the
+    // benign select race when the work completes in the same instant.
+    let guarded = async {
+        match stall_timeout {
+            Some(timeout) => tokio::select! {
+                r = work => r,
+                _ = stall_fire(&heartbeat, timeout) => {
+                    tracing::warn!(?timeout, "stall watchdog fired — no activity for the window");
+                    let note = record_guard_terminal(&handle, "stall").await?;
+                    handle.journal.shutdown_async().await?;
+                    Ok::<_, Box<dyn std::error::Error>>((note, handle.journal_dir.join("events.jsonl")))
+                }
+            },
+            None => work.await,
+        }
+    };
+    match wallclock {
+        Some(budget) => match tokio::time::timeout(budget, guarded).await {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::warn!(?budget, "max-wallclock reached — recording run_invalidated terminal");
+                let note = record_guard_terminal(&handle, "wallclock").await?;
+                handle.journal.shutdown_async().await?;
+                Ok((note, handle.journal_dir.join("events.jsonl")))
+            }
+        },
+        None => guarded.await,
+    }
 }
 
 /// Build the Phase 3 CLI host: OrzHost + IP6 permission bridge with a
@@ -720,10 +984,19 @@ fn timestamp_suffix() -> String {
 mod tests {
     use super::*;
     use orz_loop::gateway::fake::FakeProvider;
+    use orz_loop::gateway::model::{GatewayError, ModelRequest, ModelResponse};
 
     fn test_dir() -> std::path::PathBuf {
+        // 2026-08-08 stall guards: the original name keyed on
+        // `pid + current-second` only — two tests started in the same
+        // second COLLIDED on one directory (the second bootstrap's
+        // remove_dir_all wiped the first's journal mid-flight; observed as
+        // a flaky "journal file not found"). The per-call counter makes
+        // every test directory unique.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "orz-bin-plan-fail-{}-{:08x}",
+            "orz-bin-test-{}-{:08x}-{n:04x}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -754,6 +1027,7 @@ mod tests {
         let mut prev_hash = handle.last_event_sha256.clone();
         // Empty script — the gate round exhausts on the first call.
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(Vec::new()));
+        let heartbeat = orz_loop::gateway::model::ActivityClock::new();
         let err = run_plan_phase(
             &handle,
             &mut seq,
@@ -761,6 +1035,7 @@ mod tests {
             "RUN-PLAN-FAIL",
             "hi",
             &gateway,
+            &heartbeat,
         )
         .await;
         assert!(err.is_err(), "gate round must fail on an empty script");
@@ -775,6 +1050,287 @@ mod tests {
         );
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-2 (2026-08-08 stall guards): the budget parser is fail-closed —
+    /// `None`/`0` = unbounded (default), a non-numeric value is an error
+    /// (a typo must never silently disable the guard).
+    #[test]
+    fn parse_max_wallclock_is_fail_closed() {
+        assert_eq!(parse_max_wallclock(None).unwrap(), None);
+        assert_eq!(parse_max_wallclock(Some("0".into())).unwrap(), None);
+        assert_eq!(
+            parse_max_wallclock(Some("90".into())).unwrap(),
+            Some(std::time::Duration::from_secs(90))
+        );
+        assert_eq!(
+            parse_max_wallclock(Some("  30 ".into())).unwrap(),
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert!(parse_max_wallclock(Some("abc".into())).is_err());
+        assert!(parse_max_wallclock(Some("".into())).is_err());
+    }
+
+    /// P0-2 (2026-08-08 stall guards): the wallclock terminal write
+    /// continues the hash chain from the journal FILE and ends the run with
+    /// `run_invalidated{status: wallclock}` — the journal replays valid.
+    #[tokio::test]
+    async fn wallclock_terminal_records_run_invalidated_and_replays_valid() {
+        let dir = test_dir();
+        let handle = orz_host::session::bootstrap_session(
+            "RUN-WALLCLOCK",
+            Some(dir.clone()),
+            orz_host::session::TrustPolicy::Skip,
+        )
+        .await
+        .unwrap();
+
+        let note = record_guard_terminal(&handle, "wallclock").await.unwrap();
+        assert!(note.contains("wallclock"), "{note}");
+        handle.journal.shutdown_async().await.unwrap();
+
+        let replay = orz_assurance::replay_journal(
+            &handle.journal_dir.join("events.jsonl"),
+            Some("RUN-WALLCLOCK"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_invalidated"));
+        let content =
+            std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+        let last: serde_json::Value =
+            serde_json::from_str(content.lines().last().unwrap()).unwrap();
+        assert_eq!(last["payload"]["status"], "wallclock");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-2 (2026-08-08 stall guards): the REAL wallclock semantics — a run
+    /// future dropped mid-model-round (the budget expired while the gateway
+    /// was streaming) must still end with a valid chain: the dropped
+    /// controller's queued events are flushed, the chain position is
+    /// recovered from the file, and the `run_invalidated` terminal is
+    /// appended. This is what turns the harness's "killed, no journal" into
+    /// "graceful end, journal intact".
+    #[tokio::test]
+    async fn wallclock_dropped_run_recovers_chain_and_terminates() {
+        let dir = test_dir();
+        let handle = orz_host::session::bootstrap_session(
+            "RUN-WALLCLOCK-DROP",
+            Some(dir.clone()),
+            orz_host::session::TrustPolicy::Skip,
+        )
+        .await
+        .unwrap();
+        let host = orz_host::OrzHost::new(
+            handle.journal.clone(),
+            &dir,
+            orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host");
+        // ~80 chars each → ~20 chunks of the 4-char chunker × 150ms ≈ 3s
+        // of streaming; the budget fires mid-stream. 400ms is long enough
+        // that the run's first journal events have landed even under
+        // parallel-test CPU contention (the 100ms first version was flaky:
+        // under load the budget could expire before the first event was
+        // written), short enough that the stream is nowhere near done.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::from_texts(vec![
+                "slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow",
+                "slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow slow",
+            ])
+            .with_chunk_delay(std::time::Duration::from_millis(150)),
+        );
+        let controller = orz_loop::AgentLoopController::with_gateway(gateway);
+        let fut = controller.run_turn(
+            &host,
+            "wallclock 测试",
+            &handle.run_id,
+            &handle.run_manifest_sha256,
+            handle.next_sequence,
+            handle.last_event_sha256.clone(),
+        );
+        let timed = tokio::time::timeout(std::time::Duration::from_millis(400), fut).await;
+        assert!(timed.is_err(), "budget must expire mid-run: {timed:?}");
+
+        let note = record_guard_terminal(&handle, "wallclock").await.unwrap();
+        assert!(note.contains("wallclock"), "{note}");
+        handle.journal.shutdown_async().await.unwrap();
+
+        let replay = orz_assurance::replay_journal(
+            &handle.journal_dir.join("events.jsonl"),
+            Some("RUN-WALLCLOCK-DROP"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_invalidated"));
+        let content =
+            std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+        let last: serde_json::Value =
+            serde_json::from_str(content.lines().last().unwrap()).unwrap();
+        assert_eq!(last["payload"]["status"], "wallclock");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1-1 (2026-08-08 stall guards): a run that goes SILENT (no journal
+    /// event, no model wire frame — the gateway's future sleeps forever)
+    /// is ended by the stall watchdog with `run_invalidated{status: stall}`
+    /// and the journal replays valid.
+    #[tokio::test]
+    async fn stall_watchdog_terminates_silent_run() {
+        let dir = test_dir();
+        let handle = orz_host::session::bootstrap_session(
+            "RUN-STALL",
+            Some(dir.clone()),
+            orz_host::session::TrustPolicy::Skip,
+        )
+        .await
+        .unwrap();
+        let host = orz_host::OrzHost::new(
+            handle.journal.clone(),
+            &dir,
+            orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host");
+
+        // A gateway that NEVER returns and NEVER stamps the heartbeat — a
+        // hung model request with no wire frames.
+        struct SilentGateway;
+        #[async_trait::async_trait]
+        impl ModelGateway for SilentGateway {
+            async fn generate(
+                &self,
+                _request: ModelRequest,
+            ) -> Result<ModelResponse, GatewayError> {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(ModelResponse::text_response("never"))
+            }
+            async fn generate_stream(
+                &self,
+                _request: ModelRequest,
+                _cancel: Option<&tokio_util::sync::CancellationToken>,
+                _heartbeat: Option<&orz_loop::gateway::model::ActivityClock>,
+                _on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+            ) -> Result<ModelResponse, GatewayError> {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(ModelResponse::text_response("never"))
+            }
+        }
+        let controller =
+            orz_loop::AgentLoopController::with_gateway(Arc::new(SilentGateway));
+        let heartbeat = orz_loop::gateway::model::ActivityClock::new();
+        let fut = controller.run_turn_with_guards(
+            &host,
+            "stall 测试",
+            &handle.run_id,
+            &handle.run_manifest_sha256,
+            handle.next_sequence,
+            handle.last_event_sha256.clone(),
+            None,
+            Some(&heartbeat),
+        );
+        let mut stalled = false;
+        let outcome: Result<(), String> = tokio::select! {
+            r = fut => r.map(|_| ()).map_err(|e| e.to_string()),
+            _ = stall_fire(&heartbeat, std::time::Duration::from_millis(400)) => {
+                stalled = true;
+                record_guard_terminal(&handle, "stall").await.map(|_| ())
+            }
+        };
+        assert!(stalled, "stall watchdog must fire: {outcome:?}");
+        outcome.unwrap();
+        handle.journal.shutdown_async().await.unwrap();
+
+        let replay = orz_assurance::replay_journal(
+            &handle.journal_dir.join("events.jsonl"),
+            Some("RUN-STALL"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_invalidated"));
+        let content = std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+        let last: serde_json::Value =
+            serde_json::from_str(content.lines().last().unwrap()).unwrap();
+        assert_eq!(last["payload"]["status"], "stall");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1-1 (2026-08-08 stall guards): ACTIVE work must NOT trip the stall
+    /// watchdog — the fake provider stamps the heartbeat per delivered
+    /// chunk (mirroring the real transport's per-frame stamp), so a slow
+    /// but steadily-streaming run completes normally even though its wall
+    /// time exceeds the watchdog window.
+    #[tokio::test]
+    async fn stall_watchdog_does_not_fire_during_active_stream() {
+        let dir = test_dir();
+        let handle = orz_host::session::bootstrap_session(
+            "RUN-STALL-ACTIVE",
+            Some(dir.clone()),
+            orz_host::session::TrustPolicy::Skip,
+        )
+        .await
+        .unwrap();
+        let host = orz_host::OrzHost::new(
+            handle.journal.clone(),
+            &dir,
+            orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host");
+        // ~140 chars → 35 chunks × 40ms ≈ 1.4s of streaming per round —
+        // far longer than any gap the watchdog sees, but every chunk
+        // stamps the heartbeat so it stays asleep. (The window must clear
+        // the fsync clusters between rounds and after the last chunk —
+        // each journal event is `sync_all`-ed and a cluster can reach
+        // ~1.5s under parallel-test load; the 400ms and 1.2s versions
+        // false-fired on the between-round and final-tail clusters
+        // respectively. The 2.5s window clears both while staying well
+        // below the total run time.)
+        // The two rounds MUST be textually distinct — identical content
+        // would legitimately trip the runtime content-stagnation guard
+        // (ngram repetition) and end the run with run_invalidated, which
+        // would make this test assert the wrong terminal.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::from_texts(vec![
+                "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu",
+                "the second and final answer is entirely different prose without any repeated n-grams whatsoever",
+            ])
+            .with_chunk_delay(std::time::Duration::from_millis(40)),
+        );
+        let controller = orz_loop::AgentLoopController::with_gateway(gateway);
+        let heartbeat = orz_loop::gateway::model::ActivityClock::new();
+        let fut = controller.run_turn_with_guards(
+            &host,
+            "active 测试",
+            &handle.run_id,
+            &handle.run_manifest_sha256,
+            handle.next_sequence,
+            handle.last_event_sha256.clone(),
+            None,
+            Some(&heartbeat),
+        );
+        let result = tokio::select! {
+            r = fut => r.map(|_| ()).map_err(|e| e.to_string()),
+            _ = stall_fire(&heartbeat, std::time::Duration::from_millis(2500)) => {
+                Err("stall watchdog fired on an ACTIVE stream".to_string())
+            }
+        };
+        result.expect("active stream must complete normally");
+        handle.journal.shutdown_async().await.unwrap();
+        let replay = orz_assurance::replay_journal(
+            &handle.journal_dir.join("events.jsonl"),
+            Some("RUN-STALL-ACTIVE"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1036,9 +1592,18 @@ mod conformance_capture {
                     ScriptedResponse::text("X"),
                     ScriptedResponse::text("X"),
                 ]));
-                run_plan_phase(&handle, &mut seq, &mut prev_hash, run_id, "hi", &gateway)
-                    .await
-                    .unwrap();
+                let heartbeat = orz_loop::gateway::model::ActivityClock::new();
+                run_plan_phase(
+                    &handle,
+                    &mut seq,
+                    &mut prev_hash,
+                    run_id,
+                    "hi",
+                    &gateway,
+                    &heartbeat,
+                )
+                .await
+                .unwrap();
                 let host = build_cli_host(&handle, run_id, &base).unwrap();
                 let controller = orz_loop::AgentLoopController::with_gateway(gateway)
                     .with_snapshot_store(Some(handle.snapshot_store.clone()));

@@ -39,7 +39,7 @@ use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole, SubagentSpec};
 use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{FinishReason, Message, ModelGateway, Role, ToolCall};
-use crate::host::{LoopHost, PermitDecision, ToolDef, ToolResult};
+use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolResult};
 use crate::inquiry::{DEFAULT_THRESHOLDS, InquiryCounters, parse_completion_decision};
 use crate::orientation::OrientationMonitor;
 use crate::prompt::{
@@ -743,6 +743,36 @@ impl AgentLoopController {
         previous_event_sha256: Option<String>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
+        self.run_turn_with_guards(
+            host,
+            prompt,
+            run_id,
+            run_manifest_sha256,
+            next_sequence,
+            previous_event_sha256,
+            cancel,
+            None,
+        )
+        .await
+    }
+
+    /// `run_turn_with_cancel` + a P1-1 (2026-08-08 stall guards) activity
+    /// heartbeat. `heartbeat` is stamped on every journal event (inside
+    /// `EventWriter`) and forwarded to the gateway so the transport stamps
+    /// it on every wire frame — the stall watchdog measures silence since
+    /// the last stamp. `None` behaves exactly like `run_turn_with_cancel`.
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel + the heartbeat
+    pub async fn run_turn_with_guards(
+        &self,
+        host: &dyn LoopHost,
+        prompt: &str,
+        run_id: &str,
+        run_manifest_sha256: &str,
+        next_sequence: u64,
+        previous_event_sha256: Option<String>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
+    ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         let journal = host.journal();
         let mut writer = EventWriter::new(
             journal,
@@ -750,6 +780,7 @@ impl AgentLoopController {
             run_manifest_sha256,
             next_sequence,
             previous_event_sha256,
+            heartbeat.cloned(),
         );
         let result = self
             .run_turn_inner(
@@ -759,6 +790,7 @@ impl AgentLoopController {
                 run_id,
                 run_manifest_sha256,
                 cancel,
+                heartbeat,
             )
             .await;
         match result {
@@ -792,7 +824,8 @@ impl AgentLoopController {
 
     /// The turn body — writes all events except the failure terminal.
     /// The caller (`run_turn`) owns the `EventWriter` and finalizes the chain.
-    /// `cancel` is polled at cooperative checkpoints (Phase 3 slice #7).
+    /// `cancel` is polled at cooperative checkpoints (Phase 3 slice #7);
+    /// `heartbeat` (P1-1) forwards to the gateway for per-frame stamping.
     async fn run_turn_inner(
         &self,
         writer: &mut EventWriter<'_>,
@@ -801,6 +834,7 @@ impl AgentLoopController {
         run_id: &str,
         _run_manifest_sha256: &str,
         cancel: Option<&tokio_util::sync::CancellationToken>,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
     ) -> Result<String, AgentLoopError> {
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
@@ -1170,6 +1204,7 @@ impl AgentLoopController {
                     tool_defs.clone(),
                     self.main_agent_max_tokens(),
                     cancel,
+                    heartbeat,
                     &mut |chunk| {
                         // F-06 (2026-08-07 review): accumulate the streamed
                         // content deltas — on an abort (watchdog/timeout)
@@ -1440,6 +1475,7 @@ impl AgentLoopController {
                             &mut messages,
                             prompt,
                             cancel,
+                            heartbeat,
                         )
                         .await?
                     }
@@ -1453,6 +1489,7 @@ impl AgentLoopController {
                                 workspace_trust,
                                 &mut messages,
                                 tool_rounds,
+                                heartbeat,
                             )
                             .await?;
                         if let Some(m) = policy_msg {
@@ -1739,6 +1776,7 @@ impl AgentLoopController {
         messages: &mut Vec<Message>,
         prompt: &str,
         cancel: Option<&tokio_util::sync::CancellationToken>,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
     ) -> Result<ToolResult, AgentLoopError> {
         let (role, target_name) = match target {
             DispatchTarget::InternalRetrieval => {
@@ -1785,6 +1823,9 @@ impl AgentLoopController {
                 // the subagent's stream — Ctrl+C mid-retrieval now stops the
                 // round instead of waiting for the request to complete.
                 cancel,
+                // P1-1 (2026-08-08 stall guards): subagent wire frames keep
+                // the stall heartbeat alive too.
+                heartbeat,
             )
             .await
         {
@@ -1895,6 +1936,7 @@ impl AgentLoopController {
         _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         messages: &mut Vec<Message>,
         tool_rounds: u32,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
     ) -> Result<(ToolResult, Option<Message>), AgentLoopError> {
         // The second tuple element is a pending policy message (breaker /
         // ceiling) that must be injected AFTER the whole tool round — a
@@ -1923,10 +1965,20 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
+            // P1-1 (2026-08-08 stall guards): a legit long test run (up to
+            // the 30min F-09 cap) journals nothing between ToolStarted and
+            // ToolCompleted — the heartbeat keeps the stall watchdog from
+            // firing on legitimate execution.
+            if let Some(h) = heartbeat {
+                h.stamp();
+            }
             let result = host
                 .run_tests()
                 .await
                 .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            if let Some(h) = heartbeat {
+                h.stamp();
+            }
             writer
                 .record(
                     EventType::ToolCompleted,
@@ -2282,6 +2334,13 @@ impl AgentLoopController {
             });
             return Ok((result, None));
         }
+        // P1-1 (2026-08-08 stall guards): mirror the run_tests stamp — a
+        // tool that journals nothing between ToolStarted/ToolCompleted must
+        // not trip the stall watchdog (the tool itself is bounded by the
+        // P0-1 per-call timeout).
+        if let Some(h) = heartbeat {
+            h.stamp();
+        }
         let result = match host
             .call_tool(&tc.name, tc.arguments.clone(), &tc.call_id)
             .await
@@ -2398,8 +2457,18 @@ impl AgentLoopController {
                     let mut w = self.blackboard.write();
                     w.exec.errors.push(format!("[{}] {e}", tc.name));
                 }
+                // P0-1 (2026-08-08 stall guards): a host-level timeout means
+                // the tool was KILLED — the model must not read it as a
+                // regular failure it can retry the same way (the reason
+                // carries the budget; the journal records the same text in
+                // `tool_completed.error`).
                 ToolResult {
-                    output: format!("tool error: {e}"),
+                    output: match &e {
+                        ToolError::Timeout(reason) => {
+                            format!("tool TIMED OUT and was killed — it did not complete: {reason}")
+                        }
+                        _ => format!("tool error: {e}"),
+                    },
                     exit_code: Some(1),
                 }
             }
@@ -2435,6 +2504,9 @@ struct EventWriter<'a> {
     manifest_sha256: String,
     seq: u64,
     prev_hash: Option<String>,
+    /// P1-1 (2026-08-08 stall guards): stamped on every recorded event —
+    /// journaled activity keeps the stall watchdog armed.
+    heartbeat: Option<crate::gateway::model::ActivityClock>,
 }
 
 impl<'a> EventWriter<'a> {
@@ -2444,6 +2516,7 @@ impl<'a> EventWriter<'a> {
         manifest_sha256: &str,
         seq: u64,
         prev_hash: Option<String>,
+        heartbeat: Option<crate::gateway::model::ActivityClock>,
     ) -> Self {
         Self {
             journal,
@@ -2451,6 +2524,7 @@ impl<'a> EventWriter<'a> {
             manifest_sha256: manifest_sha256.to_string(),
             seq,
             prev_hash,
+            heartbeat,
         }
     }
 
@@ -2459,6 +2533,10 @@ impl<'a> EventWriter<'a> {
         event_type: EventType,
         payload: serde_json::Value,
     ) -> Result<(), AgentLoopError> {
+        // P1-1: a journaled event is activity (rounds, gates, tool events).
+        if let Some(h) = &self.heartbeat {
+            h.stamp();
+        }
         let mut event = RunEvent::new(
             self.run_id.clone(),
             self.seq,
@@ -3221,6 +3299,119 @@ mod tests {
             round4.iter().any(|m| m.content.contains(&"B".repeat(600))),
             "newest round's output kept: {round4:?}"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-1 (2026-08-08 stall guards): a host-level tool timeout (the tool
+    /// was KILLED — `ToolError::Timeout`) must be journaled as
+    /// `tool_completed{status:error}` with the timeout reason, surfaced to
+    /// the model as an explicit "killed" message (not a generic retryable
+    /// failure), and the loop must continue to a normal finish.
+    #[tokio::test]
+    async fn tool_timeout_is_journaled_and_loop_continues() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        struct TimeoutOnceHost {
+            journal: JournalRecorder,
+            calls: AtomicU64,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for TimeoutOnceHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // The host timed the call out and killed the tool tree.
+                    Err(ToolError::Timeout(format!(
+                        "tool '{name}' TIMED OUT after 300s wall-clock budget — \
+                         process tree killed; the tool did not complete"
+                    )))
+                } else {
+                    Ok(ToolResult {
+                        output: "retry ok".to_string(),
+                        exit_code: Some(0),
+                    })
+                }
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let host = TimeoutOnceHost {
+            journal,
+            calls: AtomicU64::new(0),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-t1")]),
+            // Round 2's candidate answer is intercepted by the
+            // counterexample gate; round 3 is the post-gate final answer.
+            ScriptedResponse::text("结果：完成"),
+            ScriptedResponse::text("结果：完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(&host, "测试工具超时", "RUN-TIMEOUT", MANIFEST, 0, None)
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        // The timeout is journaled with its reason (tool_completed.error).
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(completed.len(), 1, "exactly one ToolCompleted");
+        assert_eq!(completed[0]["status"], "error");
+        assert!(
+            completed[0]["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("TIMED OUT"),
+            "timeout reason in journal: {}",
+            completed[0]
+        );
+
+        // The model sees an explicit "killed" message answering the call
+        // (round-2 request carries the tool reply).
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "{received:?}");
+        let round2 = &received[1].messages;
+        let timeout_msg = round2
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-t1"));
+        assert!(timeout_msg.is_some(), "tool reply present: {round2:?}");
+        assert!(
+            timeout_msg.unwrap().content.contains("tool TIMED OUT and was killed"),
+            "explicit killed message: {}",
+            timeout_msg.unwrap().content
+        );
+
+        // The loop continued — the run finished normally.
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-TIMEOUT"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5102,6 +5293,7 @@ mod tests {
                 &self,
                 _req: ModelRequest,
                 _cancel: Option<&tokio_util::sync::CancellationToken>,
+                _heartbeat: Option<&crate::gateway::model::ActivityClock>,
                 on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
             ) -> Result<ModelResponse, GatewayError> {
                 on_chunk("partial answer...");

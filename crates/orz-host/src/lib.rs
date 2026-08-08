@@ -20,6 +20,7 @@ pub mod tools;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol as acp;
 use async_trait::async_trait;
@@ -39,6 +40,12 @@ use crate::keystore::MemoryInstallationKeyStore;
 use crate::permission::{PermissionBridge, PermissionPolicy};
 use crate::tools::ToolsetRegistry;
 use orz_workspace::permission::PermissionHookTransport;
+
+/// P0-1 (2026-08-08 stall guards): per-tool-call wall-clock budget. A tool
+/// that exceeds it is terminated (process tree killed) and the call fails
+/// with `ToolError::Timeout` — the run continues with the model notified.
+/// Default 5 minutes; configurable via [`OrzHost::with_tool_timeout`].
+pub const TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Full LoopHost implementation over the Grok providers.
 ///
@@ -67,6 +74,10 @@ pub struct OrzHost {
     /// feedback loop) — `Some` declares the `run_tests` tool to the model;
     /// the command is host-owned and the test files stay hidden.
     test_runner: Option<orz_loop::host::TestRunner>,
+    /// P0-1 (2026-08-08 stall guards): per-call wall-clock budget for tool
+    /// execution (default `TOOL_CALL_TIMEOUT`). On expiry the tool's
+    /// process tree is killed and the call fails with `ToolError::Timeout`.
+    tool_timeout: Duration,
     /// Session working directory — the run_tests command's cwd.
     cwd: PathBuf,
 }
@@ -112,8 +123,18 @@ impl OrzHost {
             session_id: None,
             gateway: None,
             test_runner: None,
+            tool_timeout: TOOL_CALL_TIMEOUT,
             cwd: cwd.to_path_buf(),
         })
+    }
+
+    /// P0-1 (2026-08-08 stall guards): set the per-tool-call wall-clock
+    /// budget. Default `TOOL_CALL_TIMEOUT` (5 min) — a tool that exceeds it
+    /// is terminated and the call fails with `ToolError::Timeout`; the run
+    /// continues and the model is notified (never silently dropped).
+    pub fn with_tool_timeout(mut self, timeout: Duration) -> Self {
+        self.tool_timeout = timeout;
+        self
     }
 
     /// D-9 (FIX_PLAN 2026-08-06): inject a fixed test-runner command —
@@ -477,12 +498,42 @@ impl LoopHost for OrzHost {
         args: serde_json::Value,
         call_id: &str,
     ) -> Result<ToolResult, ToolError> {
-        let result = self
-            .registry
-            .toolset()
-            .call(name, args, call_id, None)
-            .await
-            .map_err(|e| crate::tools::map_tool_error(&e))?;
+        // P0-1 (2026-08-08 stall guards): bounded tool execution. Every
+        // tool call runs under a wall-clock cap (default 5 min,
+        // configurable via `with_tool_timeout`) — a tool whose
+        // implementation awaits forever (a hung bash child, an
+        // `ask_user_question` with no user attached, a stuck fs read, …)
+        // used to hang the whole run with no bound anywhere (the
+        // dna-assembly 16:02 hang attribution). On expiry the tool's
+        // process tree is killed via the global process scope (Windows:
+        // per-child Job Object `TerminateJobObject` — kills grandchildren
+        // too, the 2026-08-07 orphan-holds-pipes mechanism) and the call
+        // fails with `ToolError::Timeout`; the controller journals
+        // `tool_completed{status:error}` and the model continues the loop.
+        //
+        // Recorded trade-off: the kill is process-global — any concurrently
+        // running tool child (e.g. an earlier background command) is
+        // terminated too. A hung tool poisons the session; leaving
+        // orphaned processes behind is worse. The bash tool itself carries
+        // a foreground timeout (120s default), so this wrapper is the
+        // coarse backstop for every tool, bash included.
+        let fut = self.registry.toolset().call(name, args, call_id, None);
+        let result = match tokio::time::timeout(self.tool_timeout, fut).await {
+            Ok(result) => result.map_err(|e| crate::tools::map_tool_error(&e))?,
+            Err(_) => {
+                tracing::warn!(
+                    tool = name,
+                    timeout = ?self.tool_timeout,
+                    "tool call TIMED OUT — killing the tool process tree"
+                );
+                orz_tools::util::global_process_scope().kill_all();
+                return Err(ToolError::Timeout(format!(
+                    "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
+                     process tree killed; the tool did not complete",
+                    timeout = self.tool_timeout,
+                )));
+            }
+        };
         Ok(ToolResult {
             output: result.prompt_text,
             // 2026-08-08 blackboard-partition review closure (conformance
@@ -903,6 +954,89 @@ mod tests {
         assert!(
             !text.contains(&gcid.to_string()),
             "grandchild {gcid} survived the tree kill: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-1 (2026-08-08 stall guards): a tool call that exceeds the host's
+    /// per-call wall-clock budget must fail with `ToolError::Timeout` (the
+    /// reason carried for the journal / model), kill the tool's process
+    /// tree INCLUDING grandchildren (the orphan-holds-pipes hang
+    /// mechanism), and leave the session usable for the next call.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn call_tool_timeout_kills_process_tree() {
+        let dir = test_dir();
+        // A python script that spawns a grandchild (which writes its pid
+        // and sleeps forever), then sleeps forever itself — a deadlock-style
+        // hang inside run_terminal_cmd.
+        let pidfile = dir.join("gc.pid");
+        let script = dir.join("hang.py");
+        let script_body = format!(
+            "import subprocess, sys, time, pathlib, os; \
+             g = subprocess.Popen([sys.executable, '-c', \
+             'import time, pathlib, os; pathlib.Path(r\"{pf}\").write_text(str(os.getpid())); \
+             [time.sleep(1) for _ in range(999999)]'], \
+             stdout=sys.stdout, stderr=sys.stderr); \
+             [time.sleep(1) for _ in range(999999)]",
+            pf = pidfile.display().to_string().replace('\\', "/"),
+        );
+        std::fs::write(&script, &script_body).unwrap();
+
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host")
+        .with_tool_timeout(std::time::Duration::from_millis(500));
+        let result = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": format!("python {}", script.display()),
+                    "description": "stall-guard timeout test",
+                }),
+                "call-t1",
+            )
+            .await;
+        let err = result.expect_err("hung tool must time out");
+        assert!(
+            err.to_string().contains("TIMED OUT"),
+            "expected TIMED OUT marker: {err}"
+        );
+        // The session survives: the next call returns normally (the
+        // toolset's actor must not be wedged by the killed call).
+        let follow_up = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({"target_file": pidfile}),
+                "call-t2",
+            )
+            .await
+            .expect("follow-up call works after the timeout");
+        assert!(
+            follow_up
+                .output
+                .contains(std::fs::read_to_string(&pidfile).unwrap().trim()),
+            "follow-up read_file returned the file: {follow_up:?}"
+        );
+        // Give the kill a moment to reap the tree, then verify the
+        // grandchild (the pipe holder) is gone.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let gcid: i64 = std::fs::read_to_string(&pidfile)
+            .expect("grandchild pid written")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        let listing = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {gcid}"), "/NH"])
+            .output()
+            .expect("tasklist runs");
+        let text = String::from_utf8_lossy(&listing.stdout);
+        assert!(
+            !text.contains(&gcid.to_string()),
+            "grandchild {gcid} survived the tool-timeout tree kill: {text}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

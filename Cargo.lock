@@ -5815,6 +5815,7 @@ name = "orz-bin"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "async-trait",
  "chrono",
  "orz-assurance",
  "orz-host",
@@ -5822,6 +5823,8 @@ dependencies = [
  "orz-tui",
  "serde_json",
  "tokio",
+ "tokio-util",
+ "tracing",
  "tracing-subscriber",
 ]
 

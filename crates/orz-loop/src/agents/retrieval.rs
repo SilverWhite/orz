@@ -65,6 +65,7 @@ impl RetrievalSubagent {
         spec: &SubagentSpec,
         completion_check_block: Option<&str>,
         cancel: Option<&CancellationToken>,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
     ) -> Result<ModelResponse, GatewayError> {
         let messages = completion_check_block
             .map(|block| {
@@ -103,6 +104,7 @@ impl RetrievalSubagent {
                     thinking: None,
                 },
                 cancel,
+                heartbeat,
                 // F-03 (2026-08-07 review): subagents went streaming — the
                 // idle watchdog / total budget / cancel wiring live on the
                 // streaming path (a non-streaming 10min wall clock could
@@ -168,7 +170,7 @@ mod tests {
             goal: "找到设计文档".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md", "gate.rs"]);
@@ -196,7 +198,7 @@ mod tests {
             goal: "检索论文".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(
@@ -240,6 +242,7 @@ mod tests {
                 &bb,
                 &spec,
                 Some(crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK),
+                None,
                 None,
             )
             .await

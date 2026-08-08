@@ -17,6 +17,7 @@ orz-tui = { path = "../orz-tui" }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 
@@ -25,3 +26,7 @@ tracing-subscriber = { workspace = true }
 # Capture tests answer allow-once permission requests over the in-process
 # ACP wire (conformance_capture, Phase 3 #7).
 agent-client-protocol = { workspace = true }
+# P1-1 stall-guard tests implement a silent ModelGateway (async_trait) and
+# name the cancellation token in its signature.
+async-trait = { workspace = true }
+tokio-util = { workspace = true }

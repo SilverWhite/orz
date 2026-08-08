@@ -54,6 +54,12 @@ pub enum ToolError {
     NotFound(String),
     #[error("tool execution failed: {0}")]
     ExecutionFailed(String),
+    /// P0-1 (2026-08-08 stall guards): the tool exceeded the host's
+    /// per-call wall-clock budget and its process tree was killed. The
+    /// reason carries the budget so the journal (`tool_completed.error`)
+    /// and the model-facing message are self-explanatory.
+    #[error("tool timeout: {0}")]
+    Timeout(String),
 }
 
 /// Permission decision returned by the host's approval prompter.

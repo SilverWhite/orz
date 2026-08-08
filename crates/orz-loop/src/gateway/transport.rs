@@ -346,6 +346,7 @@ impl DeepSeekTransport {
         request: &ModelRequest,
         thinking: ThinkingMode,
         cancel: Option<&CancellationToken>,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
         // Pre-cancel check (2026-08-06 implementation review P2-2): an
@@ -483,6 +484,13 @@ impl DeepSeekTransport {
             };
             warned = false;
             last_activity = tokio::time::Instant::now();
+            // P1-1 (2026-08-08 stall guards): every wire frame is activity —
+            // reasoning-only deltas included (the controller never sees
+            // them; only the transport observes a long max-effort thinking
+            // stream, so only it can keep the heartbeat alive).
+            if let Some(h) = heartbeat {
+                h.stamp();
+            }
             let chunk: CreateChatCompletionStreamResponse = item.map_err(|e| self.map_error(e))?;
             // D-6: the final chunk carries the aggregate usage (choices
             // empty, usage populated) when include_usage is honored.
@@ -718,6 +726,7 @@ impl ModelGateway for DeepSeekTransport {
         &self,
         request: ModelRequest,
         cancel: Option<&CancellationToken>,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
         // D-6 empty-content retry chain on the streaming path (same shape as
@@ -726,19 +735,19 @@ impl ModelGateway for DeepSeekTransport {
         // that produced any chunk is never retried (D-7 已见输出不重试:
         // re-sending would duplicate tool execution).
         let first = self
-            .stream_once(&request, self.effective_thinking(&request), cancel, on_chunk)
+            .stream_once(&request, self.effective_thinking(&request), cancel, heartbeat, on_chunk)
             .await?;
         if !Self::empty_content_abnormal(&first) {
             return Ok(first);
         }
         let second = self
-            .stream_once(&request, self.effective_thinking(&request), cancel, on_chunk)
+            .stream_once(&request, self.effective_thinking(&request), cancel, heartbeat, on_chunk)
             .await?;
         if !Self::empty_content_abnormal(&second) {
             return Ok(second);
         }
         let degraded = self
-            .stream_once(&request, ThinkingMode::Disabled, cancel, on_chunk)
+            .stream_once(&request, ThinkingMode::Disabled, cancel, heartbeat, on_chunk)
             .await?;
         if !Self::empty_content_abnormal(&degraded) {
             return Ok(degraded);
@@ -1544,7 +1553,7 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
             .await
             .unwrap();
         assert_eq!(chunks, vec!["Hel", "lo!"]);
@@ -1587,7 +1596,7 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
             .await
             .unwrap();
         assert!(chunks.is_empty(), "tool-call round: no text chunks");
@@ -1638,7 +1647,7 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
             .await
             .unwrap();
         assert!(chunks.is_empty(), "tool-call round: no text chunks");
@@ -1670,7 +1679,7 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
             .await
             .unwrap_err();
         assert!(
@@ -1711,7 +1720,7 @@ mod tests {
         });
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), Some(&cancel), &mut |c| {
+            .generate_stream(request(), Some(&cancel), None, &mut |c| {
                 chunks.push(c.to_string())
             })
             .await
@@ -1742,7 +1751,7 @@ mod tests {
         cancel.cancel();
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), Some(&cancel), &mut |c| {
+            .generate_stream(request(), Some(&cancel), None, &mut |c| {
                 chunks.push(c.to_string())
             })
             .await
@@ -1908,7 +1917,7 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_timeout_policy());
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
             .await
             .unwrap_err();
         assert!(
@@ -1943,7 +1952,7 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_timeout_policy());
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
             .await
             .unwrap_err();
         assert!(

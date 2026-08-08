@@ -8,6 +8,7 @@
 //! arrives ~30s later on hard tasks; `usage.reasoning_tokens` is reported
 //! per round). The empty-final-content retry chain lives in the transport.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -227,6 +228,48 @@ pub enum GatewayError {
     Timeout(String),
 }
 
+/// P1-1 (2026-08-08 stall guards): process-level heartbeat clock. Any
+/// activity source — a journal event (the controller stamps on every
+/// record), a model SSE frame (transports stamp per frame), a streamed
+/// content chunk (the fake + the default buffered path stamp per chunk) —
+/// calls [`ActivityClock::stamp`]. The stall watchdog fires when no stamp
+/// has landed for its timeout, i.e. the process went silent anywhere.
+///
+/// Cheap and lock-free (one relaxed atomic store per stamp); stamping
+/// unconditionally is fine.
+#[derive(Clone, Debug, Default)]
+pub struct ActivityClock {
+    last_millis: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl ActivityClock {
+    pub fn new() -> Self {
+        Self {
+            last_millis: Arc::new(std::sync::atomic::AtomicU64::new(Self::now_ms())),
+        }
+    }
+
+    /// Record an activity instant (called on every event/frame/chunk).
+    pub fn stamp(&self) {
+        self.last_millis.store(Self::now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Duration since the last stamp — the stall watchdog compares this
+    /// against its timeout.
+    pub fn idle(&self) -> Duration {
+        Duration::from_millis(
+            Self::now_ms().saturating_sub(self.last_millis.load(std::sync::atomic::Ordering::Relaxed)),
+        )
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+}
+
 /// The model gateway contract. `generate` takes the full request and returns
 /// a structured response; `generate_stream` additionally delivers the text
 /// to `on_chunk` as ordered chunks as they are produced (live `text_delta`
@@ -243,16 +286,26 @@ pub trait ModelGateway: Send + Sync {
     /// streaming transports poll it between wire chunks and bail with
     /// `GatewayError::Cancelled` when set. Buffered backends may ignore it —
     /// the loop re-checks after the model round either way.
+    ///
+    /// `heartbeat` (P1-1, 2026-08-08 stall guards): stamped on every wire
+    /// frame the transport receives — INCLUDING reasoning-only deltas the
+    /// controller never sees (a long max-effort thinking stream must count
+    /// as activity; only the transport observes its frames). `None` keeps
+    /// the pre-guard behavior.
     async fn generate_stream(
         &self,
         request: ModelRequest,
         cancel: Option<&tokio_util::sync::CancellationToken>,
+        heartbeat: Option<&ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
         let _ = cancel;
         let response = self.generate(request).await?;
         // Clone so the closure's borrow cannot outlive the response move.
         if let Some(t) = response.text.clone().filter(|t| !t.is_empty()) {
+            if let Some(h) = heartbeat {
+                h.stamp();
+            }
             on_chunk(&t);
         }
         Ok(response)
@@ -287,6 +340,7 @@ mod tests {
                     max_tokens: 0,
                     thinking: None,
                 },
+                None,
                 None,
                 &mut |c| chunks.push(c.to_string()),
             )
