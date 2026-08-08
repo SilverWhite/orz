@@ -160,7 +160,7 @@ class RunEventEnvelopeContractTests(unittest.TestCase):
             with self.subTest(instance=instance_path.name):
                 self.assertTrue(errors_for(instance_path, schema_path))
 
-    def test_all_33_event_types_covered(self) -> None:
+    def test_all_34_event_types_covered(self) -> None:
         """The good envelope fixtures cover exactly the run-event enum."""
         schema = load_json(RUN_EVENT_SCHEMA)
         enum_events = set(schema["properties"]["event_type"]["enum"])
@@ -170,7 +170,7 @@ class RunEventEnvelopeContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 33)
+        self.assertEqual(len(enum_events), 34)
 
 
 class CanonicalCliPayloadContractTests(unittest.TestCase):

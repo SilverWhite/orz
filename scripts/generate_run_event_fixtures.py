@@ -62,6 +62,7 @@ EVENT_TYPES = [
     "neutral_inquiry",
     "counterexample_gate",
     "retrieval_completion_check",
+    "context_compressed",
     "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
@@ -98,6 +99,7 @@ SLUGS = {
     "neutral_inquiry": "neutral-inquiry",
     "counterexample_gate": "counterexample-gate",
     "retrieval_completion_check": "retrieval-completion-check",
+    "context_compressed": "context-compressed",
     "snapshot_created": "snapshot-created",
     "snapshot_restored": "snapshot-restored",
     "artifact_registered": "artifact-registered",
@@ -243,6 +245,18 @@ PAYLOAD_GOOD: dict[str, dict] = {
         "global_review_requested": False,
         "claim_strength_effect": "none",
     },
+    # A6 (2026-08-08): explicit context compaction — all seven counters
+    # required, non-negative integers (Rust construction: controller.rs
+    # compact_messages).
+    "context_compressed": {
+        "trigger_tokens": 152000,
+        "target_tokens": 100000,
+        "rounds_since_last_compaction": 22,
+        "rounds_dropped": 4,
+        "messages_dropped": 12,
+        "messages_kept": 8,
+        "estimated_tokens_after": 95000,
+    },
     "snapshot_created": {"tool": "edit_file", "targets": ["lib.rs"], "snapshot_hash": ZERO_HASH},
     "snapshot_restored": {"snapshot_hash": ZERO_HASH, "restored": ["lib.rs"]},
     "artifact_registered": {"artifact_path": "answer-packet.json", "artifact_sha256": ZERO_HASH},
@@ -354,6 +368,15 @@ PAYLOAD_BAD: dict[str, dict] = {
         "new_subagent_requested": False,
         "global_review_requested": False,
         "claim_strength_effect": "none",
+    },
+    "context_compressed": {
+        # Missing the required rounds_since_last_compaction field.
+        "trigger_tokens": 152000,
+        "target_tokens": 100000,
+        "rounds_dropped": 4,
+        "messages_dropped": 12,
+        "messages_kept": 8,
+        "estimated_tokens_after": 95000,
     },
     "snapshot_created": {
         "tool": "edit_file",

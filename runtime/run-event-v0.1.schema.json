@@ -49,6 +49,7 @@
         "neutral_inquiry",
         "counterexample_gate",
         "retrieval_completion_check",
+        "context_compressed",
         "snapshot_created",
         "snapshot_restored",
         "artifact_registered",

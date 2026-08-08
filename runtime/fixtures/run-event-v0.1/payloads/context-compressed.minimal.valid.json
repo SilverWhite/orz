@@ -1,0 +1,9 @@
+{
+  "trigger_tokens": 152000,
+  "target_tokens": 100000,
+  "rounds_since_last_compaction": 22,
+  "rounds_dropped": 4,
+  "messages_dropped": 12,
+  "messages_kept": 8,
+  "estimated_tokens_after": 95000
+}

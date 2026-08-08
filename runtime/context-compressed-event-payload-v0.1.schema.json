@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/context-compressed-event-payload-v0.1.schema.json",
+  "title": "Context compaction runtime event payload (A6 explicit compaction)",
+  "description": "A6 (2026-08-08): the controller compacted the conversation — old tool rounds were dropped whole (declaration + tool replies + injected pushes stay paired), the marker told the model history was compressed, and the compaction is journaled as this event. Trigger/target/interval are the design §5 A6 parameters (150K/100K/20).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "trigger_tokens": {
+      "description": "Measured prompt tokens of the previous model round (provider usage.prompt_tokens) — the value that crossed the trigger.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "target_tokens": {
+      "description": "Compaction target — kept conversation estimates under this.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "rounds_since_last_compaction": {
+      "description": "Model rounds since the previous compaction (the ≥20-round cache-amortization interval, measured before this compaction).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "rounds_dropped": {
+      "description": "Complete tool rounds dropped (each round = one assistant declaration plus its tool replies and injected pushes).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "messages_dropped": {
+      "description": "Messages removed from the conversation.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "messages_kept": {
+      "description": "Messages remaining after compaction — preamble + kept rounds + the injected '前文上下文已压缩' marker (the marker is inserted before the count is journaled).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "estimated_tokens_after": {
+      "description": "Estimated kept-conversation tokens (chars/2 — conservative CJK-aware estimate; the real next-round measurement is the authoritative follow-up).",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "trigger_tokens",
+    "target_tokens",
+    "rounds_since_last_compaction",
+    "rounds_dropped",
+    "messages_dropped",
+    "messages_kept",
+    "estimated_tokens_after"
+  ]
+}

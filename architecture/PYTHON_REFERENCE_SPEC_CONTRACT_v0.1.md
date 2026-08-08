@@ -8,14 +8,14 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 
 | 角色 | 落地 |
 |---|---|
-| Assurance spec reference（金版） | 本文档 + `runtime/*.schema.json`（run-event envelope + 33 事件 payload）+ `assurance/*.schema.json`（receipt/contract 体系） |
+| Assurance spec reference（金版） | 本文档 + `runtime/*.schema.json`（run-event envelope + 34 事件 payload）+ `assurance/*.schema.json`（receipt/contract 体系） |
 | Conformance test suite | `runtime/tests/test_run_event_conformance.py` + `runtime/tests/test_run_event_journal_validation.py` + `assurance/run_event_journal_validation.py`（**#7 最终验证器，已落地**）+ `assurance/tests/`（test_p0_contracts 等）+ CI 门禁 `scripts/check_repository.py` |
 | Design documents | `architecture/`、`docs/`、`adr/`（本文档属于此角色且是 schema 契约的注册表） |
 | Offline verification | `assurance/canonical_cli.py`（保留为离线验证路径；其 payload 走 `canonical-cli-*` 独立轨） |
 | Rapid prototyping | 新 gate/行为先在 Python 实现验证，再移植 Rust（约定） |
 | Schema authority | `runtime/*-v0.1.schema.json` 与 `assurance/*-v0.1.schema.json` 是 JSON Schema 的规范定义；Rust 复制/镜像 |
 
-范围：本契约管辖 **run-event 事件体系**（envelope + 33 事件 payload schema 及其实例）。非 run-event 的 schema（P0-P5 contract、GPS、codex-app-server 等）各有既有契约文档，不在本文管束内。
+范围：本契约管辖 **run-event 事件体系**（envelope + 34 事件 payload schema 及其实例）。非 run-event 的 schema（P0-P5 contract、GPS、codex-app-server 等）各有既有契约文档，不在本文管束内。
 
 ## 2. 权威层次
 
@@ -27,13 +27,13 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 
 `runtime/run-event-v0.1.schema.json` 是唯一事实源（本文件不复制定义，只摘录约束要点）：
 
-- 33 事件 enum（清单见 §4）；13 个 required 字段；`additionalProperties: false`；`schema_version` const `"0.1.0-draft"`。
+- 34 事件 enum（清单见 §4）；13 个 required 字段；`additionalProperties: false`；`schema_version` const `"0.1.0-draft"`。
 - `sequence == 0` 时 `previous_event_sha256` 必须为 `null`，否则必须为 sha256（allOf if/else）。
 - `run_id` pattern `^(RUN|RST)-[A-Za-z0-9._-]+$`（RST- 为 restore run）；`event_id` pattern `^EVT-[A-Za-z0-9._-]+$`；sha256 pattern `^[a-f0-9]{64}$`（小写）。
 - `payload` 为自由 object；形状由 §4 的 payload schema 约束，关联仅靠 `payload_schema` 字符串约定（无 $ref 硬接线）。
 - 已知环境事实：jsonschema 4.26 的 `format: date-time` 检查对任意字符串放行（实测 no-op）——envelope 的 timestamp 格式在 conformance 层不强制（结构性约束仍生效）。
 
-## 4. Schema authority 清单（33 事件 ↔ payload schema 文件）
+## 4. Schema authority 清单（34 事件 ↔ payload schema 文件）
 
 命名惯例 `<slug>-event-payload-v0.1.schema.json`（event_type snake_case → kebab-case），文件在 `runtime/`；`$id` 域 `https://local.scientific-assurance.invalid/schema/<文件名>`；draft/2020-12；`type: object`；`additionalProperties: false`；**无 `schema_version` 字段**（envelope 已管）。哈希字段用本地 `$defs.sha256`。
 
@@ -61,6 +61,7 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 | neutral_inquiry | neutral-inquiry-event-payload-v0.1 | 既有（runtime 轨，Rust controller.rs:781-793 对齐） |
 | counterexample_gate | counterexample-gate-event-payload-v0.1 | 既有（runtime 轨） |
 | retrieval_completion_check | retrieval-completion-check-event-payload-v0.1 | 既有（runtime 轨） |
+| context_compressed | context-compressed-event-payload-v0.1 | **A6（2026-08-08）**：Rust controller.rs `compact_messages`（7 必填计数：trigger/target/rounds_since_last_compaction/rounds_dropped/messages_dropped/messages_kept/estimated_tokens_after） |
 | snapshot_created | snapshot-created-event-payload-v0.1 | 既有（runtime 轨） |
 | snapshot_restored | snapshot-restored-event-payload-v0.1 | 既有（runtime 轨） |
 | artifact_registered | artifact-registered-event-payload-v0.1 | 参考形状 |
@@ -83,7 +84,7 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 - **orientation 轨**（`orientation_runtime_journal.py`）：`orientation-stagnation-preflight-v0.1` / `orientation-stagnation-run-started-v0.1`；且该模块以完整文件名（带 `.schema.json` 后缀，如 `"tool-availability-check-event-payload-v0.1.schema.json"`，`:35`）引用 payload schema，而 canonical_cli 用去后缀形式（`canonical_cli.py:926`）——两处写法不一致（已知，§7）。
 - **deepseek runtime adapter 轨**（`deepseek_runtime_adapter.py:60`）：`deepseek-runtime-normalized-v0.1`，产出 run_preflight/run_started（`:117/:131`）。
 - **runtime preflight 轨**（`runtime_preflight.py:70`）：`gsa-runtime-preflight-projection-v0.1.schema.json#runtime_event_payload`——**第三形态**：带 `#` JSON-pointer fragment，既非纯轨标识也非纯文件名引用，产 run_preflight/run_started/run_finished（`:271/:284/:297`）。
-- **cli session lifecycle 轨**（`cli_session_lifecycle.py:14,288-291`）：`cli-session-lifecycle-event-v0.2.schema.json`——以 run-event envelope 产出 6 个 33-enum 事件类型（run_started/model_request/model_output/run_finished/run_failed/run_cancelled），但 payload 为 lifecycle 形状（与 §4 不同）。
+- **cli session lifecycle 轨**（`cli_session_lifecycle.py:14,288-291`）：`cli-session-lifecycle-event-v0.2.schema.json`——以 run-event envelope 产出 6 个 34-enum 事件类型（run_started/model_request/model_output/run_finished/run_failed/run_cancelled），但 payload 为 lifecycle 形状（与 §4 不同）。
 - **注册表范围声明**：本表登记已知全部 run-event 产出方；`#7` 交叉验证按 **payload_schema 字符串**（而非 event_type）选择校验 schema，未登记的新产出方必须先入本表。
 - **envelope 轨标识**：`payload_schema` 值不带 `.schema.json` 后缀的（`canonical-cli-*`、`grok-runtime-normalized-v0.1`、`orientation-stagnation-*`、`deepseek-runtime-normalized-v0.1`）是轨标识而非文件名引用；带后缀或 fragment 的是文件名/指针引用。
 - **#7 交叉验证按本表执行**（slice #17 落地）：`assurance/run_event_journal_validation.py` 的 `PRODUCER_SCHEMAS` + `_resolve_payload_schema` 是本表的唯一执行点——精确字符串匹配，**按 payload_schema 字符串（而非 event_type）选 schema**。规则：① Rust 轨字符串 `"run-event-v0.1.schema.json"` → §4 注册表（双轨 slug → runtime/ 文件）；② 带后缀形式（orientation 轨约定）→ `assurance/` 同名文件，**永不解析到 runtime/ 双轨文件**；③ 去后缀 canonical-cli/assurance 名 → `assurance/` 补 `.schema.json`；④ fragment 形式 → `assurance/gsa-runtime-preflight-projection-v0.1.schema.json` 的 `runtime_event_payload` 子 schema（slice #17 补齐该键——此前指针指向不存在的键）；⑤ `grok-runtime-normalized-v0.1` / `deepseek-runtime-normalized-v0.1` → envelope-only；⑥ 未登记字符串 → 报错并列注册表（"未登记产出方必须先入本表"硬执行）。**后缀写法不一致项（orientation 带后缀 vs canonical-cli 去后缀）裁决：保留登记**——两种形式均可确定解析，不归一化。
@@ -121,8 +122,8 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 
 ## 8. Rust 镜像同步纪律
 
-- `orz/crates/orz-assurance/src/journal/event.rs` 头部注释声明镜像 `runtime/run-event-v0.1.schema.json`——envelope enum（33 事件）与 payload 形状同步是本契约的组成部分。
-- 新增/改名事件类型：envelope enum + §4 注册表 + fixtures + 测试断言四者同步（`test_all_33_event_types_covered` 与 `test_payload_schema_file_convention` 自动捕获漂移）。
+- `orz/crates/orz-assurance/src/journal/event.rs` 头部注释声明镜像 `runtime/run-event-v0.1.schema.json`——envelope enum（34 事件）与 payload 形状同步是本契约的组成部分。
+- 新增/改名事件类型：envelope enum + §4 注册表 + fixtures + 测试断言四者同步（`test_all_34_event_types_covered` 与 `test_payload_schema_file_convention` 自动捕获漂移）。
 - Rust 侧 payload 构造点的形状变更必须先过 §9 流程，禁止先行改形状再补契约。
 
 ## 9. 变更流程
