@@ -2124,6 +2124,46 @@ def check_repository() -> dict[str, Any]:
     counts["run_event_journal_fixtures"] = len(run_event_journal_names)
     counts["run_event_journal_validation"] = 1
 
+    # GAP-INQUIRY-SPLIT (2026-08-09): the v0.2 production-track journals —
+    # same exact-set + full-validation discipline; a v0.2 journal must also
+    # be homogeneous on the v0.2 envelope (checked here so a mixed-track
+    # capture fails at commit time).
+    run_event_journal_v02_root = run_event_fixture_root.parent / "run-event-v0.2/journals"
+    run_event_journal_v02_expected = {
+        "plain-run.jsonl",
+        "tool-snapshot-run.jsonl",
+        "plan-run.jsonl",
+        "cancelled-run.jsonl",
+        "failed-run.jsonl",
+        "restore-run.jsonl",
+        "orientation-fire-run.jsonl",
+    }
+    run_event_journal_v02_names = {
+        path.name for path in run_event_journal_v02_root.glob("*.jsonl")
+    }
+    if run_event_journal_v02_names != run_event_journal_v02_expected:
+        errors.append(
+            "run-event-v0.2 journal fixture set diverges: "
+            f"unmapped={sorted(run_event_journal_v02_names - run_event_journal_v02_expected)} "
+            f"missing={sorted(run_event_journal_v02_expected - run_event_journal_v02_names)}"
+        )
+    for journal_path in sorted(run_event_journal_v02_root.glob("*.jsonl")):
+        for message in validate_journal_file(journal_path):
+            errors.append(
+                f"run-event-v0.2 journal invalid ({journal_path.relative_to(ROOT)}): {message}"
+            )
+        for line in journal_path.read_text(encoding="utf-8").splitlines():
+            event = json.loads(line)
+            if (
+                event.get("schema_version") != "0.2.0-draft"
+                or event.get("payload_schema") != "run-event-v0.2.schema.json"
+            ):
+                errors.append(
+                    f"run-event-v0.2 journal not homogeneous v0.2 track "
+                    f"({journal_path.relative_to(ROOT)}): {event.get('event_type')}"
+                )
+    counts["run_event_v02_journal_fixtures"] = len(run_event_journal_v02_names)
+
     for required_path in (
         ROOT / "architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md",
         ROOT / "scripts/generate_run_event_fixtures.py",

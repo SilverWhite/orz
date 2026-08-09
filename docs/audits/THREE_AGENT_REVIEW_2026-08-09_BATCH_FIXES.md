@@ -54,6 +54,10 @@ breaker 改动不新增/修改事件或 Schema（注入文本非事件），无 
 ### R-6 旧 neutral_inquiry 生产残留（C3-3）
 本次未触碰 inquiry 面；旧 INFO_SUFFICIENCY/RETRIEVAL_COMPLETION_CHECK 与
 8 轮四计数仍存在，GAP-INQUIRY-SPLIT 索引如实标 partial，允许存在（Phase C 处理）。
+**后续（2026-08-10）**：GAP-INQUIRY-SPLIT 已清除全部残留——`inquiry.rs`、
+两个旧 block、`NeutralInquiry`/`RetrievalCompletionCheck` producer 删除
+（v0.1 replay-only），索引标 implemented。见
+`GAP_INQUIRY_SPLIT_IMPL_AUDIT_2026-08-10.md`。
 
 ### R-7 案例字段待补齐（D3-5）
 ORZ-WIN-PROC-001~003 缺"复核结果"与"脱敏状态"字段，candidate 阶段可接受，
@@ -62,3 +66,7 @@ ORZ-WIN-PROC-001~003 缺"复核结果"与"脱敏状态"字段，candidate 阶段
 ### R-8 ee6ce7f 删除的 long_silent_tool_loop 回归点（D3-4）
 删除的 output_repeats 全对话测量 bug 测试，新设计由 Runtime Stagnation Guard
 （§4.5）承担；Phase C 重建测试时应保留该回归点。
+**落点（2026-08-10，GAP-INQUIRY-SPLIT）**：`is_injected_block_text` 的
+`[ORIENTATION` 前缀注册 + 注入块过滤测试（prompt.rs）承担该回归——注入的
+orientation block 被排除在停滞测量之外，重复注入不污染 ngram 统计；per-round
+输出重复测量随旧计数器删除（仅 turn 末尾守卫测量）。

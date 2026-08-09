@@ -64,6 +64,28 @@ Adjudications (three-agent review closure, 2026-08-09):
   `SIG-`, `DIAG-COV-`) are producer-local formats, not ADR-mandated
   contracts. `assessment_version` uses dotted numeric form (`1.2`).
 
-`journals/` is intentionally empty: no Rust producer writes v0.2 events yet
-(Phase C migration). Real v0.2 journals will be captured and added here by
-the orz conformance capture tests after the producer migration slice.
+## Real journals (`journals/`)
+
+GAP-INQUIRY-SPLIT (2026-08-09): the Rust producer now writes the v0.2 track
+(whole-chain flip — envelope `schema_version`/`payload_schema` are
+homogeneous `0.2.0-draft`/`run-event-v0.2.schema.json`, ADR-0010 §11.6.2).
+The 7 journals below are captured by the orz conformance capture tests
+(`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`):
+
+| journal | scenario |
+|---|---|
+| `plain-run.jsonl` | text-only turn through the real CLI host (gate round) |
+| `tool-snapshot-run.jsonl` | `search_replace` + allow-once + `snapshot_created` |
+| `plan-run.jsonl` | plan-write gate + plan_proposed/approved + execution turn |
+| `cancelled-run.jsonl` | cooperative cancel (run_cancelled terminal) |
+| `failed-run.jsonl` | empty script → run_failed terminal |
+| `restore-run.jsonl` | RST- restore journal (preflight → snapshot_restored → finished) |
+| `orientation-fire-run.jsonl` | **7 retrieval tool rounds cross the session-level threshold — the orientation fires once in the post-tool-batch gap of round 7 (v0.2 payload: `inquiry_family=neutral`, `completed_turns_since_orientation=7`), and each retrieval round records a mechanical `information_sufficiency_assessment` (`indeterminate`) over the growing ledger** |
+
+Producer scope notes for this slice: the per-turn orientation event is gone
+(fires only on the 7-round trigger); `neutral_inquiry` /
+`retrieval_completion_check` are absent (retired, v0.1-replay-only);
+`retrieval_parent_disposition` / `retrieval_close_record` are NOT produced yet
+(the disposition/close chain arrives with the subagent-isomorphism slice —
+the verifier accepts orphan assessments); `diagnostic_coverage_checkpoint` is
+not produced yet either.

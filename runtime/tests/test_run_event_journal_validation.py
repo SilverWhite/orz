@@ -1,12 +1,13 @@
 """Cross-validation tests for the Phase 3 #7 conformance suite.
 
 Validates the committed REAL Rust journals under
-`runtime/fixtures/run-event-v0.1/journals/` through
-`assurance.run_event_journal_validation` (envelope schema + per-event
-payload schema selected by the `payload_schema` track string + full
-hash-chain recompute), plus synthetic bad journals and the track-resolution
-table. The real-journal tests are the parity proof: any digest mismatch on
-a captured journal is a real bug on one side.
+`runtime/fixtures/run-event-v0.1/journals/` (historical freeze) and
+`runtime/fixtures/run-event-v0.2/journals/` (production track since
+GAP-INQUIRY-SPLIT) through `assurance.run_event_journal_validation`
+(envelope schema + per-event payload schema selected by the `payload_schema`
+track string + full hash-chain recompute), plus synthetic bad journals and
+the track-resolution table. The real-journal tests are the parity proof: any
+digest mismatch on a captured journal is a real bug on one side.
 """
 
 from __future__ import annotations
@@ -30,6 +31,9 @@ from assurance.run_event_journal_validation import (
 
 ROOT = Path(__file__).resolve().parents[2]
 JOURNALS = ROOT / "runtime/fixtures/run-event-v0.1/journals"
+# GAP-INQUIRY-SPLIT (2026-08-09): the production track since the v0.2 flip —
+# real journals captured by the v0.2 producer.
+JOURNALS_V02 = ROOT / "runtime/fixtures/run-event-v0.2/journals"
 
 ALL_JOURNALS = (
     "plain-run.jsonl",
@@ -44,6 +48,10 @@ ALL_JOURNALS = (
 # a re-captured journal with a changed loop structure fails here at commit
 # time (counts included), so drift from the current orz code is loud even
 # though CI never runs the Rust binary.
+# NOTE (GAP-INQUIRY-SPLIT): the v0.1 journals below are a HISTORICAL FREEZE —
+# they still contain the per-turn `orientation_checkpoint` and the retired
+# `neutral_inquiry`/`retrieval_completion_check` producers; the v0.2
+# production journals live in `EXPECTED_SEQUENCES_V02`.
 EXPECTED_SEQUENCES: dict[str, tuple[str, ...]] = {
     "plain-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
@@ -75,6 +83,73 @@ EXPECTED_SEQUENCES: dict[str, tuple[str, ...]] = {
     ),
     "restore-run.jsonl": (
         "run_preflight", "snapshot_restored", "run_finished",
+    ),
+}
+
+# GAP-INQUIRY-SPLIT (2026-08-09): the v0.2 production track — the per-turn
+# orientation event is GONE (fires only on the session-level 7-round trigger;
+# see `orientation-fire-run`), the retired event types are absent, and the
+# retrieval path produces mechanical `information_sufficiency_assessment`.
+ALL_JOURNALS_V02 = (
+    "plain-run.jsonl",
+    "tool-snapshot-run.jsonl",
+    "plan-run.jsonl",
+    "cancelled-run.jsonl",
+    "failed-run.jsonl",
+    "restore-run.jsonl",
+    "orientation-fire-run.jsonl",
+)
+
+EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
+    "plain-run.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "model_output", "counterexample_gate",
+        "model_output", "runtime_stagnation_guard", "run_finished",
+    ),
+    "tool-snapshot-run.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "model_output", "permission_requested",
+        "permission_decision", "snapshot_created", "tool_started",
+        "tool_completed", "model_output", "counterexample_gate",
+        "model_output", "runtime_stagnation_guard", "run_finished",
+    ),
+    "plan-run.jsonl": (
+        "run_preflight", "counterexample_gate", "plan_proposed",
+        "plan_approved", "tool_availability_check", "run_started",
+        "prompt_submitted", "model_output", "counterexample_gate",
+        "model_output", "runtime_stagnation_guard", "run_finished",
+    ),
+    "cancelled-run.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "run_cancelled",
+    ),
+    "failed-run.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "run_failed",
+    ),
+    "restore-run.jsonl": (
+        "run_preflight", "snapshot_restored", "run_finished",
+    ),
+    "orientation-fire-run.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted",
+        "model_output", "tool_started", "tool_completed",
+        "information_sufficiency_assessment",
+        "model_output", "tool_started", "tool_completed",
+        "information_sufficiency_assessment",
+        "model_output", "tool_started", "tool_completed",
+        "information_sufficiency_assessment",
+        "model_output", "tool_started", "tool_completed",
+        "information_sufficiency_assessment",
+        "model_output", "tool_started", "tool_completed",
+        "information_sufficiency_assessment",
+        "model_output", "tool_started", "tool_completed",
+        "information_sufficiency_assessment",
+        "model_output", "tool_started", "tool_completed",
+        "information_sufficiency_assessment",
+        "orientation_checkpoint",
+        "model_output", "counterexample_gate", "model_output",
+        "runtime_stagnation_guard", "run_finished",
     ),
 }
 
@@ -136,6 +211,107 @@ class RealJournalConformanceTests(unittest.TestCase):
         # The real journals jointly cover the produced-and-registered set
         # (reference-shape events are never constructed by Rust).
         self.assertGreaterEqual(len(seen), 15)
+
+
+def load_journal_v02(name: str) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in (JOURNALS_V02 / name).read_text(encoding="utf-8").splitlines()
+    ]
+
+
+class V02JournalConformanceTests(unittest.TestCase):
+    """GAP-INQUIRY-SPLIT (2026-08-09): the production-track real journals —
+    captured by the v0.2 Rust producer after the flip. Same parity proof as
+    the v0.1 class, plus v0.2-track assertions (homogeneous envelope, retired
+    event types absent, the orientation 7-round fire and the mechanical
+    information-sufficiency assessment)."""
+
+    def test_all_seven_v02_journals_validate(self) -> None:
+        for name in ALL_JOURNALS_V02:
+            with self.subTest(journal=name):
+                self.assertEqual(
+                    validate_journal_file(JOURNALS_V02 / name),
+                    [],
+                    f"{name} failed",
+                )
+
+    def test_v02_journals_are_homogeneous_v02_track(self) -> None:
+        """Every event of every v0.2 journal: v0.2 envelope schema_version +
+        v0.2 payload_schema (a mixed track would break the homogeneous-chain
+        requirement, ADR-0010 §11.6.2)."""
+        for name in ALL_JOURNALS_V02:
+            with self.subTest(journal=name):
+                for event in load_journal_v02(name):
+                    self.assertEqual(
+                        event["schema_version"], "0.2.0-draft", name
+                    )
+                    self.assertEqual(
+                        event["payload_schema"], "run-event-v0.2.schema.json", name
+                    )
+
+    def test_v02_sequence_staleness_signal(self) -> None:
+        for name, expected in EXPECTED_SEQUENCES_V02.items():
+            with self.subTest(journal=name):
+                types = tuple(event_types(load_journal_v02(name)))
+                self.assertEqual(types, expected, f"{name} sequence drifted")
+                self.assertEqual(len(types), len(expected), f"{name} count drifted")
+
+    def test_retired_event_types_absent_from_v02(self) -> None:
+        """`neutral_inquiry` / `retrieval_completion_check` are retired on the
+        v0.2 track (ADR-0010 §5.1) — no v0.2 producer may write them."""
+        retired = {"neutral_inquiry", "retrieval_completion_check"}
+        for name in ALL_JOURNALS_V02:
+            with self.subTest(journal=name):
+                for event in load_journal_v02(name):
+                    self.assertNotIn(event["event_type"], retired, name)
+
+    def test_orientation_fire_payload_is_v02_shape(self) -> None:
+        events = load_journal_v02("orientation-fire-run.jsonl")
+        orientation = next(
+            e for e in events if e["event_type"] == "orientation_checkpoint"
+        )
+        p = orientation["payload"]
+        self.assertEqual(p["inquiry_family"], "neutral")
+        self.assertEqual(p["inquiry_kind"], "orientation_checkpoint")
+        self.assertEqual(p["agent_role"], "main")
+        self.assertEqual(p["trigger"], "completed_turns_interval")
+        self.assertEqual(p["completed_turns_since_orientation"], 7)
+        self.assertEqual(p["injection_position"], "post_tool_batch_gap")
+        self.assertTrue(p["message_block"].startswith("[ORIENTATION"))
+
+    def test_orientation_fires_exactly_once_in_seven_rounds(self) -> None:
+        events = load_journal_v02("orientation-fire-run.jsonl")
+        fires = [e for e in events if e["event_type"] == "orientation_checkpoint"]
+        self.assertEqual(len(fires), 1)
+
+    def test_information_sufficiency_assessment_is_mechanical(self) -> None:
+        events = load_journal_v02("orientation-fire-run.jsonl")
+        assessments = [
+            e for e in events if e["event_type"] == "information_sufficiency_assessment"
+        ]
+        self.assertEqual(len(assessments), 7)
+        for i, a in enumerate(assessments):
+            p = a["payload"]
+            self.assertEqual(p["status"], "indeterminate")
+            self.assertEqual(p["source_visibility_gate"], "not_applicable")
+            self.assertEqual(p["contract_revision"], 0)
+            # The ledger grows one [DOC] per round.
+            self.assertEqual(p["source_counts"]["total"], i + 1)
+            # No inquiry family / model verdict on a mechanical event.
+            self.assertNotIn("inquiry_family", p)
+
+    def test_v02_lifecycle_chain_rules_still_hold(self) -> None:
+        """The 7 production journals must not trip the §4.4 lifecycle
+        verifier (orphan assessments are legal; close-before-disposition is
+        not produced this slice — the verifier accepts what exists)."""
+        from assurance.run_event_journal_validation import _verify_v02_lifecycle
+
+        for name in ALL_JOURNALS_V02:
+            with self.subTest(journal=name):
+                events = load_journal_v02(name)
+                errors = _verify_v02_lifecycle(events)
+                self.assertEqual(errors, [], f"{name}: {errors}")
 
 
 class SyntheticBadJournalTests(unittest.TestCase):

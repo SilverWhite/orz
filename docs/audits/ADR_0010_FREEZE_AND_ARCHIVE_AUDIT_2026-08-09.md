@@ -35,9 +35,10 @@ ADR-0010 已接受并冻结，成为当前唯一自然语言设计权威。首�
 | ID | 机械观察 | 与 ADR-0010 的差距 | 后续处理 |
 |---|---|---|---|
 | FUS-IMPL-001 | `orz/crates/orz-loop/src/controller.rs` 仍定义 `MAX_TOOL_ROUNDS = 40` | 冻结值为 120 | 修改常量及预算相关测试；保留 ADR-0008 的其余语义 |
-| FUS-IMPL-002 | `orz/crates/orz-loop/src/inquiry.rs` 仍以 `output_repeats/tool_calls/actions/rounds` 四计数和 8 轮阈值驱动同一 inquiry；controller 仍产生 `NeutralInquiry` | 冻结设计要求 Orientation 仅 7 轮，信息充分性独立，重复只归停滞守卫，其他三项不触发 Orientation | 先扩 Schema/fixture，再替换 producer/verifier；删除或重写锁定旧逻辑的测试 |
+| FUS-IMPL-002 | ~~`orz/crates/orz-loop/src/inquiry.rs` 仍以 `output_repeats/tool_calls/actions/rounds` 四计数和 8 轮阈值驱动同一 inquiry；controller 仍产生 `NeutralInquiry`~~ | ~~冻结设计要求 Orientation 仅 7 轮，信息充分性独立，重复只归停滞守卫，其他三项不触发 Orientation~~ | **已解决（2026-08-10，GAP-INQUIRY-SPLIT）**：`inquiry.rs` 与混合机制删除；Orientation 7 轮会话状态机 + 真实注入 + v0.2 事件；信息充分性机械 assessment；重复只归停滞守卫；producer 整轨翻 v0.2。见 [`GAP_INQUIRY_SPLIT_IMPL_AUDIT_2026-08-10.md`](GAP_INQUIRY_SPLIT_IMPL_AUDIT_2026-08-10.md) |
 | FUS-IMPL-003 | `orz/crates/orz-loop/src/agents/retrieval.rs` 明确写着 one scripted model pass，`tools: Vec::new()`，`budget_turns` 未形成同构 session loop | 子代理必须复用主 Agent runtime、工具、journal、生命周期和预算，仅任务合同与写域不同 | 将 retrieval role 接入共享 Agent runtime；移除一次性零工具特殊路径及其误导测试 |
 | FUS-IMPL-004 | 当前 retrieval completion 仍把 free-form response 当作 best-effort evidence | 冻结设计要求信息充分性状态与关闭确认分离，并具有明确事件、producer、consumer 与 verifier | 扩展事件 Schema 和结构化 receipt，迁移旧 journal 只读 replay |
+| FUS-IMPL-004 后续 | ~~retrieval completion 仍把 free-form response 当作 best-effort evidence~~ | 信息充分性与关闭确认分离 | **部分解决（2026-08-10）**：free-form 自报已删，`information_sufficiency_assessment` 机械事件落地（producer=controller 单写者、verifier 双轨已就位、v0.2 真实 journals 已捕获）；关闭确认的 disposition/close 链留子代理同构切片（GAP-SUBAGENT-RUNTIME） |
 | FUS-DOC-001 | Windows 事故与案例目录已建立，但尚无首批结构化条目 | ADR-0010 明确此时只能称 planned/not started 或 maintainer-observed | 后续按 provenance、分类、脱敏和回归门槛迁移，不提前宣称案例闭环 |
 
 ## 5. 整理边界
