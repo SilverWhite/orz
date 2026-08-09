@@ -52,21 +52,24 @@ use crate::tool::ToolDispatcher;
 /// Cap on model↔tool rounds per turn (anti-runaway backstop).
 ///
 /// D-8 (FIX_PLAN 2026-08-06, P7/LOOP-14): 8 → 40, decided by ADR-0008.
-/// The old 8 was recorded (P7) as "a port of the Python reference
-/// implementation's cap" — that record was INACCURATE (LOOP-14 cross-check:
-/// Python uses max_turns=20/max_tool_calls=0); 8 was in fact the Grok
-/// ecosystem default (mcp-grok maxTurns=8). 40 is the decided value; the
-/// model is told the budget explicitly and informed of the remaining rounds
-/// after each tool round (mechanical, controller-injected — the model does
-/// not guess). Anti-runaway protection is layered: the global round budget
-/// is the backstop, the consecutive-denial circuit breaker (IP2a/D-3) is
-/// the primary control.
-pub const MAX_TOOL_ROUNDS: u32 = 40;
+/// Budget history: 8 was the Grok ecosystem default (mcp-grok maxTurns=8,
+/// recorded inaccurately at first as a Python port — LOOP-14 cross-check:
+/// Python uses max_turns=20/max_tool_calls=0); raised to 40 by ADR-0008
+/// (2026-08-07); **frozen at 120 by ADR-0010 v1.1 (2026-08-09)** — the main
+/// agent and both retrieval subagents each carry a 120-tool-round budget,
+/// counted independently per session (FUS-BUDGET). The model is told the
+/// budget explicitly and informed of the remaining rounds after each tool
+/// round (mechanical, controller-injected — the model does not guess).
+/// Anti-runaway protection is layered: the global round budget is the
+/// backstop, the consecutive-denial circuit breaker (IP2a/D-3) is the
+/// primary control. ADR-0008's remaining semantics (deny rounds count,
+/// session/remaining/exhaustion blocks) stay unchanged.
+pub const MAX_TOOL_ROUNDS: u32 = 120;
 
 /// Env override for the global round budget (benchmark harnesses — SWE-bench
 /// exploration burns 60+ rounds; polyglot stays at the default). Parsed at
 /// controller construction; the session-declared budget block follows it, so
-/// the model always sees the real cap. Default (absent/invalid) = 40.
+/// the model always sees the real cap. Default (absent/invalid) = 120.
 pub fn max_tool_rounds_override() -> Option<u32> {
     std::env::var("ORZ_MAX_TOOL_ROUNDS")
         .ok()
@@ -5255,9 +5258,10 @@ mod tests {
 
         let received = fake.received_requests();
         assert!(received.len() >= 3, "three rounds: {received:?}");
-        // Session declaration: the system prompt carries the budget.
+        // Session declaration: the system prompt carries the budget
+        // (ADR-0010 v1.1 frozen value: 120).
         assert!(
-            received[0].system.contains("BUDGET: 40"),
+            received[0].system.contains("BUDGET: 120"),
             "budget declared in the session system prompt: {}",
             received[0].system
         );
@@ -5274,7 +5278,7 @@ mod tests {
             received[0].system, received[1].system,
             "system prompt must be stable across rounds (prefix cache)"
         );
-        // Round 1 after the first tool round: 39 remaining (mechanical).
+        // Round 1 after the first tool round: 119 remaining (mechanical).
         let round2: Vec<&str> = received[1]
             .messages
             .iter()
@@ -5282,10 +5286,10 @@ mod tests {
             .map(|m| m.content.as_str())
             .collect();
         assert!(
-            round2.iter().any(|c| c.contains("REMAINING: 39")),
-            "39 remaining after round 1: {round2:?}"
+            round2.iter().any(|c| c.contains("REMAINING: 119")),
+            "119 remaining after round 1: {round2:?}"
         );
-        // Round 2: 38 remaining.
+        // Round 2: 118 remaining.
         let round3: Vec<&str> = received[2]
             .messages
             .iter()
@@ -5293,8 +5297,8 @@ mod tests {
             .map(|m| m.content.as_str())
             .collect();
         assert!(
-            round3.iter().any(|c| c.contains("REMAINING: 38")),
-            "38 remaining after round 2: {round3:?}"
+            round3.iter().any(|c| c.contains("REMAINING: 118")),
+            "118 remaining after round 2: {round3:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

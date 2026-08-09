@@ -442,9 +442,9 @@ mod tests {
         // never matched the `[TOOL_ROUND_BUDGET v0.1]` messages).
         assert!(is_injected_block_text(&tool_policy_breaker_block("web_search", 3)));
         assert!(is_injected_block_text(&tool_policy_ceiling_block(10)));
-        assert!(is_injected_block_text(&tool_round_budget_session_block(40)));
+        assert!(is_injected_block_text(&tool_round_budget_session_block(120)));
         assert!(is_injected_block_text(&tool_round_budget_remaining_block(38)));
-        assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(40)));
+        assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(120)));
         // A6 (2026-08-08): the context-compaction marker is mechanical
         // injected text — never stagnation input.
         assert!(is_injected_block_text(&context_compressed_marker(4, 152_000, None)));
