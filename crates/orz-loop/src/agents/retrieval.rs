@@ -220,40 +220,4 @@ mod tests {
             "external_ret"
         );
     }
-
-    #[tokio::test]
-    async fn completion_check_block_is_injected_into_request() {
-        // §4.6.1: the close-time completion check rides in the subagent's
-        // request messages; the [DOC]/[SOURCE] parse stays on the response
-        // side. FakeProvider retains requests, so the injection is assertable.
-        let fake = Arc::new(FakeProvider::from_texts(vec![
-            "[DOC] a.md\nyes，已获得全部内容",
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let bb = Arc::new(SharedBlackboard::new());
-        let subagent = RetrievalSubagent::new(SubagentRole::InternalRetrieval, gateway.clone());
-        let spec = SubagentSpec {
-            role: SubagentRole::InternalRetrieval,
-            goal: "找文档".to_string(),
-            budget_turns: 1,
-        };
-        subagent
-            .run_retrieval(
-                &bb,
-                &spec,
-                Some(crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let requests = fake.received_requests();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].messages.len(), 1);
-        assert_eq!(
-            requests[0].messages[0].content,
-            crate::prompt::RETRIEVAL_COMPLETION_CHECK_BLOCK
-        );
-    }
 }

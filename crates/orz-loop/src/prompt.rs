@@ -406,23 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn inquiry_blocks_match_design_doc_verbatim() {
-        // INFO_SUFFICIENCY — design doc §4.6.5 verbatim.
-        assert!(INFO_SUFFICIENCY_BLOCK.starts_with("[INFO_SUFFICIENCY v0.1]"));
-        assert!(INFO_SUFFICIENCY_BLOCK.contains("本轮检索已完成。请确认："));
-        assert!(INFO_SUFFICIENCY_BLOCK.contains("是否已获得完成当前主任务所需的内容？"));
-        assert!(INFO_SUFFICIENCY_BLOCK.contains("请回答 yes / no / uncertain，并附简短理由。"));
-        assert!(INFO_SUFFICIENCY_BLOCK.ends_with("[/INFO_SUFFICIENCY]"));
-
-        // RETRIEVAL_COMPLETION_CHECK — Python precedent verbatim.
-        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.starts_with("[RETRIEVAL_COMPLETION_CHECK v0.1]"));
-        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.contains("子代理检索任务已完成。关闭前请确认："));
-        assert!(
-            RETRIEVAL_COMPLETION_CHECK_BLOCK.contains("是否已经获得完成当前主任务所需的内容？")
-        );
-        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.contains("不自动扩展为新子代理或无限补检索"));
-        assert!(RETRIEVAL_COMPLETION_CHECK_BLOCK.ends_with("[/RETRIEVAL_COMPLETION_CHECK]"));
-
+    fn counterexample_blocks_match_current_design() {
         // COUNTEREXAMPLE_GATE — final-answer variant carries the once-only note.
         assert!(COUNTEREXAMPLE_GATE_BLOCK.starts_with("[COUNTEREXAMPLE_GATE v0.1]"));
         assert!(

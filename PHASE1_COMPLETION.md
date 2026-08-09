@@ -128,4 +128,4 @@ Phase 1 的核心目标——fork Grok Build、删除 dead crates、重命名保
 
 目标: `orz -p "hello"` 产生有效的 `events.jsonl`，hash chain 可独立验证。
 
-具体任务见 `architecture/FORK_IMPLEMENTATION_DESIGN_v0.1.md` §8 Phase 2。
+具体任务见 `architecture/archive/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md` §8 Phase 2。
