@@ -53,18 +53,69 @@ pub fn build_toolset(cwd: &Path) -> Result<Arc<FinalizedToolset>, String> {
     // finalize only enables the tools listed in the config. The builder
     // pre-registers multiple tool packs (GrokBuild / Codex / OpenCode / …)
     // whose default client names collide — enable the GrokBuild namespace only.
+    //
+    // Scheduler-family ban (2026-08-09, TB hard B 组复盘裁决): the system
+    // holds exactly TWO designed subagents (project-doc retrieval + external
+    // retrieval — CN §7.2 / design §4.5); GrokBuild's local multi-agent
+    // scheduler ecosystem is a third subagent class and is banned. The whole
+    // async ecosystem is removed, not just `task`: `monitor` runs on the same
+    // task system (bg_handle.task_id / terminal.get_task), so with
+    // `get_task_output` banned its results would be unrecoverable.
+    // TB failure 缺口 1 (results silently dropped at run end — gpt2-codegolf
+    // and train-fasttext) is eliminated at the tool-surface: the model is
+    // left with synchronous tools only (bash/read/edit/…).
+    // `kill_terminal_command` is the async kill switch for the same
+    // ecosystem; banning it with the rest leaves no dangling-command hazard.
+    // Complete scheduler-ecosystem surface (2026-08-09 census): task /
+    // task_output (get_task_output, wait_tasks, get_terminal_command_output) /
+    // kill_task / kill_terminal_command / monitor / scheduler (create, delete,
+    // list) / workflow. `todo_write` and `update_goal` are task-list/goal
+    // bookkeeping, NOT subagent scheduling — they stay.
+    const BANNED_GROK_BUILD_TOOLS: &[&str] = &[
+        "task",                    // subagent/task scheduler (third subagent class)
+        "get_task_output",         // polls task results (dead without task)
+        "wait_tasks",              // waits on tasks (dead without task)
+        "get_terminal_command_output", // async terminal output collector
+        "kill_task",               // kills tasks (dead without task)
+        "kill_terminal_command",   // kills monitor/terminal commands (async ecosystem)
+        "monitor",                 // async terminal watch (task-system based)
+        "scheduler_create",        // recurring task scheduler
+        "scheduler_delete",        // scheduler bookkeeping
+        "scheduler_list",          // scheduler bookkeeping
+        "workflow",                // multi-agent workflow orchestrator
+    ];
     let tools: Vec<_> = builder
         .known_tool_ids()
         .into_iter()
-        .filter(|id| id.starts_with("GrokBuild:"))
-        .map(|id| orz_tools::registry::types::ToolConfig {
-            id,
-            params: None,
-            name_override: None,
-            params_name_overrides: None,
-            description_override: None,
-            behavior_version: None,
-            kind: None,
+        .filter(|id| {
+            id.starts_with("GrokBuild:")
+                && !BANNED_GROK_BUILD_TOOLS
+                    .iter()
+                    .any(|t| id.ends_with(&format!(":{t}")))
+        })
+        .map(|id| {
+            // bash background mode (`enabled_background`) requires the banned
+            // `kill_task` (background tasks must be observable/cancellable),
+            // so it is disabled too — synchronous-only tool surface, per the
+            // scheduler-family ban above. Long-running commands rely on the
+            // P0-1 tool timeout + P1-1 stall watchdogs instead.
+            let params = if id.ends_with(":run_terminal_cmd") {
+                Some(serde_json::Map::from_iter([(
+                    "enabled_background".to_string(),
+                    serde_json::Value::Bool(false),
+                )]))
+            } else {
+                None
+            };
+            orz_tools::registry::types::ToolConfig {
+                id,
+                params,
+                name_override: None,
+                params_name_overrides: None,
+                description_override: None,
+                behavior_version: None,
+                kind: None,
+            }
         })
         .collect();
     let config = ToolServerConfig {
