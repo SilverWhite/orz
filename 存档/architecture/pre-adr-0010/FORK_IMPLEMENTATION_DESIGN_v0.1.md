@@ -1,5 +1,8 @@
 # Fork 实现设计 v0.2
 
+> Archive metadata: original_path=`architecture/FORK_IMPLEMENTATION_DESIGN_v0.1.md`; archived_at=`2026-08-09`; final_status=`transferred/superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical implementation design only`.
+
+
 状态：2026-08-02。基于对 Grok Build `500129c7` 63-crate 源码树的直接审查，
 确定每一个 crate 的去留、每一个注入点的精确位置和代码。所有 assurance 逻辑
 编译进二进制内部，不存在外部进程、sidecar wrapper 或 HTTP proxy。

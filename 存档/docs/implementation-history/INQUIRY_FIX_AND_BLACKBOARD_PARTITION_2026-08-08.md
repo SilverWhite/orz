@@ -1,5 +1,7 @@
 # inquiry 触发修复 + 黑板分区设计补充（2026-08-08）
 
+> Archive metadata: original_path=`docs/INQUIRY_FIX_AND_BLACKBOARD_PARTITION_2026-08-08.md`; archived_at=`2026-08-09`; final_status=`clause-split/transferred`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`implementation history only`.
+
 **设计补充 + 待办交接文档**——对 `architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` §4.5/§4.6 的修订方向（v0.2 冻结文档暂不改，实施时随实施文档修订）。**新窗口按此继续**。
 
 ## 1. 背景：Terminal-Bench 长链诊断（实证）

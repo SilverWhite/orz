@@ -117,7 +117,7 @@ Per `UPSTREAM_FIRST_INTEGRATION_v0.1.md` §3:
 - Acceptance: One function that reads all output files and produces a single verification summary
 
 **GAK-06: Win32 cancellation staged escalation**
-- Source: `WINDOWS_RUNTIME_CONTRACT_v0.1.md` WIN-PROC-003
+- Source: `存档/architecture/runtime-spikes/WINDOWS_RUNTIME_CONTRACT_v0.1.md` WIN-PROC-003
 - Problem: Timeout handling in `windows_sandbox.py` skips CTRL_BREAK stage. Goes directly to Job Object close → TerminateProcess.
 - What to do: Add CTRL_BREAK_EVENT to process group before job close, with a short grace period
 - Acceptance: Timeout path records: method requested, actual escalation, exit code, terminal state — all separated
@@ -186,5 +186,5 @@ These design requirements were flagged in the initial audit but are confirmed im
 - [`GROK_BUILD_ADAPTATION_v0.1.md`](GROK_BUILD_ADAPTATION_v0.1.md) — Grok capability matrix
 - [`PROTOCOL_DRAFT_v0.1.md`](../protocol/PROTOCOL_DRAFT_v0.1.md) — protocol state machines and records
 - [`ACTION_KERNEL_CONTRACT_v0.1.md`](ACTION_KERNEL_CONTRACT_v0.1.md) — execution order and cross-file verification
-- [`WINDOWS_RUNTIME_CONTRACT_v0.1.md`](WINDOWS_RUNTIME_CONTRACT_v0.1.md) — process containment invariants
+- [`WINDOWS_RUNTIME_CONTRACT_v0.1.md`](../存档/architecture/runtime-spikes/WINDOWS_RUNTIME_CONTRACT_v0.1.md) — process containment invariants
 - [`DEEPSEEK_ADAPTER_CONTRACT_v0.1.md`](DEEPSEEK_ADAPTER_CONTRACT_v0.1.md) — DeepSeek-specific adapter requirements

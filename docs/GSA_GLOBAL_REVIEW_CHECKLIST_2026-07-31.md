@@ -54,7 +54,7 @@
 | A0-2 canonical CLI 降级 | fixture-only，不充当 production runtime | 源码顶部 docstring 明确声明；`gsa run` 默认 canonical 路径保留为 assurance path | ✅ 一致 |
 | A0-3 两个 Subagent 约束 | 项目文档检索 + 外部检索，不超过两个 | `retrieval_subagent.py` 恰好两个 dispatch 函数；`.grok/agents/` 恰好两个 profile | ✅ 一致 |
 | A0-4 Retrieval mode 显式 | `local_browser` / `framework_fallback` / `off` 三选一 | `grok_runtime_adapter.py` `SUPPORTED_RETRIEVAL_MODES` + `validate_grok_retrieval_mode()` | ✅ 一致 |
-| A0-5 Neutral vs Counterexample | 反例仅在 plan/conclusion 写入前；中立询问仅执行中 | `orientation_runtime_guard.py` + `docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md` | ✅ 一致 |
+| A0-5 Neutral vs Counterexample | 反例仅在 plan/conclusion 写入前；中立询问仅执行中 | `orientation_runtime_guard.py` + `存档/docs/design-inputs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md` | ✅ 一致 |
 | A0-6 ACP 优先 | `--grok-mode` 默认 `acp-smoke` | `cli.py` 默认值已切换；`prompt_smoke` 降级为窄 smoke 备选 | ✅ 一致 |
 | A0-7 Diagnostic Coverage Check | 硬信号递进阈值 2→3→4→5 | 设计文档已记录，实现状态待确认 | ⚠️ 设计已有，代码实现待确认 |
 
@@ -359,7 +359,7 @@
 |---|------|----|------|------|
 | GAP-01 | **ContentPane 对话渲染**（设计已冻结 `architecture/CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md` — 用户/模型极简边框 + 工具调用 `[工具名]` 无边框单行滚动/缩进清单展开 + 流式 text_delta + Markdown/语法高亮） | TUI | ~500 行 | GAP-02 |
 | GAP-02 | **流式 text_delta**（ACP assistant_message delta → `text_delta` 事件 → TUI 逐 token 追加） | Adapter + TUI | ~200 行 | — |
-| GAP-03 | **`gsa` 默认命令**（设计已冻结 `architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` §1 — Address/Find 折叠至 Toolbar，`命令...`/`查找...` 按钮激活弹窗） | CLI + TUI | ~150 行 | — |
+| GAP-03 | **`gsa` 默认命令**（当时设计见 `存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` §1 — Address/Find 折叠至 Toolbar，`命令...`/`查找...` 按钮激活弹窗） | CLI + TUI | ~150 行 | — |
 
 ### 高优先（严重损害可用性）
 
@@ -369,7 +369,7 @@
 | GAP-05 | **代码语法高亮**（pygments 集成） | TUI | ~150 行 | GAP-01 |
 | GAP-06 | **工具调用可折叠卡片**（设计 §11 明确要求） | TUI | ~250 行 | GAP-01 |
 | GAP-07 | **折叠策略**（运行中展开、结束后折叠） | TUI | ~150 行 | GAP-01 |
-| GAP-08 | **会话持久化**（设计已冻结 `architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` §2 — `.gsa/sessions/` 目录 + `index.jsonl` 追加索引 + 双击 Esc 切换 ExplorerPane 会话列表模式 + `gsa session list/resume/archive/delete`） | Session + CLI | ~350 行 | — |
+| GAP-08 | **会话持久化**（当时设计见 `存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` §2 — `.gsa/sessions/` 目录 + `index.jsonl` 追加索引 + 双击 Esc 切换 ExplorerPane 会话列表模式 + `gsa session list/resume/archive/delete`） | Session + CLI | ~350 行 | — |
 | GAP-09 | **启动 UX**（与 GAP-03 合并，已冻结） | CLI + TUI | ~200 行 | GAP-03 |
 
 ### 增强项（有则更好）

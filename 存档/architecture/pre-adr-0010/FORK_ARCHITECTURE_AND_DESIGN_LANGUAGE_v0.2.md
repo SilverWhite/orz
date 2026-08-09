@@ -1,5 +1,8 @@
 # Fork 架构与统一设计语言 v0.2
 
+> Archive metadata: original_path=`architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md`; archived_at=`2026-08-09`; final_status=`superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
+
 状态：2026-08-02 初版。从 v0.1 的"以 Grok 源码为模板注入"升级为"拆解 Grok、混搭重构"——
 Grok 是参考框架而非神圣上游。GSA 从 Grok 中取用成熟组件，替换和注入自己的 assurance 层，
 编译为独立二进制 `gsa`。
@@ -508,9 +511,9 @@ Python 实现**不删除**——它从"生产 runtime"降级为"reference spec +
 
 - [`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.1.md`](FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.1.md) — 上一版 fork 设计
 - [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md) — 偏差分析
-- [`GROK_BUILD_ADAPTATION_v0.1.md`](GROK_BUILD_ADAPTATION_v0.1.md) — Grok crate 结构
-- [`UPSTREAM_FIRST_INTEGRATION_v0.1.md`](UPSTREAM_FIRST_INTEGRATION_v0.1.md) — 职责边界
-- [`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md) — 产品定位
-- [`ADRs`](../adr/) — ADR-0001 (evidence-constrained kernel), ADR-0003 (runtime-neutral)
-- [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md) — 多源借鉴矩阵
-- [`../upstream/grok-build.lock.json`](../upstream/grok-build.lock.json) — 当前锁定的 Grok 版本
+- [`GROK_BUILD_ADAPTATION_v0.1.md`](../../../architecture/GROK_BUILD_ADAPTATION_v0.1.md) — Grok crate 结构
+- [`UPSTREAM_FIRST_INTEGRATION_v0.1.md`](../../../architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md) — 职责边界
+- [`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md`](../../../architecture/PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md) — 产品定位
+- [`ADRs`](../../../adr/) — ADR-0001 (evidence-constrained kernel), ADR-0003 (runtime-neutral)
+- [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](../../../architecture/OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md) — 多源借鉴矩阵
+- [`../upstream/grok-build.lock.json`](../../../upstream/grok-build.lock.json) — 当前锁定的 Grok 版本

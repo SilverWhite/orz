@@ -1,5 +1,8 @@
 # 融合架构：Codex 纪律 + Grok 能力 v0.2
 
+> Archive metadata: original_path=`architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`; archived_at=`2026-08-09`; final_status=`transferred/superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
+
 状态：2026-08-04 修正——放弃 Pro/Flash 双模型常驻（已暂时放弃实现这一构想，存档，非待办），
 采用单主 Agent + 检索子代理 ×2（见 §4.5）。v0.1 整合了 Agent Loop Redesign 与 Fork Implementation Design，
 解决了注入点分类、crate 矩阵和 Phase 规划问题。v0.2 基于对 `D:\CLI\orz` (74 crate, ~1.1M 行)

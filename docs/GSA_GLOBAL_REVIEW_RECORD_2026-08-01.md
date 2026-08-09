@@ -19,9 +19,9 @@
    - `README.md`
 3. 回查关键架构设计：
    - `architecture/INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md`
-   - `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
+- `存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
    - `architecture/CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md`
-   - `architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md`
+- `存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md`
 4. 盘点当前实现入口：
    - `assurance/cli.py`
    - `assurance/global_review_mode.py`
@@ -64,7 +64,7 @@
 - `upstream/grok-build.candidate.json`
 - `CLI_PROJECT_INDEX.md`
 - `README.md`
-- `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
+- `存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
 - `docs/GSA_GLOBAL_REVIEW_CHECKLIST_2026-07-31.md`
 - `assurance/tests/test_grok_runtime_adapter.py`
 
@@ -164,7 +164,7 @@ installed_path: C:\Users\1\.grok\bin\grok.exe
 **状态**: 已处理（L4 审查完成）
 **涉及文件**:
 
-- `architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md`
+- `存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md`
 - `docs/GSA_GLOBAL_REVIEW_CHECKLIST_2026-07-31.md`
 - `assurance/tui/app.py`
 - `assurance/tui/widgets.py`
@@ -506,7 +506,7 @@ adapter 本身的严格匹配策略是合理的；当前失败更像是 lock 漂
 
 - `CLI_PROJECT_INDEX.md`
 - `README.md`
-- `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
+- `存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
 - `docs/GSA_GLOBAL_REVIEW_CHECKLIST_2026-07-31.md`
 
 **影响**:
@@ -517,7 +517,7 @@ adapter 本身的严格匹配策略是合理的；当前失败更像是 lock 漂
 
 在 lock 决策完成后统一更新文档。若 `0.2.118` 尚未完成 gate，不应提前替换叙述；若 `0.2.118` 已完成 gate，应补齐相应 candidate/gate 文档而不是只改 lock。
 
-**处理结果**: 已裁决不推进 `0.2.118`；`CLI_PROJECT_INDEX.md`、`README.md`、`docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` 与 `docs/GSA_GLOBAL_REVIEW_CHECKLIST_2026-07-31.md` 中的 `0.2.112` 叙述现在与 lock 一致。
+**处理结果**: 已裁决不推进 `0.2.118`；`CLI_PROJECT_INDEX.md`、`README.md`、`存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` 与 `docs/GSA_GLOBAL_REVIEW_CHECKLIST_2026-07-31.md` 中的 `0.2.112` 叙述现在与 lock 一致。
 
 ### L1 测试记录
 
@@ -866,7 +866,7 @@ L2 已补 bridge / projector 的事件映射测试，但 L3 设计面仍缺少�
 
 **证据**:
 
-`architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` 要求 TUI 只读扫描 `.gsa/runs/<session_id>/session.json`。但修复前 `TuiPrototype._start_run()` 使用 `tempfile.mkdtemp(prefix="gsa-run-")` 创建系统临时 run root；bridge 虽会在该 run root 写 `session.json`，但 `_discover_sessions()` 只扫描 `.gsa/runs`，因此 TUI 自己启动的 ACP session 不会出现在 session list 中。
+`存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` 当时要求 TUI 只读扫描 `.gsa/runs/<session_id>/session.json`。但修复前 `TuiPrototype._start_run()` 使用 `tempfile.mkdtemp(prefix="gsa-run-")` 创建系统临时 run root；bridge 虽会在该 run root 写 `session.json`，但 `_discover_sessions()` 只扫描 `.gsa/runs`，因此 TUI 自己启动的 ACP session 不会出现在 session list 中。
 
 **影响**:
 

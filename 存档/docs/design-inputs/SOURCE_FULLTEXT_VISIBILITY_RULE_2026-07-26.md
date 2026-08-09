@@ -1,5 +1,7 @@
 # Source full-text visibility rule（2026-07-26）
 
+> Archive metadata: original_path=`docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md`; archived_at=`2026-08-09`; final_status=`transferred`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
 ## 裁决
 
 凡涉及文献、帖子、网页、论坛 thread、报告或其他外部文本来源的检索与讲解，输出必须固定回报每个关键来源的全文可见性状态。

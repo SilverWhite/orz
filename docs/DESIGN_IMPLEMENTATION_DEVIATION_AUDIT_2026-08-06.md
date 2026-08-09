@@ -4,8 +4,8 @@
 **背景**: Aider Polyglot 摸底（92 题，82/92）暴露 P1-P9 问题；按用户指示，**修复前**全面确认设计与具体实现间的差异，为修复提供设计依据。
 **方法**: 6 个独立审计代理并行（crate 矩阵 / orz-loop / orz-host / 双 TUI / orz-assurance / Python 侧 GAK 状态），全部判定带源码证据（file:line）；合成阶段对关键交叉点独立复核（见 §5）。
 **参照系**:
-- 设计权威: `architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`（主）+ v0.1（IP 定义原始出处）+ `IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`（既有偏差登记先例）+ `DESIGN_TO_IMPLEMENTATION_GAP_AUDIT_2026-08-02.md`（GAK-01~09 前次审计基线）
-- 约束文档: `DEEPSEEK_ADAPTER_CONTRACT_v0.1.md`、`WINDOWS_RUNTIME_CONTRACT_v0.1.md`、`PROTOCOL_DRAFT_v0.1.md` §9、`PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md`
+- 当时设计基线: `存档/architecture/pre-adr-0010/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`（主）+ 同目录 v0.1（IP 定义原始出处）+ `存档/architecture/pre-adr-0010/IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`（既有偏差登记先例）+ `architecture/DESIGN_TO_IMPLEMENTATION_GAP_AUDIT_2026-08-02.md`（GAK-01~09 前次审计基线）；当前权威已转为 ADR-0010
+- 当时约束文档: `architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md`、`存档/architecture/runtime-spikes/WINDOWS_RUNTIME_CONTRACT_v0.1.md`、`protocol/PROTOCOL_DRAFT_v0.1.md` §9、`architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md`；当前裁决见 ADR-0010
 - 实施记录（区分已记录偏差）: Slice #4/#7/#8/#12/#13/#16/#17（CLI_PROJECT_INDEX.md + docs/）
 
 ---
@@ -206,6 +206,6 @@
 
 - 跑分问题: `docs/POLYGLOT_BENCHMARK_FINDINGS_2026-08-06.md`
 - 本审计: `docs/DESIGN_IMPLEMENTATION_DEVIATION_AUDIT_2026-08-06.md`
-- 设计权威: `architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` / v0.1
+- 当时设计基线: `存档/architecture/pre-adr-0010/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` / 同目录 v0.1；当前权威已转为 ADR-0010
 - 前次审计: `architecture/DESIGN_TO_IMPLEMENTATION_GAP_AUDIT_2026-08-02.md`（GAK-01~09）
 - 实施记录: `CLI_PROJECT_INDEX.md`（Slice #1-17）/ `docs/CODEX_FALLBACK_TUI_SLICE_12_2026-08-06.md` / `docs/CODEX_FALLBACK_TUI_SLICE_16_2026-08-06.md` / `docs/CONFORMANCE_SUITE_SLICE_17_2026-08-06.md`

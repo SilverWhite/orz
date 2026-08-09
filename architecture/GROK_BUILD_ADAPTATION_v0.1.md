@@ -16,7 +16,7 @@ profile/workflow，不再作为本地 scheduler 扩展。
 
 当前上游 README 同时声明 macOS/Linux 是受支持 build host，Windows build 为 best-effort 且未在该源码树测试。本项目的实际运行面包含 Windows，因此不能继承上游测试缺口；本仓库 CI 必须保留 Windows runner，后续 Rust 控制面也需独立 Windows process/sandbox probes。
 
-当前资源策略不是 fork、完整 source build 或迁移上游 crate，而是优先采用 Windows 预编译 Grok。[`WINDOWS_RUNTIME_CONTRACT_v0.1.md`](WINDOWS_RUNTIME_CONTRACT_v0.1.md) 的 Python spike 只保留作进程控制 conformance fixture；除非窄 probe 证明上游有不可绕过的缺口，否则不移植 Rust runtime。
+当前资源策略不是 fork、完整 source build 或迁移上游 crate，而是优先采用 Windows 预编译 Grok。[`WINDOWS_RUNTIME_CONTRACT_v0.1.md`](../存档/architecture/runtime-spikes/WINDOWS_RUNTIME_CONTRACT_v0.1.md) 的 Python spike 只保留作进程控制 conformance fixture；除非窄 probe 证明上游有不可绕过的缺口，否则不移植 Rust runtime。
 
 ## 1. 结论
 

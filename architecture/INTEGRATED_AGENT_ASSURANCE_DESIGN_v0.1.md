@@ -300,7 +300,7 @@ The following project design, audit, protocol, fixture, and index documents were
 - `architecture/GLOBAL_PROGRESS_SENTINEL_CONTRACT_v0.1.md`
 - `architecture/GROK_BUILD_ADAPTATION_v0.1.md`
 - `architecture/INTERACTIVE_APPROVAL_LEDGER_CONTRACT_v0.1.md`
-- `architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
+- `存档/architecture/pre-adr-0010/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`
 - `architecture/LOOPBACK_TRANSPORT_AND_PRIVATE_TRANSCRIPT_v0.1.md`
 - `architecture/MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`
 - `architecture/MODEL_ADAPTER_LOOP_CONTRACT_v0.1.md`
@@ -312,7 +312,7 @@ The following project design, audit, protocol, fixture, and index documents were
 - `architecture/TASK_CHECKLIST_ANNOUNCEMENT_SUPPLEMENT_v0.1.md`
 - `architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md`
 - `architecture/UPSTREAM_VERSION_STRATEGY_v0.1.md`
-- `architecture/WINDOWS_RUNTIME_CONTRACT_v0.1.md`
+- `存档/architecture/runtime-spikes/WINDOWS_RUNTIME_CONTRACT_v0.1.md`
 
 ### Assurance
 
@@ -359,7 +359,7 @@ The following project design, audit, protocol, fixture, and index documents were
 - `docs/GSA_CORE_READONLY_SLICE_AUDIT_2026-07-25.md`
 - `docs/GSA_CROSS_ARTIFACT_LINEAGE_COMPARABILITY_AUDIT_2026-07-25.md`
 - `docs/GSA_DISPOSABLE_REPRODUCTION_AUDIT_2026-07-26.md`
-- `docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`
+- `存档/docs/design-inputs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`
 - `docs/GSA_VALIDATOR_BRIDGE_AUDIT_2026-07-25.md`
 - `docs/ORIENTATION_RUNTIME_GUARD_AUDIT_2026-07-28.md`
 - `docs/P1_CONVERSATION_ARCHIVE_LIFECYCLE_AUDIT_2026-07-28.md`
@@ -371,7 +371,7 @@ The following project design, audit, protocol, fixture, and index documents were
 - `docs/P5_SYNTHETIC_USER_TASK_PREFLIGHT_2026-07-25.md`
 - `docs/REPOSITORY_AUDIT_2026-07-21.md`
 - `docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md`
-- `docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md`
+- `存档/docs/design-inputs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md`
 - `docs/TOOL_AVAILABILITY_GATE_AUDIT_2026-07-27.md`
 
 ### Evaluation

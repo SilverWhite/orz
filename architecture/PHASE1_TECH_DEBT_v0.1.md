@@ -243,7 +243,7 @@ cargo build -p orz-bin
 
 ## 7. 不可变约束（贯彻 Phase 2-4）
 
-以下约束来自 `FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`，Phase 2 开始逐步实现：
+以下约束来自历史文档 `存档/architecture/pre-adr-0010/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`，Phase 2 开始逐步实现：
 
 1. 每个 action 恰好一个 terminal journal event
 2. Journal hash chain 连续不可断裂
@@ -275,7 +275,7 @@ cargo check --workspace                                # 全仓编译通过
 
 ## 9. 参考
 
-- [`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md) — 最终架构设计
-- [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](FORK_IMPLEMENTATION_DESIGN_v0.1.md) — 注入点精确设计
-- [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md) — 原始偏差分析
+- [`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](../存档/architecture/pre-adr-0010/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md) — 当时的架构设计
+- [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](../存档/architecture/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md) — 当时的注入点设计
+- [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](../存档/architecture/pre-adr-0010/IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md) — 原始偏差分析
 - `B:\orz` @ `4066dd3` — Phase 1 产物（独立 git repo）

@@ -12,7 +12,7 @@
 
 ### 2.1 Crate 删除矩阵与现实的偏差（严重）
 
-`FORK_IMPLEMENTATION_DESIGN_v0.1.md` §1.1 设计删除 18 个 crate，声称最终 ~35 crate。
+历史文档 `存档/architecture/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md` §1.1 设计删除 18 个 crate，声称最终 ~35 crate。
 实际状态：
 
 | 类别 | 数量 | 详情 |
@@ -74,9 +74,9 @@ orz-shell 深度依赖这 10 个 crate 的类型定义、trait 实现和函数�
 
 | 文件 | 文件名版本 | 内容标题版本 |
 |------|-----------|-------------|
-| `FORK_IMPLEMENTATION_DESIGN_v0.1.md` | v0.1 | **v0.2** |
+| `存档/architecture/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md` | v0.1 | **v0.2** |
 | `PHASE2_COMPILATION_STATUS` | 已修复为 v0.2 | 已修复 |
-| `IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md` | v0.1 | **v0.2** |
+| `存档/architecture/pre-adr-0010/IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md` | v0.1 | **v0.2** |
 
 ## 3. 架构风险评估
 
@@ -146,8 +146,8 @@ orz-shell 深度依赖这 10 个 crate 的类型定义、trait 实现和函数�
 ## 5. 参考
 
 - [`PHASE2_COMPILATION_STATUS_v0.2.md`](PHASE2_COMPILATION_STATUS_v0.2.md) — 编译修复完整记录
-- [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md) — 偏差分析
-- [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](FORK_IMPLEMENTATION_DESIGN_v0.1.md) — 实现设计（feat/fork-architecture 分支）
-- [`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md) — 最新设计语言（feat/fork-architecture 分支）
+- [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](../存档/architecture/pre-adr-0010/IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md) — 偏差分析
+- [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](../存档/architecture/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md) — 当时的实现设计（feat/fork-architecture 分支）
+- [`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](../存档/architecture/pre-adr-0010/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md) — 当时的设计语言（feat/fork-architecture 分支）
 - `D:\CLI\orz` commit `a2a7868` — 方案 A 提交点（仓库 2026-08-04 由 `B:\orz` 迁移）
 - 代理审查完整记录：`a9e7a4cf5d62cc286`（设计一致性）、`a0baff606859b9397`（crate 结构）、`ae51e0f2437807c37`（文档问题）

@@ -1,5 +1,8 @@
 # Fork 架构与统一设计语言 v0.3
 
+> Archive metadata: original_path=`architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`; archived_at=`2026-08-09`; final_status=`transferred/superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
+
 > **注意 (2026-08-03)**：本文档已被 [`INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md`](INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md) 整合。
 > 以下内容在此整合后的变化：
 > - Agent Loop 引擎从"注入 Grok Sampler"改为**完全替代 Grok Sampler** 的自研 `orz-loop` crate
@@ -498,6 +501,6 @@ journal.record(RunEvent::snapshot_created(snapshot_hash));
 - Goose: `crates/goose/src/security/security_inspector.rs` (Apache-2.0)
 - Grok Build: `xai-grok-shell`, `xai-grok-tools`, `xai-grok-workspace` (Apache-2.0)
 - Aider: architect/editor separation, repo map (Apache-2.0)
-- 本仓库既有多源审计: [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)
-- 本仓库职责边界: [`UPSTREAM_FIRST_INTEGRATION_v0.1.md`](UPSTREAM_FIRST_INTEGRATION_v0.1.md)
-- 本仓库 ADR: [`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md)
+- 本仓库既有多源审计: [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](../../../architecture/OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md)
+- 本仓库职责边界: [`UPSTREAM_FIRST_INTEGRATION_v0.1.md`](../../../architecture/UPSTREAM_FIRST_INTEGRATION_v0.1.md)
+- 本仓库 ADR: [`ADR-0003`](../../../adr/ADR-0003-runtime-neutral-assurance-kernel.md)

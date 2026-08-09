@@ -90,7 +90,7 @@ countercase、blind-first review 和科学自查；LIF profile 只增加当前�
 | [`D_SALVAGE_MATRIX_v0.1.md`](D_SALVAGE_MATRIX_v0.1.md) | `e923ba2112ccf5f23e1c4706c4ffa42b7c629507039383ebb6b9683633c71bc1` | D 源码 source ledger 与 adopt/adapt/reject |
 | [`OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md`](OPEN_SOURCE_AGENT_GAP_AUDIT_v0.1.md) | `060b369646ccec3a969350f1d786268a05abcc0aafac6df0e6c3de8627721054` | trust、event、checkpoint、compaction 缺口 |
 | [`MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md`](MATURE_AGENT_DESIGN_DECOMPOSITION_v0.2.md) | `52d020e92fd03b6d8d6f0ae647e3daa72169192e2f25acd85b1d36141c2a7398` | runtime/保障层职责分离 |
-| [`WINDOWS_RUNTIME_CONTRACT_v0.1.md`](WINDOWS_RUNTIME_CONTRACT_v0.1.md) | `aa261c7033048d0228ad41b965f0258b30bbc4b7b6e7dd94b09f3587f13c7e7a` | Job Object、no-shell、输出与取消边界 |
+| [`WINDOWS_RUNTIME_CONTRACT_v0.1.md`](../存档/architecture/runtime-spikes/WINDOWS_RUNTIME_CONTRACT_v0.1.md) | `aa261c7033048d0228ad41b965f0258b30bbc4b7b6e7dd94b09f3587f13c7e7a` | Job Object、no-shell、输出与取消边界 |
 | [`DEEPSEEK_EXTERNAL_TRANSPORT_SAFETY_v0.1.md`](DEEPSEEK_EXTERNAL_TRANSPORT_SAFETY_v0.1.md) | `5669becc95d1449419e1becf5db4438aceefd712937cfbc261dc4040fa21a60e` | 凭据、网络许可、真实残留限制 |
 
 对 `LIF_CURRENT_INDEX.md` 执行了 `agent/CLI/sandbox/trust/prompt injection/audit/session/snapshot/

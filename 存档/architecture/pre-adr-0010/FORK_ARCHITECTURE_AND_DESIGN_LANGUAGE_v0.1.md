@@ -1,5 +1,8 @@
 # Fork 架构与统一设计语言 v0.1
 
+> Archive metadata: original_path=`architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.1.md`; archived_at=`2026-08-09`; final_status=`superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
+
 状态：2026-08-02。确定采用 fork 模式——以 Grok 源码为模板，注入 GSA assurance 层，
 编译为 GSA 二进制。本文定义注入点、模块结构和统一设计语言。
 

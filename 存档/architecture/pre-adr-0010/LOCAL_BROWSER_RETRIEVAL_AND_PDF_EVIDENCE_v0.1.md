@@ -1,5 +1,8 @@
 # Local Browser Retrieval and PDF Evidence Design v0.1
 
+> Archive metadata: original_path=`architecture/LOCAL_BROWSER_RETRIEVAL_AND_PDF_EVIDENCE_v0.1.md`; archived_at=`2026-08-09`; final_status=`transferred/superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical subsystem design only`.
+
+
 **Date**: 2026-07-28
 **Status**: design draft
 **Scope**: local-browser external retrieval, paper PDF acquisition, deterministic local evidence reading

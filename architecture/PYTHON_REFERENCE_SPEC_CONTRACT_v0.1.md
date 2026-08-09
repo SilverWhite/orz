@@ -4,7 +4,7 @@
 
 ## 1. 目的与范围
 
-Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产 runtime 是 Rust（`D:\CLI\orz`）。Python 的六个角色（对照 `FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md` §7 与 `README.md`）：
+Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产 runtime 是 Rust（`D:\CLI\orz`）。Python 的六个角色（历史对照 `存档/architecture/pre-adr-0010/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md` §7 与 `README.md`；当前裁决见 ADR-0010）：
 
 | 角色 | 落地 |
 |---|---|
@@ -137,8 +137,8 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 
 ## 10. 参考
 
-- `architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`（§5 Phase 3 item 5/7，权威设计）
-- `architecture/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md`（§7 Python 六角色）
+- `存档/architecture/pre-adr-0010/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`（§5 Phase 3 item 5/7，当时的实现基线；当前权威为 ADR-0010）
+- `存档/architecture/pre-adr-0010/FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.2.md`（§7 Python 六角色）
 - `runtime/run-event-v0.1.schema.json`（envelope 事实源）+ `runtime/*-event-payload-v0.1.schema.json`（24 个 2026-08-06 新建 + 5 个既有 + **3 个 slice #17 Rust 轨双轨文件**）
 - `assurance/*-event-payload-v0.1.schema.json`（4 个既有）+ `assurance/canonical-cli-*-v0.1.schema.json`（7 个 2026-08-06 补齐）+ `assurance/orientation-stagnation-{preflight,run-started,terminal}-v0.1.schema.json`（3 个 slice #17 补齐）
 - `runtime/fixtures/run-event-v0.1/`（fixtures + README + **journals/ 6 个真实捕获**）、`assurance/fixtures/canonical_cli/`

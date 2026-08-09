@@ -69,7 +69,7 @@
 
 - 项目路由：`CLI_PROJECT_INDEX.md`
 - TB 交接：`docs/TERMINAL_BENCH_2_EVAL_2026-08-08.md`
-- 挂死守卫记录：`docs/RUN_STALL_GUARDS_PLAN_2026-08-08.md`
+- 挂死守卫记录：`存档/docs/implementation-history/RUN_STALL_GUARDS_PLAN_2026-08-08.md`
 - adapter：`D:\tb-eval\tb_agents\orz.py`
 - 全部 trial/job：`D:\tb-eval\jobs\**\{lock.json,config.json,result.json,verifier\*,agent\*}`
 - 任务元数据：`D:\tb-eval\terminal-bench-2\*\task.toml`
@@ -77,4 +77,3 @@
 - Terminal-Bench 论文：arXiv:2601.11868（完整 89 题、每个支持的 agent/model 组合至少五次运行的论文口径）
 
 现有 Harbor JSON 形状不匹配 FEP `validate_fep_result.py` 的 `results[]` 或通用 artifact 表结构，因此本次采用逐 trial 的人工字段审计，没有把不匹配的 validator 输出当作证明。
-

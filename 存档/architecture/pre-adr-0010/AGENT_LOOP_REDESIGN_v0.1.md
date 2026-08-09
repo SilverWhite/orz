@@ -1,5 +1,7 @@
 # Agent Loop 重设计 v0.1
 
+> Archive metadata: original_path=`architecture/AGENT_LOOP_REDESIGN_v0.1.md`; archived_at=`2026-08-09`; final_status=`transferred/superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
 > **注意 (2026-08-03)**：本文档已被 [`INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md`](INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md) 整合。
 > 整合后的关键变化：
 > - Pro/Flash/Blackboard/MechanicalRelay/检索子代理 完整采纳
@@ -561,9 +563,9 @@ Flash 遇到高风险动作:
 
 - [`FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md`](FORK_ARCHITECTURE_AND_DESIGN_LANGUAGE_v0.3.md) — 五源融合设计
 - [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](FORK_IMPLEMENTATION_DESIGN_v0.1.md) — 注入点精确位置
-- [`PHASE2_POST_PLANA_REVIEW_v0.1.md`](PHASE2_POST_PLANA_REVIEW_v0.1.md) — 审查发现
-- [`PHASE2_COMPILATION_STATUS_v0.2.md`](PHASE2_COMPILATION_STATUS_v0.2.md) — 编译修复记录
-- [`GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md`](GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md) — 检索子代理设计与 GAK 登记
+- [`PHASE2_POST_PLANA_REVIEW_v0.1.md`](../../../architecture/PHASE2_POST_PLANA_REVIEW_v0.1.md) — 审查发现
+- [`PHASE2_COMPILATION_STATUS_v0.2.md`](../../../architecture/PHASE2_COMPILATION_STATUS_v0.2.md) — 编译修复记录
+- [`GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md`](../../../architecture/GENERAL_ASSURANCE_KERNEL_GAP_REGISTER_v0.1.md) — 检索子代理设计与 GAK 登记
 - [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md) — 偏差分析
 - D 项目存档：`G:\我的云端硬盘\VSCode_Copilot_Archives\` — 黑板/蜂群传导/硬字段校验参考实现
 - Codex CLI: `codex-rs/rollout/src/recorder.rs` — JournalRecorder 参考

@@ -1,12 +1,12 @@
 # ADR-0005：中立问询 4 判定点默认阈值定稿（§4.6 Phase 3 接线；2026-08-09 修订绑定对象）
 
-- 状态：accepted（2026-08-09 修订：判定点绑定对象回归方向问询）
+- 状态：superseded by ADR-0010（仅用于历史 journal/replay 与设计退化案例解释）
 - 日期：2026-08-04（2026-08-09 修订）
-- 关联：ADR-0003、`INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` §4.6、`CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` §7.3、`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md` 修正 2/3
+- 关联：ADR-0003、ADR-0010、`存档/architecture/pre-adr-0010/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` §4.6、`存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` §7.3、`存档/docs/design-inputs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md` 修正 2/3
 
 ## 1. 背景
 
-设计文档 `INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` §4.6 规定判定点
+历史设计文档 `存档/architecture/pre-adr-0010/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` §4.6 曾规定判定点
 （输出阈值 / 工具调用次数 / 动作次数 / 轮次）任一超阈值即触发问询，且触发瞬间
 计数全部清零（隐式冷却）。默认阈值标注"Phase 3 接线时按 §4.6 语义定稿，数值调整
 以 ADR 记录"。Phase 3 Slice #2 接线时正式定稿。

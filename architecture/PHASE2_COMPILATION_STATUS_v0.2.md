@@ -39,7 +39,7 @@ Phase 1 将 Grok Build `500129c7` fork 为 orz：删除了 19 个 crate，将 21
 
 ## 2. Phase 2 编译修复策略回顾
 
-设计文档 `FORK_IMPLEMENTATION_DESIGN_v0.1.md` §8 的阶段定义：
+历史设计文档 `存档/architecture/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md` §8 的阶段定义：
 
 | Phase | 目标 | 关键依赖 |
 |-------|------|---------|
@@ -144,7 +144,7 @@ prompt_timing:    PromptTiming (~10+ types)
 
 ### 5.2 设计文档与实现的差距
 
-`FORK_IMPLEMENTATION_DESIGN_v0.1.md` §1.1 将 18 个 crate 标记为"删除"，但其中部分 crate
+`存档/architecture/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md` §1.1 将 18 个 crate 标记为"删除"，但其中部分 crate
 （如 `xai-grok-shell-session-support`）被 orz-shell 深度依赖。删除这些 crate 的决定
 基于"功能不需要"的逻辑，但未充分评估"代码仍引用"的实际情况。
 
@@ -200,6 +200,6 @@ orz-shell 的编译修复推迟到 Phase 3，届时采用方案 A（批量恢复
 
 ## 8. 参考
 
-- [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](FORK_IMPLEMENTATION_DESIGN_v0.1.md) — Phase 分步设计
+- [`FORK_IMPLEMENTATION_DESIGN_v0.1.md`](../存档/architecture/pre-adr-0010/FORK_IMPLEMENTATION_DESIGN_v0.1.md) — 当时的 Phase 分步设计
 - [`PHASE1_TECH_DEBT_v0.1.md`](PHASE1_TECH_DEBT_v0.1.md) — Phase 1 偏差和 §2.1 断裂统计
 - `B:\orz\PHASE1_COMPLETION.md` — Phase 1 完成报告

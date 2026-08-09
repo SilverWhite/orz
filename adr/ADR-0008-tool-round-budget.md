@@ -1,8 +1,8 @@
-# ADR-0008：模型↔工具轮次预算（MAX_TOOL_ROUNDS 8→40 + 双层防失控）
+# ADR-0008：模型↔工具轮次预算（历史 8→40；当前默认值由 ADR-0010 修订为 120）
 
-- 状态：accepted
+- 状态：accepted / partially superseded by ADR-0010（§2.2 数值 40→120；其余语义保留）
 - 日期：2026-08-07
-- 关联：`docs/FIX_PLAN_2026-08-06.md` D-8（跑分 P7/LOOP-14）、`docs/POLYGLOT_BENCHMARK_FINDINGS_2026-08-06.md` P7、`docs/DESIGN_IMPLEMENTATION_DEVIATION_AUDIT_2026-08-06.md` LOOP-14、`orz-loop/src/controller.rs`、`orz-loop/src/prompt.rs`（`TOOL_ROUND_BUDGET`）、ADR-0007（transport 重试，同批定稿）
+- 关联：`存档/docs/implementation-history/FIX_PLAN_2026-08-06.md` D-8（跑分 P7/LOOP-14）、`docs/POLYGLOT_BENCHMARK_FINDINGS_2026-08-06.md` P7、`docs/DESIGN_IMPLEMENTATION_DEVIATION_AUDIT_2026-08-06.md` LOOP-14、`orz-loop/src/controller.rs`、`orz-loop/src/prompt.rs`（`TOOL_ROUND_BUDGET`）、ADR-0007（transport 重试，同批定稿）
 
 ## 1. 背景
 

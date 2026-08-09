@@ -1,5 +1,7 @@
 # GSA orientation checkpoint and stagnation guard design（2026-07-26）
 
+> Archive metadata: original_path=`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`; archived_at=`2026-08-09`; final_status=`transferred/evidence_only`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
 ## 裁决
 
 本文件记录设计与首个 no-model/read-only fixture，不启用新的 runner 行为。本轮修订把原先混在一起的“自我质询/反例/停滞哨兵”

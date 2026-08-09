@@ -18,7 +18,7 @@ accident.
 Source routes checked:
 
 - `CLI_PROJECT_INDEX.md`
-- `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
+- `存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`
 - `docs/GROK_CLI_SPECIALIZATION_ADAPTATION_AUDIT_2026-07-30.md`
 - `architecture/INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md`
 - `architecture/GROK_BUILD_ADAPTATION_v0.1.md`

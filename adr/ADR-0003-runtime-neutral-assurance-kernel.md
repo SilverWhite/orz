@@ -1,6 +1,6 @@
 # ADR-0003：保障内核保持 runtime-neutral，Grok 仅作为参考适配
 
-- 状态：Accepted
+- 状态：Accepted / partially superseded by ADR-0010（assurance provider-neutral 边界保留；产品 runtime 所有权条款失效）
 - 日期：2026-07-24
 - 决策范围：通用 runtime、Assurance Kernel、profile 与参考实现的所有权边界
 - 替代：`PRODUCT_POSITIONING_AND_REFERENCE_STRATEGY_v0.1.md` 中“Grok 是唯一产品底座”的裁决

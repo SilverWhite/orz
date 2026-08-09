@@ -1,5 +1,7 @@
 # Run Stall Guards（挂死守卫）实施计划（2026-08-08）
 
+> Archive metadata: original_path=`docs/RUN_STALL_GUARDS_PLAN_2026-08-08.md`; archived_at=`2026-08-09`; final_status=`implemented/transferred`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`implementation history only`.
+
 **自包含交接文档**——新窗口按此实施，勿重开讨论。背景证据链见 §1，归因结论 §2，待办 §3（P0×2 / P1×1 / P2×1），明确不做 §4，前置 §5。
 
 ## 1. 背景与证据

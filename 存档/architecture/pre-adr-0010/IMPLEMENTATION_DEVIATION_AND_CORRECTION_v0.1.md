@@ -1,5 +1,8 @@
 # 实现偏差与修正路线 v0.2
 
+> Archive metadata: original_path=`architecture/IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`; archived_at=`2026-08-09`; final_status=`evidence_only`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical deviation record only`.
+
+
 状态：2026-08-03 更新。v0.1 记录了 sidecar vs fork 架构偏差；v0.2 补充了中立询问机制的
 设计修正（触发模型从线性管道改为事件驱动）和最终阈值。2026-08-03 更新 §4 技术债务——Phase 1
 完成、Phase 2 编译阻塞已解除（方案 A）。
@@ -50,7 +53,7 @@ conformance fixture（`canonical_cli.py` 文件头注释："不是 production ag
 
 ## 3. 中立询问机制——设计已修正，实现待重做
 
-详见 [`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`](../docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md)
+详见 [`docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`](../../docs/design-inputs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md)
 末尾的"设计修正与补充"章节（2026-08-02 追加）。
 
 ### 3.1 核心纠正

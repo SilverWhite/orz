@@ -8,7 +8,7 @@
 
 ## L0 审查结论
 
-**总体评估**: A0 方向裁决的核心架构文档（`CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` 和 `INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md`）保持一致。关键修正（ACP→Headless 主次关系恢复、Neutral/Counterexample 触发分离）已正确落实到代码。但发现 1 个阻断级差距（Diagnostic Coverage Check 无代码实现）和 4 个设计偏离项。
+**总体评估（历史）**: 当时 A0 方向裁决的核心架构文档（现归档于 `存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`，以及 `architecture/INTEGRATED_AGENT_ASSURANCE_DESIGN_v0.1.md`）保持一致。关键修正（ACP→Headless 主次关系恢复、Neutral/Counterexample 触发分离）已正确落实到代码。但发现 1 个阻断级差距（Diagnostic Coverage Check 无代码实现）和 4 个设计偏离项。当前裁决统一见 ADR-0010。
 
 ### 通过项（无需修改）
 
@@ -24,7 +24,7 @@
 
 **标题**: Diagnostic Coverage Check 设计约束无代码实现 → **已实现**
 
-**路径**: `docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` §7.3 → `assurance/diagnostic_coverage.py`
+**路径**: `存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` §7.3 → `assurance/diagnostic_coverage.py`
 
 **严重度**: ~~🔴 阻断（设计约束未落实）~~ → ✅ 已修复
 

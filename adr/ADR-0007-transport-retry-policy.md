@@ -2,7 +2,7 @@
 
 - 状态：accepted
 - 日期：2026-08-07
-- 关联：`docs/FIX_PLAN_2026-08-06.md` D-7（跑分 P1/LOOP-16、P8）、`architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md` §2.5/§4（首事件 timeout、bounded retry、首事件 vs 中断分开记录）、`integration/grok/README.md`（08-02「零重试边界」记录）、`orz-loop/src/gateway/transport.rs`、`orz-loop/src/gateway/model.rs`（`RetryPolicy`）、fork `third_party/async-openai/async-openai/src/client.rs`
+- 关联：`存档/docs/implementation-history/FIX_PLAN_2026-08-06.md` D-7（跑分 P1/LOOP-16、P8）、`architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md` §2.5/§4（首事件 timeout、bounded retry、首事件 vs 中断分开记录）、`integration/grok/README.md`（08-02「零重试边界」记录）、`orz-loop/src/gateway/transport.rs`、`orz-loop/src/gateway/model.rs`（`RetryPolicy`）、fork `third_party/async-openai/async-openai/src/client.rs`
 
 ## 1. 背景
 

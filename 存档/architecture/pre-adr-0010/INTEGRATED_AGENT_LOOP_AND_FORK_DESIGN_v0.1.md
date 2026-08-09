@@ -1,5 +1,8 @@
 # 整合 Agent Loop 与 Fork 实现设计 v0.1
 
+> Archive metadata: original_path=`architecture/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.1.md`; archived_at=`2026-08-09`; final_status=`transferred/superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design input only`.
+
+
 > **已被 v0.2 取代 (2026-08-03)**：[`INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md`](INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md) —
 > 融合架构（Codex 纪律 + Grok 能力）。v0.1 的 LoopHost trait 和注入点分类被保留，
 > 但 orz-shell + Grok TUI 被删除，orz-host 替代 shell 成为新的薄核心。
@@ -591,8 +594,8 @@ pub fn init(config: TelemetryConfig) -> TelemetryHandle {
 - [`AGENT_LOOP_REDESIGN_v0.1.md`](AGENT_LOOP_REDESIGN_v0.1.md)
 
 ### 审查与分析
-- [`PHASE2_POST_PLANA_REVIEW_v0.1.md`](PHASE2_POST_PLANA_REVIEW_v0.1.md)
-- [`PHASE2_COMPILATION_STATUS_v0.2.md`](PHASE2_COMPILATION_STATUS_v0.2.md)
+- [`PHASE2_POST_PLANA_REVIEW_v0.1.md`](../../../architecture/PHASE2_POST_PLANA_REVIEW_v0.1.md)
+- [`PHASE2_COMPILATION_STATUS_v0.2.md`](../../../architecture/PHASE2_COMPILATION_STATUS_v0.2.md)
 - [`IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md`](IMPLEMENTATION_DEVIATION_AND_CORRECTION_v0.1.md)
 
 ### 代码锚点（`B:\orz` @ `a2a7868`）

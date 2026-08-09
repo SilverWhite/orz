@@ -1,5 +1,7 @@
 # Agent 底座嫁接价值中文评估
 
+> Archive metadata: original_path=`docs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md`; archived_at=`2026-08-09`; final_status=`transferred/evidence_only`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical design review only`.
+
 日期：2026-07-30
 
 状态：评估稿，不是最终架构裁决。

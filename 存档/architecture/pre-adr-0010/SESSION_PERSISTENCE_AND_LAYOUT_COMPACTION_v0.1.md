@@ -1,5 +1,8 @@
 # 会话持久化与布局压缩 v0.1
 
+> Archive metadata: original_path=`architecture/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md`; archived_at=`2026-08-09`; final_status=`clause-split/superseded`; superseded_by=`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`; authority=`historical UI/session design input only`.
+
+
 **状态**: 设计冻结（2026-08-01 修正：session 持久化所有权归 Grok）
 **日期**: 2026-07-31
 **范围**: 布局压缩（Address/Find 折叠至 Toolbar）、会话列表 UI（只读视图，数据源为 Grok session 目录）
