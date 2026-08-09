@@ -60,6 +60,13 @@ Crate 数: 74 → ~42 (减 43%)
 | **MCP** | Grok | `orz-mcp` |
 | **自研核心** | orz | orz-loop (Agent Loop) + orz-assurance (gates/journal/snapshot) + orz-tui |
 
+### Windows-first 声明与证据边界（2026-08-09 补充）
+
+- ORZ 当前定位为 **Windows-first / Windows-only pre-beta**，不因已能在维护者环境运行就宣称完成系统性 Windows 原生适配。
+- 基础 Windows 可运行性中，Grok Build/Rust 生态的 inherited 能力与 ORZ added/modified 的专项加固必须分开记录；事故、修复和兼容性结论不得混为一谈。
+- 后续适配采用“追加式事故台账 -> 脱敏精选案例库 -> 机械回归测试 -> beta 环境证据”闭环。任务跑分衡量 agent 解题能力，案例闭环率/环境覆盖/复发率衡量 Windows 工程成熟度，二者不得互相替代。
+- 详细观察面、案例字段、晋级门槛与 beta 要求以 `WINDOWS_RUNTIME_CONTRACT_v0.1.md` §6 为准。
+
 ### 删除清单（一次性，不留手术）
 
 | Crate | 行数 | 类别 |
@@ -351,78 +358,111 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 
 ---
 
-## 4.6 中立问询与反例询问触发设计（2026-08-04 定稿）
+## 4.6 问询机制触发设计（2026-08-04 定稿；2026-08-09 修订——恢复两机制分离）
 
-承接 Neutral vs Counterexample Trigger Split（2026-07-30，CN 设计约束）与子代理检索完成确认（CN §7.3），将 IP2c/IP3b/IP3c 的触发语义定稿。原则：**中立问询留在执行过程中，收尾只留反例询问；过犹不及**。
+承接 Neutral vs Counterexample Trigger Split（2026-07-30，CN 设计约束）、原始设计 `docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md`（修正 2/3）与子代理检索完成确认（CN §7.3），将各问询机制的触发语义定稿。原则：**机械化门禁不随便扩大范围；收尾只留反例询问；过犹不及**。
 
-### 4.6.1 触发位置总表
+### 4.6.0 2026-08-09 修订记录（TB hard B 组复盘驱动）
 
-| 位置 | 机制 | 触发规则 |
-|---|---|---|
-| 每轮检索动作彻底完成后 | 中立问询（信息充分性：IP2c block + IP3c trigger） | 4 判定点任一 → 同一问询 → **触发瞬间 4 计数全部清零** |
-| 关闭检索工具/检索子代理前 | 中立 completion check | 一次性（Python 先例 `RETRIEVAL_COMPLETION_CHECK v0.1`，Rust 接线） |
-| plan 写入前 | 反例询问 | 保留（plan approval gate 链组成部分） |
-| 正式答案输出前 | 反例询问 | **仅触发一次 + message_block 显式告知模型** |
+2026-08-08/09 Terminal-Bench 探索性诊断（4 FAIL 方向全对但"深入单一方向"全程零拦阻）驱动设计复查，发现 **2026-08-04 定稿的合并错误**：
 
-### 4.6.2 裁决
+- 定稿将原始设计（07-26）两个独立机制错误合并——**方向问询**（ORIENTATION_CHECKPOINT，询问"当前任务内容与进度"）的 4 判定点被改绑到**信息充分性问询**（INFO_SUFFICIENCY）上；**方向问询被吞并**。
+- 实现进一步退化：`controller.rs` orientation_checkpoint 仅剩事件记录（每轮一次，message_block 只进事件**不进模型消息**）——方向问询从未注入模型。现行"中立问询"实为**畸形拼合**：方向问询的骨架（4 判定点 + 动作间隙检查）× 信息充分性的文案（INFO_SUFFICIENCY）——TB 场景（无检索轮）高频误触发 + 文本-场景错位；模型无视（习惯性忽视）反而是正确行为。
+- 本次修订**恢复原始设计的两机制分离**，完整保留各机制设计要素（不窄化触发时机、不吞并机制、不丢门控）。修订内容：§4.6.1 总表、§4.6.2 方向问询（5 判定点 + tool_variety 回归）、§4.6.3 信息充分性（与判定点解绑 + 原始机械事实文案）、§4.6.5 反例询问职责边界明示、§4.6.8 实现位置。
 
-1. **正式答案输出前不触发中立问询**（过犹不及）：模型能力足够，多加只是负担；且输出前中立问询的补救窗口（"还能补检索"）已关闭，价值近零。
-2. **正式答案输出前的反例询问仅触发一次**，message_block 显式告知"本询问仅出现一次"——与轮内问询区分收尾 gate 语义，让模型知道这是最后一次自查机会。
-3. **plan 写入前的反例询问保留**——它是 plan approval gate 链的组成部分，位置不同（plan 阶段模型无"即将输出"紧迫感），不在"仅一次"范围内。
+### 4.6.1 机制总览（2026-08-09 修订版）
 
-### 4.6.3 4 判定点与清零状态机（IP3b，轮内中立问询）
+| 机制 | 触发时机 | 门控/绑定 | 内容 | 回答后果 |
+|---|---|---|---|---|
+| 方向问询（ORIENTATION_CHECKPOINT） | 动作间隙（每工具轮后检查）+ 每 8 轮必触发 | **5 判定点**：输出重复 >10 / 工具调用 >10 / 动作 >10 / 轮次 >8 / 工具种类 >7——任一超限触发同一方向问询，触发瞬间全部清零（隐式冷却） | 当前正在做什么 / 任务定位 / 下一步服务哪个用户目标 | 无控制流后果（中性定位标记，证据记录） |
+| 信息充分性（INFO_SUFFICIENCY） | 检索动作彻底完成后 | `info_sufficiency_after_retrieval` 独立开关——**不绑 5 判定点** | 机械可验证事实（来源数/覆盖/全文可见/缺失类别）+ 是否足以完成任务 | 无控制流后果（证据记录；治本方向见 §4.6.3 注记） |
+| 子代理 completion check（RETRIEVAL_COMPLETION_CHECK） | 关闭检索子代理前 | 一次性，独立 | 是否已获得完成主任务所需内容（yes/no/uncertain） | 无控制流后果（中性——claim_policy 全 False） |
+| 反例询问（COUNTEREXAMPLE_GATE） | plan 写入前 + 正式答案输出前 | 正式答案变体**仅一次 + 显式告知** | 反例自查（前提/反证/结论强度） | 无控制流后果（自查引导） |
+| 停滞守卫（runtime_stagnation_guard） | 公开输出连续/ngram 重复 > 阈值 | 独立机械门禁 | restart_requested / continue / handoff | **有**（restart = 全局重启） |
 
-- 4 判定点（满足任一即触发同一中立问询）：**输出阈值**（stagnation consecutive/ngram repeat > 阈值）、**工具调用次数**、**动作次数**、**轮次**。
-- **触发即清零**：问询触发瞬间 4 个计数全部归零并重新积累（非模型响应后）。
-  - 同作用问询 = 同一事件源；不共享重置点会导致未触发计数器在下一轮立即补触发（问询刷屏）。
-  - 清零形成**隐式冷却**：任何问询后必须重新积累阈值单位才可能再次触发。
-  - **取代 CN 约束的轮次豁免（2026-08-04 裁决）**：CN `GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN` 规定"轮次触发不受 cooldown 限制"；本定稿对**轮次计数同样清零**——4 判定点同作用共享重置点，用户批准的全清零方案优先，跨轮漂移由轮内其他 3 个判定点兜底。
-  - stagnation 的 `RestartRequested`（terminal_safe_restart_packet）语义为全局重启，本身重置一切，与清零不冲突。
-- **作用域**：仅作用于轮内中立问询；子代理关闭前 completion check 为独立一次性收尾检查，无积累语义，**不参与 4 计数**。
-- **默认阈值（Phase 3 落地时定稿，参照 CN 门控默认）**：输出阈值沿用 stagnation 默认（consecutive/ngram 严格大于 10）；工具调用次数 / 动作次数 / 轮次的默认阈值参照 CN 约束（10 动作 / 8 轮）——Phase 3 接线时按 §4.6.3 语义定稿，数值调整以 ADR 记录。
-- **2026-08-04 接线定稿（ADR-0005）**：4 判定点全部严格大于——输出阈值 > 10（consecutive/ngram，沿用 stagnation 默认）、工具调用次数 > 10、动作次数 > 10、轮次 > 8；触发检查顺序固定为 output_repeats → tool_calls → actions → rounds（返回第一个命中）；触发瞬间**三实例（主 agent + 检索子代理 ×2）4 计数全部清零**。数值后续调整以新 ADR 记录。
+### 4.6.2 方向问询（原始设计恢复——询问任务内容与进度；机制最复杂，绑定 5 判定点）
 
-### 4.6.4 子代理动作语义分层（动作次数判定）
-
-- 主 agent 与检索子代理除职责、prompt、权限外配置**一致且各自独立**（承接 Two-Subagent Default Constraint 精神——约束原文只规定子代理数量与类型，配置一致性是本定稿的细化）。
-- **动作次数计数粒度角色感知**——同一计数器接口，不同事件源：
-  - 主 agent：底层工具级事件（`ToolDispatcher` 包装）。
-  - 子代理：**上层语义动作**——一次 `run_retrieval`（一个 goal 执行）= 1 个动作；`budget_turns > 1` 时每轮 = 1 个动作。子代理内部**关闭工具级计数**（检索本身动作多——search/fetch/read 多工具调用，工具级计数必然误触发）。
-- 其余 3 判定点（输出阈值/工具调用/轮次）主 agent 与子代理照常。
-
-### 4.6.5 Block 文案模板（格式对齐 Python `[BLOCK v0.1]` 惯例）
-
-反例询问（正式答案输出前，仅一次）：
+- **职责**：执行过程中的**全局回看与方向辅助**——中性定位标记，维护主 agent 对"当前正在做什么 / 当前任务定位 / 下一步服务哪个用户目标"的清醒认知；防"深入单一方向"与"单轮异常发散"。
+- **触发时机**：① 动作间隙——每工具轮后检查（原始设计修正 3 事件驱动语义：`action_completed ← 触发点`）；② **轮次必触发**——每 8 轮，下一轮开始时必定触发一次，**不受冷却限制**（防跨轮缓慢漂移：每轮都短、都正常，但累计已偏；2026-08-04 裁决"轮次同清零"保留——清零指触发瞬间计数归零，轮次必触发间隔不受影响）。
+- **判定点（5，任一超限触发同一方向问询）**：
+  - 输出重复 > 10（consecutive/ngram，沿用 stagnation 默认，按轮测量）
+  - 工具调用 > 10
+  - 动作 > 10
+  - 轮次 > 8
+  - **工具种类 > 7**（单轮按 tool_id 去重——原始设计 `orientation_trigger_tool_variety: 7` 回归；防单轮异常发散：~10 种工具用到 7 种 = 70%，高度发散）
+  - 阈值与数值调整以新 ADR 记录。
+- **清零状态机（保留定稿有效部分）**：触发瞬间**全部计数清零**并重新积累（隐式冷却——任何问询后必须重新积累阈值单位才可能再次触发；同作用问询 = 同一事件源，不共享重置点会导致未触发计数器下一轮立即补触发即问询刷屏）；触发检查顺序固定 output_repeats → tool_calls → actions → rounds → tool_variety；作用域为主 agent + 检索子代理 ×2 三实例各自独立计数、触发同作用问询、**三实例同清零**。
+- **内容（原始文案原文，中性定位标记）**：
 
 ```text
-[COUNTEREXAMPLE_GATE v0.1]
-最终回答即将输出。请对即将输出的结论做最后一次反例自查：
-1. 是否存在未验证的前提？
-2. 是否存在可推翻结论的已知证据？
-3. 结论强度是否超出证据支持？
-注意：本反例询问仅出现一次，请在最终回答前完成全部反例自查。
-[/COUNTEREXAMPLE_GATE]
+[ORIENTATION_CHECKPOINT v0.1]
+当前正在做什么？
+当前任务定位是什么？
+下一步输出应该服务哪个用户目标？
+[/ORIENTATION_CHECKPOINT]
 ```
 
-中立问询（每轮检索动作彻底完成后，IP2c）：
+- **约束**：格式明显区别于用户/系统消息，使模型识别为"中途引导/定位标记"而非"新任务/质疑"；**不要求模型"停止当前推理并重新思考"**，而是"在当前位置做一个轻量定位标记"；允许问题还包括"当前可用来源、权限和输出边界是什么"；回答无控制流后果（证据记录，循环自然继续）；若实施结构解析，响应仅允许 `orientation_summary` / `current_task_position` / `next_output_target` 三字段，拒绝 counterexample_candidate / claim_disposition 等字段（原始 `verify_orientation_response` 语义）。
+- **注记（token 门控）**：原始设计另有单轮公开输出 token 门控（`orientation_trigger_tokens: 7000`）——本次修订先不并入 5 判定点（需轮内输出 token 度量链路），语义保留于此，实施时以新 ADR 裁决是否加入。
+
+### 4.6.3 信息充分性问询（原始设计恢复——与 5 判定点解绑）
+
+- **职责**：信息收集充分性确认——检索/信息获取后的轻量确认，防"信息不足即收尾"。
+- **触发时机**：子代理检索或任何外部信息获取动作完成后、模型给出正式回复前（原始设计 `info_sufficiency_after_retrieval: true`）。**不绑定 5 判定点**。
+- **触发条件（硬门控三条件）**：① 检索/信息获取动作已返回结果（tool_completed for retrieval/info-gathering tools）② 模型尚未发出面向用户的最终回复 ③ 动作间隙注入。
+- **内容（原始文案，机械可验证事实）**：
 
 ```text
-[INFO_SUFFICIENCY v0.1]
-本轮检索已完成。请确认：
-是否已获得完成当前主任务所需的内容？
-请回答 yes / no / uncertain，并附简短理由。
-若为 no 或 uncertain，只列出还需要的内容类型。
-[/INFO_SUFFICIENCY]
+[INFO_SUFFICIENCY_CHECK v0.1]
+已获取来源: {source_count} 项
+覆盖范围: {categories}
+全文可见: {fulltext_count}/{source_count}
+缺失: {missing_categories}
+
+当前信息是否足够回答用户问题？
+如不足，还需哪些信息？
+[/INFO_SUFFICIENCY_CHECK]
 ```
 
-### 4.6.6 实现位置（承接 §4 表格；2026-08-04 已接线）
+- **约束**：绝不暗示"你应该质疑当前结论"；只陈述**机械可验证**的事实（来源数量、类别、全文可见性）；不可作为"模型已经查过了"的证明（证据在 gate receipt）；不允许模型用此机制绕过 source visibility gate 的 block/defer 决策。
+- **注记（2026-08-09 治本方向，讨论中未定稿）**：机械事实字段需要检索结果元数据链路（当前 toolset 无来源计数，实施时建设）；用户提出治本方向——**主 agent 发出关闭子代理命令后触发机械门禁**：阶段 1 先注入信息充分性问询（问主 agent），等待主 agent 回复后阶段 2 触发关闭选项（yes → 放行关闭；no/uncertain → 不关闭可继续）。涉及子代理会话模型（当前瞬态 run_retrieval vs 持久会话 + 显式关闭命令）等开放问题，定稿前不写死。
 
-- IP2c INFO_SUFFICIENCY block：`orz-loop::PromptBuilder`（原生）——常量位于 `orz-loop/src/prompt.rs`（`INFO_SUFFICIENCY_BLOCK`），以 `Role::User` message 注入（对模型的运行时提问而非系统上下文）
-- IP3b 4 判定点计数器 + 清零状态机：`orz-loop` 控制器持有状态（触发即清零）；计数事件源——主 agent 吃工具级（`ToolDispatcher` 包装），子代理吃语义级（`run_retrieval` / 轮）——`orz-loop/src/inquiry.rs`（`InquiryCounters`/`InquiryThresholds`/`DEFAULT_THRESHOLDS`）
-- IP3c sufficiency trigger：每轮检索动作彻底完成后检查（`ToolDispatcher` 包装后置）——`controller.rs` 工具循环内检索分发后触发；三实例同清零
-- 子代理关闭前 completion check：子代理关闭路径接线 Python 先例 `RETRIEVAL_COMPLETION_CHECK v0.1`（Rust 侧移植）——block 注入子代理请求（`agents/retrieval.rs` `completion_check_block` 参数），响应逐行解析 yes/no/uncertain（`parse_completion_decision`），事件带完整响应文本作证据
-- 反例询问：plan 写入前 + 正式答案输出前（仅一次 + 显式告知）——`run_plan` 在 `submit_plan` 前做一次模型轮（plan 变体 block 无"仅一次"行；机械 plan 下为 evidence-only，模型生成 plan 时升级为阻塞链环节）；正式答案输出前在工具循环无 tool_calls 分支拦截一次（`COUNTEREXAMPLE_GATE_BLOCK`，被拦截草稿 journal 为 model_output 但不进入会话）
-- 三个 gate 均记录 run-event：`neutral_inquiry` / `counterexample_gate` / `retrieval_completion_check`（run-event schema 27→30 变体，payload schema 见 `runtime/`）；模型回答无控制流后果（证据记录，循环自然继续）
+### 4.6.4 子代理 completion check（保留，中性确认）
+
+关闭检索工具/检索子代理前的中立完成确认——一次性（Python 先例 `RETRIEVAL_COMPLETION_CHECK v0.1` 逐字移植）；block 注入子代理请求，响应逐行解析 yes/no/uncertain（`parse_completion_decision`），事件带完整响应文本作证据。**中性策略**：claim_policy 全部 False（may_generate_counterexample_candidate / may_set_claim_disposition / may_enter_global_review / may_request_new_subagent 全 False，claim_strength_effect "none"）——不评估正确性、不进入全局审查、不请求新子代理；no/uncertain 只列出还需要的内容类型。
+
+### 4.6.5 反例询问（保留定稿语义 + 职责边界明示）
+
+1. **正式答案输出前不触发方向/信息问询**（过犹不及）：模型能力足够，多加只是负担；且输出前补救窗口（"还能补收集"）已关闭，价值近零。
+2. **正式答案输出前的反例询问仅触发一次**，message_block 显式告知"本询问仅出现一次"——与轮内问询区分收尾 gate 语义。
+3. **plan 写入前的反例询问保留**——plan approval gate 链组成部分，不在"仅一次"范围内。
+4. **中途不触发是设计本意**：自我质询没必要多（单一主 agent）；**中途方向维护由方向问询（§4.6.2）承担，收尾自查由反例询问承担**——职责分工不混淆；机械化门禁不随便扩大范围。
+
+### 4.6.6 停滞守卫（独立，机械化门禁不扩大范围）
+
+公开输出连续重复 / n-gram 重复 > 10 触发 `restart_requested`（全局重启语义，重置一切，与清零不冲突）。独立机械门禁，不参与任何问询判定；"输出重复/循环"类失效归它，不归方向/信息问询。
+
+### 4.6.7 子代理动作语义分层（保留 2026-08-04 语义）
+
+- 主 agent 与检索子代理除职责、prompt、权限外配置一致且各自独立（Two-Subagent Default Constraint 精神）。
+- 主 agent：底层工具级事件（ToolDispatcher 包装）。
+- 子代理：上层语义动作——一次 run_retrieval（一个 goal 执行）= 1 个动作；budget_turns > 1 时每轮 = 1 个动作。子代理内部**关闭工具级计数**（检索本身动作多——search/fetch/read 多工具调用，工具级计数必然误触发）。
+- 其余判定点（输出阈值/工具调用/轮次/工具种类）主 agent 与子代理照常（子代理工具调用恒 0——内部关闭；输出度量用其返回文本；工具种类在子代理内部不适用——其工具面固定）。
+
+### 4.6.8 Block 文案模板（三套分开，2026-08-09 修订）
+
+- 方向问询：`[ORIENTATION_CHECKPOINT v0.1]`（§4.6.2 原文）——"当前正在做什么 / 当前任务定位是什么 / 下一步输出应该服务哪个用户目标"。
+- 信息充分性：`[INFO_SUFFICIENCY v0.1]`——**文案回退原始机械事实模板**（来源数/覆盖/全文可见/缺失类别；机械事实字段待检索元数据链路）。定稿简化版（"本轮检索已完成"）废弃——该简化与机械门禁"只陈述机械可验证事实"约束冲突。
+- 反例询问：`[COUNTEREXAMPLE_GATE v0.1]`（正式答案变体含"仅一次"行；plan 变体不含）。
+- 子代理 completion check：`[RETRIEVAL_COMPLETION_CHECK v0.1]`（Python 逐字移植）。
+
+### 4.6.9 实现位置（2026-08-09 修订版）
+
+- 方向问询：5 判定点计数器 + 清零状态机 —— `orz-loop/src/inquiry.rs`（`InquiryCounters`/`InquiryThresholds`/`DEFAULT_THRESHOLDS` + **tool_variety 新增**）；检查在 `controller.rs` 工具循环后动作间隙（每工具轮后）+ 每 8 轮必触发（turn counter）；block（`ORIENTATION_CHECKPOINT_BLOCK`）以 Role::User 注入主 agent 下一轮；事件沿用 `neutral_inquiry`（payload `message_block` 区分机制），每轮机械 `orientation_checkpoint` 记录保留（Python parity）。
+- 信息充分性：检索动作完成后触发 —— `controller.rs` run_retrieval_subagent 返回后；block 文案回退机械事实模板（`INFO_SUFFICIENCY_BLOCK` 修订；机械事实字段待检索元数据链路）。
+- 子代理 completion check：`agents/retrieval.rs` `completion_check_block` 参数 + `parse_completion_decision`。
+- 反例询问：plan 写入前 + 正式答案输出前（无 tool_calls 分支拦截一次）——`run_plan` / 工具循环无 tool_calls 分支（`COUNTEREXAMPLE_GATE_BLOCK`，被拦截草稿 journal 为 model_output 但不进入会话）。
+- 各 gate 记录 run-event：`neutral_inquiry`（方向问询 / 信息充分性按 message_block 区分）/ `counterexample_gate` / `retrieval_completion_check`（run-event schema 变体，payload schema 见 `runtime/`）；模型回答无控制流后果（证据记录，循环自然继续）。
 
 ---
 
@@ -456,15 +496,27 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 4. **验证**: 完整 gate 链
 
 ### Phase 3: TUI + Snapshot + Polish
-**目标**：完整产品
+**目标**：功能闭环达到 Windows pre-beta；不等于完整 Windows 兼容性或正式产品完成
 
 1. orz-tui → assurance workbench
 2. orz-assurance::session::snapshot
 3. orz-assurance::sandbox::job_object, credential, permit
 4. Codex 纪律：严格 Clippy，零死代码 crate
 5. Python 项目 → reference-spec
-6. **§4.6 接线**（2026-08-04 审查补列；2026-08-04 已接线，部分闭合）：反例询问（plan 写入前 + 正式答案输出前**仅一次 + message_block 显式告知**）——`run_plan` submit_plan 前模型轮（plan 变体无"仅一次"行）+ 工具循环无 tool_calls 分支拦截一次；中立问询接线（IP2c `INFO_SUFFICIENCY` block + IP3c 每轮检索后触发 + 4 判定点计数/清零状态机，阈值定稿见 §4.6.3/ADR-0005）；子代理关闭前 completion check（Python `RETRIEVAL_COMPLETION_CHECK` 移植，逐字）；三机制均记 run-event（新增 3 事件类型 + payload schema，Python authority 先行）。OrzHost + PermissionBridge 接入三入口已于 Slice #1 完成。已知边界：模型回答暂不驱动控制流（evidence-only）；plan 变体 gate 在机械 plan 下为证据性触发
+6. **§4.6 接线**（2026-08-04 审查补列；2026-08-04 已接线，部分闭合；**2026-08-09 修订语义——两机制分离恢复**）：反例询问（plan 写入前 + 正式答案输出前**仅一次 + message_block 显式告知**）——`run_plan` submit_plan 前模型轮（plan 变体无"仅一次"行）+ 工具循环无 tool_calls 分支拦截一次；**方向问询**（ORIENTATION_CHECKPOINT，绑定 5 判定点计数/清零状态机——2026-08-09 起，含 tool_variety，阈值定稿见 §4.6.2/ADR-0005）；**信息充分性**（INFO_SUFFICIENCY，独立开关——检索/信息获取动作后触发，不绑判定点，§4.6.3）；子代理关闭前 completion check（Python `RETRIEVAL_COMPLETION_CHECK` 移植，逐字）；各机制均记 run-event（neutral_inquiry 按 message_block 区分机制 + counterexample_gate + retrieval_completion_check，payload schema 见 runtime/，Python authority 先行）。OrzHost + PermissionBridge 接入三入口已于 Slice #1 完成。已知边界：模型回答暂不驱动控制流（evidence-only）；plan 变体 gate 在机械 plan 下为证据性触发；**2026-08-09 起实现与设计偏差待修**（现行实现为畸形拼合：4 判定点+每工具轮检查绑 INFO_SUFFICIENCY 文案；方向问询仅事件记录无模型交互——实施排期见 memory/索引）
 7. **验证**: 全功能 conformance suite
+
+### Phase 4: Windows beta 加固 + 案例库
+**目标**：用真实 Windows 任务和 beta 环境把“Windows-first 定位”逐步转化为可复现、可回归、可披露边界的工程证据
+
+1. 建立追加式事故台账，保留未定位、不可复现和非 Windows 特有的反例；
+2. 按 `windows_native` / `cross_platform_agent` / `harness_environment` 分类并维护脱敏精选案例库；
+3. 将稳定案例晋级为自动回归测试或有明确步骤的人工复核；
+4. 记录 Windows/Shell/项目工具链环境矩阵，不以单机通过推广兼容声明；
+5. SWE-bench-Live/Windows 用于解题能力和 debug，Windows 案例闭环指标单独统计；
+6. 正式发布前冻结已验证环境、已知限制、案例入口与测试证据。
+
+详细契约：`WINDOWS_RUNTIME_CONTRACT_v0.1.md` §6。
 
 ---
 
