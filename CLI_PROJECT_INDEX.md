@@ -79,7 +79,7 @@
 - **FUS-STATE-RECOVERY** (`current-design`; 2026-08-09)：journal、blackboard、snapshot、compaction、recovery 和子代理 disposition 共同组成可审计状态链。关键词：journal、snapshot、CAS close、compaction、recovery。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
 - **FUS-WINDOWS-BOUNDARY** (`current-design`; 2026-08-09)：Windows process/runtime spike、产品事故记录和精选案例库分开治理；现阶段只保留证据边界，不提前宣称案例闭环。关键词：Job Object、Windows compatibility、incident、case library。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`docs/incidents/`](docs/incidents/) / [`docs/cases/`](docs/cases/)。
 - **FUS-UI-BOUNDARY** (`current-design`; 2026-08-09)：保留 Toolbar 和只读 session/run-history 投影，产品边界不扩展为完整 IDE。关键词：TUI、Toolbar、readonly session projection、Codex app-server、VS Code lifecycle。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
-- **FUS-COMPONENT-REGISTER** (`pending`; 2026-08-09)：逐 crate/component 的采用、替换和所有权矩阵必须按当前代码重新审计，旧矩阵不能直接复用。关键词：component matrix、crate ownership、mature adoption。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
+- **FUS-COMPONENT-REGISTER** (`partial`; 2026-08-09)：register 文件框架已建（63 组件全 `audit_required`，不得从 crate 名/编译推断采用档位），逐 crate 审计未开始。关键词：component matrix、crate ownership、mature adoption、audit_required。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`fusion-component-register-v0.1.yaml`](upstream/fusion-component-register-v0.1.yaml) / [`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
 
 ## 3. 当前实现与符合性路由
 
@@ -158,7 +158,8 @@
 - `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY。
 - `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW。
 - `partial`：IMPL-RUST-RUNTIME、IMPL-RUN-EVENT-SCHEMA、IMPL-DEEPSEEK-TRANSPORT、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER。
-- `pending`：FUS-COMPONENT-REGISTER、GAP-SUFFICIENCY-SCHEMA、GAP-WINDOWS-EVIDENCE。
+- `pending`：GAP-SUFFICIENCY-SCHEMA、GAP-WINDOWS-EVIDENCE。
+- `partial`：FUS-COMPONENT-REGISTER（框架已建，逐 crate 审计未开始）。
 - `reference`：AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 

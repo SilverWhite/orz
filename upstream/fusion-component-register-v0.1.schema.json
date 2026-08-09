@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lif.local/schemas/fusion-component-register-v0.1.schema.json",
+  "title": "Fusion component register v0.1 — per-crate adoption matrix (ADR-0010 §11.5)",
+  "description": "Machine-readable inventory of every crate/component in the ORZ fusion workspace: origin, adoption tier, ownership, seams and audit state. It is an ADR-0010 projection — it records facts about the codebase, it does not itself change design.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "frozen_at",
+    "audit_status",
+    "components"
+  ],
+  "properties": {
+    "schema_version": {"const": "0.1.0"},
+    "frozen_at": {"type": "string", "format": "date"},
+    "audit_status": {
+      "const": "not_started",
+      "description": "Until the per-crate audit runs, every entry MUST be audit_required / not_started — adoption may not be inferred from crate names, upstream origin or compilation success (ADR-0010 §11.5)."
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "capability_group",
+        "code_path",
+        "status",
+        "adoption_tier",
+        "ownership",
+        "origin"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable component ID (crate name or logical component), e.g. orz-workspace."
+        },
+        "capability_group": {
+          "enum": [
+            "tool/workspace/VCS",
+            "sandbox/permission",
+            "ACP/MCP",
+            "provider_client",
+            "compaction",
+            "host/loop/assurance",
+            "UI",
+            "build/support",
+            "inherited-support"
+          ]
+        },
+        "code_path": {
+          "type": "string",
+          "description": "Repository-relative path, e.g. orz/crates/codegen/orz-workspace."
+        },
+        "status": {
+          "enum": [
+            "audit_required",
+            "audited",
+            "not_applicable"
+          ],
+          "description": "audit_required = not yet per-crate audited (the freeze-time default); audited = register entry completed against current code."
+        },
+        "adoption_tier": {
+          "enum": [
+            "not_assessed",
+            "direct_reuse",
+            "thin_adapter",
+            "controlled_fork",
+            "local_replacement",
+            "self_build"
+          ],
+          "description": "not_assessed until audited — adoption may not be guessed from origin or name (ADR-0010 §11.5)."
+        },
+        "ownership": {
+          "enum": [
+            "not_assessed",
+            "inherited",
+            "modified",
+            "replaced",
+            "local"
+          ],
+          "description": "not_assessed until audited."
+        },
+        "origin": {
+          "type": "object",
+          "description": "Origin facts recorded at audit time. May be omitted or minimal while audit_required.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"enum": ["unassessed", "upstream", "vendored", "local", "third_party"]},
+            "project": {"type": "string"},
+            "version": {"type": "string"},
+            "revision": {"type": "string"},
+            "license": {"type": "string"}
+          }
+        },
+        "path_sets": {
+          "type": "object",
+          "description": "Inherited / modified / replaced path sets — mutually exclusive (ADR-0010 §11.5). Filled at audit time.",
+          "additionalProperties": false,
+          "properties": {
+            "inherited": {"type": "array", "items": {"type": "string"}},
+            "modified": {"type": "array", "items": {"type": "string"}},
+            "replaced": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "seam": {
+          "type": "string",
+          "description": "Public seam / call entry of the component (filled at audit time)."
+        },
+        "conflict_evidence": {
+          "type": "string",
+          "description": "Evidence of conflicts with the fusion control plane (filled at audit time)."
+        },
+        "design_record": {"type": "string"},
+        "verification_ref": {"type": "string"},
+        "upgrade_owner": {"type": "string"},
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}

@@ -1,0 +1,514 @@
+# Fusion component register v0.1 — machine-readable inventory (ADR-0010 §11.5)
+#
+# FROZEN 2026-08-09 at ADR-0010 v1.1. Every entry is audit_required:
+# adoption tier / ownership / origin must NOT be inferred from crate names,
+# upstream origin, or successful compilation — the per-crate audit against
+# current code has not run yet. This file is an ADR projection, not design.
+schema_version: 0.1.0
+frozen_at: "2026-08-09"
+audit_status: not_started
+components:
+- id: xai-proto-build
+  capability_group: build/support
+  code_path: orz/crates/build/xai-proto-build
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-agent
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-agent
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-announcements
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-announcements
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-auth
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-auth
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-chat-state
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-chat-state
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-config
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-config
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-config-types
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-config-types
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-env
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-env
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-hooks
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-hooks
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-http
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-http
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-markdown
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-markdown
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-markdown-core
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-markdown-core
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-mcp
+  capability_group: ACP/MCP
+  code_path: orz/crates/codegen/orz-mcp
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-memory
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-memory
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-models
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-models
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-paths
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-paths
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-sampling-types
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-sampling-types
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-sandbox
+  capability_group: sandbox/permission
+  code_path: orz/crates/codegen/orz-sandbox
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-secrets
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-secrets
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-shared
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-shared
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-subagent-resolution
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-subagent-resolution
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-telemetry
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-telemetry
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-tools
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/codegen/orz-tools
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-tools-api
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/codegen/orz-tools-api
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-version
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/orz-version
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-workspace
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/codegen/orz-workspace
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-workspace-client
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/codegen/orz-workspace-client
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-workspace-types
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/codegen/orz-workspace-types
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: ptyctl
+  capability_group: build/support
+  code_path: orz/crates/codegen/ptyctl
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: ptyctl-cli
+  capability_group: build/support
+  code_path: orz/crates/codegen/ptyctl-cli
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-acp-lib
+  capability_group: ACP/MCP
+  code_path: orz/crates/codegen/xai-acp-lib
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-agent-lifecycle
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-agent-lifecycle
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-crash-handler
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-crash-handler
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-fast-worktree
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/codegen/xai-fast-worktree
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-file-utils
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-file-utils
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-fsnotify
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-fsnotify
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-gix-status
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/codegen/xai-gix-status
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-hooks-plugins-types
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-hooks-plugins-types
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-hunk-tracker
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-hunk-tracker
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-mixpanel
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-mixpanel
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-ratatui-textarea
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-ratatui-textarea
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-system-power
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-system-power
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-token-estimation
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-token-estimation
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-tracing-macros
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-tracing-macros
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-tty-utils
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-tty-utils
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-workflow
+  capability_group: inherited-support
+  code_path: orz/crates/codegen/xai-workflow
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-compaction
+  capability_group: compaction
+  code_path: orz/crates/common/orz-compaction
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-circuit-breaker
+  capability_group: inherited-support
+  code_path: orz/crates/common/xai-circuit-breaker
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-computer-hub-core
+  capability_group: sandbox/permission
+  code_path: orz/crates/common/xai-computer-hub-core
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-computer-hub-mcp-adapter
+  capability_group: sandbox/permission
+  code_path: orz/crates/common/xai-computer-hub-mcp-adapter
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-computer-hub-sdk
+  capability_group: sandbox/permission
+  code_path: orz/crates/common/xai-computer-hub-sdk
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-interjection-core
+  capability_group: inherited-support
+  code_path: orz/crates/common/xai-interjection-core
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-test-utils
+  capability_group: inherited-support
+  code_path: orz/crates/common/xai-test-utils
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-tool-protocol
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/common/xai-tool-protocol
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-tool-runtime
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/common/xai-tool-runtime
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-tool-types
+  capability_group: tool/workspace/VCS
+  code_path: orz/crates/common/xai-tool-types
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: xai-tracing
+  capability_group: inherited-support
+  code_path: orz/crates/common/xai-tracing
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-assurance
+  capability_group: host/loop/assurance
+  code_path: orz/crates/orz-assurance
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-bin
+  capability_group: host/loop/assurance
+  code_path: orz/crates/orz-bin
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-codex
+  capability_group: UI
+  code_path: orz/crates/orz-codex
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-host
+  capability_group: host/loop/assurance
+  code_path: orz/crates/orz-host
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-loop
+  capability_group: host/loop/assurance
+  code_path: orz/crates/orz-loop
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-tui
+  capability_group: UI
+  code_path: orz/crates/orz-tui
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "pending per-crate audit (V11-IMPL-008)"
