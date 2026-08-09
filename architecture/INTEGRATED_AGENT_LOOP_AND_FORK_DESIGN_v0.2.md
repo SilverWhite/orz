@@ -368,7 +368,8 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 
 - 定稿将原始设计（07-26）两个独立机制错误合并——**方向问询**（ORIENTATION_CHECKPOINT，询问"当前任务内容与进度"）的 4 判定点被改绑到**信息充分性问询**（INFO_SUFFICIENCY）上；**方向问询被吞并**。
 - 实现进一步退化：`controller.rs` orientation_checkpoint 仅剩事件记录（每轮一次，message_block 只进事件**不进模型消息**）——方向问询从未注入模型。现行"中立问询"实为**畸形拼合**：方向问询的骨架（4 判定点 + 动作间隙检查）× 信息充分性的文案（INFO_SUFFICIENCY）——TB 场景（无检索轮）高频误触发 + 文本-场景错位；模型无视（习惯性忽视）反而是正确行为。
-- 本次修订**恢复原始设计的两机制分离**，完整保留各机制设计要素（不窄化触发时机、不吞并机制、不丢门控）。修订内容：§4.6.1 总表、§4.6.2 方向问询（5 判定点 + tool_variety 回归）、§4.6.3 信息充分性（与判定点解绑 + 原始机械事实文案 + **子代理生命周期实现偏差记录**）、§4.6.5 反例询问职责边界明示、§4.6.8 实现位置。
+- 本次修订**恢复原始设计的两机制分离**，完整保留各机制设计要素（不窄化触发时机、不吞并机制、不丢门控）。修订内容：§4.6.1 总表、§4.6.2 方向问询（判定点 + tool_variety 回归后删——2026-08-09 用户裁决）、§4.6.3 信息充分性（与判定点解绑 + 原始机械事实文案 + **子代理生命周期实现偏差记录**）、§4.6.5 反例询问职责边界明示、§4.6.8 实现位置。
+- **2026-08-09 第三次修订（用户裁决）**：**tool_variety 彻底去掉**（原始语义与实测失效模式不匹配——TB 为"单一方向深入"非"发散"；高难度任务多工具是常态；轮次兜底）+ **轮次判定 8→7**（轮次承担兜底职责，最坏 7 轮一次方向问询）；token 门控注记明确不再并入（同理由：低估模型能力，少限制）。
 - **2026-08-09 第二次修订（用户指示）**：① 信息充分性问询**严格恢复原设计**（`INFO_SUFFICIENCY_CHECK` 名称 + 机械事实模板全文，无任何简化——定稿简化版"本轮检索已完成"彻底废弃）；② **子代理生命周期实现偏差记录**（§4.6.3 注记）：设计 = 单轮检索任务内**持久化 + 显式开关**（主代理打开=派遣合同 / 关闭=确认本轮完毕，关闭不清零可重新唤醒，关闭回执 can_resume——`docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md` 原文），子代理动作面 = **调用本地浏览器**（外部检索，LBR-001 默认主路径）+ 项目文档（内部检索），结构化结果（query_summary / source_ledger / filtering_log / organized_response / raw_source_refs）——机械事实字段（来源数/覆盖/全文可见/缺失）的**数据出处正是 source_ledger 与 query_summary**；实现 = 瞬态单轮调用 + 零工具子代理（`agents/retrieval.rs` `tools: Vec::new()`——无法调用浏览器/任何工具）+ 自由文本结果（[DOC]/[来源] 行解析）——**实现偏差**。
 - **案例化（2026-08-09，用户指示"值得作为案例来优化 orz"）**：本轮暴露两类可防问题——**设计退化**（08-04 定稿吞并方向问询、丢 tool_variety/token 门控、简化信息充分性文案）与**实现偏差**（方向问询仅事件记录无模型交互；子代理瞬态化零工具化）。教训：① 定稿合并机制/修改文案必须显式评审并保留原始设计要素（不吞并不窄化不简化）；② 实现接线必须回查设计原文（本案例：`RETRIEVAL_SUBAGENT_AUDIT` 生命周期原文 vs 瞬态实现）；③ 机械化门禁不扩大范围；④ 退化修复 = 先恢复原设计全文、再谈增强。落点：本设计文档修订记录 + memory；正式案例库形态待用户确认（可参照 WINDOWS_RUNTIME_CONTRACT §6 案例库结构）。
 
@@ -376,7 +377,7 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 
 | 机制 | 触发时机 | 门控/绑定 | 内容 | 回答后果 |
 |---|---|---|---|---|
-| 方向问询（ORIENTATION_CHECKPOINT） | 动作间隙（每工具轮后检查）+ 每 8 轮必触发 | **5 判定点**：输出重复 >10 / 工具调用 >10 / 动作 >10 / 轮次 >8 / 工具种类 >7——任一超限触发同一方向问询，触发瞬间全部清零（隐式冷却） | 当前正在做什么 / 任务定位 / 下一步服务哪个用户目标 | 无控制流后果（中性定位标记，证据记录） |
+| 方向问询（ORIENTATION_CHECKPOINT） | 动作间隙（每工具轮后检查） | **4 判定点**：输出重复 >10 / 工具调用 >10 / 动作 >10 / 轮次 >7（2026-08-09 起，tool_variety 已删）——任一超限触发同一方向问询，触发瞬间全部清零（隐式冷却） | 当前正在做什么 / 任务定位 / 下一步服务哪个用户目标 | 无控制流后果（中性定位标记，证据记录） |
 | 信息充分性（INFO_SUFFICIENCY_CHECK） | 检索动作彻底完成后 | `info_sufficiency_after_retrieval` 独立开关——**不绑 5 判定点** | 机械可验证事实（来源数/覆盖/全文可见/缺失类别）+ 是否足以完成任务 | 无控制流后果（证据记录；治本方向见 §4.6.3 注记） |
 | 子代理 completion check（RETRIEVAL_COMPLETION_CHECK） | 关闭检索子代理前 | 一次性，独立 | 是否已获得完成主任务所需内容（yes/no/uncertain） | 无控制流后果（中性——claim_policy 全 False） |
 | 反例询问（COUNTEREXAMPLE_GATE） | plan 写入前 + 正式答案输出前 | 正式答案变体**仅一次 + 显式告知** | 反例自查（前提/反证/结论强度） | 无控制流后果（自查引导） |
@@ -385,15 +386,16 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 ### 4.6.2 方向问询（原始设计恢复——询问任务内容与进度；机制最复杂，绑定 5 判定点）
 
 - **职责**：执行过程中的**全局回看与方向辅助**——中性定位标记，维护主 agent 对"当前正在做什么 / 当前任务定位 / 下一步服务哪个用户目标"的清醒认知；防"深入单一方向"与"单轮异常发散"。
-- **触发时机**：① 动作间隙——每工具轮后检查（原始设计修正 3 事件驱动语义：`action_completed ← 触发点`）；② **轮次必触发**——每 8 轮，下一轮开始时必定触发一次，**不受冷却限制**（防跨轮缓慢漂移：每轮都短、都正常，但累计已偏；2026-08-04 裁决"轮次同清零"保留——清零指触发瞬间计数归零，轮次必触发间隔不受影响）。
-- **判定点（5，任一超限触发同一方向问询）**：
+- **触发时机**：动作间隙——每工具轮后检查（原始设计修正 3 事件驱动语义：`action_completed ← 触发点`）；跨轮漂移（每轮都短、都正常但累计已偏）由**轮次判定点（>7 轮，2026-08-09 起）兜底**——清零语义下最坏 7 轮触发一次方向问询（注记见下；"固定间隔必触发"定时器语义未采纳）。
+- **判定点（4，任一超限触发同一方向问询；2026-08-09 用户裁决——tool_variety 彻底去掉 + 轮次 8→7 兜底）**：
   - 输出重复 > 10（consecutive/ngram，沿用 stagnation 默认，按轮测量）
   - 工具调用 > 10
   - 动作 > 10
-  - 轮次 > 8
-  - **工具种类 > 7**（单轮按 tool_id 去重——原始设计 `orientation_trigger_tool_variety: 7` 回归；防单轮异常发散：~10 种工具用到 7 种 = 70%，高度发散）
+  - 轮次 > 7（**2026-08-09 由 >8 下调——轮次判定承担兜底职责**：其他判定点未抓住时，轮次最坏 7 轮触发一次方向问询）
   - 阈值与数值调整以新 ADR 记录。
-- **清零状态机（保留定稿有效部分）**：触发瞬间**全部计数清零**并重新积累（隐式冷却——任何问询后必须重新积累阈值单位才可能再次触发；同作用问询 = 同一事件源，不共享重置点会导致未触发计数器下一轮立即补触发即问询刷屏）；触发检查顺序固定 output_repeats → tool_calls → actions → rounds → tool_variety；作用域为主 agent + 检索子代理 ×2 三实例各自独立计数、触发同作用问询、**三实例同清零**。
+  - **tool_variety 删除理由（2026-08-09 用户裁决）**：原始语义（单轮工具种类 >7 = 发散）防"单轮异常发散"，与实测失效模式不匹配（TB 4 FAIL 为"单一方向深入"——低多样性高数量，tool_variety 测不到）；高难度复杂任务单轮多工具是常态（GrokBuild 工具面 30+，7 种远低于正常使用面）——误报风险高于价值；发散/漂移检测由轮次判定兜底。原始 `orientation_trigger_tool_variety: 7` 至此不再恢复。
+  - **token 门控注记更新**：原始 `orientation_trigger_tokens: 7000` 同样不再考虑并入（2026-08-09 同理由：低估模型能力，少限制；需轮内输出 token 度量链路）。
+- **清零状态机（保留定稿有效部分）**：触发瞬间**全部计数清零**并重新积累（隐式冷却——任何问询后必须重新积累阈值单位才可能再次触发；同作用问询 = 同一事件源，不共享重置点会导致未触发计数器下一轮立即补触发即问询刷屏）；触发检查顺序固定 output_repeats → tool_calls → actions → rounds；作用域为主 agent + 检索子代理 ×2 三实例各自独立计数、触发同作用问询、**三实例同清零**。**注记**：清零语义下轮次判定为"最坏 7 轮一次"（其他判定点触发会清零推迟轮次触发）；原始 07-26 的"固定间隔定时器不受冷却限制"语义（每 7 轮必定触发）未采纳——若后续需要"必触发保证"可再以新 ADR 改定时器语义。
 - **内容（原始文案原文，中性定位标记）**：
 
 ```text
@@ -464,7 +466,7 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 
 ### 4.6.9 实现位置（2026-08-09 修订版）
 
-- 方向问询：5 判定点计数器 + 清零状态机 —— `orz-loop/src/inquiry.rs`（`InquiryCounters`/`InquiryThresholds`/`DEFAULT_THRESHOLDS` + **tool_variety 新增**）；检查在 `controller.rs` 工具循环后动作间隙（每工具轮后）+ 每 8 轮必触发（turn counter）；block（`ORIENTATION_CHECKPOINT_BLOCK`）以 Role::User 注入主 agent 下一轮；事件沿用 `neutral_inquiry`（payload `message_block` 区分机制），每轮机械 `orientation_checkpoint` 记录保留（Python parity）。
+- 方向问询：判定点计数器 + 清零状态机 —— `orz-loop/src/inquiry.rs`（`InquiryCounters`/`InquiryThresholds`/`DEFAULT_THRESHOLDS`，**2026-08-09 起 4 判定点**：output_repeats >10 / tool_calls >10 / actions >10 / rounds >7——tool_variety 不实现）；检查在 `controller.rs` 工具循环后动作间隙（每工具轮后）；block（`ORIENTATION_CHECKPOINT_BLOCK`）以 Role::User 注入主 agent 下一轮；事件沿用 `neutral_inquiry`（payload `message_block` 区分机制），每轮机械 `orientation_checkpoint` 记录保留（Python parity）。
 - 信息充分性：检索动作完成后触发 —— `controller.rs` run_retrieval_subagent 返回后；block 文案恢复原始机械事实模板（`INFO_SUFFICIENCY_BLOCK` 常量文案改回 `INFO_SUFFICIENCY_CHECK v0.1` 全文；机械事实数据出处 = 子代理结构化结果 source_ledger/query_summary，随子代理持久化重构落地）。
 - 子代理 completion check：`agents/retrieval.rs` `completion_check_block` 参数 + `parse_completion_decision`。
 - 反例询问：plan 写入前 + 正式答案输出前（无 tool_calls 分支拦截一次）——`run_plan` / 工具循环无 tool_calls 分支（`COUNTEREXAMPLE_GATE_BLOCK`，被拦截草稿 journal 为 model_output 但不进入会话）。
@@ -509,7 +511,7 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 3. orz-assurance::sandbox::job_object, credential, permit
 4. Codex 纪律：严格 Clippy，零死代码 crate
 5. Python 项目 → reference-spec
-6. **§4.6 接线**（2026-08-04 审查补列；2026-08-04 已接线，部分闭合；**2026-08-09 修订语义——两机制分离恢复**）：反例询问（plan 写入前 + 正式答案输出前**仅一次 + message_block 显式告知**）——`run_plan` submit_plan 前模型轮（plan 变体无"仅一次"行）+ 工具循环无 tool_calls 分支拦截一次；**方向问询**（ORIENTATION_CHECKPOINT，绑定 5 判定点计数/清零状态机——2026-08-09 起，含 tool_variety，阈值定稿见 §4.6.2/ADR-0005）；**信息充分性**（INFO_SUFFICIENCY，独立开关——检索/信息获取动作后触发，不绑判定点，§4.6.3）；子代理关闭前 completion check（Python `RETRIEVAL_COMPLETION_CHECK` 移植，逐字）；各机制均记 run-event（neutral_inquiry 按 message_block 区分机制 + counterexample_gate + retrieval_completion_check，payload schema 见 runtime/，Python authority 先行）。OrzHost + PermissionBridge 接入三入口已于 Slice #1 完成。已知边界：模型回答暂不驱动控制流（evidence-only）；plan 变体 gate 在机械 plan 下为证据性触发；**2026-08-09 起实现与设计偏差待修**（现行实现为畸形拼合：4 判定点+每工具轮检查绑 INFO_SUFFICIENCY 文案；方向问询仅事件记录无模型交互——实施排期见 memory/索引）
+6. **§4.6 接线**（2026-08-04 审查补列；2026-08-04 已接线，部分闭合；**2026-08-09 修订语义——两机制分离恢复**）：反例询问（plan 写入前 + 正式答案输出前**仅一次 + message_block 显式告知**）——`run_plan` submit_plan 前模型轮（plan 变体无"仅一次"行）+ 工具循环无 tool_calls 分支拦截一次；**方向问询**（ORIENTATION_CHECKPOINT，绑定 4 判定点计数/清零状态机——2026-08-09 起 output>10/tool_calls>10/actions>10/rounds>7，tool_variety 已删，阈值定稿见 §4.6.2/ADR-0005）；**信息充分性**（INFO_SUFFICIENCY_CHECK，独立开关——检索/信息获取动作后触发，不绑判定点，§4.6.3）；子代理关闭前 completion check（Python `RETRIEVAL_COMPLETION_CHECK` 移植，逐字）；各机制均记 run-event（neutral_inquiry 按 message_block 区分机制 + counterexample_gate + retrieval_completion_check，payload schema 见 runtime/，Python authority 先行）。OrzHost + PermissionBridge 接入三入口已于 Slice #1 完成。已知边界：模型回答暂不驱动控制流（evidence-only）；plan 变体 gate 在机械 plan 下为证据性触发；**2026-08-09 起实现与设计偏差待修**（现行实现为畸形拼合：判定点+每工具轮检查绑 INFO_SUFFICIENCY 文案；方向问询仅事件记录无模型交互；子代理瞬态零工具——实施排期见 memory/索引）
 7. **验证**: 全功能 conformance suite
 
 ### Phase 4: Windows beta 加固 + 案例库
