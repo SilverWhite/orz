@@ -202,18 +202,43 @@ pub struct AgentLoopController {
     whitelist_cap: usize,
 }
 
-/// IP2a denial counter state (D-3): consecutive denials trigger a strategy
-/// switch message at 3; a total ceiling of 10 per run caps refusal loops.
+/// IP2a denial counter state (D-3; ADR-0010 §3.5.4 / V11-IMPL-012): the
+/// circuit breaker counts CONSECUTIVE TOOL-CALL ROUNDS whose denials share
+/// one normalized key — not individual tool calls. A round with any
+/// successful tool, a denial key change, or a permission policy revision
+/// change resets the count. The total-denial ceiling (old 10) is deleted:
+/// anti-runaway is owned by the 120-round budget (FUS-BUDGET), the breaker
+/// only corrects tool-belief/availability.
 #[derive(Debug, Default)]
 struct DenialState {
-    consecutive: u32,
-    total: u32,
+    consecutive_rounds: u32,
+    /// Normalized key of the last counted denial round; used to reset on
+    /// key change.
+    last_key: Option<DenialKey>,
 }
 
-/// IP2a circuit-breaker thresholds (D-3 — the 3/10 industry consensus values
-/// shared by Claude Code's maxConsecutive and Codex's guardian).
+/// Normalized denial key (ADR-0010 §3.5.4): same key across rounds is what
+/// accumulates; tool, reason code or policy revision changes reset it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DenialKey {
+    tool_name: String,
+    reason_code: String,
+    /// Session policy is currently fixed for a session (no mid-session
+    /// revision mechanism), so this is 0 today; wired when revisions exist.
+    policy_revision: u32,
+}
+
+/// Feedback from a host tool call for the round-level denial aggregator.
+#[derive(Debug)]
+enum PolicyFeedback {
+    /// The call was refused by the permission gate, with its normalized key.
+    Denied(DenialKey),
+}
+
+/// IP2a circuit-breaker threshold (D-3 — the 3-consecutive value shared by
+/// Claude Code's maxConsecutive; the 10-total ceiling is deleted per
+/// ADR-0010 §3.5.4).
 pub const DENIAL_BREAKER_CONSECUTIVE: u32 = 3;
-pub const DENIAL_CEILING_TOTAL: u32 = 10;
 
 /// F-09 (2026-08-07 review): the mechanical gate over what enters the model
 /// context from a `run_tests` call — a fixed completion reminder plus the
@@ -1539,11 +1564,16 @@ impl AgentLoopController {
                 reasoning_content: response.reasoning_content.clone(),
             });
             let mut assistant_parts: Vec<String> = Vec::new();
-            // Pending policy messages (denial breaker/ceiling) — appended
-            // AFTER the tool batch completes so no user message lands
-            // between the assistant declaration and its tool replies
-            // (provider protocol; 2026-08-07 wordy 400 + review P1).
+            // Pending policy messages (denial breaker) — appended AFTER the
+            // tool batch completes so no user message lands between the
+            // assistant declaration and its tool replies (provider protocol;
+            // 2026-08-07 wordy 400 + review P1).
             let mut pending_policy: Vec<Message> = Vec::new();
+            // ADR-0010 §3.5.4 round-level denial aggregation: the breaker
+            // counts ROUNDS (a round with N denied calls and no success
+            // counts 1), keyed by (tool, reason_code, policy_revision).
+            let mut round_denials: Vec<DenialKey> = Vec::new();
+            let mut round_had_success = false;
             // 2026-08-08 blackboard partition (A2): snapshot the edit-action
             // length BEFORE this round's tools — the incremental push after
             // the batch reports exactly the records this round added.
@@ -1568,7 +1598,7 @@ impl AgentLoopController {
                         .await?
                     }
                     DispatchTarget::Host => {
-                        let (result, policy_msg) =
+                        let (result, feedback) =
                             self.run_host_tool(
                                 host,
                                 writer,
@@ -1580,8 +1610,10 @@ impl AgentLoopController {
                                 heartbeat,
                             )
                             .await?;
-                        if let Some(m) = policy_msg {
-                            pending_policy.push(m);
+                        match feedback {
+                            Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
+                            // Success (None feedback) resets the breaker.
+                            None => round_had_success = true,
                         }
                         result
                     }
@@ -1631,6 +1663,41 @@ impl AgentLoopController {
             // P1/P2). Semantics are unchanged: the neutral inquiry fires at
             // most once per round (counters reset on trigger), so hoisting
             // it out of the per-tool loop is equivalent.
+            // ADR-0010 §3.5.4 round-level denial aggregation: success resets
+            // the count; otherwise the round counts only when ALL its denials
+            // share one normalized key (a round mixing tools is a key change
+            // → reset). At 3 consecutive same-key rounds the breaker message
+            // fires once and the count restarts.
+            {
+                let mut denial = self.denial_state.lock().unwrap();
+                let all_same_key = round_denials
+                    .first()
+                    .is_some_and(|k0| round_denials.iter().all(|k| k == k0));
+                if round_had_success || !all_same_key {
+                    denial.consecutive_rounds = 0;
+                    denial.last_key = None;
+                } else if let Some(key) = round_denials.first() {
+                    if denial.last_key.as_ref() == Some(key) {
+                        denial.consecutive_rounds += 1;
+                    } else {
+                        denial.consecutive_rounds = 1;
+                        denial.last_key = Some(key.clone());
+                    }
+                    if denial.consecutive_rounds >= DENIAL_BREAKER_CONSECUTIVE {
+                        denial.consecutive_rounds = 0; // injected once per burst
+                        pending_policy.push(Message {
+                            role: Role::User,
+                            content: crate::prompt::tool_policy_breaker_block(
+                                &key.tool_name,
+                                DENIAL_BREAKER_CONSECUTIVE,
+                            ),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                    }
+                }
+            }
             for pm in pending_policy {
                 messages.push(pm);
             }
@@ -2032,12 +2099,14 @@ impl AgentLoopController {
         messages: &mut Vec<Message>,
         tool_rounds: u32,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
-    ) -> Result<(ToolResult, Option<Message>), AgentLoopError> {
-        // The second tuple element is a pending policy message (breaker /
-        // ceiling) that must be injected AFTER the whole tool round — a
-        // Role::User message inserted between the assistant declaration and
-        // the tool replies violates the provider protocol (400, 2026-08-07
-        // wordy). The caller appends it after the tool batch completes.
+    ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+        // The second tuple element is a pending policy feedback (a denial
+        // key) that the caller aggregates at the END of the whole tool round
+        // — the breaker user message must be injected after the tool batch
+        // (a Role::User message inserted between the assistant declaration
+        // and the tool replies violates the provider protocol (400,
+        // 2026-08-07 wordy); ADR-0010 §3.5.4 counts rounds, not calls, so
+        // the aggregation belongs at round granularity anyway.
         // D-9 (FIX_PLAN 2026-08-06): `run_tests` executes the host's FIXED
         // command — the model supplies no argv, so the permission gate is
         // skipped by design (the command itself is host-owned and hidden;
@@ -2164,47 +2233,19 @@ impl AgentLoopController {
                     .gate_decisions
                     .push(format!("permission: deny (tool {})", tc.name));
             }
-            // IP2a circuit breaker (D-3): track consecutive + total denials
-            // this run. At 3 consecutive → inject a strategy-switch message
-            // (the model has been retrying a refused tool); at the 10 total
-            // ceiling → inject a stronger stop message. A successful call
-            // resets the consecutive counter (see below).
-            let mut denial = self.denial_state.lock().unwrap();
-            denial.consecutive += 1;
-            denial.total += 1;
-            let breaker_triggered = denial.consecutive >= DENIAL_BREAKER_CONSECUTIVE;
-            let ceiling_reached = denial.total == DENIAL_CEILING_TOTAL;
-            let breaker_tool = tc.name.clone();
-            if breaker_triggered {
-                denial.consecutive = 0; // injected once per burst
-            }
-            drop(denial);
-            // NOTE (2026-08-07 wordy fix): the breaker/ceiling message is
-            // Role::User and is pushed AFTER the denial Tool message below —
-            // the provider protocol requires the tool messages answering a
-            // tool_calls declaration to IMMEDIATELY follow the assistant
-            // message; a user message inserted between them makes the next
-            // request fail with "insufficient tool messages following
-            // tool_calls message" (400, observed on 3-consecutive-denies).
-            let breaker_message = if breaker_triggered || ceiling_reached {
-                Some(Message {
-                    role: Role::User,
-                    content: if ceiling_reached {
-                        crate::prompt::tool_policy_ceiling_block(
-                            DENIAL_CEILING_TOTAL,
-                        )
-                    } else {
-                        crate::prompt::tool_policy_breaker_block(
-                            &breaker_tool,
-                            DENIAL_BREAKER_CONSECUTIVE,
-                        )
-                    },
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                })
-            } else {
-                None
+            // IP2a circuit breaker (D-3; ADR-0010 §3.5.4): NO per-call
+            // counting here — the denial key is handed to the caller, which
+            // aggregates at round granularity (a round with N denied calls
+            // and no success counts as ONE consecutive round; success or key
+            // change resets; the old 10-total ceiling is deleted). The
+            // breaker user message is injected by the caller AFTER the whole
+            // tool batch (provider protocol: tool messages must immediately
+            // follow the assistant tool_calls declaration — 400 otherwise,
+            // 2026-08-07 wordy fix).
+            let reason_code = match decision {
+                PermitDecision::Deny => "permission_deny".to_string(),
+                PermitDecision::Defer => "permission_defer".to_string(),
+                _ => unreachable!("decision narrowed to Deny|Defer above"),
             };
             let result = ToolResult {
                 // Explicit unavailability semantics (P3, 2026-08-06 polyglot
@@ -2230,11 +2271,19 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
-            // The breaker/ceiling user message is NOT pushed here — it is
-            // returned to the caller, which appends it only after the WHOLE
+            // The breaker user message is NOT constructed or pushed here —
+            // the denial key is returned to the caller, which aggregates the
+            // round's denials and appends the breaker only after the WHOLE
             // tool batch (a user message between tool replies would violate
             // the provider protocol; 2026-08-07 wordy 400 + review P1).
-            return Ok((result, breaker_message));
+            return Ok((
+                result,
+                Some(PolicyFeedback::Denied(DenialKey {
+                    tool_name: tc.name.clone(),
+                    reason_code,
+                    policy_revision: 0,
+                })),
+            ));
         }
 
         // IP5: pre-mutation snapshot — record the pre-tool worktree state of
@@ -2532,9 +2581,10 @@ impl AgentLoopController {
                 } else {
                     res.output
                 };
-                // IP2a: a successful call resets the consecutive-denial
-                // counter (D-3 — "成功调用重置计数").
-                self.denial_state.lock().unwrap().consecutive = 0;
+                // IP2a (ADR-0010 §3.5.4): a successful call is signaled to
+                // the round-level aggregator via the None feedback; the
+                // caller resets the consecutive counter there (round
+                // granularity, not per-call).
                 ToolResult {
                     output,
                     exit_code: res.exit_code,
@@ -4699,10 +4749,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Review P1 (2026-08-07): with multiple tool calls in ONE round, the
-    /// breaker user message must be injected only AFTER the whole tool batch
-    /// — a user message between the assistant declaration and its tool
-    /// replies breaks the provider protocol (400 "insufficient tool
+    /// Review P1 (2026-08-07) + ADR-0010 §3.5.4 (V11-IMPL-012): the breaker
+    /// counts tool-call ROUNDS, not calls — one round with N parallel denied
+    /// calls is ONE round; the message is injected only after the WHOLE tool
+    /// batch (a user message between the assistant declaration and its tool
+    /// replies breaks the provider protocol, 400 "insufficient tool
     /// messages"). The single-call-per-round script in
     /// `ip2a_denial_breaker_injects_strategy_switch_message` cannot catch
     /// this (the breaker always lands after the only tool reply).
@@ -4714,14 +4765,28 @@ mod tests {
             journal,
             policy: crate::host::ToolPolicy::Interactive,
         };
-        // One round declaring FOUR calls, all denied — the 3rd denial trips
-        // the breaker mid-batch; the 4th tool reply must still precede it.
+        // THREE rounds, each declaring FOUR denied calls with the SAME key —
+        // the 3rd round trips the breaker; the 4th tool reply of that round
+        // must still precede the injected message. (One round alone, however
+        // many denied calls, must NOT trip it — round-level counting.)
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![
                 tool_call("search_replace", "call-1"),
                 tool_call("search_replace", "call-2"),
                 tool_call("search_replace", "call-3"),
-                tool_call("read_file", "call-4"),
+                tool_call("search_replace", "call-4"),
+            ]),
+            ScriptedResponse::tool_calls(vec![
+                tool_call("search_replace", "call-5"),
+                tool_call("search_replace", "call-6"),
+                tool_call("search_replace", "call-7"),
+                tool_call("search_replace", "call-8"),
+            ]),
+            ScriptedResponse::tool_calls(vec![
+                tool_call("search_replace", "call-9"),
+                tool_call("search_replace", "call-10"),
+                tool_call("search_replace", "call-11"),
+                tool_call("search_replace", "call-12"),
             ]),
             // Final-answer rounds (the counterexample gate may consume one).
             ScriptedResponse::text("完成"),
@@ -4736,13 +4801,25 @@ mod tests {
             .unwrap();
 
         let received = fake.received_requests();
+        // Round 2 (1st tool round of denials): no breaker — one round alone
+        // must not trip the breaker, no matter how many denied calls.
         let round2 = &received[1];
-        let last_tool_idx = round2
+        assert!(
+            !round2
+                .messages
+                .iter()
+                .any(|m| m.content.contains("TOOL_POLICY_BREAKER")),
+            "one denied round must not trip the breaker: {round2:?}"
+        );
+        // Round 4 (after the 3rd consecutive same-key round): the breaker is
+        // injected AFTER the ENTIRE 4-call tool batch.
+        let round4 = &received[3];
+        let last_tool_idx = round4
             .messages
             .iter()
             .rposition(|m| m.role == Role::Tool)
             .expect("four tool replies present");
-        let breaker_idx = round2
+        let breaker_idx = round4
             .messages
             .iter()
             .position(|m| m.content.contains("TOOL_POLICY_BREAKER"))
@@ -4750,28 +4827,30 @@ mod tests {
         assert!(
             last_tool_idx < breaker_idx,
             "breaker must follow the ENTIRE tool batch (last tool reply at \
-             {last_tool_idx}, breaker at {breaker_idx}): {round2:?}"
+             {last_tool_idx}, breaker at {breaker_idx}): {round4:?}"
         );
-        // And the tool replies must directly follow the assistant
-        // declaration — no user message in between.
-        let decl_idx = round2
+        // And THIS round's tool replies must directly follow its declaration
+        // — no user message in between. `received` carries the whole history,
+        // so the LAST declaration (this round's) is the one to anchor.
+        let decl_idx = round4
             .messages
             .iter()
-            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-            .expect("declaration present");
-        for (i, m) in round2.messages.iter().enumerate() {
+            .rposition(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .expect("this round's declaration present");
+        for (i, m) in round4.messages.iter().enumerate() {
             if i > decl_idx && i <= last_tool_idx && m.role != Role::Tool {
-                panic!("user message between declaration and tool replies at {i}: {round2:?}");
+                panic!("user message between declaration and tool replies at {i}: {round4:?}");
             }
         }
+        let round_tools = round4
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| *i > decl_idx && m.role == Role::Tool)
+            .count();
         assert_eq!(
-            round2
-                .messages
-                .iter()
-                .filter(|m| m.role == Role::Tool)
-                .count(),
-            4,
-            "all four calls answered: {round2:?}"
+            round_tools, 4,
+            "all four calls of this round answered: {round4:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

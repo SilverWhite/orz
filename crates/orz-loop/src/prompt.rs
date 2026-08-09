@@ -227,32 +227,24 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
 /// `[/TOOL_ROUND_BUDGET]` does not match (starts with `[/`).
 pub const TOOL_ROUND_BUDGET_PREFIX: &str = "[TOOL_ROUND_BUDGET";
 
-/// IP2a denial-circuit-breaker message (D-3, FIX_PLAN 2026-08-06): injected
-/// into the conversation after 3 consecutive policy denials in one run — the
-/// model has been retrying a refused tool (polyglot probe P3: `web_search`×4
-/// burned a third of the round budget). It tells the model to switch
-/// strategy, names the refused tool, and is counted as injected text (never
-/// stagnation input). The total-denial ceiling message is a stronger variant.
+/// IP2a denial-circuit-breaker message (D-3, FIX_PLAN 2026-08-06; ADR-0010
+/// §3.5.4 / V11-IMPL-012): injected after 3 CONSECUTIVE TOOL ROUNDS whose
+/// denials share one normalized key (tool, reason_code, policy_revision) —
+/// the model has been retrying a refused tool (polyglot probe P3:
+/// `web_search`×4 burned a third of the round budget). It tells the model to
+/// switch strategy, names the refused tool, and is counted as injected text
+/// (never stagnation input). The old total-denial ceiling (10/run) is
+/// deleted: anti-runaway is the round budget, not a second denial counter.
 pub const TOOL_POLICY_BREAKER_PREFIX: &str = "[TOOL_POLICY_BREAKER]";
 
 pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
     format!(
         "{TOOL_POLICY_BREAKER_PREFIX} v0.1\n\
-        Consecutive tool calls have been refused by the session permission policy \
-        ({consecutive} in a row, last: '{tool_name}'). The refused tool is NOT \
+        Consecutive tool rounds have been refused by the session permission policy \
+        ({consecutive} rounds in a row, last: '{tool_name}'). The refused tool is NOT \
         available under the current policy — do not retry it. Switch strategy: \
         use only the tools declared as available, or state that the task cannot \
         be completed under the current policy.\n\
-        [/TOOL_POLICY_BREAKER]"
-    )
-}
-
-pub fn tool_policy_ceiling_block(total: u32) -> String {
-    format!(
-        "{TOOL_POLICY_BREAKER_PREFIX} v0.1 CEILING\n\
-        The total number of refused tool calls this run has reached {total} \
-        (conservative ceiling). No further refused-tool retries are productive — \
-        end the attempt or switch to an available tool immediately.\n\
         [/TOOL_POLICY_BREAKER]"
     )
 }
@@ -441,7 +433,6 @@ mod tests {
         // (2026-08-07 review F-04: the constant previously ended in `]` and
         // never matched the `[TOOL_ROUND_BUDGET v0.1]` messages).
         assert!(is_injected_block_text(&tool_policy_breaker_block("web_search", 3)));
-        assert!(is_injected_block_text(&tool_policy_ceiling_block(10)));
         assert!(is_injected_block_text(&tool_round_budget_session_block(120)));
         assert!(is_injected_block_text(&tool_round_budget_remaining_block(38)));
         assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(120)));
