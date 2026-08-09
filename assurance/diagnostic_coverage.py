@@ -100,9 +100,12 @@ class DiagnosticCoverageState:
     threshold the caller should invoke :func:`build_diagnostic_coverage_check`
     and then call :meth:`acknowledge_trigger` to advance the threshold.
 
-    ``record_partial_signal`` accumulates 0.5 weight (new-evidence noise
-    reduction).  ``record_soft_signal`` never counts (truly novel,
-    pointable evidence).
+    ADR-0010 §4.6.3 (V11-IMPL-002): the 0.5 partial-signal weight is
+    abolished — it was a subjective noise-reduction that could not be
+    stably replayed. New evidence enters as a NEW hard signal bound to an
+    evidence identity / failure fingerprint. ``record_soft_signal`` is
+    retained for audit history only (weight 0, never counts — "absorbed
+    into plan" is not mechanically verifiable and must not participate).
     """
 
     def __init__(self, bug_id: str) -> None:
@@ -164,32 +167,17 @@ class DiagnosticCoverageState:
             )
         return self._record(signal_type, description, weight=1.0)
 
-    def record_partial_signal(
-        self, *, signal_type: str, description: str,
-    ) -> bool:
-        """Record a partial signal (weight 0.5 — new-evidence noise reduction).
-
-        Per CN §7.3: if a failure produced *clearly pointable* new
-        evidence (new error category, stack trace, failure location,
-        constraint, reproduction condition, pass/fail boundary), it
-        may count for only 0.5 instead of 1.0.
-        """
-        if signal_type not in HARD_SIGNAL_TYPES:
-            raise AssuranceError(
-                f"unknown hard_signal type: {signal_type}; "
-                f"must be one of {sorted(HARD_SIGNAL_TYPES)}"
-            )
-        return self._record(signal_type, description, weight=0.5)
-
     def record_soft_signal(
         self, *, description: str,
     ) -> bool:
-        """Record a soft signal (weight 0 — genuinely novel evidence).
+        """Record a soft signal (weight 0 — audit history only).
 
-        When the evidence is so clearly novel and diagnostic that the
-        debug direction is actively changing, no hard-signal
-        accumulation occurs.  "I thought about it again" is NOT
-        eligible (CN §7.3).
+        ADR-0010 §4.6.3 (V11-IMPL-002): whether new evidence was
+        "absorbed into the plan" cannot be mechanically verified, so it
+        must NOT participate in the counter. The signal is still appended
+        to the history for audit. New evidence that IS pointable enters
+        as a new hard signal (bound to an evidence identity / failure
+        fingerprint). "I thought about it again" is NOT eligible.
 
         Always returns ``False`` (never triggers on its own).
         """

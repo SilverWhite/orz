@@ -71,7 +71,7 @@
               "description": { "$ref": "#/$defs/nonempty" },
               "weight": {
                 "type": "number",
-                "enum": [0, 0.5, 1.0]
+                "enum": [0, 1.0]
               },
               "recorded_at": { "$ref": "#/$defs/nonempty" }
             }

@@ -124,9 +124,11 @@ class DiagnosticCoverageStateThresholdTests(unittest.TestCase):
 
 
 class DiagnosticCoverageStateWeightTests(unittest.TestCase):
-    """Tests for soft / partial signal weight handling."""
+    """Tests for soft signal weight handling (ADR-0010 §4.6.3)."""
 
-    def test_partial_signal_accumulates_0_5(self) -> None:
+    def test_every_pointable_evidence_counts_full_weight(self) -> None:
+        # V11-IMPL-002: the 0.5 partial weight is abolished — new evidence
+        # enters as a new hard signal at weight 1.0.
         state = DiagnosticCoverageState(BUG_ID)
         state.record_hard_signal(
             signal_type="consecutive_same_failure",
@@ -134,19 +136,11 @@ class DiagnosticCoverageStateWeightTests(unittest.TestCase):
         )
         self.assertEqual(state.hard_signal_count, 1.0)
 
-        triggered = state.record_partial_signal(
+        triggered = state.record_hard_signal(
             signal_type="key_surface_unexamined",
             description="new stack trace with different origin",
         )
-        # 1.0 + 0.5 = 1.5 — still below threshold 2
-        self.assertFalse(triggered)
-        self.assertEqual(state.hard_signal_count, 1.5)
-
-        triggered = state.record_partial_signal(
-            signal_type="same_module_no_evidence",
-            description="same module modification with slightly different error",
-        )
-        # 1.5 + 0.5 = 2.0 — now at threshold
+        # 1.0 + 1.0 = 2.0 — at threshold
         self.assertTrue(triggered)
         self.assertEqual(state.hard_signal_count, 2.0)
 
@@ -210,13 +204,10 @@ class DiagnosticCoverageStateSignalHistoryTests(unittest.TestCase):
         state = DiagnosticCoverageState(BUG_ID)
         state.record_hard_signal(
             signal_type="consecutive_same_failure", description="h1")
-        state.record_partial_signal(
-            signal_type="key_surface_unexamined", description="p1")
         state.record_soft_signal(description="s1")
-        self.assertEqual(len(state.signals), 3)
+        self.assertEqual(len(state.signals), 2)
         self.assertEqual(state.signals[0]["weight"], 1.0)
-        self.assertEqual(state.signals[1]["weight"], 0.5)
-        self.assertEqual(state.signals[2]["weight"], 0.0)
+        self.assertEqual(state.signals[1]["weight"], 0.0)
 
     def test_snapshot_reflects_current_state(self) -> None:
         state = DiagnosticCoverageState(BUG_ID)
@@ -272,7 +263,7 @@ class DiagnosticCoverageCheckBuildTests(unittest.TestCase):
             {
                 "signal_type": "repeated_pattern",
                 "description": "same NullPointer in production log",
-                "weight": 0.5,
+                "weight": 1.0,
                 "recorded_at": utc_now(),
             },
         ]
@@ -280,7 +271,7 @@ class DiagnosticCoverageCheckBuildTests(unittest.TestCase):
     def test_build_check_uses_neutral_message_block(self) -> None:
         check = build_diagnostic_coverage_check(
             bug_id=BUG_ID,
-            hard_signal_count=1.5,
+            hard_signal_count=2.0,
             current_threshold=2,
             trigger_count=0,
             signals=self._sample_signals(),
@@ -299,7 +290,7 @@ class DiagnosticCoverageCheckBuildTests(unittest.TestCase):
     def test_build_check_includes_signal_summary(self) -> None:
         check = build_diagnostic_coverage_check(
             bug_id=BUG_ID,
-            hard_signal_count=1.5,
+            hard_signal_count=2.0,
             current_threshold=2,
             trigger_count=0,
             signals=self._sample_signals(),
