@@ -368,14 +368,16 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 
 - 定稿将原始设计（07-26）两个独立机制错误合并——**方向问询**（ORIENTATION_CHECKPOINT，询问"当前任务内容与进度"）的 4 判定点被改绑到**信息充分性问询**（INFO_SUFFICIENCY）上；**方向问询被吞并**。
 - 实现进一步退化：`controller.rs` orientation_checkpoint 仅剩事件记录（每轮一次，message_block 只进事件**不进模型消息**）——方向问询从未注入模型。现行"中立问询"实为**畸形拼合**：方向问询的骨架（4 判定点 + 动作间隙检查）× 信息充分性的文案（INFO_SUFFICIENCY）——TB 场景（无检索轮）高频误触发 + 文本-场景错位；模型无视（习惯性忽视）反而是正确行为。
-- 本次修订**恢复原始设计的两机制分离**，完整保留各机制设计要素（不窄化触发时机、不吞并机制、不丢门控）。修订内容：§4.6.1 总表、§4.6.2 方向问询（5 判定点 + tool_variety 回归）、§4.6.3 信息充分性（与判定点解绑 + 原始机械事实文案）、§4.6.5 反例询问职责边界明示、§4.6.8 实现位置。
+- 本次修订**恢复原始设计的两机制分离**，完整保留各机制设计要素（不窄化触发时机、不吞并机制、不丢门控）。修订内容：§4.6.1 总表、§4.6.2 方向问询（5 判定点 + tool_variety 回归）、§4.6.3 信息充分性（与判定点解绑 + 原始机械事实文案 + **子代理生命周期实现偏差记录**）、§4.6.5 反例询问职责边界明示、§4.6.8 实现位置。
+- **2026-08-09 第二次修订（用户指示）**：① 信息充分性问询**严格恢复原设计**（`INFO_SUFFICIENCY_CHECK` 名称 + 机械事实模板全文，无任何简化——定稿简化版"本轮检索已完成"彻底废弃）；② **子代理生命周期实现偏差记录**（§4.6.3 注记）：设计 = 单轮检索任务内**持久化 + 显式开关**（主代理打开=派遣合同 / 关闭=确认本轮完毕，关闭不清零可重新唤醒，关闭回执 can_resume——`docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md` 原文），子代理动作面 = **调用本地浏览器**（外部检索，LBR-001 默认主路径）+ 项目文档（内部检索），结构化结果（query_summary / source_ledger / filtering_log / organized_response / raw_source_refs）——机械事实字段（来源数/覆盖/全文可见/缺失）的**数据出处正是 source_ledger 与 query_summary**；实现 = 瞬态单轮调用 + 零工具子代理（`agents/retrieval.rs` `tools: Vec::new()`——无法调用浏览器/任何工具）+ 自由文本结果（[DOC]/[来源] 行解析）——**实现偏差**。
+- **案例化（2026-08-09，用户指示"值得作为案例来优化 orz"）**：本轮暴露两类可防问题——**设计退化**（08-04 定稿吞并方向问询、丢 tool_variety/token 门控、简化信息充分性文案）与**实现偏差**（方向问询仅事件记录无模型交互；子代理瞬态化零工具化）。教训：① 定稿合并机制/修改文案必须显式评审并保留原始设计要素（不吞并不窄化不简化）；② 实现接线必须回查设计原文（本案例：`RETRIEVAL_SUBAGENT_AUDIT` 生命周期原文 vs 瞬态实现）；③ 机械化门禁不扩大范围；④ 退化修复 = 先恢复原设计全文、再谈增强。落点：本设计文档修订记录 + memory；正式案例库形态待用户确认（可参照 WINDOWS_RUNTIME_CONTRACT §6 案例库结构）。
 
 ### 4.6.1 机制总览（2026-08-09 修订版）
 
 | 机制 | 触发时机 | 门控/绑定 | 内容 | 回答后果 |
 |---|---|---|---|---|
 | 方向问询（ORIENTATION_CHECKPOINT） | 动作间隙（每工具轮后检查）+ 每 8 轮必触发 | **5 判定点**：输出重复 >10 / 工具调用 >10 / 动作 >10 / 轮次 >8 / 工具种类 >7——任一超限触发同一方向问询，触发瞬间全部清零（隐式冷却） | 当前正在做什么 / 任务定位 / 下一步服务哪个用户目标 | 无控制流后果（中性定位标记，证据记录） |
-| 信息充分性（INFO_SUFFICIENCY） | 检索动作彻底完成后 | `info_sufficiency_after_retrieval` 独立开关——**不绑 5 判定点** | 机械可验证事实（来源数/覆盖/全文可见/缺失类别）+ 是否足以完成任务 | 无控制流后果（证据记录；治本方向见 §4.6.3 注记） |
+| 信息充分性（INFO_SUFFICIENCY_CHECK） | 检索动作彻底完成后 | `info_sufficiency_after_retrieval` 独立开关——**不绑 5 判定点** | 机械可验证事实（来源数/覆盖/全文可见/缺失类别）+ 是否足以完成任务 | 无控制流后果（证据记录；治本方向见 §4.6.3 注记） |
 | 子代理 completion check（RETRIEVAL_COMPLETION_CHECK） | 关闭检索子代理前 | 一次性，独立 | 是否已获得完成主任务所需内容（yes/no/uncertain） | 无控制流后果（中性——claim_policy 全 False） |
 | 反例询问（COUNTEREXAMPLE_GATE） | plan 写入前 + 正式答案输出前 | 正式答案变体**仅一次 + 显式告知** | 反例自查（前提/反证/结论强度） | 无控制流后果（自查引导） |
 | 停滞守卫（runtime_stagnation_guard） | 公开输出连续/ngram 重复 > 阈值 | 独立机械门禁 | restart_requested / continue / handoff | **有**（restart = 全局重启） |
@@ -405,12 +407,12 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 - **约束**：格式明显区别于用户/系统消息，使模型识别为"中途引导/定位标记"而非"新任务/质疑"；**不要求模型"停止当前推理并重新思考"**，而是"在当前位置做一个轻量定位标记"；允许问题还包括"当前可用来源、权限和输出边界是什么"；回答无控制流后果（证据记录，循环自然继续）；若实施结构解析，响应仅允许 `orientation_summary` / `current_task_position` / `next_output_target` 三字段，拒绝 counterexample_candidate / claim_disposition 等字段（原始 `verify_orientation_response` 语义）。
 - **注记（token 门控）**：原始设计另有单轮公开输出 token 门控（`orientation_trigger_tokens: 7000`）——本次修订先不并入 5 判定点（需轮内输出 token 度量链路），语义保留于此，实施时以新 ADR 裁决是否加入。
 
-### 4.6.3 信息充分性问询（原始设计恢复——与 5 判定点解绑）
+### 4.6.3 信息充分性问询（原始设计严格恢复——与 5 判定点解绑，无简化）
 
 - **职责**：信息收集充分性确认——检索/信息获取后的轻量确认，防"信息不足即收尾"。
 - **触发时机**：子代理检索或任何外部信息获取动作完成后、模型给出正式回复前（原始设计 `info_sufficiency_after_retrieval: true`）。**不绑定 5 判定点**。
 - **触发条件（硬门控三条件）**：① 检索/信息获取动作已返回结果（tool_completed for retrieval/info-gathering tools）② 模型尚未发出面向用户的最终回复 ③ 动作间隙注入。
-- **内容（原始文案，机械可验证事实）**：
+- **内容（原始文案原文，机械可验证事实——2026-08-09 用户指示严格恢复，无任何简化）**：
 
 ```text
 [INFO_SUFFICIENCY_CHECK v0.1]
@@ -424,8 +426,12 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 [/INFO_SUFFICIENCY_CHECK]
 ```
 
-- **约束**：绝不暗示"你应该质疑当前结论"；只陈述**机械可验证**的事实（来源数量、类别、全文可见性）；不可作为"模型已经查过了"的证明（证据在 gate receipt）；不允许模型用此机制绕过 source visibility gate 的 block/defer 决策。
-- **注记（2026-08-09 治本方向，讨论中未定稿）**：机械事实字段需要检索结果元数据链路（当前 toolset 无来源计数，实施时建设）；用户提出治本方向——**主 agent 发出关闭子代理命令后触发机械门禁**：阶段 1 先注入信息充分性问询（问主 agent），等待主 agent 回复后阶段 2 触发关闭选项（yes → 放行关闭；no/uncertain → 不关闭可继续）。涉及子代理会话模型（当前瞬态 run_retrieval vs 持久会话 + 显式关闭命令）等开放问题，定稿前不写死。
+- **约束**：绝不暗示"你应该质疑当前结论"；只陈述**机械可验证**的事实（来源数量、类别、全文可见性）；不可作为"模型已经查过了"的证明（证据在 gate receipt）；不允许模型用此机制绕过 source visibility gate 的 block/defer 决策。定稿简化版（"本轮检索已完成"）**彻底废弃**——与机械门禁"只陈述机械可验证事实"约束冲突。
+- **数据出处**：机械事实字段（source_count / categories / fulltext_count / missing_categories）来自子代理结构化结果——`source_ledger`（每项来源的全文可见性状态）+ `query_summary`（实际执行的每次检索动作）+ `filtering_log`（被排除内容及原因）（`RETRIEVAL_SUBAGENT_AUDIT` "结果透明"原文）。
+- **注记（2026-08-09 治本方向 + 子代理生命周期实现偏差，讨论中未定稿）**：
+  - **子代理生命周期设计原文**（`docs/RETRIEVAL_SUBAGENT_AUDIT_2026-07-27.md`）：子代理对话由**主代理打开（派遣合同）和关闭（确认本轮完毕）**——显式开关；**关闭不清零**：journal 完整保留，子代理可被同一 parent session **重新唤醒**；关闭回执（Session Close Receipt）：`conversation_zeroed: false` / `journal_preserved: true` / `can_resume: true` / `subagent_resumable: true`（需 parent_session_id 匹配 + 新合同）；子代理动作面 = **调用本地浏览器**（外部检索，LBR-001 local_browser 默认主路径）+ 项目文档（内部检索）。
+  - **实现偏差（实锤）**：`agents/retrieval.rs` 实现为**瞬态单轮调用**（每次 `run_retrieval` 新会话、budget_turns=1 硬编码、无打开/关闭命令、无持久无唤醒无关闭回执）+ **零工具子代理**（`tools: Vec::new()`——无法调用浏览器/任何工具，检索内容纯模型生成）+ **自由文本结果**（[DOC]/[来源] 行解析替代结构化 source_ledger/query_summary）。与设计原文全面不符。
+  - **治本方向（用户 2026-08-09 提出）**：主 agent 发出**关闭子代理命令**后触发机械门禁——阶段 1 先注入信息充分性问询（问主 agent），等待主 agent 回复后阶段 2 触发**关闭选项**（yes → 放行关闭；no/uncertain → 不关闭可继续）。子代理须为**单轮检索任务内持久化 + 显式开关**（按生命周期设计原文），非瞬态。定稿前开放问题：持久会话形态、显式开关工具面、结构化结果 schema、浏览器动作接线。
 
 ### 4.6.4 子代理 completion check（保留，中性确认）
 
@@ -452,14 +458,14 @@ Pro/Flash 概念保留于此文档作为存档，标注「**已暂时放弃实�
 ### 4.6.8 Block 文案模板（三套分开，2026-08-09 修订）
 
 - 方向问询：`[ORIENTATION_CHECKPOINT v0.1]`（§4.6.2 原文）——"当前正在做什么 / 当前任务定位是什么 / 下一步输出应该服务哪个用户目标"。
-- 信息充分性：`[INFO_SUFFICIENCY v0.1]`——**文案回退原始机械事实模板**（来源数/覆盖/全文可见/缺失类别；机械事实字段待检索元数据链路）。定稿简化版（"本轮检索已完成"）废弃——该简化与机械门禁"只陈述机械可验证事实"约束冲突。
+- 信息充分性：`[INFO_SUFFICIENCY_CHECK v0.1]`——**原始文案全文严格恢复**（来源数/覆盖/全文可见/缺失类别；机械事实数据出处 = 子代理结构化结果 source_ledger/query_summary，§4.6.3）。定稿简化版（"本轮检索已完成"）废弃。
 - 反例询问：`[COUNTEREXAMPLE_GATE v0.1]`（正式答案变体含"仅一次"行；plan 变体不含）。
 - 子代理 completion check：`[RETRIEVAL_COMPLETION_CHECK v0.1]`（Python 逐字移植）。
 
 ### 4.6.9 实现位置（2026-08-09 修订版）
 
 - 方向问询：5 判定点计数器 + 清零状态机 —— `orz-loop/src/inquiry.rs`（`InquiryCounters`/`InquiryThresholds`/`DEFAULT_THRESHOLDS` + **tool_variety 新增**）；检查在 `controller.rs` 工具循环后动作间隙（每工具轮后）+ 每 8 轮必触发（turn counter）；block（`ORIENTATION_CHECKPOINT_BLOCK`）以 Role::User 注入主 agent 下一轮；事件沿用 `neutral_inquiry`（payload `message_block` 区分机制），每轮机械 `orientation_checkpoint` 记录保留（Python parity）。
-- 信息充分性：检索动作完成后触发 —— `controller.rs` run_retrieval_subagent 返回后；block 文案回退机械事实模板（`INFO_SUFFICIENCY_BLOCK` 修订；机械事实字段待检索元数据链路）。
+- 信息充分性：检索动作完成后触发 —— `controller.rs` run_retrieval_subagent 返回后；block 文案恢复原始机械事实模板（`INFO_SUFFICIENCY_BLOCK` 常量文案改回 `INFO_SUFFICIENCY_CHECK v0.1` 全文；机械事实数据出处 = 子代理结构化结果 source_ledger/query_summary，随子代理持久化重构落地）。
 - 子代理 completion check：`agents/retrieval.rs` `completion_check_block` 参数 + `parse_completion_decision`。
 - 反例询问：plan 写入前 + 正式答案输出前（无 tool_calls 分支拦截一次）——`run_plan` / 工具循环无 tool_calls 分支（`COUNTEREXAMPLE_GATE_BLOCK`，被拦截草稿 journal 为 model_output 但不进入会话）。
 - 各 gate 记录 run-event：`neutral_inquiry`（方向问询 / 信息充分性按 message_block 区分）/ `counterexample_gate` / `retrieval_completion_check`（run-event schema 变体，payload schema 见 `runtime/`）；模型回答无控制流后果（证据记录，循环自然继续）。
