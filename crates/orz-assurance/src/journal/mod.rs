@@ -30,6 +30,6 @@ pub mod verifier;
 
 // Re-export commonly used types
 pub use chain::{ChainValidation, canonical_json, compute_event_hash, seal_event, sha256_hex};
-pub use event::{EventType, Redaction, RunEvent, TERMINAL_EVENTS};
+pub use event::{EventTrack, EventType, Redaction, RunEvent, TERMINAL_EVENTS};
 pub use recorder::{JournalRecorder, JournalRecorderError};
 pub use verifier::{ReplayResult, replay_journal};

@@ -13,7 +13,6 @@ pub mod blackboard;
 pub mod controller;
 pub mod gateway;
 pub mod host;
-pub mod inquiry;
 pub mod orientation;
 pub mod prompt;
 pub mod relay;

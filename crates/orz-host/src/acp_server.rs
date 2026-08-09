@@ -13,9 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use orz_assurance::{EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
+use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
 use orz_loop::gateway::model::{Message, Role};
+use orz_loop::orientation::OrientationSessionState;
 use orz_workspace::permission::PermissionHookTransport;
 
 use crate::permission::PermissionPolicy;
@@ -150,13 +151,13 @@ impl<'a> RunRecorder<'a> {
         event_type: EventType,
         payload: serde_json::Value,
     ) -> Result<(), JournalRecorderError> {
-        let mut event = RunEvent::new(
+        let mut event = RunEvent::new_v02(
             self.run_id.clone(),
             self.seq,
             event_type,
             self.manifest_sha256.clone(),
             self.prev_hash.clone(),
-            "run-event-v0.1.schema.json".into(),
+            EventTrack::V02.payload_schema_id().into(),
             payload,
             Redaction::None,
             chrono::Utc::now().to_rfc3339(),
@@ -209,6 +210,83 @@ struct StoredSession {
     /// prompt run ids nor desync the TUI's `run_dir_for_next_prompt` (which
     /// derives the next prompt's dir from the prompt counter; slice #8).
     restore_count: u64,
+    /// GAP-INQUIRY-SPLIT (2026-08-09): session-level orientation state
+    /// (ADR-0010 §4.2 — 7-round counter, persisted across prompts AND
+    /// process restarts via the `{cwd}/.gsa/orientation/<session8>.json`
+    /// sidecar; only an actual fire resets it). Taken out during a run,
+    /// written back afterwards.
+    orientation: Option<OrientationSessionState>,
+}
+
+/// GAP-INQUIRY-SPLIT (2026-08-09): sidecar path for the session-level
+/// orientation counter — `{cwd}/.gsa/orientation/<session8>.json` (mirrors
+/// the grill log pattern; an A-class `.gsa` write point, ADR-0009).
+fn orientation_sidecar_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    let suffix: String = session_id.chars().take(8).collect();
+    base_dir
+        .join(".gsa")
+        .join("orientation")
+        .join(format!("{suffix}.json"))
+}
+
+/// Load the persisted orientation counter (ADR-0010 §4.2 — recovery resumes
+/// counting; only an actual fire resets). `None` = no sidecar yet.
+/// Review P2-1 (2026-08-10): a corrupt sidecar is WARNED, not silently
+/// discarded — silent failure would look like "restart resets the counter"
+/// to an operator who never sees a crash.
+fn load_orientation_sidecar(base_dir: &Path, session_id: &str) -> Option<OrientationSessionState> {
+    let path = orientation_sidecar_path(base_dir, session_id);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                tracing::warn!(
+                    "orientation sidecar corrupt ({}): {e} — starting the counter at 0",
+                    path.display()
+                );
+                None
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::warn!(
+                "orientation sidecar unreadable ({}): {e} — starting the counter at 0",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Persist the orientation counter — best-effort (a read-only workspace must
+/// never fail the run; the in-session write is the authoritative path).
+/// Review P2-1: failures are WARNED (same pattern as the grill JSONL).
+fn persist_orientation_sidecar(
+    base_dir: &Path,
+    session_id: &str,
+    state: &OrientationSessionState,
+) {
+    let path = orientation_sidecar_path(base_dir, session_id);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(
+                "orientation sidecar dir create failed ({}): {e}",
+                parent.display()
+            );
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(state) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::warn!(
+                    "orientation sidecar write failed ({}): {e}",
+                    path.display()
+                );
+            }
+        }
+        Err(e) => tracing::warn!("orientation sidecar serialize failed: {e}"),
+    }
 }
 
 /// Grill-mode session state (2026-08-08 write-placement slice, design §3):
@@ -444,14 +522,22 @@ impl AcpServer {
         // Journals are created per-run at `session/prompt` time — the session
         // itself only records where, under what trust policy, and under what
         // permission policy runs live.
+        let base = base_dir.unwrap_or_else(|| PathBuf::from("."));
+        // GAP-INQUIRY-SPLIT: resume the orientation counter from the sidecar
+        // when a previous process left one (ADR-0010 §4.2 — recovery resumes
+        // counting; only an actual fire resets). A brand-new session starts
+        // at 0.
+        let orientation = load_orientation_sidecar(&base, session_id)
+            .unwrap_or_else(|| OrientationSessionState::new(session_id));
         self.sessions.lock().unwrap().insert(
             session_id.to_string(),
             StoredSession {
-                base_dir: base_dir.unwrap_or_else(|| PathBuf::from(".")),
+                base_dir: base,
                 trust_policy,
                 policy,
                 prompt_count: 0,
                 restore_count: 0,
+                orientation: Some(orientation),
             },
         );
 
@@ -547,6 +633,24 @@ impl AcpServer {
         // (PermissionBridge spawns the manager actor via spawn_local, so
         // this path must run inside a LocalSet — the stdio server does.)
         let host = self.build_host(&handle, session_id, &base_dir, policy)?;
+        // GAP-INQUIRY-SPLIT (review P1-1, 2026-08-10): take the orientation
+        // counter out of the session ONLY after every fallible step above
+        // (restore-in-flight check, bootstrap, build_host) has succeeded —
+        // an early `?` return must never leave the session with a taken-out
+        // counter (the next prompt would silently restart at 0 and the
+        // sidecar would be overwritten — violating "only an actual fire
+        // resets", ADR-0010 §4.2). The sidecar is the fallback for a session
+        // created before this slice (`None`): resume from it, else start 0.
+        let mut orientation = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            session.orientation.take().unwrap_or_else(|| {
+                load_orientation_sidecar(&base_dir, session_id)
+                    .unwrap_or_else(|| OrientationSessionState::new(session_id))
+            })
+        };
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
@@ -561,6 +665,7 @@ impl AcpServer {
                 handle.next_sequence,
                 handle.last_event_sha256.clone(),
                 Some(&cancel),
+                Some(&mut orientation),
             )
             .await;
 
@@ -569,6 +674,15 @@ impl AcpServer {
         // released it).
         self.runs.lock().unwrap().remove(session_id);
         let _ = handle.journal.shutdown_async().await;
+
+        // GAP-INQUIRY-SPLIT: persist the orientation counter — back into the
+        // session and (best-effort, a read-only workspace must never fail a
+        // run) to the sidecar, so the next prompt / process restart resumes
+        // counting (§4.2).
+        persist_orientation_sidecar(&base_dir, session_id, &orientation);
+        if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+            session.orientation = Some(orientation);
+        }
 
         match run_result {
             Ok((response, _, _)) => Ok(serde_json::json!({
@@ -1110,10 +1224,11 @@ mod tests {
                     replay.errors
                 );
                 // Full Phase 2 gate chain + §4.6: preflight + started +
-                // prompt_submitted + orientation + tool_availability +
-                // model_output + counterexample_gate + model_output +
-                // stagnation + finished.
-                assert_eq!(replay.event_count, 10);
+                // prompt_submitted + tool_availability + model_output +
+                // counterexample_gate + model_output + stagnation + finished.
+                // GAP-INQUIRY-SPLIT: no per-turn orientation event (fires
+                // only on the session-level 7-round trigger).
+                assert_eq!(replay.event_count, 9);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -1177,7 +1292,9 @@ mod tests {
                     let replay =
                         orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
                     assert!(replay.valid, "run journal invalid: {:?}", replay.errors);
-                    assert_eq!(replay.event_count, 10, "preflight + 9 turn events");
+                    // GAP-INQUIRY-SPLIT: preflight + 8 turn events (the
+                    // per-turn orientation event is gone — 7-round trigger).
+                    assert_eq!(replay.event_count, 9, "preflight + 8 turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 

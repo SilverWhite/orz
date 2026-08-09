@@ -1,6 +1,7 @@
 //! Journal event types — the data model for append-only hash-chained events.
 //!
-//! Mirrors `runtime/run-event-v0.1.schema.json` from the Python reference spec.
+//! Mirrors `runtime/run-event-v0.1.schema.json` and (for the v0.2 track)
+//! `runtime/run-event-v0.2.schema.json` from the Python reference spec.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -50,10 +51,21 @@ pub enum EventType {
     InstructionProvenanceGate,
     GateDecision,
 
-    // Inquiry gates (Phase 3, §4.6 wiring — mirrors run-event schema)
+    // Inquiry gates (Phase 3, §4.6 wiring — mirrors run-event schema).
+    // `NeutralInquiry` and `RetrievalCompletionCheck` are RETIRED on the v0.2
+    // track (ADR-0010 §5.1/§11.2 — the mixed-counter inquiry mechanism is
+    // gone, GAP-INQUIRY-SPLIT); the variants stay for v0.1 journal replay.
+    // The v0.2 producer must never write them (EventWriter asserts).
     NeutralInquiry,
     CounterexampleGate,
     RetrievalCompletionCheck,
+
+    // GAP-INQUIRY-SPLIT (2026-08-09): v0.2 mechanism events (ADR-0010 §5.1 —
+    // five independent event types; two more were already present above).
+    DiagnosticCoverageCheckpoint,
+    InformationSufficiencyAssessment,
+    RetrievalParentDisposition,
+    RetrievalCloseRecord,
 
     // A6 explicit context compaction (2026-08-08 — controller-written;
     // mirrors run-event schema)
@@ -99,13 +111,47 @@ pub enum Redaction {
     ContentRedacted,
 }
 
+/// Journal track — the envelope schema family a producer writes
+/// (GAP-INQUIRY-SPLIT, 2026-08-09).
+///
+/// A journal must be homogeneous on ONE track (§11.6.2 — mixed envelope
+/// versions break the hash-chain contract): the track pins both the envelope
+/// `schema_version` and the `payload_schema` identifier for every event.
+/// `V02` is the production track; `V01` is the historical freeze, used only
+/// by replay tests and legacy fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventTrack {
+    V01,
+    V02,
+}
+
+impl EventTrack {
+    /// The `payload_schema` value stamped on every event of this track.
+    pub fn payload_schema_id(self) -> &'static str {
+        match self {
+            EventTrack::V01 => "run-event-v0.1.schema.json",
+            EventTrack::V02 => "run-event-v0.2.schema.json",
+        }
+    }
+
+    /// The envelope `schema_version` for this track.
+    pub fn schema_version(self) -> &'static str {
+        match self {
+            EventTrack::V01 => "0.1.0-draft",
+            EventTrack::V02 => "0.2.0-draft",
+        }
+    }
+}
+
 /// A single append-only event in the run journal.
 ///
 /// Each event carries a hash chain link (`previous_event_sha256`) and its own
 /// content hash (`event_sha256`). The chain is verified by `JournalVerifier`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunEvent {
-    /// Schema version — always "0.1.0-draft"
+    /// Schema version — "0.1.0-draft" (v0.1 track) or "0.2.0-draft" (v0.2
+    /// track; GAP-INQUIRY-SPLIT — producers write the v0.2 track so the
+    /// hash chain stays homogeneous, §11.6.2).
     pub schema_version: String,
 
     /// Unique run identifier, e.g. "RUN-{uuid}"
@@ -152,7 +198,11 @@ impl RunEvent {
     /// Create a new event with fields filled from context.
     /// The caller MUST call `seal_event()` (or `JournalRecorder::record()`,
     /// which seals automatically) before recording.
-    pub fn new(
+    ///
+    /// `schema_version` selects the track ("0.1.0-draft" / "0.2.0-draft");
+    /// the convenience constructors below pin it.
+    fn new(
+        schema_version: String,
         run_id: String,
         sequence: u64,
         event_type: EventType,
@@ -176,7 +226,7 @@ impl RunEvent {
         };
 
         RunEvent {
-            schema_version: "0.1.0-draft".into(),
+            schema_version,
             run_id,
             event_id,
             sequence,
@@ -190,6 +240,63 @@ impl RunEvent {
             redaction,
             event_sha256: String::new(), // filled by seal()
         }
+    }
+
+    /// v0.1 track constructor — legacy producers and replay tests only
+    /// (the v0.1 schema is a historical freeze; the v0.2 producer must not
+    /// write it).
+    pub fn new_v01(
+        run_id: String,
+        sequence: u64,
+        event_type: EventType,
+        run_manifest_sha256: String,
+        previous_event_sha256: Option<String>,
+        payload_schema: String,
+        payload: Value,
+        redaction: Redaction,
+        timestamp: String,
+    ) -> Self {
+        Self::new(
+            "0.1.0-draft".into(),
+            run_id,
+            sequence,
+            event_type,
+            run_manifest_sha256,
+            previous_event_sha256,
+            payload_schema,
+            payload,
+            redaction,
+            timestamp,
+        )
+    }
+
+    /// v0.2 track constructor (GAP-INQUIRY-SPLIT, 2026-08-09): production
+    /// producers write this track — `schema_version = "0.2.0-draft"` and
+    /// `payload_schema = "run-event-v0.2.schema.json"` (set by the caller /
+    /// `EventWriter::V02`).
+    pub fn new_v02(
+        run_id: String,
+        sequence: u64,
+        event_type: EventType,
+        run_manifest_sha256: String,
+        previous_event_sha256: Option<String>,
+        payload_schema: String,
+        payload: Value,
+        redaction: Redaction,
+        timestamp: String,
+    ) -> Self {
+        Self::new(
+            "0.2.0-draft".into(),
+            run_id,
+            sequence,
+            event_type,
+            run_manifest_sha256,
+            previous_event_sha256,
+            payload_schema,
+            payload,
+            redaction,
+            timestamp,
+        )
     }
 
     /// Returns true if this event terminates the journal.
@@ -213,7 +320,7 @@ mod tests {
 
     #[test]
     fn event_id_format() {
-        let event = RunEvent::new(
+        let event = RunEvent::new_v01(
             "RUN-A1B2C3D4".into(),
             0,
             EventType::RunStarted,

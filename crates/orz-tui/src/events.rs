@@ -130,6 +130,9 @@ pub enum TuiEvent {
     },
 
     // ── inquiry gates (§4.6) ──
+    // GAP-INQUIRY-SPLIT (2026-08-09): `NeutralInquiry` /
+    // `RetrievalCompletionCheck` remain for v0.1 replay display only — the
+    // v0.2 producer never writes them.
     NeutralInquiry {
         trigger_reason: String,
     },
@@ -140,6 +143,25 @@ pub enum TuiEvent {
     RetrievalCompletionCheck {
         role: String,
         decision: String,
+    },
+
+    // ── v0.2 mechanism events (GAP-INQUIRY-SPLIT, 2026-08-09) ──
+    DiagnosticCoverageCheckpoint {
+        checkpoint_id: String,
+        threshold_stage: i64,
+    },
+    InformationSufficiencyAssessment {
+        assessment_id: String,
+        status: String,
+        source_total: u64,
+    },
+    RetrievalParentDisposition {
+        disposition_id: String,
+        decision: String,
+    },
+    RetrievalCloseRecord {
+        close_record_id: String,
+        terminal_reason: String,
     },
 
     // ── A6 explicit context compaction ──
@@ -237,6 +259,10 @@ impl TuiEvent {
             TuiEvent::NeutralInquiry { .. } => "neutral_inquiry",
             TuiEvent::CounterexampleGate { .. } => "counterexample_gate",
             TuiEvent::RetrievalCompletionCheck { .. } => "retrieval_completion_check",
+            TuiEvent::DiagnosticCoverageCheckpoint { .. } => "diagnostic_coverage_checkpoint",
+            TuiEvent::InformationSufficiencyAssessment { .. } => "information_sufficiency_assessment",
+            TuiEvent::RetrievalParentDisposition { .. } => "retrieval_parent_disposition",
+            TuiEvent::RetrievalCloseRecord { .. } => "retrieval_close_record",
             TuiEvent::ContextCompressed { .. } => "context_compressed",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
             TuiEvent::SnapshotRestored { .. } => "snapshot_restored",

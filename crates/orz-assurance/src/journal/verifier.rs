@@ -146,7 +146,7 @@ mod tests {
     use std::io::Write;
 
     fn make_event(run_id: &str, seq: u64, et: EventType, prev: Option<String>) -> RunEvent {
-        let mut e = RunEvent::new(
+        let mut e = RunEvent::new_v01(
             run_id.into(),
             seq,
             et,

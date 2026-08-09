@@ -723,7 +723,7 @@ mod tests {
             Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
         let controller = AgentLoopController::with_gateway(gateway);
         let (response, _, _) = controller
-            .run_turn(&host, "hi", "RUN-T", "manifest-sha", 0, None)
+            .run_turn(&host, "hi", "RUN-T", "manifest-sha", 0, None, None)
             .await
             .expect("run turn");
         assert_eq!(response, "完成");

@@ -246,7 +246,7 @@ mod tests {
         previous: Option<&str>,
         payload: serde_json::Value,
     ) -> RunEvent {
-        let mut event = RunEvent::new(
+        let mut event = RunEvent::new_v01(
             run_id.into(),
             seq,
             event_type,

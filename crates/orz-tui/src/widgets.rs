@@ -1386,7 +1386,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let runs = dir.join(".gsa").join("runs").join("RUN-a1b2c3d4-0");
         std::fs::create_dir_all(&runs).unwrap();
-        let mut ev = orz_assurance::journal::RunEvent::new(
+        let mut ev = orz_assurance::journal::RunEvent::new_v01(
             "RUN-a1b2c3d4-0".into(),
             0,
             orz_assurance::journal::EventType::SnapshotCreated,

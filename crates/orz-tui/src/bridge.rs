@@ -187,6 +187,30 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             role: get_str(p, "role"),
             decision: get_str(p, "decision"),
         },
+        // GAP-INQUIRY-SPLIT (2026-08-09): v0.2 mechanism events. The
+        // diagnostic-coverage and disposition variants are projection
+        // placeholders — this slice does not produce them yet (the schema
+        // and fixtures are in place).
+        EventType::DiagnosticCoverageCheckpoint => TuiEvent::DiagnosticCoverageCheckpoint {
+            checkpoint_id: get_str(p, "checkpoint_id"),
+            threshold_stage: get_i64(p, "threshold_stage"),
+        },
+        EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
+            assessment_id: get_str(p, "assessment_id"),
+            status: get_str(p, "status"),
+            source_total: p
+                .pointer("/source_counts/total")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        },
+        EventType::RetrievalParentDisposition => TuiEvent::RetrievalParentDisposition {
+            disposition_id: get_str(p, "disposition_id"),
+            decision: get_str(p, "decision"),
+        },
+        EventType::RetrievalCloseRecord => TuiEvent::RetrievalCloseRecord {
+            close_record_id: get_str(p, "close_record_id"),
+            terminal_reason: get_str(p, "terminal_reason"),
+        },
         EventType::ContextCompressed => TuiEvent::ContextCompressed {
             trigger_tokens: get_u64(p, "trigger_tokens"),
             rounds_dropped: get_u64(p, "rounds_dropped"),
@@ -248,7 +272,7 @@ mod tests {
     use serde_json::json;
 
     fn make_event(event_type: EventType, payload: Value) -> RunEvent {
-        let mut ev = RunEvent::new(
+        let mut ev = RunEvent::new_v01(
             "RUN-TEST01".into(),
             0,
             event_type,

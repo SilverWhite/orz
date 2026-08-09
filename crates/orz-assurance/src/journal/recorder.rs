@@ -344,7 +344,7 @@ mod tests {
         event_type: EventType,
         previous: Option<String>,
     ) -> RunEvent {
-        RunEvent::new(
+        RunEvent::new_v01(
             run_id.into(),
             seq,
             event_type,

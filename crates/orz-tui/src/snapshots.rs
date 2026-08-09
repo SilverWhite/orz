@@ -188,7 +188,7 @@ mod tests {
     /// (orz-loop controller.rs: snapshot_hash | snapshot_error, tool,
     /// targets).
     fn sealed_line(run_id: &str, event_type: EventType, payload: serde_json::Value) -> String {
-        let mut ev = RunEvent::new(
+        let mut ev = RunEvent::new_v01(
             run_id.to_string(),
             0,
             event_type,

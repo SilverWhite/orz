@@ -485,7 +485,7 @@ mod tests {
             let run_id = format!("RUN-a1b2c3d4-{n}");
             let runs = dir.join(".gsa").join("runs").join(&run_id);
             std::fs::create_dir_all(&runs).unwrap();
-            let mut ev = orz_assurance::journal::RunEvent::new(
+            let mut ev = orz_assurance::journal::RunEvent::new_v01(
                 run_id.clone(),
                 0,
                 orz_assurance::journal::EventType::SnapshotCreated,

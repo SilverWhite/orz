@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::blackboard::{InternalRetSection, SharedBlackboard};
-use crate::gateway::model::{GatewayError, Message, ModelGateway, ModelResponse, Role};
+use crate::gateway::model::{GatewayError, ModelGateway, ModelResponse};
 
 /// Which retrieval domain a subagent serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,29 +55,17 @@ impl RetrievalSubagent {
     /// or `web_sources` (external). Real retrieval semantics will populate
     /// these same fields later.
     ///
-    /// `completion_check_block` (Phase 3 §4.6): the subagent-close completion
-    /// check is injected into the request when the caller is about to close
-    /// the subagent; the free-form response carries the answer (parsed as
-    /// evidence by the caller, never structurally enforced).
+    /// GAP-INQUIRY-SPLIT (2026-08-09): the `completion_check_block` parameter
+    /// is deleted — the free-form subagent-close self-report (§4.3 forbids
+    /// model free-text verdicts) is replaced by the caller's mechanical
+    /// `information_sufficiency_assessment` over this section's ledger.
     pub async fn run_retrieval(
         &self,
         blackboard: &Arc<SharedBlackboard>,
         spec: &SubagentSpec,
-        completion_check_block: Option<&str>,
         cancel: Option<&CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
     ) -> Result<ModelResponse, GatewayError> {
-        let messages = completion_check_block
-            .map(|block| {
-                vec![Message {
-                    role: Role::User,
-                    content: block.to_string(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                }]
-            })
-            .unwrap_or_default();
         let response = self
             .gateway
             .generate_stream(
@@ -99,7 +87,9 @@ impl RetrievalSubagent {
                         role = self.section_name(),
                         goal = spec.goal,
                     ),
-                    messages,
+                    // GAP-INQUIRY-SPLIT: no injected completion-check block —
+                    // the request carries the goal system prompt alone.
+                    messages: Vec::new(),
                     tools: Vec::new(),
                     // D-6 (FIX_PLAN 2026-08-06): retrieval subagents get the
                     // full 160K budget too — a thinking subagent with a 1024
@@ -176,7 +166,7 @@ mod tests {
             goal: "找到设计文档".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec, None, None, None).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md", "gate.rs"]);
@@ -204,7 +194,7 @@ mod tests {
             goal: "检索论文".to_string(),
             budget_turns: 1,
         };
-        subagent.run_retrieval(&bb, &spec, None, None, None).await.unwrap();
+        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(

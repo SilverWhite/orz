@@ -15,8 +15,9 @@ pub mod session;
 
 // Re-export commonly used types from journal
 pub use journal::{
-    ChainValidation, EventType, JournalRecorder, JournalRecorderError, Redaction, ReplayResult,
-    RunEvent, TERMINAL_EVENTS, canonical_json, compute_event_hash, replay_journal, seal_event,
+    ChainValidation, EventTrack, EventType, JournalRecorder, JournalRecorderError, Redaction,
+    ReplayResult, RunEvent, TERMINAL_EVENTS, canonical_json, compute_event_hash, replay_journal,
+    seal_event,
     sha256_hex,
 };
 

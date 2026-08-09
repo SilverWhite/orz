@@ -513,7 +513,7 @@ mod tests {
         ] {
             let run_dir = runs.join(sid);
             std::fs::create_dir_all(&run_dir).unwrap();
-            let ev = orz_assurance::journal::RunEvent::new(
+            let ev = orz_assurance::journal::RunEvent::new_v01(
                 sid.to_string(),
                 0,
                 orz_assurance::journal::EventType::RunStarted,

@@ -760,7 +760,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("orz-tui-replay-run-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("events.jsonl");
-        let mut ev0 = orz_assurance::journal::RunEvent::new(
+        let mut ev0 = orz_assurance::journal::RunEvent::new_v01(
             "RUN-REP02".into(),
             0,
             orz_assurance::journal::EventType::RunStarted,
@@ -772,7 +772,7 @@ mod tests {
             "2026-08-05T00:00:00Z".into(),
         );
         orz_assurance::seal_event(&mut ev0).unwrap();
-        let mut ev1 = orz_assurance::journal::RunEvent::new(
+        let mut ev1 = orz_assurance::journal::RunEvent::new_v01(
             "RUN-REP02".into(),
             1,
             orz_assurance::journal::EventType::RunFinished,

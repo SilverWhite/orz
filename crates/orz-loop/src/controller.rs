@@ -30,7 +30,8 @@ use orz_assurance::orientation::stagnation::{
     StagnationDecision, StagnationInput, evaluate_runtime_stagnation_guard,
 };
 use orz_assurance::{
-    EventType, GateDecision, JournalRecorder, JournalRecorderError, Redaction, RunEvent, seal_event,
+    EventTrack, EventType, GateDecision, JournalRecorder, JournalRecorderError, Redaction, RunEvent,
+    canonical_json, seal_event, sha256_hex,
 };
 
 use orz_assurance::session::snapshot::SnapshotStore;
@@ -40,11 +41,9 @@ use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{FinishReason, Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolResult};
-use crate::inquiry::{DEFAULT_THRESHOLDS, InquiryCounters, parse_completion_decision};
-use crate::orientation::OrientationMonitor;
+use crate::orientation::{AgentRole, OrientationSessionState};
 use crate::prompt::{
-    COUNTEREXAMPLE_GATE_BLOCK, INFO_SUFFICIENCY_BLOCK, RETRIEVAL_COMPLETION_CHECK_BLOCK,
-    build_tool_availability_block, is_injected_block_text,
+    COUNTEREXAMPLE_GATE_BLOCK, build_tool_availability_block, is_injected_block_text,
 };
 use crate::relay::{DispatchTarget, route};
 use crate::tool::ToolDispatcher;
@@ -170,7 +169,6 @@ pub struct AgentLoopController {
     internal_retrieval: RetrievalSubagent,
     external_retrieval: RetrievalSubagent,
     blackboard: Arc<SharedBlackboard>,
-    orientation_monitor: Mutex<OrientationMonitor>,
     max_tool_rounds: u32,
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
@@ -411,7 +409,6 @@ impl AgentLoopController {
                 gateway.clone(),
             ),
             blackboard: Arc::new(SharedBlackboard::new()),
-            orientation_monitor: Mutex::new(OrientationMonitor::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
@@ -617,7 +614,6 @@ impl AgentLoopController {
             internal_retrieval,
             external_retrieval,
             blackboard: Arc::new(SharedBlackboard::new()),
-            orientation_monitor: Mutex::new(OrientationMonitor::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
@@ -750,6 +746,9 @@ impl AgentLoopController {
     /// continue the chain on the next turn (multi-prompt session support).
     /// On error a terminal `run_failed` event is written (best effort) so the
     /// journal never ends on a mid-sequence orphan.
+    /// `orientation`: session-level orientation state (ADR-0010 §4.2,
+    /// GAP-INQUIRY-SPLIT) — `None` for grill turns and one-shot CLI runs.
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_guards
     pub async fn run_turn(
         &self,
         host: &dyn LoopHost,
@@ -758,6 +757,7 @@ impl AgentLoopController {
         run_manifest_sha256: &str,
         next_sequence: u64,
         previous_event_sha256: Option<String>,
+        orientation: Option<&mut OrientationSessionState>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         self.run_turn_with_cancel(
             host,
@@ -767,6 +767,7 @@ impl AgentLoopController {
             next_sequence,
             previous_event_sha256,
             None,
+            orientation,
         )
         .await
     }
@@ -788,6 +789,7 @@ impl AgentLoopController {
         next_sequence: u64,
         previous_event_sha256: Option<String>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
+        orientation: Option<&mut OrientationSessionState>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         self.run_turn_with_guards(
             host,
@@ -798,6 +800,7 @@ impl AgentLoopController {
             previous_event_sha256,
             cancel,
             None,
+            orientation,
         )
         .await
     }
@@ -818,10 +821,12 @@ impl AgentLoopController {
         previous_event_sha256: Option<String>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        orientation: Option<&mut OrientationSessionState>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         let journal = host.journal();
         let mut writer = EventWriter::new(
             Some(journal),
+            EventTrack::V02,
             run_id,
             run_manifest_sha256,
             next_sequence,
@@ -838,6 +843,7 @@ impl AgentLoopController {
                 cancel,
                 heartbeat,
                 None,
+                orientation,
             )
             .await;
         match result {
@@ -884,7 +890,7 @@ impl AgentLoopController {
         template: Option<&str>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<String, AgentLoopError> {
-        let mut writer = EventWriter::new(None, "grill", "", 0, None, None);
+        let mut writer = EventWriter::new(None, EventTrack::V02, "grill", "", 0, None, None);
         let mut turn = GrillTurn {
             history,
             user_input,
@@ -899,6 +905,9 @@ impl AgentLoopController {
             cancel,
             None,
             Some(&mut turn),
+            // Grill turns never fire orientation (D9 — a grill question is
+            // not a run-semantic; same reasoning as the counterexample skip).
+            None,
         )
         .await
     }
@@ -912,17 +921,23 @@ impl AgentLoopController {
     /// once-injected template and the user input), the final-answer
     /// counterexample gate is skipped, and the full conversation is written
     /// back into `GrillTurn.history` on success.
+    ///
+    /// `orientation` (GAP-INQUIRY-SPLIT, 2026-08-09): session-level orientation
+    /// state — `None` for grill turns and one-shot CLI runs (ADR-0010 §4.2:
+    /// session-level 7-round counter; the state rides the host's session, not
+    /// the per-prompt controller).
     #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_guards + the grill turn
     async fn run_turn_inner(
         &self,
         writer: &mut EventWriter<'_>,
         host: &dyn LoopHost,
         prompt: &str,
-        run_id: &str,
+        _run_id: &str,
         _run_manifest_sha256: &str,
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         mut grill: Option<&mut GrillTurn<'_>>,
+        mut orientation: Option<&mut OrientationSessionState>,
     ) -> Result<String, AgentLoopError> {
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
@@ -1083,29 +1098,11 @@ impl AgentLoopController {
             )
             .await?;
 
-        // 3. orientation_checkpoint — once per turn (Python parity)
-        let checkpoint = self
-            .orientation_monitor
-            .lock()
-            .unwrap()
-            .next_checkpoint(run_id);
-        writer
-            .record(
-                EventType::OrientationCheckpoint,
-                serde_json::json!({
-                    "checkpoint_id": checkpoint.checkpoint_id(),
-                    "trigger": checkpoint.trigger.trigger_type(),
-                    "step_index": checkpoint.trigger.step_index(),
-                    "message_block": checkpoint.message_block(),
-                }),
-            )
-            .await?;
-        {
-            let mut w = self.blackboard.write();
-            w.gate_log
-                .orientation_checks
-                .push(checkpoint.checkpoint_id().to_string());
-        }
+        // 3. (GAP-INQUIRY-SPLIT, 2026-08-09): the per-turn orientation event
+        // is GONE — the orientation producer is now the session-level 7-round
+        // state machine (§4.2); the `orientation_checkpoint` event fires only
+        // when an orientation is actually injected (see `maybe_fire_orientation`
+        // in the model↔tool loop below).
 
         // 4. model ↔ tool loop. Grill mode (2026-08-08) starts from the
         // session's accumulated conversation: history + once-injected
@@ -1150,13 +1147,11 @@ impl AgentLoopController {
         // tools, the run ends there (no execution of post-budget calls).
         let mut budget_exhausted = false;
         // §4.6 wiring state: the final-answer counterexample gate fires once
-        // per run; inquiry counters are per-agent instances (main + the two
-        // retrieval subagents), local to the turn (D11 — counters reset each
-        // run, matching the stateless-between-turns controller contract).
+        // per run. The old mixed inquiry counters are gone (GAP-INQUIRY-SPLIT
+        // 2026-08-09) — orientation counts live in the session-level
+        // `OrientationSessionState` threaded through the turn chain; output
+        // repetition belongs to the runtime stagnation guard only.
         let mut counterexample_fired = false;
-        let mut main_counters = InquiryCounters::default();
-        let mut internal_counters = InquiryCounters::default();
-        let mut external_counters = InquiryCounters::default();
         // A6 (2026-08-08, §8 C.1): explicit context compaction state — the
         // previous round's MEASURED prompt tokens (provider usage; None
         // until the first round reports usage), the rounds since the last
@@ -1279,6 +1274,26 @@ impl AgentLoopController {
                         .await?;
                 }
             }
+
+            // GAP-INQUIRY-SPLIT (2026-08-09) — FALLBACK orientation injection
+            // point (loop-top): a post-tool-batch gap exists only on tool
+            // rounds. When the 7th completed round is a FINAL round (no tool
+            // batch — the turn breaks right after), the crossing is carried
+            // here on the next loop-top: pacing + compaction done, before
+            // the system prompt is built. (A deny round DOES have a tool
+            // batch — its crossing fires in the post-tool-batch gap like any
+            // tool round; review D3-1.) This is also the recovery resume
+            // point (a restored session's persisted count crosses here).
+            // Fires at most once per loop iteration (commit resets the
+            // lane), so the two injection points never double-fire.
+            self.maybe_fire_orientation(
+                writer,
+                &mut messages,
+                orientation.as_deref_mut(),
+                AgentRole::Main,
+                "loop_top_gap",
+            )
+            .await?;
 
             let avail_block = build_tool_availability_block(
                 &report.available,
@@ -1418,30 +1433,17 @@ impl AgentLoopController {
             rounds_since_compact += 1;
             last_round_had_tools = !response.tool_calls.is_empty();
 
-            // §4.6.3: per-round output-threshold feed — repeated-content
-            // measure over THIS round's response only (2026-08-08 fix: the
-            // previous implementation measured the whole conversation, so a
-            // long session's structural repetition pushed output_repeats over
-            // the threshold on every round — 59/61 neutral inquiries in a
-            // 82-round Terminal-Bench run fired on output_repeats, defeating
-            // the trigger-instant reset cooldown). Conversation-level
-            // stagnation is covered by runtime_stagnation_guard; this 判定点
-            // is per-round output repetition.
-            main_counters.feed_round();
-            let mut output_texts: Vec<String> = Vec::new();
-            if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
-                output_texts.push(text.clone());
+            // GAP-INQUIRY-SPLIT (2026-08-09): the model round just COMPLETED —
+            // count it against the session-level orientation counter (ADR-0010
+            // §4.2: completed logical model rounds; this point is the only
+            // completion point that every round passes — tool rounds, deny
+            // rounds and gate-answer rounds alike — while transport retries
+            // never reach it, so they never count). Output repetition is
+            // consumed ONLY by the runtime stagnation guard at end of turn —
+            // the old per-round double-consumption is deleted.
+            if let Some(o) = orientation.as_deref_mut() {
+                o.feed_round(AgentRole::Main);
             }
-            let (_, output_metrics) = evaluate_runtime_stagnation_guard(&StagnationInput {
-                public_outputs: output_texts,
-                ..Default::default()
-            })
-            .map_err(|e| AgentLoopError::Assurance(e.to_string()))?;
-            main_counters.feed_output_repeats(
-                output_metrics
-                    .max_consecutive_repeated_content
-                    .max(output_metrics.max_ngram_repeat),
-            );
 
             // D-8: the post-exhaustion final round may only produce TEXT — a
             // tool request there is refused (no execution after the budget is
@@ -1629,33 +1631,13 @@ impl AgentLoopController {
                 };
                 assistant_parts.push(format!("[{}] {}", tc.name, result.output));
 
-                // §4.6.3/4.6.4: counter feeds — the main agent counts
-                // tool-level events (ToolDispatcher wrapper); subagents count
-                // semantic actions (one run_retrieval = 1 action, tool-level
-                // counting disabled inside). The IP3c trigger check runs after
-                // each retrieval round completes.
-                match target {
-                    DispatchTarget::Host => main_counters.feed_tool_call(),
-                    DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval => {
-                        main_counters.feed_tool_call();
-                        let sub_counters = match target {
-                            DispatchTarget::InternalRetrieval => &mut internal_counters,
-                            _ => &mut external_counters,
-                        };
-                        sub_counters.feed_semantic_action();
-                        let (_, sub_metrics) =
-                            evaluate_runtime_stagnation_guard(&StagnationInput {
-                                public_outputs: vec![result.output.clone()],
-                                ..Default::default()
-                            })
-                            .map_err(|e| AgentLoopError::Assurance(e.to_string()))?;
-                        sub_counters.feed_output_repeats(
-                            sub_metrics
-                                .max_consecutive_repeated_content
-                                .max(sub_metrics.max_ngram_repeat),
-                        );
-                    }
-                }
+                // GAP-INQUIRY-SPLIT (2026-08-09): the old per-tool-call
+                // counter feeds are deleted — `tool_calls` / `tool_variety`
+                // are not orientation 判定点 (§4.2) and subagent output
+                // repetition belongs to the stagnation guard only. The main
+                // lane's orientation round count happens at the model-round
+                // completion point (one completed logical model round counts
+                // 1 regardless of tool-call count).
             }
             if !assistant_parts.is_empty() {
                 messages.push(Message {
@@ -1734,12 +1716,20 @@ impl AgentLoopController {
                     reasoning_content: None,
                 });
             }
-            self.maybe_fire_neutral_inquiry(
+            // GAP-INQUIRY-SPLIT (2026-08-09) — MAIN orientation injection
+            // point: the post-tool-batch gap (a safe action gap: the tool
+            // results are in, the next generate has not started). The fired
+            // block rides into the SAME turn's next generate. When this is
+            // the budget-exhausting round, the final (post-budget) round
+            // answers both the orientation block and the exhaustion notice
+            // (review D2-1, 2026-08-10: two competing directives on the
+            // closing round — accepted; the run is ending anyway).
+            self.maybe_fire_orientation(
                 writer,
                 &mut messages,
-                &mut main_counters,
-                &mut internal_counters,
-                &mut external_counters,
+                orientation.as_deref_mut(),
+                AgentRole::Main,
+                "post_tool_batch_gap",
             )
             .await?;
 
@@ -1872,64 +1862,63 @@ impl AgentLoopController {
         160_000
     }
 
-    /// §4.6.3 IP3b/IP3c: after a retrieval round completes, check the inquiry
-    /// counters (main + the involved subagent). Any 判定点 over its threshold
-    /// fires the same neutral inquiry and ALL counters reset at the trigger
-    /// instant — the implicit cooldown (a fired inquiry must re-accumulate
-    /// threshold units before it can fire again). The block is injected as a
-    /// User message so the main agent's next round answers it; the answer is
-    /// journaled via the following model_output (no structural parse — the
-    /// loop continues naturally, per the §4.6 定稿).
-    async fn maybe_fire_neutral_inquiry(
+    /// GAP-INQUIRY-SPLIT (2026-08-09) — the ORIENTATION producer (ADR-0010
+    /// §4.2): when the lane's session-level count reached the 7-round
+    /// threshold, journal the v0.2 `orientation_checkpoint` event (10-field
+    /// payload — `inquiry_family=neutral` + `inquiry_kind=orientation_checkpoint`
+    /// consts cross-checked by the verifier) and inject the orientation block
+    /// as a User message so the next generate answers it. Firing resets the
+    /// lane (§4.2: only an actual fire resets; compaction/handoff/recovery
+    /// never do). `None` orientation state is a no-op (grill / one-shot CLI).
+    /// Fires at most once per call — the commit-then-reset guarantees the two
+    /// injection points (post-tool-batch gap + loop-top) never double-fire.
+    /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a
+    /// journal-write failure propagates before the counter is reset, so a
+    /// failed run never persists a reset-but-never-fired counter.
+    async fn maybe_fire_orientation(
         &self,
         writer: &mut EventWriter<'_>,
         messages: &mut Vec<Message>,
-        main: &mut InquiryCounters,
-        internal: &mut InquiryCounters,
-        external: &mut InquiryCounters,
+        orientation: Option<&mut OrientationSessionState>,
+        role: AgentRole,
+        injection_position: &str,
     ) -> Result<(), AgentLoopError> {
-        let reason = main
-            .any_over(&DEFAULT_THRESHOLDS)
-            .or_else(|| internal.any_over(&DEFAULT_THRESHOLDS))
-            .or_else(|| external.any_over(&DEFAULT_THRESHOLDS));
-        let Some(reason) = reason else {
+        let Some(state) = orientation else {
             return Ok(());
         };
-        let counters = |c: &InquiryCounters| {
-            serde_json::json!({
-                "output_repeats": c.output_repeats,
-                "tool_calls": c.tool_calls,
-                "actions": c.actions,
-                "rounds": c.rounds,
-            })
+        let run_id = writer.run_id().to_string();
+        let Some(rec) = state.build_fire_record(role, &run_id, injection_position) else {
+            return Ok(());
         };
         writer
             .record(
-                EventType::NeutralInquiry,
+                EventType::OrientationCheckpoint,
                 serde_json::json!({
-                    "trigger_reason": reason.as_str(),
-                    "counters": {
-                        "main": counters(main),
-                        "internal": counters(internal),
-                        "external": counters(external),
-                    },
-                    "message_block": INFO_SUFFICIENCY_BLOCK,
-                    "block_present": true,
+                    "checkpoint_id": rec.checkpoint_id,
+                    "inquiry_family": rec.inquiry_family,
+                    "inquiry_kind": rec.inquiry_kind,
+                    "agent_role": rec.agent_role.as_str(),
+                    "session_id": rec.session_id,
+                    "trigger": rec.trigger,
+                    "completed_turns_since_orientation": rec.completed_turns_since_orientation,
+                    "step_index": rec.step_index,
+                    "message_block": rec.message_block,
+                    "injection_position": rec.injection_position,
                 }),
             )
             .await?;
+        // Commit AFTER the journaled event — the reset must not survive a
+        // failed write (review P2-2). `commit_fire` only reads the record's
+        // injection_position, so it must run before `message_block` moves
+        // into the injected message below.
+        state.commit_fire(role, &rec);
         messages.push(Message {
             role: Role::User,
-            content: INFO_SUFFICIENCY_BLOCK.to_string(),
+            content: rec.message_block,
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
-        // Trigger-instant reset across all three instances (D5) — a counter
-        // near its threshold must not re-fire on the next round.
-        main.reset_all();
-        internal.reset_all();
-        external.reset_all();
         Ok(())
     }
 
@@ -1989,7 +1978,6 @@ impl AgentLoopController {
             .run_retrieval(
                 &self.blackboard,
                 &spec,
-                Some(RETRIEVAL_COMPLETION_CHECK_BLOCK),
                 // F-03 (2026-08-07 review): the run's cancel token flows into
                 // the subagent's stream — Ctrl+C mid-retrieval now stops the
                 // round instead of waiting for the request to complete.
@@ -2018,25 +2006,80 @@ impl AgentLoopController {
                         }),
                     )
                     .await?;
-                // §4.6.1: neutral completion check on subagent close — one-shot
-                // per close, no accumulation, not part of the 4 counters. The
-                // block was injected into the subagent's request; the response
-                // text is the evidence (subagent outputs are not journaled
-                // elsewhere). Failure paths record nothing (D8 — no model
-                // answer, fabricating evidence is worse).
-                let decision = parse_completion_decision(&output);
+                // GAP-INQUIRY-SPLIT (2026-08-09): the free-form
+                // RETRIEVAL_COMPLETION_CHECK (model self-reported "是否已获得
+                // 所需内容") is deleted — ADR-0010 §4.3 forbids model free-text
+                // verdicts. The replacement is a purely MECHANICAL
+                // `information_sufficiency_assessment`: it snapshots the
+                // retrieval ledger written by the subagent (single-writer
+                // section), digests the result, and records
+                // `status=indeterminate` — this slice has no mechanical
+                // coverage requirement, and §4.3 says exactly that case must
+                // be `indeterminate`, never a model-filled verdict. The
+                // disposition/close chain arrives with the subagent
+                // isomorphism slice (the verifier accepts orphan assessments).
+                let (ledger_entries, categories) = {
+                    let r = self.blackboard.read();
+                    match role {
+                        SubagentRole::InternalRetrieval => (
+                            r.internal_ret
+                                .project_docs
+                                .iter()
+                                .chain(r.internal_ret.source_ledger.iter())
+                                .cloned()
+                                .collect::<Vec<String>>(),
+                            vec!["project_docs", "source_ledger"],
+                        ),
+                        SubagentRole::ExternalRetrieval => (
+                            r.external_ret.web_sources.clone(),
+                            vec!["web_sources"],
+                        ),
+                    }
+                };
+                let ledger_value = serde_json::to_value(&ledger_entries)
+                    .unwrap_or(serde_json::Value::Null);
+                let ledger_digest =
+                    sha256_hex(&canonical_json(&ledger_value).unwrap_or_default());
+                let result_digest = sha256_hex(output.as_bytes());
+                let total = ledger_entries.len() as u64;
+                // Review P2-3 (2026-08-10): the id binds the CALL dimension
+                // too — two identical outputs on different activations must
+                // not collide (the §4.4 verifier rejects a replayed
+                // assessment_id carrying a different payload). Both halves
+                // are hex digests, matching the `ASSESS-[A-Za-z0-9._-]+`
+                // pattern.
+                let assessment_id = format!(
+                    "ASSESS-{}-{}",
+                    &result_digest[..16],
+                    &sha256_hex(tc.call_id.as_bytes())[..8],
+                );
                 writer
                     .record(
-                        EventType::RetrievalCompletionCheck,
+                        EventType::InformationSufficiencyAssessment,
                         serde_json::json!({
-                            "role": target_name,
-                            "tool": tc.name,
-                            "decision": decision,
-                            "response": output,
-                            "neutral_only": true,
-                            "new_subagent_requested": false,
-                            "global_review_requested": false,
-                            "claim_strength_effect": "none",
+                            "assessment_id": assessment_id,
+                            "activation_id": format!("{target_name}-{}", tc.call_id),
+                            "contract_id": format!("retrieval-contract-{target_name}"),
+                            "contract_revision": 0,
+                            "result_digest": result_digest,
+                            "ledger_digest": ledger_digest,
+                            "source_counts": {
+                                "total": total,
+                                // The scripted subagent's `[DOC]`/`[SOURCE]`
+                                // lines are declaration-level references —
+                                // metadata-grade visibility, never full text.
+                                "full_text_observed": 0,
+                                "partial_text_observed": 0,
+                                "metadata_only": total,
+                                "unavailable": 0,
+                            },
+                            "source_categories": categories,
+                            "missing_categories": [],
+                            "filtering_reasons": [],
+                            "status": "indeterminate",
+                            "reason_codes": ["no_mechanical_coverage_requirement"],
+                            "source_visibility_gate": "not_applicable",
+                            "assessment_version": "0.1.0",
                         }),
                     )
                     .await?;
@@ -2680,6 +2723,9 @@ struct EventWriter<'a> {
     /// persisted by the host to `{cwd}/.gsa/grill/<session>.jsonl`, never
     /// into a run journal (run = single-run integrity unit).
     journal: Option<&'a JournalRecorder>,
+    /// GAP-INQUIRY-SPLIT (2026-08-09): the journal track — production writes
+    /// `V02` (homogeneous chain, §11.6.2); `V01` is replay-only.
+    track: EventTrack,
     run_id: String,
     manifest_sha256: String,
     seq: u64,
@@ -2692,6 +2738,7 @@ struct EventWriter<'a> {
 impl<'a> EventWriter<'a> {
     fn new(
         journal: Option<&'a JournalRecorder>,
+        track: EventTrack,
         run_id: &str,
         manifest_sha256: &str,
         seq: u64,
@@ -2700,6 +2747,7 @@ impl<'a> EventWriter<'a> {
     ) -> Self {
         Self {
             journal,
+            track,
             run_id: run_id.to_string(),
             manifest_sha256: manifest_sha256.to_string(),
             seq,
@@ -2717,21 +2765,50 @@ impl<'a> EventWriter<'a> {
         let Some(journal) = self.journal else {
             return Ok(());
         };
+        // GAP-INQUIRY-SPLIT: `neutral_inquiry` / `retrieval_completion_check`
+        // are retired on the v0.2 track (ADR-0010 §5.1) — a v0.2 producer
+        // writing one is a producer bug (mirrors the verifier's negative
+        // fixtures). `V01` keeps them for historical replay only.
+        // Review P3-6 (2026-08-10): an error return, not a panic — a future
+        // producer slip must fail the run, not the whole process.
+        if self.track == EventTrack::V02
+            && matches!(
+                event_type,
+                EventType::NeutralInquiry | EventType::RetrievalCompletionCheck
+            )
+        {
+            return Err(AgentLoopError::Assurance(format!(
+                "v0.2 track must not write retired event type {event_type}"
+            )));
+        }
         // P1-1: a journaled event is activity (rounds, gates, tool events).
         if let Some(h) = &self.heartbeat {
             h.stamp();
         }
-        let mut event = RunEvent::new(
-            self.run_id.clone(),
-            self.seq,
-            event_type,
-            self.manifest_sha256.clone(),
-            self.prev_hash.clone(),
-            "run-event-v0.1.schema.json".into(),
-            payload,
-            Redaction::None,
-            chrono_utc_now(),
-        );
+        let mut event = match self.track {
+            EventTrack::V02 => RunEvent::new_v02(
+                self.run_id.clone(),
+                self.seq,
+                event_type,
+                self.manifest_sha256.clone(),
+                self.prev_hash.clone(),
+                self.track.payload_schema_id().into(),
+                payload,
+                Redaction::None,
+                chrono_utc_now(),
+            ),
+            EventTrack::V01 => RunEvent::new_v01(
+                self.run_id.clone(),
+                self.seq,
+                event_type,
+                self.manifest_sha256.clone(),
+                self.prev_hash.clone(),
+                self.track.payload_schema_id().into(),
+                payload,
+                Redaction::None,
+                chrono_utc_now(),
+            ),
+        };
         seal_event(&mut event).map_err(|e| AgentLoopError::Assurance(e.to_string()))?;
         let event_hash = event.event_sha256.clone();
         // Only advance the chain link after the write is accepted — a
@@ -2745,6 +2822,11 @@ impl<'a> EventWriter<'a> {
 
     fn seq(&self) -> u64 {
         self.seq
+    }
+
+    /// The run this writer appends to (checkpoint_ids embed the run id).
+    fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     /// Hash of the last recorded event — the next event's chain link.
@@ -2864,7 +2946,7 @@ mod tests {
             Arc::new(FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "列出当前目录", "RUN-SEQ", MANIFEST, 0, None)
+            .run_turn(&host, "列出当前目录", "RUN-SEQ", MANIFEST, 0, None, None)
             .await;
 
         assert!(result.is_ok(), "{result:?}");
@@ -2877,7 +2959,10 @@ mod tests {
 
         // Full gate sequence (text-only path) — the availability probe
         // precedes run_started (Python conformance); the counterexample gate
-        // separates the two model outputs.
+        // separates the two model outputs. GAP-INQUIRY-SPLIT: the per-turn
+        // orientation event is gone (the orientation producer fires only on
+        // the session-level 7-round trigger — this two-round run fires none;
+        // the no-orientation-state path skips it entirely).
         let types = event_types(&dir);
         assert_eq!(
             types,
@@ -2885,7 +2970,6 @@ mod tests {
                 EventType::ToolAvailabilityCheck,
                 EventType::RunStarted,
                 EventType::PromptSubmitted,
-                EventType::OrientationCheckpoint,
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,
                 EventType::ModelOutput,
@@ -2942,7 +3026,7 @@ mod tests {
             Arc::new(FakeProvider::from_texts(vec!["你好世界", "你好世界"]).with_chunk_size(2));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "列出当前目录", "RUN-DELTA", MANIFEST, 0, None)
+            .run_turn(&host, "列出当前目录", "RUN-DELTA", MANIFEST, 0, None, None)
             .await;
 
         assert!(result.is_ok(), "{result:?}");
@@ -2955,7 +3039,8 @@ mod tests {
             "chunks must arrive in order and cover both gate rounds"
         );
 
-        // Journal unchanged: streaming adds no events.
+        // Journal unchanged: streaming adds no events. GAP-INQUIRY-SPLIT:
+        // no per-turn orientation event (fires only on the 7-round trigger).
         let types = event_types(&dir);
         assert_eq!(
             types,
@@ -2963,7 +3048,6 @@ mod tests {
                 EventType::ToolAvailabilityCheck,
                 EventType::RunStarted,
                 EventType::PromptSubmitted,
-                EventType::OrientationCheckpoint,
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,
                 EventType::ModelOutput,
@@ -2996,7 +3080,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读文件", "RUN-TOOL", MANIFEST, 0, None)
+            .run_turn(&host, "读文件", "RUN-TOOL", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3086,7 +3170,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-EDIT", MANIFEST, 0, None)
+            .run_turn(&host, "改文件", "RUN-EDIT", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3171,7 +3255,7 @@ mod tests {
         }
 
         controller
-            .run_turn(&host, "请调查", "RUN-PLAN-ST", MANIFEST, 0, None)
+            .run_turn(&host, "请调查", "RUN-PLAN-ST", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3206,7 +3290,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "hi", "RUN-NOPLAN", MANIFEST, 0, None)
+            .run_turn(&host, "hi", "RUN-NOPLAN", MANIFEST, 0, None, None)
             .await
             .unwrap();
         for request in fake.received_requests() {
@@ -3247,7 +3331,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_plan("任务".to_string(), vec!["步骤一".to_string()]);
         controller
-            .run_turn(&host, "开始", "RUN-STABLE", MANIFEST, 0, None)
+            .run_turn(&host, "开始", "RUN-STABLE", MANIFEST, 0, None, None)
             .await
             .unwrap();
         let received = fake.received_requests();
@@ -3431,7 +3515,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 2, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT", MANIFEST, 0, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3551,7 +3635,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "测试工具超时", "RUN-TIMEOUT", MANIFEST, 0, None)
+            .run_turn(&host, "测试工具超时", "RUN-TIMEOUT", MANIFEST, 0, None, None)
             .await;
         assert!(result.is_ok(), "{result:?}");
 
@@ -3686,7 +3770,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 1, 100_000);
         controller
-            .run_turn(&host, "修复任务", "RUN-WHITELIST", MANIFEST, 0, None)
+            .run_turn(&host, "修复任务", "RUN-WHITELIST", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3795,7 +3879,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "任务", "RUN-WL-REFUSE", MANIFEST, 0, None)
+            .run_turn(&host, "任务", "RUN-WL-REFUSE", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3862,7 +3946,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway).with_whitelist_cap(10);
         controller
-            .run_turn(&host, "任务", "RUN-WL-CAP", MANIFEST, 0, None)
+            .run_turn(&host, "任务", "RUN-WL-CAP", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3909,7 +3993,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "任务", "RUN-WL-EMPTY", MANIFEST, 0, None)
+            .run_turn(&host, "任务", "RUN-WL-EMPTY", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -3977,7 +4061,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 1, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-GAP", MANIFEST, 0, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-GAP", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4048,7 +4132,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 5, 100_000); // cooldown longer than the run
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-NO", MANIFEST, 0, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-NO", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4112,7 +4196,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(150_000, 400, 20, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-SAFE", MANIFEST, 0, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-SAFE", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4175,7 +4259,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-EDIT-FAIL", MANIFEST, 0, None)
+            .run_turn(&host, "改文件", "RUN-EDIT-FAIL", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4213,7 +4297,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读文件", "RUN-READ", MANIFEST, 0, None)
+            .run_turn(&host, "读文件", "RUN-READ", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4266,7 +4350,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件再看黑板", "RUN-BB", MANIFEST, 0, None)
+            .run_turn(&host, "改文件再看黑板", "RUN-BB", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4355,7 +4439,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件并回看", "RUN-BBS", MANIFEST, 0, None)
+            .run_turn(&host, "改文件并回看", "RUN-BBS", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4417,7 +4501,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读错误分区", "RUN-BBE", MANIFEST, 0, None)
+            .run_turn(&host, "读错误分区", "RUN-BBE", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4487,7 +4571,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-DENY", MANIFEST, 0, None)
+            .run_turn(&host, "改文件", "RUN-DENY", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4599,7 +4683,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "查一下", "RUN-POLICY", MANIFEST, 0, None)
+            .run_turn(&host, "查一下", "RUN-POLICY", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4654,7 +4738,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "只读", "RUN-RO", MANIFEST, 0, None)
+            .run_turn(&host, "只读", "RUN-RO", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4704,7 +4788,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-BREAK", MANIFEST, 0, None)
+            .run_turn(&host, "改文件", "RUN-BREAK", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4814,7 +4898,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-BREAK2", MANIFEST, 0, None)
+            .run_turn(&host, "改文件", "RUN-BREAK2", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4941,7 +5025,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "混合", "RUN-RESET", MANIFEST, 0, None)
+            .run_turn(&host, "混合", "RUN-RESET", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -4988,7 +5072,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读文件", "RUN-REASON", MANIFEST, 0, None)
+            .run_turn(&host, "读文件", "RUN-REASON", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5054,7 +5138,7 @@ mod tests {
         let controller =
             AgentLoopController::with_gateway(gateway).with_snapshot_store(Some(store.clone()));
         controller
-            .run_turn(&host, "改文件", "RUN-SNAP", MANIFEST, 0, None)
+            .run_turn(&host, "改文件", "RUN-SNAP", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5133,6 +5217,7 @@ mod tests {
                 MANIFEST,
                 0,
                 None,
+                None,
             )
             .await;
         assert!(result.is_ok(), "{result:?}");
@@ -5182,7 +5267,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "查找项目文档", "RUN-RET", MANIFEST, 0, None)
+            .run_turn(&host, "查找项目文档", "RUN-RET", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5270,7 +5355,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None)
+            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5360,7 +5445,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读两次", "RUN-BUDGET", MANIFEST, 0, None)
+            .run_turn(&host, "读两次", "RUN-BUDGET", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5438,7 +5523,7 @@ mod tests {
         let mut controller = AgentLoopController::with_gateway(gateway);
         controller.max_tool_rounds = 1;
         controller
-            .run_turn(&host, "读", "RUN-CAP", MANIFEST, 0, None)
+            .run_turn(&host, "读", "RUN-CAP", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5487,7 +5572,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(Vec::new()));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "hello", "RUN-FAIL", MANIFEST, 0, None)
+            .run_turn(&host, "hello", "RUN-FAIL", MANIFEST, 0, None, None)
             .await;
         assert!(result.is_err(), "expected model error, got {result:?}");
 
@@ -5535,7 +5620,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = Arc::new(PartialThenAbort);
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "hello", "RUN-PART", MANIFEST, 0, None)
+            .run_turn(&host, "hello", "RUN-PART", MANIFEST, 0, None, None)
             .await;
         assert!(result.is_err(), "expected model error, got {result:?}");
 
@@ -5593,7 +5678,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "输出结果", "RUN-STAG", MANIFEST, 0, None)
+            .run_turn(&host, "输出结果", "RUN-STAG", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5658,7 +5743,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "运行命令", "RUN-DEFER", MANIFEST, 0, None)
+            .run_turn(&host, "运行命令", "RUN-DEFER", MANIFEST, 0, None, None)
             .await
             .unwrap();
 
@@ -5685,7 +5770,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         let (response, _, _) = controller
-            .run_turn(&host, "hello", "RUN-GATE", MANIFEST, 0, None)
+            .run_turn(&host, "hello", "RUN-GATE", MANIFEST, 0, None, None)
             .await
             .unwrap();
         // The intercepted draft is never returned — the post-gate answer is.
@@ -5775,6 +5860,7 @@ mod tests {
                 0,
                 None,
                 Some(&token),
+                None,
             )
             .await;
 
@@ -5840,6 +5926,7 @@ mod tests {
                 0,
                 None,
                 Some(&t),
+                None,
             )
             .await
         });
@@ -5942,6 +6029,7 @@ mod tests {
                 0,
                 None,
                 Some(&t),
+                None,
             )
             .await
         });
@@ -6043,6 +6131,7 @@ mod tests {
                 0,
                 None,
                 Some(&t),
+                None,
             )
             .await
         });

@@ -293,6 +293,49 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("检索完成确认: {role} = {decision}")]
         }
 
+        // ── v0.2 mechanism events (GAP-INQUIRY-SPLIT, 2026-08-09) ──
+        TuiEvent::DiagnosticCoverageCheckpoint {
+            checkpoint_id,
+            threshold_stage,
+        } => {
+            app.content.add_system_message(
+                &format!("[诊断覆盖检查点] {checkpoint_id} 阈值 {threshold_stage}"),
+                false,
+            );
+            vec![format!("诊断覆盖检查点: {checkpoint_id}")]
+        }
+        TuiEvent::InformationSufficiencyAssessment {
+            assessment_id,
+            status,
+            source_total,
+        } => {
+            app.content.add_system_message(
+                &format!("[信息充分性] {assessment_id}: {status}（来源 {source_total}）"),
+                false,
+            );
+            vec![format!("信息充分性: {status}")]
+        }
+        TuiEvent::RetrievalParentDisposition {
+            disposition_id,
+            decision,
+        } => {
+            app.content.add_system_message(
+                &format!("[检索处置] {disposition_id}: {decision}"),
+                false,
+            );
+            vec![format!("检索处置: {decision}")]
+        }
+        TuiEvent::RetrievalCloseRecord {
+            close_record_id,
+            terminal_reason,
+        } => {
+            app.content.add_system_message(
+                &format!("[检索关闭] {close_record_id}: {terminal_reason}"),
+                false,
+            );
+            vec![format!("检索关闭: {terminal_reason}")]
+        }
+
         // ── A6 explicit context compaction ──
         TuiEvent::ContextCompressed {
             trigger_tokens,

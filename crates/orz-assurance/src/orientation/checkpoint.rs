@@ -6,11 +6,16 @@
 //! the Python side (conformance suite + schema authority).
 
 /// Fixed three-section Chinese orientation prompt (Python `ORIENTATION_BLOCK`).
-pub const ORIENTATION_BLOCK: &str = "[ORIENTATION_CHECKPOINT v0.1]\n\
+///
+/// GAP-INQUIRY-SPLIT (2026-08-09): re-tagged `[ORIENTATION v0.2]` — the v0.2
+/// producer actually injects the block (the old monitor wrote the event but
+/// never injected it), so the marker must match the `ORIENTATION_INJECTED_PREFIX`
+/// registration in the stagnation filter. The three questions are unchanged.
+pub const ORIENTATION_BLOCK: &str = "[ORIENTATION v0.2]\n\
 当前正在做什么？\n\
 当前任务定位是什么？\n\
 下一步输出应该服务哪个用户目标？\n\
-[/ORIENTATION_CHECKPOINT]";
+[/ORIENTATION]";
 
 /// Checklist context prefix template (Python `CHECKLIST_CONTEXT_TEMPLATE`).
 pub const CHECKLIST_CONTEXT_TEMPLATE: &str = "[CHECKLIST_CONTEXT v0.1]\n\
@@ -225,8 +230,11 @@ mod tests {
         assert!(c.message_block.contains("当前正在做什么？"));
         assert!(c.message_block.contains("当前任务定位是什么？"));
         assert!(c.message_block.contains("下一步输出应该服务哪个用户目标？"));
-        assert!(c.message_block.starts_with("[ORIENTATION_CHECKPOINT v0.1]"));
-        assert!(c.message_block.ends_with("[/ORIENTATION_CHECKPOINT]"));
+        // GAP-INQUIRY-SPLIT: v0.2 marker — the injected block must match the
+        // `[ORIENTATION` prefix registered with the stagnation filter.
+        assert!(c.message_block.starts_with("[ORIENTATION v0.2]"));
+        assert!(c.message_block.ends_with("[/ORIENTATION]"));
+        assert!(c.message_block.starts_with("[ORIENTATION"));
     }
 
     #[test]

@@ -368,6 +368,9 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
                     prev_hash,
                     None,
                     Some(&heartbeat),
+                    // GAP-INQUIRY-SPLIT: one-shot CLI runs carry no session
+                    // orientation state (the ACP server hosts sessions).
+                    None,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -575,13 +578,13 @@ async fn record_plan_event(
     event_type: orz_assurance::EventType,
     payload: serde_json::Value,
 ) -> Result<String, String> {
-    let mut event = orz_assurance::RunEvent::new(
+    let mut event = orz_assurance::RunEvent::new_v02(
         handle.run_id.clone(),
         seq,
         event_type,
         handle.run_manifest_sha256.clone(),
         prev_hash,
-        "run-event-v0.1.schema.json".into(),
+        orz_assurance::EventTrack::V02.payload_schema_id().into(),
         payload,
         orz_assurance::Redaction::None,
         chrono_utc_now(),
@@ -675,10 +678,10 @@ async fn stall_fire(heartbeat: &orz_loop::gateway::model::ActivityClock, timeout
 /// Ordering: `flush_async` FIRST — the recorder channel is FIFO, so every
 /// event the dropped controller queued lands before the flush completes;
 /// reading the file afterwards yields a consistent chain end. The write
-/// goes through `record_plan_event` (same `run-event-v0.1.schema.json`
-/// payload schema as the controller's writer) so the hash chain, event_id
-/// derivation (`{:03}`) and terminal semantics all match the production
-/// path.
+/// goes through `record_plan_event` (same `run-event-v0.2.schema.json`
+/// payload schema as the controller's writer — both flipped to the v0.2
+/// track by GAP-INQUIRY-SPLIT) so the hash chain, event_id derivation
+/// (`{:03}`) and terminal semantics all match the production path.
 ///
 /// If the file ALREADY ends on a terminal event (the run finished in the
 /// same instant the guard fired — a benign select race), nothing is
@@ -921,6 +924,9 @@ async fn run(
                 handle.last_event_sha256.clone(),
                 None,
                 Some(&heartbeat),
+                // GAP-INQUIRY-SPLIT: one-shot CLI runs carry no session
+                // orientation state (the ACP server hosts sessions).
+                None,
             )
             .await?;
 
@@ -1200,6 +1206,7 @@ mod tests {
             &handle.run_manifest_sha256,
             handle.next_sequence,
             handle.last_event_sha256.clone(),
+            None,
         );
         let timed = tokio::time::timeout(std::time::Duration::from_millis(400), fut).await;
         assert!(timed.is_err(), "budget must expire mid-run: {timed:?}");
@@ -1281,6 +1288,7 @@ mod tests {
             handle.last_event_sha256.clone(),
             None,
             Some(&heartbeat),
+            None,
         );
         let mut stalled = false;
         let outcome: Result<(), String> = tokio::select! {
@@ -1362,6 +1370,7 @@ mod tests {
             handle.last_event_sha256.clone(),
             None,
             Some(&heartbeat),
+            None,
         );
         let result = tokio::select! {
             r = fut => r.map(|_| ()).map_err(|e| e.to_string()),
@@ -1498,6 +1507,7 @@ mod conformance_capture {
                         &handle.run_manifest_sha256,
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
+                        None,
                     )
                     .await
                     .unwrap();
@@ -1510,7 +1520,6 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
-                        "orientation_checkpoint",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -1600,7 +1609,6 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
-                        "orientation_checkpoint",
                         "model_output",
                         "permission_requested",
                         "permission_decision",
@@ -1663,6 +1671,7 @@ mod conformance_capture {
                         &handle.run_manifest_sha256,
                         seq,
                         prev_hash,
+                        None,
                     )
                     .await
                     .unwrap();
@@ -1678,7 +1687,6 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
-                        "orientation_checkpoint",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -1754,7 +1762,6 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
-                        "orientation_checkpoint",
                         "run_cancelled",
                     ],
                     "run_cancelled",
@@ -1789,6 +1796,7 @@ mod conformance_capture {
                         &handle.run_manifest_sha256,
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
+                        None,
                     )
                     .await;
                 assert!(result.is_err(), "empty script must fail the turn");
@@ -1801,7 +1809,6 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
-                        "orientation_checkpoint",
                         "run_failed",
                     ],
                     "run_failed",
@@ -1860,6 +1867,127 @@ mod conformance_capture {
                     "run_finished",
                 );
                 copy_journal(&journal_dir, "restore-run");
+            })
+            .await
+    }
+
+    /// 7. orientation-fire — GAP-INQUIRY-SPLIT: seven retrieval tool rounds
+    /// cross the session-level 7-round threshold; the orientation fires in
+    /// the post-tool-batch gap of round 7 (the injected block is answered by
+    /// the next generate; the counterexample gate then separates the final
+    /// answer). Also captures the mechanical `information_sufficiency_assessment`
+    /// the subagent path produces (v0.2 track).
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_orientation_fire_run() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("orientation-fire-run");
+                let run_id = "RUN-ORIENT-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                // 7 tool rounds × (declaration + subagent response) + the
+                // orientation answer round + the final answer round.
+                let mut script = Vec::new();
+                for i in 0..7 {
+                    script.push(ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "retrieve_project_docs".to_string(),
+                        arguments: serde_json::json!({"query": format!("查询 {i}")}),
+                        call_id: format!("call-{i}"),
+                    }]));
+                    script.push(ScriptedResponse::text(format!(
+                        "[DOC] doc-{i}.md\n检索结果 {i}"
+                    )));
+                }
+                script.push(ScriptedResponse::text("当前任务定位：处理查询批次；下一步：汇总结果"));
+                script.push(ScriptedResponse::text("最终汇总完成。"));
+                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
+                    FakeProvider::new(script),
+                ))
+                .with_snapshot_store(Some(handle.snapshot_store.clone()));
+                // This scenario is the 7-round-crossing proof — the session
+                // orientation state MUST be threaded in (a one-shot CLI run
+                // would pass None and never fire).
+                let mut orientation =
+                    orz_loop::orientation::OrientationSessionState::new(run_id);
+                controller
+                    .run_turn(
+                        &host,
+                        "跑 7 轮检索后汇总",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                        Some(&mut orientation),
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+
+                let mut expected = vec![
+                    "run_preflight",
+                    "tool_availability_check",
+                    "run_started",
+                    "prompt_submitted",
+                ];
+                for _ in 0..7 {
+                    expected.extend([
+                        "model_output",
+                        "tool_started",
+                        "tool_completed",
+                        "information_sufficiency_assessment",
+                    ]);
+                }
+                expected.extend([
+                    "orientation_checkpoint",
+                    "model_output",
+                    "counterexample_gate",
+                    "model_output",
+                    "runtime_stagnation_guard",
+                    "run_finished",
+                ]);
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "orientation-fire-run",
+                    &expected,
+                    "run_finished",
+                );
+
+                // The fired checkpoint carries the v0.2 payload shape —
+                // inquiry_family=neutral + inquiry_kind const + the 7-count.
+                let content =
+                    std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+                let orientation_line = content
+                    .lines()
+                    .filter(|l| l.contains("\"orientation_checkpoint\""))
+                    .next()
+                    .expect("orientation event present");
+                let payload: serde_json::Value =
+                    serde_json::from_str(orientation_line).unwrap();
+                let p = &payload["payload"];
+                assert_eq!(p["inquiry_family"], "neutral");
+                assert_eq!(p["inquiry_kind"], "orientation_checkpoint");
+                assert_eq!(p["agent_role"], "main");
+                assert_eq!(p["trigger"], "completed_turns_interval");
+                assert_eq!(p["completed_turns_since_orientation"], 7);
+                assert_eq!(p["injection_position"], "post_tool_batch_gap");
+                assert!(p["message_block"].as_str().unwrap().starts_with("[ORIENTATION"));
+                // The mechanical assessment snapshots the growing ledger:
+                // round 7's assessment counts 7 [DOC] entries.
+                let assessment_lines: Vec<&str> = content
+                    .lines()
+                    .filter(|l| l.contains("\"information_sufficiency_assessment\""))
+                    .collect();
+                assert_eq!(assessment_lines.len(), 7);
+                let last: serde_json::Value =
+                    serde_json::from_str(assessment_lines[6]).unwrap();
+                assert_eq!(last["payload"]["status"], "indeterminate");
+                assert_eq!(last["payload"]["source_counts"]["total"], 7);
+                assert_eq!(last["payload"]["reason_codes"][0], "no_mechanical_coverage_requirement");
+
+                copy_journal(&handle.journal_dir, "orientation-fire-run");
             })
             .await
     }

@@ -13,7 +13,7 @@ use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::JournalRecorder;
 use orz_assurance::permit::PermitSigner;
 use orz_assurance::session::snapshot::SnapshotStore;
-use orz_assurance::{EventType, Redaction, RunEvent};
+use orz_assurance::{EventTrack, EventType, Redaction, RunEvent};
 
 use crate::keystore::{
     KeystoreError, MemoryInstallationKeyStore, WindowsDpapiInstallationKeyStore,
@@ -170,6 +170,13 @@ pub async fn bootstrap_session(
     let journal = JournalRecorder::new(journal_dir.clone());
 
     // Compute a manifest SHA-256
+    // GAP-INQUIRY-SPLIT (2026-08-09): production sessions write the v0.2
+    // track — the preflight (first event) pins the whole chain's envelope
+    // schema (homogeneous-chain requirement, ADR-0010 §11.6.2). The
+    // manifest's OWN `schema_version` stays "0.1.0-draft": it is a PAYLOAD
+    // field constrained by the v0.1 preflight payload schema (which the v0.2
+    // track reuses for the 31 unchanged events) — only the ENVELOPE
+    // `schema_version` flips to 0.2.0-draft (Python canonical_cli parity).
     let manifest = serde_json::json!({
         "run_id": run_id,
         "created_at": chrono::Utc::now().to_rfc3339(),
@@ -179,13 +186,13 @@ pub async fn bootstrap_session(
         orz_assurance::sha256_hex(&orz_assurance::canonical_json(&manifest).unwrap_or_default());
 
     // Record run_preflight as event 0
-    let mut preflight = RunEvent::new(
+    let mut preflight = RunEvent::new_v02(
         run_id.into(),
         0,
         EventType::RunPreflight,
         manifest_sha256.clone(),
         None,
-        "run-event-v0.1.schema.json".into(),
+        EventTrack::V02.payload_schema_id().into(),
         manifest,
         Redaction::None,
         chrono::Utc::now().to_rfc3339(),

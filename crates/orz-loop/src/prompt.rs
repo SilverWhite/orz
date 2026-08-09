@@ -2,12 +2,13 @@
 //!
 //! IP2a: TOOL_AVAILABILITY block injection (format aligned with Python
 //! `_build_context_block`).
-//! IP2b: ORIENTATION_CHECKPOINT block (injected per-turn by the controller via
-//! the orientation monitor; the builder provides the composition helper).
-//! IP2c: INFO_SUFFICIENCY + RETRIEVAL_COMPLETION_CHECK + COUNTEREXAMPLE_GATE
-//! blocks (§4.6 wiring, Phase 3). Inquiries are injected as `Role::User`
-//! messages by the controller (they are runtime questions to the model, not
-//! system context); the constants live here per design §4.6.6.
+//! IP2c: COUNTEREXAMPLE_GATE + ORIENTATION blocks (ADR-0010 §4.1 six-mechanism
+//! split, Phase C 前置序 GAP-INQUIRY-SPLIT). Inquiries are injected as
+//! `Role::User` messages by the controller (they are runtime questions to the
+//! model, not system context); the constants live here per design §4.6.6.
+//! The orientation block text lives in `orz-assurance` (checkpoint.rs) so the
+//! journal `message_block` payload and the injected text stay one source;
+//! `ORIENTATION_INJECTED_PREFIX` registers it with the stagnation filter.
 
 /// Base system prompt — runtime-neutral orientation.
 ///
@@ -36,27 +37,6 @@ compaction_whitelist_add 写入压缩白名单——该内容不被上下文压�
 写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
 不写计划/步骤/推测/临时状态（计划由 plan mode 承载）。";
 
-/// Neutral inquiry block — IP2c, fired after a retrieval round completes when
-/// any of the 4 判定点 crosses its threshold (§4.6.5, verbatim).
-pub const INFO_SUFFICIENCY_BLOCK: &str = "[INFO_SUFFICIENCY v0.1]\n\
-本轮检索已完成。请确认：\n\
-是否已获得完成当前主任务所需的内容？\n\
-请回答 yes / no / uncertain，并附简短理由。\n\
-若为 no 或 uncertain，只列出还需要的内容类型。\n\
-[/INFO_SUFFICIENCY]";
-
-/// Subagent close completion check block — one-shot per subagent close, no
-/// accumulation (§4.6.1; Python `RETRIEVAL_COMPLETION_CHECK v0.1` verbatim,
-/// `assurance/retrieval_subagent.py` L474-482).
-pub const RETRIEVAL_COMPLETION_CHECK_BLOCK: &str = "[RETRIEVAL_COMPLETION_CHECK v0.1]\n\
-子代理检索任务已完成。关闭前请确认：\n\
-\n\
-是否已经获得完成当前主任务所需的内容？\n\
-\n\
-请回答 yes / no / uncertain，并附简短理由。\n\
-若为 no 或 uncertain，只列出还需要的内容类型（不自动扩展为新子代理或无限补检索）。\n\
-[/RETRIEVAL_COMPLETION_CHECK]";
-
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
 pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
@@ -77,15 +57,30 @@ pub const COUNTEREXAMPLE_GATE_PLAN_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 3. 结论强度是否超出证据支持？\n\
 [/COUNTEREXAMPLE_GATE]";
 
-/// Whether `content` is exactly one of the runtime-injected inquiry blocks.
+/// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
+/// (ADR-0010 §4.2 — session-level 7-round neutral inquiry). Registered with
+/// `is_injected_block_text` so the injected block never enters stagnation
+/// inputs. The full block text lives in `orz-assurance` (checkpoint.rs) — the
+/// journal `message_block` payload and the injected message share it.
+pub const ORIENTATION_INJECTED_PREFIX: &str = "[ORIENTATION";
+
+/// Whether `content` is one of the runtime-injected assurance blocks.
 /// The controller filters these out of stagnation inputs (D7) — fixed injected
 /// text is not model output and repeated blocks would pollute ngram stats.
+///
+/// GAP-INQUIRY-SPLIT (2026-08-09): the old INFO_SUFFICIENCY and
+/// RETRIEVAL_COMPLETION_CHECK blocks are deleted (the mixed-counter inquiry
+/// mechanism is gone); the orientation block is registered by prefix — the
+/// v0.2 block text carries a version marker (`[ORIENTATION v0.2]`), so the
+/// registration must be a prefix match, not equality.
 pub fn is_injected_block_text(content: &str) -> bool {
     let content = content.trim();
-    content == INFO_SUFFICIENCY_BLOCK
-        || content == RETRIEVAL_COMPLETION_CHECK_BLOCK
-        || content == COUNTEREXAMPLE_GATE_BLOCK
+    content == COUNTEREXAMPLE_GATE_BLOCK
         || content == COUNTEREXAMPLE_GATE_PLAN_BLOCK
+        // GAP-INQUIRY-SPLIT: the injected orientation block must never be
+        // stagnation input — a repeated `[ORIENTATION …]` block would
+        // otherwise pollute the guard's ngram stats (R-8 regression point).
+        || content.starts_with(ORIENTATION_INJECTED_PREFIX)
         || content.starts_with(TOOL_POLICY_BREAKER_PREFIX)
         || content.starts_with(TOOL_ROUND_BUDGET_PREFIX)
         // 2026-08-08 blackboard partition (review closure, P2-1/D2-1): the
@@ -442,10 +437,19 @@ mod tests {
 
     #[test]
     fn is_injected_block_text_detects_blocks() {
-        assert!(is_injected_block_text(INFO_SUFFICIENCY_BLOCK));
-        assert!(is_injected_block_text(RETRIEVAL_COMPLETION_CHECK_BLOCK));
         assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_BLOCK));
         assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_PLAN_BLOCK));
+        // GAP-INQUIRY-SPLIT (2026-08-09): the old mixed-counter inquiry
+        // blocks are deleted; the orientation block is registered by prefix
+        // (its v0.2 text carries a version marker — equality would miss it).
+        let orientation_block = orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
+        assert!(is_injected_block_text(orientation_block));
+        assert!(is_injected_block_text("[ORIENTATION v0.2] 当前任务、位置与下一目标"));
+        // The closing tag must never match (starts with `[/`).
+        assert!(!is_injected_block_text("[/ORIENTATION]"));
+        // The retired blocks must NOT match — nothing injects them anymore.
+        assert!(!is_injected_block_text("[INFO_SUFFICIENCY v0.1] 部分拷贝"));
+        assert!(!is_injected_block_text("[RETRIEVAL_COMPLETION_CHECK v0.1]"));
         // D-3 breaker + D-8 budget blocks (FIX_PLAN 2026-08-06) — budget
         // blocks use the versioned marker form; the prefix must match it
         // (2026-08-07 review F-04: the constant previously ended in `]` and
@@ -482,11 +486,15 @@ mod tests {
         assert!(BASE_SYSTEM_PROMPT.contains("压缩白名单"));
         // Leading/trailing whitespace tolerated.
         assert!(is_injected_block_text(&format!(
-            "  {INFO_SUFFICIENCY_BLOCK}\n"
+            "  {orientation_block}\n"
         )));
         // Ordinary model/user text must never match.
         assert!(!is_injected_block_text("完成"));
-        assert!(!is_injected_block_text("[INFO_SUFFICIENCY v0.1] 部分拷贝"));
+        // The prefix match is deliberately conservative: the legacy v0.1
+        // text `[ORIENTATION_CHECKPOINT …]` also hits — harmless (that text
+        // was never injected into a conversation; over-matching only makes
+        // the stagnation filter stricter).
+        assert!(is_injected_block_text("[ORIENTATION_CHECKPOINT v0.1] 手抄"));
         // A closing tag alone must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/TOOL_ROUND_BUDGET]"));
         assert!(!is_injected_block_text(""));
