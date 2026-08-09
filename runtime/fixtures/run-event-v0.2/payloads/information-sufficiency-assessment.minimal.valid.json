@@ -1,7 +1,7 @@
 {
   "assessment_id": "ASSESS-0001",
-  "activation_id": "ACT-INT-0001",
-  "contract_id": "CONTRACT-INT-0001",
+  "activation_id": "ACT-EXT-0001",
+  "contract_id": "CONTRACT-EXT-0001",
   "contract_revision": 0,
   "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
   "ledger_digest": "0000000000000000000000000000000000000000000000000000000000000000",

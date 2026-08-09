@@ -18,7 +18,7 @@ Parity scope (matches the Rust verifier): `event_id` format, timestamp
 parseability and `schema_version` are NOT checked beyond the envelope schema
 itself plus the chain rules.
 
-Single registry source: `PAYLOAD_SCHEMA_BY_EVENT_TYPE` (33 events, the 3
+Single registry source: `PAYLOAD_SCHEMA_BY_EVENT_TYPE` (34 events, the 3
 dual-track slugs pointing at the `runtime/` Rust-track files) is consumed by
 this module, `runtime/tests/test_run_event_conformance.py` and
 `scripts/check_repository.py`.
@@ -40,7 +40,7 @@ ASSURANCE = ROOT / "assurance"
 RUN_EVENT_SCHEMA = RUNTIME / "run-event-v0.1.schema.json"
 RUN_EVENT_SCHEMA_V02 = RUNTIME / "run-event-v0.2.schema.json"
 
-# 33-event registry: event_type -> (slug, payload schema file). The three
+# 34-event registry: event_type -> (slug, payload schema file). The three
 # dual-track slugs resolve to the runtime/ Rust-track files (slice #17
 # adjudication — contract §6); `tool_belief_stagnation` stays assurance-only
 # (Rust never constructs it).
@@ -305,13 +305,6 @@ def _payload_errors(event: dict[str, Any], index: int) -> list[str]:
 _V02_NEUTRAL_INQUIRY_EVENTS = frozenset(
     {"orientation_checkpoint", "diagnostic_coverage_checkpoint"}
 )
-_V02_LIFECYCLE_EVENTS = frozenset(
-    {
-        "information_sufficiency_assessment",
-        "retrieval_parent_disposition",
-        "retrieval_close_record",
-    }
-)
 
 
 def _is_v02(event: dict[str, Any]) -> bool:
@@ -343,16 +336,23 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
 
     - every parent disposition references an assessment that precedes it and
       whose contract_revision equals the disposition's
-      expected_contract_revision (CAS);
-    - a normal_close close record references a preceding disposition with
-      decision=close and matching revision/assessment/activation ids;
+      expected_contract_revision (CAS); activation ids must match;
+    - an accepted disposition must act on the activation's current revision —
+      stale/conflicting accepted dispositions and the "new requirement
+      accepted, old close later" race are rejected (§4.4);
+    - only one accepted decision per assessment; a conflicting second
+      decision is rejected (§4.4);
     - an accepted continue increments the activation's contract revision — the
-      next assessment on that activation must carry revision + 1, and
-      revisions never decrease;
-    - after a close record, no further disposition/assessment/close on the
-      same activation is allowed;
-    - a replayed disposition_id must carry an identical payload (idempotent
-      replay), a different payload is a conflict.
+      first assessment after it must carry revision + 1, and revisions never
+      decrease;
+    - a normal_close close record references a preceding disposition with
+      decision=close, outcome in {accepted, replayed_idempotent}, and
+      matching revision/assessment/activation/contract/result ids;
+    - after the first close record on an activation, no further
+      disposition/assessment/close on it is allowed;
+    - a replayed disposition_id or assessment_id must carry an identical
+      payload (idempotent replay, canonical-bytes comparison); a different
+      payload is a conflict.
     """
     errors: list[str] = []
     assessments: list[tuple[int, dict[str, Any]]] = []
@@ -371,61 +371,164 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
     if not (assessments or dispositions or closes):
         return errors
 
-    assessment_index: dict[str, tuple[int, int]] = {}
+    # First-occurrence binding: later replays never rebind references.
+    assessment_first: dict[str, tuple[int, dict[str, Any]]] = {}
     for index, event in assessments:
         payload = event["payload"]
-        assessment_index[payload["assessment_id"]] = (
-            index,
-            payload["contract_revision"],
-        )
-    close_indexes: dict[str, int] = {}
+        a_id = payload["assessment_id"]
+        if a_id not in assessment_first:
+            assessment_first[a_id] = (index, event)
+    disposition_first: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, event in dispositions:
+        payload = event["payload"]
+        disp_id = payload["disposition_id"]
+        if disp_id not in disposition_first:
+            disposition_first[disp_id] = (index, event)
+
+    # FIRST close per activation; a second close on the same activation is
+    # itself a §4.4 violation (close is terminal for the activation).
+    close_first: dict[str, int] = {}
+    for index, event in closes:
+        activation = event["payload"]["activation_id"]
+        if activation in close_first:
+            errors.append(
+                f"event {index}: second close record "
+                f"{event['payload']['close_record_id']} on activation "
+                f"{activation} (first at event {close_first[activation]})"
+            )
+        else:
+            close_first[activation] = index
+
+    def _after_close(index: int, what: str, activation: str) -> bool:
+        closed_at = close_first.get(activation)
+        if closed_at is not None and closed_at < index:
+            errors.append(
+                f"event {index}: {what} on activation {activation} after its "
+                f"close record (event {closed_at})"
+            )
+            return True
+        return False
+
+    # Single pass over the lifecycle events in journal order: disposition
+    # state machine (current revision, accepted decision per assessment,
+    # close freeze) then assessment checks (monotonic revision, continue+1).
+    current_revision: dict[str, int] = {}
+    assessment_decision: dict[str, str] = {}
+    # activation -> (continue event index, required next revision): the
+    # revision increment only applies to assessments AFTER the continue.
+    continue_pending: dict[str, tuple[int, int]] = {}
+    seen_max: dict[str, int] = {}
 
     for index, event in dispositions:
         payload = event["payload"]
         disp_id = payload["disposition_id"]
+        first_index, first_event = disposition_first[disp_id]
+        if first_index != index:
+            # Idempotent replay: identical canonical payload required —
+            # JSON-semantic equivalents (0 vs 0.0) must NOT be treated as
+            # equal replays.
+            if _canonical_bytes(first_event["payload"]) != _canonical_bytes(payload):
+                errors.append(
+                    f"event {index}: disposition {disp_id} replayed with a "
+                    f"conflicting payload"
+                )
+            continue
+
+        activation = payload["activation_id"]
+        if _after_close(index, f"disposition {disp_id}", activation):
+            continue
+
         a_ref = payload["assessment_id"]
-        a_entry = assessment_index.get(a_ref)
+        a_entry = assessment_first.get(a_ref)
         if a_entry is None:
             errors.append(
                 f"event {index}: disposition {disp_id} references unknown "
                 f"assessment {a_ref}"
             )
-        else:
-            a_index, a_revision = a_entry
-            if a_index >= index:
-                errors.append(
-                    f"event {index}: disposition {disp_id} references "
-                    f"assessment {a_ref} that does not precede it"
-                )
-            if payload["expected_contract_revision"] != a_revision:
-                errors.append(
-                    f"event {index}: disposition {disp_id} expected_contract_revision "
-                    f"{payload['expected_contract_revision']} != referenced "
-                    f"assessment {a_ref} contract_revision {a_revision}"
-                )
+            continue
+        a_index, a_event = a_entry
+        a_payload = a_event["payload"]
+        if a_index >= index:
+            errors.append(
+                f"event {index}: disposition {disp_id} references "
+                f"assessment {a_ref} that does not precede it"
+            )
+        if a_payload["activation_id"] != activation:
+            errors.append(
+                f"event {index}: disposition {disp_id} activation_id {activation} "
+                f"!= referenced assessment {a_ref} activation_id "
+                f"{a_payload['activation_id']}"
+            )
+        a_revision = a_payload["contract_revision"]
+        if payload["expected_contract_revision"] != a_revision:
+            errors.append(
+                f"event {index}: disposition {disp_id} expected_contract_revision "
+                f"{payload['expected_contract_revision']} != referenced "
+                f"assessment {a_ref} contract_revision {a_revision}"
+            )
 
-    # close records → referenced disposition must be decision=close with
-    # matching revision/assessment/activation and must precede the close.
+        outcome = payload["outcome"]
+        decision = payload["decision"]
+        if outcome == "accepted":
+            # Stale-revision / late-close rejection (§4.4): accepted
+            # dispositions must act on the current revision.
+            cur = current_revision.get(activation, a_revision)
+            if payload["expected_contract_revision"] != cur:
+                errors.append(
+                    f"event {index}: disposition {disp_id} accepted on "
+                    f"activation {activation} at revision "
+                    f"{payload['expected_contract_revision']}, current revision "
+                    f"is {cur}"
+                )
+            # Conflicting decision on the same assessment (§4.4).
+            prior = assessment_decision.get(a_ref)
+            if prior is not None and prior != decision:
+                errors.append(
+                    f"event {index}: disposition {disp_id} decision {decision} "
+                    f"conflicts with prior accepted decision {prior} on "
+                    f"assessment {a_ref}"
+                )
+            assessment_decision[a_ref] = decision
+            if decision == "continue":
+                current_revision[activation] = cur + 1
+                continue_pending[activation] = (index, cur + 1)
+            # decision == close: revision frozen; the close record commits it.
+        elif outcome in ("rejected_stale", "rejected_conflicting"):
+            # Refusal records document the rejection; they don't advance the
+            # activation state.
+            pass
+        else:
+            errors.append(
+                f"event {index}: disposition {disp_id} unknown outcome {outcome!r}"
+            )
+
     for index, event in closes:
         payload = event["payload"]
         close_id = payload["close_record_id"]
-        close_indexes[payload["activation_id"]] = index
+        activation = payload["activation_id"]
+        if _after_close(index, f"close record {close_id}", activation):
+            continue
         if payload["terminal_reason"] != "normal_close":
             continue
         d_ref = payload["validated_disposition_id"]
-        d_events = [e for i, e in dispositions if i < index]
-        d_event = next((e for e in d_events if e["payload"]["disposition_id"] == d_ref), None)
-        if d_event is None:
+        d_entry = disposition_first.get(d_ref)
+        if d_entry is None or d_entry[0] >= index:
             errors.append(
                 f"event {index}: close record {close_id} references "
                 f"disposition {d_ref} that does not precede it"
             )
             continue
-        d_payload = d_event["payload"]
+        d_payload = d_entry[1]["payload"]
         if d_payload["decision"] != "close":
             errors.append(
                 f"event {index}: close record {close_id} references "
                 f"disposition {d_ref} with decision != close"
+            )
+        if d_payload["outcome"] not in ("accepted", "replayed_idempotent"):
+            errors.append(
+                f"event {index}: close record {close_id} references "
+                f"disposition {d_ref} with outcome {d_payload['outcome']} — "
+                f"only a validated close disposition commits a close record"
             )
         if d_payload["expected_contract_revision"] != payload["contract_revision"]:
             errors.append(
@@ -439,64 +542,71 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
                 f"{payload['assessment_id']} != disposition {d_ref} "
                 f"assessment_id {d_payload['assessment_id']}"
             )
-        if d_payload["activation_id"] != payload["activation_id"]:
+        if d_payload["activation_id"] != activation:
             errors.append(
                 f"event {index}: close record {close_id} activation_id "
-                f"{payload['activation_id']} != disposition {d_ref} "
-                f"activation_id {d_payload['activation_id']}"
+                f"{activation} != disposition {d_ref} activation_id "
+                f"{d_payload['activation_id']}"
             )
+        # Cross-field binding to the referenced assessment (§4.4 identity
+        # chain): contract and result digests must match when the close
+        # record carries them (normal_close always does).
+        a_ref = payload["assessment_id"]
+        a_entry = assessment_first.get(a_ref)
+        if a_entry is not None:
+            a_payload = a_entry[1]["payload"]
+            if a_payload.get("contract_id") != payload.get("contract_id"):
+                errors.append(
+                    f"event {index}: close record {close_id} contract_id "
+                    f"{payload.get('contract_id')} != referenced assessment "
+                    f"{a_ref} contract_id {a_payload.get('contract_id')}"
+                )
+            if a_payload.get("result_digest") != payload.get("result_digest"):
+                errors.append(
+                    f"event {index}: close record {close_id} result_digest "
+                    f"{payload.get('result_digest')} != referenced assessment "
+                    f"{a_ref} result_digest {a_payload.get('result_digest')}"
+                )
 
-    # continue increments the revision; revisions never decrease; a close
-    # forbids later lifecycle events on the same activation.
-    for index, event in dispositions:
-        payload = event["payload"]
-        if payload["decision"] == "continue" and payload["outcome"] == "accepted":
-            activation = payload["activation_id"]
-            expected_next = payload["expected_contract_revision"] + 1
-            for a_index, a_event in assessments:
-                if a_index <= index:
-                    continue
-                a_payload = a_event["payload"]
-                if a_payload["activation_id"] != activation:
-                    continue
-                if a_payload["contract_revision"] != expected_next:
-                    errors.append(
-                        f"event {a_index}: assessment {a_payload['assessment_id']} "
-                        f"contract_revision {a_payload['contract_revision']} != "
-                        f"continue disposition {payload['disposition_id']} "
-                        f"revision + 1 ({expected_next})"
-                    )
-                break
-    for index, event in dispositions:
-        payload = event["payload"]
-        closed_at = close_indexes.get(payload["activation_id"])
-        if closed_at is not None and closed_at < index:
-            errors.append(
-                f"event {index}: disposition {payload['disposition_id']} on "
-                f"activation {payload['activation_id']} after its close record "
-                f"(event {closed_at})"
-            )
     for index, event in assessments:
         payload = event["payload"]
-        closed_at = close_indexes.get(payload["activation_id"])
-        if closed_at is not None and closed_at < index:
+        activation = payload["activation_id"]
+        a_id = payload["assessment_id"]
+        if _after_close(index, f"assessment {a_id}", activation):
+            continue
+        # Replayed assessment must carry an identical payload.
+        first_index, first_event = assessment_first[a_id]
+        if first_index != index and (
+            _canonical_bytes(first_event["payload"]) != _canonical_bytes(payload)
+        ):
             errors.append(
-                f"event {index}: assessment {payload['assessment_id']} on "
-                f"activation {payload['activation_id']} after its close record "
-                f"(event {closed_at})"
-            )
-
-    # idempotent replay: identical disposition_id ⇒ identical payload.
-    seen: dict[str, dict[str, Any]] = {}
-    for index, event in dispositions:
-        payload = event["payload"]
-        disp_id = payload["disposition_id"]
-        if disp_id in seen and seen[disp_id] != payload:
-            errors.append(
-                f"event {index}: disposition {disp_id} replayed with a "
+                f"event {index}: assessment {a_id} replayed with a "
                 f"conflicting payload"
             )
-        seen[disp_id] = payload
+        revision = payload["contract_revision"]
+        if first_index == index:
+            # continue+1: the first assessment AFTER an accepted continue must
+            # carry exactly current revision (assessments before the continue
+            # are untouched by the pending increment).
+            expected = continue_pending.get(activation)
+            if expected is not None and index > expected[0]:
+                if revision != expected[1]:
+                    errors.append(
+                        f"event {index}: assessment {a_id} contract_revision "
+                        f"{revision} != continue revision + 1 ({expected[1]}) on "
+                        f"activation {activation}"
+                    )
+                continue_pending.pop(activation, None)
+            # Monotonic revisions never decrease (temporal order).
+            prev_max = seen_max.get(activation)
+            if prev_max is not None and revision < prev_max:
+                errors.append(
+                    f"event {index}: assessment {a_id} contract_revision "
+                    f"{revision} < previous max {prev_max} on activation "
+                    f"{activation} (revisions never decrease)"
+                )
+            seen_max[activation] = revision
+            current_revision.setdefault(activation, revision)
     return errors
 
 
@@ -613,14 +723,20 @@ def validate_journal_text(text: str) -> list[str]:
         # Envelope failures can leave fields missing that hashing needs.
         return errors
 
+    payload_errors: list[str] = []
     for index, event in enumerate(events):
         try:
-            errors.extend(_payload_errors(event, index))
+            payload_errors.extend(_payload_errors(event, index))
         except ValueError as exc:
-            errors.append(f"event {index}: {exc}")
+            payload_errors.append(f"event {index}: {exc}")
+    errors.extend(payload_errors)
     errors.extend(_verify_chain(events))
-    errors.extend(_verify_v02_inquiry_kind(events))
-    errors.extend(_verify_v02_lifecycle(events))
+    if not payload_errors:
+        # Cross-layer checks (inquiry_kind, §4.4 lifecycle) need complete
+        # payloads — with payload schema violations present they would crash
+        # or report misleading facts, so they run only on schema-valid input.
+        errors.extend(_verify_v02_inquiry_kind(events))
+        errors.extend(_verify_v02_lifecycle(events))
     return errors
 
 

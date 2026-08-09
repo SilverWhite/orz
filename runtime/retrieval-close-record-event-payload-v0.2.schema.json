@@ -27,8 +27,18 @@
     "activation_id": { "type": "string", "minLength": 1 },
     "contract_id": { "type": "string", "minLength": 1 },
     "contract_revision": { "type": "integer", "minimum": 0 },
-    "result_digest": { "$ref": "#/$defs/sha256" },
-    "assessment_id": { "type": "string", "minLength": 1 },
+    "result_digest": {
+      "oneOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "assessment_id": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
     "validated_disposition_id": {
       "oneOf": [
         { "type": "string", "minLength": 1 },
@@ -42,6 +52,7 @@
         "user_cancelled",
         "session_cancelled",
         "wallclock",
+        "budget_exhausted",
         "subagent_failed",
         "subagent_cancelled"
       ]
@@ -58,9 +69,15 @@
       },
       "then": {
         "properties": {
-          "validated_disposition_id": { "type": "string", "minLength": 1 }
+          "validated_disposition_id": { "type": "string", "minLength": 1 },
+          "assessment_id": { "type": "string", "minLength": 1 },
+          "result_digest": { "$ref": "#/$defs/sha256" }
         },
-        "required": ["validated_disposition_id"]
+        "required": [
+          "validated_disposition_id",
+          "assessment_id",
+          "result_digest"
+        ]
       }
     }
   ],

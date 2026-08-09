@@ -452,7 +452,7 @@ class V02LifecycleChainTests(unittest.TestCase):
         )
         errors = validate_journal_text(journal)
         self.assertTrue(
-            any("contract_revision 2 != continue disposition" in e for e in errors)
+            any("contract_revision 2 != continue revision + 1" in e for e in errors)
         )
 
     def test_lifecycle_event_after_close_record_rejected(self) -> None:
@@ -499,30 +499,233 @@ class V02LifecycleChainTests(unittest.TestCase):
         self.assertTrue(any("replayed with a conflicting payload" in e for e in errors))
 
     def test_v02_inquiry_kind_cross_check(self) -> None:
-        payload = {
-            "checkpoint_id": "ORIENT-RUN-V02-0000",
-            "inquiry_family": "neutral",
-            "inquiry_kind": "diagnostic_coverage_checkpoint",  # wrong kind
-            "agent_role": "main",
-            "session_id": "sess-main-1",
-            "trigger": "completed_turns_interval",
-            "completed_turns_since_orientation": 7,
-            "step_index": 0,
-            "message_block": "[ORIENTATION v0.2] x",
-            "injection_position": "post_tool_batch_gap",
+        """§5.1 cross-check on the verifier function itself: the payload
+        schema's inquiry_kind const already rejects a mismatched kind at the
+        schema layer (end-to-end the P1-1 fix skips cross-checks when payload
+        schema errors exist), so the cross-check unit is exercised directly.
+        """
+        from assurance.run_event_journal_validation import _verify_v02_inquiry_kind
+
+        event = {
+            "schema_version": "0.2.0-draft",
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "orientation_checkpoint",
+            "payload": {"inquiry_kind": "diagnostic_coverage_checkpoint"},
         }
-        journal = _v02_journal(
-            [_mk_v02_event("orientation_checkpoint", payload, 0, None)]
-        )
-        errors = validate_journal_text(journal)
+        errors = _verify_v02_inquiry_kind([event])
         self.assertTrue(
             any("inquiry_kind 'diagnostic_coverage_checkpoint' != envelope" in e for e in errors)
         )
+        ok_event = {
+            "schema_version": "0.2.0-draft",
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "orientation_checkpoint",
+            "payload": {"inquiry_kind": "orientation_checkpoint"},
+        }
+        self.assertEqual(_verify_v02_inquiry_kind([ok_event]), [])
 
     def test_v02_checks_do_not_fire_on_v01_journals(self) -> None:
         for name in ALL_JOURNALS:
             with self.subTest(journal=name):
                 self.assertEqual(validate_journal_file(JOURNALS / name), [])
+
+    def test_schema_invalid_payload_does_not_crash_lifecycle(self) -> None:
+        """P1-1: a v0.2 lifecycle event with a schema-invalid payload must be
+        reported as errors, never crash the validator with a KeyError."""
+        bad_disposition = _disposition("DISP-1", "close", 0, "ASSESS-1")
+        del bad_disposition["assessment_id"]  # schema-required field missing
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("retrieval_parent_disposition", bad_disposition, 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(errors)
+        self.assertTrue(any("payload schema violation" in e for e in errors))
+
+    def test_second_close_record_on_activation_rejected(self) -> None:
+        """P1-2: a close record is terminal for the activation — a second
+        close on the same activation is a §4.4 violation."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("retrieval_parent_disposition", _disposition("DISP-1", "close", 0, "ASSESS-1"), 1, _ZERO),
+                _mk_v02_event("retrieval_close_record", _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-1"), 2, _ZERO),
+                _mk_v02_event("retrieval_close_record", _close_record("CLOSE-2", 0, "ASSESS-1", "DISP-1"), 3, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("second close record" in e for e in errors))
+
+    def test_close_between_close_records_rejected(self) -> None:
+        """P1-2: after the FIRST close, even a disposition sandwiched between
+        two closes is rejected."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("retrieval_parent_disposition", _disposition("DISP-1", "close", 0, "ASSESS-1"), 1, _ZERO),
+                _mk_v02_event("retrieval_close_record", _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-1"), 2, _ZERO),
+                _mk_v02_event("retrieval_parent_disposition", _disposition("DISP-2", "close", 0, "ASSESS-1"), 3, _ZERO),
+                _mk_v02_event("retrieval_close_record", _close_record("CLOSE-2", 0, "ASSESS-1", "DISP-2"), 4, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("after its close record" in e for e in errors))
+        self.assertTrue(any("second close record" in e for e in errors))
+
+    def test_revision_decrease_rejected(self) -> None:
+        """P2-1: revisions never decrease even without a continue."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 5), 0, None),
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-2", 3), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("revisions never decrease" in e for e in errors))
+
+    def test_assessment_conflicting_replay_rejected(self) -> None:
+        """P2-2/C1-1e: a replayed assessment_id with a different payload is a
+        conflict; the CAS binding stays on the first occurrence."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 2), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("assessment ASSESS-1 replayed with a conflicting payload" in e for e in errors))
+
+    def test_assessment_replay_does_not_rebind_cas(self) -> None:
+        """P2-2: a later identical replay must not rebind the disposition's
+        assessment reference away from the first occurrence."""
+        assessment_dup = _assessment("ASSESS-1", 0)
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", assessment_dup, 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event("information_sufficiency_assessment", assessment_dup, 2, _ZERO),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_conflicting_decisions_on_same_assessment_rejected(self) -> None:
+        """C1-1a: two accepted dispositions with different decisions on the
+        same assessment are a §4.4 conflict."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("retrieval_parent_disposition", _disposition("DISP-1", "close", 0, "ASSESS-1"), 1, _ZERO),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-2", "continue", 0, "ASSESS-1", delta="x"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("conflicts with prior accepted decision" in e for e in errors))
+
+    def test_late_close_at_stale_revision_rejected(self) -> None:
+        """C1-1b/c: after an accepted continue advanced the revision, an
+        accepted close acting on the old revision is stale — the
+        'new requirement accepted, old close later' race is rejected."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "continue", 0, "ASSESS-1", delta="x"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-2", 1), 2, _ZERO),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-2", "close", 0, "ASSESS-1"),
+                    3, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-2"),
+                    4, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("accepted on activation ACT-1 at revision 0, current revision is 1" in e for e in errors)
+        )
+
+    def test_close_references_rejected_disposition_fails(self) -> None:
+        """C1-1d: only a validated close disposition (outcome accepted or
+        replayed) commits a close record."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1", outcome="rejected_conflicting"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-1"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("only a validated close disposition commits" in e for e in errors))
+
+    def test_disposition_activation_mismatch_rejected(self) -> None:
+        """C3-3: the disposition's activation must equal the referenced
+        assessment's activation."""
+        disposition = _disposition("DISP-1", "close", 0, "ASSESS-1")
+        disposition["activation_id"] = "ACT-2"
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("retrieval_parent_disposition", disposition, 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("activation_id ACT-2 != referenced assessment" in e for e in errors))
+
+    def test_close_assessment_cross_fields_mismatch_rejected(self) -> None:
+        """C3-4: close record contract_id / result_digest must match the
+        referenced assessment."""
+        close = _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-1")
+        close["contract_id"] = "CONTRACT-OTHER"
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("retrieval_parent_disposition", _disposition("DISP-1", "close", 0, "ASSESS-1"), 1, _ZERO),
+                _mk_v02_event("retrieval_close_record", close, 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("contract_id CONTRACT-OTHER != referenced assessment" in e for e in errors))
+
+    def test_disposition_replay_with_json_semantic_equivalence_rejected(self) -> None:
+        """P3-1: canonical-bytes comparison distinguishes 0 vs 0.0 — a replay
+        that only swaps JSON semantics is a conflicting payload."""
+        first = _disposition("DISP-1", "close", 0, "ASSESS-1")
+        second = _disposition("DISP-1", "close", 0, "ASSESS-1")
+        second["expected_contract_revision"] = 0.0
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event("retrieval_parent_disposition", first, 1, _ZERO),
+                _mk_v02_event("retrieval_parent_disposition", second, 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("replayed with a conflicting payload" in e for e in errors))
 
 
 class TrackResolutionTests(unittest.TestCase):

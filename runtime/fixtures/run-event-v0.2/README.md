@@ -17,12 +17,15 @@ Scope:
   their v0.2 payload; the other 31 events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for
-  unchanged payloads).
+  unchanged payloads). `chained-run-finished.valid.json` covers the
+  sequence-1 branch (v0.1 README documents the same convention).
 - `envelope/<bad-name>.invalid.json` — v0.1 envelope constraints (identical
-  structure) plus two v0.2-specific negatives: the v0.1 schema version and
-  the retired `neutral_inquiry` / `retrieval_completion_check` event types.
+  structure) plus three v0.2-specific negatives: the v0.1 schema version and
+  one negative per retired event type (`neutral_inquiry` /
+  `retrieval_completion_check`). Every negative isolates exactly one
+  constraint on the v0.2 track.
 
-Adjudications:
+Adjudications (three-agent review closure, 2026-08-09):
 
 - `neutral_inquiry` and `retrieval_completion_check` are absent from the
   v0.2 enum — they exist only on the v0.1 track for historical journal
@@ -30,6 +33,36 @@ Adjudications:
 - The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
   The cross-validator resolves the five v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
+- **Producer/consumer/verifier** (§5.2): `information_sufficiency_assessment`,
+  `retrieval_parent_disposition` and `retrieval_close_record` are mechanical
+  records written by the controller (single writer, serial commit); the
+  disposition's `decision`/`requirement_delta` originate from the main
+  Agent's structured input, `outcome` is the controller's mechanical result
+  (never model self-report). Verifier: the assurance dual-track validator.
+  Migration version: `0.2.0-draft`.
+- **Termination without results** (§4.3/§4.4): a termination-authority close
+  (user cancel / session cancel / wallclock / budget exhaustion / subagent
+  failure) may close an activation directly, without an assessment — close
+  record `assessment_id` / `result_digest` are therefore required only for
+  `terminal_reason=normal_close`. `budget_exhausted` is a distinct terminal
+  reason (ADR-0010 §3.3.6), not a wallclock alias.
+- **Scope completion** (§3.3.6): scope completion flows through the normal
+  path (result → assessment → parent disposition `close` → close record), so
+  it is represented by `normal_close`; no separate terminal value.
+- **`unabsorbed_new_evidence`** (diagnostic signal taxonomy, §4.6.2/§4.6.3):
+  the name means "new evidence identity not yet counted in this episode" —
+  it carries no judgment about whether the plan absorbed the evidence;
+  signal counting is bound to evidence identity / failure fingerprint only.
+- **Closed signal taxonomy**: the six `signal_type` values are a closed
+  contract — new signal categories require a schema change (the §4.6.2 list
+  is an "e.g." list, the schema narrows it deliberately).
+- **`trigger_count` / `hard_signal_count` / `threshold_stage`** are
+  informational episode metrics (§5.2 lists the payload boundary; the counts
+  are derived facts). `decision=close` requires `requirement_delta=null`
+  (a close carrying a delta is self-contradictory, §4.4).
+- **ID formats** (`ORIENT-...-[0-9]{4}`, `ASSESS-`, `DISP-`, `CLOSE-`,
+  `SIG-`, `DIAG-COV-`) are producer-local formats, not ADR-mandated
+  contracts. `assessment_version` uses dotted numeric form (`1.2`).
 
 `journals/` is intentionally empty: no Rust producer writes v0.2 events yet
 (Phase C migration). Real v0.2 journals will be captured and added here by

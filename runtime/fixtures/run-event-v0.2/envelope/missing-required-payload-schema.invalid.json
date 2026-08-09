@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.1.0-draft",
+  "schema_version": "0.2.0-draft",
   "run_id": "RUN-CONF-RUN-PREFLIGHT",
   "event_id": "EVT-CONF-000",
   "sequence": 0,
