@@ -13,5 +13,5 @@
     - verifier digest `33b43f9551d4b630dbe19648bd4d10db182c307168466fc5038aa4eacae8ea10`
   - `0.2.106` PASS：trial `child-tree-0.2.106-task-cancel-v1`
     - run digest `2bf178963db8cf6bdcd6eb20743e9af586f673c7b5e350627a12c4aae1108ce1`
-- **回归入口**：`regression/` 探针 fixture（同 ORZ-WIN-PROC-001）
+- **回归入口**：`scripts/child_tree_fixture.py`（同 ORZ-WIN-PROC-001）
 - **边界**：同 ORZ-WIN-PROC-001 —— 固定 fixture 机械一致性证据，不构成通用进程安全结论。

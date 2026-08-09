@@ -13,7 +13,7 @@
     - verifier digest `71bedab122be31b7774f953f0ba2e1bce0c3adb50c1c51490c280c132298055b`
   - `0.2.106` FAIL（基线）：Grok 返回终态后仍未退出
     - failure `106e125440c813362800f1b380a3660943572bade35ce6db8335e6599424d9c1`
-- **回归入口**：`regression/` 探针 fixture（`child_tree_fixture.py` 三角色原子写入
+- **回归入口**：`scripts/child_tree_fixture.py`（三角色原子写入
   PID/PPID、nonce、脚本 digest、启动时间）
 - **边界**：Schema PASS 与 verifier PASS 只证明固定 fixture 的机械一致性，不证明
   通用进程安全，更不证明科学正确性（探针文档 §安全边界）。

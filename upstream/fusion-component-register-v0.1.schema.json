@@ -53,7 +53,7 @@
             "host/loop/assurance",
             "UI",
             "build/support",
-            "inherited-support"
+            "codegen-support"
           ]
         },
         "code_path": {

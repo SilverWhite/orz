@@ -79,7 +79,7 @@
 - **FUS-STATE-RECOVERY** (`current-design`; 2026-08-09)：journal、blackboard、snapshot、compaction、recovery 和子代理 disposition 共同组成可审计状态链。关键词：journal、snapshot、CAS close、compaction、recovery。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
 - **FUS-WINDOWS-BOUNDARY** (`current-design`; 2026-08-09)：Windows process/runtime spike、产品事故记录和精选案例库分开治理；现阶段只保留证据边界，不提前宣称案例闭环。关键词：Job Object、Windows compatibility、incident、case library。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`docs/incidents/`](docs/incidents/) / [`docs/cases/`](docs/cases/)。
 - **FUS-UI-BOUNDARY** (`current-design`; 2026-08-09)：保留 Toolbar 和只读 session/run-history 投影，产品边界不扩展为完整 IDE。关键词：TUI、Toolbar、readonly session projection、Codex app-server、VS Code lifecycle。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
-- **FUS-COMPONENT-REGISTER** (`partial`; 2026-08-09)：register 文件框架已建（63 组件全 `audit_required`，不得从 crate 名/编译推断采用档位），逐 crate 审计未开始。关键词：component matrix、crate ownership、mature adoption、audit_required。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`fusion-component-register-v0.1.yaml`](upstream/fusion-component-register-v0.1.yaml) / [`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
+- **FUS-COMPONENT-REGISTER** (`partial`; 2026-08-09)：register 文件框架已建（65 组件全 `audit_required`，不得从 crate 名/编译推断采用档位），逐 crate 审计未开始。关键词：component matrix、crate ownership、mature adoption、audit_required。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`fusion-component-register-v0.1.yaml`](upstream/fusion-component-register-v0.1.yaml) / [`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
 
 ## 3. 当前实现与符合性路由
 
@@ -92,10 +92,12 @@
 
 ### 3.1 已登记实现差距
 
-- **GAP-TOOL-BUDGET** (`partial`; 2026-08-09)：Rust controller 冻结审计时仍使用 40 轮，设计值已变为 120。关键词：MAX_TOOL_ROUNDS、ADR-0008、budget migration。入口：[`AUTH-FREEZE-AUDIT`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md) / [`controller.rs`](orz/crates/orz-loop/src/controller.rs)。
+- **GAP-TOOL-BUDGET** (`implemented`; 2026-08-09)：MAX_TOOL_ROUNDS 已改为 120（orz `c1513a5`），测试与 env 覆盖同步；ADR-0008 其余语义保留。关键词：MAX_TOOL_ROUNDS、ADR-0008、budget migration。入口：[`AUTH-FREEZE-AUDIT`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md) / [`controller.rs`](orz/crates/orz-loop/src/controller.rs)。
 - **GAP-INQUIRY-SPLIT** (`partial`; 2026-08-09)：旧 inquiry 仍混合 output/tool/action/round 信号，需拆成 Orientation、Information Sufficiency、Counterexample 和 Stagnation 独立 producer/consumer。关键词：NeutralInquiry、tool_variety、职责分离。入口：[`AUTH-FREEZE-AUDIT`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 - **GAP-SUBAGENT-RUNTIME** (`partial`; 2026-08-09)：检索子代理仍存在一次模型调用、零工具的特殊路径，尚未复用主 Agent 完整 runtime。关键词：scripted pass、retrieval role、shared runtime。入口：[`retrieval.rs`](orz/crates/orz-loop/src/agents/retrieval.rs) / [`AUTH-FREEZE-AUDIT`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 - **GAP-SUFFICIENCY-SCHEMA** (`pending`; 2026-08-09)：机械 assessment、parent disposition、contract revision、CAS close 和 stale-close 拒绝尚需完整 Schema 与 verifier。关键词：awaiting_parent_disposition、close receipt、requirement_delta。入口：[`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
+- **GAP-RUN-TESTS** (`partial`; 2026-08-09)：run_tests 三差距——RT-001 跳过 execution permission、RT-002 env 全继承无脱敏、RT-003 无 workspace delta 记录；Job Object/timeout/输出上限/声明门控已验证达标。关键词：run_tests、D-9、hidden test、Aider mode。入口：[`V11_IMPL_005_RUN_TESTS_SECURITY_REVIEW`](docs/audits/V11_IMPL_005_RUN_TESTS_SECURITY_REVIEW_2026-08-09.md)。
+- **GAP-DENIAL-POLICY-REVISION** (`partial`; 2026-08-09)：DenialKey.policy_revision 当前恒 0 且无接线来源——ADR §3.5.4"policy revision 变化重置"结构上不可触发；未来引入 mid-session revision 机制时必须接入。关键词：denial breaker、policy_revision、V11-IMPL-012。入口：[`ADR-0010 §3.5.4`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`controller.rs`](orz/crates/orz-loop/src/controller.rs)。
 - **GAP-WINDOWS-EVIDENCE** (`partial`; 2026-08-09)：三个案例候选（ORZ-WIN-PROC-001/002/003，晋级自 child-tree 探针三场景）已登记并引用探针 digest，均标 `candidate` 未宣称闭环；事故路由保留 WIN-LIM-001（raw TCP）与 WIN-INC-001（observer leak）。关键词：Windows incident、case selection、compatibility evidence、WIN-LIM、ORZ-WIN-PROC。入口：[`docs/incidents/windows/`](docs/incidents/windows/) / [`docs/cases/windows/`](docs/cases/windows/)。
 
 ## 4. 保障、合约与安全路由
@@ -156,10 +158,9 @@
 本节只列 canonical ID，不重复定义：
 
 - `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY。
-- `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW。
-- `partial`：IMPL-RUST-RUNTIME、IMPL-RUN-EVENT-SCHEMA、IMPL-DEEPSEEK-TRANSPORT、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER。
+- `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、GAP-TOOL-BUDGET。
+- `partial`：IMPL-RUST-RUNTIME、IMPL-RUN-EVENT-SCHEMA、IMPL-DEEPSEEK-TRANSPORT、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER。
 - `pending`：GAP-SUFFICIENCY-SCHEMA。
-- `partial`：FUS-COMPONENT-REGISTER（框架已建，逐 crate 审计未开始）、GAP-WINDOWS-EVIDENCE（案例候选已登记，未闭环）。
 - `reference`：AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 

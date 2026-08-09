@@ -15,6 +15,6 @@
     - verifier digest `2cc08349694abfa823f3535aef1a55d8929b115657e94873c19385a1c86dba31`
   - `0.2.106` PASS：trial `child-tree-0.2.106-parent-exit-v1`
     - run digest `19461bbe38186420b5cd8303206a94a3ecba6c31bfb618683a39ca58b3c23186`
-- **回归入口**：`regression/` 探针 fixture（同 ORZ-WIN-PROC-001/002）
+- **回归入口**：`scripts/child_tree_fixture.py`（同 ORZ-WIN-PROC-001/002）
 - **边界**：同 ORZ-WIN-PROC-001 —— 固定 fixture 机械一致性证据；parent_exit 的
   capture 未 drain 是场景设计（故意终止 owner），不是完整输出证据。

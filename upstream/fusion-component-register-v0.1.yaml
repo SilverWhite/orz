@@ -17,7 +17,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-agent
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-agent
   status: audit_required
   adoption_tier: not_assessed
@@ -25,7 +25,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-announcements
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-announcements
   status: audit_required
   adoption_tier: not_assessed
@@ -33,7 +33,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-auth
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-auth
   status: audit_required
   adoption_tier: not_assessed
@@ -41,7 +41,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-chat-state
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-chat-state
   status: audit_required
   adoption_tier: not_assessed
@@ -49,7 +49,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-config
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-config
   status: audit_required
   adoption_tier: not_assessed
@@ -57,7 +57,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-config-types
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-config-types
   status: audit_required
   adoption_tier: not_assessed
@@ -65,7 +65,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-env
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-env
   status: audit_required
   adoption_tier: not_assessed
@@ -73,7 +73,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-hooks
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-hooks
   status: audit_required
   adoption_tier: not_assessed
@@ -81,7 +81,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-http
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-http
   status: audit_required
   adoption_tier: not_assessed
@@ -89,7 +89,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-markdown
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-markdown
   status: audit_required
   adoption_tier: not_assessed
@@ -97,7 +97,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-markdown-core
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-markdown-core
   status: audit_required
   adoption_tier: not_assessed
@@ -113,7 +113,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-memory
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-memory
   status: audit_required
   adoption_tier: not_assessed
@@ -121,7 +121,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-models
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-models
   status: audit_required
   adoption_tier: not_assessed
@@ -129,7 +129,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-paths
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-paths
   status: audit_required
   adoption_tier: not_assessed
@@ -137,7 +137,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-sampling-types
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-sampling-types
   status: audit_required
   adoption_tier: not_assessed
@@ -153,7 +153,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-secrets
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-secrets
   status: audit_required
   adoption_tier: not_assessed
@@ -161,7 +161,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-shared
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-shared
   status: audit_required
   adoption_tier: not_assessed
@@ -169,7 +169,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-subagent-resolution
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-subagent-resolution
   status: audit_required
   adoption_tier: not_assessed
@@ -177,7 +177,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-telemetry
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-telemetry
   status: audit_required
   adoption_tier: not_assessed
@@ -201,7 +201,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-version
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/orz-version
   status: audit_required
   adoption_tier: not_assessed
@@ -257,7 +257,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-agent-lifecycle
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-agent-lifecycle
   status: audit_required
   adoption_tier: not_assessed
@@ -265,7 +265,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-crash-handler
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-crash-handler
   status: audit_required
   adoption_tier: not_assessed
@@ -281,7 +281,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-file-utils
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-file-utils
   status: audit_required
   adoption_tier: not_assessed
@@ -289,7 +289,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-fsnotify
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-fsnotify
   status: audit_required
   adoption_tier: not_assessed
@@ -305,7 +305,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-hooks-plugins-types
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-hooks-plugins-types
   status: audit_required
   adoption_tier: not_assessed
@@ -313,7 +313,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-hunk-tracker
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-hunk-tracker
   status: audit_required
   adoption_tier: not_assessed
@@ -321,7 +321,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-mixpanel
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-mixpanel
   status: audit_required
   adoption_tier: not_assessed
@@ -329,7 +329,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-ratatui-textarea
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-ratatui-textarea
   status: audit_required
   adoption_tier: not_assessed
@@ -337,7 +337,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-system-power
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-system-power
   status: audit_required
   adoption_tier: not_assessed
@@ -345,7 +345,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-token-estimation
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-token-estimation
   status: audit_required
   adoption_tier: not_assessed
@@ -353,7 +353,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-tracing-macros
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-tracing-macros
   status: audit_required
   adoption_tier: not_assessed
@@ -361,7 +361,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-tty-utils
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-tty-utils
   status: audit_required
   adoption_tier: not_assessed
@@ -369,7 +369,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-workflow
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/codegen/xai-workflow
   status: audit_required
   adoption_tier: not_assessed
@@ -385,7 +385,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-circuit-breaker
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/common/xai-circuit-breaker
   status: audit_required
   adoption_tier: not_assessed
@@ -417,7 +417,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-interjection-core
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/common/xai-interjection-core
   status: audit_required
   adoption_tier: not_assessed
@@ -425,7 +425,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-test-utils
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/common/xai-test-utils
   status: audit_required
   adoption_tier: not_assessed
@@ -457,7 +457,7 @@ components:
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: xai-tracing
-  capability_group: inherited-support
+  capability_group: codegen-support
   code_path: orz/crates/common/xai-tracing
   status: audit_required
   adoption_tier: not_assessed
@@ -503,7 +503,7 @@ components:
   adoption_tier: not_assessed
   ownership: not_assessed
   origin: {kind: unassessed}
-  notes: "pending per-crate audit (V11-IMPL-008)"
+  notes: "includes provider client (gateway/ transport/model, ADR §11.5 capability group) — D2-4 review note; pending per-crate audit (V11-IMPL-008)"
 - id: orz-tui
   capability_group: UI
   code_path: orz/crates/orz-tui
@@ -512,3 +512,19 @@ components:
   ownership: not_assessed
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
+- id: cli-chat-proxy-types
+  capability_group: codegen-support
+  code_path: orz/prod/mc/cli-chat-proxy-types
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "workspace member prod/mc/cli-chat-proxy-types (P2-3 review fix); pending per-crate audit (V11-IMPL-008)"
+- id: orz-loop-gateway
+  capability_group: provider_client
+  code_path: orz/crates/orz-loop/src/gateway
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: unassessed}
+  notes: "provider client capability group (ADR §11.5): DeepSeek transport/model gateway — D2-4 review fix; logical component inside orz-loop, pending per-crate audit (V11-IMPL-008)"
