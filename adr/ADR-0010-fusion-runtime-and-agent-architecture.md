@@ -16,6 +16,7 @@
   - **取代** `存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` 中“Grok 完整拥有 session 持久化/恢复”的所有权裁决；其中布局和只读会话投影仍作为 UI 输入；
   - 历史融合、问询、黑板、检索、运行守卫与 Windows 文档的有效规范性内容已转录入本 ADR；原文件之后只保留为设计来源、实施记录或审计证据，不再与本文件共同构成 current design。
   - **v1.1 补充**：恢复显式检索模式、Diagnostic Coverage、Global Review 和 IDE 生命周期证据边界；重裁 Information Sufficiency、来源绑定、`run_tests`、UI 投影、模型/轮次与拒绝熔断语义。
+  - **2026-08-09 登记**：ADR-0011 承担受信控制与动作授权面（ACAF）的决策权威；ACAF 派生自本 ADR §2.4、§3.2、§3.8、§4、§5.3、§5.4 与 §11.3，不改变本 ADR 任何既有条款；登记见 §11.8。
 
 ## 1. 背景
 
@@ -728,6 +729,17 @@ regression/windows/                     # 自动 fixture、脚本与人工复核
   重写为 AppContainer 自身完成网络隔离。
 - credential hardening 当前主要是 offline implementation evidence，不能晋级为 Windows Credential
   Manager 实机兼容案例，直至真实 credential-read 路径完成脱敏验证。
+
+### 11.8 受信控制与动作授权面（ADR-0011）
+
+Authenticated Control and Action Fabric（ACAF）的决策权威由 [`ADR-0011`](ADR-0011-authenticated-control-and-action-fabric.md)
+承担，详细设计见 [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](../docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
+ACAF 派生自 §2.4（permission hard gate）、§3.2/§3.8（子代理写域与受控 `run_tests`）、
+§4.1/§4.2（机制分层与 7 轮机械计数）、§5.3/§5.4（Schema 迁移纪律与 journal/snapshot）与
+§11.3（写域解析验证），**不改变本 ADR 任何既有条款**，不得反向削弱本 ADR 的机制分层、
+机械判定语义或权威层级。ACAF 为 GAP-DENIAL-POLICY-REVISION 提供必接消费面，并为
+GAP-RUN-TESTS RT-001/002/003 建立执行器前置依赖；其实施切片独立于 §9 Phase C 排期，
+仅共享"先扩展 Schema/fixture 再修改 producer"的迁移纪律。
 
 ## 12. 旧设计条款处置
 

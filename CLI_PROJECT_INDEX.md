@@ -80,6 +80,7 @@
 - **FUS-WINDOWS-BOUNDARY** (`current-design`; 2026-08-09)：Windows process/runtime spike、产品事故记录和精选案例库分开治理；现阶段只保留证据边界，不提前宣称案例闭环。关键词：Job Object、Windows compatibility、incident、case library。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`docs/incidents/`](docs/incidents/) / [`docs/cases/`](docs/cases/)。
 - **FUS-UI-BOUNDARY** (`current-design`; 2026-08-09)：保留 Toolbar 和只读 session/run-history 投影，产品边界不扩展为完整 IDE。关键词：TUI、Toolbar、readonly session projection、Codex app-server、VS Code lifecycle。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
 - **FUS-COMPONENT-REGISTER** (`partial`; 2026-08-09)：register 文件框架已建（65 组件全 `audit_required`，不得从 crate 名/编译推断采用档位），逐 crate 审计未开始。关键词：component matrix、crate ownership、mature adoption、audit_required。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`fusion-component-register-v0.1.yaml`](upstream/fusion-component-register-v0.1.yaml) / [`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
+- **FUS-CONTROL-FABRIC** (`current-design`; 2026-08-09)：跨信任边界控制事件与外部效果动作必须持一次性 HMAC 票据（ACAF）；签发器独立进程窄 IPC；三运行模式（正常审批/无运行自动/临时沙盒运行），不做完全授权。关键词：ACAF、ControlTicket、SandboxLease、PromotionPermit、签发器、三模式。入口：[`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
 
 ## 3. 当前实现与符合性路由
 
@@ -89,6 +90,7 @@
 - **IMPL-DEEPSEEK-TRANSPORT** (`partial`; 2026-08-09)：默认模型族为 DeepSeek，当前配置为 V4；transport、重试和 thinking 必须与主/子代理同构约束一起复核。关键词：DeepSeek V4、deepseek-v4-flash、transport retry、thinking。入口：[`DEEPSEEK_ADAPTER_CONTRACT`](architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md) / [`ADR-0007`](adr/ADR-0007-transport-retry-policy.md)。
 - **IMPL-WRITE-PLACEMENT** (`implemented`; 2026-08-09)：工作区、本体状态和系统必要状态按 ADR-0009 分域，Grill 使用独立只读审计链。关键词：GROK_HOME、write placement、Grill、read-only。入口：[`ADR-0009`](adr/ADR-0009-write-placement-policy.md) / [`WRITE_PLACEMENT_AND_GRILL_DESIGN`](docs/WRITE_PLACEMENT_AND_GRILL_DESIGN_2026-08-08.md)。
 - **IMPL-GLOBAL-REVIEW** (`implemented`; 2026-08-09)：显式 Global Review Mode 负责激活全局审查义务，其 receipt 不冒充最终审查结论。关键词：global review、activation receipt、L1-L7。入口：[`global_review_mode.py`](assurance/global_review_mode.py) / [`GSA_GLOBAL_REVIEW_RECORD`](docs/GSA_GLOBAL_REVIEW_RECORD_2026-08-01.md)。
+- **IMPL-CONTROL-FABRIC** (`pending`; 2026-08-09)：ACAF 设计已定稿（ADR-0011 accepted），四切片实施独立于 Phase C；Slice 2 前置 GAP-RUN-TESTS RT-001~003 闭合与 policy_revision 接线。关键词：ACAF 切片、签发器、fail-closed、shadow mode。入口：[`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
 
 ### 3.1 已登记实现差距
 
@@ -130,6 +132,7 @@
 | ADR-0008 | accepted / numeric value partially superseded | [`ADR-0008`](adr/ADR-0008-tool-round-budget.md) |
 | ADR-0009 | accepted | [`ADR-0009`](adr/ADR-0009-write-placement-policy.md) |
 | ADR-0010 | accepted / frozen / current authority | [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) |
+| ADR-0011 | accepted | [`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) |
 
 ## 6. 评测与回归入口
 
@@ -157,10 +160,10 @@
 
 本节只列 canonical ID，不重复定义：
 
-- `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY。
+- `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC。
 - `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、GAP-TOOL-BUDGET。
 - `partial`：IMPL-RUST-RUNTIME、IMPL-RUN-EVENT-SCHEMA、IMPL-DEEPSEEK-TRANSPORT、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER。
-- `pending`：无。
+- `pending`：IMPL-CONTROL-FABRIC。
 - `reference`：AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 
