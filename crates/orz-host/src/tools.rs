@@ -71,6 +71,14 @@ pub fn build_toolset(cwd: &Path) -> Result<Arc<FinalizedToolset>, String> {
     // kill_task / kill_terminal_command / monitor / scheduler (create, delete,
     // list) / workflow. `todo_write` and `update_goal` are task-list/goal
     // bookkeeping, NOT subagent scheduling — they stay.
+    //
+    // NOTE (residual, 2026-08-09): the inherited-crate implementations are
+    // NOT deleted (Slice #13 inherited-crate discipline + orz-agent tests
+    // lock TaskTool presence + terminal/session coupling). This filter is the
+    // only surface — KEEP this list in sync whenever the GrokBuild tool
+    // packs change. Future long-task needs go through the run_tests pattern
+    // (host-owned synchronous tools) or an explicit CN §5.1 review — never
+    // resurrect the async scheduler ecosystem.
     const BANNED_GROK_BUILD_TOOLS: &[&str] = &[
         "task",                    // subagent/task scheduler (third subagent class)
         "get_task_output",         // polls task results (dead without task)
