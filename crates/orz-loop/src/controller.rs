@@ -229,10 +229,16 @@ struct DenialKey {
 }
 
 /// Feedback from a host tool call for the round-level denial aggregator.
+/// `None` is neutral — timeout, tool error and whitelist-refused calls are
+/// neither successes nor denials: they must not reset the streak AND must
+/// not count as a deny round (ADR-0010 §3.5.4: "用户取消、timeout、tool
+/// error 与 permission deny 分开记账").
 #[derive(Debug)]
 enum PolicyFeedback {
     /// The call was refused by the permission gate, with its normalized key.
     Denied(DenialKey),
+    /// The call executed successfully — resets the consecutive streak.
+    Succeeded,
 }
 
 /// IP2a circuit-breaker threshold (D-3 — the 3-consecutive value shared by
@@ -1612,8 +1618,11 @@ impl AgentLoopController {
                             .await?;
                         match feedback {
                             Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
-                            // Success (None feedback) resets the breaker.
-                            None => round_had_success = true,
+                            // A successful call resets the breaker; None
+                            // (timeout / tool error) is neutral — it neither
+                            // resets nor counts (ADR-0010 §3.5.4 分开记账).
+                            Some(PolicyFeedback::Succeeded) => round_had_success = true,
+                            None => {}
                         }
                         result
                     }
@@ -2190,7 +2199,9 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
-            return Ok((tool_result, None));
+            // run_tests executed the host's fixed command — a success for
+            // the denial streak (ADR-0010 §3.5.4: only actual success resets).
+            return Ok((tool_result, Some(PolicyFeedback::Succeeded)));
         }
 
         // Permission gate.
@@ -2498,7 +2509,10 @@ impl AgentLoopController {
         if let Some(h) = heartbeat {
             h.stamp();
         }
-        let result = match host
+        // The bool tracks execution success vs timeout/tool error: only a
+        // successful call resets the denial streak (ADR-0010 §3.5.4);
+        // timeout/error are neutral (分开记账 — neither reset nor count).
+        let (result, succeeded) = match host
             .call_tool(&tc.name, tc.arguments.clone(), &tc.call_id)
             .await
         {
@@ -2581,14 +2595,10 @@ impl AgentLoopController {
                 } else {
                     res.output
                 };
-                // IP2a (ADR-0010 §3.5.4): a successful call is signaled to
-                // the round-level aggregator via the None feedback; the
-                // caller resets the consecutive counter there (round
-                // granularity, not per-call).
-                ToolResult {
+                (ToolResult {
                     output,
                     exit_code: res.exit_code,
-                }
+                }, true)
             }
             Err(e) => {
                 writer
@@ -2620,15 +2630,18 @@ impl AgentLoopController {
                 // regular failure it can retry the same way (the reason
                 // carries the budget; the journal records the same text in
                 // `tool_completed.error`).
-                ToolResult {
-                    output: match &e {
-                        ToolError::Timeout(reason) => {
-                            format!("tool TIMED OUT and was killed — it did not complete: {reason}")
-                        }
-                        _ => format!("tool error: {e}"),
+                (
+                    ToolResult {
+                        output: match &e {
+                            ToolError::Timeout(reason) => format!(
+                                "tool TIMED OUT and was killed — it did not complete: {reason}"
+                            ),
+                            _ => format!("tool error: {e}"),
+                        },
+                        exit_code: Some(1),
                     },
-                    exit_code: Some(1),
-                }
+                    false,
+                )
             }
         };
 
@@ -2645,7 +2658,12 @@ impl AgentLoopController {
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
-        Ok((result, None))
+        let feedback = if succeeded {
+            Some(PolicyFeedback::Succeeded)
+        } else {
+            None // timeout / tool error — neutral for the denial streak
+        };
+        Ok((result, feedback))
     }
 }
 
@@ -4858,11 +4876,17 @@ mod tests {
 
     #[tokio::test]
     async fn ip2a_successful_call_resets_consecutive_denials() {
-        // D-3: a successful call resets the consecutive counter — denials on
-        // either side of a success must not accumulate into a breaker.
+        // D-3 + ADR-0010 §3.5.4: a SUCCESSFUL ROUND resets the consecutive
+        // counter. Differential design vs the 3-pure-deny-round script in
+        // `ip2a_denial_breaker_injects_strategy_switch_message`: THREE deny
+        // rounds would trip the breaker; inserting a successful tool in
+        // round 2 must reset the streak so round 3's deny still does not
+        // trip it. (Round-level counting: a round is a success if ANY of its
+        // calls succeeded; timeout/error calls are neutral and reset
+        // nothing.)
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
-        // A host that denies by call id: allow call-2 (the middle one).
+        // A host that allows only search_replace — the success tool.
         struct SelectiveHost {
             journal: JournalRecorder,
         }
@@ -4900,14 +4924,17 @@ mod tests {
         }
         let host = SelectiveHost { journal };
         let fake = Arc::new(FakeProvider::new(vec![
-            // deny → allow → deny (denied tool: run_terminal_cmd — a HOST
-            // tool, unlike web_search which routes to the external retrieval
-            // subagent; the middle success resets the consecutive count).
+            // Round 1: deny (run_terminal_cmd is a HOST tool — unlike
+            // web_search which routes to the external retrieval subagent).
+            ScriptedResponse::tool_calls(vec![tool_call("run_terminal_cmd", "call-1")]),
+            // Round 2: deny + SUCCESS — the success resets the streak.
             ScriptedResponse::tool_calls(vec![
-                tool_call("run_terminal_cmd", "call-1"),
-                tool_call("search_replace", "call-2"),
-                tool_call("run_terminal_cmd", "call-3"),
+                tool_call("run_terminal_cmd", "call-2"),
+                tool_call("search_replace", "call-3"),
             ]),
+            // Round 3: deny again — streak restarted at round 3, so no trip.
+            ScriptedResponse::tool_calls(vec![tool_call("run_terminal_cmd", "call-4")]),
+            // Final-answer rounds (the counterexample gate may consume one).
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -4927,7 +4954,9 @@ mod tests {
             .count();
         assert_eq!(
             breaker_count, 0,
-            "success between denials resets the consecutive counter: {received:?}"
+            "a successful round between denials resets the streak (3 deny rounds \
+             alone would trip — see ip2a_denial_breaker_injects_strategy_switch_message): \
+             {received:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

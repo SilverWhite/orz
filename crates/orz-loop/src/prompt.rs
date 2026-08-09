@@ -27,8 +27,9 @@ pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent 
 遵循注入的 assurance 上下文块执行任务；工具可用性由运行时声明，不得自行推断。\
 \n引用纪律：凡基于外部依据、参考实现或内部文档的引用，必须在引用处附带内联标记 \
 `[来源: source_id]`（已有 ledger 记录时）或 `[来源: 路径:行号]`（本地代码 observation-time \
-定位）；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。内部文档引用用 \
-文档ID §节/锚点 而非裸行号（行号会漂移）。标记是写入侧绑定，不构成验证；\
+定位）；外部来源引用 URL/document identity + observed scope（如 `[来源: <url> metadata_only]`，\
+metadata-only 不得生成全文级归因）；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。\
+内部文档引用用 文档ID §节/锚点 而非裸行号（行号会漂移）。标记是写入侧绑定，不构成验证；\
 来源身份、可见性等级与 claim 上限由 verifier 机械检查。\
 \n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
 compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
@@ -415,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn counterexample_blocks_match_current_design() {
+    fn counterexample_blocks_match_adr0010_v1_1_s4_5() {
         // COUNTEREXAMPLE_GATE — final-answer variant carries the once-only note.
         assert!(COUNTEREXAMPLE_GATE_BLOCK.starts_with("[COUNTEREXAMPLE_GATE v0.1]"));
         assert!(

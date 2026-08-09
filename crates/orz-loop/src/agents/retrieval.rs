@@ -91,9 +91,11 @@ impl RetrievalSubagent {
                          `[来源: 路径:行号]` (local observation-time) at the citing \
                          site; content without a locatable source must not be \
                          cited — never claim '参考自某处' from memory. Internal docs \
-                         cite as 文档ID §节/锚点, not bare line numbers (they drift). \
-                         The marker is a writer-side binding, not a verification \
-                         claim.",
+                         cite as 文档ID §节/锚点, not bare line numbers (they drift); \
+                         EXTERNAL sources cite as URL/document identity + observed \
+                         scope (e.g. `[来源: <url> metadata_only]`) — never full-text \
+                         attribution for metadata-only material. The marker is a \
+                         writer-side binding, not a verification claim.",
                         role = self.section_name(),
                         goal = spec.goal,
                     ),
