@@ -610,6 +610,13 @@ def _check_markdown_links() -> list[str]:
     for path in sorted(ROOT.rglob("*.md")):
         if _is_non_repository_path(path):
             continue
+        # `存档/` holds frozen historical snapshots (index/README full
+        # copies, pre-ADR-0010 designs): their links point at the paths as
+        # they were at freeze time — a provenance feature, not a defect.
+        # Rewriting them would falsify the archived originals (ADR-0010
+        # §7.2), so link checks skip the archive zone.
+        if "存档" in path.parts:
+            continue
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             for match in pattern.finditer(line):
                 target = match.group(1).split("#", 1)[0]
@@ -1085,7 +1092,7 @@ def check_repository() -> dict[str, Any]:
         ROOT / "scripts/build_deepseek_public_output_observation.py",
         ROOT / "scripts/build_deepseek_stream_observation_fixture.py",
         ROOT / "scripts/invoke_deepseek_public_output_observation.ps1",
-        ROOT / "docs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md",
+        ROOT / "存档/docs/design-inputs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md",
         ROOT / "runtime/run-event-v0.1.schema.json",
     ):
         if not required_path.is_file():

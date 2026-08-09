@@ -246,7 +246,7 @@ def build_canonical_cli_run_manifest(
             "canonicalization": "RFC8785",
             "hash_chain": "sha256",
             "redaction_policy_sha256": _digest_path(
-                "docs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md"
+                "存档/docs/design-inputs/SOURCE_FULLTEXT_VISIBILITY_RULE_2026-07-26.md"
             ),
         },
         "notes": [
