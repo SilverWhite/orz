@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-close-record-event-payload-v0.2.schema.json",
+  "title": "Retrieval close record runtime event payload v0.2",
+  "description": "ADR-0010 §4.4/§5.2: mechanical receipt of the close commit (terminal record + live-state reset are one commit). normal_close must reference a validated decision=close disposition (verifier cross-check); termination authorities reference cancel/failure/wallclock reasons instead.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "close_record_id",
+    "parent_session_id",
+    "subagent_session_id",
+    "activation_id",
+    "contract_id",
+    "contract_revision",
+    "result_digest",
+    "assessment_id",
+    "validated_disposition_id",
+    "terminal_reason",
+    "resumable",
+    "live_state_reset",
+    "archive_ref"
+  ],
+  "properties": {
+    "close_record_id": { "type": "string", "pattern": "^CLOSE-[A-Za-z0-9._-]+$" },
+    "parent_session_id": { "type": "string", "minLength": 1 },
+    "subagent_session_id": { "type": "string", "minLength": 1 },
+    "activation_id": { "type": "string", "minLength": 1 },
+    "contract_id": { "type": "string", "minLength": 1 },
+    "contract_revision": { "type": "integer", "minimum": 0 },
+    "result_digest": { "$ref": "#/$defs/sha256" },
+    "assessment_id": { "type": "string", "minLength": 1 },
+    "validated_disposition_id": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "terminal_reason": {
+      "type": "string",
+      "enum": [
+        "normal_close",
+        "user_cancelled",
+        "session_cancelled",
+        "wallclock",
+        "subagent_failed",
+        "subagent_cancelled"
+      ]
+    },
+    "resumable": { "type": "boolean" },
+    "live_state_reset": { "type": "boolean" },
+    "archive_ref": { "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "terminal_reason": { "const": "normal_close" } },
+        "required": ["terminal_reason"]
+      },
+      "then": {
+        "properties": {
+          "validated_disposition_id": { "type": "string", "minLength": 1 }
+        },
+        "required": ["validated_disposition_id"]
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

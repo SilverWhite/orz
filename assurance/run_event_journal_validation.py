@@ -38,6 +38,7 @@ RUNTIME = ROOT / "runtime"
 ASSURANCE = ROOT / "assurance"
 
 RUN_EVENT_SCHEMA = RUNTIME / "run-event-v0.1.schema.json"
+RUN_EVENT_SCHEMA_V02 = RUNTIME / "run-event-v0.2.schema.json"
 
 # 33-event registry: event_type -> (slug, payload schema file). The three
 # dual-track slugs resolve to the runtime/ Rust-track files (slice #17
@@ -81,6 +82,33 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE: dict[str, tuple[str, Path]] = {
     "run_failed": ("run-failed", RUNTIME / "run-failed-event-payload-v0.1.schema.json"),
     "run_cancelled": ("run-cancelled", RUNTIME / "run-cancelled-event-payload-v0.1.schema.json"),
     "run_invalidated": ("run-invalidated", RUNTIME / "run-invalidated-event-payload-v0.1.schema.json"),
+}
+
+# v0.2 track (Phase B, ADR-0010 §11.2/§5.2): the five events with their own
+# v0.2 payload schema. Any other event on the v0.2 track resolves to its v0.1
+# payload schema file (payload shapes unchanged — adjudicated decision, see
+# runtime/fixtures/run-event-v0.2/README.md).
+PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
+    "orientation_checkpoint": (
+        "orientation-checkpoint",
+        RUNTIME / "orientation-checkpoint-event-payload-v0.2.schema.json",
+    ),
+    "diagnostic_coverage_checkpoint": (
+        "diagnostic-coverage-checkpoint",
+        RUNTIME / "diagnostic-coverage-checkpoint-event-payload-v0.2.schema.json",
+    ),
+    "information_sufficiency_assessment": (
+        "information-sufficiency-assessment",
+        RUNTIME / "information-sufficiency-assessment-event-payload-v0.2.schema.json",
+    ),
+    "retrieval_parent_disposition": (
+        "retrieval-parent-disposition",
+        RUNTIME / "retrieval-parent-disposition-event-payload-v0.2.schema.json",
+    ),
+    "retrieval_close_record": (
+        "retrieval-close-record",
+        RUNTIME / "retrieval-close-record-event-payload-v0.2.schema.json",
+    ),
 }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -189,6 +217,17 @@ def _resolve_payload_schema(event: dict[str, Any]) -> tuple[str, Path | None]:
     string (contract §5: track identifier, never event_type). Returns
     ("payload", path) or ("envelope_only", None)."""
     producer = event.get("payload_schema")
+    if producer == "run-event-v0.2.schema.json":
+        event_type = event.get("event_type")
+        if event_type in PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02:
+            return ("payload", PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02[event_type][1])
+        if event_type not in PAYLOAD_SCHEMA_BY_EVENT_TYPE:
+            raise ValueError(
+                f"unknown event_type on the Rust v0.2 track: {event_type!r}"
+            )
+        # v0.2 events without their own payload schema reuse the v0.1 payload
+        # schema file (payload shapes unchanged — Phase B adjudication).
+        return ("payload", PAYLOAD_SCHEMA_BY_EVENT_TYPE[event_type][1])
     if producer == "run-event-v0.1.schema.json":
         event_type = event.get("event_type")
         if event_type not in PAYLOAD_SCHEMA_BY_EVENT_TYPE:
@@ -209,7 +248,7 @@ def _resolve_payload_schema(event: dict[str, Any]) -> tuple[str, Path | None]:
     )
 
 
-_envelope_validator: Draft202012Validator | None = None
+_envelope_validators: dict[Path, Draft202012Validator] = {}
 _schema_cache: dict[Path, dict[str, Any]] = {}
 
 
@@ -219,15 +258,29 @@ def _load_schema(path: Path) -> dict[str, Any]:
     return _schema_cache[path]
 
 
-def _envelope_errors(event: dict[str, Any], index: int) -> list[str]:
-    global _envelope_validator
-    if _envelope_validator is None:
-        _envelope_validator = Draft202012Validator(
-            _load_schema(RUN_EVENT_SCHEMA), format_checker=FormatChecker()
+def _envelope_validator_for(event: dict[str, Any]) -> Draft202012Validator:
+    """The envelope version is selected by the track string: v0.2 events are
+    validated against run-event-v0.2.schema.json, everything else against
+    run-event-v0.1.schema.json (a v0.2-only producer must never be silently
+    checked against the v0.1 enum)."""
+    schema_path = (
+        RUN_EVENT_SCHEMA_V02
+        if event.get("payload_schema") == "run-event-v0.2.schema.json"
+        else RUN_EVENT_SCHEMA
+    )
+    validator = _envelope_validators.get(schema_path)
+    if validator is None:
+        validator = Draft202012Validator(
+            _load_schema(schema_path), format_checker=FormatChecker()
         )
+        _envelope_validators[schema_path] = validator
+    return validator
+
+
+def _envelope_errors(event: dict[str, Any], index: int) -> list[str]:
     return [
         f"envelope schema violation at event {index}: {error.message}"
-        for error in _envelope_validator.iter_errors(event)
+        for error in _envelope_validator_for(event).iter_errors(event)
     ]
 
 
@@ -245,6 +298,206 @@ def _payload_errors(event: dict[str, Any], index: int) -> list[str]:
         f"payload schema violation at event {index}: {error.message}"
         for error in validator.iter_errors(event.get("payload"))
     ]
+
+
+# ── v0.2 mechanism cross-checks (ADR-0010 §5.1/§4.4) ─────────────────
+
+_V02_NEUTRAL_INQUIRY_EVENTS = frozenset(
+    {"orientation_checkpoint", "diagnostic_coverage_checkpoint"}
+)
+_V02_LIFECYCLE_EVENTS = frozenset(
+    {
+        "information_sufficiency_assessment",
+        "retrieval_parent_disposition",
+        "retrieval_close_record",
+    }
+)
+
+
+def _is_v02(event: dict[str, Any]) -> bool:
+    return event.get("payload_schema") == "run-event-v0.2.schema.json"
+
+
+def _verify_v02_inquiry_kind(events: list[dict[str, Any]]) -> list[str]:
+    """§5.1: the two neutral-inquiry events carry a const `inquiry_kind` in
+    their payload that must equal the envelope `event_type` — the payload
+    schema alone cannot express the cross-layer equality."""
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type in _V02_NEUTRAL_INQUIRY_EVENTS:
+            payload = event.get("payload", {})
+            inquiry_kind = payload.get("inquiry_kind")
+            if inquiry_kind != event_type:
+                errors.append(
+                    f"event {index}: v0.2 neutral inquiry payload inquiry_kind "
+                    f"{inquiry_kind!r} != envelope event_type {event_type!r}"
+                )
+    return errors
+
+
+def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §4.4 mechanical lifecycle facts on the v0.2 track:
+
+    - every parent disposition references an assessment that precedes it and
+      whose contract_revision equals the disposition's
+      expected_contract_revision (CAS);
+    - a normal_close close record references a preceding disposition with
+      decision=close and matching revision/assessment/activation ids;
+    - an accepted continue increments the activation's contract revision — the
+      next assessment on that activation must carry revision + 1, and
+      revisions never decrease;
+    - after a close record, no further disposition/assessment/close on the
+      same activation is allowed;
+    - a replayed disposition_id must carry an identical payload (idempotent
+      replay), a different payload is a conflict.
+    """
+    errors: list[str] = []
+    assessments: list[tuple[int, dict[str, Any]]] = []
+    dispositions: list[tuple[int, dict[str, Any]]] = []
+    closes: list[tuple[int, dict[str, Any]]] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type == "information_sufficiency_assessment":
+            assessments.append((index, event))
+        elif event_type == "retrieval_parent_disposition":
+            dispositions.append((index, event))
+        elif event_type == "retrieval_close_record":
+            closes.append((index, event))
+    if not (assessments or dispositions or closes):
+        return errors
+
+    assessment_index: dict[str, tuple[int, int]] = {}
+    for index, event in assessments:
+        payload = event["payload"]
+        assessment_index[payload["assessment_id"]] = (
+            index,
+            payload["contract_revision"],
+        )
+    close_indexes: dict[str, int] = {}
+
+    for index, event in dispositions:
+        payload = event["payload"]
+        disp_id = payload["disposition_id"]
+        a_ref = payload["assessment_id"]
+        a_entry = assessment_index.get(a_ref)
+        if a_entry is None:
+            errors.append(
+                f"event {index}: disposition {disp_id} references unknown "
+                f"assessment {a_ref}"
+            )
+        else:
+            a_index, a_revision = a_entry
+            if a_index >= index:
+                errors.append(
+                    f"event {index}: disposition {disp_id} references "
+                    f"assessment {a_ref} that does not precede it"
+                )
+            if payload["expected_contract_revision"] != a_revision:
+                errors.append(
+                    f"event {index}: disposition {disp_id} expected_contract_revision "
+                    f"{payload['expected_contract_revision']} != referenced "
+                    f"assessment {a_ref} contract_revision {a_revision}"
+                )
+
+    # close records → referenced disposition must be decision=close with
+    # matching revision/assessment/activation and must precede the close.
+    for index, event in closes:
+        payload = event["payload"]
+        close_id = payload["close_record_id"]
+        close_indexes[payload["activation_id"]] = index
+        if payload["terminal_reason"] != "normal_close":
+            continue
+        d_ref = payload["validated_disposition_id"]
+        d_events = [e for i, e in dispositions if i < index]
+        d_event = next((e for e in d_events if e["payload"]["disposition_id"] == d_ref), None)
+        if d_event is None:
+            errors.append(
+                f"event {index}: close record {close_id} references "
+                f"disposition {d_ref} that does not precede it"
+            )
+            continue
+        d_payload = d_event["payload"]
+        if d_payload["decision"] != "close":
+            errors.append(
+                f"event {index}: close record {close_id} references "
+                f"disposition {d_ref} with decision != close"
+            )
+        if d_payload["expected_contract_revision"] != payload["contract_revision"]:
+            errors.append(
+                f"event {index}: close record {close_id} contract_revision "
+                f"{payload['contract_revision']} != disposition {d_ref} "
+                f"expected_contract_revision {d_payload['expected_contract_revision']}"
+            )
+        if d_payload["assessment_id"] != payload["assessment_id"]:
+            errors.append(
+                f"event {index}: close record {close_id} assessment_id "
+                f"{payload['assessment_id']} != disposition {d_ref} "
+                f"assessment_id {d_payload['assessment_id']}"
+            )
+        if d_payload["activation_id"] != payload["activation_id"]:
+            errors.append(
+                f"event {index}: close record {close_id} activation_id "
+                f"{payload['activation_id']} != disposition {d_ref} "
+                f"activation_id {d_payload['activation_id']}"
+            )
+
+    # continue increments the revision; revisions never decrease; a close
+    # forbids later lifecycle events on the same activation.
+    for index, event in dispositions:
+        payload = event["payload"]
+        if payload["decision"] == "continue" and payload["outcome"] == "accepted":
+            activation = payload["activation_id"]
+            expected_next = payload["expected_contract_revision"] + 1
+            for a_index, a_event in assessments:
+                if a_index <= index:
+                    continue
+                a_payload = a_event["payload"]
+                if a_payload["activation_id"] != activation:
+                    continue
+                if a_payload["contract_revision"] != expected_next:
+                    errors.append(
+                        f"event {a_index}: assessment {a_payload['assessment_id']} "
+                        f"contract_revision {a_payload['contract_revision']} != "
+                        f"continue disposition {payload['disposition_id']} "
+                        f"revision + 1 ({expected_next})"
+                    )
+                break
+    for index, event in dispositions:
+        payload = event["payload"]
+        closed_at = close_indexes.get(payload["activation_id"])
+        if closed_at is not None and closed_at < index:
+            errors.append(
+                f"event {index}: disposition {payload['disposition_id']} on "
+                f"activation {payload['activation_id']} after its close record "
+                f"(event {closed_at})"
+            )
+    for index, event in assessments:
+        payload = event["payload"]
+        closed_at = close_indexes.get(payload["activation_id"])
+        if closed_at is not None and closed_at < index:
+            errors.append(
+                f"event {index}: assessment {payload['assessment_id']} on "
+                f"activation {payload['activation_id']} after its close record "
+                f"(event {closed_at})"
+            )
+
+    # idempotent replay: identical disposition_id ⇒ identical payload.
+    seen: dict[str, dict[str, Any]] = {}
+    for index, event in dispositions:
+        payload = event["payload"]
+        disp_id = payload["disposition_id"]
+        if disp_id in seen and seen[disp_id] != payload:
+            errors.append(
+                f"event {index}: disposition {disp_id} replayed with a "
+                f"conflicting payload"
+            )
+        seen[disp_id] = payload
+    return errors
 
 
 # ── chain verification (mirror of orz-assurance chain.rs) ────────────
@@ -366,6 +619,8 @@ def validate_journal_text(text: str) -> list[str]:
         except ValueError as exc:
             errors.append(f"event {index}: {exc}")
     errors.extend(_verify_chain(events))
+    errors.extend(_verify_v02_inquiry_kind(events))
+    errors.extend(_verify_v02_lifecycle(events))
     return errors
 
 

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-parent-disposition-event-payload-v0.2.schema.json",
+  "title": "Retrieval parent disposition runtime event payload v0.2",
+  "description": "ADR-0010 §4.4/§5.2: structured main-Agent lifecycle command. Binds activation_id + expected_contract_revision + assessment_id; only close|continue, never rewrites the mechanical assessment. continue requires a non-empty requirement_delta and capability-gate result; stale/conflicting outcomes are recorded mechanically.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "disposition_id",
+    "parent_session_id",
+    "subagent_session_id",
+    "activation_id",
+    "assessment_id",
+    "expected_contract_revision",
+    "decision",
+    "requirement_delta",
+    "capability_gate",
+    "outcome"
+  ],
+  "properties": {
+    "disposition_id": { "type": "string", "pattern": "^DISP-[A-Za-z0-9._-]+$" },
+    "parent_session_id": { "type": "string", "minLength": 1 },
+    "subagent_session_id": { "type": "string", "minLength": 1 },
+    "activation_id": { "type": "string", "minLength": 1 },
+    "assessment_id": { "type": "string", "minLength": 1 },
+    "expected_contract_revision": { "type": "integer", "minimum": 0 },
+    "decision": {
+      "type": "string",
+      "enum": ["close", "continue"]
+    },
+    "requirement_delta": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "capability_gate": {
+      "type": "string",
+      "enum": ["passed", "blocked", "not_applicable"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "rejected_stale",
+        "rejected_conflicting",
+        "replayed_idempotent"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "decision": { "const": "continue" } },
+        "required": ["decision"]
+      },
+      "then": {
+        "properties": { "requirement_delta": { "type": "string", "minLength": 1 } },
+        "required": ["requirement_delta"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "decision": { "const": "close" } },
+        "required": ["decision"]
+      },
+      "then": {
+        "properties": { "requirement_delta": { "type": "null" } }
+      }
+    }
+  ]
+}

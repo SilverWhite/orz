@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-RUN-FINISHED",
+  "event_id": "EVT-CONF-001",
+  "sequence": 1,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "run_finished",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "status": "completed",
+    "turn_count": 1,
+    "tool_rounds": 0
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

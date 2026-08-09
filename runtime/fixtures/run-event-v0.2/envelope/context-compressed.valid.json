@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-CONTEXT-COMPRESSED",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "context_compressed",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "trigger_tokens": 152000,
+    "target_tokens": 100000,
+    "rounds_since_last_compaction": 22,
+    "rounds_dropped": 4,
+    "messages_dropped": 12,
+    "messages_kept": 8,
+    "estimated_tokens_after": 95000
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

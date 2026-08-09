@@ -1094,6 +1094,12 @@ def check_repository() -> dict[str, Any]:
         ROOT / "scripts/invoke_deepseek_public_output_observation.ps1",
         ROOT / "存档/docs/design-inputs/GSA_SELF_QUESTION_COUNTEREXAMPLE_DESIGN_2026-07-26.md",
         ROOT / "runtime/run-event-v0.1.schema.json",
+        ROOT / "runtime/run-event-v0.2.schema.json",
+        ROOT / "runtime/orientation-checkpoint-event-payload-v0.2.schema.json",
+        ROOT / "runtime/diagnostic-coverage-checkpoint-event-payload-v0.2.schema.json",
+        ROOT / "runtime/information-sufficiency-assessment-event-payload-v0.2.schema.json",
+        ROOT / "runtime/retrieval-parent-disposition-event-payload-v0.2.schema.json",
+        ROOT / "runtime/retrieval-close-record-event-payload-v0.2.schema.json",
     ):
         if not required_path.is_file():
             errors.append(
@@ -1974,6 +1980,120 @@ def check_repository() -> dict[str, Any]:
         )
     counts["run_event_reference_fixtures"] = len(payload_fixture_names) + len(
         envelope_fixture_names
+    )
+
+    # Phase B v0.2 (ADR-0010 §11.2): the v0.2 fixture tree — payload
+    # contracts for the five v0.2-payload events, envelope contracts for
+    # every valid/invalid fixture in the v0.2 envelope dir. Completeness
+    # assertions mirror the v0.1 tree.
+    run_event_v02_root = ROOT / "runtime/fixtures/run-event-v0.2"
+    run_event_v02_payload_root = run_event_v02_root / "payloads"
+    run_event_v02_envelope_root = run_event_v02_root / "envelope"
+    from assurance.run_event_journal_validation import (
+        PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02,
+    )
+
+    run_event_v02_payload_schema_by_slug = {
+        slug: schema_path
+        for _event_type, (slug, schema_path) in PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02.items()
+    }
+    run_event_v02_envelope_schema = ROOT / "runtime/run-event-v0.2.schema.json"
+    run_event_v02_payload_positive_contracts = {
+        run_event_v02_payload_root / f"{slug}.minimal.valid.json": schema
+        for slug, schema in run_event_v02_payload_schema_by_slug.items()
+    }
+    run_event_v02_payload_negative_contracts = {
+        run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
+        for slug, schema in run_event_v02_payload_schema_by_slug.items()
+    }
+    for instance_path, schema_path in run_event_v02_payload_positive_contracts.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(instance_path),
+                schema_path,
+                f"runtime/fixtures/run-event-v0.2/payloads/{instance_path.name}",
+            )
+        )
+    for instance_path, schema_path in run_event_v02_payload_negative_contracts.items():
+        validator = Draft202012Validator(
+            _load_json(schema_path), format_checker=FormatChecker()
+        )
+        validation_errors = list(validator.iter_errors(_load_json(instance_path)))
+        if not validation_errors:
+            errors.append(
+                "negative run-event v0.2 payload fixture unexpectedly validated: "
+                f"{instance_path.relative_to(ROOT)}"
+            )
+    counts["run_event_v02_payload_positive_contracts"] = len(
+        run_event_v02_payload_positive_contracts
+    )
+    counts["run_event_v02_payload_negative_contracts"] = len(
+        run_event_v02_payload_negative_contracts
+    )
+
+    run_event_v02_envelope_positive_contracts = {
+        path: run_event_v02_envelope_schema
+        for path in run_event_v02_envelope_root.glob("*.valid.json")
+    }
+    run_event_v02_envelope_negative_contracts = {
+        path: run_event_v02_envelope_schema
+        for path in run_event_v02_envelope_root.glob("*.invalid.json")
+    }
+    for instance_path, schema_path in run_event_v02_envelope_positive_contracts.items():
+        errors.extend(
+            _validate_instance(
+                _load_json(instance_path),
+                schema_path,
+                f"runtime/fixtures/run-event-v0.2/envelope/{instance_path.name}",
+            )
+        )
+    counts["run_event_v02_envelope_positive_contracts"] = len(
+        run_event_v02_envelope_positive_contracts
+    )
+    for instance_path, schema_path in run_event_v02_envelope_negative_contracts.items():
+        validator = Draft202012Validator(
+            _load_json(schema_path), format_checker=FormatChecker()
+        )
+        validation_errors = list(validator.iter_errors(_load_json(instance_path)))
+        if not validation_errors:
+            errors.append(
+                "negative run-event v0.2 envelope fixture unexpectedly validated: "
+                f"{instance_path.relative_to(ROOT)}"
+            )
+    counts["run_event_v02_envelope_negative_contracts"] = len(
+        run_event_v02_envelope_negative_contracts
+    )
+
+    v02_payload_fixture_names = {
+        path.name for path in run_event_v02_payload_root.glob("*.json")
+    }
+    expected_v02_payload_names = {
+        path.name
+        for path in list(run_event_v02_payload_positive_contracts)
+        + list(run_event_v02_payload_negative_contracts)
+    }
+    if v02_payload_fixture_names != expected_v02_payload_names:
+        errors.append(
+            "run-event v0.2 payload fixture set diverges from mappings: "
+            f"unmapped={sorted(v02_payload_fixture_names - expected_v02_payload_names)} "
+            f"missing={sorted(expected_v02_payload_names - v02_payload_fixture_names)}"
+        )
+    v02_envelope_fixture_names = {
+        path.name for path in run_event_v02_envelope_root.glob("*.json")
+    }
+    expected_v02_envelope_names = {
+        path.name for path in run_event_v02_envelope_positive_contracts
+    } | {
+        path.name for path in run_event_v02_envelope_negative_contracts
+    }
+    if v02_envelope_fixture_names != expected_v02_envelope_names:
+        errors.append(
+            "run-event v0.2 envelope fixture set diverges from mappings: "
+            f"unmapped={sorted(v02_envelope_fixture_names - expected_v02_envelope_names)} "
+            f"missing={sorted(expected_v02_envelope_names - v02_envelope_fixture_names)}"
+        )
+    counts["run_event_v02_reference_fixtures"] = len(v02_payload_fixture_names) + len(
+        v02_envelope_fixture_names
     )
 
     # Phase 3 #7: REAL Rust-produced journals — every line validated

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/orientation-checkpoint-event-payload-v0.2.schema.json",
+  "title": "Orientation checkpoint runtime event payload v0.2 (neutral inquiry)",
+  "description": "ADR-0010 §5.2 payload boundary: session/agent identity, trigger point, turn state, message block and injection position. Neutral inquiry family — inquiry_kind must equal the envelope event_type (verifier cross-check).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkpoint_id",
+    "inquiry_family",
+    "inquiry_kind",
+    "agent_role",
+    "session_id",
+    "trigger",
+    "completed_turns_since_orientation",
+    "step_index",
+    "message_block",
+    "injection_position"
+  ],
+  "properties": {
+    "checkpoint_id": { "type": "string", "pattern": "^ORIENT-[A-Za-z0-9._-]+-[0-9]{4}$" },
+    "inquiry_family": { "const": "neutral" },
+    "inquiry_kind": { "const": "orientation_checkpoint" },
+    "agent_role": {
+      "type": "string",
+      "enum": ["main", "internal_retrieval", "external_retrieval"]
+    },
+    "session_id": { "type": "string", "minLength": 1 },
+    "trigger": {
+      "type": "string",
+      "enum": ["completed_turns_interval", "pre_handoff"]
+    },
+    "completed_turns_since_orientation": { "type": "integer", "minimum": 0 },
+    "step_index": { "type": "integer", "minimum": 0 },
+    "message_block": { "type": "string", "minLength": 1 },
+    "injection_position": { "type": "string", "minLength": 1 }
+  }
+}

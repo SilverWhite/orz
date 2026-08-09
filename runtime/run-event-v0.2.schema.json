@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/run-event-v0.2.schema.json",
+  "title": "FEP Agent Append-only Run Event v0.2",
+  "description": "v0.2 event system (ADR-0010 §5.3/§11.6): five independent mechanism event types; neutral_inquiry and retrieval_completion_check are retired from the current enum and only exist on the v0.1 track for historical journal replay.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "event_id",
+    "sequence",
+    "timestamp",
+    "event_type",
+    "run_manifest_sha256",
+    "previous_event_sha256",
+    "payload_schema",
+    "payload",
+    "payload_sha256",
+    "redaction",
+    "event_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.2.0-draft" },
+    "run_id": { "type": "string", "pattern": "^(RUN|RST)-[A-Za-z0-9._-]+$" },
+    "event_id": { "type": "string", "pattern": "^EVT-[A-Za-z0-9._-]+$" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "event_type": {
+      "enum": [
+        "run_preflight",
+        "run_started",
+        "prompt_submitted",
+        "model_request",
+        "model_response_received",
+        "model_output",
+        "acp_initialize",
+        "acp_session_created",
+        "tool_proposal",
+        "permission_requested",
+        "permission_decision",
+        "tool_started",
+        "tool_completed",
+        "orientation_checkpoint",
+        "diagnostic_coverage_checkpoint",
+        "runtime_stagnation_guard",
+        "tool_availability_check",
+        "tool_belief_stagnation",
+        "instruction_provenance_gate",
+        "gate_decision",
+        "counterexample_gate",
+        "information_sufficiency_assessment",
+        "retrieval_parent_disposition",
+        "retrieval_close_record",
+        "context_compressed",
+        "snapshot_created",
+        "snapshot_restored",
+        "artifact_registered",
+        "plan_proposed",
+        "plan_approved",
+        "plan_rejected",
+        "action_approved",
+        "run_finished",
+        "run_failed",
+        "run_cancelled",
+        "run_invalidated"
+      ]
+    },
+    "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "previous_event_sha256": {
+      "oneOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "payload_schema": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" },
+    "payload_sha256": { "$ref": "#/$defs/sha256" },
+    "redaction": { "enum": ["none", "metadata_only", "content_redacted"] },
+    "event_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "sequence": { "const": 0 } }, "required": ["sequence"] },
+      "then": { "properties": { "previous_event_sha256": { "type": "null" } } },
+      "else": { "properties": { "previous_event_sha256": { "$ref": "#/$defs/sha256" } } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

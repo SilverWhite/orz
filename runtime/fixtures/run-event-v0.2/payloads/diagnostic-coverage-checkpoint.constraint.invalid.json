@@ -1,0 +1,22 @@
+{
+  "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
+  "inquiry_family": "neutral",
+  "inquiry_kind": "diagnostic_coverage_checkpoint",
+  "debug_episode_id": "BUG-RUN-CONF-0001",
+  "threshold_stage": 3,
+  "hard_signal_count": 3,
+  "trigger_count": 2,
+  "signals": [
+    {
+      "signal_id": "SIG-0001",
+      "signal_type": "hypothesis_only",
+      "evidence_identity": "EVT-CONF-007"
+    }
+  ],
+  "covered_surfaces": [
+    "test_logs"
+  ],
+  "missing_surfaces": [],
+  "message_block": "[DIAG_COV v0.2] x",
+  "minimal_next_diagnostic_action": "运行最小复现"
+}

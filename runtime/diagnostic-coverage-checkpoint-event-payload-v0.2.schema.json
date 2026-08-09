@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/diagnostic-coverage-checkpoint-event-payload-v0.2.schema.json",
+  "title": "Diagnostic coverage checkpoint runtime event payload v0.2 (neutral inquiry)",
+  "description": "ADR-0010 §4.6/§5.2: per-debug-episode progressive 2→3→4→5 threshold, deduplicated hard signals bound to evidence identity, coverage block and one minimal follow-up diagnostic action. Neutral inquiry family — inquiry_kind must equal the envelope event_type (verifier cross-check).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkpoint_id",
+    "inquiry_family",
+    "inquiry_kind",
+    "debug_episode_id",
+    "threshold_stage",
+    "hard_signal_count",
+    "trigger_count",
+    "signals",
+    "covered_surfaces",
+    "missing_surfaces",
+    "message_block",
+    "minimal_next_diagnostic_action"
+  ],
+  "properties": {
+    "checkpoint_id": { "type": "string", "pattern": "^DIAG-COV-[A-Z0-9._-]+-[0-9]+$" },
+    "inquiry_family": { "const": "neutral" },
+    "inquiry_kind": { "const": "diagnostic_coverage_checkpoint" },
+    "debug_episode_id": { "type": "string", "minLength": 1 },
+    "threshold_stage": { "type": "integer", "minimum": 2, "maximum": 5 },
+    "hard_signal_count": { "type": "integer", "minimum": 0 },
+    "trigger_count": { "type": "integer", "minimum": 0 },
+    "signals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["signal_id", "signal_type", "evidence_identity"],
+        "properties": {
+          "signal_id": { "type": "string", "pattern": "^SIG-[A-Za-z0-9._-]+$" },
+          "signal_type": {
+            "type": "string",
+            "enum": [
+              "consecutive_same_failure",
+              "repeated_pattern",
+              "same_module_no_evidence",
+              "unabsorbed_new_evidence",
+              "large_scope_low_diag",
+              "key_surface_unexamined"
+            ]
+          },
+          "evidence_identity": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "covered_surfaces": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "missing_surfaces": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "message_block": { "type": "string", "minLength": 1 },
+    "minimal_next_diagnostic_action": { "type": "string", "minLength": 1 }
+  }
+}

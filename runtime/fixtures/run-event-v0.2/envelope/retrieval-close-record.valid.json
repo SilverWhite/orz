@@ -1,0 +1,29 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-RETRIEVAL-CLOSE-RECORD",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "retrieval_close_record",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "close_record_id": "CLOSE-0001",
+    "parent_session_id": "sess-main-1",
+    "subagent_session_id": "sess-ext-2",
+    "activation_id": "ACT-EXT-0001",
+    "contract_id": "CONTRACT-EXT-0001",
+    "contract_revision": 0,
+    "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "assessment_id": "ASSESS-0001",
+    "validated_disposition_id": "DISP-0001",
+    "terminal_reason": "normal_close",
+    "resumable": true,
+    "live_state_reset": true,
+    "archive_ref": "archive/ACT-EXT-0001"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

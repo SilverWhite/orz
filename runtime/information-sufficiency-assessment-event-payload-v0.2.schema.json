@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/information-sufficiency-assessment-event-payload-v0.2.schema.json",
+  "title": "Mechanical information sufficiency assessment runtime event payload v0.2",
+  "description": "ADR-0010 §4.3/§5.2: purely mechanical assessment — no inquiry family, no model-generated conclusion. Inputs come from the structured task/retrieval contract, result/ledger and source visibility gate. Dedupe key (activation_id, contract_revision, result_digest, assessment_version) is recomputed by the verifier.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "assessment_id",
+    "activation_id",
+    "contract_id",
+    "contract_revision",
+    "result_digest",
+    "ledger_digest",
+    "source_counts",
+    "source_categories",
+    "source_visibility_gate",
+    "missing_categories",
+    "filtering_reasons",
+    "status",
+    "reason_codes",
+    "assessment_version"
+  ],
+  "properties": {
+    "assessment_id": { "type": "string", "pattern": "^ASSESS-[A-Za-z0-9._-]+$" },
+    "activation_id": { "type": "string", "minLength": 1 },
+    "contract_id": { "type": "string", "minLength": 1 },
+    "contract_revision": { "type": "integer", "minimum": 0 },
+    "result_digest": { "$ref": "#/$defs/sha256" },
+    "ledger_digest": { "$ref": "#/$defs/sha256" },
+    "source_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "full_text_observed",
+        "partial_text_observed",
+        "metadata_only",
+        "unavailable"
+      ],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "full_text_observed": { "type": "integer", "minimum": 0 },
+        "partial_text_observed": { "type": "integer", "minimum": 0 },
+        "metadata_only": { "type": "integer", "minimum": 0 },
+        "unavailable": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "source_categories": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "source_visibility_gate": {
+      "type": "string",
+      "enum": ["passed", "blocked", "not_applicable"]
+    },
+    "missing_categories": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "filtering_reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["sufficient", "insufficient", "indeterminate", "not_applicable"]
+    },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "assessment_version": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)+$" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

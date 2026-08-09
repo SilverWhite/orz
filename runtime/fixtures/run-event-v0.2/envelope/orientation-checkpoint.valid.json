@@ -1,0 +1,26 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-ORIENTATION-CHECKPOINT",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "orientation_checkpoint",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+    "inquiry_family": "neutral",
+    "inquiry_kind": "orientation_checkpoint",
+    "agent_role": "main",
+    "session_id": "sess-main-1",
+    "trigger": "completed_turns_interval",
+    "completed_turns_since_orientation": 7,
+    "step_index": 0,
+    "message_block": "[ORIENTATION v0.2] 当前任务、位置与下一目标是什么？",
+    "injection_position": "post_tool_batch_gap"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

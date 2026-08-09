@@ -2,9 +2,10 @@
 
 Phase 3 slice #14 (Python reference-spec): this script is the single source
 of truth for the good/bad fixture shapes under
-`runtime/fixtures/run-event-v0.1/` and `assurance/fixtures/canonical_cli/`.
-Re-run it after any payload schema change to regenerate the tree (the
-check_repository gate asserts every generated file is covered by a mapping).
+`runtime/fixtures/run-event-v0.1/`, `runtime/fixtures/run-event-v0.2/` and
+`assurance/fixtures/canonical_cli/`. Re-run it after any payload schema change
+to regenerate the tree (the check_repository gate asserts every generated
+file is covered by a mapping).
 
 Fixture conventions (see `runtime/fixtures/run-event-v0.1/README.md`):
 - `<slug>.minimal.valid.json` — a legal payload for the event type (the
@@ -24,6 +25,14 @@ Slice #17 (conformance suite) changes:
 - Hash-chain integrity is NOT validated by this generator's fixtures — it is
   verified against real captured journals by
   `assurance/run_event_journal_validation.py` (journals/ directory).
+
+Phase B v0.2 (2026-08-09, ADR-0010 §5.3.1/§11.2/§11.6) changes:
+- The v0.2 tree (`runtime/fixtures/run-event-v0.2/`) covers the five v1.1
+  mechanism events: orientation_checkpoint (v0.2 payload) plus the four new
+  event types. neutral_inquiry / retrieval_completion_check are retired from
+  the v0.2 envelope enum (v0.1 replay only).
+- The remaining 31 events reuse the v0.1 payload schema files unchanged
+  (payload shapes did not change; adjudicated in the v0.2 fixture README).
 """
 
 from __future__ import annotations
@@ -74,6 +83,67 @@ EVENT_TYPES = [
     "run_failed",
     "run_cancelled",
     "run_invalidated",
+]
+
+# v0.2 event system (Phase B, ADR-0010 §11.2): v0.1 enum minus the two
+# retired events (neutral_inquiry, retrieval_completion_check) plus the four
+# new mechanism events. orientation_checkpoint keeps its slot with a v0.2
+# payload shape. Order mirrors run-event-v0.2.schema.json.
+V02_EVENT_TYPES = [
+    "run_preflight",
+    "run_started",
+    "prompt_submitted",
+    "model_request",
+    "model_response_received",
+    "model_output",
+    "acp_initialize",
+    "acp_session_created",
+    "tool_proposal",
+    "permission_requested",
+    "permission_decision",
+    "tool_started",
+    "tool_completed",
+    "orientation_checkpoint",
+    "diagnostic_coverage_checkpoint",
+    "runtime_stagnation_guard",
+    "tool_availability_check",
+    "tool_belief_stagnation",
+    "instruction_provenance_gate",
+    "gate_decision",
+    "counterexample_gate",
+    "information_sufficiency_assessment",
+    "retrieval_parent_disposition",
+    "retrieval_close_record",
+    "context_compressed",
+    "snapshot_created",
+    "snapshot_restored",
+    "artifact_registered",
+    "plan_proposed",
+    "plan_approved",
+    "plan_rejected",
+    "action_approved",
+    "run_finished",
+    "run_failed",
+    "run_cancelled",
+    "run_invalidated",
+]
+
+SLUGS_V02 = {
+    "orientation_checkpoint": "orientation-checkpoint",
+    "diagnostic_coverage_checkpoint": "diagnostic-coverage-checkpoint",
+    "information_sufficiency_assessment": "information-sufficiency-assessment",
+    "retrieval_parent_disposition": "retrieval-parent-disposition",
+    "retrieval_close_record": "retrieval-close-record",
+}
+
+# The five v0.2 events with their own v0.2 payload schema (the rest of the
+# v0.2 envelope reuses the v0.1 payload schema files).
+V02_PAYLOAD_EVENTS = [
+    "orientation_checkpoint",
+    "diagnostic_coverage_checkpoint",
+    "information_sufficiency_assessment",
+    "retrieval_parent_disposition",
+    "retrieval_close_record",
 ]
 
 SLUGS = {
@@ -401,6 +471,186 @@ PAYLOAD_BAD: dict[str, dict] = {
     "run_invalidated": {"status": "invalidated"},
 }
 
+# v0.2 payload shapes (Phase B, ADR-0010 §5.2). Only the five events with
+# their own v0.2 payload schema live here; all other v0.2 events reuse the
+# v0.1 PAYLOAD_GOOD/PAYLOAD_BAD shapes.
+PAYLOAD_GOOD_V02: dict[str, dict] = {
+    "orientation_checkpoint": {
+        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "orientation_checkpoint",
+        "agent_role": "main",
+        "session_id": "sess-main-1",
+        "trigger": "completed_turns_interval",
+        "completed_turns_since_orientation": 7,
+        "step_index": 0,
+        "message_block": "[ORIENTATION v0.2] 当前任务、位置与下一目标是什么？",
+        "injection_position": "post_tool_batch_gap",
+    },
+    "diagnostic_coverage_checkpoint": {
+        "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "diagnostic_coverage_checkpoint",
+        "debug_episode_id": "BUG-RUN-CONF-0001",
+        "threshold_stage": 3,
+        "hard_signal_count": 3,
+        "trigger_count": 2,
+        "signals": [
+            {
+                "signal_id": "SIG-0001",
+                "signal_type": "consecutive_same_failure",
+                "evidence_identity": "EVT-CONF-007",
+            },
+            {
+                "signal_id": "SIG-0002",
+                "signal_type": "same_module_no_evidence",
+                "evidence_identity": "EVT-CONF-011",
+            },
+        ],
+        "covered_surfaces": ["test_logs", "stack_trace"],
+        "missing_surfaces": ["edge_cases"],
+        "message_block": "[DIAG_COV v0.2] 已覆盖：测试日志、堆栈；缺失：边界条件；最小补诊断动作：运行最小复现",
+        "minimal_next_diagnostic_action": "运行最小复现并采集 trace",
+    },
+    "information_sufficiency_assessment": {
+        "assessment_id": "ASSESS-0001",
+        "activation_id": "ACT-INT-0001",
+        "contract_id": "CONTRACT-INT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "ledger_digest": ZERO_HASH,
+        "source_counts": {
+            "total": 4,
+            "full_text_observed": 2,
+            "partial_text_observed": 1,
+            "metadata_only": 1,
+            "unavailable": 0,
+        },
+        "source_categories": ["official_docs", "source_code", "forum"],
+        "source_visibility_gate": "passed",
+        "missing_categories": ["vendor_changelog"],
+        "filtering_reasons": ["paywall"],
+        "status": "sufficient",
+        "reason_codes": ["COVERAGE_OK"],
+        "assessment_version": "0.2.0",
+    },
+    "retrieval_parent_disposition": {
+        "disposition_id": "DISP-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "assessment_id": "ASSESS-0001",
+        "expected_contract_revision": 0,
+        "decision": "continue",
+        "requirement_delta": "补充 vendor 版本差异与截止日期",
+        "capability_gate": "passed",
+        "outcome": "accepted",
+    },
+    "retrieval_close_record": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "assessment_id": "ASSESS-0001",
+        "validated_disposition_id": "DISP-0001",
+        "terminal_reason": "normal_close",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "archive/ACT-EXT-0001",
+    },
+}
+
+# One constraint violation per v0.2 event (never a bare missing-required when
+# a sharper constraint exists; conditional constraints preferred where the
+# schema expresses them).
+PAYLOAD_BAD_V02: dict[str, dict] = {
+    "orientation_checkpoint": {
+        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "orientation_checkpoint",
+        "agent_role": "main",
+        "session_id": "sess-main-1",
+        "trigger": "manual",
+        "completed_turns_since_orientation": 7,
+        "step_index": 0,
+        "message_block": "[ORIENTATION v0.2] 当前任务、位置与下一目标是什么？",
+        "injection_position": "post_tool_batch_gap",
+    },
+    "diagnostic_coverage_checkpoint": {
+        "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "diagnostic_coverage_checkpoint",
+        "debug_episode_id": "BUG-RUN-CONF-0001",
+        "threshold_stage": 3,
+        "hard_signal_count": 3,
+        "trigger_count": 2,
+        "signals": [
+            {
+                "signal_id": "SIG-0001",
+                "signal_type": "hypothesis_only",
+                "evidence_identity": "EVT-CONF-007",
+            }
+        ],
+        "covered_surfaces": ["test_logs"],
+        "missing_surfaces": [],
+        "message_block": "[DIAG_COV v0.2] x",
+        "minimal_next_diagnostic_action": "运行最小复现",
+    },
+    "information_sufficiency_assessment": {
+        "assessment_id": "ASSESS-0001",
+        "activation_id": "ACT-INT-0001",
+        "contract_id": "CONTRACT-INT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "ledger_digest": ZERO_HASH,
+        "source_counts": {
+            "total": 4,
+            "full_text_observed": 2,
+            "partial_text_observed": 1,
+            "metadata_only": 1,
+            "unavailable": 0,
+        },
+        "source_categories": ["official_docs"],
+        "source_visibility_gate": "passed",
+        "missing_categories": [],
+        "filtering_reasons": [],
+        "status": "probably_sufficient",
+        "reason_codes": ["COVERAGE_OK"],
+        "assessment_version": "0.2.0",
+    },
+    "retrieval_parent_disposition": {
+        "disposition_id": "DISP-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "assessment_id": "ASSESS-0001",
+        "expected_contract_revision": 0,
+        "decision": "continue",
+        "requirement_delta": None,
+        "capability_gate": "passed",
+        "outcome": "accepted",
+    },
+    "retrieval_close_record": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "assessment_id": "ASSESS-0001",
+        "validated_disposition_id": None,
+        "terminal_reason": "normal_close",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "archive/ACT-EXT-0001",
+    },
+}
+
+
 # canonical_cli payload shapes (its own `canonical-cli-*` track). Shapes taken
 # from canonical_cli.py event_specs (fake path L900-1009, real path L1322-1360).
 CANONICAL_CLI_GOOD: dict[str, dict] = {
@@ -474,6 +724,25 @@ def _envelope(event_type: str, payload: dict, sequence: int, previous: str | Non
     }
 
 
+def _envelope_v02(event_type: str, payload: dict, sequence: int, previous: str | None) -> dict:
+    slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
+    return {
+        "schema_version": "0.2.0-draft",
+        "run_id": f"RUN-CONF-{slug.upper()}",
+        "event_id": f"EVT-CONF-{sequence:03d}",
+        "sequence": sequence,
+        "timestamp": TIMESTAMP,
+        "event_type": event_type,
+        "run_manifest_sha256": ZERO_HASH,
+        "previous_event_sha256": previous,
+        "payload_schema": "run-event-v0.2.schema.json",
+        "payload": payload,
+        "payload_sha256": ZERO_HASH,
+        "redaction": "none",
+        "event_sha256": ZERO_HASH,
+    }
+
+
 def _bad_envelope(mutate: dict) -> dict:
     return mutate(
         _envelope("run_preflight", {"run_id": "RUN-CONF-0001"}, 0, None)
@@ -515,6 +784,19 @@ ENVELOPE_BAD: dict[str, dict] = {
     "missing-timestamp": _bad_envelope(lambda e: _pop(e, "timestamp")),
 }
 
+# v0.2 envelope negatives: reuse every v0.1 envelope constraint (identical
+# structure), except the schema-version bad value flips to the v0.1 constant,
+# and the retired events are now illegal event types on the v0.2 track.
+V02_ENVELOPE_BAD: dict[str, dict] = {
+    "bad-schema-version": _bad_envelope(lambda e: e.update({"schema_version": "0.1.0-draft"}) or e),
+    "retired-event-type": _bad_envelope(
+        lambda e: e.update({"event_type": "neutral_inquiry"}) or e
+    ),
+}
+for _name, _payload in ENVELOPE_BAD.items():
+    if _name not in V02_ENVELOPE_BAD:
+        V02_ENVELOPE_BAD[_name] = _payload
+
 FIXTURES_README = """# run-event-v0.1 reference fixtures
 
 Reference-spec fixtures for the run-event envelope and its 33 event payload
@@ -554,6 +836,44 @@ production track records this string for every event (reference-spec
 contract, see `architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md`).
 """
 
+FIXTURES_README_V02 = """# run-event-v0.2 reference fixtures
+
+Phase B (ADR-0010 §5.3.1/§11.2/§11.6) fixtures for the v0.2 event system
+(generated by `scripts/generate_run_event_fixtures.py` — re-run that script
+after any v0.2 payload schema change).
+
+Scope:
+
+- `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
+  legal / one-constraint-violation payloads for the **five** v0.2 mechanism
+  events with their own v0.2 payload schema: `orientation_checkpoint`
+  (v0.2 shape), `diagnostic_coverage_checkpoint`,
+  `information_sufficiency_assessment`, `retrieval_parent_disposition`,
+  `retrieval_close_record`.
+- `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
+  event in the v0.2 enum (36 events). The five v0.2-payload events carry
+  their v0.2 payload; the other 31 events reuse the v0.1 payload shape
+  unchanged (their payload schema files did not change — adjudicated
+  decision: no copied schema files, the v0.1 files remain authoritative for
+  unchanged payloads).
+- `envelope/<bad-name>.invalid.json` — v0.1 envelope constraints (identical
+  structure) plus two v0.2-specific negatives: the v0.1 schema version and
+  the retired `neutral_inquiry` / `retrieval_completion_check` event types.
+
+Adjudications:
+
+- `neutral_inquiry` and `retrieval_completion_check` are absent from the
+  v0.2 enum — they exist only on the v0.1 track for historical journal
+  replay (ADR-0010 §11.2).
+- The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
+  The cross-validator resolves the five v0.2-payload events to their v0.2
+  payload schema files and every other event to its v0.1 payload schema file.
+
+`journals/` is intentionally empty: no Rust producer writes v0.2 events yet
+(Phase C migration). Real v0.2 journals will be captured and added here by
+the orz conformance capture tests after the producer migration slice.
+"""
+
 
 def write_json(path: Path, data: dict) -> None:
     path.write_text(
@@ -590,10 +910,49 @@ def main() -> None:
 
     fixture_root.joinpath("README.md").write_text(FIXTURES_README, encoding="utf-8")
 
+    # v0.2 tree (Phase B): payload fixtures for the five v0.2-payload events;
+    # envelope fixtures for every event in the v0.2 enum.
+    v02_root = ROOT / "runtime/fixtures/run-event-v0.2"
+    v02_payloads_dir = v02_root / "payloads"
+    v02_envelope_dir = v02_root / "envelope"
+    v02_journals_dir = v02_root / "journals"
+    for directory in (v02_payloads_dir, v02_envelope_dir):
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True, exist_ok=True)
+    v02_journals_dir.mkdir(parents=True, exist_ok=True)
+
+    for event_type in V02_PAYLOAD_EVENTS:
+        slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
+        write_json(
+            v02_payloads_dir / f"{slug}.minimal.valid.json",
+            PAYLOAD_GOOD_V02[event_type],
+        )
+        write_json(
+            v02_payloads_dir / f"{slug}.constraint.invalid.json",
+            PAYLOAD_BAD_V02[event_type],
+        )
+    for event_type in V02_EVENT_TYPES:
+        slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
+        payload = PAYLOAD_GOOD_V02.get(event_type) or PAYLOAD_GOOD[event_type]
+        write_json(
+            v02_envelope_dir / f"{slug}.valid.json",
+            _envelope_v02(event_type, payload, 0, None),
+        )
+    write_json(
+        v02_envelope_dir / "chained-run-finished.valid.json",
+        _envelope_v02("run_finished", PAYLOAD_GOOD["run_finished"], 1, DUMMY_HASH),
+    )
+    for name, payload in V02_ENVELOPE_BAD.items():
+        write_json(v02_envelope_dir / f"{name}.invalid.json", payload)
+
+    v02_root.joinpath("README.md").write_text(FIXTURES_README_V02, encoding="utf-8")
+
     print(
         f"payloads: {len(PAYLOAD_GOOD) * 2} files, "
         f"envelope: {len(EVENT_TYPES) + 1 + len(ENVELOPE_BAD)} files, "
-        f"canonical_cli: {len(CANONICAL_CLI_GOOD)} files"
+        f"canonical_cli: {len(CANONICAL_CLI_GOOD)} files, "
+        f"v0.2 payloads: {len(PAYLOAD_GOOD_V02) * 2} files, "
+        f"v0.2 envelope: {len(V02_EVENT_TYPES) + 1 + len(V02_ENVELOPE_BAD)} files"
     )
 
 

@@ -21,6 +21,8 @@ from assurance.run_event_journal_validation import (
     PRODUCER_SCHEMAS,
     RUNTIME,
     _canonical_bytes,
+    _event_sha256,
+    _payload_sha256,
     _resolve_payload_schema,
     validate_journal_file,
     validate_journal_text,
@@ -205,6 +207,322 @@ class SyntheticBadJournalTests(unittest.TestCase):
         line = text.splitlines()[3]
         text = text.replace(line, line[:-1] + '"x": NaN}')
         self.assert_has_error(text, "invalid JSON at line 4")
+
+
+# ── v0.2 synthetic lifecycle journals (Phase B, ADR-0010 §4.4) ─────────
+
+_ZERO = "0" * 64
+
+
+def _mk_v02_event(
+    event_type: str, payload: dict, seq: int, previous: str
+) -> dict:
+    event = {
+        "schema_version": "0.2.0-draft",
+        "run_id": "RUN-V02-0001",
+        "event_id": f"EVT-V02-{seq:03d}",
+        "sequence": seq,
+        "timestamp": "2026-08-09T00:00:00Z",
+        "event_type": event_type,
+        "run_manifest_sha256": _ZERO,
+        "previous_event_sha256": previous,
+        "payload_schema": "run-event-v0.2.schema.json",
+        "payload": payload,
+        "payload_sha256": _payload_sha256(payload),
+        "redaction": "none",
+        "event_sha256": _ZERO,
+    }
+    event["event_sha256"] = _event_sha256(event)
+    return event
+
+
+def _assessment(assessment_id: str, revision: int, activation: str = "ACT-1") -> dict:
+    return {
+        "assessment_id": assessment_id,
+        "activation_id": activation,
+        "contract_id": "CONTRACT-1",
+        "contract_revision": revision,
+        "result_digest": _ZERO,
+        "ledger_digest": _ZERO,
+        "source_counts": {
+            "total": 2,
+            "full_text_observed": 1,
+            "partial_text_observed": 1,
+            "metadata_only": 0,
+            "unavailable": 0,
+        },
+        "source_categories": ["official_docs"],
+        "source_visibility_gate": "passed",
+        "missing_categories": [],
+        "filtering_reasons": [],
+        "status": "sufficient",
+        "reason_codes": ["COVERAGE_OK"],
+        "assessment_version": "0.2.0",
+    }
+
+
+def _disposition(
+    disposition_id: str,
+    decision: str,
+    revision: int,
+    assessment_id: str,
+    outcome: str = "accepted",
+    delta: str | None = None,
+) -> dict:
+    return {
+        "disposition_id": disposition_id,
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-1",
+        "activation_id": "ACT-1",
+        "assessment_id": assessment_id,
+        "expected_contract_revision": revision,
+        "decision": decision,
+        "requirement_delta": delta,
+        "capability_gate": "passed",
+        "outcome": outcome,
+    }
+
+
+def _close_record(
+    close_id: str,
+    revision: int,
+    assessment_id: str,
+    disposition_id: str,
+    terminal_reason: str = "normal_close",
+) -> dict:
+    return {
+        "close_record_id": close_id,
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-1",
+        "activation_id": "ACT-1",
+        "contract_id": "CONTRACT-1",
+        "contract_revision": revision,
+        "result_digest": _ZERO,
+        "assessment_id": assessment_id,
+        "validated_disposition_id": disposition_id,
+        "terminal_reason": terminal_reason,
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "archive/ACT-1",
+    }
+
+
+def _v02_journal(events: list[dict]) -> str:
+    """Chain a v0.2 event sequence with correct hashes and a terminal."""
+    terminal = _mk_v02_event(
+        "run_finished",
+        {"status": "completed", "turn_count": 1, "tool_rounds": 0},
+        len(events),
+        events[-1]["event_sha256"],
+    )
+    chain = []
+    previous: str | None = None
+    for seq, event in enumerate(events):
+        event["sequence"] = seq
+        event["previous_event_sha256"] = previous
+        event["event_sha256"] = _ZERO
+        event["event_sha256"] = _event_sha256(event)
+        chain.append(event)
+        previous = event["event_sha256"]
+    terminal["sequence"] = len(chain)
+    terminal["previous_event_sha256"] = chain[-1]["event_sha256"]
+    terminal["event_sha256"] = _event_sha256(terminal)
+    chain.append(terminal)
+    return dump_journal(chain)
+
+
+class V02LifecycleChainTests(unittest.TestCase):
+    """ADR-0010 §4.4 mechanical lifecycle facts on synthetic v0.2 journals."""
+
+    def test_happy_path_assessment_continue_close_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "continue", 0, "ASSESS-1", delta="补充截止日期"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-2", 1), 2, _ZERO),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-2", "close", 1, "ASSESS-2"),
+                    3, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 1, "ASSESS-2", "DISP-2"),
+                    4, _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_disposition_references_unknown_assessment(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-99"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 0, "ASSESS-99", "DISP-1"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("unknown assessment ASSESS-99" in e for e in errors))
+
+    def test_disposition_cas_revision_mismatch(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 3, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 3, "ASSESS-1", "DISP-1"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("expected_contract_revision 3 != referenced assessment" in e for e in errors)
+        )
+
+    def test_close_references_non_close_disposition(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "continue", 0, "ASSESS-1", delta="x"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-1"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("decision != close" in e for e in errors))
+
+    def test_close_revision_mismatch_with_disposition(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 5, "ASSESS-1", "DISP-1"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("contract_revision 5 != disposition" in e for e in errors))
+
+    def test_continue_increments_next_assessment_revision(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "continue", 0, "ASSESS-1", delta="x"),
+                    1, _ZERO,
+                ),
+                # Wrong: after an accepted continue the next assessment on the
+                # same activation must carry revision + 1 (i.e. 1).
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-2", 2), 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("contract_revision 2 != continue disposition" in e for e in errors)
+        )
+
+    def test_lifecycle_event_after_close_record_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-1"),
+                    2, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-2", "close", 0, "ASSESS-1"),
+                    3, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("after its close record" in e for e in errors))
+
+    def test_disposition_replayed_with_conflicting_payload(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("information_sufficiency_assessment", _assessment("ASSESS-1", 0), 0, None),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "continue", 0, "ASSESS-1", delta="x"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("replayed with a conflicting payload" in e for e in errors))
+
+    def test_v02_inquiry_kind_cross_check(self) -> None:
+        payload = {
+            "checkpoint_id": "ORIENT-RUN-V02-0000",
+            "inquiry_family": "neutral",
+            "inquiry_kind": "diagnostic_coverage_checkpoint",  # wrong kind
+            "agent_role": "main",
+            "session_id": "sess-main-1",
+            "trigger": "completed_turns_interval",
+            "completed_turns_since_orientation": 7,
+            "step_index": 0,
+            "message_block": "[ORIENTATION v0.2] x",
+            "injection_position": "post_tool_batch_gap",
+        }
+        journal = _v02_journal(
+            [_mk_v02_event("orientation_checkpoint", payload, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("inquiry_kind 'diagnostic_coverage_checkpoint' != envelope" in e for e in errors)
+        )
+
+    def test_v02_checks_do_not_fire_on_v01_journals(self) -> None:
+        for name in ALL_JOURNALS:
+            with self.subTest(journal=name):
+                self.assertEqual(validate_journal_file(JOURNALS / name), [])
 
 
 class TrackResolutionTests(unittest.TestCase):

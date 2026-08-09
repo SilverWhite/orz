@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-SNAPSHOT-RESTORED",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "snapshot_restored",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "snapshot_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "restored": [
+      "lib.rs"
+    ]
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

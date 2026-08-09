@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-TOOL-PROPOSAL",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "tool_proposal",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "tool": "bash",
+    "call_id": "call-1",
+    "input_summary": "ls"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

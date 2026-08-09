@@ -1,0 +1,46 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-INFORMATION-SUFFICIENCY-ASSESSMENT",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "information_sufficiency_assessment",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "assessment_id": "ASSESS-0001",
+    "activation_id": "ACT-INT-0001",
+    "contract_id": "CONTRACT-INT-0001",
+    "contract_revision": 0,
+    "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "ledger_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "source_counts": {
+      "total": 4,
+      "full_text_observed": 2,
+      "partial_text_observed": 1,
+      "metadata_only": 1,
+      "unavailable": 0
+    },
+    "source_categories": [
+      "official_docs",
+      "source_code",
+      "forum"
+    ],
+    "source_visibility_gate": "passed",
+    "missing_categories": [
+      "vendor_changelog"
+    ],
+    "filtering_reasons": [
+      "paywall"
+    ],
+    "status": "sufficient",
+    "reason_codes": [
+      "COVERAGE_OK"
+    ],
+    "assessment_version": "0.2.0"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
