@@ -46,6 +46,14 @@
 
 **守卫+无回归验证结论（本批核心目标）**：**5/5 无挂死、无 harness 硬杀**（n_errored=0 / n_cancelled=0，全部正常完成）；wallclock 兜底真实生效且优雅收尾（path-tracing）；stall 零触发；restart_requested ×2 为存量内容停滞机制正常工作（其中 1 次带 verifier 1.0）；L1 GROK_HOME 注入零干扰（5 题 journal 全部实时落 `--mounts` 卷、`.gsa/runs/RUN-*` + whitelist 结构正常、无注入相关报错）；headless `-p` 路径零行为变化（grill 分支隔离验证）。**全部 5 题同一新二进制**（00:42 构建 66.5MB，strings 验证 `max-wallclock`×3 / `grok-home` 命中；stale-binary 教训遵守）。环境：镜像 5/5 预拉、Docker 正常、Job A 3 题共用卷 b3-900s（trial-uuid 子目录区分）、Job B/C 独立卷。
 
+**失败归因（2026-08-09 复盘，4/4 方向正确，非模型方向错误）**：4 个 FAIL 全部有明确机制归因——
+
+**缺口 1（框架，实锤）：异步工具（monitor/task）结果未回流**。orz 的 `monitor`/`task` 为异步工具（返回 task_id，结果需显式 `get_task_output` 取回），**无完成自动注入**。两个独立案例同一模式：gpt2-codegolf 启动 task（查 ckpt 格式）+ monitor（xxd 头部）后**从未 get_task_output**，2 空轮后 completed（58 事件 / 5 轮收工，产物缺失）；train-fasttext 前 4 个 monitor 均正确取回（模型熟练），但**最后一个训练 monitor（几十分钟）启动后模型声明"等待通知"即 completed**——训练结果未取回，model 文件缺失（verifier test_accuracy 0.0007s 秒败）。run_finished 时挂起任务结果被静默丢弃，无兜底。TB 长命令场景新暴露（polyglot 时代 run_tests 同步无此面）。**已缓解（2026-08-09，orz `cfa551f`）**：封禁整个 GrokBuild 异步调度生态——task / get_task_output / wait_tasks / get_terminal_command_output / kill_task / kill_terminal_command / monitor / scheduler_create / scheduler_delete / scheduler_list / workflow 共 11 工具（依据：CN §7.2 唯二子代理 + §4.5 不发展本地多代理调度器——task 即第三类子代理）+ `run_terminal_cmd enabled_background=false`（bash 同步化，后台依赖 kill_task 观察/取消）。模型只剩同步工具面，缺口从工具面根除；长命令走 P0-1 5min 超时 + P1-1 看门狗。设计裁决：**不自写/不从 Codex 借异步调度**（违反 §4.5；Codex 协议即同步 turn 哲学无物可借）；未来长任务需求走 run_tests 先例（host-owned 同步长任务）或 CN §5.1 显式评审。测试 orz-host 98 / orz-loop 124 / orz-tui 177 / orz-codex 33 / orz-bin 1 全绿。
+
+**缺口 2（框架，与中立问询机制相关）：中立问询触发但未矫正行为**。path-tracing（147 调用 59min，131+ 次 read 纯像素逆向，wallclock 耗尽未动笔写 image.c）与 make-doom-for-mips（53 调用 6.7min 侦察循环后 restart）均触发 neutral_inquiry 5-6 次，但模型行为未被拉回——机制触发正确但矫正失效，详见 §7 中立问询机制检查（2026-08-09）。
+
+**缺口 3（框架，承接 polyglot 教训）：TB 适配无 run_tests 反馈环 + completed 无产物校验**。TB 测试隐藏 + verifier 一次性，模型无法自测（polyglot "无反馈环盲改"教训重现）；`run_finished{completed}` 为模型单方面声明，交付物缺失（gpt2.c / model.bin / image.c 均不存在）框架零干预。SWE-bench 已有 ORZ_TEST_RUNNER 先例，TB adapter 可复用。
+
 ## 2. 适配架构（全链路已验证）
 
 ```
