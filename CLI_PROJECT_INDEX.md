@@ -96,7 +96,7 @@
 - **GAP-INQUIRY-SPLIT** (`partial`; 2026-08-09)：旧 inquiry 仍混合 output/tool/action/round 信号，需拆成 Orientation、Information Sufficiency、Counterexample 和 Stagnation 独立 producer/consumer。关键词：NeutralInquiry、tool_variety、职责分离。入口：[`AUTH-FREEZE-AUDIT`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 - **GAP-SUBAGENT-RUNTIME** (`partial`; 2026-08-09)：检索子代理仍存在一次模型调用、零工具的特殊路径，尚未复用主 Agent 完整 runtime。关键词：scripted pass、retrieval role、shared runtime。入口：[`retrieval.rs`](orz/crates/orz-loop/src/agents/retrieval.rs) / [`AUTH-FREEZE-AUDIT`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 - **GAP-SUFFICIENCY-SCHEMA** (`pending`; 2026-08-09)：机械 assessment、parent disposition、contract revision、CAS close 和 stale-close 拒绝尚需完整 Schema 与 verifier。关键词：awaiting_parent_disposition、close receipt、requirement_delta。入口：[`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
-- **GAP-WINDOWS-EVIDENCE** (`pending`; 2026-08-09)：事故和案例目录已经建立，但真实 provenance、脱敏、分类和回归门槛尚未形成首批闭环条目。关键词：Windows incident、case selection、compatibility evidence。入口：[`docs/incidents/`](docs/incidents/) / [`docs/cases/`](docs/cases/)。
+- **GAP-WINDOWS-EVIDENCE** (`partial`; 2026-08-09)：三个案例候选（ORZ-WIN-PROC-001/002/003，晋级自 child-tree 探针三场景）已登记并引用探针 digest，均标 `candidate` 未宣称闭环；事故路由保留 WIN-LIM-001（raw TCP）与 WIN-INC-001（observer leak）。关键词：Windows incident、case selection、compatibility evidence、WIN-LIM、ORZ-WIN-PROC。入口：[`docs/incidents/windows/`](docs/incidents/windows/) / [`docs/cases/windows/`](docs/cases/windows/)。
 
 ## 4. 保障、合约与安全路由
 
@@ -158,8 +158,8 @@
 - `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY。
 - `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW。
 - `partial`：IMPL-RUST-RUNTIME、IMPL-RUN-EVENT-SCHEMA、IMPL-DEEPSEEK-TRANSPORT、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER。
-- `pending`：GAP-SUFFICIENCY-SCHEMA、GAP-WINDOWS-EVIDENCE。
-- `partial`：FUS-COMPONENT-REGISTER（框架已建，逐 crate 审计未开始）。
+- `pending`：GAP-SUFFICIENCY-SCHEMA。
+- `partial`：FUS-COMPONENT-REGISTER（框架已建，逐 crate 审计未开始）、GAP-WINDOWS-EVIDENCE（案例候选已登记，未闭环）。
 - `reference`：AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 
