@@ -17,13 +17,19 @@
 /// marker, no structured template (the main agent works alone — no helper
 /// subagent, so the burden must be minimal). The rule blocks hallucinated
 /// attributions ("参考自某处" claims without a locatable source — P7's
-/// false "Python 移植" record is the direct precedent) and the inline
-/// markers are mechanically checkable (grep `[来源:`).
+/// false "Python 移植" record is the direct precedent). ADR-0010 §3.7.9
+/// (V11-IMPL-004): the marker carries a stable `source_id` binding to the
+/// source ledger when one exists (observation-time `path:line` remains the
+/// local-code fallback); the marker is a WRITER-SIDE binding, NOT a
+/// verification claim — a verifier must check source identity / visibility
+/// / claim limits, not grep the text.
 pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent workbench。\
 遵循注入的 assurance 上下文块执行任务；工具可用性由运行时声明，不得自行推断。\
 \n引用纪律：凡基于外部依据、参考实现或内部文档的引用，必须在引用处附带内联标记 \
-`[来源: 路径:行号]`；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。\
-内部文档引用用 文档ID §节/锚点 而非裸行号（行号会漂移）。\
+`[来源: source_id]`（已有 ledger 记录时）或 `[来源: 路径:行号]`（本地代码 observation-time \
+定位）；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。内部文档引用用 \
+文档ID §节/锚点 而非裸行号（行号会漂移）。标记是写入侧绑定，不构成验证；\
+来源身份、可见性等级与 claim 上限由 verifier 机械检查。\
 \n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
 compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
 写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
@@ -380,12 +386,23 @@ mod tests {
 
     #[test]
     fn base_system_prompt_carries_d1_citation_rule() {
-        // D-1 (FIX_PLAN 2026-08-06): the citation rule lives in the main
-        // agent prompt (the binary's carrier) — inline marker `[来源: 路径:行号]`,
-        // no bare line numbers for internal docs (they drift).
+        // D-1 (FIX_PLAN 2026-08-06) + ADR-0010 §3.7.9 (V11-IMPL-004): the
+        // citation rule lives in the main-agent prompt (the binary's carrier)
+        // — inline marker `[来源: source_id]` (ledger-backed) or
+        // `[来源: 路径:行号]` (local observation-time); no bare line numbers
+        // for internal docs (they drift); the marker is a writer-side
+        // binding, not a verification claim.
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("[来源: source_id]"),
+            "ledger-backed citation marker in the main-agent prompt"
+        );
         assert!(
             BASE_SYSTEM_PROMPT.contains("[来源: 路径:行号]"),
-            "citation marker in the main-agent prompt"
+            "observation-time path:line fallback still present"
+        );
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("不构成验证"),
+            "marker is a binding, not a verification claim"
         );
         assert!(
             BASE_SYSTEM_PROMPT.contains("不得凭记忆声称"),

@@ -84,12 +84,16 @@ impl RetrievalSubagent {
                 crate::gateway::model::ModelRequest {
                     system: format!(
                         "Retrieval subagent ({role}). Goal: {goal}\n\
-                         Citation rule (D-1, FIX_PLAN 2026-08-06): any claim based on \
-                         external evidence, a reference implementation, or internal \
-                         docs must carry an inline `[来源: 路径:行号]` marker at the \
-                         citing site; content without a locatable source must not be \
+                         Citation rule (D-1, FIX_PLAN 2026-08-06; ADR-0010 §3.7.9): \
+                         any claim based on external evidence, a reference \
+                         implementation, or internal docs must carry an inline \
+                         `[来源: source_id]` marker (ledger-backed) or \
+                         `[来源: 路径:行号]` (local observation-time) at the citing \
+                         site; content without a locatable source must not be \
                          cited — never claim '参考自某处' from memory. Internal docs \
-                         cite as 文档ID §节/锚点, not bare line numbers (they drift).",
+                         cite as 文档ID §节/锚点, not bare line numbers (they drift). \
+                         The marker is a writer-side binding, not a verification \
+                         claim.",
                         role = self.section_name(),
                         goal = spec.goal,
                     ),
