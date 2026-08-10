@@ -61,6 +61,7 @@
 | D-15 | DC journal capture 场景暂缓——DC 信号需 test-runner 宿主，capture 环境（真实 CLI host）无固定 runner；机制由 Rust 单测+E2E 覆盖，payload schema 由 fixture 树覆盖 | 注册边界 |
 | D-16 | subagent-run-close/continue 独立 capture 不建——orientation-fire-run 单 fixture 已覆盖 4 continue+1 close 全链 + 7 轮跨越 | 合并覆盖 |
 | D-17 | 子代理预算耗尽：部分结果先 assessment 后 close（verifier 顺序要求） | §4.4 |
+| D-18 | continue 重入是同一检索 session 的延续——预算跨 dispatch 累计（`ActivationState.tool_rounds_used` 读入 `LoopProfile.initial_tool_rounds`，循环结束后写回），仅 activation 关闭后新激活从 0 起；主 agent 维持 per-run 既有语义（ADR-0008 未改） | 用户裁决 2026-08-10（F5 升级）；§3.4.6 |
 
 ## 4. 边界（明确未做，登记给后续切片）
 
@@ -73,7 +74,6 @@
 - `session_cancelled` 独立 close reason（D-3 映射）
 - wallclock close record（D-14）
 - DC 的 `same_module_no_evidence`/`key_surface_unexamined` 信号（需检索/读取类别统计，enum 保留）；`large_scope_low_diag` 以"测试仍失败时编辑新文件"近似 §4.6.2"扩大 mutation scope"信号（以编辑动作自身触发，非"准备扩大"阶段）
-- 子代理工具轮预算按 dispatch 独立计数（continue 重入同一 activation 后从 0 重新计）——§3.4.6"每 session 独立记账"对 continue 是否累计未明确；anti-runaway 累计语义随真实检索切片裁决（主 agent 跨 turn 同理，属继承的 per-run 语义）
 - v0.1 轨任何改动（replay-only 历史冻结）
 
 ## 5. 验证
@@ -95,8 +95,8 @@
 | F2 | "ADR §4.6 完整"措辞过强——硬信号实际 4/6 产出 | 措辞限缩为"机制完整；硬信号 4/6 产出"；§1.4 与索引条目同改；`large_scope_low_diag` 近似语义在 §1.4/§4 注明 |
 | F3 | retrieval `max_tokens` 双源字面量（agent_loop.rs:457 vs `main_agent_max_tokens`） | 收敛为 `agent_loop::REQUEST_MAX_TOKENS` 单常量；controller/agent_loop/retrieval 测试同源（§3.4.2 三 agent 同注入） |
 | F4 | `DebugEpisodeState.resolved` 死字段（只写不读） | 删除（阈值回 2 由 run_tests exit 0 路径直接完成） |
-| F5 | 子代理预算按 dispatch 重置（continue 重入后从 0 计） | 登记边界（§4）+ 代码注释；§3.4.6 对 continue 累计语义随真实检索切片裁决 |
+| F5 | 子代理预算按 dispatch 重置（continue 重入后从 0 计） | **用户裁决升级（2026-08-10）**：continue 重入是同一检索 session，预算跨 dispatch 累计——`ActivationState.tool_rounds_used`（新建激活 0 起，循环结束写回）+ `LoopProfile.initial_tool_rounds` 读入，仅 Closed 后新激活重置（D-18）；主 agent 维持 per-run 既有语义；判别测试 `subagent_budget_accumulates_across_continue` |
 | F6 | ① clippy 声称"pre-existing 1 条"实际 5 条全 pre-existing ② run_tests 以 `retrieval_role_write_denied` 拒绝语义不精确 | ① 措辞修正（§5）② 新增 `retrieval_role_execution_denied` 执行类拒绝 reason（§3.8.2 受控代码执行）+ write_gate 单测 |
 | F7 | `handle_parent_disposition` 错误路径不重插 activation（journal 写失败时注册表丢失活激活） | 提交块重构：disposition+close+状态切换单 commit，任何错误路径先重插再返回（journal 失败 run-fatal，注册表不静默丢激活） |
 
-回归（修复后）：`cargo test -p orz-loop` 140 passed / 3 ignored（+1 write_gate 单测）；orz-host/orz-bin 全绿；conformance capture 7/7；Python 57 passed。
+回归（修复后）：`cargo test -p orz-loop` 141 passed / 3 ignored（+1 write_gate 单测 +1 预算累计单测）；orz-host/orz-bin 全绿；conformance capture 7/7；Python 57 passed。
