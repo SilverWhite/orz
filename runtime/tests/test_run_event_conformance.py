@@ -260,9 +260,11 @@ class RunEventV02ContractTests(unittest.TestCase):
             with self.subTest(instance=instance_path.name):
                 self.assertTrue(errors_for(instance_path, schema_path))
 
-    def test_v02_all_36_event_types_covered(self) -> None:
+    def test_v02_all_39_event_types_covered(self) -> None:
         """The v0.2 good envelope fixtures cover exactly the v0.2 enum, and
-        the retired v0.1 events are absent from it (ADR-0010 §11.2)."""
+        the retired v0.1 events are absent from it (ADR-0010 §11.2).
+        GAP-RETRIEVAL-TOOLS (2026-08-10): 36 → 39 (+retrieval_mode_transition,
+        +retrieval_result_committed, +retrieval_activation_restored)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -271,7 +273,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 36)
+        self.assertEqual(len(enum_events), 39)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
 

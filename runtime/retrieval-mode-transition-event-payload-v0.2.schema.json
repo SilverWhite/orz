@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-mode-transition-event-payload-v0.2.schema.json",
+  "title": "Retrieval mode transition runtime event payload v0.2",
+  "description": "ADR-0010 §3.7.1/§5.2: mechanical record of an explicit retrieval-mode transition on the session/task-contract level. Every transition must carry old value, new value, authority and reason code; mode changes are never implicit (no silent fallback on timeout/login/CAPTCHA). local_browser is accepted as a mode even where browser automation is not yet implemented — the capability probe then records capability_status=unsupported instead of degrading silently.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "transition_id",
+    "session_id",
+    "old_mode",
+    "new_mode",
+    "authority",
+    "reason_code"
+  ],
+  "properties": {
+    "transition_id": { "type": "string", "pattern": "^MODETRANS-[A-Za-z0-9._-]+$" },
+    "session_id": { "type": "string", "minLength": 1 },
+    "old_mode": {
+      "type": "string",
+      "enum": ["off", "local_browser", "framework_fallback"]
+    },
+    "new_mode": {
+      "type": "string",
+      "enum": ["off", "local_browser", "framework_fallback"]
+    },
+    "authority": {
+      "type": "string",
+      "enum": ["user", "parent_task_contract", "session_bootstrap"]
+    },
+    "reason_code": {
+      "type": "string",
+      "enum": ["explicit_selection", "session_default", "capability_probe"]
+    },
+    "capability_status": {
+      "oneOf": [
+        { "type": "string", "enum": ["available", "unsupported", "degraded"] },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "new_mode": { "const": "off" } },
+        "required": ["new_mode"]
+      },
+      "then": {
+        "properties": { "capability_status": { "type": "null" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "new_mode": { "not": { "const": "off" } } },
+        "required": ["new_mode"]
+      },
+      "then": {
+        "properties": {
+          "capability_status": {
+            "type": "string",
+            "enum": ["available", "unsupported", "degraded"]
+          }
+        }
+      }
+    }
+  ]
+}

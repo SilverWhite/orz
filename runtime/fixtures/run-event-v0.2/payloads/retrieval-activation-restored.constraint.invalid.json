@@ -1,0 +1,12 @@
+{
+  "restore_id": "RST-ACT-0001",
+  "activation_id": "ACT-EXT-0001",
+  "subagent_session_id": "sess-ext-1",
+  "contract_id": "CONTRACT-EXT-0001",
+  "contract_revision": 0,
+  "status": "awaiting_disposition",
+  "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "origin_run_id": "RUN-CONF-0001",
+  "sidecar_ref": ".gsa/activations/sess-abc.json",
+  "tool_rounds_used": 3
+}

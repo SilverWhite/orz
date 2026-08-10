@@ -1,0 +1,90 @@
+{
+  "schema_version": "0.2.0-draft",
+  "result_kind": "retrieval_subagent_result",
+  "result_id": "RET-RES-0001",
+  "activation_id": "ACT-EXT-0001",
+  "subagent_session_id": "sess-ext-1",
+  "contract_id": "CONTRACT-EXT-0001",
+  "contract_revision": 0,
+  "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "ledger_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "query_summary": [
+    {
+      "query_id": "QRY-0001",
+      "query_text": "rust channel docs",
+      "source_category": "official_docs",
+      "result_count": 2,
+      "action_taken": "searched",
+      "tool_used": "web_search"
+    }
+  ],
+  "source_ledger": [
+    {
+      "source_id": "SRC-0001",
+      "source_title": "Rust reference",
+      "source_url_or_ref": "https://doc.rust-lang.org/reference",
+      "source_type": "web_page",
+      "visibility": "full_text_observed",
+      "accessed_at": "2026-08-10T00:00:00Z",
+      "observed_scope": "full document",
+      "missing_scope": "none",
+      "relevance": "direct",
+      "used_in_sections": [
+        "Rust channels"
+      ],
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "highest_allowed_claim": "observed"
+    },
+    {
+      "source_id": "SRC-0002",
+      "source_title": "Rust forum thread",
+      "source_url_or_ref": "https://forum.rust-lang.org/t/42",
+      "source_type": "web_page",
+      "visibility": "partial_text_observed",
+      "accessed_at": "2026-08-10T00:00:01Z",
+      "observed_scope": "first section",
+      "missing_scope": "rest of page",
+      "relevance": "partial",
+      "used_in_sections": [],
+      "highest_allowed_claim": "derived"
+    }
+  ],
+  "filtering_log": [
+    {
+      "source_id": "SRC-0003",
+      "reason": "policy_blocked",
+      "action": "excluded",
+      "filtered_at": "2026-08-10T00:00:02Z"
+    }
+  ],
+  "organized_response": {
+    "sections": [
+      {
+        "section_title": "Rust channels",
+        "content": "std::sync::mpsc provides channels.",
+        "source_ids": [
+          "SRC-0001"
+        ],
+        "claim_strength": "observed"
+      }
+    ],
+    "claims": []
+  },
+  "raw_source_refs": [
+    {
+      "source_id": "SRC-0001",
+      "source_title": "Rust reference",
+      "source_url_or_ref": "https://doc.rust-lang.org/reference",
+      "visibility": "full_text_observed",
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "source_counts": {
+    "total": 2,
+    "full_text_observed": 1,
+    "partial_text_observed": 1,
+    "metadata_only": 0,
+    "unavailable": 0
+  },
+  "visibility_degraded": false
+}

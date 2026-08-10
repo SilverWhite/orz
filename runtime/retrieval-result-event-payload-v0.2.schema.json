@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-result-event-payload-v0.2.schema.json",
+  "title": "Structured retrieval result runtime event payload v0.2",
+  "description": "ADR-0010 §3.3.3/§3.7.4/§5.2: the structured result the retrieval sub-agent forms and validates before the mechanical assessment — query_summary, source_ledger, filtering_log, organized_response and raw_source_refs. query_summary/source_ledger/filtering_log/raw_source_refs are built mechanically by the controller from tool-call evidence (provider-neutral); organized_response is the model-organized block bound to ledger source_ids. claim_strength is capped by the mechanical visibility matrix (§3.7.5): observed requires every bound source full_text_observed, derived requires >= partial_text_observed, synthesized requires >= metadata_only. visibility_degraded=true records an explicit fallback (never a silent downgrade). The assurance/retrieval-result-v0.1.schema.json twin is migration input and stays replay-only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "result_id",
+    "activation_id",
+    "subagent_session_id",
+    "contract_id",
+    "contract_revision",
+    "result_digest",
+    "ledger_digest",
+    "query_summary",
+    "source_ledger",
+    "filtering_log",
+    "organized_response",
+    "raw_source_refs",
+    "source_counts",
+    "visibility_degraded"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.2.0-draft" },
+    "result_kind": { "const": "retrieval_subagent_result" },
+    "result_id": { "type": "string", "pattern": "^RET-RES-[A-Za-z0-9._-]+$" },
+    "activation_id": { "type": "string", "minLength": 1 },
+    "subagent_session_id": { "type": "string", "minLength": 1 },
+    "contract_id": { "type": "string", "minLength": 1 },
+    "contract_revision": { "type": "integer", "minimum": 0 },
+    "result_digest": { "$ref": "#/$defs/sha256" },
+    "ledger_digest": { "$ref": "#/$defs/sha256" },
+    "query_summary": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/query_entry" }
+    },
+    "source_ledger": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source_entry" }
+    },
+    "filtering_log": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/filter_entry" }
+    },
+    "organized_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sections", "claims"],
+      "properties": {
+        "sections": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/section_entry" }
+        },
+        "claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/claim_entry" }
+        }
+      }
+    },
+    "raw_source_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ref_entry" }
+    },
+    "source_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "full_text_observed",
+        "partial_text_observed",
+        "metadata_only",
+        "unavailable"
+      ],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "full_text_observed": { "type": "integer", "minimum": 0 },
+        "partial_text_observed": { "type": "integer", "minimum": 0 },
+        "metadata_only": { "type": "integer", "minimum": 0 },
+        "unavailable": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "visibility_degraded": { "type": "boolean" }
+  },
+  "$defs": {
+    "nonempty": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "visibility": {
+      "type": "string",
+      "enum": ["full_text_observed", "partial_text_observed", "metadata_only", "unavailable"]
+    },
+    "query_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query_id", "query_text", "source_category", "result_count", "action_taken"],
+      "properties": {
+        "query_id": { "type": "string", "pattern": "^QRY-[A-Za-z0-9._-]+$" },
+        "query_text": { "$ref": "#/$defs/nonempty" },
+        "source_category": { "$ref": "#/$defs/nonempty" },
+        "result_count": { "type": "integer", "minimum": 0 },
+        "action_taken": { "enum": ["searched", "refined", "aborted_scope_violation", "aborted_no_results"] },
+        "tool_used": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "source_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "source_title",
+        "source_url_or_ref",
+        "source_type",
+        "visibility",
+        "accessed_at",
+        "observed_scope",
+        "missing_scope",
+        "relevance",
+        "used_in_sections",
+        "highest_allowed_claim"
+      ],
+      "properties": {
+        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
+        "source_title": { "$ref": "#/$defs/nonempty" },
+        "source_url_or_ref": { "$ref": "#/$defs/nonempty" },
+        "source_type": { "enum": ["project_doc", "web_page", "web_search_result", "local_file"] },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "accessed_at": { "type": "string", "format": "date-time" },
+        "observed_scope": { "$ref": "#/$defs/nonempty" },
+        "missing_scope": { "$ref": "#/$defs/nonempty" },
+        "relevance": { "enum": ["direct", "partial", "tangential", "excluded"] },
+        "used_in_sections": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonempty" }
+        },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "highest_allowed_claim": { "enum": ["observed", "derived", "synthesized", "none"] },
+        "limitation": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "filter_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "reason", "action", "filtered_at"],
+      "properties": {
+        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
+        "reason": {
+          "enum": [
+            "scope_violation",
+            "visibility_insufficient",
+            "duplicate",
+            "low_relevance",
+            "source_type_forbidden",
+            "budget_exceeded",
+            "policy_blocked"
+          ]
+        },
+        "action": { "enum": ["excluded", "deferred_for_main_agent_review"] },
+        "filtered_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "section_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["section_title", "content", "source_ids", "claim_strength"],
+      "properties": {
+        "section_title": { "$ref": "#/$defs/nonempty" },
+        "content": { "$ref": "#/$defs/nonempty" },
+        "source_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" }
+        },
+        "claim_strength": { "enum": ["observed", "derived", "synthesized", "none"] }
+      }
+    },
+    "claim_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_id", "claim_text", "source_ids", "claim_strength"],
+      "properties": {
+        "claim_id": { "type": "string", "pattern": "^CLM-[A-Za-z0-9._-]+$" },
+        "claim_text": { "$ref": "#/$defs/nonempty" },
+        "source_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
+          "minItems": 1
+        },
+        "claim_strength": { "enum": ["observed", "derived", "synthesized"] }
+      }
+    },
+    "ref_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_title", "source_url_or_ref", "visibility", "content_sha256"],
+      "properties": {
+        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
+        "source_title": { "$ref": "#/$defs/nonempty" },
+        "source_url_or_ref": { "$ref": "#/$defs/nonempty" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "content_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "retrieval_note": { "$ref": "#/$defs/nonempty" }
+      }
+    }
+  }
+}

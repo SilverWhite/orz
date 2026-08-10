@@ -1100,6 +1100,9 @@ def check_repository() -> dict[str, Any]:
         ROOT / "runtime/information-sufficiency-assessment-event-payload-v0.2.schema.json",
         ROOT / "runtime/retrieval-parent-disposition-event-payload-v0.2.schema.json",
         ROOT / "runtime/retrieval-close-record-event-payload-v0.2.schema.json",
+        ROOT / "runtime/retrieval-mode-transition-event-payload-v0.2.schema.json",
+        ROOT / "runtime/retrieval-result-event-payload-v0.2.schema.json",
+        ROOT / "runtime/retrieval-activation-restored-event-payload-v0.2.schema.json",
     ):
         if not required_path.is_file():
             errors.append(
@@ -2137,6 +2140,13 @@ def check_repository() -> dict[str, Any]:
         "failed-run.jsonl",
         "restore-run.jsonl",
         "orientation-fire-run.jsonl",
+        # GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode / structured
+        # result / activation restore / pre-handoff scenarios.
+        "mode-off-refusal.jsonl",
+        "local-browser-capability.jsonl",
+        "real-doc-retrieval.jsonl",
+        "cross-prompt-restore.jsonl",
+        "pre-handoff-checkpoint.jsonl",
     }
     run_event_journal_v02_names = {
         path.name for path in run_event_journal_v02_root.glob("*.jsonl")

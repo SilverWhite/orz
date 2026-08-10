@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-RETRIEVAL-MODE-TRANSITION",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "retrieval_mode_transition",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "transition_id": "MODETRANS-CONF-0001",
+    "session_id": "sess-main-1",
+    "old_mode": "off",
+    "new_mode": "framework_fallback",
+    "authority": "session_bootstrap",
+    "reason_code": "session_default",
+    "capability_status": "available"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

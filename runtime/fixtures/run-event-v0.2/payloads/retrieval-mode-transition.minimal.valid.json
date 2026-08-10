@@ -1,0 +1,9 @@
+{
+  "transition_id": "MODETRANS-CONF-0001",
+  "session_id": "sess-main-1",
+  "old_mode": "off",
+  "new_mode": "framework_fallback",
+  "authority": "session_bootstrap",
+  "reason_code": "session_default",
+  "capability_status": "available"
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-RETRIEVAL-ACTIVATION-RESTORED",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "retrieval_activation_restored",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "restore_id": "RST-ACT-0001",
+    "activation_id": "ACT-EXT-0001",
+    "subagent_session_id": "sess-ext-1",
+    "contract_id": "CONTRACT-EXT-0001",
+    "contract_revision": 0,
+    "status": "awaiting_disposition",
+    "assessment_id": "ASSESS-0001",
+    "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "origin_run_id": "RUN-CONF-0001",
+    "sidecar_ref": ".gsa/activations/sess-abc.json",
+    "tool_rounds_used": 3
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

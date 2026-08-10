@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-activation-restored-event-payload-v0.2.schema.json",
+  "title": "Retrieval activation restore runtime event payload v0.2",
+  "description": "ADR-0010 §3.3/§4.4/§5.2: mechanical declaration that a sub-agent activation survived across prompts via the .gsa activation sidecar. Restores a process-lost activation (contract revision, pending disposition state, budget) and declares its last assessment_id as known so a parent disposition may close or continue it across runs; conversation context is not restored (journal is the evidence record). origin_run_id routes the audit trail back to the run where the activation was last active.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "restore_id",
+    "activation_id",
+    "subagent_session_id",
+    "contract_id",
+    "contract_revision",
+    "status",
+    "origin_run_id",
+    "sidecar_ref",
+    "tool_rounds_used"
+  ],
+  "properties": {
+    "restore_id": { "type": "string", "pattern": "^RST-ACT-[A-Za-z0-9._-]+$" },
+    "activation_id": { "type": "string", "minLength": 1 },
+    "subagent_session_id": { "type": "string", "minLength": 1 },
+    "contract_id": { "type": "string", "minLength": 1 },
+    "contract_revision": { "type": "integer", "minimum": 0 },
+    "status": {
+      "type": "string",
+      "enum": ["active", "awaiting_disposition"]
+    },
+    "assessment_id": { "type": "string", "pattern": "^ASSESS-[A-Za-z0-9._-]+$" },
+    "result_digest": { "$ref": "#/$defs/sha256" },
+    "origin_run_id": { "type": "string", "minLength": 1 },
+    "sidecar_ref": { "type": "string", "minLength": 1 },
+    "tool_rounds_used": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "awaiting_disposition" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "assessment_id": { "type": "string", "minLength": 1 } },
+        "required": ["assessment_id"]
+      }
+    }
+  ]
+}

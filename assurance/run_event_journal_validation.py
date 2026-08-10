@@ -88,6 +88,8 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE: dict[str, tuple[str, Path]] = {
 # v0.2 payload schema. Any other event on the v0.2 track resolves to its v0.1
 # payload schema file (payload shapes unchanged — adjudicated decision, see
 # runtime/fixtures/run-event-v0.2/README.md).
+# GAP-RETRIEVAL-TOOLS (2026-08-10): +retrieval_mode_transition,
+# +retrieval_result_committed, +retrieval_activation_restored (ADR §3.7.1/§3.3.3).
 PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
     "orientation_checkpoint": (
         "orientation-checkpoint",
@@ -108,6 +110,18 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
     "retrieval_close_record": (
         "retrieval-close-record",
         RUNTIME / "retrieval-close-record-event-payload-v0.2.schema.json",
+    ),
+    "retrieval_mode_transition": (
+        "retrieval-mode-transition",
+        RUNTIME / "retrieval-mode-transition-event-payload-v0.2.schema.json",
+    ),
+    "retrieval_result_committed": (
+        "retrieval-result",
+        RUNTIME / "retrieval-result-event-payload-v0.2.schema.json",
+    ),
+    "retrieval_activation_restored": (
+        "retrieval-activation-restored",
+        RUNTIME / "retrieval-activation-restored-event-payload-v0.2.schema.json",
     ),
 }
 
@@ -331,6 +345,266 @@ def _verify_v02_inquiry_kind(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+_RETRIEVAL_TARGETS = frozenset({"internal_retrieval", "external_retrieval"})
+
+
+def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §3.7.1 mechanical mode facts on the v0.2 track:
+
+    - a session_bootstrap transition occurs at most once per journal;
+    - a transition's old_mode equals the previous transition's new_mode
+      (mode is one session-level value; the first transition has no in-journal
+      predecessor because the mode is set before the run);
+    - after a transition to off, no retrieval dispatch (tool_started with a
+      retrieval target), no assessment and no committed result may follow —
+      parent dispositions of already-pending activations stay legal;
+    - after a transition to local_browser, every retrieval dispatch must fail
+      explicitly (the capability probe records unsupported — no silent
+      fallback) and no committed result may follow.
+    """
+    errors: list[str] = []
+    transitions: list[tuple[int, dict[str, Any]]] = []
+    for index, event in enumerate(events):
+        if _is_v02(event) and event.get("event_type") == "retrieval_mode_transition":
+            transitions.append((index, event))
+
+    bootstrap_count = 0
+    current_mode: str | None = None
+    for position, (index, event) in enumerate(transitions):
+        payload = event["payload"]
+        old_mode = payload["old_mode"]
+        new_mode = payload["new_mode"]
+        if payload["authority"] == "session_bootstrap":
+            bootstrap_count += 1
+        if current_mode is not None and old_mode != current_mode:
+            errors.append(
+                f"event {index}: transition old_mode {old_mode!r} != previous "
+                f"transition new_mode {current_mode!r}"
+            )
+        current_mode = new_mode
+
+        next_transition = (
+            transitions[position + 1][0] if position + 1 < len(transitions) else len(events)
+        )
+        if new_mode == "off":
+            for j in range(index + 1, next_transition):
+                payload_j = events[j].get("payload", {})
+                if events[j].get("event_type") == "tool_started" and payload_j.get("target") in _RETRIEVAL_TARGETS:
+                    errors.append(
+                        f"event {j}: retrieval dispatch {payload_j.get('tool')} "
+                        f"after transition to off (event {index})"
+                    )
+                elif events[j].get("event_type") == "information_sufficiency_assessment":
+                    errors.append(
+                        f"event {j}: assessment on activation "
+                        f"{payload_j.get('activation_id')} after transition to "
+                        f"off (event {index})"
+                    )
+                elif events[j].get("event_type") == "retrieval_result_committed":
+                    errors.append(
+                        f"event {j}: committed result after transition to off "
+                        f"(event {index})"
+                    )
+        elif new_mode == "local_browser":
+            for j in range(index + 1, next_transition):
+                payload_j = events[j].get("payload", {})
+                if events[j].get("event_type") == "retrieval_result_committed":
+                    errors.append(
+                        f"event {j}: committed result under local_browser mode "
+                        f"(event {index}) — capability unsupported, no silent "
+                        f"fallback allowed"
+                    )
+                elif (
+                    events[j].get("event_type") == "tool_completed"
+                    and payload_j.get("target") in _RETRIEVAL_TARGETS
+                    and payload_j.get("status") != "error"
+                ):
+                    errors.append(
+                        f"event {j}: retrieval dispatch {payload_j.get('tool')} "
+                        f"completed non-error under local_browser mode (event "
+                        f"{index}) — capability unsupported must fail explicitly"
+                    )
+    if bootstrap_count > 1:
+        errors.append(
+            f"journal has {bootstrap_count} session_bootstrap transitions — "
+            f"at most one allowed"
+        )
+    return errors
+
+
+# §3.7.5 claim × visibility matrix: mechanical ranks, derived in the verifier
+# from the committed result's own source_ledger.
+_VISIBILITY_RANK = {
+    "full_text_observed": 3,
+    "partial_text_observed": 2,
+    "metadata_only": 1,
+    "unavailable": 0,
+}
+_CLAIM_MIN_VISIBILITY = {
+    "observed": 3,
+    "derived": 2,
+    "synthesized": 1,
+}
+
+
+def _verify_v02_result_consistency(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §3.3.3/§3.7.5 mechanical facts on committed retrieval results:
+
+    - source_counts equal the visibility distribution mechanically counted
+      from the commit's own source_ledger;
+    - every section/claim claim_strength is bounded by the visibility of all
+      its bound sources (§3.7.5: observed needs full text, derived needs >=
+      partial, synthesized needs >= metadata; "none" carries no obligation);
+    - an assessment on the same (activation_id, contract_revision) after the
+      commit must carry identical result_digest/ledger_digest/source_counts;
+    - the commit precedes its assessment.
+    """
+    errors: list[str] = []
+    commits: list[tuple[int, dict[str, Any]]] = []
+    for index, event in enumerate(events):
+        if _is_v02(event) and event.get("event_type") == "retrieval_result_committed":
+            commits.append((index, event))
+
+    assessments_by_key: dict[tuple[str, int], list[tuple[int, dict[str, Any]]]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "information_sufficiency_assessment":
+            continue
+        p = event["payload"]
+        assessments_by_key.setdefault((p["activation_id"], p["contract_revision"]), []).append(
+            (index, event)
+        )
+
+    def _strength_ok(strength: str, entry: dict[str, Any]) -> bool:
+        min_rank = _CLAIM_MIN_VISIBILITY.get(strength)
+        if min_rank is None:
+            return True
+        return _VISIBILITY_RANK.get(entry["visibility"], -1) >= min_rank
+
+    for index, event in commits:
+        p = event["payload"]
+        ledger = p["source_ledger"]
+        counted: dict[str, int] = {
+            "full_text_observed": 0,
+            "partial_text_observed": 0,
+            "metadata_only": 0,
+            "unavailable": 0,
+        }
+        for entry in ledger:
+            vis = entry["visibility"]
+            if vis in counted:
+                counted[vis] += 1
+            else:
+                errors.append(
+                    f"event {index}: source {entry.get('source_id')} has unknown "
+                    f"visibility {vis!r}"
+                )
+        expected_counts = {**counted, "total": len(ledger)}
+        if p["source_counts"] != expected_counts:
+            errors.append(
+                f"event {index}: source_counts {p['source_counts']} != mechanical "
+                f"distribution {expected_counts} of source_ledger"
+            )
+
+        ledger_by_id = {entry["source_id"]: entry for entry in ledger}
+        # D1 (review 2026-08-10): highest_allowed_claim is a mechanical
+        # projection of visibility (§3.7.5) — a declared value that does not
+        # match the matrix means the ledger lies about its own cap.
+        _HIGHEST_CLAIM_BY_VISIBILITY = {
+            "full_text_observed": "observed",
+            "partial_text_observed": "derived",
+            "metadata_only": "synthesized",
+            "unavailable": "none",
+        }
+        for entry in ledger:
+            declared = entry.get("highest_allowed_claim")
+            if declared is None:
+                continue
+            expected = _HIGHEST_CLAIM_BY_VISIBILITY.get(entry["visibility"])
+            if expected is None:
+                continue  # unknown visibility already reported above
+            if declared != expected:
+                errors.append(
+                    f"event {index}: source {entry['source_id']} "
+                    f"highest_allowed_claim {declared!r} != mechanical cap "
+                    f"{expected!r} for visibility {entry['visibility']!r}"
+                )
+        for section in p["organized_response"]["sections"]:
+            strength = section["claim_strength"]
+            for sid in section["source_ids"]:
+                entry = ledger_by_id.get(sid)
+                if entry is None:
+                    errors.append(
+                        f"event {index}: section {section['section_title']!r} "
+                        f"binds unknown source {sid}"
+                    )
+                elif not _strength_ok(strength, entry):
+                    errors.append(
+                        f"event {index}: section {section['section_title']!r} "
+                        f"claim_strength {strength} exceeds source {sid} "
+                        f"visibility {entry['visibility']}"
+                    )
+        for claim in p["organized_response"]["claims"]:
+            strength = claim["claim_strength"]
+            for sid in claim["source_ids"]:
+                entry = ledger_by_id.get(sid)
+                if entry is None:
+                    errors.append(
+                        f"event {index}: claim {claim['claim_id']} binds unknown "
+                        f"source {sid}"
+                    )
+                elif not _strength_ok(strength, entry):
+                    errors.append(
+                        f"event {index}: claim {claim['claim_id']} "
+                        f"claim_strength {strength} exceeds source {sid} "
+                        f"visibility {entry['visibility']}"
+                    )
+
+        for a_index, a_event in assessments_by_key.get(
+            (p["activation_id"], p["contract_revision"]), []
+        ):
+            if a_index < index:
+                continue
+            a_payload = a_event["payload"]
+            a_id = a_payload["assessment_id"]
+            if a_payload.get("result_digest") != p["result_digest"]:
+                errors.append(
+                    f"event {a_index}: assessment {a_id} result_digest != "
+                    f"committed result {p['result_id']} (event {index})"
+                )
+            if a_payload.get("ledger_digest") != p["ledger_digest"]:
+                errors.append(
+                    f"event {a_index}: assessment {a_id} ledger_digest != "
+                    f"committed result {p['result_id']} (event {index})"
+                )
+            if a_payload.get("source_counts") != p["source_counts"]:
+                errors.append(
+                    f"event {a_index}: assessment {a_id} source_counts "
+                    f"{a_payload.get('source_counts')} != committed result "
+                    f"{p['result_id']} (event {index})"
+                )
+    return errors
+
+
+def _verify_v02_activation_restore(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §3.3/§4.4 restore facts on the v0.2 track: the same activation
+    is restored at most once per journal (each prompt's controller build may
+    declare the sidecar handover once)."""
+    errors: list[str] = []
+    seen: dict[str, int] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "retrieval_activation_restored":
+            continue
+        activation = event["payload"]["activation_id"]
+        if activation in seen:
+            errors.append(
+                f"event {index}: second restore of activation {activation} "
+                f"(first at event {seen[activation]})"
+            )
+        else:
+            seen[activation] = index
+    return errors
+
+
 def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §4.4 mechanical lifecycle facts on the v0.2 track:
 
@@ -384,6 +658,18 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
         disp_id = payload["disposition_id"]
         if disp_id not in disposition_first:
             disposition_first[disp_id] = (index, event)
+    # GAP-RETRIEVAL-TOOLS: a restore event declares its awaiting disposition's
+    # assessment as known, legalizing a cross-run disposition reference (§3.3
+    # — the assessment itself lives in an earlier run's journal).
+    restore_assessment_declared: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "retrieval_activation_restored":
+            continue
+        payload = event["payload"]
+        if payload.get("status") == "awaiting_disposition":
+            a_id = payload["assessment_id"]
+            if a_id not in restore_assessment_declared:
+                restore_assessment_declared[a_id] = (index, event)
 
     # FIRST close per activation; a second close on the same activation is
     # itself a §4.4 violation (close is terminal for the activation).
@@ -441,25 +727,45 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
         a_ref = payload["assessment_id"]
         a_entry = assessment_first.get(a_ref)
         if a_entry is None:
-            errors.append(
-                f"event {index}: disposition {disp_id} references unknown "
-                f"assessment {a_ref}"
-            )
-            continue
-        a_index, a_event = a_entry
-        a_payload = a_event["payload"]
-        if a_index >= index:
-            errors.append(
-                f"event {index}: disposition {disp_id} references "
-                f"assessment {a_ref} that does not precede it"
-            )
-        if a_payload["activation_id"] != activation:
-            errors.append(
-                f"event {index}: disposition {disp_id} activation_id {activation} "
-                f"!= referenced assessment {a_ref} activation_id "
-                f"{a_payload['activation_id']}"
-            )
-        a_revision = a_payload["contract_revision"]
+            # Cross-run reference: only a preceding restore declaration of the
+            # same activation makes the assessment known (§3.3).
+            r_entry = restore_assessment_declared.get(a_ref)
+            if r_entry is None:
+                errors.append(
+                    f"event {index}: disposition {disp_id} references unknown "
+                    f"assessment {a_ref}"
+                )
+                continue
+            r_index, r_event = r_entry
+            r_payload = r_event["payload"]
+            if r_index >= index:
+                errors.append(
+                    f"event {index}: disposition {disp_id} references "
+                    f"assessment {a_ref} restored at event {r_index}, which does "
+                    f"not precede it"
+                )
+            if r_payload["activation_id"] != activation:
+                errors.append(
+                    f"event {index}: disposition {disp_id} activation_id "
+                    f"{activation} != restored activation {r_payload['activation_id']} "
+                    f"declaring assessment {a_ref}"
+                )
+            a_revision = r_payload["contract_revision"]
+        else:
+            a_index, a_event = a_entry
+            a_payload = a_event["payload"]
+            if a_index >= index:
+                errors.append(
+                    f"event {index}: disposition {disp_id} references "
+                    f"assessment {a_ref} that does not precede it"
+                )
+            if a_payload["activation_id"] != activation:
+                errors.append(
+                    f"event {index}: disposition {disp_id} activation_id {activation} "
+                    f"!= referenced assessment {a_ref} activation_id "
+                    f"{a_payload['activation_id']}"
+                )
+            a_revision = a_payload["contract_revision"]
         if payload["expected_contract_revision"] != a_revision:
             errors.append(
                 f"event {index}: disposition {disp_id} expected_contract_revision "
@@ -550,7 +856,8 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
             )
         # Cross-field binding to the referenced assessment (§4.4 identity
         # chain): contract and result digests must match when the close
-        # record carries them (normal_close always does).
+        # record carries them (normal_close always does). An assessment that
+        # lives in an earlier run is bound through its restore declaration.
         a_ref = payload["assessment_id"]
         a_entry = assessment_first.get(a_ref)
         if a_entry is not None:
@@ -567,6 +874,25 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
                     f"{payload.get('result_digest')} != referenced assessment "
                     f"{a_ref} result_digest {a_payload.get('result_digest')}"
                 )
+        else:
+            r_entry = restore_assessment_declared.get(a_ref)
+            if r_entry is not None:
+                r_payload = r_entry[1]["payload"]
+                if r_payload.get("contract_id") != payload.get("contract_id"):
+                    errors.append(
+                        f"event {index}: close record {close_id} contract_id "
+                        f"{payload.get('contract_id')} != restored assessment "
+                        f"{a_ref} contract_id {r_payload.get('contract_id')}"
+                    )
+                if (
+                    r_payload.get("result_digest")
+                    and r_payload.get("result_digest") != payload.get("result_digest")
+                ):
+                    errors.append(
+                        f"event {index}: close record {close_id} result_digest "
+                        f"{payload.get('result_digest')} != restored assessment "
+                        f"{a_ref} result_digest {r_payload.get('result_digest')}"
+                    )
 
     for index, event in assessments:
         payload = event["payload"]
@@ -732,11 +1058,15 @@ def validate_journal_text(text: str) -> list[str]:
     errors.extend(payload_errors)
     errors.extend(_verify_chain(events))
     if not payload_errors:
-        # Cross-layer checks (inquiry_kind, §4.4 lifecycle) need complete
-        # payloads — with payload schema violations present they would crash
-        # or report misleading facts, so they run only on schema-valid input.
+        # Cross-layer checks (inquiry_kind, §4.4 lifecycle, retrieval mode /
+        # result / restore) need complete payloads — with payload schema
+        # violations present they would crash or report misleading facts, so
+        # they run only on schema-valid input.
         errors.extend(_verify_v02_inquiry_kind(events))
         errors.extend(_verify_v02_lifecycle(events))
+        errors.extend(_verify_v02_retrieval_mode(events))
+        errors.extend(_verify_v02_result_consistency(events))
+        errors.extend(_verify_v02_activation_restore(events))
     return errors
 
 

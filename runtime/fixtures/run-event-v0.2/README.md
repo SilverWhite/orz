@@ -7,13 +7,15 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-  legal / one-constraint-violation payloads for the **five** v0.2 mechanism
+  legal / one-constraint-violation payloads for the **eight** v0.2 mechanism
   events with their own v0.2 payload schema: `orientation_checkpoint`
   (v0.2 shape), `diagnostic_coverage_checkpoint`,
   `information_sufficiency_assessment`, `retrieval_parent_disposition`,
-  `retrieval_close_record`.
+  `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
+  `retrieval_mode_transition`, `retrieval_result_committed`,
+  `retrieval_activation_restored`.
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (36 events). The five v0.2-payload events carry
+  event in the v0.2 enum (39 events). The eight v0.2-payload events carry
   their v0.2 payload; the other 31 events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for
@@ -25,21 +27,24 @@ Scope:
   `retrieval_completion_check`). Every negative isolates exactly one
   constraint on the v0.2 track.
 
-Adjudications (three-agent review closure, 2026-08-09):
+Adjudications (three-agent review closure, 2026-08-09; GAP-RETRIEVAL-TOOLS
+extension 2026-08-10):
 
 - `neutral_inquiry` and `retrieval_completion_check` are absent from the
   v0.2 enum — they exist only on the v0.1 track for historical journal
   replay (ADR-0010 §11.2).
 - The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
-  The cross-validator resolves the five v0.2-payload events to their v0.2
+  The cross-validator resolves the eight v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
 - **Producer/consumer/verifier** (§5.2): `information_sufficiency_assessment`,
-  `retrieval_parent_disposition` and `retrieval_close_record` are mechanical
-  records written by the controller (single writer, serial commit); the
-  disposition's `decision`/`requirement_delta` originate from the main
-  Agent's structured input, `outcome` is the controller's mechanical result
-  (never model self-report). Verifier: the assurance dual-track validator.
-  Migration version: `0.2.0-draft`.
+  `retrieval_parent_disposition` and `retrieval_close_record` — plus the
+  GAP-RETRIEVAL-TOOLS trio `retrieval_mode_transition`,
+  `retrieval_result_committed` and `retrieval_activation_restored` — are
+  mechanical records written by the controller (single writer, serial
+  commit); the disposition's `decision`/`requirement_delta` originate from
+  the main Agent's structured input, `outcome` is the controller's
+  mechanical result (never model self-report). Verifier: the assurance
+  dual-track validator. Migration version: `0.2.0-draft`.
 - **Termination without results** (§4.3/§4.4): a termination-authority close
   (user cancel / session cancel / wallclock / budget exhaustion / subagent
   failure) may close an activation directly, without an assessment — close
@@ -66,11 +71,11 @@ Adjudications (three-agent review closure, 2026-08-09):
 
 ## Real journals (`journals/`)
 
-GAP-INQUIRY-SPLIT (2026-08-09): the Rust producer now writes the v0.2 track
-(whole-chain flip — envelope `schema_version`/`payload_schema` are
-homogeneous `0.2.0-draft`/`run-event-v0.2.schema.json`, ADR-0010 §11.6.2).
-The 7 journals below are captured by the orz conformance capture tests
-(`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`):
+The 12 journals below are captured by the orz conformance capture tests
+(`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`,
+staged under `target/conformance-journals/` and dev-copied here — see the
+GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
+fixes (H1 off projection now hides `project_doc_index` too):
 
 | journal | scenario |
 |---|---|
@@ -80,12 +85,9 @@ The 7 journals below are captured by the orz conformance capture tests
 | `cancelled-run.jsonl` | cooperative cancel (run_cancelled terminal) |
 | `failed-run.jsonl` | empty script → run_failed terminal |
 | `restore-run.jsonl` | RST- restore journal (preflight → snapshot_restored → finished) |
-| `orientation-fire-run.jsonl` | **7 retrieval tool rounds cross the session-level threshold — the orientation fires once in the post-tool-batch gap of round 7 (v0.2 payload: `inquiry_family=neutral`, `completed_turns_since_orientation=7`), and each retrieval round records a mechanical `information_sufficiency_assessment` (`indeterminate`) over the growing ledger** |
-
-Producer scope notes for this slice: the per-turn orientation event is gone
-(fires only on the 7-round trigger); `neutral_inquiry` /
-`retrieval_completion_check` are absent (retired, v0.1-replay-only);
-`retrieval_parent_disposition` / `retrieval_close_record` are NOT produced yet
-(the disposition/close chain arrives with the subagent-isomorphism slice —
-the verifier accepts orphan assessments); `diagnostic_coverage_checkpoint` is
-not produced yet either.
+| `orientation-fire-run.jsonl` | **7 retrieval tool rounds cross the session-level threshold — the orientation fires once in the post-tool-batch gap of round 7, and each retrieval round records a mechanical `information_sufficiency_assessment` (`indeterminate`) plus a `retrieval_result_committed`** |
+| `mode-off-refusal.jsonl` | retrieval dispatch under mode=off — refused as `retrieval_mode_off` with NO ToolStarted (verifier mode rule) |
+| `local-browser-capability.jsonl` | bootstrap transition to `local_browser` with capability `unsupported` — dispatch fails explicitly (`retrieval_capability_unavailable`), no silent fallback |
+| `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
+| `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
+| `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |

@@ -114,6 +114,9 @@ V02_EVENT_TYPES = [
     "information_sufficiency_assessment",
     "retrieval_parent_disposition",
     "retrieval_close_record",
+    "retrieval_mode_transition",
+    "retrieval_result_committed",
+    "retrieval_activation_restored",
     "context_compressed",
     "snapshot_created",
     "snapshot_restored",
@@ -134,16 +137,23 @@ SLUGS_V02 = {
     "information_sufficiency_assessment": "information-sufficiency-assessment",
     "retrieval_parent_disposition": "retrieval-parent-disposition",
     "retrieval_close_record": "retrieval-close-record",
+    "retrieval_mode_transition": "retrieval-mode-transition",
+    "retrieval_result_committed": "retrieval-result",
+    "retrieval_activation_restored": "retrieval-activation-restored",
 }
 
-# The five v0.2 events with their own v0.2 payload schema (the rest of the
-# v0.2 envelope reuses the v0.1 payload schema files).
+# The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
+# envelope reuses the v0.1 payload schema files). GAP-RETRIEVAL-TOOLS
+# (2026-08-10) adds the three retrieval events.
 V02_PAYLOAD_EVENTS = [
     "orientation_checkpoint",
     "diagnostic_coverage_checkpoint",
     "information_sufficiency_assessment",
     "retrieval_parent_disposition",
     "retrieval_close_record",
+    "retrieval_mode_transition",
+    "retrieval_result_committed",
+    "retrieval_activation_restored",
 ]
 
 SLUGS = {
@@ -561,6 +571,114 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "live_state_reset": True,
         "archive_ref": "archive/ACT-EXT-0001",
     },
+    "retrieval_mode_transition": {
+        "transition_id": "MODETRANS-CONF-0001",
+        "session_id": "sess-main-1",
+        "old_mode": "off",
+        "new_mode": "framework_fallback",
+        "authority": "session_bootstrap",
+        "reason_code": "session_default",
+        "capability_status": "available",
+    },
+    "retrieval_result_committed": {
+        "schema_version": "0.2.0-draft",
+        "result_kind": "retrieval_subagent_result",
+        "result_id": "RET-RES-0001",
+        "activation_id": "ACT-EXT-0001",
+        "subagent_session_id": "sess-ext-1",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "ledger_digest": ZERO_HASH,
+        "query_summary": [
+            {
+                "query_id": "QRY-0001",
+                "query_text": "rust channel docs",
+                "source_category": "official_docs",
+                "result_count": 2,
+                "action_taken": "searched",
+                "tool_used": "web_search",
+            }
+        ],
+        "source_ledger": [
+            {
+                "source_id": "SRC-0001",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "source_type": "web_page",
+                "visibility": "full_text_observed",
+                "accessed_at": "2026-08-10T00:00:00Z",
+                "observed_scope": "full document",
+                "missing_scope": "none",
+                "relevance": "direct",
+                "used_in_sections": ["Rust channels"],
+                "content_sha256": ZERO_HASH,
+                "highest_allowed_claim": "observed",
+            },
+            {
+                "source_id": "SRC-0002",
+                "source_title": "Rust forum thread",
+                "source_url_or_ref": "https://forum.rust-lang.org/t/42",
+                "source_type": "web_page",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-10T00:00:01Z",
+                "observed_scope": "first section",
+                "missing_scope": "rest of page",
+                "relevance": "partial",
+                "used_in_sections": [],
+                "highest_allowed_claim": "derived",
+            },
+        ],
+        "filtering_log": [
+            {
+                "source_id": "SRC-0003",
+                "reason": "policy_blocked",
+                "action": "excluded",
+                "filtered_at": "2026-08-10T00:00:02Z",
+            }
+        ],
+        "organized_response": {
+            "sections": [
+                {
+                    "section_title": "Rust channels",
+                    "content": "std::sync::mpsc provides channels.",
+                    "source_ids": ["SRC-0001"],
+                    "claim_strength": "observed",
+                }
+            ],
+            "claims": [],
+        },
+        "raw_source_refs": [
+            {
+                "source_id": "SRC-0001",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "visibility": "full_text_observed",
+                "content_sha256": ZERO_HASH,
+            }
+        ],
+        "source_counts": {
+            "total": 2,
+            "full_text_observed": 1,
+            "partial_text_observed": 1,
+            "metadata_only": 0,
+            "unavailable": 0,
+        },
+        "visibility_degraded": False,
+    },
+    "retrieval_activation_restored": {
+        "restore_id": "RST-ACT-0001",
+        "activation_id": "ACT-EXT-0001",
+        "subagent_session_id": "sess-ext-1",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "status": "awaiting_disposition",
+        "assessment_id": "ASSESS-0001",
+        "result_digest": ZERO_HASH,
+        "origin_run_id": "RUN-CONF-0001",
+        "sidecar_ref": ".gsa/activations/sess-abc.json",
+        "tool_rounds_used": 3,
+    },
 }
 
 # One constraint violation per v0.2 event (never a bare missing-required when
@@ -647,6 +765,93 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "resumable": True,
         "live_state_reset": True,
         "archive_ref": "archive/ACT-EXT-0001",
+    },
+    "retrieval_mode_transition": {
+        "transition_id": "MODETRANS-CONF-0001",
+        "session_id": "sess-main-1",
+        "old_mode": "off",
+        "new_mode": "off",
+        "authority": "session_bootstrap",
+        "reason_code": "session_default",
+        "capability_status": "available",
+    },
+    "retrieval_result_committed": {
+        "schema_version": "0.2.0-draft",
+        "result_kind": "retrieval_subagent_result",
+        "result_id": "RET-RES-0001",
+        "activation_id": "ACT-EXT-0001",
+        "subagent_session_id": "sess-ext-1",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "ledger_digest": ZERO_HASH,
+        "query_summary": [
+            {
+                "query_id": "QRY-0001",
+                "query_text": "rust channel docs",
+                "source_category": "official_docs",
+                "result_count": 2,
+                "action_taken": "searched",
+                "tool_used": "web_search",
+            }
+        ],
+        "source_ledger": [
+            {
+                "source_id": "SRC-0001",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "source_type": "web_page",
+                "visibility": "full_text_observed",
+                "accessed_at": "2026-08-10T00:00:00Z",
+                "observed_scope": "full document",
+                "missing_scope": "none",
+                "relevance": "direct",
+                "used_in_sections": ["Rust channels"],
+                "content_sha256": ZERO_HASH,
+                "highest_allowed_claim": "derived",
+            },
+        ],
+        "filtering_log": [],
+        "organized_response": {
+            "sections": [
+                {
+                    "section_title": "Rust channels",
+                    "content": "std::sync::mpsc provides channels.",
+                    "source_ids": ["SRC-0001"],
+                    "claim_strength": "legendary",
+                }
+            ],
+            "claims": [],
+        },
+        "raw_source_refs": [
+            {
+                "source_id": "SRC-0001",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "visibility": "full_text_observed",
+                "content_sha256": ZERO_HASH,
+            }
+        ],
+        "source_counts": {
+            "total": 1,
+            "full_text_observed": 1,
+            "partial_text_observed": 0,
+            "metadata_only": 0,
+            "unavailable": 0,
+        },
+        "visibility_degraded": True,
+    },
+    "retrieval_activation_restored": {
+        "restore_id": "RST-ACT-0001",
+        "activation_id": "ACT-EXT-0001",
+        "subagent_session_id": "sess-ext-1",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "status": "awaiting_disposition",
+        "result_digest": ZERO_HASH,
+        "origin_run_id": "RUN-CONF-0001",
+        "sidecar_ref": ".gsa/activations/sess-abc.json",
+        "tool_rounds_used": 3,
     },
 }
 
@@ -870,13 +1075,15 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-  legal / one-constraint-violation payloads for the **five** v0.2 mechanism
+  legal / one-constraint-violation payloads for the **eight** v0.2 mechanism
   events with their own v0.2 payload schema: `orientation_checkpoint`
   (v0.2 shape), `diagnostic_coverage_checkpoint`,
   `information_sufficiency_assessment`, `retrieval_parent_disposition`,
-  `retrieval_close_record`.
+  `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
+  `retrieval_mode_transition`, `retrieval_result_committed`,
+  `retrieval_activation_restored`.
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (36 events). The five v0.2-payload events carry
+  event in the v0.2 enum (39 events). The eight v0.2-payload events carry
   their v0.2 payload; the other 31 events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for
@@ -888,21 +1095,24 @@ Scope:
   `retrieval_completion_check`). Every negative isolates exactly one
   constraint on the v0.2 track.
 
-Adjudications (three-agent review closure, 2026-08-09):
+Adjudications (three-agent review closure, 2026-08-09; GAP-RETRIEVAL-TOOLS
+extension 2026-08-10):
 
 - `neutral_inquiry` and `retrieval_completion_check` are absent from the
   v0.2 enum — they exist only on the v0.1 track for historical journal
   replay (ADR-0010 §11.2).
 - The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
-  The cross-validator resolves the five v0.2-payload events to their v0.2
+  The cross-validator resolves the eight v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
 - **Producer/consumer/verifier** (§5.2): `information_sufficiency_assessment`,
-  `retrieval_parent_disposition` and `retrieval_close_record` are mechanical
-  records written by the controller (single writer, serial commit); the
-  disposition's `decision`/`requirement_delta` originate from the main
-  Agent's structured input, `outcome` is the controller's mechanical result
-  (never model self-report). Verifier: the assurance dual-track validator.
-  Migration version: `0.2.0-draft`.
+  `retrieval_parent_disposition` and `retrieval_close_record` — plus the
+  GAP-RETRIEVAL-TOOLS trio `retrieval_mode_transition`,
+  `retrieval_result_committed` and `retrieval_activation_restored` — are
+  mechanical records written by the controller (single writer, serial
+  commit); the disposition's `decision`/`requirement_delta` originate from
+  the main Agent's structured input, `outcome` is the controller's
+  mechanical result (never model self-report). Verifier: the assurance
+  dual-track validator. Migration version: `0.2.0-draft`.
 - **Termination without results** (§4.3/§4.4): a termination-authority close
   (user cancel / session cancel / wallclock / budget exhaustion / subagent
   failure) may close an activation directly, without an assessment — close
@@ -927,9 +1137,28 @@ Adjudications (three-agent review closure, 2026-08-09):
   `SIG-`, `DIAG-COV-`) are producer-local formats, not ADR-mandated
   contracts. `assessment_version` uses dotted numeric form (`1.2`).
 
-`journals/` is intentionally empty: no Rust producer writes v0.2 events yet
-(Phase C migration). Real v0.2 journals will be captured and added here by
-the orz conformance capture tests after the producer migration slice.
+## Real journals (`journals/`)
+
+The 12 journals below are captured by the orz conformance capture tests
+(`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`,
+staged under `target/conformance-journals/` and dev-copied here — see the
+GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
+fixes (H1 off projection now hides `project_doc_index` too):
+
+| journal | scenario |
+|---|---|
+| `plain-run.jsonl` | text-only turn through the real CLI host (gate round) |
+| `tool-snapshot-run.jsonl` | `search_replace` + allow-once + `snapshot_created` |
+| `plan-run.jsonl` | plan-write gate + plan_proposed/approved + execution turn |
+| `cancelled-run.jsonl` | cooperative cancel (run_cancelled terminal) |
+| `failed-run.jsonl` | empty script → run_failed terminal |
+| `restore-run.jsonl` | RST- restore journal (preflight → snapshot_restored → finished) |
+| `orientation-fire-run.jsonl` | **7 retrieval tool rounds cross the session-level threshold — the orientation fires once in the post-tool-batch gap of round 7, and each retrieval round records a mechanical `information_sufficiency_assessment` (`indeterminate`) plus a `retrieval_result_committed`** |
+| `mode-off-refusal.jsonl` | retrieval dispatch under mode=off — refused as `retrieval_mode_off` with NO ToolStarted (verifier mode rule) |
+| `local-browser-capability.jsonl` | bootstrap transition to `local_browser` with capability `unsupported` — dispatch fails explicitly (`retrieval_capability_unavailable`), no silent fallback |
+| `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
+| `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
+| `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |
 """
 
 

@@ -98,6 +98,13 @@ ALL_JOURNALS_V02 = (
     "failed-run.jsonl",
     "restore-run.jsonl",
     "orientation-fire-run.jsonl",
+    # GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode / structured result /
+    # activation restore / pre-handoff scenarios.
+    "mode-off-refusal.jsonl",
+    "local-browser-capability.jsonl",
+    "real-doc-retrieval.jsonl",
+    "cross-prompt-restore.jsonl",
+    "pre-handoff-checkpoint.jsonl",
 )
 
 EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
@@ -138,36 +145,97 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
     # and the close record on the accepted close — land between the tool's
     # start and completion); the 7-round orientation crossing fires once, on
     # the 4th retrieve's post-tool-batch gap.
+    # GAP-RETRIEVAL-TOOLS (2026-08-10): each iteration commits its structured
+    # result (retrieval_result_committed) between the dispatch's
+    # tool_completed and the mechanical assessment.
     "orientation-fire-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted",
         "model_output", "tool_started", "model_output",
         "runtime_stagnation_guard", "tool_completed",
+        "retrieval_result_committed",
         "information_sufficiency_assessment",
         "model_output", "tool_started", "retrieval_parent_disposition",
         "tool_completed",
         "model_output", "tool_started", "model_output",
         "runtime_stagnation_guard", "tool_completed",
+        "retrieval_result_committed",
         "information_sufficiency_assessment",
         "model_output", "tool_started", "retrieval_parent_disposition",
         "tool_completed",
         "model_output", "tool_started", "model_output",
         "runtime_stagnation_guard", "tool_completed",
+        "retrieval_result_committed",
         "information_sufficiency_assessment",
         "model_output", "tool_started", "retrieval_parent_disposition",
         "tool_completed",
         "model_output", "tool_started", "model_output",
         "runtime_stagnation_guard", "tool_completed",
+        "retrieval_result_committed",
         "information_sufficiency_assessment", "orientation_checkpoint",
         "model_output", "tool_started", "retrieval_parent_disposition",
         "tool_completed",
         "model_output", "tool_started", "model_output",
         "runtime_stagnation_guard", "tool_completed",
+        "retrieval_result_committed",
         "information_sufficiency_assessment",
         "model_output", "tool_started", "retrieval_parent_disposition",
         "retrieval_close_record", "tool_completed",
         "model_output", "counterexample_gate", "model_output",
         "runtime_stagnation_guard", "run_finished",
+    ),
+    # GAP-RETRIEVAL-TOOLS (2026-08-10): mode=off refuses the scripted
+    # retrieval dispatch — the refusal is the terminal ToolCompleted(error)
+    # ALONE (no ToolStarted: the verifier's mode rule forbids any dispatch
+    # after a transition to off).
+    "mode-off-refusal.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "model_output", "tool_completed",
+        "model_output", "counterexample_gate", "model_output",
+        "runtime_stagnation_guard", "run_finished",
+    ),
+    # local_browser with an unsupported capability: the bootstrap transition
+    # journals before the availability gate; the refusal follows the
+    # standard ToolStarted → ToolCompleted(error) audit shape.
+    "local-browser-capability.jsonl": (
+        "run_preflight", "retrieval_mode_transition",
+        "tool_availability_check", "run_started", "prompt_submitted",
+        "model_output", "tool_started", "tool_completed", "model_output",
+        "counterexample_gate", "model_output", "runtime_stagnation_guard",
+        "run_finished",
+    ),
+    # Real project-doc retrieval: the subagent's index call runs through
+    # the host (permission bridge records its auto-allow), the committed
+    # result carries the real visibility, the assessment consumes it.
+    "real-doc-retrieval.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "model_output", "tool_started",
+        "model_output", "permission_requested", "permission_decision",
+        "tool_started", "tool_completed", "model_output",
+        "runtime_stagnation_guard", "tool_completed",
+        "retrieval_result_committed", "information_sufficiency_assessment",
+        "model_output", "counterexample_gate", "model_output",
+        "runtime_stagnation_guard", "run_finished",
+    ),
+    # Cross-run activation restore: the seeded AwaitingDisposition
+    # activation journals its restore at startup, the parent's disposition
+    # closes it (close record binds through the restore declaration).
+    "cross-prompt-restore.jsonl": (
+        "run_preflight", "retrieval_activation_restored",
+        "tool_availability_check", "run_started", "prompt_submitted",
+        "model_output", "tool_started", "retrieval_parent_disposition",
+        "retrieval_close_record", "tool_completed", "model_output",
+        "counterexample_gate", "model_output", "runtime_stagnation_guard",
+        "run_finished",
+    ),
+    # Pre-handoff checkpoint: the stagnation restart decision journals the
+    # orientation checkpoint (independent lifecycle trigger) before the
+    # run_invalidated terminal.
+    "pre-handoff-checkpoint.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "model_output", "counterexample_gate",
+        "model_output", "runtime_stagnation_guard",
+        "orientation_checkpoint", "run_invalidated",
     ),
 }
 
@@ -318,8 +386,11 @@ class V02JournalConformanceTests(unittest.TestCase):
             self.assertEqual(p["status"], "indeterminate")
             self.assertEqual(p["source_visibility_gate"], "not_applicable")
             self.assertEqual(p["contract_revision"], i)
-            # The ledger grows one [DOC] per round.
-            self.assertEqual(p["source_counts"]["total"], i + 1)
+            # GAP-RETRIEVAL-TOOLS (2026-08-10): the structured result is
+            # PER-ITERATION — each round's ledger covers that round's one
+            # [DOC] declaration (metadata-grade).
+            self.assertEqual(p["source_counts"]["total"], 1)
+            self.assertEqual(p["source_counts"]["metadata_only"], 1)
             # No inquiry family / model verdict on a mechanical event.
             self.assertNotIn("inquiry_family", p)
 
@@ -466,12 +537,13 @@ def _disposition(
     assessment_id: str,
     outcome: str = "accepted",
     delta: str | None = None,
+    activation: str = "ACT-1",
 ) -> dict:
     return {
         "disposition_id": disposition_id,
         "parent_session_id": "sess-main-1",
         "subagent_session_id": "sess-ext-1",
-        "activation_id": "ACT-1",
+        "activation_id": activation,
         "assessment_id": assessment_id,
         "expected_contract_revision": revision,
         "decision": decision,
@@ -1050,6 +1122,581 @@ class CanonicalFormTests(unittest.TestCase):
                     rust_form = _payload_sha256(event["payload"])
                     rfc8785_form = sha256_bytes(canonical_bytes(event["payload"]))
                     self.assertEqual(rust_form, rfc8785_form)
+
+
+def _mode_transition(
+    transition_id: str,
+    old_mode: str,
+    new_mode: str,
+    authority: str = "session_bootstrap",
+    reason_code: str = "session_default",
+    capability_status: str | None = None,
+) -> dict:
+    payload = {
+        "transition_id": transition_id,
+        "session_id": "sess-main-1",
+        "old_mode": old_mode,
+        "new_mode": new_mode,
+        "authority": authority,
+        "reason_code": reason_code,
+    }
+    if capability_status is not None:
+        payload["capability_status"] = capability_status
+    return payload
+
+
+def _tool_started(target: str, tool: str = "web_search") -> dict:
+    return {"tool": tool, "call_id": "call-1", "target": target}
+
+
+def _tool_completed(target: str, tool: str = "web_search", errored: bool = False) -> dict:
+    payload: dict = {"tool": tool, "call_id": "call-1", "target": target, "exit_code": None}
+    if errored:
+        payload["status"] = "error"
+        payload["error"] = "retrieval_capability_unavailable"
+    else:
+        payload["exit_code"] = 0
+    return payload
+
+
+class RetrievalModeTransitionTests(unittest.TestCase):
+    """ADR-0010 §3.7.1 mode mechanics on synthetic v0.2 journals: at most one
+    session_bootstrap transition, old_mode chains to the previous new_mode,
+    and mode obligations hold until the next transition (off forbids retrieval
+    dispatch/assessment/result; local_browser requires every retrieval
+    dispatch to fail explicitly)."""
+
+    def test_bootstrap_transition_to_framework_fallback_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "framework_fallback",
+                        capability_status="available",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed("external_retrieval"), 2, _ZERO),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_dispatch_after_transition_to_off_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "framework_fallback", "off"),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("internal_retrieval"), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("after transition to off", " | ".join(errors))
+
+    def test_assessment_after_transition_to_off_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "framework_fallback", "off"),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "information_sufficiency_assessment",
+                    _assessment("ASSESS-1", 0),
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("after transition to off", " | ".join(errors))
+
+    def test_committed_result_after_transition_to_off_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "framework_fallback", "off"),
+                    0, None,
+                ),
+                _mk_v02_event("retrieval_result_committed", _committed_result(), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("after transition to off", " | ".join(errors))
+
+    def test_local_browser_dispatch_must_fail_explicitly(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="unsupported",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed("external_retrieval"), 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("non-error under local_browser", " | ".join(errors))
+
+    def test_local_browser_explicit_error_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="unsupported",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 1, _ZERO),
+                _mk_v02_event(
+                    "tool_completed", _tool_completed("external_retrieval", errored=True),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_local_browser_committed_result_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="unsupported",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("retrieval_result_committed", _committed_result(), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("under local_browser", " | ".join(errors))
+
+    def test_second_bootstrap_transition_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "off", "framework_fallback"),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-2", "framework_fallback", "off",
+                        authority="user", reason_code="explicit_selection",
+                    ),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-3", "off", "framework_fallback",
+                        authority="session_bootstrap",
+                    ),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("at most one allowed", " | ".join(errors))
+
+    def test_disjoint_old_mode_chain_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "off", "framework_fallback"),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-2", "off", "off",
+                        authority="user", reason_code="explicit_selection",
+                    ),
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("old_mode", " | ".join(errors))
+
+    def test_mode_obligations_end_at_next_transition(self) -> None:
+        """off-mode forbids dispatch only until the next transition — the
+        transition back to framework_fallback restores dispatch legality."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "off", "off"),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-2", "off", "framework_fallback",
+                        authority="user", reason_code="explicit_selection",
+                        capability_status="available",
+                    ),
+                    1, _ZERO,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 2, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed("external_retrieval"), 3, _ZERO),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+
+def _committed_result() -> dict:
+    """A minimal valid committed retrieval result (schema-valid; ledger with
+    one full-text source and one partial source, counts derived)."""
+    return {
+        "schema_version": "0.2.0-draft",
+        "result_kind": "retrieval_subagent_result",
+        "result_id": "RET-RES-1",
+        "activation_id": "ACT-1",
+        "subagent_session_id": "sess-ext-1",
+        "contract_id": "CONTRACT-1",
+        "contract_revision": 0,
+        "result_digest": _ZERO,
+        "ledger_digest": _ZERO,
+        "query_summary": [
+            {
+                "query_id": "QRY-1",
+                "query_text": "rust channels",
+                "source_category": "official_docs",
+                "result_count": 2,
+                "action_taken": "searched",
+                "tool_used": "web_search",
+            }
+        ],
+        "source_ledger": [
+            {
+                "source_id": "SRC-1",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "source_type": "web_page",
+                "visibility": "full_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "full document",
+                "missing_scope": "none",
+                "relevance": "direct",
+                "used_in_sections": ["Rust channels"],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "observed",
+            },
+            {
+                "source_id": "SRC-2",
+                "source_title": "Rust forum thread",
+                "source_url_or_ref": "https://forum.rust-lang.org/t/42",
+                "source_type": "web_page",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "first section",
+                "missing_scope": "rest",
+                "relevance": "partial",
+                "used_in_sections": [],
+                "highest_allowed_claim": "derived",
+            },
+        ],
+        "filtering_log": [],
+        "organized_response": {
+            "sections": [
+                {
+                    "section_title": "Rust channels",
+                    "content": "std::sync::mpsc provides channels.",
+                    "source_ids": ["SRC-1"],
+                    "claim_strength": "observed",
+                }
+            ],
+            "claims": [],
+        },
+        "raw_source_refs": [
+            {
+                "source_id": "SRC-1",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "visibility": "full_text_observed",
+                "content_sha256": _ZERO,
+            }
+        ],
+        "source_counts": {
+            "total": 2,
+            "full_text_observed": 1,
+            "partial_text_observed": 1,
+            "metadata_only": 0,
+            "unavailable": 0,
+        },
+        "visibility_degraded": False,
+    }
+
+
+class RetrievalResultConsistencyTests(unittest.TestCase):
+    """ADR-0010 §3.3.3/§3.7.5 mechanical consistency of committed results:
+    source_counts equal the ledger's visibility distribution; claim_strength
+    never exceeds the bound sources' visibility; the following assessment on
+    the same (activation, revision) carries identical digests and counts."""
+
+    def _journal(self, *extra: dict) -> str:
+        events = [_mk_v02_event("retrieval_result_committed", _committed_result(), 0, None)]
+        seq = 1
+        previous = events[-1]["event_sha256"]
+        for event in extra:
+            event["sequence"] = seq
+            event["previous_event_sha256"] = previous
+            event["event_sha256"] = _ZERO
+            event["event_sha256"] = _event_sha256(event)
+            events.append(event)
+            previous = event["event_sha256"]
+            seq += 1
+        return _v02_journal(events)
+
+    def test_consistent_commit_and_assessment_validates(self) -> None:
+        journal = self._journal(
+            _mk_v02_event(
+                "information_sufficiency_assessment",
+                _assessment("ASSESS-1", 0),
+                1, _ZERO,
+            )
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_source_counts_must_match_ledger_distribution(self) -> None:
+        result = _committed_result()
+        result["source_counts"]["full_text_observed"] = 2
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("source_counts", " | ".join(errors))
+
+    def test_observed_claim_requires_full_text_source(self) -> None:
+        result = _committed_result()
+        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-2"]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("exceeds source", " | ".join(errors))
+
+    def test_claim_binding_unknown_source_rejected(self) -> None:
+        result = _committed_result()
+        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-999"]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("unknown source", " | ".join(errors))
+
+    def test_assessment_digest_must_match_committed_result(self) -> None:
+        assessment = _assessment("ASSESS-1", 0)
+        assessment["result_digest"] = "1" * 64
+        journal = self._journal(
+            _mk_v02_event("information_sufficiency_assessment", assessment, 1, _ZERO)
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("result_digest", " | ".join(errors))
+
+    def test_assessment_source_counts_must_match_committed_result(self) -> None:
+        assessment = _assessment("ASSESS-1", 0)
+        assessment["source_counts"]["total"] = 7
+        journal = self._journal(
+            _mk_v02_event("information_sufficiency_assessment", assessment, 1, _ZERO)
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("source_counts", " | ".join(errors))
+
+    def test_assessment_before_commit_is_exempt(self) -> None:
+        """An assessment that PRECEDES the commit (e.g. a budget-exhaustion
+        partial assessment) is not cross-checked against the later result."""
+        assessment = _assessment("ASSESS-1", 0)
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "information_sufficiency_assessment", assessment, 0, None
+                ),
+                _mk_v02_event(
+                    "retrieval_result_committed", _committed_result(), 1, _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_highest_allowed_claim_must_match_visibility(self) -> None:
+        """D1 (review 2026-08-10): the declared highest_allowed_claim is a
+        mechanical projection of the entry's visibility (§3.7.5) — a
+        mismatched declaration means the ledger lies about its own cap."""
+        result = _committed_result()
+        result["source_ledger"][0]["highest_allowed_claim"] = "derived"
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_result_committed", result, 0, None
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("highest_allowed_claim", errors[0])
+        self.assertIn("SRC-1", errors[0])
+
+
+def _restore(
+    restore_id: str,
+    assessment_id: str | None,
+    revision: int,
+    activation: str = "ACT-1",
+    status: str = "awaiting_disposition",
+) -> dict:
+    payload = {
+        "restore_id": restore_id,
+        "activation_id": activation,
+        "subagent_session_id": "sess-ext-1",
+        "contract_id": "CONTRACT-1",
+        "contract_revision": revision,
+        "status": status,
+        "result_digest": _ZERO,
+        "origin_run_id": "RUN-PREV-0001",
+        "sidecar_ref": ".gsa/activations/sess-abc.json",
+        "tool_rounds_used": 3,
+    }
+    if assessment_id is not None:
+        payload["assessment_id"] = assessment_id
+    return payload
+
+
+class RetrievalActivationRestoreTests(unittest.TestCase):
+    """ADR-0010 §3.3 cross-run activation restore on synthetic v0.2 journals:
+    a restore declaration legalizes a parent disposition referencing the
+    earlier run's assessment; the same activation is restored at most once
+    per journal; the close record still binds through the declaration."""
+
+    def test_restore_then_disposition_then_close_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_activation_restored",
+                    _restore("RST-ACT-1", "ASSESS-1", 0),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "retrieval_close_record",
+                    _close_record("CLOSE-1", 0, "ASSESS-1", "DISP-1"),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_second_restore_of_same_activation_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_activation_restored",
+                    _restore("RST-ACT-1", "ASSESS-1", 0),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_activation_restored",
+                    _restore("RST-ACT-2", "ASSESS-1", 0),
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("second restore", " | ".join(errors))
+
+    def test_disposition_before_restore_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_activation_restored",
+                    _restore("RST-ACT-1", "ASSESS-1", 0),
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("does not precede", " | ".join(errors))
+
+    def test_restore_activation_mismatch_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_activation_restored",
+                    _restore("RST-ACT-1", "ASSESS-1", 0),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1", activation="ACT-2"),
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("activation_id", " | ".join(errors))
+
+    def test_restore_revision_cas_enforced(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_activation_restored",
+                    _restore("RST-ACT-1", "ASSESS-1", 1),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("expected_contract_revision", " | ".join(errors))
+
+    def test_active_restore_declares_no_assessment(self) -> None:
+        """A status=active restore has no assessment to declare — a
+        disposition still referencing ASSESS-1 stays unknown."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_activation_restored",
+                    _restore("RST-ACT-1", None, 0, status="active"),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "retrieval_parent_disposition",
+                    _disposition("DISP-1", "close", 0, "ASSESS-1"),
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("unknown assessment", " | ".join(errors))
 
 
 if __name__ == "__main__":
