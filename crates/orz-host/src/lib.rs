@@ -85,9 +85,11 @@ pub struct OrzHost {
     tool_timeout: Duration,
     /// Session working directory — the run_tests command's cwd.
     cwd: PathBuf,
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the project-doc index — the
-    /// internal retrieval lane's real discovery/query tool (ADR-0010
-    /// §3.7.4/§3.7.5; host-owned, run_tests precedent).
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10) + GAP-PROJECT-DOC-INDEX-CACHE
+    /// (2026-08-11): the project-doc index — the internal retrieval lane's
+    /// real discovery/query tool (ADR-0010 §3.7.4/§3.7.5; host-owned,
+    /// run_tests precedent). Holds an in-process diff snapshot, persisted
+    /// across runs at `{cwd}/.gsa/project-doc-index/cache.json`.
     project_doc_index: crate::project_doc_index::ProjectDocIndex,
     /// ADR-0006 (2026-08-11): the web_search client config — single source
     /// of truth built once from the credential reader (was: env-only bool).

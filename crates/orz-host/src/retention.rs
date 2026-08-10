@@ -14,6 +14,12 @@
 //!   conversation sidecars older than the cutoff are removed (the largest
 //!   `.gsa` files; a LIVE session's sidecar is rewritten on every successful
 //!   prompt, so its mtime is always fresh and it naturally survives).
+//! - `project-doc-index/` (GAP-PROJECT-DOC-INDEX-CACHE 2026-08-11) — the
+//!   doc-index cache file, swept by age like conversations. The cache is
+//!   100% rebuildable and written best-effort, so deleting it is always
+//!   safe (the next query rebuilds it in one pass) — the contrast with
+//!   `keystore/` below, which must NEVER be swept, is exactly the
+//!   "rebuildable → sweepable" judgement.
 //! - `keystore/` is NEVER swept: deleting the installation key would
 //!   silently invalidate every permit signed under it (a permit issued
 //!   under key A fails verification under key B).
@@ -70,6 +76,9 @@ pub struct PruneReport {
     /// GAP-CONVERSATION-RESTORE (2026-08-10): session conversation sidecars
     /// (`conversations/<session8>.json`) — swept by age like permit claims.
     pub removed_conversation_sidecars: Vec<String>,
+    /// GAP-PROJECT-DOC-INDEX-CACHE (2026-08-11): the doc-index cache file
+    /// (`project-doc-index/cache.json`) — rebuildable, so swept by age.
+    pub removed_project_doc_caches: Vec<String>,
 }
 
 /// Best-effort retention sweep over `gsa_root` (the `.gsa` directory).
@@ -95,6 +104,14 @@ pub fn prune_old_records(
     prune_old_files(
         &mut report.removed_conversation_sidecars,
         &gsa_root.join("conversations"),
+        cutoff,
+    );
+    // GAP-PROJECT-DOC-INDEX-CACHE (2026-08-11): the doc-index cache is
+    // rebuildable and written best-effort, so age-sweeping it is always
+    // safe — the next query rebuilds it in one pass.
+    prune_old_files(
+        &mut report.removed_project_doc_caches,
+        &gsa_root.join("project-doc-index"),
         cutoff,
     );
     // local_browser (2026-08-10): orphaned browser profiles — a session
@@ -527,6 +544,29 @@ mod tests {
         assert_eq!(report.removed_conversation_sidecars, vec!["sess-old.json"]);
         assert!(!old.exists());
         assert!(conv.join("sess-fresh.json").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// GAP-PROJECT-DOC-INDEX-CACHE (2026-08-11): an old doc-index cache file
+    /// is swept by age; a fresh one (a working workspace rewrites it on
+    /// changed queries) survives.
+    #[test]
+    fn sweep_removes_old_project_doc_cache_keeps_fresh() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        let caches = gsa.join("project-doc-index");
+        std::fs::create_dir_all(&caches).unwrap();
+        let old = caches.join("cache.json");
+        std::fs::write(&old, "{}").unwrap();
+        backdate(&old, 10);
+        std::fs::write(caches.join("fresh.json"), "{}").unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(report.removed_project_doc_caches, vec!["cache.json"]);
+        assert!(!old.exists());
+        assert!(caches.join("fresh.json").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }
