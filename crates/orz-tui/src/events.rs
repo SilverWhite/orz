@@ -163,6 +163,24 @@ pub enum TuiEvent {
         close_record_id: String,
         terminal_reason: String,
     },
+    // GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode authority (§3.7.1),
+    // structured result commit (§3.3.3) and cross-run activation restore
+    // (§3.3) — projection placeholders; the payload details render through
+    // the generic fallback in projection.rs.
+    RetrievalModeTransition {
+        transition_id: String,
+        old_mode: String,
+        new_mode: String,
+    },
+    RetrievalResultCommitted {
+        result_id: String,
+        source_total: u64,
+    },
+    RetrievalActivationRestored {
+        restore_id: String,
+        activation_id: String,
+        status: String,
+    },
 
     // ── A6 explicit context compaction ──
     ContextCompressed {
@@ -263,6 +281,9 @@ impl TuiEvent {
             TuiEvent::InformationSufficiencyAssessment { .. } => "information_sufficiency_assessment",
             TuiEvent::RetrievalParentDisposition { .. } => "retrieval_parent_disposition",
             TuiEvent::RetrievalCloseRecord { .. } => "retrieval_close_record",
+            TuiEvent::RetrievalModeTransition { .. } => "retrieval_mode_transition",
+            TuiEvent::RetrievalResultCommitted { .. } => "retrieval_result_committed",
+            TuiEvent::RetrievalActivationRestored { .. } => "retrieval_activation_restored",
             TuiEvent::ContextCompressed { .. } => "context_compressed",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
             TuiEvent::SnapshotRestored { .. } => "snapshot_restored",

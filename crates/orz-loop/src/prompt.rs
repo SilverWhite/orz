@@ -310,19 +310,28 @@ pub fn build_retrieval_system_prompt(section_name: &str, goal: &str, blocks: &st
          Citation rule (D-1, FIX_PLAN 2026-08-06; ADR-0010 §3.7.9): \
          any claim based on external evidence, a reference \
          implementation, or internal docs must carry an inline \
-         `[来源: source_id]` marker (ledger-backed) or \
-         `[来源: 路径:行号]` (local observation-time) at the citing \
-         site; content without a locatable source must not be \
-         cited — never claim '参考自某处' from memory. Internal docs \
-         cite as 文档ID §节/锚点, not bare line numbers (they drift); \
-         EXTERNAL sources cite as URL/document identity + observed \
-         scope (e.g. `[来源: <url> metadata_only]`) — never full-text \
-         attribution for metadata-only material. The marker is a \
-         writer-side binding, not a verification claim.\n\
-         Delivery contract: output `[DOC]`-prefixed lines for project \
-         docs and `[SOURCE]`-prefixed lines for sources \
-         (internal: source_ledger; external: web_sources); lines \
-         without a prefix form the plain response prose.\n\n\
+         `[来源: source_id]` marker (ledger-backed) at the citing site \
+         — the ledger is the single binding authority; observation-time \
+         path references are notes only, never a verification claim. \
+         Content without a locatable source must not be cited — never \
+         claim '参考自某处' from memory. Internal docs cite as 文档ID \
+         §节/锚点; EXTERNAL sources cite as URL/document identity + \
+         observed scope (e.g. `[来源: <url> metadata_only]`) — never \
+         full-text attribution for metadata-only material.\n\
+         Delivery contract: use your actual tool results. Output \
+         `[DOC]`-prefixed lines for project docs and `[SOURCE]`-prefixed \
+         lines for sources (internal: source_ledger; external: \
+         web_sources); lines without a prefix form the plain response \
+         prose. OPTIONALLY, after the prose, emit one \
+         `[RESULT_JSON]{{...}}[/RESULT_JSON]` block carrying your \
+         organized response: `{{\"sections\": [{{\"section_title\": ..., \
+         \"content\": ..., \"source_ids\": [\"SRC-...\"], \"claim_strength\": \
+         \"observed|derived|synthesized\"}}], \"claims\": [...]}}` — every \
+         source_id must reference an actual tool result you received; \
+         claim_strength must not exceed what the source's visibility \
+         supports (observed = you read the full text, derived = partial, \
+         synthesized = metadata-level). The mechanical ledger is built \
+         from your tool calls, not from this block.\n\n\
          {blocks}"
     )
 }

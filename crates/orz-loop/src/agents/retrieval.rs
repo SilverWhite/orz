@@ -92,6 +92,32 @@ impl RoundAgent for RetrievalSubagent {
     }
 }
 
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): the model-organized structured result
+/// block — `[RESULT_JSON]{...}[/RESULT_JSON]`. Carries ONLY the
+/// organized_response shape (sections/claims bound to ledger source_ids);
+/// query_summary/source_ledger/filtering_log/raw_source_refs are built
+/// MECHANICALLY by the controller from tool-call evidence (§3.3.3 —
+/// provider-neutral: the model's self-description is never mechanical
+/// fact). Malformed JSON or a non-object block returns `None` — the caller
+/// falls back to the [DOC]/[SOURCE] prose contract with an explicit
+/// visibility_degraded record (never a silent downgrade).
+pub fn parse_retrieval_result_json(text: &str) -> Option<serde_json::Value> {
+    const OPEN: &str = "[RESULT_JSON]";
+    const CLOSE: &str = "[/RESULT_JSON]";
+    let start = text.find(OPEN)?;
+    let after = &text[start + OPEN.len()..];
+    let end = after.find(CLOSE)?;
+    let block = after[..end].trim();
+    if !block.starts_with('{') {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(block).ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    Some(value)
+}
+
 /// [DOC]/[SOURCE] line-contract parse (stable interface — the subagent's
 /// result formation: `[DOC]`-prefixed lines → docs, `[SOURCE]`-prefixed
 /// lines → sources; other lines are plain response prose).
@@ -140,6 +166,34 @@ mod tests {
 
     fn gateway(text: &str) -> Arc<dyn ModelGateway> {
         Arc::new(FakeProvider::from_texts(vec![text]))
+    }
+
+    #[test]
+    fn parse_retrieval_result_json_extracts_organized_block() {
+        let text = concat!(
+            "检索完成\n",
+            "[RESULT_JSON]",
+            r#"{"sections":[{"section_title":"t","content":"c","source_ids":["SRC-1"],"claim_strength":"observed"}],"claims":[]}"#,
+            "[/RESULT_JSON]\n",
+        );
+        let value = parse_retrieval_result_json(text).unwrap();
+        assert_eq!(value["sections"][0]["source_ids"][0], "SRC-1");
+    }
+
+    #[test]
+    fn parse_retrieval_result_json_rejects_malformed_blocks() {
+        // No open marker.
+        assert!(parse_retrieval_result_json("无块").is_none());
+        // Open without close.
+        assert!(parse_retrieval_result_json("[RESULT_JSON]{").is_none());
+        // Not an object.
+        assert!(
+            parse_retrieval_result_json("[RESULT_JSON][1,2][/RESULT_JSON]").is_none()
+        );
+        // Malformed JSON inside.
+        assert!(
+            parse_retrieval_result_json("[RESULT_JSON]{bad[/RESULT_JSON]").is_none()
+        );
     }
 
     #[test]

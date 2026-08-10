@@ -211,6 +211,25 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             close_record_id: get_str(p, "close_record_id"),
             terminal_reason: get_str(p, "terminal_reason"),
         },
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): mode transition / result commit /
+        // activation restore projections.
+        EventType::RetrievalModeTransition => TuiEvent::RetrievalModeTransition {
+            transition_id: get_str(p, "transition_id"),
+            old_mode: get_str(p, "old_mode"),
+            new_mode: get_str(p, "new_mode"),
+        },
+        EventType::RetrievalResultCommitted => TuiEvent::RetrievalResultCommitted {
+            result_id: get_str(p, "result_id"),
+            source_total: p
+                .pointer("/source_counts/total")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        },
+        EventType::RetrievalActivationRestored => TuiEvent::RetrievalActivationRestored {
+            restore_id: get_str(p, "restore_id"),
+            activation_id: get_str(p, "activation_id"),
+            status: get_str(p, "status"),
+        },
         EventType::ContextCompressed => TuiEvent::ContextCompressed {
             trigger_tokens: get_u64(p, "trigger_tokens"),
             rounds_dropped: get_u64(p, "rounds_dropped"),

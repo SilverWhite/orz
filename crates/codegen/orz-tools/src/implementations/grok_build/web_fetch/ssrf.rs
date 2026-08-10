@@ -10,6 +10,10 @@
 //!   resolves to loopback/private stays blocked.
 //!
 //! Reference: [IANA IPv4 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv4-special-registry/)
+//!
+//! Public visibility (2026-08-10): re-used by `orz-host::local_browser` URL
+//! gate (ADR-0010 §3.7.3) — the browser navigation gate checks the same
+//! SSRF policy, fail-closed by default.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -20,7 +24,7 @@ use super::error::WebFetchError;
 /// Hostnames/IP literals that may reach loopback when local binding is
 /// enabled. Public names that *resolve* to loopback are not included — that
 /// closes DNS rebinding through a non-local hostname.
-pub(crate) fn is_explicit_local_host(host: &str) -> bool {
+pub fn is_explicit_local_host(host: &str) -> bool {
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     let host = host
         .strip_prefix('[')
@@ -40,7 +44,7 @@ pub(crate) fn is_explicit_local_host(host: &str) -> bool {
 
 /// Returns `true` if an IP is not globally routable and should be treated as
 /// local/private for SSRF.
-pub(crate) fn is_non_public_ip(ip: IpAddr) -> bool {
+pub fn is_non_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_non_public_ipv4(v4),
         IpAddr::V6(v6) => is_non_public_ipv6(v6),
@@ -83,8 +87,28 @@ fn ipv4_in_cidr(ip: Ipv4Addr, base: [u8; 4], prefix: u8) -> bool {
 }
 
 fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
-    if let Some(v4) = ip.to_ipv4_mapped() {
+    // IPv4-mapped (::ffff:a.b.c.d) AND IPv4-compatible (::a.b.c.d) forms both
+    // embed a plain IPv4 in the low 32 bits — `to_ipv4()` covers both
+    // (2026-08-10 review: `to_ipv4_mapped()` only covered the ::ffff: form,
+    // so `http://[::127.0.0.1]/` slipped through).
+    if let Some(v4) = ip.to_ipv4() {
         return is_non_public_ipv4(v4);
+    }
+    let octets = ip.octets();
+    // 6to4 (RFC 3056): `2002:V4ADDR::/48` embeds the IPv4 in bytes 2..6.
+    if octets[0] == 0x20 && octets[1] == 0x02 {
+        let v4 = Ipv4Addr::new(octets[2], octets[3], octets[4], octets[5]);
+        if is_non_public_ipv4(v4) {
+            return true;
+        }
+    }
+    // NAT64 well-known prefix (RFC 6052): `64:ff9b::/96` embeds the IPv4 in
+    // bytes 12..16.
+    if octets[..12] == [0x00, 0x64, 0xff, 0x9b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] {
+        let v4 = Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]);
+        if is_non_public_ipv4(v4) {
+            return true;
+        }
     }
     // Anything not globally routable: loopback, ULA, link-local, unspecified, multicast.
     ip.is_loopback()
@@ -94,16 +118,17 @@ fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
         || ip.is_unicast_link_local()
 }
 
-/// Loopback including IPv4-mapped forms (`::ffff:127.0.0.1`).
+/// Loopback including IPv4-embedded forms (`::ffff:127.0.0.1`,
+/// `::127.0.0.1`).
 ///
-/// `IpAddr::is_loopback` is false for mapped addresses even when the embedded
-/// v4 is loopback, so local opt-in must use this helper.
+/// `IpAddr::is_loopback` is false for mapped/compatible addresses even when
+/// the embedded v4 is loopback, so local opt-in must use this helper.
 fn is_loopback_addr(ip: IpAddr) -> bool {
     if ip.is_loopback() {
         return true;
     }
     match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()),
+        IpAddr::V6(v6) => v6.to_ipv4().is_some_and(|v4| v4.is_loopback()),
         IpAddr::V4(_) => false,
     }
 }
@@ -112,7 +137,7 @@ fn is_loopback_addr(ip: IpAddr) -> bool {
 ///
 /// Dual-gate: even with local binding allowed, only explicit loopback hosts
 /// may use loopback IPs; private/link-local never open via this flag.
-pub(crate) fn is_blocked_for_host(ip: IpAddr, host: &str, allow_local: bool) -> bool {
+pub fn is_blocked_for_host(ip: IpAddr, host: &str, allow_local: bool) -> bool {
     if !is_non_public_ip(ip) {
         return false;
     }
@@ -127,7 +152,7 @@ pub(crate) fn is_blocked_for_host(ip: IpAddr, host: &str, allow_local: bool) -> 
 ///
 /// `allow_local` comes from tool config (`WebFetchParams::allow_local`); it is
 /// not read from the environment here so the agent cannot flip the policy.
-pub(crate) async fn check_ssrf(url: &Url, allow_local: bool) -> Result<(), WebFetchError> {
+pub async fn check_ssrf(url: &Url, allow_local: bool) -> Result<(), WebFetchError> {
     let host = url
         .host_str()
         .ok_or_else(|| WebFetchError::SingleLabelHost {
@@ -253,6 +278,31 @@ mod tests {
             "localhost",
             false
         ));
+    }
+
+    #[test]
+    fn blocks_ipv4_embedded_forms() {
+        // IPv4-mapped, IPv4-compatible, 6to4 and NAT64-wrapped
+        // private/loopback literals (2026-08-10 review: compatible/6to4/
+        // NAT64 were not covered — only the ::ffff: mapped form was).
+        for raw in [
+            "::ffff:127.0.0.1", // mapped loopback
+            "::127.0.0.1",      // IPv4-compatible loopback
+            "::ffff:10.0.0.1",  // mapped private
+            "::10.0.0.1",       // IPv4-compatible private
+            "2002:7f00:1::",    // 6to4 127.0.0.1
+            "2002:0a00:1::",    // 6to4 10.0.0.1
+            "64:ff9b::7f00:1",  // NAT64 127.0.0.1
+            "64:ff9b::a00:1",   // NAT64 10.0.0.1
+        ] {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(is_non_public_ip(ip), "{raw}");
+            assert!(is_blocked_for_host(ip, raw, false), "{raw}");
+        }
+        // Embedded PUBLIC v4 stays allowed — only the embedded-v4 policy
+        // applies.
+        assert!(!is_non_public_ip("2002:0808:0808::".parse().unwrap())); // 6to4 8.8.8.8
+        assert!(!is_non_public_ip("64:ff9b::808:808".parse().unwrap())); // NAT64 8.8.8.8
     }
 
     #[test]

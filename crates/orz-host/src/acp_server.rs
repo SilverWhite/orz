@@ -15,9 +15,12 @@ use std::sync::{Arc, Mutex};
 
 use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
+use orz_loop::controller::{RetrievalCapability, RetrievalMode};
 use orz_loop::gateway::model::{Message, Role};
 use orz_loop::orientation::OrientationSessionState;
 use orz_workspace::permission::PermissionHookTransport;
+
+use serde::{Deserialize, Serialize};
 
 use crate::permission::PermissionPolicy;
 use crate::session::{SessionError, bootstrap_session};
@@ -216,6 +219,174 @@ struct StoredSession {
     /// sidecar; only an actual fire resets it). Taken out during a run,
     /// written back afterwards.
     orientation: Option<OrientationSessionState>,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval-mode + activation
+    /// snapshot (ADR-0010 §3.7.1/§3.3) — persisted across prompts AND
+    /// process restarts via `{cwd}/.gsa/activations/<session8>.json`.
+    /// Taken out during a run, written back afterwards (orientation
+    /// pattern). S2 carries the mode; per-role activation state rides the
+    /// same file (S4).
+    activation_snapshot: Option<StoredActivationSnapshot>,
+    /// local_browser (2026-08-10): the session's browser lane handle —
+    /// survives across runs (the process stays up on its isolated profile;
+    /// re-injected into each run's host by the capability probe). Shut down
+    /// (process tree kill + profile-dir best-effort delete) on
+    /// `close_session`.
+    browser: Option<crate::local_browser::SharedBrowser>,
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): the persisted retrieval-mode +
+/// activation snapshot. S2 (mode slice) persists `retrieval_mode` and
+/// `bootstrap_transition_pending`; S4 (activation persistence) fills
+/// `next_seq`/`activations`. Same sidecar discipline as the orientation
+/// counter: best-effort persist, corrupt → warn, take-out only after every
+/// fallible step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredActivationSnapshot {
+    schema_version: String,
+    session_id: String,
+    retrieval_mode: RetrievalMode,
+    bootstrap_transition_pending: bool,
+    /// M4 (review 2026-08-10): the persisted mode BEFORE a pending explicit
+    /// selection — the transition journal reads it as the real `old_mode`.
+    /// Cleared once the controller journaled the transition.
+    #[serde(default)]
+    previous_retrieval_mode: Option<RetrievalMode>,
+    /// S4: per-role activation sequence counters (`activation_id` suffixes).
+    #[serde(default)]
+    next_seq: HashMap<String, u32>,
+    /// S4: live (non-Closed) activation states.
+    #[serde(default)]
+    activations: Vec<serde_json::Value>,
+}
+
+impl StoredActivationSnapshot {
+    fn for_session(session_id: &str) -> Self {
+        StoredActivationSnapshot {
+            schema_version: "0.1.0-draft".to_string(),
+            session_id: session_id.to_string(),
+            retrieval_mode: RetrievalMode::Off,
+            bootstrap_transition_pending: false,
+            previous_retrieval_mode: None,
+            next_seq: HashMap::new(),
+            activations: Vec::new(),
+        }
+    }
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): sidecar path for the session-level
+/// activation snapshot — `{cwd}/.gsa/activations/<session8>.json` (mirrors
+/// the orientation sidecar; an A-class `.gsa` write point, ADR-0009).
+fn activation_sidecar_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    let suffix: String = session_id.chars().take(8).collect();
+    base_dir
+        .join(".gsa")
+        .join("activations")
+        .join(format!("{suffix}.json"))
+}
+
+/// Load the persisted activation snapshot. `None` = no sidecar yet.
+/// Corrupt → warn, not silently discarded (orientation sidecar pattern).
+fn load_activation_sidecar(base_dir: &Path, session_id: &str) -> Option<StoredActivationSnapshot> {
+    let path = activation_sidecar_path(base_dir, session_id);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                tracing::warn!(
+                    "activation sidecar corrupt ({}): {e} — starting fresh",
+                    path.display()
+                );
+                None
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::warn!(
+                "activation sidecar unreadable ({}): {e} — starting fresh",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Persist the activation snapshot — best-effort (a read-only workspace must
+/// never fail the run); failures are WARNED (orientation sidecar pattern).
+fn persist_activation_sidecar(
+    base_dir: &Path,
+    session_id: &str,
+    state: &StoredActivationSnapshot,
+) {
+    let path = activation_sidecar_path(base_dir, session_id);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!(
+            "activation sidecar dir create failed ({}): {e}",
+            parent.display()
+        );
+        return;
+    }
+    match serde_json::to_string_pretty(state) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::warn!(
+                    "activation sidecar write failed ({}): {e}",
+                    path.display()
+                );
+            }
+        }
+        Err(e) => tracing::warn!("activation sidecar serialize failed: {e}"),
+    }
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): mechanical capability probe for the
+/// session's mode (ADR-0010 §3.7.1 — never a silent fallback). Under
+/// framework_fallback web_fetch is always available (no key dependency)
+/// and web_search rides the configured API key — missing key = Degraded
+/// with an explicit reason, never an implicit switch.
+///
+/// local_browser (2026-08-10): REAL probe — reuse an already-launched
+/// session handle (kept on `StoredSession` so the browser survives across
+/// runs on the same profile, no profile-lock conflicts), else discover +
+/// launch a headless browser and inject it into the host. Launch failure is
+/// `Degraded("browser_launch_failed: <cause>")` — explicit, never a silent
+/// fallback to web tools (ADR-0010 §3.7.1/§3.7.2). A re-probe on a later
+/// prompt retries the launch (self-healing: the browser or profile may
+/// have become available meanwhile).
+async fn probe_retrieval_capability(
+    mode: RetrievalMode,
+    web_search_configured: bool,
+    host: &mut crate::OrzHost,
+    workspace: &std::path::Path,
+    session_id: &str,
+) -> RetrievalCapability {
+    match mode {
+        RetrievalMode::Off => {
+            RetrievalCapability::Unsupported("retrieval_mode_not_selected".to_string())
+        }
+        RetrievalMode::LocalBrowser => {
+            if host.browser_ready() {
+                return RetrievalCapability::Available;
+            }
+            match crate::local_browser::probe_launch(workspace, session_id).await {
+                Ok(manager) => {
+                    host.set_browser_session(std::sync::Arc::new(manager));
+                    RetrievalCapability::Available
+                }
+                Err(cause) => {
+                    RetrievalCapability::Degraded(format!("browser_launch_failed: {cause}"))
+                }
+            }
+        }
+        RetrievalMode::FrameworkFallback => {
+            if web_search_configured {
+                RetrievalCapability::Available
+            } else {
+                RetrievalCapability::Degraded("web_search_not_configured".to_string())
+            }
+        }
+    }
 }
 
 /// GAP-INQUIRY-SPLIT (2026-08-09): sidecar path for the session-level
@@ -267,14 +438,14 @@ fn persist_orientation_sidecar(
     state: &OrientationSessionState,
 ) {
     let path = orientation_sidecar_path(base_dir, session_id);
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            tracing::warn!(
-                "orientation sidecar dir create failed ({}): {e}",
-                parent.display()
-            );
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!(
+            "orientation sidecar dir create failed ({}): {e}",
+            parent.display()
+        );
+        return;
     }
     match serde_json::to_string_pretty(state) {
         Ok(json) => {
@@ -519,6 +690,31 @@ impl AcpServer {
         trust_policy: crate::session::TrustPolicy,
         policy: PermissionPolicy,
     ) -> Result<serde_json::Value, AcpError> {
+        self.handle_session_new_with_options(
+            session_id,
+            base_dir,
+            trust_policy,
+            policy,
+            None,
+        )
+        .await
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): `retrieval_mode` is the
+    /// session-level explicit mode (ADR-0010 §3.7.1 — `Some` = explicit user
+    /// / parent-task-contract selection; `None` = the `off` default). An
+    /// explicit selection different from the persisted mode marks a bootstrap
+    /// transition pending (journaled on the next run's startup). The
+    /// activation sidecar (mode + per-role activations) resumes across
+    /// process restarts.
+    pub async fn handle_session_new_with_options(
+        &self,
+        session_id: &str,
+        base_dir: Option<PathBuf>,
+        trust_policy: crate::session::TrustPolicy,
+        policy: PermissionPolicy,
+        retrieval_mode: Option<RetrievalMode>,
+    ) -> Result<serde_json::Value, AcpError> {
         // Journals are created per-run at `session/prompt` time — the session
         // itself only records where, under what trust policy, and under what
         // permission policy runs live.
@@ -529,6 +725,23 @@ impl AcpServer {
         // at 0.
         let orientation = load_orientation_sidecar(&base, session_id)
             .unwrap_or_else(|| OrientationSessionState::new(session_id));
+        // GAP-RETRIEVAL-TOOLS: resume the activation sidecar; an explicit
+        // mode selection that differs from the persisted mode marks a
+        // bootstrap transition pending (off → mode, journaled once).
+        let mut activation_snapshot = load_activation_sidecar(&base, session_id)
+            .unwrap_or_else(|| StoredActivationSnapshot::for_session(session_id));
+        if let Some(mode) = retrieval_mode
+            && mode != activation_snapshot.retrieval_mode
+        {
+            // M4 (review 2026-08-10): every explicit mode change journals —
+            // including a change TO off (a transition like any other,
+            // §3.7.1 "never implicit"); the previous persisted mode is
+            // carried as the transition's real old_mode.
+            activation_snapshot.previous_retrieval_mode =
+                Some(activation_snapshot.retrieval_mode);
+            activation_snapshot.retrieval_mode = mode;
+            activation_snapshot.bootstrap_transition_pending = true;
+        }
         self.sessions.lock().unwrap().insert(
             session_id.to_string(),
             StoredSession {
@@ -538,6 +751,8 @@ impl AcpServer {
                 prompt_count: 0,
                 restore_count: 0,
                 orientation: Some(orientation),
+                activation_snapshot: Some(activation_snapshot),
+                browser: None,
             },
         );
 
@@ -632,7 +847,7 @@ impl AcpServer {
         // (`None` gateway) fails closed: Read auto-allows, Bash → Deny.
         // (PermissionBridge spawns the manager actor via spawn_local, so
         // this path must run inside a LocalSet — the stdio server does.)
-        let host = self.build_host(&handle, session_id, &base_dir, policy)?;
+        let mut host = self.build_host(&handle, session_id, &base_dir, policy)?;
         // GAP-INQUIRY-SPLIT (review P1-1, 2026-08-10): take the orientation
         // counter out of the session ONLY after every fallible step above
         // (restore-in-flight check, bootstrap, build_host) has succeeded —
@@ -651,10 +866,65 @@ impl AcpServer {
                     .unwrap_or_else(|| OrientationSessionState::new(session_id))
             })
         };
+        // GAP-RETRIEVAL-TOOLS: take out the activation snapshot (mode +
+        // pending + activations) with the orientation counter — same
+        // discipline: only after every fallible step, so an early `?` never
+        // leaves the session with a taken-out snapshot.
+        let mut activation_snapshot = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            session.activation_snapshot.take().unwrap_or_else(|| {
+                load_activation_sidecar(&base_dir, session_id)
+                    .unwrap_or_else(|| StoredActivationSnapshot::for_session(session_id))
+            })
+        };
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
+        // GAP-RETRIEVAL-TOOLS (S4): seed the activation registry from the
+        // sidecar — a cross-run AwaitingDisposition activation is restored
+        // and journaled (the parent may dispose it in this run).
+        let activation_snapshot_json = serde_json::to_value(&activation_snapshot)
+            .unwrap_or(serde_json::Value::Null);
+        // local_browser (2026-08-10): re-inject the session's browser lane
+        // (launched on a previous prompt — the process stays up across runs
+        // on its isolated profile) BEFORE the probe runs.
+        if let Some(browser) = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .and_then(|s| s.browser.clone())
+        {
+            host.set_browser_session(browser);
+        }
+        let capability = probe_retrieval_capability(
+            activation_snapshot.retrieval_mode,
+            host.web_search_configured(),
+            &mut host,
+            &base_dir,
+            session_id,
+        )
+        .await;
+        // Freshly-launched browser (the probe injected it): persist the
+        // handle back onto the session so it survives across runs. An
+        // existing handle is never replaced.
+        if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id)
+            && session.browser.is_none()
+        {
+            session.browser = Some(host.browser_session().clone());
+        }
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
-            .with_snapshot_store(Some(handle.snapshot_store.clone()));
+            .with_snapshot_store(Some(handle.snapshot_store.clone()))
+            .with_retrieval_mode(
+                activation_snapshot.retrieval_mode,
+                capability,
+                activation_snapshot.bootstrap_transition_pending,
+                Some(session_id.to_string()),
+                activation_snapshot.previous_retrieval_mode,
+            )
+            .with_activation_snapshot(Some(&activation_snapshot_json));
 
         let run_result = controller
             .run_turn_with_cancel(
@@ -682,6 +952,32 @@ impl AcpServer {
         persist_orientation_sidecar(&base_dir, session_id, &orientation);
         if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
             session.orientation = Some(orientation);
+        }
+        // GAP-RETRIEVAL-TOOLS: persist the activation snapshot (mode +
+        // pending + activations). The bootstrap transition flag clears once
+        // the controller journaled it (the transition is written exactly
+        // once; a failed run before it keeps the flag for the next prompt).
+        if controller.bootstrap_transition_journaled() {
+            activation_snapshot.bootstrap_transition_pending = false;
+            // M4: the transition's old_mode is consumed — the next change
+            // records its own previous value.
+            activation_snapshot.previous_retrieval_mode = None;
+        }
+        // S4: fold the controller's live registry back into the snapshot
+        // (next_seq + non-Closed activations; Closed excluded).
+        let live = controller.activation_snapshot_json(&handle.run_id);
+        if let (Some(next_seq), Some(activations)) = (
+            live.get("next_seq").cloned(),
+            live.get("activations").cloned(),
+        ) {
+            activation_snapshot.next_seq = serde_json::from_value(next_seq)
+                .unwrap_or_default();
+            activation_snapshot.activations = serde_json::from_value(activations)
+                .unwrap_or_default();
+        }
+        persist_activation_sidecar(&base_dir, session_id, &activation_snapshot);
+        if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+            session.activation_snapshot = Some(activation_snapshot);
         }
 
         match run_result {
@@ -1015,13 +1311,25 @@ impl AcpServer {
     /// for long-lived/embedded hosts (2026-08-04 review P2-4).
     /// Returns `true` if the session existed and was removed.
     pub fn close_session(&self, session_id: &str) -> bool {
-        let existed = self.sessions.lock().unwrap().remove(session_id).is_some();
+        let removed = {
+            let mut sessions = self.sessions.lock().unwrap();
+            sessions.remove(session_id)
+        };
+        // local_browser (2026-08-10): tear the browser down (process-tree
+        // kill + best-effort profile-dir delete). `close_session` is sync —
+        // the shutdown runs detached (best-effort; an orphaned profile dir
+        // is covered by the A5 retention sweep on `chrome-profile-*`).
+        if let Some(browser) = removed.as_ref().and_then(|s| s.browser.clone()) {
+            tokio::spawn(async move {
+                browser.shutdown().await;
+            });
+        }
         // Release cancellation state too — a remembered cancel must not
         // outlive its session (2026-08-05 review P2-1). A stray run/restore
         // marker is dropped the same way (slice #11, P2-2).
         self.runs.lock().unwrap().remove(session_id);
         self.pending_cancels.lock().unwrap().remove(session_id);
-        existed
+        removed.is_some()
     }
 
     /// Build the real host for a run: finalized GrokBuild toolset +
@@ -1109,11 +1417,13 @@ impl LoopHost for JournalOnlyHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local_browser::ORZ_BROWSER_PATH_ENV;
     use crate::permission::dead_gateway;
     use crate::stdio::StdioAgentHandler;
     use agent_client_protocol as acp;
     use agent_client_protocol::MessageHandler;
     use orz_assurance::EventType;
+    use orz_assurance::gates::ipg::WorkspaceTrust;
     use orz_loop::controller::AgentLoopError;
     use orz_loop::gateway::fake::ScriptedResponse;
     use orz_loop::gateway::model::ToolCall;
@@ -1154,6 +1464,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// local_browser (2026-08-10): the probe reuses an already-ready lane
+    /// (Available without re-launching), fails Degraded with a subdivided
+    /// cause when the browser cannot start, and keeps the framework_fallback
+    /// semantics untouched (off → Unsupported; missing key → Degraded).
+    #[tokio::test]
+    async fn probe_retrieval_capability_three_states() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+
+        // LocalBrowser + ready lane → Available (no re-launch).
+        let stub = crate::local_browser::tests::ready_stub_browser();
+        let mut host = crate::OrzHost::new(journal.clone(), &dir, WorkspaceTrust::ObservedTrusted)
+            .unwrap()
+            .with_browser_session(stub);
+        let cap = probe_retrieval_capability(
+            RetrievalMode::LocalBrowser,
+            true,
+            &mut host,
+            &dir,
+            "RUN-TEST01",
+        )
+        .await;
+        assert_eq!(cap, RetrievalCapability::Available);
+
+        // LocalBrowser + no lane + ORZ_BROWSER_PATH pointing nowhere →
+        // Degraded("browser_launch_failed: browser_not_found: ...").
+        let missing = dir.join("no-such-browser.exe");
+        // SAFETY: test-only; parallel tests read the env through
+        // find_browser which tolerates concurrent set/remove (worst case a
+        // degraded reason names a missing path).
+        unsafe { std::env::set_var(ORZ_BROWSER_PATH_ENV, &missing) };
+        let mut host = crate::OrzHost::new(journal.clone(), &dir, WorkspaceTrust::ObservedTrusted)
+            .unwrap();
+        let cap = probe_retrieval_capability(
+            RetrievalMode::LocalBrowser,
+            true,
+            &mut host,
+            &dir,
+            "RUN-TEST02",
+        )
+        .await;
+        unsafe { std::env::remove_var(ORZ_BROWSER_PATH_ENV) };
+        match cap {
+            RetrievalCapability::Degraded(reason) => {
+                assert!(reason.starts_with("browser_launch_failed: "), "{reason}");
+                assert!(reason.contains("browser_not_found"), "{reason}");
+            }
+            other => panic!("expected Degraded, got {other:?}"),
+        }
+
+        // Off → Unsupported; framework_fallback without key → Degraded.
+        let mut host = crate::OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted).unwrap();
+        assert_eq!(
+            probe_retrieval_capability(RetrievalMode::Off, true, &mut host, &dir, "RUN-TEST03")
+                .await,
+            RetrievalCapability::Unsupported("retrieval_mode_not_selected".to_string())
+        );
+        assert_eq!(
+            probe_retrieval_capability(
+                RetrievalMode::FrameworkFallback,
+                false,
+                &mut host,
+                &dir,
+                "RUN-TEST04"
+            )
+            .await,
+            RetrievalCapability::Degraded("web_search_not_configured".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

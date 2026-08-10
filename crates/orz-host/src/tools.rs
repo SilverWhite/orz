@@ -15,11 +15,56 @@ use orz_tools::registry::types::{
     FinalizedToolset, SessionContext, ToolRegistryBuilder, ToolServerConfig,
 };
 
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_search client config from the
+/// environment — `ORZ_WEB_SEARCH_API_KEY` enables the xAI Grok search
+/// client (ADR-0010 §3.7.1 framework_fallback; ADR-0006 seam — the key
+/// channel is explicit env, credential-registry wiring is a later slice).
+/// `ORZ_WEB_SEARCH_BASE_URL`/`ORZ_WEB_SEARCH_MODEL` override the defaults.
+/// Absent key = Disabled = the tool is not declared and the capability
+/// probe records it (never a silent fallback).
+pub fn web_search_config_from_env() -> orz_tools::implementations::web_search::WebSearchConfig {
+    use orz_tools::implementations::web_search::WebSearchConfig;
+    match std::env::var("ORZ_WEB_SEARCH_API_KEY") {
+        Ok(key) if !key.trim().is_empty() => WebSearchConfig::Enabled {
+            api_key: key.trim().to_string(),
+            base_url: std::env::var("ORZ_WEB_SEARCH_BASE_URL")
+                .unwrap_or_else(|_| "https://api.x.ai/v1".to_string()),
+            model: std::env::var("ORZ_WEB_SEARCH_MODEL")
+                .unwrap_or_else(|_| "grok-4-fast".to_string()),
+            extra_headers: Default::default(),
+            alpha_test_key: None,
+        },
+        _ => WebSearchConfig::Disabled,
+    }
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_fetch client config — always
+/// enabled (direct HTTP fetch, no key dependency); bounded by the
+/// fail-closed defaults (SSRF guard, size caps).
+pub fn web_fetch_config_default() -> orz_tools::implementations::grok_build::web_fetch::WebFetchConfig {
+    use orz_tools::implementations::grok_build::web_fetch::{WebFetchConfig, WebFetchParams};
+    WebFetchConfig::Enabled {
+        params: WebFetchParams {
+            cache_ttl_secs: None,
+            max_cache_entries: None,
+            timeout_secs: None,
+            max_content_length: None,
+            max_markdown_length: None,
+            context_window_tokens: None,
+            allowed_domains: None,
+            proxy_endpoint: None,
+            allow_local: None,
+        },
+    }
+}
+
 /// Build a finalized toolset for a session working directory.
 ///
 /// SessionContext is constructed with minimal-but-functional defaults:
 /// local terminal backend, local fs rooted at `cwd`, noop notification
-/// handle, all optional backends (memory/MCP/LSP/image/web) disabled.
+/// handle, all optional backends (memory/MCP/LSP/image) disabled. Web
+/// retrieval is config-driven (GAP-RETRIEVAL-TOOLS 2026-08-10): web_fetch
+/// always enabled, web_search gated on the env API key.
 pub fn build_toolset(cwd: &Path) -> Result<Arc<FinalizedToolset>, String> {
     let backend: Arc<dyn TerminalBackend> = Arc::new(LocalTerminalBackend::new());
     let fs: Arc<dyn AsyncFileSystem> = Arc::new(LocalFs);
@@ -37,8 +82,8 @@ pub fn build_toolset(cwd: &Path) -> Result<Arc<FinalizedToolset>, String> {
         skills: Vec::new(),
         state_path: cwd.join(".gsa").join("state.json"),
         memory_backend: None,
-        web_search_config: Default::default(),
-        web_fetch_config: Default::default(),
+        web_search_config: web_search_config_from_env(),
+        web_fetch_config: web_fetch_config_default(),
         lsp: None,
         image_gen_config: Default::default(),
         video_gen_config: Default::default(),
@@ -139,20 +184,45 @@ pub fn build_toolset(cwd: &Path) -> Result<Arc<FinalizedToolset>, String> {
 /// Adapt `FinalizedToolset` definitions to the orz-loop `ToolRegistry` view.
 pub struct ToolsetRegistry {
     toolset: Arc<FinalizedToolset>,
+    /// local_browser (2026-08-10): whether `browser_read` is declared.
+    /// Set by the session bootstrap via the capability probe — declaration
+    /// and probe are the same source of truth (fail-closed default: false).
+    browser_ready: bool,
 }
 
 impl ToolsetRegistry {
     pub fn new(toolset: Arc<FinalizedToolset>) -> Self {
-        Self { toolset }
+        Self {
+            toolset,
+            browser_ready: false,
+        }
     }
 
     pub fn toolset(&self) -> &Arc<FinalizedToolset> {
         &self.toolset
     }
+
+    /// local_browser (2026-08-10): flip `browser_read` declaration on/off
+    /// (caller is the host's `with_browser_session`).
+    pub fn set_browser_ready(&mut self, ready: bool) {
+        self.browser_ready = ready;
+    }
 }
 
 impl orz_loop::host::ToolRegistry for ToolsetRegistry {
     fn get(&self, name: &str) -> Option<orz_loop::host::ToolDef> {
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): the host-owned project-doc
+        // index is declared alongside the GrokBuild registry (executed via
+        // the call_tool special case).
+        if name == "project_doc_index" {
+            return Some(crate::project_doc_index::ProjectDocIndex::tool_def());
+        }
+        // local_browser (2026-08-10): `browser_read` is only declared when
+        // the session's browser lane is actually ready — a model must never
+        // see a tool that will fail on every call.
+        if name == "browser_read" && self.browser_ready {
+            return Some(crate::local_browser::browser_read_tool_def());
+        }
         self.toolset
             .tool_definitions()
             .into_iter()
@@ -165,7 +235,8 @@ impl orz_loop::host::ToolRegistry for ToolsetRegistry {
     }
 
     fn list(&self) -> Vec<orz_loop::host::ToolDef> {
-        self.toolset
+        let mut defs: Vec<orz_loop::host::ToolDef> = self
+            .toolset
             .tool_definitions()
             .into_iter()
             .map(|d| orz_loop::host::ToolDef {
@@ -173,7 +244,17 @@ impl orz_loop::host::ToolRegistry for ToolsetRegistry {
                 description: d.function.description.unwrap_or_default(),
                 parameters: d.function.parameters,
             })
-            .collect()
+            .collect();
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): the host-owned project-doc
+        // index rides the registry list (declaration + availability).
+        if !defs.iter().any(|d| d.name == "project_doc_index") {
+            defs.push(crate::project_doc_index::ProjectDocIndex::tool_def());
+        }
+        // local_browser (2026-08-10): declared only when the lane is ready.
+        if self.browser_ready && !defs.iter().any(|d| d.name == "browser_read") {
+            defs.push(crate::local_browser::browser_read_tool_def());
+        }
+        defs
     }
 }
 
@@ -206,5 +287,64 @@ pub fn exit_code_from_output(output: &orz_tools::types::output::ToolOutput) -> O
             })
         }
         _ => Some(0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orz_tools::implementations::web_search::WebSearchConfig;
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_search env wiring —
+    /// absent key = Disabled (tool not declared, capability probe reports
+    /// degraded); present key = Enabled with the xAI defaults/overrides.
+    #[test]
+    fn web_search_config_follows_env_key() {
+        // Unset → Disabled.
+        unsafe {
+            std::env::remove_var("ORZ_WEB_SEARCH_API_KEY");
+        }
+        assert!(matches!(
+            web_search_config_from_env(),
+            WebSearchConfig::Disabled
+        ));
+        assert!(!web_search_config_from_env().is_enabled());
+
+        // Set → Enabled with defaults.
+        unsafe {
+            std::env::set_var("ORZ_WEB_SEARCH_API_KEY", "test-key");
+            std::env::remove_var("ORZ_WEB_SEARCH_BASE_URL");
+            std::env::remove_var("ORZ_WEB_SEARCH_MODEL");
+        }
+        match web_search_config_from_env() {
+            WebSearchConfig::Enabled {
+                api_key,
+                base_url,
+                model,
+                ..
+            } => {
+                assert_eq!(api_key, "test-key");
+                assert_eq!(base_url, "https://api.x.ai/v1");
+                assert!(!model.is_empty());
+            }
+            other => panic!("expected Enabled, got {other:?}"),
+        }
+
+        // Overrides respected.
+        unsafe {
+            std::env::set_var("ORZ_WEB_SEARCH_BASE_URL", "https://example.invalid/v1");
+        }
+        match web_search_config_from_env() {
+            WebSearchConfig::Enabled { base_url, .. } => {
+                assert_eq!(base_url, "https://example.invalid/v1");
+            }
+            other => panic!("expected Enabled, got {other:?}"),
+        }
+    }
+
+    /// web_fetch is always enabled (no key dependency).
+    #[test]
+    fn web_fetch_config_is_always_enabled() {
+        assert!(web_fetch_config_default().is_enabled());
     }
 }

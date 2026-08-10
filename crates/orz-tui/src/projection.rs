@@ -335,6 +335,40 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("检索关闭: {terminal_reason}")]
         }
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode / result / restore
+        // projections.
+        TuiEvent::RetrievalModeTransition {
+            transition_id,
+            old_mode,
+            new_mode,
+        } => {
+            app.content.add_system_message(
+                &format!("[检索模式] {transition_id}: {old_mode} → {new_mode}"),
+                false,
+            );
+            vec![format!("检索模式: {old_mode} → {new_mode}")]
+        }
+        TuiEvent::RetrievalResultCommitted {
+            result_id,
+            source_total,
+        } => {
+            app.content.add_system_message(
+                &format!("[检索结果] {result_id}: {source_total} 来源"),
+                false,
+            );
+            vec![format!("检索结果: {source_total} 来源")]
+        }
+        TuiEvent::RetrievalActivationRestored {
+            restore_id,
+            activation_id,
+            status,
+        } => {
+            app.content.add_system_message(
+                &format!("[激活恢复] {restore_id}: {activation_id} ({status})"),
+                false,
+            );
+            vec![format!("激活恢复: {status}")]
+        }
 
         // ── A6 explicit context compaction ──
         TuiEvent::ContextCompressed {

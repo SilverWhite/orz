@@ -39,6 +39,13 @@ tokio-util = { workspace = true }
 # Keystore (permit signing — install-level key, Windows DPAPI)
 ring = { workspace = true }
 
+# local_browser (2026-08-10): CDP-over-WebSocket client for the headless
+# browser retrieval lane (ADR-0010 §3.7). All three are workspace deps already
+# in the lock graph — zero new transitive entries.
+tokio-tungstenite = { workspace = true }
+url = { workspace = true }
+futures = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }
 

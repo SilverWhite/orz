@@ -76,6 +76,19 @@ pub(crate) struct DebugEpisodeState {
     pub last_fingerprint: Option<String>,
     /// Signals accumulated for the stage — drained into the checkpoint.
     pub pending_signals: Vec<DcSignal>,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): surfaces EXAMINED this episode —
+    /// successfully read files (read_file) and committed retrieval source
+    /// identities. `same_module_no_evidence` and `key_surface_unexamined`
+    /// consume this set (§4.6.2: an unexamined key surface is a hard
+    /// signal).
+    pub evidence_ids: HashSet<String>,
+    /// Modules (parent dirs) with at least one edit this episode —
+    /// same-module repeat edits without new evidence are a hard signal.
+    pub edited_modules: HashSet<String>,
+    /// Modules that have at least one evidence read (read_file or
+    /// retrieval evidence) — an edited module without evidence is the
+    /// "same module, no evidence" condition.
+    pub module_evidence: HashSet<String>,
 }
 
 impl Default for DebugEpisodeState {
@@ -89,8 +102,53 @@ impl Default for DebugEpisodeState {
             edited_files: HashSet::new(),
             last_fingerprint: None,
             pending_signals: Vec::new(),
+            evidence_ids: HashSet::new(),
+            edited_modules: HashSet::new(),
+            module_evidence: HashSet::new(),
         }
     }
+}
+
+/// Normalize a file path for evidence identity (forward slashes).
+fn normalize_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+/// The module (parent dir) of a path — "." for root-level files.
+fn module_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(idx) if idx > 0 => path[..idx].to_string(),
+        _ => ".".to_string(),
+    }
+}
+
+/// Extract file paths referenced by a failing output — `File "..."` quotes,
+/// pytest `FAILED tests/...::...` prefixes, and `at ...:line` stack frames.
+/// The mechanical input to `key_surface_unexamined` (§4.6.2).
+fn extract_file_paths(output: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        let t = line.trim();
+        // Python traceback / compiler: File "path", line N
+        if let Some(start) = t.find("File \"") {
+            let rest = &t[start + 6..];
+            if let Some(end) = rest.find('"') {
+                let p = normalize_path(&rest[..end]);
+                if !p.is_empty() && !paths.contains(&p) {
+                    paths.push(p);
+                }
+                continue;
+            }
+        }
+        // pytest: FAILED tests/test_x.py::test_y
+        if let Some(rest) = t.strip_prefix("FAILED ") {
+            let p = normalize_path(rest.split("::").next().unwrap_or(rest));
+            if (p.contains('/') || p.contains('\\')) && !paths.contains(&p) {
+                paths.push(p);
+            }
+        }
+    }
+    paths
 }
 
 /// Consume the tool result's hard signals (§4.6.2 — the ONLY production
@@ -166,6 +224,38 @@ pub(crate) async fn maybe_consume_dc_signal(
         }
     }
 
+    // GAP-RETRIEVAL-TOOLS (2026-08-10): read evidence — a successfully read
+    // file is an examined surface (consumed by same_module_no_evidence /
+    // key_surface_unexamined).
+    if tc.name == "read_file"
+        && result.exit_code == Some(0)
+        && let Some(path) = tc.arguments.get("path").and_then(|v| v.as_str())
+    {
+        let key = normalize_path(path);
+        s.evidence_ids.insert(key.clone());
+        s.module_evidence.insert(module_of(&key));
+    }
+
+    // §4.6.2: the failing output references files the episode has neither
+    // read nor edited — the key surface is unexamined.
+    if result.exit_code != Some(0) {
+        for path in extract_file_paths(&result.output) {
+            if s.evidence_ids.contains(&path) || s.edited_files.contains(&path) {
+                continue;
+            }
+            let evidence = format!("{}:{}", tc.call_id, &sha256_hex(path.as_bytes())[..8]);
+            if s.seen.insert(("key_surface_unexamined".to_string(), evidence.clone())) {
+                s.signal_count += 1;
+                s.pending_signals.push(DcSignal {
+                    signal_type: "key_surface_unexamined",
+                    evidence_identity: evidence,
+                });
+            }
+            // One signal per failing call.
+            break;
+        }
+    }
+
     // Mutation-scope expansion without improvement (§4.6.2 fourth bullet):
     // a successful edit on a NEW file while tests are still failing.
     if ToolDispatcher::is_file_edit(&tc.name)
@@ -186,6 +276,53 @@ pub(crate) async fn maybe_consume_dc_signal(
                     signal_type: "large_scope_low_diag",
                     evidence_identity: evidence,
                 });
+            }
+        }
+    }
+
+    // GAP-RETRIEVAL-TOOLS (2026-08-10): same_module_no_evidence (§4.6.2) —
+    // a successful edit in a module that ALREADY has edits while that
+    // module has no evidence (read/retrieval) — repeated editing without
+    // looking is the "locked into one route" signature.
+    if ToolDispatcher::is_file_edit(&tc.name) && result.exit_code == Some(0) {
+        let file = tc
+            .arguments
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !file.is_empty() {
+            let module = module_of(&normalize_path(&file));
+            if s.edited_modules.contains(&module) && !s.module_evidence.contains(&module) {
+                let evidence = format!("{}:{}", tc.call_id, &sha256_hex(module.as_bytes())[..8]);
+                if s.seen.insert(("same_module_no_evidence".to_string(), evidence.clone())) {
+                    s.signal_count += 1;
+                    s.pending_signals.push(DcSignal {
+                        signal_type: "same_module_no_evidence",
+                        evidence_identity: evidence,
+                    });
+                }
+            }
+            s.edited_modules.insert(module);
+        }
+    }
+    Ok(())
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): fold a committed retrieval result's
+/// source identities into the DC evidence set — the retrieval lane's reads
+/// count as examined surfaces (key_surface_unexamined consumes them; the
+/// source_ids are the ledger-bound identities). Main lane only — called by
+/// the controller after a successful subagent dispatch.
+pub(crate) async fn maybe_consume_dc_retrieval_evidence(
+    dc: &Mutex<DebugEpisodeState>,
+    committed: &crate::controller::StructuredCommittedResult,
+) -> Result<(), AgentLoopError> {
+    let mut s = dc.lock().unwrap();
+    if let Some(ledger) = committed.payload["source_ledger"].as_array() {
+        for entry in ledger {
+            if let Some(id) = entry["source_id"].as_str() {
+                s.evidence_ids.insert(id.to_string());
             }
         }
     }
@@ -394,5 +531,127 @@ mod tests {
         assert!(types.contains(&"consecutive_same_failure"));
         // Per call: the failure signal + its error-class signal.
         assert_eq!(s.signal_count, 4);
+    }
+
+    // ── GAP-RETRIEVAL-TOOLS (2026-08-10): same_module_no_evidence +
+    //    key_surface_unexamined ──
+
+    #[test]
+    fn file_path_extraction() {
+        assert_eq!(
+            extract_file_paths("Traceback:\n  File \"src/a.rs\", line 3"),
+            vec!["src/a.rs"]
+        );
+        assert_eq!(
+            extract_file_paths("FAILED tests/test_x.py::test_y"),
+            vec!["tests/test_x.py"]
+        );
+        assert_eq!(extract_file_paths("all green"), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn key_surface_unexamined_fires_on_unread_failure_reference() {
+        let dc = Mutex::new(DebugEpisodeState::default());
+        let mut writer = crate::controller::discard_event_writer("RUN-DC-UNIT");
+        // A failing run referencing a file never read nor edited.
+        let mut run = tc("run_tests", "call-1");
+        maybe_consume_dc_signal(
+            &dc,
+            &mut writer,
+            &run,
+            &result("FAILED tests/test_x.py::test_y", Some(1)),
+        )
+        .await
+        .unwrap();
+        {
+            let s = dc.lock().unwrap();
+            assert!(
+                s.pending_signals
+                    .iter()
+                    .any(|x| x.signal_type == "key_surface_unexamined")
+            );
+        }
+
+        // After a read_file of the referenced path, the signal is NOT
+        // produced again (examined surface).
+        let read = ToolCall {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({"path": "tests/test_x.py"}),
+            call_id: "call-r".to_string(),
+        };
+        maybe_consume_dc_signal(&dc, &mut writer, &read, &result("content", Some(0)))
+            .await
+            .unwrap();
+        run.call_id = "call-2".to_string();
+        maybe_consume_dc_signal(
+            &dc,
+            &mut writer,
+            &run,
+            &result("FAILED tests/test_x.py::test_y", Some(1)),
+        )
+        .await
+        .unwrap();
+        let s = dc.lock().unwrap();
+        // The examined surface suppresses the signal — still exactly the
+        // call-1 signal in the pending list, no new one.
+        assert_eq!(
+            s.pending_signals
+                .iter()
+                .filter(|x| x.signal_type == "key_surface_unexamined")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn same_module_no_evidence_fires_on_repeat_edit_without_read() {
+        let dc = Mutex::new(DebugEpisodeState::default());
+        let mut writer = crate::controller::discard_event_writer("RUN-DC-UNIT");
+        let edit = |call_id: &str| ToolCall {
+            name: "search_replace".to_string(),
+            arguments: serde_json::json!({"file_path": "src/impl.rs"}),
+            call_id: call_id.to_string(),
+        };
+        // First edit in src/ — new module, no signal.
+        maybe_consume_dc_signal(&dc, &mut writer, &edit("call-e1"), &result("ok", Some(0)))
+            .await
+            .unwrap();
+        // Second edit in the SAME module with no read evidence → signal.
+        maybe_consume_dc_signal(&dc, &mut writer, &edit("call-e2"), &result("ok", Some(0)))
+            .await
+            .unwrap();
+        {
+            let s = dc.lock().unwrap();
+            assert!(
+                s.pending_signals
+                    .iter()
+                    .any(|x| x.signal_type == "same_module_no_evidence"),
+                "{:?}",
+                s.pending_signals
+            );
+        }
+
+        // A read in the module clears the condition for the next edit.
+        let read = ToolCall {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({"path": "src/impl.rs"}),
+            call_id: "call-r".to_string(),
+        };
+        maybe_consume_dc_signal(&dc, &mut writer, &read, &result("content", Some(0)))
+            .await
+            .unwrap();
+        maybe_consume_dc_signal(&dc, &mut writer, &edit("call-e3"), &result("ok", Some(0)))
+            .await
+            .unwrap();
+        let s = dc.lock().unwrap();
+        // The module read clears the condition — still exactly the e2
+        // signal in the pending list, no new one.
+        assert_eq!(
+            s.pending_signals
+                .iter()
+                .filter(|x| x.signal_type == "same_module_no_evidence")
+                .count(),
+            1
+        );
     }
 }

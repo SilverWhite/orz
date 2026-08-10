@@ -32,6 +32,26 @@ fn is_web_retrieval_tool(name: &str) -> bool {
         || (name == "web_fetch" || name.starts_with("web_fetch_"))
 }
 
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval dispatch family —
+/// internal (`retrieve_project_*`) and external (`web_search*`/`web_fetch*`)
+/// tool names. The mode projection uses it to remove the family from the
+/// model-visible declarations under mode=off (ADR-0010 §3.7.1/§3.5.2); the
+/// relay refuses the same names at dispatch time (belt and braces).
+pub fn is_retrieval_dispatch_name(name: &str) -> bool {
+    name.starts_with("retrieve_project_") || is_web_retrieval_tool(name)
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10, H1 review): the host-routed retrieval
+/// tool family. These are retrieval tools even though they do not go
+/// through the subagent dispatch lanes, so the mode=off projection and the
+/// dispatch gate cover them too (ADR-0010 §3.7.1 — off means no retrieval
+/// tools; a model must not bypass the gate by switching to one of these
+/// names). local_browser (2026-08-10): `browser_read` joins the family —
+/// its reachability is mode-gated (local_browser mode only).
+pub fn is_retrieval_mode_gated_host_tool(name: &str) -> bool {
+    name == "project_doc_index" || name == "browser_read"
+}
+
 /// Route a function name to the appropriate dispatch target.
 ///
 /// - `retrieve_project_*` → InternalRetrieval
@@ -90,6 +110,21 @@ mod tests {
             route("retrieval_disposition"),
             DispatchTarget::ParentDisposition
         );
+    }
+
+    /// local_browser (2026-08-10): the host-routed retrieval family covers
+    /// `project_doc_index` AND `browser_read` (mode=off projection + the
+    /// dispatch gate both key on it — a model must not bypass the gate by
+    /// switching names). `browser_read` itself routes to Host.
+    #[test]
+    fn gated_host_tools_include_browser_read() {
+        assert!(is_retrieval_mode_gated_host_tool("project_doc_index"));
+        assert!(is_retrieval_mode_gated_host_tool("browser_read"));
+        for name in ["web_search", "web_fetch", "retrieve_project_docs", "read_file", "bash"] {
+            assert!(!is_retrieval_mode_gated_host_tool(name), "{name}");
+        }
+        // browser_read is a Host lane tool (not a subagent dispatch lane).
+        assert_eq!(route("browser_read"), DispatchTarget::Host);
     }
 
     #[test]

@@ -60,6 +60,9 @@ pub struct PruneReport {
     pub removed_manifests: Vec<String>,
     pub removed_objects: Vec<String>,
     pub removed_permit_files: Vec<String>,
+    /// local_browser (2026-08-10): orphaned headless-browser profiles
+    /// (`chrome-profile-*` dirs under `.gsa/`) — swept by age like runs.
+    pub removed_browser_profiles: Vec<String>,
 }
 
 /// Best-effort retention sweep over `gsa_root` (the `.gsa` directory).
@@ -79,7 +82,38 @@ pub fn prune_old_records(
         &gsa_root.join("one_shot_permit"),
         cutoff,
     );
+    // local_browser (2026-08-10): orphaned browser profiles — a session
+    // whose close_session ran after a hard crash leaves its `chrome-profile-*`
+    // dir behind; age-based sweep covers it (a LIVE session's profile is
+    // recent by definition; the active run's own browser stays untouched).
+    prune_old_dirs(&mut report.removed_browser_profiles, gsa_root, cutoff, "chrome-profile-");
     report
+}
+
+/// Prune first-level dirs under `root` whose names start with `prefix` and
+/// whose mtime predates `cutoff` (fail-safe: unreadable entries are kept).
+fn prune_old_dirs(
+    removed: &mut Vec<String>,
+    root: &Path,
+    cutoff: SystemTime,
+    prefix: &str,
+) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(prefix) {
+            continue;
+        }
+        let path = root.join(&name);
+        if !entry_older_than(&path, cutoff) {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            removed.push(name);
+        }
+    }
 }
 
 /// Whether `path` (a run dir or file) is older than `cutoff`. Run dirs are
@@ -254,6 +288,29 @@ mod tests {
     /// Default-window cutoff from the real clock (now - 7 days).
     fn default_cutoff() -> SystemTime {
         retention_cutoff(std::time::SystemTime::now(), DEFAULT_RETENTION_DAYS)
+    }
+
+    /// local_browser (2026-08-10): orphaned headless-browser profiles are
+    /// swept by age; a fresh profile is kept.
+    #[test]
+    fn sweep_removes_old_browser_profiles_keeps_fresh() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        std::fs::create_dir_all(gsa.join("chrome-profile-OLDRUN")).unwrap();
+        std::fs::create_dir_all(gsa.join("chrome-profile-FRESHRUN")).unwrap();
+        std::fs::write(gsa.join("chrome-profile-OLDRUN").join("DevToolsActivePort"), "1").unwrap();
+        std::fs::write(gsa.join("chrome-profile-FRESHRUN").join("DevToolsActivePort"), "2").unwrap();
+        // entry_older_than judges a profile dir by the DIR mtime (no
+        // events.jsonl) — backdate the dir itself.
+        backdate(&gsa.join("chrome-profile-OLDRUN"), 10);
+        // A non-profile dir never matches the prefix.
+        std::fs::create_dir_all(gsa.join("snapshots")).unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+        assert_eq!(report.removed_browser_profiles, vec!["chrome-profile-OLDRUN"]);
+        assert!(!gsa.join("chrome-profile-OLDRUN").exists());
+        assert!(gsa.join("chrome-profile-FRESHRUN").exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

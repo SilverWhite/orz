@@ -67,6 +67,17 @@ impl ToolDispatcher {
             // triggering. (Its .gsa archive write is a mechanical best-
             // effort audit append, not a worktree mutation.)
             || tool_name == "compaction_whitelist_add"
+            // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
+            // workspace-local read (discovery + query) — ReadOnly class
+            // (auto-allowed under every policy; the retrieval subagent's
+            // primary tool).
+            || tool_name == "project_doc_index"
+            // local_browser (2026-08-10): `browser_read` navigates the
+            // session's headless browser and returns page text — a pure read
+            // with no worktree/network-to-host side effects. ReadOnly class
+            // (auto-allowed under every policy; the mode gate in the
+            // controller governs when it is reachable at all).
+            || tool_name == "browser_read"
         {
             RiskClass::ReadOnly
         } else if tool_name.starts_with("web_") {
@@ -115,9 +126,10 @@ impl ToolDispatcher {
             "terminal"
         } else if Self::risk_class(tool_name) == RiskClass::ReadOnly {
             "read"
-        } else if tool_name.starts_with("web_") {
-            // External retrieval (web_search/web_fetch) — the retrieval
-            // subagent's sibling on the main agent's toolset.
+        } else if tool_name.starts_with("web_") || tool_name == "project_doc_index" {
+            // External retrieval (web_search/web_fetch) + the internal
+            // project-doc index (GAP-RETRIEVAL-TOOLS 2026-08-10) — the
+            // retrieval subagents' tool families.
             "retrieval"
         } else if Self::risk_class(tool_name) == RiskClass::LocalMutation {
             "edit"
@@ -261,6 +273,14 @@ mod tests {
             ToolDispatcher::risk_class("write_file"),
             RiskClass::LocalMutation
         );
+        // local_browser (2026-08-10): browser_read is a pure read (page
+        // text in, no side effects) — ReadOnly, auto-allowed under every
+        // policy; the mode gate governs reachability.
+        assert_eq!(
+            ToolDispatcher::risk_class("browser_read"),
+            RiskClass::ReadOnly
+        );
+        assert!(!ToolDispatcher::modifies_files("browser_read"));
     }
 
     #[test]

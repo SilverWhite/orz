@@ -67,6 +67,13 @@ pub enum EventType {
     RetrievalParentDisposition,
     RetrievalCloseRecord,
 
+    // GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode authority (§3.7.1),
+    // structured result commit (§3.3.3) and cross-run activation restore
+    // (§3.3) — all three are non-terminal v0.2 mechanism events.
+    RetrievalModeTransition,
+    RetrievalResultCommitted,
+    RetrievalActivationRestored,
+
     // A6 explicit context compaction (2026-08-08 — controller-written;
     // mirrors run-event schema)
     ContextCompressed,

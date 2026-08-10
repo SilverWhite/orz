@@ -22,12 +22,18 @@ use agent_client_protocol::{
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use xai_acp_lib::acp_gateway;
 
+use orz_loop::controller::RetrievalMode;
+
 use crate::acp_server::AcpServer;
 
 /// Agent-side handler: dispatches inbound client requests to the AcpServer.
 pub struct StdioAgentHandler {
     server: Arc<AcpServer>,
     trust_policy: crate::session::TrustPolicy,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): session-level retrieval mode for
+    /// every session this handler creates (ADR-0010 §3.7.1). `None` = the
+    /// `off` default with no bootstrap transition.
+    retrieval_mode: Option<RetrievalMode>,
 }
 
 impl StdioAgentHandler {
@@ -45,6 +51,22 @@ impl StdioAgentHandler {
         Self {
             server,
             trust_policy,
+            retrieval_mode: None,
+        }
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): fix the session-level retrieval
+    /// mode for sessions created through this handler (the TUI/stdio
+    /// surfaces pass their `--retrieval-mode` through here).
+    pub fn with_retrieval_mode(
+        server: Arc<AcpServer>,
+        trust_policy: crate::session::TrustPolicy,
+        retrieval_mode: Option<RetrievalMode>,
+    ) -> Self {
+        Self {
+            server,
+            trust_policy,
+            retrieval_mode,
         }
     }
 }
@@ -73,7 +95,13 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                 // The client asks for a new session; the agent generates the ID.
                 let session_id = uuid::Uuid::new_v4().to_string();
                 self.server
-                    .handle_session_new(&session_id, Some(args.cwd), self.trust_policy)
+                    .handle_session_new_with_options(
+                        &session_id,
+                        Some(args.cwd),
+                        self.trust_policy,
+                        Default::default(),
+                        self.retrieval_mode,
+                    )
                     .await
                     .map_err(acp::Error::into_internal_error)?;
                 Ok(AgentResponse::NewSessionResponse(NewSessionResponse::new(
@@ -126,8 +154,19 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
 ///
 /// Wires the outbound gateway into the server (permission bridge reads it),
 /// then awaits the connection I/O future — which completes on stdin EOF.
-pub async fn run_stdio_server(server: Arc<AcpServer>) -> acp::Result<()> {
-    let handler = StdioAgentHandler::new(server.clone());
+///
+/// `retrieval_mode` (GAP-RETRIEVAL-TOOLS 2026-08-10): the session-level
+/// mode (ADR-0010 §3.7.1) applied to every session created over this
+/// connection; `None` = the `off` default.
+pub async fn run_stdio_server(
+    server: Arc<AcpServer>,
+    retrieval_mode: Option<RetrievalMode>,
+) -> acp::Result<()> {
+    let handler = StdioAgentHandler::with_retrieval_mode(
+        server.clone(),
+        crate::session::TrustPolicy::Enforce,
+        retrieval_mode,
+    );
     let (conn, io_future) = acp::AgentSideConnection::new(
         handler,
         tokio::io::stdout().compat_write(),

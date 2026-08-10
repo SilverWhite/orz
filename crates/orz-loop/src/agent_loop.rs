@@ -228,6 +228,10 @@ pub(crate) struct SharedLoopServices<'a> {
     /// M5 (2026-08-10): the Diagnostic Coverage episode state (ADR-0010
     /// §4.6) — consumed by the main lane only (`profile.dc_enabled`).
     pub dc_state: &'a Mutex<DebugEpisodeState>,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval-lane tool-call evidence
+    /// (ADR-0010 §3.7.4 — the mechanical source of the structured ledger).
+    /// `Some` only on retrieval profiles; the main lane passes `None`.
+    pub evidence: Option<&'a Mutex<Vec<crate::controller::EvidenceRecord>>>,
 }
 
 /// What the loop produced — the caller maps it to its own terminal
@@ -852,6 +856,16 @@ pub(crate) async fn run_agent_loop(
                                 heartbeat,
                             )
                             .await?;
+                        // GAP-RETRIEVAL-TOOLS (2026-08-10): evidence
+                        // collection for the retrieval lanes — the
+                        // mechanical source of the structured result's
+                        // ledger (§3.7.4). Main lane: `None`.
+                        if let Some(evidence) = svc.evidence
+                            && let Some(record) =
+                                crate::controller::build_evidence_record(&tc.name, tc, &result)
+                        {
+                            evidence.lock().unwrap().push(record);
+                        }
                         // M5 (2026-08-10): DC hard-signal consumption — the
                         // ONLY production point (§4.6.2; a journal replay
                         // never recounts). Main lane only.

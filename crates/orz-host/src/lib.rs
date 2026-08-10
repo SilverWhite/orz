@@ -8,12 +8,14 @@
 //!   No Grok crate depends on orz-host.
 
 pub mod acp_server;
+pub mod local_browser;
 pub mod approval;
 pub mod codex_app;
 pub mod codex_permission;
 pub mod grok_home;
 pub mod keystore;
 pub mod permission;
+pub mod project_doc_index;
 pub mod retention;
 pub mod session;
 pub mod stdio;
@@ -81,6 +83,18 @@ pub struct OrzHost {
     tool_timeout: Duration,
     /// Session working directory — the run_tests command's cwd.
     cwd: PathBuf,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the project-doc index — the
+    /// internal retrieval lane's real discovery/query tool (ADR-0010
+    /// §3.7.4/§3.7.5; host-owned, run_tests precedent).
+    project_doc_index: crate::project_doc_index::ProjectDocIndex,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): whether the web_search client is
+    /// configured (env API key) — drives the framework_fallback capability
+    /// probe (ADR-0010 §3.7.1; never a silent fallback).
+    web_search_configured: bool,
+    /// local_browser (2026-08-10): the session's browser lane handle.
+    /// Defaults to a fail-closed [`UnavailableBrowserSession`] (probe failed
+    /// or mode ≠ local_browser); the probe injects the real manager.
+    browser: crate::local_browser::SharedBrowser,
 }
 
 impl OrzHost {
@@ -126,7 +140,48 @@ impl OrzHost {
             test_runner: None,
             tool_timeout: TOOL_CALL_TIMEOUT,
             cwd: cwd.to_path_buf(),
+            project_doc_index: crate::project_doc_index::ProjectDocIndex::new(
+                cwd.to_path_buf(),
+            ),
+            web_search_configured: crate::tools::web_search_config_from_env().is_enabled(),
+            browser: Arc::new(crate::local_browser::UnavailableBrowserSession::new(
+                "no browser handle injected".to_string(),
+            )),
         })
+    }
+
+    /// local_browser (2026-08-10): inject the session's browser lane handle
+    /// (the capability probe calls this with a launched manager; tests and
+    /// conformance captures inject fakes). Declaration follows readiness —
+    /// `browser_read` is only advertised when the lane is actually usable.
+    pub fn with_browser_session(mut self, browser: crate::local_browser::SharedBrowser) -> Self {
+        self.set_browser_session(browser);
+        self
+    }
+
+    /// local_browser (2026-08-10): in-place variant for the async probe
+    /// (which holds `&mut self`).
+    pub fn set_browser_session(&mut self, browser: crate::local_browser::SharedBrowser) {
+        let ready = browser.ready();
+        self.registry.set_browser_ready(ready);
+        self.browser = browser;
+    }
+
+    /// Whether the browser lane is ready — drives the `browser_read` tool
+    /// declaration (same source of truth as the capability probe).
+    pub fn browser_ready(&self) -> bool {
+        self.browser.ready()
+    }
+
+    /// The browser lane handle (for the probe and shutdown paths).
+    pub fn browser_session(&self) -> &crate::local_browser::SharedBrowser {
+        &self.browser
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): whether the web_search client is
+    /// configured (the framework_fallback capability probe).
+    pub fn web_search_configured(&self) -> bool {
+        self.web_search_configured
     }
 
     /// P0-1 (2026-08-08 stall guards): set the per-tool-call wall-clock
@@ -518,6 +573,28 @@ impl LoopHost for OrzHost {
         // orphaned processes behind is worse. The bash tool itself carries
         // a foreground timeout (120s default), so this wrapper is the
         // coarse backstop for every tool, bash included.
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): the project-doc index is a
+        // host-owned tool (run_tests precedent) — routed before the
+        // finalize toolset; synchronous and workspace-local.
+        if name == "project_doc_index" {
+            return self.project_doc_index.query(&args);
+        }
+        // local_browser (2026-08-10): `browser_read` is host-owned (the
+        // browser lane is session state, not a finalized-toolset resource).
+        // The mode gate lives in the controller (`is_retrieval_mode_gated_
+        // host_tool`); here we only execute when the session carries a
+        // browser. Fail-closed: no handle → explicit error, never a stub
+        // success (ADR-0010 §3.7.2).
+        if name == "browser_read" {
+            if !self.browser.ready() {
+                return Err(ToolError::ExecutionFailed(
+                    "browser_read: browser lane not available (probe failed or \
+                     mode ≠ local_browser)"
+                        .to_string(),
+                ));
+            }
+            return crate::local_browser::handle_browser_read(self.browser.as_ref(), &args).await;
+        }
         let fut = self.registry.toolset().call(name, args, call_id, None);
         let result = match tokio::time::timeout(self.tool_timeout, fut).await {
             Ok(result) => result.map_err(|e| crate::tools::map_tool_error(&e))?,
@@ -617,6 +694,64 @@ mod tests {
             names.iter().any(|n| n == "run_terminal_cmd"),
             "expected run_terminal_cmd (GrokBuild bash), got {names:?}"
         );
+    }
+
+    /// local_browser (2026-08-10): the registry declares `browser_read`
+    /// ONLY when the browser lane is ready (fail-closed default), and the
+    /// host routes it to the injected browser session.
+    #[tokio::test]
+    async fn browser_read_declaration_follows_browser_ready() {
+        // Default registry: not ready → not declared.
+        let mut registry = ToolsetRegistry::new(shared_toolset().clone());
+        assert!(registry.get("browser_read").is_none());
+        assert!(!registry.list().iter().any(|d| d.name == "browser_read"));
+        // Flip ready → declared (declaration and probe are one source).
+        registry.set_browser_ready(true);
+        assert!(registry.get("browser_read").is_some());
+        assert!(registry.list().iter().any(|d| d.name == "browser_read"));
+        // Flip back → gone again.
+        registry.set_browser_ready(false);
+        assert!(registry.get("browser_read").is_none());
+    }
+
+    /// local_browser (2026-08-10): `call_tool("browser_read")` routes to the
+    /// injected browser session; without a ready lane it fails explicitly
+    /// (never a silent stub success — ADR-0010 §3.7.2).
+    #[tokio::test]
+    async fn call_browser_read_routes_to_session_and_fails_closed() {
+        let dir = test_dir();
+
+        // Fail-closed default: no handle injected → explicit error.
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap();
+        let err = host
+            .call_tool("browser_read", serde_json::json!({"url": "https://example.com"}), "c1")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("browser lane not available"), "{err}");
+
+        // Ready session → success path with the real wrapper.
+        let stub = crate::local_browser::tests::ready_stub_browser();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_browser_session(stub);
+        assert!(host.browser_ready());
+        let result = host
+            .call_tool("browser_read", serde_json::json!({"url": "https://example.com"}), "c2")
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.output.contains("hello page"), "{}", result.output);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

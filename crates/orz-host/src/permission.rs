@@ -400,6 +400,20 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
                 .unwrap_or_default()
                 .to_string(),
         )
+    } else if tool == "project_doc_index" {
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): the host-owned project-doc
+        // index — a workspace-local read (discovery + query), Read class
+        // (auto-allowed under ReadOnly/Interactive like read_file).
+        AccessKind::Read(None)
+    } else if tool == "browser_read" {
+        // local_browser (2026-08-10): the host-owned headless-browser read —
+        // pure read with no worktree side effect, same Read(None) shape as
+        // project_doc_index (auto-allowed; no path restriction — the URL
+        // gate lives in the browser lane itself, ADR-0010 §3.7.3, and the
+        // controller mode-gates the tool; permission's job is only "read,
+        // not edit"). Without this mapping the fallthrough Edit branch
+        // denied every call (project_doc_index precedent, review P1-1).
+        AccessKind::Read(None)
     } else if tool == "compaction_whitelist_add" || tool == "blackboard_read" {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no

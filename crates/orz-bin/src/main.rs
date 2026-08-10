@@ -78,6 +78,28 @@ fn main() {
             std::env::set_var("ORZ_MAX_WALLCLOCK", secs);
         }
     }
+    // GAP-RETRIEVAL-TOOLS (2026-08-10): `--retrieval-mode <off|local_browser|
+    // framework_fallback>` — the session-level retrieval mode (ADR-0010
+    // §3.7.1) for sessions created by this process (stdio/TUI). Explicit
+    // selection only; invalid values exit 2.
+    if let Some(pos) = args.iter().position(|a| a == "--retrieval-mode") {
+        let mode = match args.get(pos + 1) {
+            Some(s) => s.clone(),
+            None => {
+                eprintln!(
+                    "error: --retrieval-mode requires off|local_browser|framework_fallback"
+                );
+                std::process::exit(2);
+            }
+        };
+        if !["off", "local_browser", "framework_fallback"].contains(&mode.as_str()) {
+            eprintln!("error: --retrieval-mode must be off|local_browser|framework_fallback");
+            std::process::exit(2);
+        }
+        unsafe {
+            std::env::set_var("ORZ_RETRIEVAL_MODE", mode);
+        }
+    }
     if args.iter().any(|a| a == "--stdio") {
         run_stdio();
         return;
@@ -246,6 +268,15 @@ fn run_replay_entry(path: &std::path::Path) {
     }
 }
 
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): read `ORZ_RETRIEVAL_MODE`
+/// (set by `--retrieval-mode`) — the session-level retrieval mode for
+/// sessions created by this process; `None` = the `off` default.
+fn retrieval_mode_from_env() -> Option<orz_loop::controller::RetrievalMode> {
+    std::env::var("ORZ_RETRIEVAL_MODE")
+        .ok()
+        .and_then(|v| orz_loop::controller::RetrievalMode::from_wire(Some(&v)))
+}
+
 /// ACP stdio server entry: serve `session/new` + `session/prompt` over the
 /// persistent stdio JSON-RPC stream until the client closes stdin.
 fn run_stdio() {
@@ -268,7 +299,7 @@ fn run_stdio() {
         let server = std::sync::Arc::new(orz_host::acp_server::AcpServer::with_gateway(
             build_gateway(),
         ));
-        orz_host::stdio::run_stdio_server(server).await
+        orz_host::stdio::run_stdio_server(server, retrieval_mode_from_env()).await
     });
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -1409,9 +1440,37 @@ mod tests {
 mod conformance_capture {
     use super::*;
     use agent_client_protocol as acp;
+    use async_trait::async_trait;
     use orz_host::acp_server::{AcpError, AcpServer};
     use orz_host::session::TrustPolicy;
     use orz_loop::controller::AgentLoopError;
+
+    /// local_browser (2026-08-10): a deterministic fake browser lane — the
+    /// conformance scenario must never touch a real browser (fake-provider
+    /// discipline); the real lane is covered by the env-gated e2e test.
+    struct StubBrowserSession;
+
+    #[async_trait]
+    impl orz_host::local_browser::BrowserSession for StubBrowserSession {
+        async fn read_page(
+            &self,
+            url: &str,
+        ) -> Result<orz_host::local_browser::PageReadOutcome, orz_host::local_browser::CdpError>
+        {
+            Ok(orz_host::local_browser::PageReadOutcome {
+                final_url: url.to_string(),
+                title: "Example".to_string(),
+                text: "Example Domain — This domain is for use in illustrative examples."
+                    .to_string(),
+            })
+        }
+
+        fn ready(&self) -> bool {
+            true
+        }
+
+        async fn shutdown(&self) {}
+    }
 
     /// `{workspace}/target/conformance-journals` — hermetic (gitignored
     /// target/), one dir per scenario; `worktrees/<scenario>/` holds each
@@ -1932,7 +1991,18 @@ mod conformance_capture {
                 let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
                     FakeProvider::new(script),
                 ))
-                .with_snapshot_store(Some(handle.snapshot_store.clone()));
+                .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                // GAP-RETRIEVAL-TOOLS (2026-08-10): the scenario dispatches
+                // retrieval — run under an explicit framework_fallback mode
+                // with a fully available capability (the bare default is
+                // mode=off, which would refuse every dispatch).
+                .with_retrieval_mode(
+                    orz_loop::controller::RetrievalMode::FrameworkFallback,
+                    orz_loop::controller::RetrievalCapability::Available,
+                    false,
+                    None,
+                    None,
+                );
                 // This scenario is the 7-round-crossing proof — the session
                 // orientation state MUST be threaded in (a one-shot CLI run
                 // would pass None and never fire).
@@ -1974,6 +2044,9 @@ mod conformance_capture {
                         "model_output",
                         "runtime_stagnation_guard",
                         "tool_completed",
+                        // GAP-RETRIEVAL-TOOLS (2026-08-10): the committed
+                        // structured result precedes the assessment.
+                        "retrieval_result_committed",
                         "information_sufficiency_assessment",
                     ]);
                     if i == 3 {
@@ -2012,8 +2085,7 @@ mod conformance_capture {
                     std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
                 let orientation_line = content
                     .lines()
-                    .filter(|l| l.contains("\"orientation_checkpoint\""))
-                    .next()
+                    .find(|l| l.contains("\"orientation_checkpoint\""))
                     .expect("orientation event present");
                 let payload: serde_json::Value =
                     serde_json::from_str(orientation_line).unwrap();
@@ -2025,8 +2097,11 @@ mod conformance_capture {
                 assert_eq!(p["completed_turns_since_orientation"], 7);
                 assert_eq!(p["injection_position"], "post_tool_batch_gap");
                 assert!(p["message_block"].as_str().unwrap().starts_with("[ORIENTATION"));
-                // The mechanical assessment snapshots the growing ledger:
-                // the last assessment counts 5 [DOC] entries.
+                // The mechanical assessment snapshots the PER-ITERATION
+                // structured result: each iteration's [DOC] line is one
+                // metadata-grade ledger entry (GAP-RETRIEVAL-TOOLS — the
+                // result is per-revision; the blackboard section still
+                // accumulates).
                 let assessment_lines: Vec<&str> = content
                     .lines()
                     .filter(|l| l.contains("\"information_sufficiency_assessment\""))
@@ -2035,10 +2110,558 @@ mod conformance_capture {
                 let last: serde_json::Value =
                     serde_json::from_str(assessment_lines[4]).unwrap();
                 assert_eq!(last["payload"]["status"], "indeterminate");
-                assert_eq!(last["payload"]["source_counts"]["total"], 5);
+                assert_eq!(last["payload"]["source_counts"]["total"], 1);
+                assert_eq!(last["payload"]["source_counts"]["metadata_only"], 1);
                 assert_eq!(last["payload"]["reason_codes"][0], "no_mechanical_coverage_requirement");
 
                 copy_journal(&handle.journal_dir, "orientation-fire-run");
+            })
+            .await
+    }
+
+    /// 8. mode-off refusal — GAP-RETRIEVAL-TOOLS: the default mode=off
+    /// refuses a scripted retrieval dispatch with the explicit
+    /// `retrieval_mode_off` error (ToolCompleted alone — no ToolStarted:
+    /// the verifier's mode rule forbids any dispatch after a transition to
+    /// off); the model's declaration projection hides the retrieval family.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_mode_off_refusal() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("mode-off-refusal");
+                let run_id = "RUN-MODEOFF-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let controller =
+                    orz_loop::AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "retrieve_project_docs".to_string(),
+                            arguments: serde_json::json!({"query": "x"}),
+                            call_id: "call-1".to_string(),
+                        }]),
+                        ScriptedResponse::text("完成。"),
+                        ScriptedResponse::text("完成。"),
+                    ])))
+                    .with_snapshot_store(Some(handle.snapshot_store.clone()));
+                controller
+                    .run_turn(
+                        &host,
+                        "查文档",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "mode-off-refusal",
+                    &[
+                        "run_preflight",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "model_output",
+                        "tool_completed",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                let content =
+                    std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+                let refused: serde_json::Value = content
+                    .lines()
+                    .find(|l| l.contains("\"tool_completed\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .unwrap();
+                assert_eq!(refused["payload"]["error"], "retrieval_mode_off");
+                assert_eq!(refused["payload"]["target"], "internal_retrieval");
+                copy_journal(&handle.journal_dir, "mode-off-refusal");
+            })
+            .await
+    }
+
+    /// 9. local-browser capability — GAP-RETRIEVAL-TOOLS: mode=local_browser
+    /// with an unsupported capability fails every retrieval dispatch
+    /// explicitly (ToolStarted → ToolCompleted(error,
+    /// retrieval_capability_unavailable)) — no silent degradation to the
+    /// framework tools.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_local_browser_capability_error() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("local-browser-capability");
+                let run_id = "RUN-LBROW-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "web_search".to_string(),
+                            arguments: serde_json::json!({"query": "x"}),
+                            call_id: "call-1".to_string(),
+                        }]),
+                        ScriptedResponse::text("完成。"),
+                        ScriptedResponse::text("完成。"),
+                    ]),
+                ))
+                .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                .with_retrieval_mode(
+                    orz_loop::controller::RetrievalMode::LocalBrowser,
+                    orz_loop::controller::RetrievalCapability::Unsupported(
+                        "local_browser_automation_not_implemented".to_string(),
+                    ),
+                    true,
+                    None,
+                    None,
+                );
+                controller
+                    .run_turn(
+                        &host,
+                        "查资料",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "local-browser-capability",
+                    &[
+                        "run_preflight",
+                        // Bootstrap transition (off → local_browser) journals
+                        // before the availability gate.
+                        "retrieval_mode_transition",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "model_output",
+                        "tool_started",
+                        "tool_completed",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                let content =
+                    std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+                let refused: serde_json::Value = content
+                    .lines()
+                    .find(|l| l.contains("\"retrieval_capability_unavailable\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .unwrap();
+                assert_eq!(refused["payload"]["status"], "error");
+                copy_journal(&handle.journal_dir, "local-browser-capability");
+            })
+            .await
+    }
+
+    /// 10. local-browser read — local_browser (2026-08-10): mode=
+    /// local_browser with an AVAILABLE capability runs the real host
+    /// `browser_read` tool (fake lane) inside the external retrieval
+    /// subagent; the committed structured result carries REAL full-text
+    /// web_page evidence and the transition records capability_status
+    /// = available.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_local_browser_read() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("local-browser-read");
+                let run_id = "RUN-LBROW-READ";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base)
+                    .unwrap()
+                    .with_browser_session(Arc::new(StubBrowserSession));
+                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "web_search".to_string(),
+                            arguments: serde_json::json!({"query": "example domain"}),
+                            call_id: "call-1".to_string(),
+                        }]),
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "browser_read".to_string(),
+                            arguments: serde_json::json!({"url": "https://example.com/"}),
+                            call_id: "call-b1".to_string(),
+                        }]),
+                        ScriptedResponse::text(concat!(
+                            "[DOC] https://example.com/ 检索完成\n",
+                            "[RESULT_JSON]",
+                            r#"{"sections":[{"section_title":"Example","content":"Example Domain","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
+                            "[/RESULT_JSON]",
+                        )),
+                        ScriptedResponse::text("完成。"),
+                        ScriptedResponse::text("完成。"),
+                    ]),
+                ))
+                .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                .with_retrieval_mode(
+                    orz_loop::controller::RetrievalMode::LocalBrowser,
+                    orz_loop::controller::RetrievalCapability::Available,
+                    true,
+                    None,
+                    None,
+                );
+                controller
+                    .run_turn(
+                        &host,
+                        "用浏览器读 example.com",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "local-browser-read",
+                    &[
+                        "run_preflight",
+                        // Bootstrap transition (off → local_browser) with
+                        // capability_status=available.
+                        "retrieval_mode_transition",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "model_output",
+                        "tool_started",
+                        // Subagent round → the host browser_read tool
+                        // (Interactive bridge auto-allow, then execution).
+                        "model_output",
+                        "permission_requested",
+                        "permission_decision",
+                        "tool_started",
+                        "tool_completed",
+                        // The subagent's answer round (result formation).
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "tool_completed",
+                        "retrieval_result_committed",
+                        "information_sufficiency_assessment",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                let content =
+                    std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+                let transition: serde_json::Value = content
+                    .lines()
+                    .find(|l| l.contains("\"retrieval_mode_transition\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .unwrap();
+                assert_eq!(transition["payload"]["capability_status"], "available");
+                let commit: serde_json::Value = content
+                    .lines()
+                    .find(|l| l.contains("\"retrieval_result_committed\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .unwrap();
+                let p = &commit["payload"];
+                assert_eq!(p["source_counts"]["full_text_observed"], 1);
+                assert_eq!(p["visibility_degraded"], false);
+                assert_eq!(p["source_ledger"][0]["source_type"], "web_page");
+                assert_eq!(p["source_ledger"][0]["visibility"], "full_text_observed");
+                copy_journal(&handle.journal_dir, "local-browser-read");
+            })
+            .await
+    }
+
+    /// 11. real doc retrieval — GAP-RETRIEVAL-TOOLS: the internal lane runs
+    /// the REAL project_doc_index tool (workspace doc), producing tool-call
+    /// evidence → the committed structured result carries REAL visibility
+    /// (full_text_observed) and the assessment consumes the mechanical
+    /// counts.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_real_doc_retrieval() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("real-doc-retrieval");
+                std::fs::write(base.join("README.md"), "# Readme\n项目文档内容").unwrap();
+                let run_id = "RUN-DOC-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "retrieve_project_docs".to_string(),
+                            arguments: serde_json::json!({"query": "readme"}),
+                            call_id: "call-1".to_string(),
+                        }]),
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "project_doc_index".to_string(),
+                            arguments: serde_json::json!({
+                                "query": "readme",
+                                "include_content": "true",
+                            }),
+                            call_id: "call-i1".to_string(),
+                        }]),
+                        ScriptedResponse::text(concat!(
+                            "[DOC] README.md\n检索完成\n",
+                            "[RESULT_JSON]",
+                            r#"{"sections":[{"section_title":"Readme","content":"项目文档","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
+                            "[/RESULT_JSON]",
+                        )),
+                        ScriptedResponse::text("完成。"),
+                        ScriptedResponse::text("完成。"),
+                    ]),
+                ))
+                .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                .with_retrieval_mode(
+                    orz_loop::controller::RetrievalMode::FrameworkFallback,
+                    orz_loop::controller::RetrievalCapability::Available,
+                    false,
+                    None,
+                    None,
+                );
+                controller
+                    .run_turn(
+                        &host,
+                        "查项目文档",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "real-doc-retrieval",
+                    &[
+                        "run_preflight",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "model_output",
+                        "tool_started",
+                        // Subagent round → the real index tool (host): the
+                        // Interactive permission bridge records its
+                        // auto-allow, then the tool runs.
+                        "model_output",
+                        "permission_requested",
+                        "permission_decision",
+                        "tool_started",
+                        "tool_completed",
+                        // The subagent's answer round (result formation).
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "tool_completed",
+                        "retrieval_result_committed",
+                        "information_sufficiency_assessment",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                let content =
+                    std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+                let commit: serde_json::Value = content
+                    .lines()
+                    .find(|l| l.contains("\"retrieval_result_committed\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .unwrap();
+                let p = &commit["payload"];
+                assert_eq!(p["source_counts"]["full_text_observed"], 1);
+                assert_eq!(p["visibility_degraded"], false);
+                assert_eq!(p["organized_response"]["sections"][0]["source_ids"][0], "SRC-001");
+                copy_journal(&handle.journal_dir, "real-doc-retrieval");
+            })
+            .await
+    }
+
+    /// 11. cross-run activation restore — GAP-RETRIEVAL-TOOLS: a seeded
+    /// AwaitingDisposition activation is journaled as
+    /// `retrieval_activation_restored` at startup and the parent's
+    /// disposition closes it across runs (the verifier resolves the
+    /// assessment through the restore declaration).
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_cross_prompt_activation_restore() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("cross-prompt-restore");
+                let run_id = "RUN-RESTORE-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let snapshot = serde_json::json!({
+                    "next_seq": {"internal_retrieval": 1},
+                    "activations": [{
+                        "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                        "parent_session_id": "sess-abcdef123456",
+                        "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                        "contract_id": "retrieval-contract-internal_retrieval",
+                        "contract_revision": 0,
+                        "status": "awaiting_disposition",
+                        "tool_rounds_used": 3,
+                        "result_digest": "b".repeat(64),
+                        "pending_assessment_id": "ASSESS-PREV-1",
+                        "pending_expected_contract_revision": 0,
+                        "origin_run_id": "RUN-PREV-0001",
+                    }]
+                });
+                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
+                    FakeProvider::new(vec![
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "retrieval_disposition".to_string(),
+                            arguments: serde_json::json!({
+                                "role": "internal_retrieval",
+                                "decision": "close",
+                            }),
+                            call_id: "call-d1".to_string(),
+                        }]),
+                        ScriptedResponse::text("完成。"),
+                        ScriptedResponse::text("完成。"),
+                    ]),
+                ))
+                .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                .with_retrieval_mode(
+                    orz_loop::controller::RetrievalMode::FrameworkFallback,
+                    orz_loop::controller::RetrievalCapability::Available,
+                    false,
+                    None,
+                    None,
+                )
+                .with_activation_snapshot(Some(&snapshot));
+                controller
+                    .run_turn(
+                        &host,
+                        "关闭检索",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "cross-prompt-restore",
+                    &[
+                        "run_preflight",
+                        "retrieval_activation_restored",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "model_output",
+                        "tool_started",
+                        "retrieval_parent_disposition",
+                        "retrieval_close_record",
+                        "tool_completed",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "run_finished",
+                    ],
+                    "run_finished",
+                );
+                copy_journal(&handle.journal_dir, "cross-prompt-restore");
+            })
+            .await
+    }
+
+    /// 12. pre-handoff checkpoint — GAP-RETRIEVAL-TOOLS: a stagnation
+    /// restart decision journals the pre-handoff orientation checkpoint
+    /// (ADR-0010 §11.1 — independent lifecycle trigger) before the
+    /// run_invalidated terminal.
+    #[tokio::test]
+    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
+    async fn capture_pre_handoff_checkpoint() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = worktree("pre-handoff-checkpoint");
+                let run_id = "RUN-PREHAND-CONF";
+                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let host = build_cli_host(&handle, run_id, &base).unwrap();
+                let pattern = "重复 的 片段 ";
+                let repeated = pattern.repeat(11);
+                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
+                    FakeProvider::from_texts(vec![repeated.as_str(), repeated.as_str()]),
+                ))
+                .with_snapshot_store(Some(handle.snapshot_store.clone()));
+                controller
+                    .run_turn(
+                        &host,
+                        "输出结果",
+                        run_id,
+                        &handle.run_manifest_sha256,
+                        handle.next_sequence,
+                        handle.last_event_sha256.clone(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                handle.journal.shutdown_async().await.unwrap();
+                verify(
+                    &handle.journal_dir.join("events.jsonl"),
+                    "pre-handoff-checkpoint",
+                    &[
+                        "run_preflight",
+                        "tool_availability_check",
+                        "run_started",
+                        "prompt_submitted",
+                        "model_output",
+                        "counterexample_gate",
+                        "model_output",
+                        "runtime_stagnation_guard",
+                        "orientation_checkpoint",
+                        "run_invalidated",
+                    ],
+                    "run_invalidated",
+                );
+                let content =
+                    std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+                let checkpoint: serde_json::Value = content
+                    .lines()
+                    .find(|l| l.contains("\"pre_handoff\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .unwrap();
+                assert_eq!(checkpoint["payload"]["trigger"], "pre_handoff");
+                assert_eq!(checkpoint["payload"]["injection_position"], "pre_terminal");
+                copy_journal(&handle.journal_dir, "pre-handoff-checkpoint");
             })
             .await
     }

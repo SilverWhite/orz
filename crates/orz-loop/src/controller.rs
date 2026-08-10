@@ -23,6 +23,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use orz_assurance::gates::tool_availability::{
     Capability, ToolAvailabilityReport, ToolSpec, gate_decision, probe_tool_availability,
 };
@@ -211,6 +213,519 @@ pub struct AgentLoopController {
     /// §4.6) — main lane; one episode per run (registered boundary:
     /// cross-prompt episodes are not persisted).
     dc_state: Mutex<crate::diagnostic_coverage::DebugEpisodeState>,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): ADR-0010 §3.7.1 explicit retrieval
+    /// mode — session/task-contract level. `off` is the default; a session
+    /// bootstrap transition (session/new with an explicit mode) journals one
+    /// `retrieval_mode_transition` on the first run that sees it.
+    pub(crate) retrieval_mode: RetrievalMode,
+    /// M4 (review 2026-08-10): the mode the session had BEFORE a pending
+    /// bootstrap transition — the transition journal uses it as the real
+    /// `old_mode` (ADR-0010 §3.7.1 — every transition carries old/new; a
+    /// hardcoded "off" would misstate a mode change away from an
+    /// already-enabled mode). `None` = the session default (off).
+    pub(crate) previous_retrieval_mode: Option<RetrievalMode>,
+    /// Capability probe result for `retrieval_mode` — never a silent
+    /// fallback: Unsupported/Degraded carry the reason.
+    pub(crate) retrieval_capability: RetrievalCapability,
+    /// Session bootstrap carried an explicit mode selection — journal the
+    /// transition on the next run's startup sequence, then clear. Atomic
+    /// because the run path holds only `&self`.
+    pub(crate) bootstrap_transition_pending: std::sync::atomic::AtomicBool,
+    /// The owning session id (for the transition payload; `None` in bare
+    /// test controllers).
+    pub(crate) session_id: Option<String>,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): tool-call evidence collected from
+    /// the retrieval lane's host calls — the MECHANICAL source of the
+    /// structured result's ledger (ADR-0010 §3.7.4). Cleared at each
+    /// dispatch start; consumed at result formation.
+    pub(crate) evidence: Mutex<Vec<EvidenceRecord>>,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): activations restored from the
+    /// sidecar at build time — journaled as `retrieval_activation_restored`
+    /// once at the next run's startup (per activation per prompt).
+    pub(crate) restored_activations: Mutex<Vec<StoredActivation>>,
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
+/// record — identity/source type/access time/visibility/observed-missing
+/// scope/digest per ADR-0010 §3.7.4. Built mechanically from the tool call
+/// and its result (never from model self-description).
+#[derive(Debug, Clone)]
+pub(crate) struct EvidenceRecord {
+    pub tool: String,
+    /// Stable identity — path (project docs) or URL (web).
+    pub identity: String,
+    /// Display title — basename for local files, the URL for web.
+    pub title: String,
+    /// `project_doc` | `web_page` | `web_search_result` | `local_file`.
+    pub source_type: String,
+    /// Four-grade visibility (§3.7.5).
+    pub visibility: String,
+    pub content_sha256: Option<String>,
+    pub observed_scope: String,
+    pub missing_scope: String,
+    /// RFC 3339 access timestamp (journal format).
+    pub accessed_at: String,
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): mechanically derive the evidence record
+/// for a retrieval-lane host tool call (ADR-0010 §3.7.5 visibility table —
+/// a failed call produces NO evidence; read_file success = full text;
+/// web_fetch = full/partial by truncation markers; web_search = partial
+/// (its snippet is partial text); project_doc_index = full/metadata by the
+/// include_content argument). Pure — the structured ledger is built from
+/// these records, never from model self-description.
+pub(crate) fn build_evidence_record(
+    tool: &str,
+    tc: &ToolCall,
+    result: &ToolResult,
+) -> Option<EvidenceRecord> {
+    if result.exit_code != Some(0) {
+        return None;
+    }
+    let output = result.output.trim();
+    if output.is_empty() {
+        return None;
+    }
+    let arg = |key: &str| tc.arguments.get(key).and_then(|v| v.as_str());
+    let identity = arg("path")
+        .or_else(|| arg("url"))
+        .or_else(|| arg("query"))
+        .unwrap_or(tool)
+        .to_string();
+    let title = match tool {
+        "read_file" | "project_doc_index" => identity
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&identity)
+            .to_string(),
+        _ => identity.clone(),
+    };
+    let (source_type, visibility, observed_scope, missing_scope) = match tool {
+        "read_file" => (
+            "local_file",
+            "full_text_observed",
+            "file content",
+            "none",
+        ),
+        "web_fetch" => {
+            // H2 (review 2026-08-10): the fetch pipeline's truncation
+            // footer is "[web_fetch content truncated: ..." (codegen
+            // overflow.rs) — matching that prefix (plus the bounded-budget
+            // "[truncated]" fallback marker and a length backstop) is what
+            // actually detects a truncated page; the old substrings missed
+            // the real footer and granted full-level attribution to
+            // truncated text (§3.7.5).
+            let truncated = output.contains("[web_fetch content truncated")
+                || output.contains("[truncated")
+                || output.len() > 200_000;
+            if truncated {
+                ("web_page", "partial_text_observed", "first portion", "rest of page")
+            } else {
+                ("web_page", "full_text_observed", "full document", "none")
+            }
+        }
+        // A search result's snippet is partial text (never full-text
+        // attribution for a snippet — §3.7.5).
+        "web_search" => ("web_search_result", "partial_text_observed", "search snippet", "full page"),
+        // local_browser (2026-08-10): `browser_read` returns rendered page
+        // text with a mechanical truncation footer (host-side constant
+        // "[browser_read content truncated: ...") — same visibility mapping
+        // as web_fetch (§3.7.5): footer or length backstop → partial.
+        "browser_read" => {
+            let truncated = output.contains("[browser_read content truncated")
+                || output.len() > 200_000;
+            if truncated {
+                ("web_page", "partial_text_observed", "first portion", "rest of page")
+            } else {
+                ("web_page", "full_text_observed", "full document", "none")
+            }
+        }
+        "project_doc_index" => {
+            let include_content = arg("include_content") == Some("true");
+            if include_content {
+                ("project_doc", "full_text_observed", "document content", "none")
+            } else {
+                ("project_doc", "metadata_only", "metadata only", "document content")
+            }
+        }
+        _ => return None,
+    };
+    Some(EvidenceRecord {
+        tool: tool.to_string(),
+        identity,
+        title,
+        source_type: source_type.to_string(),
+        visibility: visibility.to_string(),
+        content_sha256: Some(sha256_hex(output.as_bytes())),
+        observed_scope: observed_scope.to_string(),
+        missing_scope: missing_scope.to_string(),
+        accessed_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): the committed structured result —
+/// the five ADR-0010 §3.3.3 sections as an event payload, plus the digests
+/// and mechanical facts the assessment reuses.
+#[derive(Debug, Clone)]
+pub(crate) struct StructuredCommittedResult {
+    /// The full `retrieval_result_committed` payload.
+    pub payload: serde_json::Value,
+    pub result_digest: String,
+    pub ledger_digest: String,
+    pub source_counts: serde_json::Value,
+    /// `Some` when degraded — the reason code for the assessment.
+    pub validation_note: Option<String>,
+}
+
+/// The claim × visibility matrix (§3.7.5) — mechanical bounds.
+fn claim_rank(strength: &str) -> u8 {
+    match strength {
+        "observed" => 3,
+        "derived" => 2,
+        "synthesized" => 1,
+        _ => 0,
+    }
+}
+
+fn visibility_rank(visibility: &str) -> u8 {
+    match visibility {
+        "full_text_observed" => 3,
+        "partial_text_observed" => 2,
+        "metadata_only" => 1,
+        _ => 0,
+    }
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): form the structured retrieval result
+/// (ADR-0010 §3.3.3/§3.7.4/§3.7.5). The ledger/query_summary/filtering_log/
+/// raw_source_refs are built MECHANICALLY from tool-call evidence; only the
+/// organized_response comes from the model's `[RESULT_JSON]` block, and it
+/// is validated — source_ids must reference the ledger and claim_strength
+/// must respect the visibility matrix. Validation failure (or no block)
+/// degrades the organized response to empty with an explicit
+/// `visibility_degraded` + reason record — never a silent downgrade.
+#[allow(clippy::too_many_arguments)] // the full result-formation contract
+pub(crate) fn build_structured_result(
+    evidence: &[EvidenceRecord],
+    docs: &[String],
+    sources: &[String],
+    fallback_source_type: &str,
+    output: &str,
+    subagent_session_id: &str,
+    activation_id: &str,
+    contract_id: &str,
+    contract_revision: u32,
+    call_id: &str,
+    task_goal: &str,
+) -> StructuredCommittedResult {
+    // 1. Mechanical ledger — tool-call evidence first (§3.7.4 identity/type/
+    //    access time/visibility/observed-missing scope/digest + derived
+    //    claim cap), then the [DOC]/[SOURCE] declaration lines as
+    //    metadata-grade entries (a no-tool-call response is legal; the line
+    //    contract stays a stable metadata interface).
+    let mut source_ledger: Vec<serde_json::Value> = Vec::new();
+    for (i, ev) in evidence.iter().enumerate() {
+        let source_id = format!("SRC-{:03}", i + 1);
+        let highest_allowed_claim = match ev.visibility.as_str() {
+            "full_text_observed" => "observed",
+            "partial_text_observed" => "derived",
+            "metadata_only" => "synthesized",
+            _ => "none",
+        };
+        let limitation = if ev.missing_scope != "none" {
+            format!("missing scope: {}", ev.missing_scope)
+        } else {
+            String::new()
+        };
+        let mut entry = serde_json::json!({
+            "source_id": source_id,
+            "source_title": ev.title,
+            "source_url_or_ref": ev.identity,
+            "source_type": ev.source_type,
+            "visibility": ev.visibility,
+            "accessed_at": ev.accessed_at,
+            "observed_scope": ev.observed_scope,
+            "missing_scope": ev.missing_scope,
+            "relevance": "direct",
+            "used_in_sections": [],
+            "highest_allowed_claim": highest_allowed_claim,
+        });
+        if let Some(digest) = &ev.content_sha256 {
+            entry["content_sha256"] = serde_json::Value::String(digest.clone());
+        }
+        if !limitation.is_empty() {
+            entry["limitation"] = serde_json::Value::String(limitation);
+        }
+        source_ledger.push(entry);
+    }
+    // [DOC]/[SOURCE] declaration lines — metadata-grade (never full-text
+    // attribution for a declaration; §3.7.5).
+    for doc in docs {
+        source_ledger.push(serde_json::json!({
+            "source_id": format!("SRC-{:03}", source_ledger.len() + 1),
+            "source_title": doc,
+            "source_url_or_ref": doc,
+            "source_type": "project_doc",
+            "visibility": "metadata_only",
+            "accessed_at": chrono::Utc::now().to_rfc3339(),
+            "observed_scope": "declaration only",
+            "missing_scope": "content",
+            "relevance": "direct",
+            "used_in_sections": [],
+            "highest_allowed_claim": "synthesized",
+        }));
+    }
+    for src in sources {
+        source_ledger.push(serde_json::json!({
+            "source_id": format!("SRC-{:03}", source_ledger.len() + 1),
+            "source_title": src,
+            "source_url_or_ref": src,
+            "source_type": fallback_source_type,
+            "visibility": "metadata_only",
+            "accessed_at": chrono::Utc::now().to_rfc3339(),
+            "observed_scope": "declaration only",
+            "missing_scope": "content",
+            "relevance": "direct",
+            "used_in_sections": [],
+            "highest_allowed_claim": "synthesized",
+        }));
+    }
+
+    // 2. Model organized block — validated against the ledger.
+    let model_block = crate::agents::retrieval::parse_retrieval_result_json(output);
+    let mut degraded = model_block.is_none();
+    let mut validation_note: Option<String> = None;
+    let mut sections: Vec<serde_json::Value> = Vec::new();
+    let mut claims: Vec<serde_json::Value> = Vec::new();
+    let mut used_in_sections: HashMap<String, Vec<String>> = HashMap::new();
+    if let Some(block) = &model_block {
+        let ledger_ids: std::collections::HashSet<String> = source_ledger
+            .iter()
+            .filter_map(|e| e["source_id"].as_str().map(str::to_string))
+            .collect();
+        let section_list = block
+            .get("sections")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let claim_list = block
+            .get("claims")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut ok = true;
+        for section in &section_list {
+            let strength = section.get("claim_strength").and_then(|v| v.as_str());
+            let ids: Vec<&str> = section
+                .get("source_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let title = section
+                .get("section_title")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if strength.is_none()
+                || ids.is_empty()
+                || !ids.iter().all(|id| ledger_ids.contains(*id))
+                || !title.is_empty() && section.get("content").and_then(|v| v.as_str()).is_none()
+            {
+                ok = false;
+                break;
+            }
+            // §3.7.5 matrix: every bound source must satisfy the strength.
+            for id in &ids {
+                let entry = source_ledger
+                    .iter()
+                    .find(|e| e["source_id"].as_str() == Some(*id))
+                    .unwrap();
+                if claim_rank(strength.unwrap()) > visibility_rank(entry["visibility"].as_str().unwrap_or_default()) {
+                    ok = false;
+                    break;
+                }
+            }
+            for id in &ids {
+                used_in_sections
+                    .entry((*id).to_string())
+                    .or_default()
+                    .push(title.to_string());
+            }
+        }
+        for claim in &claim_list {
+            let strength = claim.get("claim_strength").and_then(|v| v.as_str());
+            let ids: Vec<&str> = claim
+                .get("source_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            if strength.is_none()
+                || ids.is_empty()
+                || !ids.iter().all(|id| ledger_ids.contains(*id))
+            {
+                ok = false;
+                break;
+            }
+            for id in &ids {
+                let entry = source_ledger
+                    .iter()
+                    .find(|e| e["source_id"].as_str() == Some(*id))
+                    .unwrap();
+                if claim_rank(strength.unwrap()) > visibility_rank(entry["visibility"].as_str().unwrap_or_default()) {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            sections = section_list;
+            claims = claim_list;
+        } else {
+            degraded = true;
+            validation_note = Some("structured_result_validation_failed".to_string());
+        }
+    } else {
+        validation_note = Some("structured_result_validation_failed".to_string());
+    }
+    // Back-fill `used_in_sections` from the accepted block.
+    for entry in &mut source_ledger {
+        if let Some(ids) = used_in_sections.get(entry["source_id"].as_str().unwrap_or_default()) {
+            entry["used_in_sections"] =
+                serde_json::Value::Array(ids.iter().map(|s| serde_json::Value::String(s.clone())).collect());
+        }
+    }
+
+    // 3. query_summary — one mechanical entry for the dispatch.
+    let query_summary = vec![serde_json::json!({
+        "query_id": format!("QRY-{}", &sha256_hex(call_id.as_bytes())[..8]),
+        "query_text": task_goal,
+        "source_category": if evidence.iter().any(|e| e.source_type == "project_doc" || e.source_type == "local_file") { "project_docs" } else { "web" },
+        "result_count": source_ledger.len(),
+        "action_taken": "searched",
+        "tool_used": evidence.first().map(|e| e.tool.as_str()).unwrap_or("retrieval_dispatch"),
+    })];
+
+    // 4. filtering_log — this slice has no mechanical filter events (the
+    //    real tools' policy refusals land with the web client wiring, S5).
+    let filtering_log: Vec<serde_json::Value> = Vec::new();
+
+    // 5. raw_source_refs — mechanical projection of the ledger.
+    let raw_source_refs: Vec<serde_json::Value> = source_ledger
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "source_id": e["source_id"],
+                "source_title": e["source_title"],
+                "source_url_or_ref": e["source_url_or_ref"],
+                "visibility": e["visibility"],
+                "content_sha256": e.get("content_sha256").cloned().unwrap_or(serde_json::Value::Null),
+            })
+        })
+        .collect();
+
+    // 6. source_counts — mechanical distribution of the ledger.
+    let mut counts = [("full_text_observed", 0u64), ("partial_text_observed", 0u64), ("metadata_only", 0u64), ("unavailable", 0u64)];
+    for entry in &source_ledger {
+        let vis = entry["visibility"].as_str().unwrap_or_default();
+        if let Some((_, n)) = counts.iter_mut().find(|(k, _)| *k == vis) {
+            *n += 1;
+        }
+    }
+    let source_counts = serde_json::json!({
+        "total": source_ledger.len(),
+        "full_text_observed": counts[0].1,
+        "partial_text_observed": counts[1].1,
+        "metadata_only": counts[2].1,
+        "unavailable": counts[3].1,
+    });
+
+    let organized_response = serde_json::json!({ "sections": sections, "claims": claims });
+    let five_fields = serde_json::json!({
+        "query_summary": query_summary,
+        "source_ledger": source_ledger,
+        "filtering_log": filtering_log,
+        "organized_response": organized_response,
+        "raw_source_refs": raw_source_refs,
+    });
+    let result_digest = sha256_hex(&canonical_json(&five_fields).unwrap_or_default());
+    let ledger_digest = sha256_hex(
+        &canonical_json(&five_fields["source_ledger"]).unwrap_or_default(),
+    );
+    let result_id = format!(
+        "RET-RES-{}-{}",
+        &result_digest[..16],
+        &sha256_hex(call_id.as_bytes())[..8],
+    );
+    let payload = serde_json::json!({
+        "schema_version": "0.2.0-draft",
+        "result_kind": "retrieval_subagent_result",
+        "result_id": result_id,
+        "activation_id": activation_id,
+        "subagent_session_id": subagent_session_id,
+        "contract_id": contract_id,
+        "contract_revision": contract_revision,
+        "result_digest": result_digest,
+        "ledger_digest": ledger_digest,
+        "query_summary": five_fields["query_summary"],
+        "source_ledger": five_fields["source_ledger"],
+        "filtering_log": five_fields["filtering_log"],
+        "organized_response": five_fields["organized_response"],
+        "raw_source_refs": five_fields["raw_source_refs"],
+        "source_counts": source_counts,
+        "visibility_degraded": degraded,
+    });
+    StructuredCommittedResult {
+        payload,
+        result_digest,
+        ledger_digest,
+        source_counts,
+        validation_note,
+    }
+}
+
+impl AgentLoopController {
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): best-effort structured-result
+    /// artifact persist — `{journal_dir}/retrieval-results/
+    /// {activation_id}-r{rev}-{digest8}.json` (ADR-0010 §3.3.5 archive_ref;
+    /// the close record cites the real artifact). Failures only WARN — the
+    /// journal event is the authoritative record.
+    pub(crate) fn persist_result_artifact(
+        &self,
+        writer: &EventWriter<'_>,
+        committed: &StructuredCommittedResult,
+        activation_id: &str,
+        contract_revision: u32,
+    ) -> Option<String> {
+        let journal_dir = writer.journal_dir()?;
+        let dir = journal_dir.join("retrieval-results");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(
+                "result artifact dir create failed ({}): {e}",
+                dir.display()
+            );
+            return None;
+        }
+        let name = format!(
+            "{activation_id}-r{contract_revision}-{}.json",
+            &committed.result_digest[..8]
+        );
+        let path = dir.join(&name);
+        match serde_json::to_string_pretty(&committed.payload) {
+            Ok(json) => match std::fs::write(&path, json) {
+                Ok(()) => Some(path.to_string_lossy().to_string()),
+                Err(e) => {
+                    tracing::warn!(
+                        "result artifact write failed ({}): {e}",
+                        path.display()
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("result artifact serialize failed: {e}");
+                None
+            }
+        }
+    }
 }
 
 /// GAP-SUBAGENT-RUNTIME (2026-08-10) — ADR-0010 §3.3 subagent lifecycle
@@ -230,6 +745,123 @@ impl ActivationRegistry {
     #[allow(dead_code)] // read by the M4 disposition handler
     pub(crate) fn state(&self, role: SubagentRole) -> Option<&ActivationState> {
         self.states.get(&role)
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): serialize the live registry to the
+    /// sidecar snapshot JSON (Closed activations excluded — the next
+    /// creation starts a new seq). `origin_run_id` records where each
+    /// activation was last active (the restore audit route).
+    pub(crate) fn snapshot_json(&self, origin_run_id: &str) -> serde_json::Value {
+        let snapshot = StoredActivationSnapshot {
+            next_seq: self
+                .next_seq
+                .iter()
+                .map(|(role, seq)| (role.as_str().to_string(), *seq))
+                .collect(),
+            activations: self
+                .states
+                .values()
+                .filter(|a| a.status != ActivationStatus::Closed)
+                .map(|a| StoredActivation {
+                    activation_id: a.activation_id.clone(),
+                    parent_session_id: a.parent_session_id.clone(),
+                    subagent_session_id: a.subagent_session_id.clone(),
+                    contract_id: a.contract_id.clone(),
+                    contract_revision: a.contract_revision,
+                    status: a.status,
+                    tool_rounds_used: a.tool_rounds_used,
+                    result_digest: a.result_digest.clone(),
+                    result_archive_ref: a.result_archive_ref.clone(),
+                    next_goal: a.next_goal.clone(),
+                    pending_assessment_id: a.pending.as_ref().map(|p| p.assessment_id.clone()),
+                    pending_expected_contract_revision: a
+                        .pending
+                        .as_ref()
+                        .map(|p| p.expected_contract_revision)
+                        .unwrap_or(0),
+                    origin_run_id: origin_run_id.to_string(),
+                })
+                .collect(),
+        };
+        serde_json::to_value(snapshot).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Seed the registry from a sidecar snapshot; returns the restored
+    /// activations (journaled as `retrieval_activation_restored` by the
+    /// caller). A malformed snapshot seeds nothing (the sidecar load already
+    /// warned).
+    pub(crate) fn seed_from_json(&mut self, value: &serde_json::Value) -> Vec<StoredActivation> {
+        let Ok(snapshot) = serde_json::from_value::<StoredActivationSnapshot>(value.clone()) else {
+            return Vec::new();
+        };
+        for (role_str, seq) in &snapshot.next_seq {
+            if let Some(role) = subagent_role_from_str(role_str) {
+                self.next_seq.insert(role, *seq);
+            }
+        }
+        let mut restored = Vec::new();
+        for stored in snapshot.activations {
+            // The role rides the activation_id (`retrieval-{role}-…`).
+            let role = stored
+                .activation_id
+                .split('-')
+                .nth(1)
+                .and_then(subagent_role_from_str);
+            let Some(role) = role else {
+                tracing::warn!(
+                    "activation sidecar: unparseable activation_id {} — skipped",
+                    stored.activation_id
+                );
+                continue;
+            };
+            if self.states.contains_key(&role) {
+                tracing::warn!(
+                    "activation sidecar: duplicate activation for role {} — skipped",
+                    role.as_str()
+                );
+                continue;
+            }
+            let pending = stored.pending_assessment_id.as_ref().map(|a_id| {
+                PendingDisposition {
+                    assessment_id: a_id.clone(),
+                    expected_contract_revision: stored.pending_expected_contract_revision,
+                    decided: None,
+                }
+            });
+            // GAP-RETRIEVAL-TOOLS: conversation context does not ride the
+            // sidecar (registered boundary) — a restored activation resumes
+            // with an empty conversation; the journal is the evidence.
+            self.states.insert(
+                role,
+                ActivationState {
+                    activation_id: stored.activation_id.clone(),
+                    parent_session_id: stored.parent_session_id.clone(),
+                    subagent_session_id: stored.subagent_session_id.clone(),
+                    contract_id: stored.contract_id.clone(),
+                    contract_revision: stored.contract_revision,
+                    status: stored.status,
+                    conversation: Vec::new(),
+                    pending,
+                    next_goal: stored.next_goal.clone(),
+                    result_digest: stored.result_digest.clone(),
+                    submitted: Vec::new(),
+                    tool_rounds_used: stored.tool_rounds_used,
+                    result_archive_ref: stored.result_archive_ref.clone(),
+                },
+            );
+            restored.push(stored);
+        }
+        restored
+    }
+}
+
+/// Role from the wire/snapshot string (`internal_retrieval` /
+/// `external_retrieval`).
+fn subagent_role_from_str(s: &str) -> Option<SubagentRole> {
+    match s {
+        "internal_retrieval" => Some(SubagentRole::InternalRetrieval),
+        "external_retrieval" => Some(SubagentRole::ExternalRetrieval),
+        _ => None,
     }
 }
 
@@ -267,9 +899,16 @@ pub(crate) struct ActivationState {
     /// activation starts at 0). Read as `initial_tool_rounds` by the
     /// shared loop and written back from `LoopOutcome.tool_rounds`.
     pub tool_rounds_used: u32,
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the committed structured result's
+    /// artifact path (ADR-0010 §3.3.5 archive_ref — the close record cites
+    /// the real artifact instead of the `run-journal:{run_id}` placeholder).
+    /// `None` when no result was committed (terminal closes keep the
+    /// journal reference).
+    pub result_archive_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum ActivationStatus {
     /// Retrieval may run (new task or continue).
     Active,
@@ -279,6 +918,104 @@ pub(crate) enum ActivationStatus {
     /// Close committed — live state cleared; the next retrieval creates
     /// a new activation (new seq, revision 0).
     Closed,
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10): the serializable activation snapshot —
+/// persisted via the acp_server sidecar (`.gsa/activations/<session8>.json`).
+/// Only state-machine fields ride the sidecar; the conversation and the
+/// in-process replay ledger (`submitted`) do not (registered boundary:
+/// cross-run disposition replay-idempotency is in-process only — a new run's
+/// dispositions derive fresh ids from their call ids).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct StoredActivationSnapshot {
+    #[serde(default)]
+    pub next_seq: HashMap<String, u32>,
+    #[serde(default)]
+    pub activations: Vec<StoredActivation>,
+}
+
+/// One persisted activation (state-machine fields only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredActivation {
+    pub activation_id: String,
+    pub parent_session_id: String,
+    pub subagent_session_id: String,
+    pub contract_id: String,
+    pub contract_revision: u32,
+    pub status: ActivationStatus,
+    pub tool_rounds_used: u32,
+    #[serde(default)]
+    pub result_digest: Option<String>,
+    #[serde(default)]
+    pub result_archive_ref: Option<String>,
+    #[serde(default)]
+    pub next_goal: Option<String>,
+    #[serde(default)]
+    pub pending_assessment_id: Option<String>,
+    #[serde(default)]
+    pub pending_expected_contract_revision: u32,
+    /// The run where this activation was last active (restore audit route).
+    #[serde(default)]
+    pub origin_run_id: String,
+}
+
+/// GAP-RETRIEVAL-TOOLS (2026-08-10) — ADR-0010 §3.7.1: the explicit
+/// session/task-contract retrieval mode. `off` is the unauthenticated
+/// default; `local_browser` is the preferred enabled mode; `framework_fallback`
+/// may only be entered by explicit user / parent-task-contract selection.
+/// Mode changes are NEVER implicit — a failure (timeout/login/CAPTCHA) must
+/// surface explicitly, not switch modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrievalMode {
+    Off,
+    LocalBrowser,
+    FrameworkFallback,
+}
+
+impl RetrievalMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RetrievalMode::Off => "off",
+            RetrievalMode::LocalBrowser => "local_browser",
+            RetrievalMode::FrameworkFallback => "framework_fallback",
+        }
+    }
+
+    /// Parse the session-level mode from its wire form (ACP session/new).
+    pub fn from_wire(value: Option<&str>) -> Option<RetrievalMode> {
+        match value {
+            Some("local_browser") => Some(RetrievalMode::LocalBrowser),
+            Some("framework_fallback") => Some(RetrievalMode::FrameworkFallback),
+            Some("off") => Some(RetrievalMode::Off),
+            _ => None,
+        }
+    }
+}
+
+/// GAP-RETRIEVAL-TOOLS: the capability probe result for the selected mode.
+/// Never a silent fallback — `Unsupported`/`Degraded` record WHY a mode
+/// cannot serve (e.g. local_browser automation not implemented in this slice;
+/// web client not configured). `Available` is constructed by the web client
+/// probe once a client is configured (S5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetrievalCapability {
+    #[allow(dead_code)] // constructed by the S5 web-client probe
+    Available,
+    Unsupported(String),
+    #[allow(dead_code)] // reserved for degraded transports (S5)
+    Degraded(String),
+}
+
+impl RetrievalCapability {
+    /// The `capability_status` value for the mode-transition payload.
+    pub(crate) fn status_str(&self) -> &'static str {
+        match self {
+            RetrievalCapability::Available => "available",
+            RetrievalCapability::Unsupported(_) => "unsupported",
+            RetrievalCapability::Degraded(_) => "degraded",
+        }
+    }
 }
 
 /// The assessment context a parent disposition must bind (ADR-0010 §4.4:
@@ -557,7 +1294,125 @@ impl AgentLoopController {
             whitelist_cap: DEFAULT_WHITELIST_CAP,
             activations: Mutex::new(ActivationRegistry::default()),
             dc_state: Mutex::new(crate::diagnostic_coverage::DebugEpisodeState::default()),
+            retrieval_mode: RetrievalMode::Off,
+            previous_retrieval_mode: None,
+            retrieval_capability: RetrievalCapability::Unsupported(
+                "retrieval_mode_not_selected".to_string(),
+            ),
+            bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
+            session_id: None,
+            evidence: Mutex::new(Vec::new()),
+            restored_activations: Mutex::new(Vec::new()),
         }
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): attach the session-level retrieval
+    /// mode (ADR-0010 §3.7.1). `bootstrap_transition_pending` journals one
+    /// `retrieval_mode_transition` (off → mode) at the next run's startup.
+    pub fn with_retrieval_mode(
+        mut self,
+        mode: RetrievalMode,
+        capability: RetrievalCapability,
+        bootstrap_transition_pending: bool,
+        session_id: Option<String>,
+        previous_mode: Option<RetrievalMode>,
+    ) -> Self {
+        self.retrieval_mode = mode;
+        self.retrieval_capability = capability;
+        self.bootstrap_transition_pending =
+            std::sync::atomic::AtomicBool::new(bootstrap_transition_pending);
+        self.session_id = session_id;
+        self.previous_retrieval_mode = previous_mode;
+        self
+    }
+
+    /// GAP-RETRIEVAL-TOOLS: whether the bootstrap mode transition was
+    /// journaled (the pending flag cleared) — the acp_server uses it to
+    /// clear the sidecar flag after a successful run.
+    pub fn bootstrap_transition_journaled(&self) -> bool {
+        !self
+            .bootstrap_transition_pending
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): seed the activation registry from a
+    /// cross-prompt sidecar snapshot. Restored activations are journaled as
+    /// `retrieval_activation_restored` at the next run's startup (each
+    /// prompt's controller build declares the handover once).
+    pub fn with_activation_snapshot(
+        self,
+        snapshot: Option<&serde_json::Value>,
+    ) -> Self {
+        if let Some(value) = snapshot {
+            let restored = {
+                let mut reg = self.activations.lock().unwrap();
+                reg.seed_from_json(value)
+            };
+            *self.restored_activations.lock().unwrap() = restored;
+        }
+        self
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): journal one `retrieval_activation_
+    /// restored` event per seeded awaiting-disposition activation — the
+    /// parent disposition may then close/continue it across runs (the
+    /// verifier resolves the assessment reference through the declaration).
+    /// Called at the run startup (after the mode transition, before the
+    /// availability gate). Cleared after journaling.
+    pub(crate) async fn journal_activation_restores(
+        &self,
+        writer: &mut EventWriter<'_>,
+    ) -> Result<(), AgentLoopError> {
+        let restores: Vec<StoredActivation> =
+            std::mem::take(&mut *self.restored_activations.lock().unwrap());
+        let session_id = self.session_id.clone().unwrap_or_default();
+        // M3 (review 2026-08-10): chars().take(8), not a byte slice — a
+        // multi-byte UTF-8 session id would panic on a non-char boundary.
+        // Matches the sidecar path derivation in acp_server.
+        let sidecar_ref = format!(
+            ".gsa/activations/{}.json",
+            session_id.chars().take(8).collect::<String>()
+        );
+        for (i, stored) in restores.iter().enumerate() {
+            let restore_id = format!(
+                "RST-ACT-{}-{:02}",
+                &sha256_hex(stored.activation_id.as_bytes())[..16],
+                i,
+            );
+            let mut payload = serde_json::json!({
+                "restore_id": restore_id,
+                "activation_id": stored.activation_id,
+                "subagent_session_id": stored.subagent_session_id,
+                "contract_id": stored.contract_id,
+                "contract_revision": stored.contract_revision,
+                "status": match stored.status {
+                    ActivationStatus::AwaitingDisposition => "awaiting_disposition",
+                    _ => "active",
+                },
+                "origin_run_id": stored.origin_run_id,
+                "sidecar_ref": sidecar_ref,
+                "tool_rounds_used": stored.tool_rounds_used,
+            });
+            if let Some(a_id) = &stored.pending_assessment_id {
+                payload["assessment_id"] = serde_json::Value::String(a_id.clone());
+            }
+            if let Some(digest) = &stored.result_digest {
+                payload["result_digest"] = serde_json::Value::String(digest.clone());
+            }
+            writer
+                .record(EventType::RetrievalActivationRestored, payload)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the live registry as sidecar JSON
+    /// (Closed excluded) — the acp_server persists it after each run.
+    pub fn activation_snapshot_json(&self, origin_run_id: &str) -> serde_json::Value {
+        self.activations
+            .lock()
+            .unwrap()
+            .snapshot_json(origin_run_id)
     }
 
     /// IP5: attach the session's pre-mutation snapshot store (see
@@ -773,6 +1628,15 @@ impl AgentLoopController {
             whitelist_cap: DEFAULT_WHITELIST_CAP,
             activations: Mutex::new(ActivationRegistry::default()),
             dc_state: Mutex::new(crate::diagnostic_coverage::DebugEpisodeState::default()),
+            retrieval_mode: RetrievalMode::Off,
+            previous_retrieval_mode: None,
+            retrieval_capability: RetrievalCapability::Unsupported(
+                "retrieval_mode_not_selected".to_string(),
+            ),
+            bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
+            session_id: None,
+            evidence: Mutex::new(Vec::new()),
+            restored_activations: Mutex::new(Vec::new()),
         }
     }
 
@@ -1249,6 +2113,72 @@ impl AgentLoopController {
                 }),
             });
         }
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): mode=off removes the retrieval
+        // dispatch family from the model-visible declarations (ADR-0010
+        // §3.7.1 — unauthenticated retrieval starts from off; §3.5.2
+        // name-level refusal: the model never sees tools that cannot run).
+        // `retrieval_disposition` STAYS — disposing an already-pending
+        // (possibly cross-run restored) activation is a legal off-mode
+        // action; the relay still refuses the family at dispatch time
+        // (belt and braces).
+        if self.retrieval_mode == RetrievalMode::Off {
+            // H1 (review 2026-08-10): `project_doc_index` is a retrieval
+            // tool routed through the host lane — the off projection hides
+            // it too (the dispatch gate in run_host_tool is belt and
+            // braces).
+            tool_defs.retain(|t| {
+                !crate::relay::is_retrieval_dispatch_name(&t.name)
+                    && !crate::relay::is_retrieval_mode_gated_host_tool(&t.name)
+            });
+        }
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): journal the session bootstrap
+        // mode transition (ADR-0010 §3.7.1 — every transition carries
+        // old/new/authority/reason; never implicit). Written BEFORE
+        // tool_availability_check so the availability gate reflects the
+        // mode's tool projection. Cleared on journal success (the
+        // acp_server sidecar write-back flips the session flag).
+        // M4 (review 2026-08-10): any explicit mode change journals —
+        // including a change TO off (that is a transition like any other);
+        // old_mode is the real persisted value, never a hardcoded "off".
+        if self
+            .bootstrap_transition_pending
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let suffix = writer
+                .run_id()
+                .strip_prefix("RUN-")
+                .unwrap_or(writer.run_id());
+            let capability_status = if self.retrieval_mode == RetrievalMode::Off {
+                // Schema allOf: new_mode=off ⇒ capability_status must be null.
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(self.retrieval_capability.status_str())
+            };
+            writer
+                .record(
+                    EventType::RetrievalModeTransition,
+                    serde_json::json!({
+                        "transition_id": format!("MODETRANS-{}-{:04}", suffix, writer.seq()),
+                        "session_id": self.session_id.clone().unwrap_or_else(|| writer.run_id().to_string()),
+                        "old_mode": self
+                            .previous_retrieval_mode
+                            .as_ref()
+                            .map_or("off", |m| m.as_str()),
+                        "new_mode": self.retrieval_mode.as_str(),
+                        "authority": "session_bootstrap",
+                        "reason_code": "session_default",
+                        "capability_status": capability_status,
+                    }),
+                )
+                .await?;
+            self.bootstrap_transition_pending
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): journal the sidecar-restored
+        // activations (ADR-0010 §3.3 — the assessment is declared known so a
+        // parent disposition may close/continue across runs). After the mode
+        // transition, before the availability gate.
+        self.journal_activation_restores(writer).await?;
         let specs: Vec<ToolSpec> = tool_defs
             .iter()
             .map(|t| {
@@ -1344,6 +2274,13 @@ impl AgentLoopController {
         } else {
             LoopProfile::main(self.max_tool_rounds)
         };
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): pre-loop orientation snapshot
+        // for the pre-handoff checkpoint (the orientation reference is
+        // consumed by the loop below).
+        let pre_handoff_completed = orientation
+            .as_ref()
+            .map(|o| o.completed_rounds(crate::orientation::AgentRole::Main))
+            .unwrap_or(0);
         let outcome = run_agent_loop(
             &SharedLoopServices {
                 blackboard: &self.blackboard,
@@ -1351,6 +2288,8 @@ impl AgentLoopController {
                 pacing_rounds: &self.pacing_rounds,
                 context_compact: &self.context_compact,
                 dc_state: &self.dc_state,
+                // Main lane: no retrieval evidence collection.
+                evidence: None,
             },
             self,
             writer,
@@ -1381,6 +2320,33 @@ impl AgentLoopController {
             }
             StagnationDecision::HandoffRequired => (EventType::RunInvalidated, "handoff_required"),
         };
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): pre-handoff orientation
+        // checkpoint — ADR-0010 §11.1: pre-handoff is an independent
+        // lifecycle trigger, never part of the 7-round count; audit-only
+        // (no block injection, no fire reset). Journaled before the
+        // run-invalidated terminal. `completed` is the pre-loop snapshot
+        // (the orientation reference is consumed by the loop) — the audit
+        // intent is "how far the session was before the handoff".
+        if !matches!(stagnation_decision, StagnationDecision::Continue) {
+            let completed = pre_handoff_completed;
+            writer
+                .record(
+                    EventType::OrientationCheckpoint,
+                    serde_json::json!({
+                        "checkpoint_id": format!("ORIENT-{}-{:04}", writer.run_id(), writer.seq()),
+                        "inquiry_family": "neutral",
+                        "inquiry_kind": "orientation_checkpoint",
+                        "agent_role": "main",
+                        "session_id": self.session_id.clone().unwrap_or_else(|| writer.run_id().to_string()),
+                        "trigger": "pre_handoff",
+                        "completed_turns_since_orientation": completed,
+                        "step_index": 0,
+                        "message_block": "",
+                        "injection_position": "pre_terminal",
+                    }),
+                )
+                .await?;
+        }
         writer
             .record(
                 terminal_event,
@@ -1559,6 +2525,95 @@ impl AgentLoopController {
             }
             DispatchTarget::Host => unreachable!("host calls go to run_host_tool"),
         };
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): mode gate (ADR-0010 §3.7.1 —
+        // explicit mode, never an implicit fallback).
+        //
+        // mode=off refuses WITHOUT a ToolStarted: the verifier's mode rule
+        // forbids any retrieval dispatch (tool_started with a retrieval
+        // target) after a transition to off — the refusal is journaled as
+        // the terminal ToolCompleted(error) alone.
+        if self.retrieval_mode == RetrievalMode::Off {
+            let msg = format!(
+                "retrieval '{target_name}' refused — retrieval mode is 'off' \
+                 for this session (ADR-0010 §3.7.1); no retrieval tools are \
+                 available. Submit retrieval_disposition close for any \
+                 already-pending activation.",
+            );
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "target": target_name,
+                        "status": "error",
+                        "error": "retrieval_mode_off",
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(ToolResult {
+                output: msg,
+                exit_code: Some(1),
+            });
+        }
+        // mode=local_browser with an unavailable capability fails EXPLICITLY
+        // (browser automation is not implemented in this slice; the probe
+        // recorded unsupported — no silent degradation to the framework
+        // tools). The refusal follows the standard ToolStarted →
+        // ToolCompleted(error) audit shape.
+        if self.retrieval_mode == RetrievalMode::LocalBrowser {
+            match &self.retrieval_capability {
+                RetrievalCapability::Available => {}
+                RetrievalCapability::Unsupported(reason) | RetrievalCapability::Degraded(reason) => {
+                    writer
+                        .record(
+                            EventType::ToolStarted,
+                            serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "target": target_name,
+                            }),
+                        )
+                        .await?;
+                    let msg = format!(
+                        "retrieval '{target_name}' refused — local_browser \
+                         capability is not available ({reason}); no silent \
+                         fallback to framework retrieval tools (ADR-0010 \
+                         §3.7.1)",
+                    );
+                    writer
+                        .record(
+                            EventType::ToolCompleted,
+                            serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "target": target_name,
+                                "status": "error",
+                                "error": "retrieval_capability_unavailable",
+                            }),
+                        )
+                        .await?;
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: msg.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                    return Ok(ToolResult {
+                        output: msg,
+                        exit_code: Some(1),
+                    });
+                }
+            }
+        }
         writer
             .record(
                 EventType::ToolStarted,
@@ -1681,6 +2736,7 @@ impl AgentLoopController {
                             // budget accumulates only within one
                             // activation's lifetime).
                             tool_rounds_used: 0,
+                            result_archive_ref: None,
                         },
                         goal.clone(),
                     )
@@ -1741,6 +2797,10 @@ impl AgentLoopController {
         // Box::pin: the subagent loop is a recursive call through the
         // dispatch edge (main loop → subagent loop; depth is capped at one
         // by the nested-dispatch gate, E0733 requires the box).
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): fresh evidence collection per
+        // dispatch — the loop fills it from the lane's host calls; result
+        // formation consumes it below.
+        self.evidence.lock().unwrap().clear();
         let loop_outcome = Box::pin(run_agent_loop(
             &SharedLoopServices {
                 blackboard: &self.blackboard,
@@ -1748,6 +2808,8 @@ impl AgentLoopController {
                 pacing_rounds: &self.pacing_rounds,
                 context_compact: &self.context_compact,
                 dc_state: &self.dc_state,
+                // Retrieval lane: collect tool-call evidence (§3.7.4).
+                evidence: Some(&self.evidence),
             },
             self,
             writer,
@@ -1803,6 +2865,9 @@ impl AgentLoopController {
             act.contract_id.clone(),
             act.contract_revision,
         );
+        // GAP-RETRIEVAL-TOOLS: the subagent session id rides the committed
+        // result payload — cloned before the move into the registry.
+        let subagent_session_id = act.subagent_session_id.clone();
         self.activations.lock().unwrap().states.insert(role, act);
 
         let tool_result = match result {
@@ -1819,6 +2884,27 @@ impl AgentLoopController {
                 // retrieval semantics plug into).
                 let (docs, sources) =
                     crate::agents::retrieval::parse_retrieval_text(&output);
+                // GAP-RETRIEVAL-TOOLS: the structured result consumes the
+                // parsed lines by reference (ledger merge); `write_section`
+                // takes them by value afterwards.
+                let (activation_id, contract_id, contract_revision) = activation_identity;
+                let evidence = self.evidence.lock().unwrap().clone();
+                let committed = build_structured_result(
+                    &evidence,
+                    &docs,
+                    &sources,
+                    match role {
+                        SubagentRole::InternalRetrieval => "project_doc",
+                        SubagentRole::ExternalRetrieval => "web_page",
+                    },
+                    &output,
+                    &subagent_session_id,
+                    &activation_id,
+                    &contract_id,
+                    contract_revision,
+                    &tc.call_id,
+                    &goal,
+                );
                 crate::agents::retrieval::write_section(
                     role,
                     &self.blackboard,
@@ -1840,39 +2926,44 @@ impl AgentLoopController {
                 // GAP-INQUIRY-SPLIT (2026-08-09): the free-form
                 // RETRIEVAL_COMPLETION_CHECK (model self-reported "是否已获得
                 // 所需内容") is deleted — ADR-0010 §4.3 forbids model free-text
-                // verdicts. The replacement is a purely MECHANICAL
-                // `information_sufficiency_assessment`: it snapshots the
-                // retrieval ledger written by the subagent (single-writer
-                // section), digests the result, and records
-                // `status=indeterminate` — this slice has no mechanical
-                // coverage requirement, and §4.3 says exactly that case must
-                // be `indeterminate`, never a model-filled verdict. The
-                // disposition/close chain arrives in M4 (the verifier
-                // accepts orphan assessments).
-                let (ledger_entries, categories) = {
-                    let r = self.blackboard.read();
-                    match role {
-                        SubagentRole::InternalRetrieval => (
-                            r.internal_ret
-                                .project_docs
-                                .iter()
-                                .chain(r.internal_ret.source_ledger.iter())
-                                .cloned()
-                                .collect::<Vec<String>>(),
-                            vec!["project_docs", "source_ledger"],
-                        ),
-                        SubagentRole::ExternalRetrieval => (
-                            r.external_ret.web_sources.clone(),
-                            vec!["web_sources"],
-                        ),
-                    }
-                };
-                let ledger_value = serde_json::to_value(&ledger_entries)
-                    .unwrap_or(serde_json::Value::Null);
-                let ledger_digest =
-                    sha256_hex(&canonical_json(&ledger_value).unwrap_or_default());
-                let result_digest = sha256_hex(output.as_bytes());
-                let total = ledger_entries.len() as u64;
+                // verdicts.
+                //
+                // GAP-RETRIEVAL-TOOLS (2026-08-10): structured result
+                // formation — ADR-0010 §3.3.3 five sections. The ledger/
+                // query_summary/filtering_log/raw_source_refs are built
+                // MECHANICALLY from the lane's tool-call evidence (single
+                // writer: the controller); the model's `[RESULT_JSON]` block
+                // supplies the organized_response and is validated against
+                // the ledger (source_ids ⊆ ledger, claim × visibility
+                // matrix §3.7.5). Validation failure degrades explicitly —
+                // visibility_degraded + reason code, never a silent
+                // downgrade. The result is committed as an event, archived
+                // to `{journal_dir}/retrieval-results/` (best-effort), and
+                // the assessment consumes its mechanical facts.
+                let result_digest = committed.result_digest.clone();
+                let ledger_digest = committed.ledger_digest.clone();
+                let source_counts = committed.source_counts.clone();
+                writer
+                    .record(
+                        EventType::RetrievalResultCommitted,
+                        committed.payload.clone(),
+                    )
+                    .await?;
+                // GAP-RETRIEVAL-TOOLS (2026-08-10): the committed result's
+                // source identities count as examined surfaces for the DC
+                // signals (key_surface_unexamined; main lane — the
+                // subagent dispatch runs under the main profile).
+                crate::diagnostic_coverage::maybe_consume_dc_retrieval_evidence(
+                    &self.dc_state,
+                    &committed,
+                )
+                .await?;
+                let artifact_ref = self.persist_result_artifact(
+                    writer,
+                    &committed,
+                    &activation_id,
+                    contract_revision,
+                );
                 // Review P2-3 (2026-08-10): the id binds the CALL dimension
                 // too — two identical outputs on different activations must
                 // not collide (the §4.4 verifier rejects a replayed
@@ -1884,14 +2975,11 @@ impl AgentLoopController {
                     &result_digest[..16],
                     &sha256_hex(tc.call_id.as_bytes())[..8],
                 );
-                // D3-3 upgrade: session-scoped activation identity (the old
-                // `{target}-{call_id}` temporary identity is gone). The
-                // digest rides the activation for the M4 close record.
-                let (activation_id, contract_id, contract_revision) = activation_identity;
                 {
                     let mut reg = self.activations.lock().unwrap();
                     if let Some(a) = reg.states.get_mut(&role) {
                         a.result_digest = Some(result_digest.clone());
+                        a.result_archive_ref = artifact_ref;
                     }
                 }
                 // M4: the activation moves to awaiting_parent_disposition —
@@ -1907,6 +2995,24 @@ impl AgentLoopController {
                         });
                     }
                 }
+                // source_categories — the mechanical source-type set of the
+                // committed ledger.
+                let categories: Vec<String> = committed.payload["source_ledger"]
+                    .as_array()
+                    .map(|ledger| {
+                        let mut seen = std::collections::BTreeSet::new();
+                        for entry in ledger {
+                            if let Some(st) = entry["source_type"].as_str() {
+                                seen.insert(st.to_string());
+                            }
+                        }
+                        seen.into_iter().collect()
+                    })
+                    .unwrap_or_default();
+                let mut reason_codes = vec!["no_mechanical_coverage_requirement"];
+                if let Some(note) = &committed.validation_note {
+                    reason_codes.push(note.as_str());
+                }
                 writer
                     .record(
                         EventType::InformationSufficiencyAssessment,
@@ -1917,21 +3023,12 @@ impl AgentLoopController {
                             "contract_revision": contract_revision,
                             "result_digest": result_digest,
                             "ledger_digest": ledger_digest,
-                            "source_counts": {
-                                "total": total,
-                                // The scripted subagent's `[DOC]`/`[SOURCE]`
-                                // lines are declaration-level references —
-                                // metadata-grade visibility, never full text.
-                                "full_text_observed": 0,
-                                "partial_text_observed": 0,
-                                "metadata_only": total,
-                                "unavailable": 0,
-                            },
+                            "source_counts": source_counts,
                             "source_categories": categories,
                             "missing_categories": [],
                             "filtering_reasons": [],
                             "status": "indeterminate",
-                            "reason_codes": ["no_mechanical_coverage_requirement"],
+                            "reason_codes": reason_codes,
                             "source_visibility_gate": "not_applicable",
                             "assessment_version": "0.1.0",
                         }),
@@ -2492,6 +3589,14 @@ impl AgentLoopController {
             )[..16],
             contract_revision,
         );
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): the close record cites the REAL
+        // structured-result artifact when one was committed (normal_close /
+        // budget_exhausted with a result); terminal closes without a result
+        // keep the journal reference.
+        let archive_ref = match (&result_digest, self.retrieval_capability_archive_ref(activation_id)) {
+            (Some(_), Some(artifact)) => artifact,
+            _ => format!("run-journal:{}", writer.run_id()),
+        };
         writer
             .record(
                 EventType::RetrievalCloseRecord,
@@ -2508,11 +3613,23 @@ impl AgentLoopController {
                     "terminal_reason": terminal_reason,
                     "resumable": true,
                     "live_state_reset": true,
-                    "archive_ref": format!("run-journal:{}", writer.run_id()),
+                    "archive_ref": archive_ref,
                 }),
             )
             .await?;
         Ok(())
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the activation's committed-result
+    /// artifact path (set at result formation; `None` before any commit).
+    fn retrieval_capability_archive_ref(&self, activation_id: &str) -> Option<String> {
+        self.activations
+            .lock()
+            .unwrap()
+            .states
+            .values()
+            .find(|a| a.activation_id == activation_id)
+            .and_then(|a| a.result_archive_ref.clone())
     }
 
     /// Close the role's activation with a TERMINAL authority reason (user
@@ -2614,6 +3731,86 @@ impl AgentLoopController {
         // and the tool replies violates the provider protocol (400,
         // 2026-08-07 wordy); ADR-0010 §3.5.4 counts rounds, not calls, so
         // the aggregation belongs at round granularity anyway.
+        // H1 (review 2026-08-10): the host-routed retrieval tool is gated by
+        // the mode=off refusal — same no-ToolStarted shape as the subagent
+        // dispatch gate (the verifier's mode rule forbids retrieval dispatch
+        // after a transition to off; the refusal is the ToolCompleted(error)
+        // alone).
+        if self.retrieval_mode == RetrievalMode::Off
+            && crate::relay::is_retrieval_mode_gated_host_tool(&tc.name)
+        {
+            let msg = format!(
+                "retrieval '{}' refused — retrieval mode is 'off' for this \
+                 session (ADR-0010 §3.7.1); no retrieval tools are available.",
+                tc.name,
+            );
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "target": "internal_retrieval",
+                        "status": "error",
+                        "error": "retrieval_mode_off",
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                },
+                None,
+            ));
+        }
+        // local_browser (2026-08-10): `browser_read` is only reachable in
+        // local_browser mode — framework_fallback is the web-tool lane and
+        // the model must not cross lanes (ADR-0010 §3.7.1; the off case was
+        // already refused above via the gated-host-tool family). No
+        // ToolStarted — same refusal shape as the off gate.
+        if tc.name == "browser_read" && self.retrieval_mode != RetrievalMode::LocalBrowser {
+            let msg = format!(
+                "retrieval '{}' refused — retrieval mode is '{}' for this \
+                 session; browser_read requires local_browser mode \
+                 (ADR-0010 §3.7.1); no silent fallback to web tools.",
+                tc.name,
+                self.retrieval_mode.as_str(),
+            );
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "target": "external_retrieval",
+                        "status": "error",
+                        "error": "retrieval_mode_requires_local_browser",
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                },
+                None,
+            ));
+        }
         // D-9 (FIX_PLAN 2026-08-06): `run_tests` executes the host's FIXED
         // command — the model supplies no argv, so the permission gate is
         // skipped by design (the command itself is host-owned and hidden;
@@ -3192,6 +4389,15 @@ pub(crate) struct EventWriter<'a> {
     heartbeat: Option<crate::gateway::model::ActivityClock>,
 }
 
+impl EventWriter<'_> {
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the run's journal directory
+    /// (`None` in grill discard mode) — structured-result artifacts land
+    /// under `{dir}/retrieval-results/`.
+    pub(crate) fn journal_dir(&self) -> Option<std::path::PathBuf> {
+        self.journal.map(|j| j.journal_dir().to_path_buf())
+    }
+}
+
 /// GAP-SUBAGENT-RUNTIME M5 (2026-08-10): a discard-mode writer (grill
 /// semantics — `journal: None`) for unit tests that exercise producer
 /// logic without a journal.
@@ -3383,6 +4589,19 @@ mod tests {
         }
     }
 
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval tests run under an
+    /// explicit `framework_fallback` mode with an available capability —
+    /// the bare `with_gateway` default is mode=off (ADR-0010 §3.7.1).
+    fn with_retrieval_enabled(controller: AgentLoopController) -> AgentLoopController {
+        controller.with_retrieval_mode(
+            RetrievalMode::FrameworkFallback,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+    }
+
     fn events(dir: &Path) -> Vec<RunEvent> {
         let content = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
         content
@@ -3393,6 +4612,712 @@ mod tests {
 
     fn event_types(dir: &Path) -> Vec<EventType> {
         events(dir).into_iter().map(|e| e.event_type).collect()
+    }
+
+    // ── GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode authority (§3.7.1) ──
+
+    /// mode=off (the default) refuses a retrieval dispatch with an explicit
+    /// error — WITHOUT a ToolStarted (the verifier's mode rule forbids any
+    /// retrieval dispatch after a transition to off; the refusal is the
+    /// terminal ToolCompleted(error) alone). The tool projection also hides
+    /// the retrieval family from the model's declarations.
+    #[tokio::test]
+    async fn mode_off_refuses_retrieval_dispatch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        // Default controller — mode=off, no bootstrap transition.
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找文档", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        assert!(!types.contains(&EventType::ToolStarted), "{types:?}");
+        let all_events = events(&dir);
+        let refused: Vec<&RunEvent> = all_events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .collect();
+        assert_eq!(refused.len(), 1, "{types:?}");
+        assert_eq!(refused[0].payload["error"], "retrieval_mode_off");
+        // No subagent side effect: the blackboard internal section stays empty.
+        let r = controller.blackboard().read();
+        assert!(r.internal_ret.project_docs.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mode=off projection removes the retrieval family from the
+    /// tool_availability_check report (the model never sees the tools).
+    #[tokio::test]
+    async fn mode_off_removes_retrieval_tools_from_declarations() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("直接回答"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+        let all_events = events(&dir);
+        let availability = all_events
+            .iter()
+            .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .unwrap();
+        let available = availability.payload["available"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|v| v.as_str().unwrap_or_default().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for tool in [
+            "retrieve_project_docs",
+            "retrieve_project_source_ledger",
+            "web_search",
+            "web_fetch",
+            // H1 (review 2026-08-10): the host-routed internal retrieval
+            // tool is hidden too — off means no retrieval tools at all.
+            "project_doc_index",
+        ] {
+            assert!(!available.iter().any(|t| t == tool), "{tool} in {available:?}");
+        }
+        // The disposition control tool STAYS — disposing an already-pending
+        // activation is a legal off-mode action.
+        assert!(
+            available.iter().any(|t| t == "retrieval_disposition"),
+            "{available:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A session bootstrap with an explicit mode journals exactly one
+    /// `retrieval_mode_transition` (old=off, new=mode, authority/session_
+    /// bootstrap, capability) on the run's startup, BEFORE the availability
+    /// gate. A second run under the same controller does not repeat it.
+    #[tokio::test]
+    async fn bootstrap_transition_journaled_once_before_availability() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::text("[SOURCE] x.com\n完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
+            .with_retrieval_mode(
+                RetrievalMode::FrameworkFallback,
+                RetrievalCapability::Unsupported("web_client_not_configured".to_string()),
+                true,
+                Some("sess-test12345".to_string()),
+                None,
+            );
+        controller
+            .run_turn(&host, "查", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let transitions: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalModeTransition)
+            .collect();
+        assert_eq!(transitions.len(), 1);
+        let p = &transitions[0].payload;
+        assert_eq!(p["old_mode"], "off");
+        assert_eq!(p["new_mode"], "framework_fallback");
+        assert_eq!(p["authority"], "session_bootstrap");
+        assert_eq!(p["reason_code"], "session_default");
+        assert_eq!(p["capability_status"], "unsupported");
+        assert_eq!(p["session_id"], "sess-test12345");
+        // The transition precedes the availability gate.
+        let t_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalModeTransition)
+            .unwrap();
+        let a_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .unwrap();
+        assert!(t_index < a_index);
+        // Pending cleared after the journal.
+        assert!(controller.bootstrap_transition_journaled());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4 (review 2026-08-10): an explicit change TO off is a transition
+    /// like any other — it journals with the REAL persisted old_mode (never
+    /// a hardcoded "off") and a null capability_status (schema allOf).
+    #[tokio::test]
+    async fn explicit_change_to_off_journals_real_old_mode() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("直接回答"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_retrieval_mode(
+            RetrievalMode::Off,
+            RetrievalCapability::Unsupported("off".to_string()),
+            true,
+            Some("sess-test12345".to_string()),
+            Some(RetrievalMode::FrameworkFallback),
+        );
+        controller
+            .run_turn(&host, "hi", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let all_events = events(&dir);
+        let transitions: Vec<&RunEvent> = all_events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalModeTransition)
+            .collect();
+        assert_eq!(transitions.len(), 1, "{transitions:?}");
+        assert_eq!(transitions[0].payload["old_mode"], "framework_fallback");
+        assert_eq!(transitions[0].payload["new_mode"], "off");
+        assert!(transitions[0].payload["capability_status"].is_null());
+        assert_eq!(transitions[0].payload["authority"], "session_bootstrap");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// mode=local_browser with an unsupported capability fails EVERY
+    /// retrieval dispatch explicitly (ToolStarted → ToolCompleted(error)),
+    /// never degrading silently to the framework tools.
+    #[tokio::test]
+    async fn local_browser_unsupported_fails_explicitly() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Unsupported("local_browser_automation_not_implemented".to_string()),
+            true,
+            None,
+            None,
+        );
+        controller
+            .run_turn(&host, "查", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let all_events = events(&dir);
+        let refused: Vec<&RunEvent> = all_events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .collect();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(
+            refused[0].payload["error"],
+            "retrieval_capability_unavailable"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// local_browser (2026-08-10): `browser_read` is mode-gated — under
+    /// framework_fallback (the web-tool lane) it is refused with
+    /// `retrieval_mode_requires_local_browser`, never silently falling back
+    /// to web tools (ADR-0010 §3.7.1).
+    #[tokio::test]
+    async fn framework_fallback_refuses_browser_read() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("browser_read", "call-1")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "读网页", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        assert!(!types.contains(&EventType::ToolStarted), "{types:?}");
+        let all_events = events(&dir);
+        let refused: Vec<&RunEvent> = all_events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .collect();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(
+            refused[0].payload["error"],
+            "retrieval_mode_requires_local_browser"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GAP-RETRIEVAL-TOOLS (2026-08-10): structured result (§3.3.3) ──
+
+    /// Evidence collection from the lane's host calls feeds the mechanical
+    /// ledger: a read_file round yields a full-text source, and the
+    /// committed result carries REAL visibility (full_text_observed > 0).
+    #[tokio::test]
+    async fn structured_result_uses_tool_evidence_with_real_visibility() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "fn main() {}  // file content".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commits: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .collect();
+        assert_eq!(commits.len(), 1, "{:?}", event_types(&dir));
+        let p = &commits[0].payload;
+        assert_eq!(p["result_kind"], "retrieval_subagent_result");
+        assert_eq!(p["schema_version"], "0.2.0-draft");
+        // read_file evidence = full-text source; the [DOC] line is a
+        // metadata-only declaration — the merged ledger counts both.
+        let ledger = p["source_ledger"].as_array().unwrap();
+        assert_eq!(ledger.len(), 2);
+        let full = ledger
+            .iter()
+            .find(|e| e["visibility"] == "full_text_observed")
+            .unwrap();
+        assert_eq!(full["source_type"], "local_file");
+        assert!(full["content_sha256"].as_str().unwrap().len() == 64);
+        assert_eq!(full["highest_allowed_claim"], "observed");
+        assert_eq!(p["source_counts"]["total"], 2);
+        assert_eq!(p["source_counts"]["full_text_observed"], 1);
+        assert_eq!(p["source_counts"]["metadata_only"], 1);
+        // No [RESULT_JSON] block in this script → the result degrades
+        // EXPLICITLY (organized_response empty, visibility_degraded=true) —
+        // the ledger itself stays mechanical.
+        assert_eq!(p["visibility_degraded"], true);
+        // The assessment consumed the same mechanical counts.
+        let assessments: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .collect();
+        assert_eq!(assessments.len(), 1);
+        assert_eq!(
+            assessments[0].payload["source_counts"]["full_text_observed"],
+            1
+        );
+        assert_eq!(
+            assessments[0].payload["result_digest"],
+            p["result_digest"]
+        );
+        // Artifact landed under the journal dir.
+        let artifact_dir = dir.join("retrieval-results");
+        assert!(artifact_dir.is_dir());
+        assert_eq!(std::fs::read_dir(&artifact_dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A valid `[RESULT_JSON]` block carries the organized_response into the
+    /// committed result, with source_ids bound to the mechanical ledger.
+    #[tokio::test]
+    async fn structured_result_accepts_valid_model_block() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "fn main() {}".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::text(concat!(
+                "[DOC] design.md\n检索完成\n",
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"API","content":"入口函数","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let sections = commit.payload["organized_response"]["sections"]
+            .as_array()
+            .unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0]["source_ids"][0], "SRC-001");
+        assert_eq!(commit.payload["visibility_degraded"], false);
+        // The accepted block back-filled the source's used_in_sections.
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let full = ledger
+            .iter()
+            .find(|e| e["visibility"] == "full_text_observed")
+            .unwrap();
+        assert_eq!(full["used_in_sections"][0], "API");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A malformed / out-of-ledger model block degrades EXPLICITLY:
+    /// organized_response is empty, visibility_degraded=true and the
+    /// assessment reason_codes carry structured_result_validation_failed.
+    #[tokio::test]
+    async fn structured_result_validation_failure_degrades_explicitly() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text(concat!(
+                "[DOC] design.md\n检索完成\n",
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"API","content":"c","source_ids":["SRC-999"],"claim_strength":"observed"}],"claims":[]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        assert_eq!(commit.payload["visibility_degraded"], true);
+        assert!(commit.payload["organized_response"]["sections"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let assessment = events
+            .iter()
+            .find(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .unwrap();
+        assert!(
+            assessment.payload["reason_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == "structured_result_validation_failed")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GAP-RETRIEVAL-TOOLS (2026-08-10): cross-run activation persistence ──
+
+    /// The registry snapshot round-trips: seed → snapshot → seed keeps the
+    /// state-machine fields (status/pending/digest/budget); Closed
+    /// activations are excluded from the snapshot.
+    #[test]
+    fn activation_snapshot_round_trips_state_machine_fields() {
+        let mut registry = ActivationRegistry::default();
+        registry.next_seq.insert(SubagentRole::InternalRetrieval, 3);
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            ActivationState {
+                activation_id: "retrieval-internal_retrieval-sess-abc-02".to_string(),
+                parent_session_id: "sess-p".to_string(),
+                subagent_session_id: "SUB-internal_retrieval-sess-abc".to_string(),
+                contract_id: "retrieval-contract-internal_retrieval".to_string(),
+                contract_revision: 1,
+                status: ActivationStatus::AwaitingDisposition,
+                conversation: vec![Message {
+                    role: Role::User,
+                    content: "会话内容不入侧车".to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                }],
+                pending: Some(PendingDisposition {
+                    assessment_id: "ASSESS-1".to_string(),
+                    expected_contract_revision: 1,
+                    decided: None,
+                }),
+                next_goal: None,
+                result_digest: Some("a".repeat(64)),
+                submitted: vec![("DISP-1".to_string(), vec![1, 2, 3])],
+                tool_rounds_used: 7,
+                result_archive_ref: Some(".gsa/runs/RUN-X/retrieval-results/a.json".to_string()),
+            },
+        );
+        // A Closed activation must NOT ride the snapshot.
+        registry.states.insert(
+            SubagentRole::ExternalRetrieval,
+            ActivationState {
+                activation_id: "retrieval-external_retrieval-sess-abc-00".to_string(),
+                parent_session_id: "sess-p".to_string(),
+                subagent_session_id: "SUB-external_retrieval-sess-abc".to_string(),
+                contract_id: "retrieval-contract-external_retrieval".to_string(),
+                contract_revision: 0,
+                status: ActivationStatus::Closed,
+                conversation: Vec::new(),
+                pending: None,
+                next_goal: None,
+                result_digest: None,
+                submitted: Vec::new(),
+                tool_rounds_used: 0,
+                result_archive_ref: None,
+            },
+        );
+
+        let json = registry.snapshot_json("RUN-ORIGIN");
+        let mut seeded = ActivationRegistry::default();
+        let restored = seeded.seed_from_json(&json);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(
+            seeded.next_seq.get(&SubagentRole::InternalRetrieval),
+            Some(&3)
+        );
+        let act = seeded
+            .states
+            .get(&SubagentRole::InternalRetrieval)
+            .unwrap();
+        assert_eq!(act.activation_id, "retrieval-internal_retrieval-sess-abc-02");
+        assert_eq!(act.contract_revision, 1);
+        assert_eq!(act.status, ActivationStatus::AwaitingDisposition);
+        assert_eq!(
+            act.pending.as_ref().unwrap().assessment_id,
+            "ASSESS-1"
+        );
+        assert_eq!(act.tool_rounds_used, 7);
+        assert_eq!(
+            act.result_archive_ref.as_deref(),
+            Some(".gsa/runs/RUN-X/retrieval-results/a.json")
+        );
+        // Conversation and replay ledger do NOT ride the sidecar.
+        assert!(act.conversation.is_empty());
+        assert!(act.submitted.is_empty());
+        // Closed excluded.
+        assert!(!seeded.states.contains_key(&SubagentRole::ExternalRetrieval));
+    }
+
+    /// A seeded AwaitingDisposition activation is journaled at the run
+    /// startup (`retrieval_activation_restored`), and the parent's
+    /// disposition can then CLOSE it across runs — the verifier resolves
+    /// the assessment through the restore declaration.
+    #[tokio::test]
+    async fn restored_activation_journaled_and_disposable_across_runs() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let snapshot = serde_json::json!({
+            "next_seq": {"internal_retrieval": 1},
+            "activations": [{
+                "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                "parent_session_id": "sess-abcdef123456",
+                "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                "contract_id": "retrieval-contract-internal_retrieval",
+                "contract_revision": 0,
+                "status": "awaiting_disposition",
+                "tool_rounds_used": 3,
+                "result_digest": "b".repeat(64),
+                "pending_assessment_id": "ASSESS-PREV-1",
+                "pending_expected_contract_revision": 0,
+                "origin_run_id": "RUN-PREV-0001",
+            }]
+        });
+        let disposition_call = ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "internal_retrieval",
+                "decision": "close",
+            }),
+            call_id: "call-d1".to_string(),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![disposition_call]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
+            .with_activation_snapshot(Some(&snapshot));
+        controller
+            .run_turn(&host, "关闭检索", "RUN-RES", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let types = event_types(&dir);
+        // Restore event journaled at startup.
+        let restores: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalActivationRestored)
+            .collect();
+        assert_eq!(restores.len(), 1, "{types:?}");
+        let rp = &restores[0].payload;
+        assert_eq!(rp["activation_id"], "retrieval-internal_retrieval-sess-abc-00");
+        assert_eq!(rp["status"], "awaiting_disposition");
+        assert_eq!(rp["assessment_id"], "ASSESS-PREV-1");
+        assert_eq!(rp["origin_run_id"], "RUN-PREV-0001");
+        assert_eq!(rp["tool_rounds_used"], 3);
+        // The restore precedes the disposition.
+        let r_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalActivationRestored)
+            .unwrap();
+        let d_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .unwrap();
+        assert!(r_index < d_index);
+        // Cross-run close: disposition outcome accepted + close record.
+        let disposition = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .unwrap();
+        assert_eq!(disposition.payload["outcome"], "accepted");
+        assert_eq!(
+            disposition.payload["assessment_id"],
+            "ASSESS-PREV-1"
+        );
+        let close = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .unwrap();
+        assert_eq!(close.payload["terminal_reason"], "normal_close");
+        // The restored activation closes with the real artifact ref.
+        assert!(
+            close.payload["archive_ref"]
+                .as_str()
+                .unwrap()
+                .starts_with("run-journal:"),
+            "{}",
+            close.payload["archive_ref"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Evidence visibility table (§3.7.5): read_file=full, web_fetch=full
+    /// (or partial when truncated), web_search=partial, project_doc_index by
+    /// include_content. Failed calls produce no evidence.
+    #[test]
+    fn evidence_visibility_table_is_mechanical() {
+        let call = |name: &str, args: serde_json::Value| ToolCall {
+            name: name.to_string(),
+            arguments: args,
+            call_id: "c1".to_string(),
+        };
+        let ok = |output: &str| ToolResult {
+            output: output.to_string(),
+            exit_code: Some(0),
+        };
+        let fail = ToolResult {
+            output: "boom".to_string(),
+            exit_code: Some(1),
+        };
+        // Failed call → no evidence.
+        assert!(build_evidence_record("read_file", &call("read_file", serde_json::json!({"path": "a.rs"})), &fail).is_none());
+        // read_file success → full text.
+        let e = build_evidence_record("read_file", &call("read_file", serde_json::json!({"path": "src/a.rs"})), &ok("x")).unwrap();
+        assert_eq!(e.visibility, "full_text_observed");
+        assert_eq!(e.source_type, "local_file");
+        assert_eq!(e.identity, "src/a.rs");
+        // web_fetch full vs truncated. The truncated sample uses the fetch
+        // pipeline's REAL footer ("[web_fetch content truncated: showing
+        // first N of M bytes...]", codegen overflow.rs) — the pre-review
+        // detector matched "[truncated", which that footer does not contain,
+        // and granted full-level attribution to truncated text (H2).
+        let w = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com"})), &ok("page")).unwrap();
+        assert_eq!(w.visibility, "full_text_observed");
+        let t = build_evidence_record(
+            "web_fetch",
+            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
+            &ok("first portion\n\n[web_fetch content truncated: showing first 1000 of 5000 bytes]"),
+        )
+        .unwrap();
+        assert_eq!(t.visibility, "partial_text_observed");
+        // The bounded-budget fallback marker and a long output also count.
+        let t2 = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com"})), &ok("x\n[truncated]")).unwrap();
+        assert_eq!(t2.visibility, "partial_text_observed");
+        // web_search → partial (snippet).
+        let s = build_evidence_record("web_search", &call("web_search", serde_json::json!({"query": "q"})), &ok("snippet")).unwrap();
+        assert_eq!(s.visibility, "partial_text_observed");
+        assert_eq!(s.source_type, "web_search_result");
+        // project_doc_index: metadata vs content mode.
+        let m = build_evidence_record("project_doc_index", &call("project_doc_index", serde_json::json!({"query": "q"})), &ok("meta")).unwrap();
+        assert_eq!(m.visibility, "metadata_only");
+        let f = build_evidence_record("project_doc_index", &call("project_doc_index", serde_json::json!({"query": "q", "include_content": "true"})), &ok("content")).unwrap();
+        assert_eq!(f.visibility, "full_text_observed");
+        // local_browser (2026-08-10): browser_read full vs truncated — the
+        // host's mechanical footer ("[browser_read content truncated: ...")
+        // and the length backstop map to partial (§3.7.5); source_type is
+        // web_page (the transport difference lives in evidence.tool).
+        let b = build_evidence_record("browser_read", &call("browser_read", serde_json::json!({"url": "https://x.com"})), &ok("page text")).unwrap();
+        assert_eq!(b.visibility, "full_text_observed");
+        assert_eq!(b.source_type, "web_page");
+        let bt = build_evidence_record("browser_read", &call("browser_read", serde_json::json!({"url": "https://x.com"})), &ok("first portion\n\n[browser_read content truncated: 100000 chars, page text only]")).unwrap();
+        assert_eq!(bt.visibility, "partial_text_observed");
+        let bl = build_evidence_record("browser_read", &call("browser_read", serde_json::json!({"url": "https://x.com"})), &ok(&"x".repeat(200_001))).unwrap();
+        assert_eq!(bl.visibility, "partial_text_observed");
+        // Unknown tool → no evidence.
+        assert!(build_evidence_record("bash", &call("bash", serde_json::json!({})), &ok("x")).is_none());
     }
 
     #[tokio::test]
@@ -5736,7 +7661,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
             .run_turn(&host, "查找项目文档", "RUN-RET", MANIFEST, 0, None, None)
             .await
@@ -5789,7 +7714,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
             .run_turn(&host, "查找项目文档", "RUN-MR", MANIFEST, 0, None, None)
             .await
@@ -5860,7 +7785,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
             .run_turn(&host, "查找项目文档", "RUN-WG", MANIFEST, 0, None, None)
             .await
@@ -5919,7 +7844,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
             .run_turn(&host, "查找项目文档", "RUN-NS", MANIFEST, 0, None, None)
             .await
@@ -5973,7 +7898,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         let mut orientation =
             crate::orientation::OrientationSessionState::new("sess-abcdef123456");
         controller
@@ -6011,8 +7936,13 @@ mod tests {
         // (verifier §4.4 continue+1 rule).
         assert_eq!(p0.get("contract_revision"), Some(&serde_json::json!(0)));
         assert_eq!(p1.get("contract_revision"), Some(&serde_json::json!(1)));
-        // The ledger accumulates across the reused activation.
-        assert_eq!(p1.get("source_counts").unwrap()["total"], 2);
+        // GAP-RETRIEVAL-TOOLS: the structured result is PER-ITERATION —
+        // revision 1's ledger covers this dispatch's evidence ([DOC] b.md).
+        // The blackboard section still accumulates across the reused
+        // activation (write_section extends).
+        assert_eq!(p1.get("source_counts").unwrap()["total"], 1);
+        let r = controller.blackboard().read();
+        assert_eq!(r.internal_ret.project_docs, vec!["a.md", "b.md"]);
         // The continue disposition was accepted (outcome=accepted) and bound
         // the first assessment.
         let dispositions: Vec<_> = events
@@ -6085,7 +8015,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         let mut orientation =
             crate::orientation::OrientationSessionState::new("sess-abcdef123456");
         controller
@@ -6164,7 +8094,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
             .run_turn(&host, "查找项目文档", "RUN-REPLAY", MANIFEST, 0, None, None)
             .await
@@ -6227,7 +8157,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
             .run_turn(&host, "查找项目文档", "RUN-STALE", MANIFEST, 0, None, None)
             .await
@@ -6277,7 +8207,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
             .run_turn(&host, "查找项目文档", "RUN-AWAIT", MANIFEST, 0, None, None)
             .await
@@ -6330,7 +8260,7 @@ mod tests {
             ])
             .with_chunk_delay(std::time::Duration::from_millis(60)),
         );
-        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let controller = Arc::new(with_retrieval_enabled(AgentLoopController::with_gateway(gateway)));
         let token = tokio_util::sync::CancellationToken::new();
 
         let c = controller.clone();
@@ -6412,7 +8342,7 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let controller =
-            AgentLoopController::with_gateway(gateway).with_max_tool_rounds(2);
+            with_retrieval_enabled(AgentLoopController::with_gateway(gateway)).with_max_tool_rounds(2);
         controller
             .run_turn(&host, "查找项目文档", "RUN-BUD", MANIFEST, 0, None, None)
             .await
@@ -6487,7 +8417,7 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let controller =
-            AgentLoopController::with_gateway(gateway).with_max_tool_rounds(4);
+            with_retrieval_enabled(AgentLoopController::with_gateway(gateway)).with_max_tool_rounds(4);
         controller
             .run_turn(&host, "查找项目文档", "RUN-BUDACC", MANIFEST, 0, None, None)
             .await
@@ -6505,7 +8435,7 @@ mod tests {
                     && e.payload.get("gate").and_then(|v| v.as_str())
                         == Some("tool_rounds_limit")
             })
-            .map(|(i, e)| i)
+            .map(|(i, _e)| i)
             .collect();
         assert_eq!(limits.len(), 1, "{:?}", event_types(&dir));
         let limit_gate = &events[limits[0]];
@@ -6592,7 +8522,9 @@ mod tests {
         script.push(ScriptedResponse::text("[DOC] doc.md\n检索完成"));
         script.push(ScriptedResponse::text("完成"));
         script.push(ScriptedResponse::text("完成"));
-        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(script),
+        )));
         let mut orientation =
             crate::orientation::OrientationSessionState::new("sess-lane1234567");
         controller
@@ -6793,12 +8725,18 @@ mod tests {
             .into_iter()
             .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
             .collect();
-        // Call 1's signals (≥ 2) fire exactly once at threshold 2; call 2's
-        // signals (2 < 3) do not reach the next threshold — one checkpoint.
-        assert_eq!(checkpoints.len(), 1, "{:?}", event_types(&dir));
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): each failing run now also
+        // produces `key_surface_unexamined` (the FAILED line references
+        // tests/test_x.py, never read by the model) — call 1's 3 signals
+        // fire at threshold 2, call 2's 3 signals reach threshold 3.
+        assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
         assert_eq!(
             checkpoints[0].payload.get("threshold_stage"),
             Some(&serde_json::json!(2))
+        );
+        assert_eq!(
+            checkpoints[1].payload.get("threshold_stage"),
+            Some(&serde_json::json!(3))
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -6842,11 +8780,13 @@ mod tests {
             .into_iter()
             .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
             .collect();
-        // fail ×2 → fire at 2; pass → reset; fail ×2 → fire at 2 again.
-        assert_eq!(checkpoints.len(), 2);
-        for c in &checkpoints {
-            assert_eq!(c.payload.get("threshold_stage"), Some(&serde_json::json!(2)));
-        }
+        // fail ×2 (3 signals each — incl. key_surface_unexamined) → fire at
+        // 2 and 3; pass → reset to 2; fail ×2 → fire at 2 and 3 again.
+        let stages: Vec<u32> = checkpoints
+            .iter()
+            .map(|c| c.payload["threshold_stage"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(stages, vec![2, 3, 2, 3], "{stages:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -7254,6 +9194,66 @@ mod tests {
             Some("restart_requested")
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10): a non-continue stagnation decision
+    /// journals the pre-handoff orientation checkpoint (ADR-0010 §11.1 —
+    /// independent lifecycle trigger, audit-only, never part of the 7-round
+    /// count) before the run-invalidated terminal.
+    #[tokio::test]
+    async fn stagnation_pre_handoff_checkpoint_journaled_before_terminal() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let pattern = "重复 的 片段 ";
+        let repeated = pattern.repeat(11);
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
+            repeated.as_str(),
+            repeated.as_str(),
+        ]));
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "输出结果",
+                "RUN-PREH",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let types = event_types(&dir);
+        // The pre-handoff checkpoint precedes the run-invalidated terminal.
+        let checkpoint = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::OrientationCheckpoint
+                    && e.payload.get("trigger").and_then(|t| t.as_str())
+                        == Some("pre_handoff")
+            })
+            .expect("pre-handoff checkpoint journaled");
+        assert_eq!(checkpoint.payload["agent_role"], "main");
+        assert_eq!(checkpoint.payload["injection_position"], "pre_terminal");
+        assert_eq!(checkpoint.payload["completed_turns_since_orientation"], 0);
+        let c_index = events
+            .iter()
+            .position(|e| e.event_id == checkpoint.event_id)
+            .unwrap();
+        let t_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::RunInvalidated)
+            .unwrap();
+        assert!(c_index < t_index, "{types:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
