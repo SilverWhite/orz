@@ -232,6 +232,12 @@ struct StoredSession {
     /// (process tree kill + profile-dir best-effort delete) on
     /// `close_session`.
     browser: Option<crate::local_browser::SharedBrowser>,
+    /// GAP-CONVERSATION-RESTORE (2026-08-10): the session conversation —
+    /// persists across prompts AND process restarts via the
+    /// `{cwd}/.gsa/conversations/<session8>.json` sidecar (the in-session
+    /// copy is the authoritative write; the sidecar is best-effort). Taken
+    /// out during a run, written back on success (orientation pattern).
+    conversation: Option<Vec<Message>>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the persisted retrieval-mode +
@@ -389,6 +395,34 @@ async fn probe_retrieval_capability(
     }
 }
 
+/// GAP-CONVERSATION-RESTORE (2026-08-10): the session conversation sidecar —
+/// `{cwd}/.gsa/conversations/<session8>.json` (same sidecar discipline as the
+/// orientation/activation sidecars; an A-class `.gsa` write point, ADR-0009).
+///
+/// Privacy boundary: the file holds the FULL conversation in clear text,
+/// including `reasoning_content` (DeepSeek multi-turn replay requires the
+/// reasoning back on assistant declaration messages — missing it 400s, the
+/// F-01 lesson). The sidecar is NOT the journal evidence face: ADR-0010
+/// §5.4.6 restricts reasoning/credential/private-transcript text only from
+/// the journal; this file is a local session artifact outside the run
+/// evidence chain, retained by the 7-day retention sweep.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredConversation {
+    schema_version: String,
+    session_id: String,
+    messages: Vec<Message>,
+}
+
+impl StoredConversation {
+    fn new(session_id: &str, messages: Vec<Message>) -> Self {
+        StoredConversation {
+            schema_version: "0.1.0-draft".to_string(),
+            session_id: session_id.to_string(),
+            messages,
+        }
+    }
+}
+
 /// GAP-INQUIRY-SPLIT (2026-08-09): sidecar path for the session-level
 /// orientation counter — `{cwd}/.gsa/orientation/<session8>.json` (mirrors
 /// the grill log pattern; an A-class `.gsa` write point, ADR-0009).
@@ -457,6 +491,89 @@ fn persist_orientation_sidecar(
             }
         }
         Err(e) => tracing::warn!("orientation sidecar serialize failed: {e}"),
+    }
+}
+
+/// GAP-CONVERSATION-RESTORE (2026-08-10): sidecar path for the session
+/// conversation — `{cwd}/.gsa/conversations/<session8>.json`.
+fn conversation_sidecar_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    let suffix: String = session_id.chars().take(8).collect();
+    base_dir
+        .join(".gsa")
+        .join("conversations")
+        .join(format!("{suffix}.json"))
+}
+
+/// Load the persisted conversation (cross-prompt AND cross-process recovery —
+/// a process restart that re-creates the same `session_id` resumes the
+/// conversation). `None` = no sidecar yet (brand-new session); a corrupt
+/// sidecar is WARNED and discarded (same discipline as the orientation
+/// counter — silent failure would look like "restart loses the history").
+fn load_conversation_sidecar(base_dir: &Path, session_id: &str) -> Option<StoredConversation> {
+    let path = conversation_sidecar_path(base_dir, session_id);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<StoredConversation>(&text) {
+            // Review P3-3 (three-agent 2026-08-10): the envelope's
+            // `session_id` is checked against the requester — an 8-char
+            // prefix collision (or a hand-moved file) must not restore
+            // another session's conversation.
+            Ok(stored) if stored.session_id == session_id => Some(stored),
+            Ok(stored) => {
+                tracing::warn!(
+                    "conversation sidecar session mismatch ({}): expected {session_id}, found {} — starting a fresh conversation",
+                    path.display(),
+                    stored.session_id
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "conversation sidecar corrupt ({}): {e} — starting a fresh conversation",
+                    path.display()
+                );
+                None
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::warn!(
+                "conversation sidecar unreadable ({}): {e} — starting a fresh conversation",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Persist the session conversation — best-effort (a read-only workspace must
+/// never fail the run; the in-session write is the authoritative path), same
+/// discipline as the orientation/activation sidecars. An EMPTY conversation
+/// is not persisted (a brand-new session has no file until its first
+/// successful prompt — `load`'s NotFound → `None` naturally covers it).
+fn persist_conversation_sidecar(base_dir: &Path, session_id: &str, messages: &[Message]) {
+    if messages.is_empty() {
+        return;
+    }
+    let path = conversation_sidecar_path(base_dir, session_id);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!(
+            "conversation sidecar dir create failed ({}): {e}",
+            parent.display()
+        );
+        return;
+    }
+    match serde_json::to_string_pretty(&StoredConversation::new(session_id, messages.to_vec())) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::warn!(
+                    "conversation sidecar write failed ({}): {e}",
+                    path.display()
+                );
+            }
+        }
+        Err(e) => tracing::warn!("conversation sidecar serialize failed: {e}"),
     }
 }
 
@@ -742,6 +859,11 @@ impl AcpServer {
             activation_snapshot.retrieval_mode = mode;
             activation_snapshot.bootstrap_transition_pending = true;
         }
+        // GAP-CONVERSATION-RESTORE: resume the conversation sidecar when a
+        // previous process left one (cross-process continuation); a brand-new
+        // session has no conversation (`None` — the first prompt seeds a
+        // single-message context).
+        let conversation = load_conversation_sidecar(&base, session_id).map(|s| s.messages);
         self.sessions.lock().unwrap().insert(
             session_id.to_string(),
             StoredSession {
@@ -753,6 +875,7 @@ impl AcpServer {
                 orientation: Some(orientation),
                 activation_snapshot: Some(activation_snapshot),
                 browser: None,
+                conversation,
             },
         );
 
@@ -880,6 +1003,22 @@ impl AcpServer {
                     .unwrap_or_else(|| StoredActivationSnapshot::for_session(session_id))
             })
         };
+        // GAP-CONVERSATION-RESTORE: take out the session conversation with
+        // the orientation/activation state — same discipline: only after
+        // every fallible step above, so an early `?` never leaves the
+        // session with a taken-out conversation (the next prompt would
+        // silently restart from zero and the sidecar would be overwritten).
+        let mut conversation = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            session.conversation.take().unwrap_or_else(|| {
+                load_conversation_sidecar(&base_dir, session_id)
+                    .map(|s| s.messages)
+                    .unwrap_or_default()
+            })
+        };
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
         // GAP-RETRIEVAL-TOOLS (S4): seed the activation registry from the
@@ -936,6 +1075,7 @@ impl AcpServer {
                 handle.last_event_sha256.clone(),
                 Some(&cancel),
                 Some(&mut orientation),
+                Some(&mut conversation),
             )
             .await;
 
@@ -978,6 +1118,26 @@ impl AcpServer {
         persist_activation_sidecar(&base_dir, session_id, &activation_snapshot);
         if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
             session.activation_snapshot = Some(activation_snapshot);
+        }
+        // GAP-CONVERSATION-RESTORE: persist the conversation — back into the
+        // session and (best-effort, a read-only workspace must never fail a
+        // run) to the sidecar, so the next prompt / process restart resumes
+        // the history. SUCCESS-ONLY: a failed run keeps the pre-run history
+        // (the run's partial messages never enter the conversation — the
+        // journal is the failure evidence). The seed was a clone, so a failed
+        // run leaves the caller's copy byte-identical.
+        //
+        // Review P3-1 (three-agent 2026-08-10): the in-session write sits in
+        // the SAME `is_ok` branch as the sidecar — a failure (incl. the
+        // `journal.flush_async` error surfaced from `run_turn_with_guards`)
+        // leaves `session.conversation` at `None`, so the next prompt's
+        // take-out falls back to the sidecar (the pre-run history) instead
+        // of diverging from it.
+        if run_result.is_ok() {
+            persist_conversation_sidecar(&base_dir, session_id, &conversation);
+            if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+                session.conversation = Some(conversation);
+            }
         }
 
         match run_result {
@@ -2948,6 +3108,346 @@ mod tests {
                     !base.join("x.py").exists(),
                     "grill (ReadOnly) must never execute write tools"
                 );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    // ── GAP-CONVERSATION-RESTORE (2026-08-10): conversation sidecar ──
+
+    fn conv_sidecar_path(base: &Path, session_id: &str) -> PathBuf {
+        let suffix: String = session_id.chars().take(8).collect();
+        base.join(".gsa").join("conversations").join(format!("{suffix}.json"))
+    }
+
+    #[test]
+    fn conversation_sidecar_roundtrip() {
+        let base = test_dir();
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: "中文问题".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+            Message {
+                role: Role::Assistant,
+                content: "回答".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: Some("推理过程".to_string()),
+            },
+            Message {
+                role: Role::Tool,
+                content: "工具结果".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+        ];
+        persist_conversation_sidecar(&base, "sess-roundtrip", &messages);
+        let stored = load_conversation_sidecar(&base, "sess-roundtrip").expect("sidecar loads");
+        assert_eq!(stored.session_id, "sess-roundtrip");
+        assert_eq!(stored.messages.len(), 3);
+        assert_eq!(stored.messages[0].content, "中文问题");
+        assert_eq!(stored.messages[1].reasoning_content.as_deref(), Some("推理过程"));
+        assert_eq!(stored.messages[2].tool_call_id.as_deref(), Some("call-1"));
+        // Exact path shape.
+        assert!(conv_sidecar_path(&base, "sess-roundtrip").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn conversation_sidecar_corrupt_warns_and_none() {
+        let base = test_dir();
+        let path = conv_sidecar_path(&base, "sess-corrupt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(load_conversation_sidecar(&base, "sess-corrupt").is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn conversation_sidecar_missing_returns_none() {
+        let base = test_dir();
+        assert!(load_conversation_sidecar(&base, "sess-missing").is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn empty_conversation_not_persisted() {
+        let base = test_dir();
+        persist_conversation_sidecar(&base, "sess-empty", &[]);
+        assert!(!conv_sidecar_path(&base, "sess-empty").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Core regression: two sequential prompts on one session — the second
+    /// model request carries the first turn's history (conversation seeds
+    /// across prompts); the sidecar lands; orientation/activation sidecars
+    /// are unaffected.
+    #[tokio::test]
+    async fn cross_prompt_conversation_continues() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let fake = Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("第一答"),
+                    ScriptedResponse::text("第一答"),
+                    ScriptedResponse::text("第二答"),
+                    ScriptedResponse::text("第二答"),
+                ]));
+                let server = AcpServer::with_gateway(fake.clone());
+                server
+                    .handle_session_new(
+                        "sess-conv",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let r1 = server
+                    .handle_session_prompt("sess-conv", "第一问")
+                    .await
+                    .unwrap();
+                assert_eq!(r1["response"], "第一答");
+                let r2 = server
+                    .handle_session_prompt("sess-conv", "第二问")
+                    .await
+                    .unwrap();
+                assert_eq!(r2["response"], "第二答");
+
+                // The second prompt's first model request opened with the
+                // first turn (two model calls per prompt: round + final).
+                let reqs = fake.received_requests();
+                assert_eq!(reqs.len(), 4, "two model calls per prompt");
+                let msgs = &reqs[2].messages;
+                assert!(
+                    msgs.iter().any(|m| m.content == "第一问"),
+                    "first prompt in history: {msgs:?}"
+                );
+                assert!(
+                    msgs.iter().any(|m| m.content == "第一答"),
+                    "first reply in history: {msgs:?}"
+                );
+                assert!(msgs.iter().any(|m| m.content == "第二问"));
+
+                // The sidecar landed (only after a successful run).
+                let stored = load_conversation_sidecar(&base, "sess-conv").expect("sidecar");
+                assert!(stored.messages.iter().any(|m| m.content == "第一问"));
+                assert!(stored.messages.iter().any(|m| m.content == "第二答"));
+
+                // Two run journals exist (one per prompt) — the conversation
+                // path adds no extra runs.
+                let runs_dir = base.join(".gsa").join("runs");
+                let run_dirs: Vec<String> = std::fs::read_dir(&runs_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with("RUN-"))
+                    .collect();
+                assert_eq!(run_dirs.len(), 2, "{run_dirs:?}");
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// Process-restart recovery (Review P3-8): a new server re-creating the
+    /// same `session_id` loads the conversation sidecar — the first prompt
+    /// seeds from the previous process's history.
+    #[tokio::test]
+    async fn new_server_resumes_conversation_from_sidecar() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // Process 1: one successful prompt lands the sidecar.
+                let fake1 = Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("第一答"),
+                    ScriptedResponse::text("第一答"),
+                ]));
+                let server1 = AcpServer::with_gateway(fake1.clone());
+                server1
+                    .handle_session_new(
+                        "sess-restart",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server1
+                    .handle_session_prompt("sess-restart", "重启前的问题")
+                    .await
+                    .unwrap();
+                // (server1 dropped — process restart.)
+
+                // Process 2: a NEW server re-creates the session.
+                let fake2 = Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("第二答"),
+                    ScriptedResponse::text("第二答"),
+                ]));
+                let server2 = AcpServer::with_gateway(fake2.clone());
+                server2
+                    .handle_session_new(
+                        "sess-restart",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server2
+                    .handle_session_prompt("sess-restart", "重启后的问题")
+                    .await
+                    .unwrap();
+
+                // The new process's first request carried the old history.
+                let reqs = fake2.received_requests();
+                assert_eq!(reqs.len(), 2, "two model calls per prompt");
+                let msgs = &reqs[0].messages;
+                assert!(
+                    msgs.iter().any(|m| m.content == "重启前的问题"),
+                    "pre-restart prompt in history: {msgs:?}"
+                );
+                assert!(
+                    msgs.iter().any(|m| m.content == "第一答"),
+                    "pre-restart reply in history: {msgs:?}"
+                );
+                assert!(msgs.iter().any(|m| m.content == "重启后的问题"));
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// A failed prompt keeps the pre-run conversation — the sidecar is not
+    /// overwritten by a failed run's partial messages.
+    #[tokio::test]
+    async fn failed_prompt_keeps_pre_run_conversation() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // One successful prompt consumes the scripted replies; the
+                // second prompt hits an empty script → model failure.
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("第一答"),
+                    ScriptedResponse::text("第一答"),
+                ])));
+                server
+                    .handle_session_new(
+                        "sess-fail",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                server
+                    .handle_session_prompt("sess-fail", "第一问")
+                    .await
+                    .unwrap();
+                let err = server
+                    .handle_session_prompt("sess-fail", "第二问")
+                    .await
+                    .unwrap_err();
+                assert!(matches!(err, AcpError::AgentLoop(_)), "{err}");
+
+                // The sidecar still holds only the FIRST run's history.
+                let stored = load_conversation_sidecar(&base, "sess-fail").expect("sidecar");
+                assert_eq!(stored.messages.len(), 2, "{:?}", stored.messages);
+                assert!(stored.messages.iter().any(|m| m.content == "第一问"));
+                assert!(stored.messages.iter().all(|m| m.content != "第二问"));
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// The activation sidecar's conversation survives a cross-run round trip
+    /// through the host: sidecar → session → controller seed → fold → persist.
+    #[tokio::test]
+    async fn restored_activation_conversation_across_runs() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // Pre-seed the activation sidecar with a restored
+                // AwaitingDisposition activation carrying its conversation.
+                let activation = serde_json::json!({
+                    "schema_version": "0.1.0-draft",
+                    "session_id": "sess-act",
+                    "retrieval_mode": "framework_fallback",
+                    "bootstrap_transition_pending": false,
+                    "next_seq": {"internal_retrieval": 1},
+                    "activations": [{
+                        "activation_id": "retrieval-internal_retrieval-sess-act-00",
+                        "parent_session_id": "sess-act",
+                        "subagent_session_id": "SUB-internal_retrieval-sess-act",
+                        "contract_id": "retrieval-contract-internal_retrieval",
+                        "contract_revision": 0,
+                        "status": "awaiting_disposition",
+                        "tool_rounds_used": 2,
+                        "result_digest": "b".repeat(64),
+                        "pending_assessment_id": "ASSESS-PREV-1",
+                        "pending_expected_contract_revision": 0,
+                        "origin_run_id": "RUN-PREV-0001",
+                        "conversation": [
+                            {"role": "user", "content": "跨 run 的历史上下文",
+                             "tool_call_id": null, "tool_calls": [],
+                             "reasoning_content": null},
+                            {"role": "assistant", "content": "跨 run 的结论",
+                             "tool_call_id": null, "tool_calls": [],
+                             "reasoning_content": "跨 run 推理"},
+                        ]
+                    }]
+                });
+                let act_dir = base.join(".gsa").join("activations");
+                std::fs::create_dir_all(&act_dir).unwrap();
+                std::fs::write(
+                    act_dir.join("sess-act.json"),
+                    serde_json::to_string_pretty(&activation).unwrap(),
+                )
+                .unwrap();
+
+                let fake = Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("收到"),
+                    ScriptedResponse::text("收到"),
+                ]));
+                let server = AcpServer::with_gateway(fake.clone());
+                server
+                    .handle_session_new(
+                        "sess-act",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server
+                    .handle_session_prompt("sess-act", "继续检索")
+                    .await
+                    .unwrap();
+
+                // The restored activation was journaled (restore event) and
+                // the persisted sidecar still carries the conversation.
+                let events = run_events(&base);
+                assert!(
+                    events
+                        .iter()
+                        .any(|e| e.event_type == EventType::RetrievalActivationRestored),
+                    "restore event journaled"
+                );
+                let persisted = std::fs::read_to_string(act_dir.join("sess-act.json")).unwrap();
+                let json: serde_json::Value = serde_json::from_str(&persisted).unwrap();
+                let conv = &json["activations"][0]["conversation"];
+                assert_eq!(conv[0]["content"], "跨 run 的历史上下文");
+                assert_eq!(conv[1]["reasoning_content"], "跨 run 推理");
+                // The restore event does not carry the conversation (journal
+                // stays reasoning-free — zero-event-change discipline).
+                let restore = events
+                    .iter()
+                    .find(|e| e.event_type == EventType::RetrievalActivationRestored)
+                    .unwrap();
+                assert!(restore.payload.get("conversation").is_none());
 
                 let _ = std::fs::remove_dir_all(&base);
             })

@@ -401,6 +401,9 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
                     Some(&heartbeat),
                     // GAP-INQUIRY-SPLIT: one-shot CLI runs carry no session
                     // orientation state (the ACP server hosts sessions).
+                    // GAP-CONVERSATION-RESTORE: one-shot CLI runs carry no
+                    // session conversation either.
+                    None,
                     None,
                 )
                 .await
@@ -957,6 +960,9 @@ async fn run(
                 Some(&heartbeat),
                 // GAP-INQUIRY-SPLIT: one-shot CLI runs carry no session
                 // orientation state (the ACP server hosts sessions).
+                // GAP-CONVERSATION-RESTORE: one-shot CLI runs carry no
+                // session conversation either.
+                None,
                 None,
             )
             .await?;
@@ -1238,6 +1244,7 @@ mod tests {
             handle.next_sequence,
             handle.last_event_sha256.clone(),
             None,
+            None,
         );
         let timed = tokio::time::timeout(std::time::Duration::from_millis(400), fut).await;
         assert!(timed.is_err(), "budget must expire mid-run: {timed:?}");
@@ -1320,6 +1327,7 @@ mod tests {
             None,
             Some(&heartbeat),
             None,
+            None,
         );
         let mut stalled = false;
         let outcome: Result<(), String> = tokio::select! {
@@ -1401,6 +1409,7 @@ mod tests {
             handle.last_event_sha256.clone(),
             None,
             Some(&heartbeat),
+            None,
             None,
         );
         let result = tokio::select! {
@@ -1567,6 +1576,7 @@ mod conformance_capture {
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
                         None,
+                        None,
                     )
                     .await
                     .unwrap();
@@ -1731,6 +1741,7 @@ mod conformance_capture {
                         seq,
                         prev_hash,
                         None,
+                        None,
                     )
                     .await
                     .unwrap();
@@ -1855,6 +1866,7 @@ mod conformance_capture {
                         &handle.run_manifest_sha256,
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
+                        None,
                         None,
                     )
                     .await;
@@ -2017,6 +2029,7 @@ mod conformance_capture {
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
                         Some(&mut orientation),
+                        None,
                     )
                     .await
                     .unwrap();
@@ -2155,6 +2168,7 @@ mod conformance_capture {
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
                         None,
+                        None,
                     )
                     .await
                     .unwrap();
@@ -2236,6 +2250,7 @@ mod conformance_capture {
                         &handle.run_manifest_sha256,
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
+                        None,
                         None,
                     )
                     .await
@@ -2333,6 +2348,7 @@ mod conformance_capture {
                         &handle.run_manifest_sha256,
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
+                        None,
                         None,
                     )
                     .await
@@ -2454,6 +2470,7 @@ mod conformance_capture {
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
                         None,
+                        None,
                     )
                     .await
                     .unwrap();
@@ -2570,6 +2587,7 @@ mod conformance_capture {
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
                         None,
+                        None,
                     )
                     .await
                     .unwrap();
@@ -2630,6 +2648,7 @@ mod conformance_capture {
                         &handle.run_manifest_sha256,
                         handle.next_sequence,
                         handle.last_event_sha256.clone(),
+                        None,
                         None,
                     )
                     .await

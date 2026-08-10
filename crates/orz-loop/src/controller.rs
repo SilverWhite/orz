@@ -780,6 +780,20 @@ impl ActivationRegistry {
                         .map(|p| p.expected_contract_revision)
                         .unwrap_or(0),
                     origin_run_id: origin_run_id.to_string(),
+                    // Review D2-1/P3-4 (three-agent 2026-08-10): the
+                    // subagent conversation gets the same injection-block
+                    // filter as the main lane (the shared loop injects
+                    // budget/orientation blocks into it too — persisting
+                    // them would replay stale mechanical scaffolding on
+                    // restore).
+                    conversation: a
+                        .conversation
+                        .iter()
+                        .filter(|m| {
+                            !(m.role == Role::User && is_injected_block_text(&m.content))
+                        })
+                        .cloned()
+                        .collect(),
                 })
                 .collect(),
         };
@@ -828,9 +842,11 @@ impl ActivationRegistry {
                     decided: None,
                 }
             });
-            // GAP-RETRIEVAL-TOOLS: conversation context does not ride the
-            // sidecar (registered boundary) — a restored activation resumes
-            // with an empty conversation; the journal is the evidence.
+            // GAP-CONVERSATION-RESTORE (2026-08-10): the conversation rides
+            // the sidecar now — a restored activation resumes with its full
+            // subagent context (registered boundary closed; the `submitted`
+            // replay ledger still does not ride the sidecar — cross-run
+            // idempotent replay stays in-process, D-6 update).
             self.states.insert(
                 role,
                 ActivationState {
@@ -840,7 +856,7 @@ impl ActivationRegistry {
                     contract_id: stored.contract_id.clone(),
                     contract_revision: stored.contract_revision,
                     status: stored.status,
-                    conversation: Vec::new(),
+                    conversation: stored.conversation.clone(),
                     pending,
                     next_goal: stored.next_goal.clone(),
                     result_digest: stored.result_digest.clone(),
@@ -922,10 +938,12 @@ pub(crate) enum ActivationStatus {
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the serializable activation snapshot —
 /// persisted via the acp_server sidecar (`.gsa/activations/<session8>.json`).
-/// Only state-machine fields ride the sidecar; the conversation and the
-/// in-process replay ledger (`submitted`) do not (registered boundary:
-/// cross-run disposition replay-idempotency is in-process only — a new run's
-/// dispositions derive fresh ids from their call ids).
+/// State-machine fields ride the sidecar; GAP-CONVERSATION-RESTORE (2026-08-10)
+/// adds the subagent conversation (a restored activation resumes with its
+/// context). The in-process replay ledger (`submitted`) still does not ride
+/// the sidecar (registered boundary: cross-run disposition replay-idempotency
+/// is in-process only — a new run's dispositions derive fresh ids from their
+/// call ids).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct StoredActivationSnapshot {
     #[serde(default)]
@@ -934,7 +952,15 @@ pub(crate) struct StoredActivationSnapshot {
     pub activations: Vec<StoredActivation>,
 }
 
-/// One persisted activation (state-machine fields only).
+/// One persisted activation (state-machine fields + conversation).
+///
+/// GAP-CONVERSATION-RESTORE (2026-08-10): `conversation` rides the sidecar
+/// now — a restored activation resumes with its full subagent context
+/// (ADR-0010 §3.1: the recovery mechanism is shared by all three agents).
+/// The `submitted` in-process replay ledger STILL does not ride the sidecar
+/// (D-6 update — cross-run idempotent replay stays in-process; disposition
+/// ids derive from call ids, naturally collision-free). `#[serde(default)]`
+/// keeps old sidecars (no `conversation` key) parseable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredActivation {
     pub activation_id: String,
@@ -957,6 +983,10 @@ pub(crate) struct StoredActivation {
     /// The run where this activation was last active (restore audit route).
     #[serde(default)]
     pub origin_run_id: String,
+    /// GAP-CONVERSATION-RESTORE: the subagent's conversation (state-machine
+    /// companion) — resumes across runs via the activation sidecar.
+    #[serde(default)]
+    pub conversation: Vec<Message>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10) — ADR-0010 §3.7.1: the explicit
@@ -1764,6 +1794,11 @@ impl AgentLoopController {
     /// journal never ends on a mid-sequence orphan.
     /// `orientation`: session-level orientation state (ADR-0010 §4.2,
     /// GAP-INQUIRY-SPLIT) — `None` for grill turns and one-shot CLI runs.
+    /// `conversation` (GAP-CONVERSATION-RESTORE, 2026-08-10): session-level
+    /// multi-prompt conversation — `Some` seeds the model context with the
+    /// prior prompts' history (clone) and writes the full conversation back
+    /// on success; `None` (one-shot CLI / grill) keeps the single-prompt
+    /// seed.
     #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_guards
     pub async fn run_turn(
         &self,
@@ -1774,6 +1809,7 @@ impl AgentLoopController {
         next_sequence: u64,
         previous_event_sha256: Option<String>,
         orientation: Option<&mut OrientationSessionState>,
+        conversation: Option<&mut Vec<Message>>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         self.run_turn_with_cancel(
             host,
@@ -1784,6 +1820,7 @@ impl AgentLoopController {
             previous_event_sha256,
             None,
             orientation,
+            conversation,
         )
         .await
     }
@@ -1806,6 +1843,7 @@ impl AgentLoopController {
         previous_event_sha256: Option<String>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
         orientation: Option<&mut OrientationSessionState>,
+        conversation: Option<&mut Vec<Message>>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         self.run_turn_with_guards(
             host,
@@ -1817,6 +1855,7 @@ impl AgentLoopController {
             cancel,
             None,
             orientation,
+            conversation,
         )
         .await
     }
@@ -1838,6 +1877,7 @@ impl AgentLoopController {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         orientation: Option<&mut OrientationSessionState>,
+        conversation: Option<&mut Vec<Message>>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
         let journal = host.journal();
         let mut writer = EventWriter::new(
@@ -1860,6 +1900,7 @@ impl AgentLoopController {
                 heartbeat,
                 None,
                 orientation,
+                conversation,
             )
             .await;
         match result {
@@ -1935,6 +1976,8 @@ impl AgentLoopController {
             // Grill turns never fire orientation (D9 — a grill question is
             // not a run-semantic; same reasoning as the counterexample skip).
             None,
+            // Grill keeps its own history path (`GrillTurn.history`).
+            None,
         )
         .await
     }
@@ -1953,6 +1996,11 @@ impl AgentLoopController {
     /// state — `None` for grill turns and one-shot CLI runs (ADR-0010 §4.2:
     /// session-level 7-round counter; the state rides the host's session, not
     /// the per-prompt controller).
+    /// `conversation` (GAP-CONVERSATION-RESTORE, 2026-08-10): session-level
+    /// multi-prompt conversation — seeds the model context with the prior
+    /// prompts' history (cloned; the caller keeps its copy so error paths
+    /// preserve it) and receives the full conversation back on success.
+    /// `None` (one-shot CLI, grill) keeps the single-prompt seed.
     #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_guards + the grill turn
     async fn run_turn_inner(
         &self,
@@ -1965,7 +2013,16 @@ impl AgentLoopController {
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         mut grill: Option<&mut GrillTurn<'_>>,
         orientation: Option<&mut OrientationSessionState>,
+        mut conversation: Option<&mut Vec<Message>>,
     ) -> Result<String, AgentLoopError> {
+        // Review P3-5 (three-agent 2026-08-10): grill and conversation are
+        // mutually exclusive by construction (grill keeps its own history
+        // path; callers pass `None` for the other) — asserted in debug
+        // builds so a future caller cannot silently lose one of them.
+        debug_assert!(
+            grill.is_none() || conversation.is_none(),
+            "grill and conversation are mutually exclusive"
+        );
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
         *self.denial_state.lock().unwrap() = DenialState::default();
@@ -2256,13 +2313,24 @@ impl AgentLoopController {
                 });
                 m
             }
-            None => vec![Message {
-                role: Role::User,
-                content: prompt.to_string(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            }],
+            // GAP-CONVERSATION-RESTORE (2026-08-10): the session's prior
+            // conversation seeds the model context (cloned — the caller keeps
+            // its copy so an error path leaves the pre-run history intact);
+            // `None` reproduces the historical single-prompt seed byte-for-byte.
+            None => {
+                let mut m = conversation
+                    .as_deref_mut()
+                    .map(|conv| conv.clone())
+                    .unwrap_or_default();
+                m.push(Message {
+                    role: Role::User,
+                    content: prompt.to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                m
+            }
         };
         // GAP-SUBAGENT-RUNTIME (2026-08-10): the model↔tool loop body is
         // the shared `run_agent_loop` (agent_loop.rs) — the main agent and
@@ -2360,9 +2428,45 @@ impl AgentLoopController {
 
         // Grill mode (2026-08-08): persist the full conversation (incl. tool
         // rounds) as the next turn's history — the session is multi-turn.
-        // Error paths skip this: a failed turn keeps the previous history.
+        // GAP-CONVERSATION-RESTORE (2026-08-10): the main-lane conversation is
+        // written back the same way (success-only — a failed run's partial
+        // messages never enter the conversation; the journal is the failure
+        // evidence). Error paths skip this: a failed turn keeps the previous
+        // history.
         if let Some(g) = &mut grill {
             *g.history = messages;
+        } else if let Some(conv) = conversation {
+            // GAP-CONVERSATION-RESTORE: mechanical injection blocks
+            // (counterexample gate / budget / breaker / edit push /
+            // orientation) are runtime scaffolding, not dialogue — filtered
+            // so the persisted conversation stays clean dialogue (a restored
+            // prompt would otherwise replay stale "once-only" gates).
+            //
+            // Review P2-1 (three-agent 2026-08-10): the filter only drops
+            // USER-role injection blocks (every injection point injects
+            // `Role::User` — verified across agent_loop.rs) — a Tool message
+            // whose CONTENT happens to match a prefix is kept (deleting it
+            // would orphan the assistant's `tool_calls` declaration; the
+            // replayed conversation would 400 forever). Index 0 (the seed's
+            // first dialogue message) is never dropped.
+            //
+            // Review D2-4 (three-agent 2026-08-10): write-back is gated on
+            // `StagnationDecision::Continue` — a run_invalidated run's
+            // messages must NOT enter the conversation (the triggering
+            // content would ride the sidecar, the restored next prompt would
+            // re-trigger on the same content, and the restart/retry escape
+            // path would fail — a permanent run_invalidated loop).
+            if matches!(stagnation_decision, StagnationDecision::Continue) {
+                *conv = messages
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, m)| {
+                        *i == 0
+                            || !(m.role == Role::User && is_injected_block_text(&m.content))
+                    })
+                    .map(|(_, m)| m)
+                    .collect();
+            }
         }
 
         Ok(last_text.unwrap_or_default())
@@ -4637,7 +4741,7 @@ mod tests {
         // Default controller — mode=off, no bootstrap transition.
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "查找文档", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找文档", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -4672,7 +4776,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "hi", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "hi", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
         let all_events = events(&dir);
@@ -4735,7 +4839,7 @@ mod tests {
                 None,
             );
         controller
-            .run_turn(&host, "查", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "查", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -4790,7 +4894,7 @@ mod tests {
             Some(RetrievalMode::FrameworkFallback),
         );
         controller
-            .run_turn(&host, "hi", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "hi", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -4831,7 +4935,7 @@ mod tests {
             None,
         );
         controller
-            .run_turn(&host, "查", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "查", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -4867,7 +4971,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "读网页", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "读网页", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -4911,7 +5015,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -4990,7 +5094,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -5039,7 +5143,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -5148,8 +5252,11 @@ mod tests {
             act.result_archive_ref.as_deref(),
             Some(".gsa/runs/RUN-X/retrieval-results/a.json")
         );
-        // Conversation and replay ledger do NOT ride the sidecar.
-        assert!(act.conversation.is_empty());
+        // GAP-CONVERSATION-RESTORE (2026-08-10): the conversation now rides
+        // the sidecar (D-6 update — it round-trips intact); the replay
+        // ledger (`submitted`) still does not ride the sidecar.
+        assert_eq!(act.conversation.len(), 1);
+        assert_eq!(act.conversation[0].content, "会话内容不入侧车");
         assert!(act.submitted.is_empty());
         // Closed excluded.
         assert!(!seeded.states.contains_key(&SubagentRole::ExternalRetrieval));
@@ -5199,7 +5306,7 @@ mod tests {
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
             .with_activation_snapshot(Some(&snapshot));
         controller
-            .run_turn(&host, "关闭检索", "RUN-RES", MANIFEST, 0, None, None)
+            .run_turn(&host, "关闭检索", "RUN-RES", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -5336,7 +5443,7 @@ mod tests {
             Arc::new(FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "列出当前目录", "RUN-SEQ", MANIFEST, 0, None, None)
+            .run_turn(&host, "列出当前目录", "RUN-SEQ", MANIFEST, 0, None, None, None)
             .await;
 
         assert!(result.is_ok(), "{result:?}");
@@ -5416,7 +5523,7 @@ mod tests {
             Arc::new(FakeProvider::from_texts(vec!["你好世界", "你好世界"]).with_chunk_size(2));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "列出当前目录", "RUN-DELTA", MANIFEST, 0, None, None)
+            .run_turn(&host, "列出当前目录", "RUN-DELTA", MANIFEST, 0, None, None, None)
             .await;
 
         assert!(result.is_ok(), "{result:?}");
@@ -5470,7 +5577,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读文件", "RUN-TOOL", MANIFEST, 0, None, None)
+            .run_turn(&host, "读文件", "RUN-TOOL", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -5560,7 +5667,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-EDIT", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件", "RUN-EDIT", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -5645,7 +5752,7 @@ mod tests {
         }
 
         controller
-            .run_turn(&host, "请调查", "RUN-PLAN-ST", MANIFEST, 0, None, None)
+            .run_turn(&host, "请调查", "RUN-PLAN-ST", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -5680,7 +5787,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "hi", "RUN-NOPLAN", MANIFEST, 0, None, None)
+            .run_turn(&host, "hi", "RUN-NOPLAN", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
         for request in fake.received_requests() {
@@ -5721,7 +5828,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_plan("任务".to_string(), vec!["步骤一".to_string()]);
         controller
-            .run_turn(&host, "开始", "RUN-STABLE", MANIFEST, 0, None, None)
+            .run_turn(&host, "开始", "RUN-STABLE", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
         let received = fake.received_requests();
@@ -5905,7 +6012,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 2, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT", MANIFEST, 0, None, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6025,7 +6132,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "测试工具超时", "RUN-TIMEOUT", MANIFEST, 0, None, None)
+            .run_turn(&host, "测试工具超时", "RUN-TIMEOUT", MANIFEST, 0, None, None, None)
             .await;
         assert!(result.is_ok(), "{result:?}");
 
@@ -6160,7 +6267,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 1, 100_000);
         controller
-            .run_turn(&host, "修复任务", "RUN-WHITELIST", MANIFEST, 0, None, None)
+            .run_turn(&host, "修复任务", "RUN-WHITELIST", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6269,7 +6376,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "任务", "RUN-WL-REFUSE", MANIFEST, 0, None, None)
+            .run_turn(&host, "任务", "RUN-WL-REFUSE", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6336,7 +6443,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway).with_whitelist_cap(10);
         controller
-            .run_turn(&host, "任务", "RUN-WL-CAP", MANIFEST, 0, None, None)
+            .run_turn(&host, "任务", "RUN-WL-CAP", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6383,7 +6490,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "任务", "RUN-WL-EMPTY", MANIFEST, 0, None, None)
+            .run_turn(&host, "任务", "RUN-WL-EMPTY", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6451,7 +6558,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 1, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-GAP", MANIFEST, 0, None, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-GAP", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6522,7 +6629,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 5, 100_000); // cooldown longer than the run
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-NO", MANIFEST, 0, None, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-NO", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6586,7 +6693,7 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(150_000, 400, 20, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-SAFE", MANIFEST, 0, None, None)
+            .run_turn(&host, "压缩测试", "RUN-COMPACT-SAFE", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6649,7 +6756,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-EDIT-FAIL", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件", "RUN-EDIT-FAIL", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6687,7 +6794,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读文件", "RUN-READ", MANIFEST, 0, None, None)
+            .run_turn(&host, "读文件", "RUN-READ", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6740,7 +6847,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件再看黑板", "RUN-BB", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件再看黑板", "RUN-BB", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6829,7 +6936,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件并回看", "RUN-BBS", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件并回看", "RUN-BBS", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6891,7 +6998,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读错误分区", "RUN-BBE", MANIFEST, 0, None, None)
+            .run_turn(&host, "读错误分区", "RUN-BBE", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -6961,7 +7068,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-DENY", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件", "RUN-DENY", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7073,7 +7180,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "查一下", "RUN-POLICY", MANIFEST, 0, None, None)
+            .run_turn(&host, "查一下", "RUN-POLICY", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7130,7 +7237,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "只读", "RUN-RO", MANIFEST, 0, None, None)
+            .run_turn(&host, "只读", "RUN-RO", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7184,7 +7291,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-BREAK", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件", "RUN-BREAK", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7294,7 +7401,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-BREAK2", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件", "RUN-BREAK2", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7421,7 +7528,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "混合", "RUN-RESET", MANIFEST, 0, None, None)
+            .run_turn(&host, "混合", "RUN-RESET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7468,7 +7575,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读文件", "RUN-REASON", MANIFEST, 0, None, None)
+            .run_turn(&host, "读文件", "RUN-REASON", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7534,7 +7641,7 @@ mod tests {
         let controller =
             AgentLoopController::with_gateway(gateway).with_snapshot_store(Some(store.clone()));
         controller
-            .run_turn(&host, "改文件", "RUN-SNAP", MANIFEST, 0, None, None)
+            .run_turn(&host, "改文件", "RUN-SNAP", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7614,6 +7721,7 @@ mod tests {
                 0,
                 None,
                 None,
+            None,
             )
             .await;
         assert!(result.is_ok(), "{result:?}");
@@ -7663,7 +7771,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-RET", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-RET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7716,7 +7824,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-MR", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-MR", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7787,7 +7895,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-WG", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-WG", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7846,7 +7954,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-NS", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-NS", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -7910,6 +8018,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
+            None,
             )
             .await
             .unwrap();
@@ -8027,6 +8136,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
+            None,
             )
             .await
             .unwrap();
@@ -8096,7 +8206,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-REPLAY", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-REPLAY", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8159,7 +8269,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-STALE", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-STALE", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8209,7 +8319,7 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-AWAIT", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-AWAIT", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8274,6 +8384,7 @@ mod tests {
                 0,
                 None,
                 Some(&t),
+                None,
                 None,
             )
             .await
@@ -8344,7 +8455,7 @@ mod tests {
         let controller =
             with_retrieval_enabled(AgentLoopController::with_gateway(gateway)).with_max_tool_rounds(2);
         controller
-            .run_turn(&host, "查找项目文档", "RUN-BUD", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-BUD", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8419,7 +8530,7 @@ mod tests {
         let controller =
             with_retrieval_enabled(AgentLoopController::with_gateway(gateway)).with_max_tool_rounds(4);
         controller
-            .run_turn(&host, "查找项目文档", "RUN-BUDACC", MANIFEST, 0, None, None)
+            .run_turn(&host, "查找项目文档", "RUN-BUDACC", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8536,6 +8647,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
+            None,
             )
             .await
             .unwrap();
@@ -8652,6 +8764,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
+            None,
             )
             .await
             .unwrap();
@@ -8717,7 +8830,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "修复测试失败", "RUN-DC2", MANIFEST, 0, None, None)
+            .run_turn(&host, "修复测试失败", "RUN-DC2", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8772,7 +8885,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "修复测试失败", "RUN-DC3", MANIFEST, 0, None, None)
+            .run_turn(&host, "修复测试失败", "RUN-DC3", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8856,7 +8969,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None, None)
+            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -8946,7 +9059,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读两次", "RUN-BUDGET", MANIFEST, 0, None, None)
+            .run_turn(&host, "读两次", "RUN-BUDGET", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -9024,7 +9137,7 @@ mod tests {
         let mut controller = AgentLoopController::with_gateway(gateway);
         controller.max_tool_rounds = 1;
         controller
-            .run_turn(&host, "读", "RUN-CAP", MANIFEST, 0, None, None)
+            .run_turn(&host, "读", "RUN-CAP", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -9073,7 +9186,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(Vec::new()));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "hello", "RUN-FAIL", MANIFEST, 0, None, None)
+            .run_turn(&host, "hello", "RUN-FAIL", MANIFEST, 0, None, None, None)
             .await;
         assert!(result.is_err(), "expected model error, got {result:?}");
 
@@ -9121,7 +9234,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = Arc::new(PartialThenAbort);
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "hello", "RUN-PART", MANIFEST, 0, None, None)
+            .run_turn(&host, "hello", "RUN-PART", MANIFEST, 0, None, None, None)
             .await;
         assert!(result.is_err(), "expected model error, got {result:?}");
 
@@ -9179,7 +9292,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "输出结果", "RUN-STAG", MANIFEST, 0, None, None)
+            .run_turn(&host, "输出结果", "RUN-STAG", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -9227,6 +9340,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
+            None,
             )
             .await
             .unwrap();
@@ -9304,7 +9418,7 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "运行命令", "RUN-DEFER", MANIFEST, 0, None, None)
+            .run_turn(&host, "运行命令", "RUN-DEFER", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -9331,7 +9445,7 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         let (response, _, _) = controller
-            .run_turn(&host, "hello", "RUN-GATE", MANIFEST, 0, None, None)
+            .run_turn(&host, "hello", "RUN-GATE", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
         // The intercepted draft is never returned — the post-gate answer is.
@@ -9422,6 +9536,7 @@ mod tests {
                 None,
                 Some(&token),
                 None,
+            None,
             )
             .await;
 
@@ -9487,6 +9602,7 @@ mod tests {
                 0,
                 None,
                 Some(&t),
+                None,
                 None,
             )
             .await
@@ -9591,6 +9707,7 @@ mod tests {
                 None,
                 Some(&t),
                 None,
+                None,
             )
             .await
         });
@@ -9693,6 +9810,7 @@ mod tests {
                 None,
                 Some(&t),
                 None,
+                None,
             )
             .await
         });
@@ -9770,6 +9888,337 @@ mod tests {
             "grill turns must not write run-journal events"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GAP-CONVERSATION-RESTORE (2026-08-10): multi-prompt conversation ──
+
+    fn conv_message(role: Role, content: &str) -> Message {
+        Message {
+            role,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        }
+    }
+
+    /// The conversation seeds the model context (prior history + new prompt)
+    /// and the full conversation comes back on success — reasoning content
+    /// included (the DeepSeek multi-turn replay requirement).
+    #[tokio::test]
+    async fn run_turn_conversation_seeds_and_writes_back() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("收到"),
+            ScriptedResponse::text("收到"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut conversation = vec![
+            conv_message(Role::User, "第一问"),
+            Message {
+                role: Role::Assistant,
+                content: "第一答".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: Some("思考过程".to_string()),
+            },
+        ];
+        let response = controller
+            .run_turn(
+                &host, "第二问", "RUN-CONV", MANIFEST, 0, None, None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.0, "收到");
+        // The model request carried the full history + the new prompt.
+        let reqs = fake.received_requests();
+        assert_eq!(reqs.len(), 2, "model call + final answer round");
+        let msgs = &reqs[0].messages;
+        assert_eq!(msgs[0].content, "第一问", "{msgs:?}");
+        assert_eq!(msgs[1].content, "第一答");
+        assert_eq!(
+            msgs[1].reasoning_content.as_deref(),
+            Some("思考过程"),
+            "reasoning must be replayed"
+        );
+        assert_eq!(msgs[2].content, "第二问");
+        // The conversation came back complete (history + new turn + the
+        // model's reply; mechanical injection blocks filtered out).
+        assert_eq!(conversation.len(), 4, "{conversation:?}");
+        assert_eq!(conversation[0].content, "第一问");
+        assert_eq!(conversation[2].content, "第二问");
+        assert_eq!(conversation[3].content, "收到");
+        assert!(
+            conversation
+                .iter()
+                .all(|m| !is_injected_block_text(&m.content)),
+            "injection blocks filtered: {conversation:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed run keeps the caller's conversation byte-identical (clone
+    /// seed + success-only write-back; the journal is the failure evidence).
+    #[tokio::test]
+    async fn run_turn_conversation_error_preserves_history() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        // Empty script — the model call fails with "script exhausted".
+        let fake = Arc::new(FakeProvider::new(vec![]));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut conversation = vec![conv_message(Role::User, "第一问")];
+        let before = conversation.clone();
+        let result = controller
+            .run_turn(
+                &host, "第二问", "RUN-CONV-FAIL", MANIFEST, 0, None, None,
+                Some(&mut conversation),
+            )
+            .await;
+        assert!(result.is_err(), "empty script must fail the run");
+        assert_eq!(conversation, before, "failed run must not touch history");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `None` conversation keeps the historical single-prompt seed exactly.
+    #[tokio::test]
+    async fn run_turn_none_conversation_unchanged() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        controller
+            .run_turn(&host, "hi", "RUN-NONE", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let reqs = fake.received_requests();
+        assert_eq!(reqs.len(), 2, "model call + final answer round");
+        let first = &reqs[0].messages;
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert_eq!(first[0].content, "hi");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// seed_from_json restores the subagent conversation (incl. reasoning +
+    /// tool messages) — and `submitted` stays empty (D-6 update: the replay
+    /// ledger still does not ride the sidecar).
+    #[tokio::test]
+    async fn seed_from_json_restores_conversation() {
+        let snapshot = serde_json::json!({
+            "next_seq": {"internal_retrieval": 1},
+            "activations": [{
+                "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                "parent_session_id": "sess-abcdef123456",
+                "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                "contract_id": "retrieval-contract-internal_retrieval",
+                "contract_revision": 0,
+                "status": "awaiting_disposition",
+                "tool_rounds_used": 2,
+                "result_digest": "b".repeat(64),
+                "pending_assessment_id": "ASSESS-PREV-1",
+                "pending_expected_contract_revision": 0,
+                "origin_run_id": "RUN-PREV-0001",
+                "conversation": [
+                    {"role": "user", "content": "第一问", "tool_call_id": null,
+                     "tool_calls": [], "reasoning_content": null},
+                    {"role": "assistant", "content": "第一答", "tool_call_id": null,
+                     "tool_calls": [], "reasoning_content": "思考"},
+                    {"role": "tool", "content": "结果", "tool_call_id": "call-1",
+                     "tool_calls": [], "reasoning_content": null},
+                ]
+            }]
+        });
+        let controller = AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::from_texts(vec!["x"]),
+        ));
+        let mut registry = controller.activations.lock().unwrap();
+        let restored = registry.seed_from_json(&snapshot);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].conversation.len(), 3);
+        assert_eq!(
+            restored[0].conversation[1].reasoning_content.as_deref(),
+            Some("思考")
+        );
+        assert_eq!(
+            restored[0].conversation[2].tool_call_id.as_deref(),
+            Some("call-1")
+        );
+        // ActivationState restored; submitted stays in-process empty.
+        let state = registry
+            .states
+            .get(&SubagentRole::InternalRetrieval)
+            .expect("activation restored");
+        assert_eq!(state.conversation.len(), 3);
+        assert!(state.submitted.is_empty(), "submitted stays in-process");
+        drop(registry);
+    }
+
+    /// ActivationState → snapshot_json → seed_from_json round-trips the
+    /// conversation field-for-field.
+    #[tokio::test]
+    async fn stored_activation_roundtrip_with_conversation() {
+        let controller = AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::from_texts(vec!["x"]),
+        ));
+        let state = ActivationState {
+            activation_id: "retrieval-internal_retrieval-sess-abc-00".to_string(),
+            parent_session_id: "sess-abcdef123456".to_string(),
+            subagent_session_id: "SUB-internal_retrieval-sess-abc".to_string(),
+            contract_id: "retrieval-contract-internal_retrieval".to_string(),
+            contract_revision: 0,
+            status: ActivationStatus::AwaitingDisposition,
+            conversation: vec![conv_message(Role::User, "历史问")],
+            pending: None,
+            next_goal: None,
+            result_digest: None,
+            submitted: Vec::new(),
+            tool_rounds_used: 1,
+            result_archive_ref: None,
+        };
+        controller
+            .activations
+            .lock()
+            .unwrap()
+            .states
+            .insert(SubagentRole::InternalRetrieval, state);
+        let json = controller.activations.lock().unwrap().snapshot_json("RUN-1");
+        let c2 = AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec![
+            "x",
+        ])));
+        let restored = c2.activations.lock().unwrap().seed_from_json(&json);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].conversation.len(), 1);
+        assert_eq!(restored[0].conversation[0].content, "历史问");
+        assert_eq!(restored[0].activation_id, "retrieval-internal_retrieval-sess-abc-00");
+    }
+
+    /// An OLD sidecar (no `conversation` key) still parses — `serde(default)`
+    /// fills an empty conversation (backward compatibility).
+    #[tokio::test]
+    async fn stored_activation_old_sidecar_no_conversation_field() {
+        let snapshot = serde_json::json!({
+            "next_seq": {"internal_retrieval": 1},
+            "activations": [{
+                "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                "parent_session_id": "sess-abcdef123456",
+                "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                "contract_id": "retrieval-contract-internal_retrieval",
+                "contract_revision": 0,
+                "status": "active",
+                "tool_rounds_used": 0,
+                "origin_run_id": "RUN-PREV-0001",
+            }]
+        });
+        let controller = AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::from_texts(vec!["x"]),
+        ));
+        let mut registry = controller.activations.lock().unwrap();
+        let restored = registry.seed_from_json(&snapshot);
+        assert_eq!(restored.len(), 1);
+        assert!(restored[0].conversation.is_empty(), "default empty");
+        assert!(registry
+            .states
+            .get(&SubagentRole::InternalRetrieval)
+            .unwrap()
+            .conversation
+            .is_empty());
+        drop(registry);
+    }
+
+    /// A restored activation with history continues from that history — the
+    /// subagent's next request opens with the restored conversation and ends
+    /// with the new goal (the registered boundary closes: cross-run continue
+    /// no longer starts from scratch).
+    #[tokio::test]
+    async fn restored_activation_continue_seeds_history() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let snapshot = serde_json::json!({
+            "next_seq": {"internal_retrieval": 1},
+            "activations": [{
+                "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                "parent_session_id": "sess-abcdef123456",
+                "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                "contract_id": "retrieval-contract-internal_retrieval",
+                "contract_revision": 0,
+                "status": "awaiting_disposition",
+                "tool_rounds_used": 2,
+                "result_digest": "b".repeat(64),
+                "pending_assessment_id": "ASSESS-PREV-1",
+                "pending_expected_contract_revision": 0,
+                "origin_run_id": "RUN-PREV-0001",
+                "conversation": [
+                    {"role": "user", "content": "历史检索目标", "tool_call_id": null,
+                     "tool_calls": [], "reasoning_content": null},
+                    {"role": "assistant", "content": "历史结论", "tool_call_id": null,
+                     "tool_calls": [], "reasoning_content": null},
+                ]
+            }]
+        });
+        let continue_call = ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "internal_retrieval",
+                "decision": "continue",
+                "requirement_delta": "补充检索：新需求",
+            }),
+            call_id: "call-c1".to_string(),
+        };
+        let retrieve_call = ToolCall {
+            name: "retrieve_project_docs".to_string(),
+            arguments: serde_json::json!({"query": "继续检索"}),
+            call_id: "call-r1".to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![continue_call]),
+            // Parent wrap-up after the accepted disposition.
+            ScriptedResponse::text(""),
+            // The parent re-dispatches the subagent (continue) — the
+            // subagent's requests follow.
+            ScriptedResponse::tool_calls(vec![retrieve_call]),
+            ScriptedResponse::text("子代理继续完成"),
+            ScriptedResponse::text("子代理继续完成"),
+            // The parent's wrap-up round after the subagent returns.
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(fake.clone()))
+            .with_activation_snapshot(Some(&snapshot));
+        controller
+            .run_turn(&host, "继续检索", "RUN-CONT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // The subagent request opened with the restored history and ended
+        // with the new goal.
+        let reqs = fake.received_requests();
+        let subagent_req = reqs
+            .iter()
+            .find(|r| r.messages.iter().any(|m| m.content.contains("历史检索目标")))
+            .expect("subagent request with restored history");
+        assert!(
+            subagent_req.messages.iter().any(|m| m.content.contains("补充检索")),
+            "new goal appended: {:?}",
+            subagent_req.messages
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

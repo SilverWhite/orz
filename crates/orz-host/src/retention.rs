@@ -10,6 +10,10 @@
 //!   enough — a fresh snapshot may reference an old object).
 //! - `one_shot_permit/` — consumed single-use claim files older than the
 //!   cutoff are removed.
+//! - `conversations/` (GAP-CONVERSATION-RESTORE 2026-08-10) — session
+//!   conversation sidecars older than the cutoff are removed (the largest
+//!   `.gsa` files; a LIVE session's sidecar is rewritten on every successful
+//!   prompt, so its mtime is always fresh and it naturally survives).
 //! - `keystore/` is NEVER swept: deleting the installation key would
 //!   silently invalidate every permit signed under it (a permit issued
 //!   under key A fails verification under key B).
@@ -63,6 +67,9 @@ pub struct PruneReport {
     /// local_browser (2026-08-10): orphaned headless-browser profiles
     /// (`chrome-profile-*` dirs under `.gsa/`) — swept by age like runs.
     pub removed_browser_profiles: Vec<String>,
+    /// GAP-CONVERSATION-RESTORE (2026-08-10): session conversation sidecars
+    /// (`conversations/<session8>.json`) — swept by age like permit claims.
+    pub removed_conversation_sidecars: Vec<String>,
 }
 
 /// Best-effort retention sweep over `gsa_root` (the `.gsa` directory).
@@ -80,6 +87,14 @@ pub fn prune_old_records(
     prune_old_files(
         &mut report.removed_permit_files,
         &gsa_root.join("one_shot_permit"),
+        cutoff,
+    );
+    // GAP-CONVERSATION-RESTORE (2026-08-10): conversation sidecars swept by
+    // age (the largest `.gsa` files; a live session's sidecar is rewritten
+    // on every successful prompt — mtime fresh, naturally kept).
+    prune_old_files(
+        &mut report.removed_conversation_sidecars,
+        &gsa_root.join("conversations"),
         cutoff,
     );
     // local_browser (2026-08-10): orphaned browser profiles — a session
@@ -490,6 +505,29 @@ mod tests {
         // No .gsa at all — no-op, no panic.
         let report = prune_old_records(&base, default_cutoff(), None);
         assert!(report.removed_run_dirs.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// GAP-CONVERSATION-RESTORE (2026-08-10): old conversation sidecars are
+    /// swept by age; fresh ones (a live session rewrites its sidecar on
+    /// every successful prompt) survive.
+    #[test]
+    fn sweep_removes_old_conversation_sidecars_keeps_fresh() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        let conv = gsa.join("conversations");
+        std::fs::create_dir_all(&conv).unwrap();
+        let old = conv.join("sess-old.json");
+        std::fs::write(&old, "{}").unwrap();
+        backdate(&old, 10);
+        std::fs::write(conv.join("sess-fresh.json"), "{}").unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(report.removed_conversation_sidecars, vec!["sess-old.json"]);
+        assert!(!old.exists());
+        assert!(conv.join("sess-fresh.json").exists());
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }

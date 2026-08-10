@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::host::ToolDef;
@@ -83,7 +84,13 @@ pub struct ModelConfig {
 }
 
 /// Conversation role for a message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize/Deserialize` (GAP-CONVERSATION-RESTORE 2026-08-10): the session
+/// conversation rides the `.gsa/conversations/<session8>.json` sidecar;
+/// `snake_case` names match the provider protocol strings ("system"/"user"/
+/// "assistant"/"tool").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
     User,
@@ -105,7 +112,13 @@ pub enum Role {
 /// conversations (alpha-test 2026-08-06: live probe showed 318 chars even
 /// without a thinking option); the transport echoes it back on the
 /// declaration message.
-#[derive(Debug, Clone)]
+/// `Serialize/Deserialize` (GAP-CONVERSATION-RESTORE 2026-08-10): the full
+/// conversation (incl. `reasoning_content` — DeepSeek multi-turn replay
+/// requires it back on assistant declaration messages) persists across
+/// prompts via the conversation sidecar. Privacy boundary: the sidecar is NOT
+/// the journal evidence face — ADR-0010 §5.4.6 restricts reasoning text only
+/// from the journal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,
@@ -115,7 +128,7 @@ pub struct Message {
 }
 
 /// A tool call requested by the model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub name: String,
     pub arguments: Value,
