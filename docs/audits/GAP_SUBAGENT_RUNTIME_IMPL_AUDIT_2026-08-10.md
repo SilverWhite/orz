@@ -61,7 +61,7 @@
 | D-15 | DC journal capture 场景暂缓——DC 信号需 test-runner 宿主，capture 环境（真实 CLI host）无固定 runner；机制由 Rust 单测+E2E 覆盖，payload schema 由 fixture 树覆盖 | 注册边界 |
 | D-16 | subagent-run-close/continue 独立 capture 不建——orientation-fire-run 单 fixture 已覆盖 4 continue+1 close 全链 + 7 轮跨越 | 合并覆盖 |
 | D-17 | 子代理预算耗尽：部分结果先 assessment 后 close（verifier 顺序要求） | §4.4 |
-| D-18 | continue 重入是同一检索 session 的延续——预算跨 dispatch 累计（`ActivationState.tool_rounds_used` 读入 `LoopProfile.initial_tool_rounds`，循环结束后写回），仅 activation 关闭后新激活从 0 起；主 agent 维持 per-run 既有语义（ADR-0008 未改） | 用户裁决 2026-08-10（F5 升级）；§3.4.6 |
+| D-18 | continue 重入是同一检索 session 的延续——预算跨 dispatch 累计（`ActivationState.tool_rounds_used` 读入 `LoopProfile.initial_tool_rounds`，循环结束后写回），仅 activation 关闭后新激活从 0 起；主 agent 维持 per-run 既有语义（ADR-0008 未改） | 用户裁决 2026-08-10（F5 升级）；已转录 ADR-0010 v1.2（§3.4.6 + §14.2） |
 
 ## 4. 边界（明确未做，登记给后续切片）
 

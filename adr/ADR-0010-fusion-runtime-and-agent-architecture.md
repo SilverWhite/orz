@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -17,6 +17,7 @@
   - 历史融合、问询、黑板、检索、运行守卫与 Windows 文档的有效规范性内容已转录入本 ADR；原文件之后只保留为设计来源、实施记录或审计证据，不再与本文件共同构成 current design。
   - **v1.1 补充**：恢复显式检索模式、Diagnostic Coverage、Global Review 和 IDE 生命周期证据边界；重裁 Information Sufficiency、来源绑定、`run_tests`、UI 投影、模型/轮次与拒绝熔断语义。
   - **2026-08-09 登记**：ADR-0011 承担受信控制与动作授权面（ACAF）的决策权威；ACAF 派生自本 ADR §2.4、§3.2、§3.8、§4、§5.3、§5.4 与 §11.3，不改变本 ADR 任何既有条款；登记见 §11.8。
+  - **v1.2 补充（2026-08-10）**：显式化子代理工具轮预算的 session 累计语义——`continue(requirement_delta)` 重入是同一检索 session 的延续，预算跨 dispatch 累计、不得因重入重置；仅 activation 关闭后新激活从 0 起；主 Agent 维持每 run 独立起算的既有语义。正文见 §3.4.6，索引见 §14.2；来源：GAP-SUBAGENT-RUNTIME 实施审计 D-18（用户裁决）。
 
 ## 1. 背景
 
@@ -219,7 +220,10 @@ active -> failed/cancelled -> closing -> closed_resumable
    identity/audit，不改变模型能力和配置一致性。
 6. Agent 级工具轮预算均为 120、独立计数、模型可见；deny 轮仍计入。每轮剩余量通过尾部机械消息
    提供，不写入随轮变化的 system prompt，以保持前缀缓存稳定。预算是 anti-runaway backstop，不是
-   对正常复杂任务工作量的估计。
+   对正常复杂任务工作量的估计。预算按 session（activation 生命周期）连续记账：主 Agent 每 run
+   独立起算；检索子代理经 `continue(requirement_delta)` 重入后保持同一 session——已耗工具轮跨
+   dispatch 累计，不得因重入重置；只有 activation 关闭（close/失败/取消/预算耗尽）后，下一个新
+   activation 才从 0 起算（v1.2 补写，2026-08-10）。
 
 ### 3.5 Tool availability、permission 与失败反馈
 
@@ -832,3 +836,13 @@ Schema 与机械证据：
    `not_started / audit_required`。
 6. **模型、轮次与拒绝熔断**：默认 DeepSeek family、当前 V4；tool-call/inquiry/recovery 后轮次均按
    §4.2 计数；删除累计拒绝 10 次，只保留同类拒绝连续三轮熔断，见 §3.4、§3.5。
+
+### 14.2 v1.2 补写裁决索引（2026-08-10）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写不改变本 ADR 任何既有条款的语义。
+
+1. **子代理预算 session 累计**：`continue(requirement_delta)` 重入是同一检索 session 的延续——120
+   轮工具预算跨 dispatch 累计（`ActivationState.tool_rounds_used` 读入 `LoopProfile.initial_tool_rounds`，
+   循环结束写回），不得因重入重置；仅 activation 关闭后新激活从 0 起；主 Agent 维持每 run 独立起算
+   的既有语义（ADR-0008/GAP-TOOL-BUDGET 未改）。见 §3.4.6；来源：GAP-SUBAGENT-RUNTIME 实施审计
+   D-18（用户裁决 2026-08-10）。
