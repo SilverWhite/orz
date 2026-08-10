@@ -38,6 +38,19 @@ pub fn web_search_config_from_env() -> orz_tools::implementations::web_search::W
     }
 }
 
+/// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the global `web_search` tool
+/// family — the exact `web_search` name plus any `web_search_*` variant
+/// (ADR-0010 §3.7.7/§11.3: global web_search concurrency is 1; the main
+/// agent and the external-retrieval subagent share the same semaphore,
+/// while internal and external retrieval sessions still run in parallel).
+/// `web_fetch` is deliberately NOT here — the contract limits only
+/// `web_search`; the variant prefix mirrors `relay::is_web_retrieval_tool`
+/// (the subagent-dispatch match) so a name cannot dodge the semaphore by
+/// switching spellings.
+pub fn is_web_search_tool(name: &str) -> bool {
+    name == "web_search" || name.starts_with("web_search_")
+}
+
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_fetch client config — always
 /// enabled (direct HTTP fetch, no key dependency); bounded by the
 /// fail-closed defaults (SSRF guard, size caps).
@@ -298,8 +311,17 @@ mod tests {
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_search env wiring —
     /// absent key = Disabled (tool not declared, capability probe reports
     /// degraded); present key = Enabled with the xAI defaults/overrides.
-    #[test]
-    fn web_search_config_follows_env_key() {
+    /// P2-1 (review 2026-08-10): serialized with the semaphore tests via the
+    /// shared `TESTS_ENV_LOCK`; every var is restored on drop (this test
+    /// previously leaked `ORZ_WEB_SEARCH_API_KEY=test-key` into every later
+    /// test in the binary — any `OrzHost::new` after it saw web_search
+    /// configured).
+    #[tokio::test]
+    async fn web_search_config_follows_env_key() {
+        let _env_lock = crate::tests::tests_env_lock().lock().await;
+        let _key = crate::tests::EnvVarGuard::new("ORZ_WEB_SEARCH_API_KEY");
+        let _base = crate::tests::EnvVarGuard::new("ORZ_WEB_SEARCH_BASE_URL");
+        let _model = crate::tests::EnvVarGuard::new("ORZ_WEB_SEARCH_MODEL");
         // Unset → Disabled.
         unsafe {
             std::env::remove_var("ORZ_WEB_SEARCH_API_KEY");
@@ -346,5 +368,27 @@ mod tests {
     #[test]
     fn web_fetch_config_is_always_enabled() {
         assert!(web_fetch_config_default().is_enabled());
+    }
+
+    /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the semaphore matches the
+    /// `web_search` family — the exact name plus `_*` variants (mirror of
+    /// `relay::is_web_retrieval_tool`'s search half, so a variant spelling
+    /// cannot dodge the gate) — and nothing else. `web_fetch` is NOT gated
+    /// (ADR-0010 §3.7.7 limits only web_search).
+    #[test]
+    fn is_web_search_tool_matches_search_family_only() {
+        assert!(is_web_search_tool("web_search"));
+        assert!(is_web_search_tool("web_search_arxiv_paper"));
+        assert!(is_web_search_tool("web_search_custom"));
+        // web_fetch family stays ungated; host/retrieval tools never acquire.
+        assert!(!is_web_search_tool("web_fetch"));
+        assert!(!is_web_search_tool("web_fetch_page"));
+        assert!(!is_web_search_tool("project_doc_index"));
+        assert!(!is_web_search_tool("browser_read"));
+        assert!(!is_web_search_tool("read_file"));
+        assert!(!is_web_search_tool("bash"));
+        // Prefix boundary: the underscore separates the family.
+        assert!(!is_web_search_tool("web_searchX"));
+        assert!(!is_web_search_tool("web_searchx"));
     }
 }

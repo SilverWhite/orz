@@ -91,6 +91,15 @@ pub struct OrzHost {
     /// configured (env API key) — drives the framework_fallback capability
     /// probe (ADR-0010 §3.7.1; never a silent fallback).
     web_search_configured: bool,
+    /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the global `web_search`
+    /// concurrency gate (ADR-0010 §3.7.7/§11.3 — global web_search
+    /// concurrency is fixed at 1; the main agent and the external-retrieval
+    /// subagent share this single semaphore, internal retrieval does not
+    /// touch it). `call_tool` acquires one permit per `web_search*` call and
+    /// drops it when the call future ends (timeout included) — the permit is
+    /// owned by the tokio future, so the P0-1 timeout drop releases it
+    /// automatically.
+    web_search_semaphore: Arc<tokio::sync::Semaphore>,
     /// local_browser (2026-08-10): the session's browser lane handle.
     /// Defaults to a fail-closed [`UnavailableBrowserSession`] (probe failed
     /// or mode ≠ local_browser); the probe injects the real manager.
@@ -144,6 +153,7 @@ impl OrzHost {
                 cwd.to_path_buf(),
             ),
             web_search_configured: crate::tools::web_search_config_from_env().is_enabled(),
+            web_search_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             browser: Arc::new(crate::local_browser::UnavailableBrowserSession::new(
                 "no browser handle injected".to_string(),
             )),
@@ -595,10 +605,57 @@ impl LoopHost for OrzHost {
             }
             return crate::local_browser::handle_browser_read(self.browser.as_ref(), &args).await;
         }
-        let fut = self.registry.toolset().call(name, args, call_id, None);
+        // GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): global `web_search`
+        // concurrency is fixed at 1 (ADR-0010 §3.7.7/§11.3 — the main agent
+        // and the external-retrieval subagent share this semaphore; internal
+        // retrieval does not touch it, so internal + external sessions still
+        // run in parallel). Every `web_search*` call acquires the shared
+        // permit BEFORE execution. The P0-1 timeout wraps the whole
+        // acquire+call future, so a WAITING call is bounded by the same
+        // 300s budget, and the timeout drop releases the permit with the
+        // future — a holder can never leak the gate. `web_fetch` is not
+        // gated (the contract limits only web_search).
+        //
+        // P3-1 (review 2026-08-10, upgraded to a fix — the new timeout test
+        // reproduced the mis-kill): `started_exec` distinguishes a WAITING
+        // timeout from an EXECUTION timeout. A call that times out while
+        // waiting for the permit holds no process tree of its own, so the
+        // global `kill_active` would only destroy unrelated concurrent
+        // processes (reproduced: the parallel `call_tool_timeout_kills_
+        // process_tree` test lost its python child to the semaphore test's
+        // 100ms waiting timeout). Only an execution timeout kills.
+        let started_exec = std::sync::atomic::AtomicBool::new(false);
+        let fut = async {
+            if crate::tools::is_web_search_tool(name) {
+                tracing::debug!(
+                    tool = name,
+                    "web_search: acquiring the global semaphore (concurrency=1)"
+                );
+                let _permit = self
+                    .web_search_semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| {
+                        // P3-4 (review 2026-08-10): the map_tool_error
+                        // bridge surfaces only the Display text — inline the
+                        // code so a model never sees a bare "semaphore
+                        // closed" that reads like a tool being switched off.
+                        xai_tool_runtime::ToolError::custom(
+                            "web_search_semaphore",
+                            format!("web_search_semaphore: {e}"),
+                        )
+                    })?;
+                started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.registry.toolset().call(name, args, call_id, None).await
+            } else {
+                started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.registry.toolset().call(name, args, call_id, None).await
+            }
+        };
         let result = match tokio::time::timeout(self.tool_timeout, fut).await {
             Ok(result) => result.map_err(|e| crate::tools::map_tool_error(&e))?,
-            Err(_) => {
+            Err(_) if started_exec.load(std::sync::atomic::Ordering::SeqCst) => {
                 tracing::warn!(
                     tool = name,
                     timeout = ?self.tool_timeout,
@@ -615,6 +672,21 @@ impl LoopHost for OrzHost {
                 return Err(ToolError::Timeout(format!(
                     "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
                      process tree killed; the tool did not complete",
+                    timeout = self.tool_timeout,
+                )));
+            }
+            Err(_) => {
+                // Waiting timeout: bounded by the same 300s budget (D-3),
+                // but nothing was killed — the call never reached a tool.
+                tracing::warn!(
+                    tool = name,
+                    timeout = ?self.tool_timeout,
+                    "web_search call TIMED OUT while waiting for the global permit"
+                );
+                return Err(ToolError::Timeout(format!(
+                    "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
+                     still waiting for the global web_search permit (concurrency=1); \
+                     nothing was killed, retry when the holder finishes",
                     timeout = self.tool_timeout,
                 )));
             }
@@ -659,6 +731,44 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// P2-1 (review 2026-08-10): every test that mutates the web_search env
+    /// vars takes this lock — `web_search_config_follows_env_key` (tools.rs)
+    /// and the semaphore tests here share one test binary and would
+    /// otherwise race on `ORZ_WEB_SEARCH_API_KEY` (a cross-test flake).
+    /// tokio mutex: the async tests hold it across awaits (clippy
+    /// await_holding_lock would flag a std guard); OnceLock because tokio's
+    /// `Mutex::new` is not const.
+    pub(crate) static TESTS_ENV_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    /// P2-1: accessor for the shared env-test lock.
+    pub(crate) fn tests_env_lock() -> &'static tokio::sync::Mutex<()> {
+        TESTS_ENV_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    /// P2-1 (review 2026-08-10): restores an env var on drop — tests that
+    /// mutate shared env state must not leak into later tests.
+    pub(crate) struct EnvVarGuard {
+        key: &'static str,
+        old: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        pub(crate) fn new(key: &'static str) -> Self {
+            let old = std::env::var(key).ok();
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
 
     fn test_dir() -> std::path::PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -750,6 +860,176 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, Some(0));
         assert!(result.output.contains("hello page"), "{}", result.output);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): a `web_search` call waits on
+    /// the global permit (concurrency=1, ADR-0010 §3.7.7/§11.3). The test
+    /// holds the permit, spawns the call, asserts it is still pending while
+    /// held, then releases — the call completes (fast-fails: the tool is
+    /// unregistered without an env key, but the gate ordering is what is
+    /// under test).
+    #[tokio::test]
+    async fn web_search_call_waits_for_global_permit() {
+        let dir = test_dir();
+        // P2-1 (review 2026-08-10): serialize with the env-mutating test in
+        // tools.rs and restore the var on drop (no cross-test leakage).
+        let _env_lock = tests_env_lock().lock().await;
+        let _key = EnvVarGuard::new("ORZ_WEB_SEARCH_API_KEY");
+        unsafe {
+            std::env::remove_var("ORZ_WEB_SEARCH_API_KEY");
+        }
+        let host = Arc::new(
+            OrzHost::new(
+                JournalRecorder::new(dir.clone()),
+                &dir,
+                WorkspaceTrust::ObservedTrusted,
+            )
+            .unwrap(),
+        );
+
+        // Hold the single permit.
+        let permit = host
+            .web_search_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+
+        let host2 = host.clone();
+        let handle = tokio::spawn(async move {
+            host2
+                .call_tool(
+                    "web_search",
+                    serde_json::json!({"query": "test"}),
+                    "ws-gate-1",
+                )
+                .await
+        });
+
+        // While the permit is held the call must still be pending.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !handle.is_finished(),
+            "web_search call must wait on the global permit"
+        );
+
+        // Release → the call proceeds (and fast-fails: no key = unregistered).
+        drop(permit);
+        let result = handle.await.unwrap();
+        assert!(result.is_err(), "unregistered web_search must fail: {result:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10, review F7): a P0-1 timeout on a
+    /// WAITING call drops the future → the permit releases with it. A holder
+    /// can never leak the gate: after the timeout the next call acquires
+    /// immediately (fast-fails again — unregistered without an env key).
+    #[tokio::test]
+    async fn web_search_timeout_releases_the_permit() {
+        let dir = test_dir();
+        let _env_lock = tests_env_lock().lock().await;
+        let _key = EnvVarGuard::new("ORZ_WEB_SEARCH_API_KEY");
+        unsafe {
+            std::env::remove_var("ORZ_WEB_SEARCH_API_KEY");
+        }
+        let host = Arc::new(
+            OrzHost::new(
+                JournalRecorder::new(dir.clone()),
+                &dir,
+                WorkspaceTrust::ObservedTrusted,
+            )
+            .unwrap()
+            .with_tool_timeout(std::time::Duration::from_millis(100)),
+        );
+
+        // Hold the single permit so the call can only wait.
+        let permit = host
+            .web_search_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+
+        let host2 = host.clone();
+        let handle = tokio::spawn(async move {
+            host2
+                .call_tool(
+                    "web_search",
+                    serde_json::json!({"query": "x"}),
+                    "ws-tout-1",
+                )
+                .await
+        });
+        let err = handle.await.unwrap().unwrap_err();
+        assert!(
+            err.to_string().contains("TIMED OUT"),
+            "waiting call must hit the P0-1 budget: {err}"
+        );
+
+        // The timeout dropped the future → the permit is back.
+        drop(permit);
+        let host3 = host.clone();
+        let again = tokio::spawn(async move {
+            host3
+                .call_tool(
+                    "web_search",
+                    serde_json::json!({"query": "y"}),
+                    "ws-tout-2",
+                )
+                .await
+        });
+        let res = again.await.unwrap();
+        assert!(
+            res.is_err(),
+            "second call must acquire the released permit and fast-fail: {res:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the gate covers ONLY the
+    /// `web_search` family — a non-search tool (read_file) completes while
+    /// the permit is held.
+    #[tokio::test]
+    async fn non_web_search_tools_ignore_the_gate() {
+        let dir = test_dir();
+        let path = dir.join("gate.txt");
+        std::fs::write(&path, "gate").unwrap();
+        let host = Arc::new(
+            OrzHost::new(
+                JournalRecorder::new(dir.clone()),
+                &dir,
+                WorkspaceTrust::ObservedTrusted,
+            )
+            .unwrap(),
+        );
+
+        let permit = host
+            .web_search_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+
+        let host2 = host.clone();
+        let handle = tokio::spawn(async move {
+            host2
+                .call_tool(
+                    "read_file",
+                    serde_json::json!({"target_file": path.to_string_lossy()}),
+                    "ws-gate-2",
+                )
+                .await
+        });
+
+        // read_file is not gated — it completes while the permit is held.
+        let result = handle.await.unwrap().unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.output.contains("gate"), "{}", result.output);
+        drop(permit);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
