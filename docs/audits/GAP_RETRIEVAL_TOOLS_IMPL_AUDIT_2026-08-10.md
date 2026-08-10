@@ -64,7 +64,7 @@
 | D-3 | mode=off 保留 retrieval_disposition 声明 | 处置既有/restored pending 是合法 off 动作 |
 | D-4 | [DOC]/[SOURCE] 声明行=metadata-grade ledger 条目（evidence 优先合并） | §3.7.5 未读全文不得全文级归因；无工具调用场景合法 |
 | D-5 | [RESULT_JSON] 验证失败 → 显式降级（空 organized_response + visibility_degraded + reason_code），非硬失败 | 用户裁决；部分结果不丢；§3.7.2 不违反（显式记录非静默） |
-| D-6 | conversation/submitted 不入侧车 | 用户裁决；journal 是证据；跨 run 幂等重放限进程内（call_id 派生 disposition_id 天然防冲突） |
+| D-6 | conversation/submitted 不入侧车 | 用户裁决；journal 是证据；跨 run 幂等重放限进程内（call_id 派生 disposition_id 天然防冲突）。**部分撤销（GAP-CONVERSATION-RESTORE 2026-08-10）**：conversation 改随侧车恢复（`StoredActivation.conversation`，serde default 兼容旧侧车）；`submitted` 仍不入 |
 | D-7 | web_search key=env（ORZ_WEB_SEARCH_API_KEY）显式通道 | ADR-0006 凭据注册表完整接线留后续切片（seam 保留） |
 | D-8 | 无 key 时 framework_fallback=Degraded("web_search_not_configured")（web_fetch 恒可用） | 显式能力记录，非 Unsupported 非静默 |
 | D-9 | pre_handoff completed_turns 取 loop 前快照 | orientation 引用被 run_agent_loop 消费；审计意图是"handoff 前会话进度" |
@@ -75,7 +75,7 @@
 ## 4. 边界（明确未做，登记给后续切片）
 
 - local_browser 浏览器自动化（CDP）——枚举/transition/capability 完整接线，mode=local_browser 显式 unsupported（`local_browser_automation_not_implemented`）
-- conversation 跨 prompt 恢复（侧车只存状态机字段；跨 run continue 子代理上下文从头开始）
+- ~~conversation 跨 prompt 恢复（侧车只存状态机字段；跨 run continue 子代理上下文从头开始）~~——**已由 GAP-CONVERSATION-RESTORE 闭合**（2026-08-10，见 [GAP_CONVERSATION_RESTORE_IMPL_AUDIT](GAP_CONVERSATION_RESTORE_IMPL_AUDIT_2026-08-10.md)）
 - ADR-0006 凭据注册表 → web_search key 的完整注入（env 通道先行）
 - web_search=1 全局 semaphore（§3.7.7 工具合同项）
 - project_doc_index 索引缓存/增量扫描（每 query 全扫，正确性优先）
