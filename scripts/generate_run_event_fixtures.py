@@ -1139,11 +1139,13 @@ extension 2026-08-10):
 
 ## Real journals (`journals/`)
 
-The 12 journals below are captured by the orz conformance capture tests
+The 13 journals below are captured by the orz conformance capture tests
 (`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`,
 staged under `target/conformance-journals/` and dev-copied here — see the
 GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
-fixes (H1 off projection now hides `project_doc_index` too):
+fixes (H1 off projection now hides `project_doc_index` too); the 13th
+(`local-browser-read`) is the local_browser slice (2026-08-10) available-
+capability scenario:
 
 | journal | scenario |
 |---|---|
@@ -1156,6 +1158,7 @@ fixes (H1 off projection now hides `project_doc_index` too):
 | `orientation-fire-run.jsonl` | **7 retrieval tool rounds cross the session-level threshold — the orientation fires once in the post-tool-batch gap of round 7, and each retrieval round records a mechanical `information_sufficiency_assessment` (`indeterminate`) plus a `retrieval_result_committed`** |
 | `mode-off-refusal.jsonl` | retrieval dispatch under mode=off — refused as `retrieval_mode_off` with NO ToolStarted (verifier mode rule) |
 | `local-browser-capability.jsonl` | bootstrap transition to `local_browser` with capability `unsupported` — dispatch fails explicitly (`retrieval_capability_unavailable`), no silent fallback |
+| `local-browser-read.jsonl` | bootstrap transition to `local_browser` with capability `available` — external lane runs the host `browser_read` tool (fake lane), committed result carries real full-text `web_page` evidence (ADR §3.7.3/§3.7.5) |
 | `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
 | `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
 | `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |

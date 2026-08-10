@@ -217,6 +217,22 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "model_output", "counterexample_gate", "model_output",
         "runtime_stagnation_guard", "run_finished",
     ),
+    # local_browser (2026-08-10): mode=local_browser with an AVAILABLE
+    # capability — the external subagent runs the host browser_read tool
+    # (permission auto-allow), the committed result carries REAL full-text
+    # web_page evidence, and the transition records capability_status
+    # = available.
+    "local-browser-read.jsonl": (
+        "run_preflight", "retrieval_mode_transition",
+        "tool_availability_check", "run_started", "prompt_submitted",
+        "model_output", "tool_started", "model_output",
+        "permission_requested", "permission_decision", "tool_started",
+        "tool_completed", "model_output", "runtime_stagnation_guard",
+        "tool_completed", "retrieval_result_committed",
+        "information_sufficiency_assessment", "model_output",
+        "counterexample_gate", "model_output", "runtime_stagnation_guard",
+        "run_finished",
+    ),
     # Cross-run activation restore: the seeded AwaitingDisposition
     # activation journals its restore at startup, the parent's disposition
     # closes it (close record binds through the restore declaration).
@@ -1284,12 +1300,195 @@ class RetrievalModeTransitionTests(unittest.TestCase):
         errors = validate_journal_text(journal)
         self.assertIn("under local_browser", " | ".join(errors))
 
+    # ── local_browser capability_status branch (2026-08-10 local_browser
+    # slice): available → successful dispatches and committed results are
+    # legal; unsupported/degraded → the strict rules above; a missing
+    # capability_status on a local_browser transition is itself an error.
+
+    def test_local_browser_available_full_chain_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="available",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed("external_retrieval"), 2, _ZERO),
+                _mk_v02_event("retrieval_result_committed", _committed_result(), 3, _ZERO),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_local_browser_available_explicit_error_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="available",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 1, _ZERO),
+                _mk_v02_event(
+                    "tool_completed", _tool_completed("external_retrieval", errored=True),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_local_browser_degraded_non_error_dispatch_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="degraded",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed("external_retrieval"), 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("non-error under local_browser", " | ".join(errors))
+        self.assertIn("degraded", " | ".join(errors))
+
+    def test_local_browser_degraded_committed_result_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="degraded",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event("retrieval_result_committed", _committed_result(), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("under local_browser", " | ".join(errors))
+
+    def test_local_browser_transition_missing_capability_status_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "off", "local_browser"),
+                    0, None,
+                ),
+                _mk_v02_event("tool_started", _tool_started("external_retrieval"), 1, _ZERO),
+                _mk_v02_event(
+                    "tool_completed", _tool_completed("external_retrieval", errored=True),
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("capability_status", " | ".join(errors))
+
+    # ── host-lane retrieval tools under off/degraded (2026-08-10 review
+    # M2): browser_read's tool events carry NO `target` field (D-2 host
+    # lane), so the target-based checks alone cannot see a successful
+    # host-lane retrieval under an unavailable capability — the name-based
+    # rule below closes that gap.
+
+    def test_local_browser_degraded_host_lane_success_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="degraded",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "tool_started",
+                    {"tool": "browser_read", "call_id": "call-b1"},
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "tool_completed",
+                    {"tool": "browser_read", "call_id": "call-b1", "exit_code": 0},
+                    2, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("browser_read", " | ".join(errors))
+        self.assertIn("degraded", " | ".join(errors))
+
+    def test_local_browser_degraded_host_lane_explicit_error_validates(self) -> None:
+        # The same dispatch failing explicitly stays legal.
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition(
+                        "MODETRANS-1", "off", "local_browser",
+                        capability_status="degraded",
+                    ),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "tool_started",
+                    {"tool": "browser_read", "call_id": "call-b1"},
+                    1, _ZERO,
+                ),
+                _mk_v02_event(
+                    "tool_completed",
+                    {
+                        "tool": "browser_read", "call_id": "call-b1",
+                        "status": "error", "error": "browser_read_failed",
+                    },
+                    2, _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_off_host_lane_dispatch_rejected(self) -> None:
+        # The off rule covers host-lane retrieval dispatches the same way
+        # (browser_read has no target field).
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "retrieval_mode_transition",
+                    _mode_transition("MODETRANS-1", "off", "off"),
+                    0, None,
+                ),
+                _mk_v02_event(
+                    "tool_started",
+                    {"tool": "browser_read", "call_id": "call-b1"},
+                    1, _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("browser_read", " | ".join(errors))
+        self.assertIn("off", " | ".join(errors))
+
     def test_second_bootstrap_transition_rejected(self) -> None:
         journal = _v02_journal(
             [
                 _mk_v02_event(
                     "retrieval_mode_transition",
-                    _mode_transition("MODETRANS-1", "off", "framework_fallback"),
+                    _mode_transition(
+                        "MODETRANS-1", "off", "framework_fallback",
+                        capability_status="available",
+                    ),
                     0, None,
                 ),
                 _mk_v02_event(
@@ -1305,6 +1504,7 @@ class RetrievalModeTransitionTests(unittest.TestCase):
                     _mode_transition(
                         "MODETRANS-3", "off", "framework_fallback",
                         authority="session_bootstrap",
+                        capability_status="available",
                     ),
                     2, _ZERO,
                 ),
@@ -1318,7 +1518,10 @@ class RetrievalModeTransitionTests(unittest.TestCase):
             [
                 _mk_v02_event(
                     "retrieval_mode_transition",
-                    _mode_transition("MODETRANS-1", "off", "framework_fallback"),
+                    _mode_transition(
+                        "MODETRANS-1", "off", "framework_fallback",
+                        capability_status="available",
+                    ),
                     0, None,
                 ),
                 _mk_v02_event(

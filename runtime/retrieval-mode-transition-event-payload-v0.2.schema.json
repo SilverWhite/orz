@@ -60,7 +60,8 @@
             "type": "string",
             "enum": ["available", "unsupported", "degraded"]
           }
-        }
+        },
+        "required": ["capability_status"]
       }
     }
   ]

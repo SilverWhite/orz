@@ -2144,6 +2144,9 @@ def check_repository() -> dict[str, Any]:
         # result / activation restore / pre-handoff scenarios.
         "mode-off-refusal.jsonl",
         "local-browser-capability.jsonl",
+        # local_browser (2026-08-10): the available-capability read lane
+        # (real host browser_read tool, fake lane in capture).
+        "local-browser-read.jsonl",
         "real-doc-retrieval.jsonl",
         "cross-prompt-restore.jsonl",
         "pre-handoff-checkpoint.jsonl",

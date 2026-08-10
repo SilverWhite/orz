@@ -347,6 +347,16 @@ def _verify_v02_inquiry_kind(events: list[dict[str, Any]]) -> list[str]:
 
 _RETRIEVAL_TARGETS = frozenset({"internal_retrieval", "external_retrieval"})
 
+# Host-lane retrieval tools whose tool events carry NO `target` field
+# (D-2, 2026-08-10 local_browser slice): `browser_read` runs on the host
+# lane, so the target-based dispatch rules below cannot see it — a
+# successful browser_read under off / unavailable capability would slip
+# past exactly the "no silent fallback" the mode rules enforce. web_fetch /
+# web_search are NOT listed: they dispatch through the external lane and
+# their events carry target=external_retrieval (covered by the target
+# checks).
+_HOST_LANE_RETRIEVAL_TOOLS = frozenset({"browser_read"})
+
 
 def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §3.7.1 mechanical mode facts on the v0.2 track:
@@ -358,9 +368,16 @@ def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
     - after a transition to off, no retrieval dispatch (tool_started with a
       retrieval target), no assessment and no committed result may follow —
       parent dispositions of already-pending activations stay legal;
-    - after a transition to local_browser, every retrieval dispatch must fail
-      explicitly (the capability probe records unsupported — no silent
-      fallback) and no committed result may follow.
+    - after a transition to local_browser, the obligation depends on the
+      transition's capability_status (2026-08-10 local_browser slice): with
+      `available`, successful dispatches and committed results are legal;
+      with `unsupported`/`degraded`, every retrieval dispatch must fail
+      explicitly (no silent fallback) and no committed result may follow;
+      a missing capability_status on a local_browser transition is itself
+      an error — the schema's allOf constrains the VALUE when present but
+      does not require presence, so this check is the presence gate
+      (2026-08-10 review: corrected the earlier "schema double backstop"
+      wording).
     """
     errors: list[str] = []
     transitions: list[tuple[int, dict[str, Any]]] = []
@@ -389,7 +406,10 @@ def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
         if new_mode == "off":
             for j in range(index + 1, next_transition):
                 payload_j = events[j].get("payload", {})
-                if events[j].get("event_type") == "tool_started" and payload_j.get("target") in _RETRIEVAL_TARGETS:
+                if events[j].get("event_type") == "tool_started" and (
+                    payload_j.get("target") in _RETRIEVAL_TARGETS
+                    or payload_j.get("tool") in _HOST_LANE_RETRIEVAL_TOOLS
+                ):
                     errors.append(
                         f"event {j}: retrieval dispatch {payload_j.get('tool')} "
                         f"after transition to off (event {index})"
@@ -406,24 +426,46 @@ def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
                         f"(event {index})"
                     )
         elif new_mode == "local_browser":
+            capability_status = payload.get("capability_status")
+            if capability_status not in ("available", "unsupported", "degraded"):
+                errors.append(
+                    f"event {index}: capability_status {capability_status!r} "
+                    f"missing/invalid on local_browser transition — the schema "
+                    f"requires one of available/unsupported/degraded"
+                )
+                continue
             for j in range(index + 1, next_transition):
                 payload_j = events[j].get("payload", {})
-                if events[j].get("event_type") == "retrieval_result_committed":
-                    errors.append(
-                        f"event {j}: committed result under local_browser mode "
-                        f"(event {index}) — capability unsupported, no silent "
-                        f"fallback allowed"
-                    )
-                elif (
-                    events[j].get("event_type") == "tool_completed"
-                    and payload_j.get("target") in _RETRIEVAL_TARGETS
-                    and payload_j.get("status") != "error"
-                ):
-                    errors.append(
-                        f"event {j}: retrieval dispatch {payload_j.get('tool')} "
-                        f"completed non-error under local_browser mode (event "
-                        f"{index}) — capability unsupported must fail explicitly"
-                    )
+                if capability_status != "available":
+                    # Capability unavailable → every dispatch must fail
+                    # explicitly; a committed result is impossible (no silent
+                    # fallback — ADR-0010 §3.7.1/§3.7.2).
+                    if events[j].get("event_type") == "retrieval_result_committed":
+                        errors.append(
+                            f"event {j}: committed result under local_browser "
+                            f"mode with capability_status={capability_status} "
+                            f"(event {index}) — capability unavailable, no "
+                            f"silent fallback allowed"
+                        )
+                    elif (
+                        events[j].get("event_type") == "tool_completed"
+                        and (
+                            payload_j.get("target") in _RETRIEVAL_TARGETS
+                            or payload_j.get("tool") in _HOST_LANE_RETRIEVAL_TOOLS
+                        )
+                        and payload_j.get("status") != "error"
+                    ):
+                        errors.append(
+                            f"event {j}: retrieval dispatch "
+                            f"{payload_j.get('tool')} completed non-error under "
+                            f"local_browser mode with "
+                            f"capability_status={capability_status} (event "
+                            f"{index}) — capability unavailable must fail "
+                            f"explicitly"
+                        )
+                # capability_status == "available": successful dispatches and
+                # committed results are legal — no obligation beyond the
+                # shared rules above.
     if bootstrap_count > 1:
         errors.append(
             f"journal has {bootstrap_count} session_bootstrap transitions — "
