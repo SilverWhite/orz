@@ -130,24 +130,42 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
     "restore-run.jsonl": (
         "run_preflight", "snapshot_restored", "run_finished",
     ),
+    # GAP-SUBAGENT-RUNTIME (2026-08-10, M3/M4): each retrieval dispatch runs
+    # the SHARED loop — the subagent's model round and its own stagnation
+    # guard land in the same chain between the parent's tool_started/
+    # tool_completed wrapper; each assessment is followed by the parent's
+    # retrieval_disposition round (the control call's disposition event —
+    # and the close record on the accepted close — land between the tool's
+    # start and completion); the 7-round orientation crossing fires once, on
+    # the 4th retrieve's post-tool-batch gap.
     "orientation-fire-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted",
-        "model_output", "tool_started", "tool_completed",
+        "model_output", "tool_started", "model_output",
+        "runtime_stagnation_guard", "tool_completed",
         "information_sufficiency_assessment",
-        "model_output", "tool_started", "tool_completed",
+        "model_output", "tool_started", "retrieval_parent_disposition",
+        "tool_completed",
+        "model_output", "tool_started", "model_output",
+        "runtime_stagnation_guard", "tool_completed",
         "information_sufficiency_assessment",
-        "model_output", "tool_started", "tool_completed",
+        "model_output", "tool_started", "retrieval_parent_disposition",
+        "tool_completed",
+        "model_output", "tool_started", "model_output",
+        "runtime_stagnation_guard", "tool_completed",
         "information_sufficiency_assessment",
-        "model_output", "tool_started", "tool_completed",
+        "model_output", "tool_started", "retrieval_parent_disposition",
+        "tool_completed",
+        "model_output", "tool_started", "model_output",
+        "runtime_stagnation_guard", "tool_completed",
+        "information_sufficiency_assessment", "orientation_checkpoint",
+        "model_output", "tool_started", "retrieval_parent_disposition",
+        "tool_completed",
+        "model_output", "tool_started", "model_output",
+        "runtime_stagnation_guard", "tool_completed",
         "information_sufficiency_assessment",
-        "model_output", "tool_started", "tool_completed",
-        "information_sufficiency_assessment",
-        "model_output", "tool_started", "tool_completed",
-        "information_sufficiency_assessment",
-        "model_output", "tool_started", "tool_completed",
-        "information_sufficiency_assessment",
-        "orientation_checkpoint",
+        "model_output", "tool_started", "retrieval_parent_disposition",
+        "retrieval_close_record", "tool_completed",
         "model_output", "counterexample_gate", "model_output",
         "runtime_stagnation_guard", "run_finished",
     ),
@@ -290,12 +308,16 @@ class V02JournalConformanceTests(unittest.TestCase):
         assessments = [
             e for e in events if e["event_type"] == "information_sufficiency_assessment"
         ]
-        self.assertEqual(len(assessments), 7)
+        # GAP-SUBAGENT-RUNTIME (2026-08-10): the M4 scenario interleaves a
+        # disposition after every assessment (4 × continue + 1 × close) —
+        # each continue bumps the contract revision, so the assessments
+        # carry revisions 0..4.
+        self.assertEqual(len(assessments), 5)
         for i, a in enumerate(assessments):
             p = a["payload"]
             self.assertEqual(p["status"], "indeterminate")
             self.assertEqual(p["source_visibility_gate"], "not_applicable")
-            self.assertEqual(p["contract_revision"], 0)
+            self.assertEqual(p["contract_revision"], i)
             # The ledger grows one [DOC] per round.
             self.assertEqual(p["source_counts"]["total"], i + 1)
             # No inquiry family / model verdict on a mechanical event.

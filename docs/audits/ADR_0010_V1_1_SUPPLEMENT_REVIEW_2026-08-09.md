@@ -70,16 +70,16 @@ session 事实和 restore，数据源转为 ORZ 当前 journal/session index。�
 
 | ID | 当前观察 | 下一轮必须确认 |
 |---|---|---|
-| V11-IMPL-001 | 显式 retrieval mode 主要存在于 Python CLI/receipt/gate，Rust retrieval session 未接入 | mode authority、transition event、禁止 fallback 是否端到端成立 |
-| V11-IMPL-002 | Python Diagnostic Coverage 已有 2→3→4→5；需与 v1.1 去主观 0.5、event identity 规则对照 | signal producer、去重、episode close、Rust 接线 |
+| V11-IMPL-001 | 显式 retrieval mode 主要存在于 Python CLI/receipt/gate，Rust retrieval session 未接入 | **保持开放（2026-08-10）**：mode 枚举/transition event 需真实检索工具语义落地，由 GAP-RETRIEVAL-TOOLS 切片接线（GAP-SUBAGENT-RUNTIME 用户裁决不纳入） |
+| V11-IMPL-002 | Python Diagnostic Coverage 已有 2→3→4→5；需与 v1.1 去主观 0.5、event identity 规则对照 | **Rust producer 已接线（2026-08-10，GAP-SUBAGENT-RUNTIME）**：阈值 2→3→4→5 封顶、evidence identity 去重、episode=run、达阈值注入一次 checkpoint、pass 重置；剩余 `same_module_no_evidence`/`key_surface_unexamined` 信号类别随真实检索工具切片 |
 | V11-IMPL-003 | Global Review receipt 已实现于 Python | activation 与真正审查结论是否仍严格分离 |
 | V11-IMPL-004 | Rust D-1 仍是 prompt 字符串 + grep 测试 | source ledger binding、claim limit verifier、renderer |
 | V11-IMPL-005 | `run_tests` 已落地但需安全复核 | permission、sandbox/network、hidden-output、写副作用 |
-| V11-IMPL-006 | LBR Python 实现存在，Rust 子代理仍 `tools: Vec::new()`/single pass | 同构 session、真实工具、状态/失败事件、archive |
+| V11-IMPL-006 | LBR Python 实现存在，Rust 子代理仍 `tools: Vec::new()`/single pass | **`tools: Vec::new()`/single pass 已关闭（2026-08-10）**：子代理同构共享 AgentLoop 落地（多轮/工具/journal/预算/生命周期链）；真实检索工具（LBR/文档索引）与状态/失败事件、archive 仍待 GAP-RETRIEVAL-TOOLS |
 | V11-IMPL-007 | Toolbar/只读 run-history 已落地 | 数据源是否统一到当前 ORZ session ownership，旧路径假设是否残留 |
 | V11-IMPL-008 | component register 不存在 | 逐 crate 来源、local diff、可达性、license、seam、owner |
-| V11-IMPL-009 | 仍有 `neutral_inquiry`、free-form retrieval completion、旧 Schema | assessment → parent disposition → close commit 的 v0.2 Schema/producer/verifier/replay 迁移；检查 revision CAS、幂等与迟到 close 竞态 |
-| V11-IMPL-010 | 当前 model ID 为 `deepseek-v4-flash`，符合 family/V4；三个 Agent runtime 尚不同构 | 单一 registry 与三实例相同配置是否真正成立 |
+| V11-IMPL-009 | 仍有 `neutral_inquiry`、free-form retrieval completion、旧 Schema | **已关闭（2026-08-10）**：`neutral_inquiry`/`retrieval_completion_check` v0.2 轨退休（v0.1 replay-only）；free-form 自报删除；assessment → parent disposition → close commit 全链 v0.2 producer/verifier 落地（CAS/幂等/冲突 decision/迟到 close/close 后冻结，见 GAP-SUBAGENT-RUNTIME 审计） |
+| V11-IMPL-010 | 当前 model ID 为 `deepseek-v4-flash`，符合 family/V4；三个 Agent runtime 尚不同构 | **已关闭（2026-08-10）**：三 agent 复用同一共享 AgentLoop（agent_loop.rs RoundAgent 统一模型轮入口）+ 同一 gateway/160K 配置；单一 model registry 化仍随真实检索工具切片（当前共享 gateway 同一构造点） |
 | V11-IMPL-011 | controller 仍是旧 40 工具轮和旧 inquiry counter | 120 工具轮、7 逻辑模型轮、recovery 持久计数 |
 | V11-IMPL-012 | denial 仍按每 tool call 累积 3/10 | 改为同 denial key 连续三 tool-call rounds，删除 total 10 |
 
