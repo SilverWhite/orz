@@ -145,6 +145,13 @@ pub(crate) struct LoopProfile {
     pub dc_enabled: bool,
     /// Independent per-session tool-round budget (§3.4.6 — 120 default).
     pub max_tool_rounds: u32,
+    /// Rounds already consumed by this session BEFORE this loop starts
+    /// (user adjudication 2026-08-10, review F5): a `continue` re-entry is
+    /// the SAME retrieval session — the budget accumulates across
+    /// dispatches and resets only with a NEW activation (Closed → next
+    /// creation starts at 0). The main agent keeps the inherited per-run
+    /// semantic (`main`/`grill` = 0).
+    pub initial_tool_rounds: u32,
 }
 
 impl LoopProfile {
@@ -157,6 +164,7 @@ impl LoopProfile {
             tool_filter: ToolFilter::None,
             dc_enabled: true,
             max_tool_rounds,
+            initial_tool_rounds: 0,
         }
     }
 
@@ -172,14 +180,23 @@ impl LoopProfile {
             tool_filter: ToolFilter::None,
             dc_enabled: false,
             max_tool_rounds,
+            initial_tool_rounds: 0,
         }
     }
 
     /// A retrieval subagent's loop (GAP-SUBAGENT-RUNTIME 2026-08-10; M5:
     /// the internal/external lanes are fed — §4.2 counts every agent's
     /// completed logical model rounds; DC stays off (debug-specific, §4.6
-    /// is a main-lane mechanism).
-    pub(crate) fn retrieval(role: SubagentRole, goal: &str, max_tool_rounds: u32) -> Self {
+    /// is a main-lane mechanism). `initial_tool_rounds` carries the
+    /// session's consumed budget across `continue` re-entries (user
+    /// adjudication 2026-08-10, review F5 — the caller reads it back from
+    /// the activation).
+    pub(crate) fn retrieval(
+        role: SubagentRole,
+        goal: &str,
+        max_tool_rounds: u32,
+        initial_tool_rounds: u32,
+    ) -> Self {
         let agent_role = match role {
             SubagentRole::InternalRetrieval => AgentRole::InternalRetrieval,
             SubagentRole::ExternalRetrieval => AgentRole::ExternalRetrieval,
@@ -195,6 +212,7 @@ impl LoopProfile {
             tool_filter: ToolFilter::Retrieval,
             dc_enabled: false,
             max_tool_rounds,
+            initial_tool_rounds,
         }
     }
 }
@@ -255,14 +273,12 @@ pub(crate) async fn run_agent_loop(
     heartbeat: Option<&ActivityClock>,
 ) -> Result<LoopOutcome, AgentLoopError> {
     let workspace_trust = host.workspace_trust();
-    // Per-loop budget counter — one 120-round budget per agent session
-    // (§3.4.6). Registered boundary (review F5, 2026-08-10): a `continue`
-    // re-entry starts a NEW loop, so the budget restarts from 0 for the
-    // same activation; §3.4.6 does not state whether continue accumulates
-    // against the session budget — adjudicated with the real retrieval
-    // tools slice (the main agent's cross-turn budget resets likewise, an
-    // inherited per-run semantic).
-    let mut tool_rounds = 0u32;
+    // The session's budget counter (user adjudication 2026-08-10, review
+    // F5): a `continue` re-entry is the same retrieval session — the
+    // counter starts from the activation's consumed rounds and resets only
+    // with a NEW activation (Closed → next creation starts at 0). The main
+    // agent keeps the inherited per-run semantic (`initial_tool_rounds` 0).
+    let mut tool_rounds = profile.initial_tool_rounds;
     // The `None` seed is required by Rust's initialization rules (the
     // value is overwritten on every break path before the read at the
     // end — clippy's unused_assignments is a false positive here).

@@ -260,6 +260,13 @@ pub(crate) struct ActivationState {
     /// a pre-continue disposition must be recognized even after the
     /// pending was replaced.
     pub submitted: Vec<(String, Vec<u8>)>,
+    /// Tool rounds consumed by this activation's sessions (user
+    /// adjudication 2026-08-10, review F5): a `continue` re-entry is the
+    /// SAME retrieval session — the 120-round budget accumulates across
+    /// dispatches and resets only when the activation closes (a new
+    /// activation starts at 0). Read as `initial_tool_rounds` by the
+    /// shared loop and written back from `LoopOutcome.tool_rounds`.
+    pub tool_rounds_used: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1669,6 +1676,11 @@ impl AgentLoopController {
                             next_goal: None,
                             result_digest: None,
                             submitted: Vec::new(),
+                            // A fresh activation starts a fresh budget
+                            // (F5, user adjudication 2026-08-10 — the
+                            // budget accumulates only within one
+                            // activation's lifetime).
+                            tool_rounds_used: 0,
                         },
                         goal.clone(),
                     )
@@ -1717,7 +1729,15 @@ impl AgentLoopController {
         // the parent), the retrieval task contract as IPG input. The lane
         // feeding (orientation) is wired in M5; the session identity above
         // still derives from the session state.
-        let profile = LoopProfile::retrieval(role, &goal, self.max_tool_rounds);
+        // F5 (user adjudication 2026-08-10): the activation's consumed
+        // rounds carry into this dispatch — a `continue` re-entry is the
+        // same retrieval session, so the 120-round budget accumulates.
+        let profile = LoopProfile::retrieval(
+            role,
+            &goal,
+            self.max_tool_rounds,
+            act.tool_rounds_used,
+        );
         // Box::pin: the subagent loop is a recursive call through the
         // dispatch edge (main loop → subagent loop; depth is capped at one
         // by the nested-dispatch gate, E0733 requires the box).
@@ -1745,6 +1765,17 @@ impl AgentLoopController {
             heartbeat,
         ))
         .await;
+
+        // F5 (user adjudication 2026-08-10): the session's consumed budget
+        // carries into the next dispatch (a continue re-entry) — read back
+        // from the loop outcome BEFORE `result` consumes it below. An Err
+        // path leaves the count untouched: the activation closes with
+        // subagent_failed/subagent_cancelled anyway (a new activation
+        // starts a fresh budget). Read back even on a stagnation failure —
+        // the close still records the consumed rounds.
+        if let Ok(outcome) = &loop_outcome {
+            act.tool_rounds_used = outcome.tool_rounds;
+        }
 
         // The subagent's own stagnation guard — evaluated over the subagent
         // conversation (shared with the main path). A non-continue decision
@@ -6408,6 +6439,122 @@ mod tests {
             .position(|e| e.event_type == EventType::RetrievalCloseRecord)
             .unwrap();
         assert!(assessment_idx < close_idx, "assessment before close");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// F5 (user adjudication 2026-08-10): a `continue` re-entry is the
+    /// SAME retrieval session — the 120-round budget ACCUMULATES across
+    /// dispatches and resets only with a new activation. Dispatch 1
+    /// consumes 2 subagent tool rounds; the continue re-entry starts at
+    /// initial=2, so dispatch 2's 2nd subagent round (cumulative 4 ≥ 4)
+    /// exhausts the budget — the result still forms, then a
+    /// `budget_exhausted` close. The MAIN lane (3 rounds: retrieve /
+    /// continue / retrieve) stays under its own independent 4 — no second
+    /// limit gate. Without accumulation the subagent's gate would never
+    /// fire (its re-entry would start at 0 and only 3 of 4 would be used).
+    #[tokio::test]
+    async fn subagent_budget_accumulates_across_continue() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s2")]),
+            ScriptedResponse::text("[DOC] a.md\n第一批"),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "continue",
+                Some("补充第二批"),
+                "call-d1",
+            )]),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s3")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s4")]),
+            ScriptedResponse::text("[DOC] b.md\n第二批"),
+            ScriptedResponse::text("完成"),
+            // The main's final answer crosses the counterexample gate —
+            // one extra model round answers it (run-semantic; the
+            // subagent lanes never fire the gate).
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_max_tool_rounds(4);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-BUDACC", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // The re-entry's 2nd subagent round crosses the ACCUMULATED budget
+        // (2 used + 2 = 4 ≥ 4) — the limit gate fired exactly once, with
+        // the cumulative count, INSIDE dispatch 2 (before the close).
+        let limits: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                e.event_type == EventType::GateDecision
+                    && e.payload.get("gate").and_then(|v| v.as_str())
+                        == Some("tool_rounds_limit")
+            })
+            .map(|(i, e)| i)
+            .collect();
+        assert_eq!(limits.len(), 1, "{:?}", event_types(&dir));
+        let limit_gate = &events[limits[0]];
+        assert_eq!(
+            limit_gate.payload.get("tool_rounds"),
+            Some(&serde_json::json!(4))
+        );
+        assert_eq!(
+            limit_gate.payload.get("max_tool_rounds"),
+            Some(&serde_json::json!(4))
+        );
+        // Both dispatches formed results — assessments at revisions 0
+        // (pre-continue) and 1 (the re-entry).
+        let assessments: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .collect();
+        assert_eq!(assessments.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            assessments[1].payload.get("contract_revision"),
+            Some(&serde_json::json!(1))
+        );
+        // Exhaustion closed the activation with the assessment bound (no
+        // parent disposition was needed — §4.4 terminal authority); the
+        // limit gate precedes the close record.
+        let close_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .expect("budget close record");
+        assert!(limits[0] < close_idx, "limit gate inside dispatch 2");
+        let close = &events[close_idx];
+        assert_eq!(
+            close.payload.get("terminal_reason").and_then(|v| v.as_str()),
+            Some("budget_exhausted")
+        );
+        assert!(close.payload.get("assessment_id").is_some());
+        // Exactly 4 subagent tool rounds executed across both dispatches —
+        // dispatch 2's second round was the last allowed one.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+                        && e.payload.get("exit_code") == Some(&serde_json::json!(0))
+                })
+                .count(),
+            4
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
