@@ -623,7 +623,12 @@ def _check_markdown_links() -> list[str]:
                 if not target or re.match(r"^(?:https?://|mailto:)", target):
                     continue
                 resolved = (path.parent / target).resolve()
-                if not resolved.exists():
+                # orz/ is a nested independent repository (own git history)
+                # excluded from this repository's scan (NON_REPOSITORY_PARTS):
+                # links into it are navigation aids governed by orz's own
+                # review, so a target absent from a fresh CI checkout (which
+                # never contains orz/) is not a broken link in this repo.
+                if not resolved.exists() and not resolved.is_relative_to(ROOT / "orz"):
                     errors.append(
                         f"{path.relative_to(ROOT)}:{line_number}: broken local link {target}"
                     )
