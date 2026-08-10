@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -18,6 +18,7 @@
   - **v1.1 补充**：恢复显式检索模式、Diagnostic Coverage、Global Review 和 IDE 生命周期证据边界；重裁 Information Sufficiency、来源绑定、`run_tests`、UI 投影、模型/轮次与拒绝熔断语义。
   - **2026-08-09 登记**：ADR-0011 承担受信控制与动作授权面（ACAF）的决策权威；ACAF 派生自本 ADR §2.4、§3.2、§3.8、§4、§5.3、§5.4 与 §11.3，不改变本 ADR 任何既有条款；登记见 §11.8。
   - **v1.2 补充（2026-08-10）**：显式化子代理工具轮预算的 session 累计语义——`continue(requirement_delta)` 重入是同一检索 session 的延续，预算跨 dispatch 累计、不得因重入重置；仅 activation 关闭后新激活从 0 起；主 Agent 维持每 run 独立起算的既有语义。正文见 §3.4.6，索引见 §14.2；来源：GAP-SUBAGENT-RUNTIME 实施审计 D-18（用户裁决）。
+  - **2026-08-11 登记（含方向修正）**：C2-1 解禁闭合——外部检索 lane 内 web 工具 Host 直执行（lane 自执行，嵌套门对 `retrieve_project_*` 防递归保留），lane 内豁免 per-call 权限门、授权链由 §3.7.1 显式 mode 门承担（用户裁决）。web_search 执行器 = **DeepSeek 服务端 web search**（Responses API `/v1/responses`，同一把 DeepSeek key，服务端执行搜索——曾提议 xAI Grok 搜索后端独立 key（`orz-grok/search`），被用户裁决否决：检索必须来自当前接入的 provider，不依赖外部检索 API）。凭据无新增（ADR-0006 表不变）。**v1.3 补写 §3.7.10**（2026-08-11，用户裁决升级为正文条款）：「禁止引入独立检索 API 供应商」；正文见 §3.7 条 10，索引见 §14.3；C2-1 解禁与 lane 内权限豁免裁决索引见 §14.3 条 2；实施审计见 `docs/audits/ADR_0006_WEB_SEARCH_CREDENTIAL_AND_C2_1_UNBLOCK_IMPL_AUDIT_2026-08-11.md`。
 
 ## 1. 背景
 
@@ -298,6 +299,11 @@ marker，不调用模型生成摘要。首个工具批次可以通过 `compactio
    代码可记录 observation-time `path:line`，内部文档优先使用文档 ID + section/anchor，外部来源使用
    URL/document identity + observed scope。renderer 可以显示 `[来源: source_id]` 或展开后的可读定位；
    verifier 必须检查 source identity 存在、可见性等级和 claim 上限，而不只检查标记文本存在。
+10. 检索执行器（`web_search`）必须使用当前接入的 provider 的服务端搜索能力——DeepSeek 服务端
+    web search（Responses API `/v1/responses`，与主 transport 同一把 key、同一供应商）；**禁止引入
+    独立检索 API 供应商**（第二供应商、第二 key、独立计费）。该条为冻结后补写（v1.3，2026-08-11）：
+    曾提议 xAI Grok 搜索后端独立 key（`orz-grok/search`），被用户裁决否决——检索是模型 API 的
+    组成部分，不依赖外部检索 API；来源：web_search 执行器实施审计（2026-08-11），索引见 §14.3。
 
 ### 3.8 受控 `run_tests` / hidden-test 反馈环
 
@@ -732,7 +738,10 @@ regression/windows/                     # 自动 fixture、脚本与人工复核
 - Windows native sandbox 的 raw TCP 残余保留为 open limitation/incident；host firewall 补偿不能被
   重写为 AppContainer 自身完成网络隔离。
 - credential hardening 当前主要是 offline implementation evidence，不能晋级为 Windows Credential
-  Manager 实机兼容案例，直至真实 credential-read 路径完成脱敏验证。
+  Manager 实机兼容案例，直至真实 credential-read 路径完成脱敏验证。2026-08-11 方向修正后
+  web_search 读取路径复用主 DeepSeek key 通道（零化 + `redacted()` 唯一序列化出口，当前生产
+  接线=构建时 `tracing::info!(redacted)`），DeepSeek 实机 live 测试已跑通
+  （`live_deepseek_web_search_roundtrip`）；Windows 实机晋级仍待精选案例路由（2026-08-11 登记）。
 
 ### 11.8 受信控制与动作授权面（ADR-0011）
 
@@ -846,3 +855,20 @@ Schema 与机械证据：
    循环结束写回），不得因重入重置；仅 activation 关闭后新激活从 0 起；主 Agent 维持每 run 独立起算
    的既有语义（ADR-0008/GAP-TOOL-BUDGET 未改）。见 §3.4.6；来源：GAP-SUBAGENT-RUNTIME 实施审计
    D-18（用户裁决 2026-08-10）。
+
+### 14.3 v1.3 补写裁决索引（2026-08-11）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写不改变本 ADR 任何既有条款的语义。
+
+1. **检索执行器禁止引入独立检索 API 供应商**：`web_search` 执行器必须使用当前接入的 provider 的
+   服务端搜索能力（DeepSeek 服务端 web search，Responses API `/v1/responses`，与主 transport 同一把
+   key、同一供应商、同一计费面）；禁止第二供应商/第二 key（曾提议 xAI Grok 搜索后端 `orz-grok/search`，
+   被用户裁决否决）。见 §3.7 条 10；来源：web_search 执行器实施审计（2026-08-11，用户裁决升级为
+   正文条款）。
+2. **C2-1 解禁与 lane 内权限豁免（2026-08-11 登记裁决，未升级正文条款）**：外部检索 lane 内 web 工具
+   由嵌套派发门拒绝改为 Host 直执行（`lane_self_execute`，嵌套门仅对 `retrieve_project_*` 保留防递归
+   语义）；lane 内自执行豁免 per-call 权限桥（无 PermissionRequested/PermissionDecision 事件），授权链
+   由 §3.7.1 显式 mode 门承担——web 族仅 `framework_fallback` 可执行（新门
+   `retrieval_mode_requires_framework_fallback`）、off 门覆盖、mode transition 事件 journaled；主 Agent
+   直用 web_search 的既有无 per-call 权限门语义不变（§3.7 条 8）。见 §3.7.1、§3.7 条 8；来源：
+   web_search 执行器实施审计（2026-08-11，用户裁决，D-5）。

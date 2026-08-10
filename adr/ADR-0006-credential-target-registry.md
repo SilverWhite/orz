@@ -22,6 +22,10 @@ DeepSeek API key 此前注册于 Windows Credential Manager，目标名为初步
 | 内部检索子代理 | `orz-deepseek/2` | `deepseek-retrieval-subagent` |
 
 - 统一前缀 `orz-deepseek/`；`agent` = 主 agent，数字序号 = 检索子代理（1 = 外部、2 = 内部）。
+- **web_search（2026-08-11 裁决）**：不新增独立注册目标——web_search 执行器复用主
+  agent 凭据（`orz-deepseek/agent`）。曾提议 `orz-grok/search`（xAI Grok 搜索后端独立
+  key），被用户裁决否决：检索必须来自当前接入的 provider（DeepSeek 服务端 web
+  search，同一把 key），不依赖外部检索 API——框架检索能力不是外挂。
 - 目标名是**不可变注册项**：任何改名必须先新增本表条目并迁移凭据，再删除旧条目
   （旧条目留存期间属孤儿条目，凭据审计应报告）。
 - 代码引用纪律：目标名只允许出现在常量定义处（Python：`deepseek_adapter.py`
@@ -36,10 +40,29 @@ DeepSeek API key 此前注册于 Windows Credential Manager，目标名为初步
 - Python 侧：GAK-CRED-001 既有机制（`_read_windows_credential` + `CredentialGuard`
   RAII 零化 + 环境脱敏 + 审计）维持，仅目标名随注册表。
 - Rust 侧：`orz-loop/src/gateway/credentials.rs` `read_agent_api_key()`（CredReadW +
-  blob 零化后 CredFree；非 Windows fail-closed）；**仅 live 测试消费**（生产
-  `build_gateway` 真实分支未开，属 alpha 测范围，届时另行裁决真实模式开关）。
+  blob 零化后 CredFree；非 Windows fail-closed）；`--real` 生产分支已开通
+  （`transport.rs` `real_gateway_from_credentials`，orz-bin/orz-codex `build_gateway`
+  fail-closed exit(2)）。
 - `ORZ_TEST_API_KEY` 环境变量机制**废除**（2026-08-06 live 测试已改读凭据管理器；
   环境变量仅保留 `ORZ_TEST_LIVE` 测试开关——开关非凭据，不属注入）。
+- **web_search（2026-08-11 方向修正）**：执行器复用主 DeepSeek key——`orz-host`
+  `credentials.rs` 的 `DeepSeekCredentialReader` 委托 `orz-loop` `read_agent_api_key()`
+  （Windows Credential Manager / 非 Windows `ORZ_DEEPSEEK_API_KEY` env，即 §2.3
+  Linux 容器通道；eval 容器零新增 env）。无新注册目标、无新
+  env 变量、无第二供应商。
+
+### 2.3 扩展：Linux 容器通道（2026-08-07 登记）
+
+- 2026-08-07 TB2/eval 实机运行登记：Linux 容器内无 Windows Credential Manager，
+  `read_agent_api_key()` 非 Windows 分支读 `ORZ_DEEPSEEK_API_KEY` env。eval `.env`
+  由 `write_env_key.py` 从 Windows 凭据写入（静默、不打印），经 harbor `--env-file`
+  注入容器，不落盘不打印。
+- 该 env 通道是 §2.2「统一 Windows Credential Manager」裁决的**显式例外**：仅限无
+  Credential Manager 的平台（Linux 容器/CI）；有 Credential Manager 的平台不得走 env。
+- 2026-08-11 起 web_search 执行器复用同一通道（§2.2 web_search 方向修正），eval
+  容器零新增 env 变量。
+- 来源：`TERMINAL_BENCH_2_EVAL_2026-08-08.md`（"ADR-0006 扩展（Linux 容器通道，
+  注释已记录）"）；实现注释见 `orz-loop/src/gateway/credentials.rs` 非 Windows 分支。
 
 ## 3. 后果
 

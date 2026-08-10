@@ -89,7 +89,7 @@ D:\tb-eval\
   orz-target\        构建缓存（CARGO_TARGET_DIR）
   terminal-bench-2\ 89 任务源码 clone（github 经 git 代理）
   cargo-config.toml / build_orz.sh / write_env_key.py / 辅助脚本
-  .env               ORZ_DEEPSEEK_API_KEY（write_env_key.py 从 Windows 凭据写入，勿打印）
+  .env               ORZ_DEEPSEEK_API_KEY（write_env_key.py 从 Windows 凭据写入，勿打印）；2026-08-11 起 web_search 复用同一 key（DeepSeek 服务端搜索，零新增 env）
   jobs\              harbor 结果（每任务 result.json + trial.log + agent/trajectory.json + verifier/）
 ```
 
