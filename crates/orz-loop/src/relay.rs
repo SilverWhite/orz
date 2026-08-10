@@ -18,6 +18,10 @@
 pub enum DispatchTarget {
     InternalRetrieval,
     ExternalRetrieval,
+    /// GAP-SUBAGENT-RUNTIME (2026-08-10, M4): the parent's structured
+    /// disposition control tool (`retrieval_disposition`) — main-lane only
+    /// (the subagent's tool projection strips it).
+    ParentDisposition,
     Host,
 }
 
@@ -38,6 +42,8 @@ pub fn route(function_name: &str) -> DispatchTarget {
         DispatchTarget::InternalRetrieval
     } else if is_web_retrieval_tool(function_name) {
         DispatchTarget::ExternalRetrieval
+    } else if function_name == "retrieval_disposition" {
+        DispatchTarget::ParentDisposition
     } else {
         DispatchTarget::Host
     }
@@ -76,6 +82,14 @@ mod tests {
         assert_eq!(route("unknown_tool"), DispatchTarget::Host);
         // Prefix boundary: bare "retrieve_project" without underscore → Host.
         assert_eq!(route("retrieve_project"), DispatchTarget::Host);
+    }
+
+    #[test]
+    fn parent_disposition_routes() {
+        assert_eq!(
+            route("retrieval_disposition"),
+            DispatchTarget::ParentDisposition
+        );
     }
 
     #[test]

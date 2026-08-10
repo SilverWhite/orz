@@ -99,6 +99,10 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // stagnation input (model-written, but a resident framework-
         // managed block, not per-round model output).
         || content.starts_with(WHITELIST_PREFIX)
+        // GAP-SUBAGENT-RUNTIME M5 (2026-08-10): the Diagnostic Coverage
+        // checkpoint block (ADR-0010 §4.6.4) is mechanical injected text —
+        // never stagnation input.
+        || content.starts_with(crate::diagnostic_coverage::DIAGNOSTIC_COVERAGE_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
@@ -289,6 +293,40 @@ pub fn tool_round_budget_exhaustion_block(budget: u32) -> String {
 
 /// Tool availability context block format — aligned with Python
 /// `_build_context_block` (`[TOOL_AVAILABILITY v0.1]` ... `[/TOOL_AVAILABILITY]`).
+/// ADR-0010 §3.2 retrieval task contract + §3.7.9 citation rule — the
+/// subagent's system prompt (NOT `BASE_SYSTEM_PROMPT`: a retrieval task
+/// contract is not a run-semantic; GAP-SUBAGENT-RUNTIME 2026-08-10).
+///
+/// The citation-rule text is preserved verbatim from the pre-split
+/// one-shot pass (`retrieval.rs`, 2026-08-10) — the stable interface;
+/// the delivery contract (the `[DOC]`/`[SOURCE]` line protocol the
+/// caller parses mechanically) is now an explicit clause instead of an
+/// implicit write contract. `blocks` carries the shared availability +
+/// budget declarations (the subagent budget is its own — independent
+/// per-session accounting).
+pub fn build_retrieval_system_prompt(section_name: &str, goal: &str, blocks: &str) -> String {
+    format!(
+        "Retrieval subagent ({section_name}). Goal: {goal}\n\
+         Citation rule (D-1, FIX_PLAN 2026-08-06; ADR-0010 §3.7.9): \
+         any claim based on external evidence, a reference \
+         implementation, or internal docs must carry an inline \
+         `[来源: source_id]` marker (ledger-backed) or \
+         `[来源: 路径:行号]` (local observation-time) at the citing \
+         site; content without a locatable source must not be \
+         cited — never claim '参考自某处' from memory. Internal docs \
+         cite as 文档ID §节/锚点, not bare line numbers (they drift); \
+         EXTERNAL sources cite as URL/document identity + observed \
+         scope (e.g. `[来源: <url> metadata_only]`) — never full-text \
+         attribution for metadata-only material. The marker is a \
+         writer-side binding, not a verification claim.\n\
+         Delivery contract: output `[DOC]`-prefixed lines for project \
+         docs and `[SOURCE]`-prefixed lines for sources \
+         (internal: source_ledger; external: web_sources); lines \
+         without a prefix form the plain response prose.\n\n\
+         {blocks}"
+    )
+}
+
 pub fn build_tool_availability_block(
     available: &[String],
     unavailable: &[String],

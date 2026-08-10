@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::agent_loop::RoundAgent;
 use crate::gateway::model::{
     ActivityClock, GatewayError, Message, ModelGateway, ModelRequest, ModelResponse,
 };
@@ -57,5 +58,33 @@ impl MainAgent {
                 on_chunk,
             )
             .await
+    }
+}
+
+/// GAP-SUBAGENT-RUNTIME (2026-08-10): the main agent's uniform round entry —
+/// delegates to the inherent method so the shared loop (`run_agent_loop`)
+/// drives all three agents through one code path.
+#[async_trait::async_trait]
+impl RoundAgent for MainAgent {
+    async fn run_round(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Vec<ToolDef>,
+        max_tokens: u32,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+        heartbeat: Option<&ActivityClock>,
+        on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ModelResponse, GatewayError> {
+        self.run_round(
+            system,
+            messages,
+            tools,
+            max_tokens,
+            cancel,
+            heartbeat,
+            on_chunk,
+        )
+        .await
     }
 }

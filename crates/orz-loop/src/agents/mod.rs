@@ -16,4 +16,4 @@ pub mod main;
 pub mod retrieval;
 
 pub use main::MainAgent;
-pub use retrieval::{RetrievalSubagent, SubagentRole, SubagentSpec};
+pub use retrieval::{RetrievalSubagent, SubagentRole};

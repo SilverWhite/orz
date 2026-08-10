@@ -1888,10 +1888,16 @@ mod conformance_capture {
                     .await
                     .unwrap();
                 let host = build_cli_host(&handle, run_id, &base).unwrap();
-                // 7 tool rounds × (declaration + subagent response) + the
-                // orientation answer round + the final answer round.
+                // M4 (GAP-SUBAGENT-RUNTIME 2026-08-10): §4.4 — a retrieval
+                // while the activation awaits disposition is REFUSED, so the
+                // crossing scenario interleaves a disposition after every
+                // assessment (4 × continue + 1 × close): the main alternates
+                // retrieve → disposition rounds, the subagent consumes one
+                // text per retrieve. 10 tool rounds + 2 final rounds = 12
+                // completed model rounds — the 7-round threshold crosses
+                // exactly once (on the 4th retrieve's gap).
                 let mut script = Vec::new();
-                for i in 0..7 {
+                for i in 0..5 {
                     script.push(ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "retrieve_project_docs".to_string(),
                         arguments: serde_json::json!({"query": format!("查询 {i}")}),
@@ -1900,6 +1906,26 @@ mod conformance_capture {
                     script.push(ScriptedResponse::text(format!(
                         "[DOC] doc-{i}.md\n检索结果 {i}"
                     )));
+                    if i < 4 {
+                        script.push(ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "retrieval_disposition".to_string(),
+                            arguments: serde_json::json!({
+                                "role": "internal_retrieval",
+                                "decision": "continue",
+                                "requirement_delta": format!("补充 doc-{} 的线索", i + 1),
+                            }),
+                            call_id: format!("call-d{i}"),
+                        }]));
+                    } else {
+                        script.push(ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "retrieval_disposition".to_string(),
+                            arguments: serde_json::json!({
+                                "role": "internal_retrieval",
+                                "decision": "close",
+                            }),
+                            call_id: "call-d4".to_string(),
+                        }]));
+                    }
                 }
                 script.push(ScriptedResponse::text("当前任务定位：处理查询批次；下一步：汇总结果"));
                 script.push(ScriptedResponse::text("最终汇总完成。"));
@@ -1932,16 +1958,41 @@ mod conformance_capture {
                     "run_started",
                     "prompt_submitted",
                 ];
-                for _ in 0..7 {
+                // Per retrieval iteration: the shared-loop dispatch (subagent
+                // model round + its stagnation guard inside the parent's
+                // wrapper) + the assessment + the parent's disposition round
+                // (control tool — journaled with its own ToolStarted/
+                // ToolCompleted). The orientation crosses the 7-round
+                // threshold on the 4th retrieve's post-tool-batch gap (the
+                // 7th completed main round) — it fires between that
+                // iteration's assessment and its disposition round. The last
+                // iteration closes (accepted close → close record).
+                for i in 0..5 {
                     expected.extend([
                         "model_output",
                         "tool_started",
+                        "model_output",
+                        "runtime_stagnation_guard",
                         "tool_completed",
                         "information_sufficiency_assessment",
                     ]);
+                    if i == 3 {
+                        expected.push("orientation_checkpoint");
+                    }
+                    // The disposition event (and the close record for an
+                    // accepted close) are the control call's products — they
+                    // land between the tool's start and completion.
+                    expected.extend([
+                        "model_output",
+                        "tool_started",
+                        "retrieval_parent_disposition",
+                    ]);
+                    if i == 4 {
+                        expected.push("retrieval_close_record");
+                    }
+                    expected.push("tool_completed");
                 }
                 expected.extend([
-                    "orientation_checkpoint",
                     "model_output",
                     "counterexample_gate",
                     "model_output",
@@ -1975,16 +2026,16 @@ mod conformance_capture {
                 assert_eq!(p["injection_position"], "post_tool_batch_gap");
                 assert!(p["message_block"].as_str().unwrap().starts_with("[ORIENTATION"));
                 // The mechanical assessment snapshots the growing ledger:
-                // round 7's assessment counts 7 [DOC] entries.
+                // the last assessment counts 5 [DOC] entries.
                 let assessment_lines: Vec<&str> = content
                     .lines()
                     .filter(|l| l.contains("\"information_sufficiency_assessment\""))
                     .collect();
-                assert_eq!(assessment_lines.len(), 7);
+                assert_eq!(assessment_lines.len(), 5);
                 let last: serde_json::Value =
-                    serde_json::from_str(assessment_lines[6]).unwrap();
+                    serde_json::from_str(assessment_lines[4]).unwrap();
                 assert_eq!(last["payload"]["status"], "indeterminate");
-                assert_eq!(last["payload"]["source_counts"]["total"], 7);
+                assert_eq!(last["payload"]["source_counts"]["total"], 5);
                 assert_eq!(last["payload"]["reason_codes"][0], "no_mechanical_coverage_requirement");
 
                 copy_journal(&handle.journal_dir, "orientation-fire-run");

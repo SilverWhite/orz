@@ -1,30 +1,48 @@
 //! Retrieval subagents — internal (project docs) + external (web).
 //!
-//! Phase 2 scope: structure + scheduling ready. Each subagent runs one
-//! scripted model pass and writes its blackboard section. Real retrieval
-//! semantics (project doc index, local_browser web retrieval) are deferred —
-//! the write contract below is the stable interface future semantics plug into.
+//! GAP-SUBAGENT-RUNTIME (2026-08-10): the one-shot scripted model pass is
+//! GONE — ADR-0010 §3.1 forbids the zero-tool, no-session, no-journal
+//! special runtime. The subagent now implements `RoundAgent` and runs the
+//! SAME shared loop as the main agent (`crate::agent_loop`), with its own
+//! tool-round budget, journal events, write-domain gate and (later) its
+//! orientation lane. The `[DOC]`/`[SOURCE]` line contract below is the
+//! stable result-formation interface — real retrieval semantics (project
+//! doc index, local_browser web retrieval) plug into these same fields
+//! in a later slice (structured result schema is deferred by user
+//! decision 2026-08-10).
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
+use crate::agent_loop::RoundAgent;
 use crate::blackboard::{InternalRetSection, SharedBlackboard};
-use crate::gateway::model::{GatewayError, ModelGateway, ModelResponse};
+use crate::gateway::model::{
+    ActivityClock, GatewayError, Message, ModelGateway, ModelRequest, ModelResponse,
+};
+use crate::host::ToolDef;
 
 /// Which retrieval domain a subagent serves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubagentRole {
     InternalRetrieval,
     ExternalRetrieval,
 }
 
-/// Specification for a subagent invocation.
-#[derive(Debug, Clone)]
-pub struct SubagentSpec {
-    pub role: SubagentRole,
-    pub goal: String,
-    pub budget_turns: u32,
+impl SubagentRole {
+    /// v0.2 payload `target` / `agent_role` value (schema enum — never free text).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SubagentRole::InternalRetrieval => "internal_retrieval",
+            SubagentRole::ExternalRetrieval => "external_retrieval",
+        }
+    }
+
+    /// Blackboard section name for this role.
+    pub fn section_name(&self) -> &'static str {
+        match self {
+            SubagentRole::InternalRetrieval => "internal_ret",
+            SubagentRole::ExternalRetrieval => "external_ret",
+        }
+    }
 }
 
 /// A retrieval subagent with its own model gateway (scripted in tests).
@@ -38,110 +56,80 @@ impl RetrievalSubagent {
     pub fn new(role: SubagentRole, gateway: Arc<dyn ModelGateway>) -> Self {
         Self { role, gateway }
     }
+}
 
-    /// Blackboard section name for this role.
-    pub fn section_name(&self) -> &'static str {
-        match self.role {
-            SubagentRole::InternalRetrieval => "internal_ret",
-            SubagentRole::ExternalRetrieval => "external_ret",
-        }
-    }
-
-    /// Run one retrieval pass and write results into the blackboard section.
-    ///
-    /// Scripted in Phase 2 (FakeProvider drives the response). The write
-    /// contract: response text → `response`; `[DOC]`-prefixed lines →
-    /// `project_docs`; `[SOURCE]`-prefixed lines → `source_ledger` (internal)
-    /// or `web_sources` (external). Real retrieval semantics will populate
-    /// these same fields later.
-    ///
-    /// GAP-INQUIRY-SPLIT (2026-08-09): the `completion_check_block` parameter
-    /// is deleted — the free-form subagent-close self-report (§4.3 forbids
-    /// model free-text verdicts) is replaced by the caller's mechanical
-    /// `information_sufficiency_assessment` over this section's ledger.
-    pub async fn run_retrieval(
+/// GAP-SUBAGENT-RUNTIME (2026-08-10): the subagent's model round — same
+/// shape as `MainAgent::run_round` (ADR-0010 §3.4.2: identical model
+/// config; D-6: full 160K budget — a thinking subagent with a 1024 token
+/// cap would spend everything on reasoning and die before producing
+/// output, the Anthropic subagent 8K hard-cap lesson).
+#[async_trait::async_trait]
+impl RoundAgent for RetrievalSubagent {
+    async fn run_round(
         &self,
-        blackboard: &Arc<SharedBlackboard>,
-        spec: &SubagentSpec,
-        cancel: Option<&CancellationToken>,
-        heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Vec<ToolDef>,
+        max_tokens: u32,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+        heartbeat: Option<&ActivityClock>,
+        on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
-        let response = self
-            .gateway
+        self.gateway
             .generate_stream(
-                crate::gateway::model::ModelRequest {
-                    system: format!(
-                        "Retrieval subagent ({role}). Goal: {goal}\n\
-                         Citation rule (D-1, FIX_PLAN 2026-08-06; ADR-0010 §3.7.9): \
-                         any claim based on external evidence, a reference \
-                         implementation, or internal docs must carry an inline \
-                         `[来源: source_id]` marker (ledger-backed) or \
-                         `[来源: 路径:行号]` (local observation-time) at the citing \
-                         site; content without a locatable source must not be \
-                         cited — never claim '参考自某处' from memory. Internal docs \
-                         cite as 文档ID §节/锚点, not bare line numbers (they drift); \
-                         EXTERNAL sources cite as URL/document identity + observed \
-                         scope (e.g. `[来源: <url> metadata_only]`) — never full-text \
-                         attribution for metadata-only material. The marker is a \
-                         writer-side binding, not a verification claim.",
-                        role = self.section_name(),
-                        goal = spec.goal,
-                    ),
-                    // GAP-INQUIRY-SPLIT: no injected completion-check block —
-                    // the request carries the goal system prompt alone.
-                    messages: Vec::new(),
-                    tools: Vec::new(),
-                    // D-6 (FIX_PLAN 2026-08-06): retrieval subagents get the
-                    // full 160K budget too — a thinking subagent with a 1024
-                    // token cap would spend everything on reasoning and die
-                    // before producing output (the Anthropic subagent 8K
-                    // hard-cap lesson, FIX_PLAN §3).
-                    max_tokens: 160_000,
+                ModelRequest {
+                    system: system.to_string(),
+                    messages,
+                    tools,
+                    max_tokens,
                     thinking: None,
                 },
                 cancel,
                 heartbeat,
-                // F-03 (2026-08-07 review): subagents went streaming — the
-                // idle watchdog / total budget / cancel wiring live on the
-                // streaming path (a non-streaming 10min wall clock could
-                // falsely kill a legitimately slow 160K thinking round, and
-                // Ctrl+C mid-retrieval had no effect). Subagent text has no
-                // live consumer, so the deltas are discarded.
-                &mut |_| {},
+                on_chunk,
             )
-            .await?;
+            .await
+    }
+}
 
-        let text = response.text.clone().unwrap_or_default();
-        let mut docs: Vec<String> = Vec::new();
-        let mut sources: Vec<String> = Vec::new();
-        for line in text.lines() {
-            if let Some(rest) = line.strip_prefix("[DOC]") {
-                docs.push(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("[SOURCE]") {
-                sources.push(rest.trim().to_string());
-            }
+/// [DOC]/[SOURCE] line-contract parse (stable interface — the subagent's
+/// result formation: `[DOC]`-prefixed lines → docs, `[SOURCE]`-prefixed
+/// lines → sources; other lines are plain response prose).
+pub fn parse_retrieval_text(text: &str) -> (Vec<String>, Vec<String>) {
+    let mut docs: Vec<String> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("[DOC]") {
+            docs.push(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("[SOURCE]") {
+            sources.push(rest.trim().to_string());
         }
+    }
+    (docs, sources)
+}
 
-        // Scope write to this section only (single-writer discipline);
-        // never hold the write guard across an await.
-        {
-            let mut w = blackboard.write();
-            match self.role {
-                SubagentRole::InternalRetrieval => {
-                    let section: &mut InternalRetSection = &mut w.internal_ret;
-                    section.response = Some(text);
-                    section.project_docs.extend(docs);
-                    section.source_ledger.extend(sources);
-                }
-                SubagentRole::ExternalRetrieval => {
-                    let section = &mut w.external_ret;
-                    section.response = Some(text);
-                    section.web_sources.extend(sources);
-                }
-            }
+/// Write the parsed contract into the role's blackboard section
+/// (single-writer discipline; never hold the write guard across an await).
+pub fn write_section(
+    role: SubagentRole,
+    blackboard: &Arc<SharedBlackboard>,
+    response: String,
+    docs: Vec<String>,
+    sources: Vec<String>,
+) {
+    let mut w = blackboard.write();
+    match role {
+        SubagentRole::InternalRetrieval => {
+            let section: &mut InternalRetSection = &mut w.internal_ret;
+            section.response = Some(response);
+            section.project_docs.extend(docs);
+            section.source_ledger.extend(sources);
         }
-
-        Ok(response)
+        SubagentRole::ExternalRetrieval => {
+            let section = &mut w.external_ret;
+            section.response = Some(response);
+            section.web_sources.extend(sources);
+        }
     }
 }
 
@@ -154,19 +142,38 @@ mod tests {
         Arc::new(FakeProvider::from_texts(vec![text]))
     }
 
+    #[test]
+    fn parse_retrieval_text_splits_doc_and_source_lines() {
+        let (docs, sources) = parse_retrieval_text(
+            "[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成",
+        );
+        assert_eq!(docs, vec!["design.md", "gate.rs"]);
+        assert_eq!(sources, vec!["docs/index"]);
+    }
+
+    #[test]
+    fn parse_retrieval_text_handles_empty_and_unprefixed_lines() {
+        let (docs, sources) = parse_retrieval_text("仅文字\n[DOC] a.md\n无前缀行\n[SOURCE] b");
+        assert_eq!(docs, vec!["a.md"]);
+        assert_eq!(sources, vec!["b"]);
+        let (empty_docs, empty_sources) = parse_retrieval_text("");
+        assert!(empty_docs.is_empty());
+        assert!(empty_sources.is_empty());
+    }
+
     #[tokio::test]
     async fn retrieval_subagent_writes_internal_ret_section() {
         let bb = Arc::new(SharedBlackboard::new());
-        let subagent = RetrievalSubagent::new(
+        let subagent = RetrievalSubagent::new(SubagentRole::InternalRetrieval, gateway("x"));
+        let (docs, sources) = parse_retrieval_text("[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成");
+        let _ = subagent;
+        write_section(
             SubagentRole::InternalRetrieval,
-            gateway("[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成"),
+            &bb,
+            "[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成".to_string(),
+            docs,
+            sources,
         );
-        let spec = SubagentSpec {
-            role: SubagentRole::InternalRetrieval,
-            goal: "找到设计文档".to_string(),
-            budget_turns: 1,
-        };
-        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md", "gate.rs"]);
@@ -185,16 +192,15 @@ mod tests {
     #[tokio::test]
     async fn retrieval_subagent_writes_external_ret_section() {
         let bb = Arc::new(SharedBlackboard::new());
-        let subagent = RetrievalSubagent::new(
+        let (docs, sources) =
+            parse_retrieval_text("[SOURCE] https://example.com/paper\n网页检索完成");
+        write_section(
             SubagentRole::ExternalRetrieval,
-            gateway("[SOURCE] https://example.com/paper\n网页检索完成"),
+            &bb,
+            "[SOURCE] https://example.com/paper\n网页检索完成".to_string(),
+            docs,
+            sources,
         );
-        let spec = SubagentSpec {
-            role: SubagentRole::ExternalRetrieval,
-            goal: "检索论文".to_string(),
-            budget_turns: 1,
-        };
-        subagent.run_retrieval(&bb, &spec, None, None).await.unwrap();
 
         let r = bb.read();
         assert_eq!(
@@ -205,15 +211,34 @@ mod tests {
         assert!(r.internal_ret.project_docs.is_empty());
     }
 
+    #[test]
+    fn subagent_role_names() {
+        assert_eq!(SubagentRole::InternalRetrieval.as_str(), "internal_retrieval");
+        assert_eq!(SubagentRole::ExternalRetrieval.as_str(), "external_retrieval");
+        assert_eq!(SubagentRole::InternalRetrieval.section_name(), "internal_ret");
+        assert_eq!(SubagentRole::ExternalRetrieval.section_name(), "external_ret");
+    }
+
     #[tokio::test]
-    async fn subagent_section_name() {
-        assert_eq!(
-            RetrievalSubagent::new(SubagentRole::InternalRetrieval, gateway("x")).section_name(),
-            "internal_ret"
+    async fn subagent_run_round_uses_gateway_and_full_budget() {
+        // The RoundAgent implementation forwards to the gateway with the
+        // same request shape as the main agent (160K budget — D-6).
+        let subagent = RetrievalSubagent::new(
+            SubagentRole::ExternalRetrieval,
+            Arc::new(FakeProvider::from_texts(vec!["网页检索完成"])),
         );
-        assert_eq!(
-            RetrievalSubagent::new(SubagentRole::ExternalRetrieval, gateway("x")).section_name(),
-            "external_ret"
-        );
+        let response = subagent
+            .run_round(
+                "system",
+                Vec::new(),
+                Vec::new(),
+                crate::agent_loop::REQUEST_MAX_TOKENS,
+                None,
+                None,
+                &mut |_| {},
+            )
+            .await
+            .unwrap();
+        assert!(response.text.as_deref().unwrap().contains("检索完成"));
     }
 }

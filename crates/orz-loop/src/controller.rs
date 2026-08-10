@@ -24,28 +24,27 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::gates::tool_availability::{
-    Capability, ToolSpec, gate_decision, probe_tool_availability,
+    Capability, ToolAvailabilityReport, ToolSpec, gate_decision, probe_tool_availability,
 };
 use orz_assurance::orientation::stagnation::{
     StagnationDecision, StagnationInput, evaluate_runtime_stagnation_guard,
 };
 use orz_assurance::{
-    EventTrack, EventType, GateDecision, JournalRecorder, JournalRecorderError, Redaction, RunEvent,
+    EventTrack, EventType, JournalRecorder, JournalRecorderError, Redaction, RunEvent,
     canonical_json, seal_event, sha256_hex,
 };
 
 use orz_assurance::session::snapshot::SnapshotStore;
 
-use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole, SubagentSpec};
+use crate::agent_loop::{LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop};
+use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole};
 use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
-use crate::gateway::model::{FinishReason, Message, ModelGateway, Role, ToolCall};
+use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolResult};
 use crate::orientation::{AgentRole, OrientationSessionState};
-use crate::prompt::{
-    COUNTEREXAMPLE_GATE_BLOCK, build_tool_availability_block, is_injected_block_text,
-};
-use crate::relay::{DispatchTarget, route};
+use crate::prompt::is_injected_block_text;
+use crate::relay::DispatchTarget;
 use crate::tool::ToolDispatcher;
 
 /// Cap on model↔tool rounds per turn (anti-runaway backstop).
@@ -165,7 +164,9 @@ pub struct GrillTurn<'a> {
 }
 
 pub struct AgentLoopController {
-    main_agent: MainAgent,
+    /// GAP-SUBAGENT-RUNTIME (2026-08-10): `pub(crate)` — the shared
+    /// `run_agent_loop` (agent_loop.rs) drives the model round through it.
+    pub(crate) main_agent: MainAgent,
     internal_retrieval: RetrievalSubagent,
     external_retrieval: RetrievalSubagent,
     blackboard: Arc<SharedBlackboard>,
@@ -198,6 +199,105 @@ pub struct AgentLoopController {
     /// user decision; the whitelist must stay a small part of the ~90K
     /// compacted context).
     whitelist_cap: usize,
+    /// GAP-SUBAGENT-RUNTIME (2026-08-10): per-role retrieval activation
+    /// registry — the subagent lifecycle state (ADR-0010 §3.3). The
+    /// controller is the single writer (disposition/close commits are
+    /// serialized through it; §4.4). Process/turn-scoped: ACP builds a
+    /// controller per prompt, so activations do not survive into the
+    /// next prompt (registered boundary — cross-turn persistence is a
+    /// later slice).
+    activations: Mutex<ActivationRegistry>,
+    /// M5 (2026-08-10): Diagnostic Coverage episode state (ADR-0010
+    /// §4.6) — main lane; one episode per run (registered boundary:
+    /// cross-prompt episodes are not persisted).
+    dc_state: Mutex<crate::diagnostic_coverage::DebugEpisodeState>,
+}
+
+/// GAP-SUBAGENT-RUNTIME (2026-08-10) — ADR-0010 §3.3 subagent lifecycle
+/// state (per-role; one activation per role, §11.3 one seat per role).
+#[derive(Debug, Default)]
+pub(crate) struct ActivationRegistry {
+    /// Monotonic per-role sequence — the `activation_id` suffix.
+    next_seq: HashMap<SubagentRole, u32>,
+    /// Live activations. The state is REMOVED while a retrieval task is
+    /// running (so the std::Mutex guard never crosses an await) and
+    /// re-inserted when the task ends; a Closed activation is replaced by
+    /// the next creation (new seq).
+    states: HashMap<SubagentRole, ActivationState>,
+}
+
+impl ActivationRegistry {
+    #[allow(dead_code)] // read by the M4 disposition handler
+    pub(crate) fn state(&self, role: SubagentRole) -> Option<&ActivationState> {
+        self.states.get(&role)
+    }
+}
+
+/// One retrieval activation (ADR-0010 §3.3 state machine).
+#[derive(Debug)]
+pub(crate) struct ActivationState {
+    pub activation_id: String,
+    pub parent_session_id: String,
+    pub subagent_session_id: String,
+    pub contract_id: String,
+    pub contract_revision: u32,
+    pub status: ActivationStatus,
+    /// The subagent session's conversation — persists across rounds and
+    /// across `continue` iterations of the same activation (multi-turn,
+    /// §3.3.2); preserved on every terminal path (§4.4: never deleted on
+    /// reset).
+    pub conversation: Vec<Message>,
+    /// The assessment awaiting (or already receiving) a parent
+    /// disposition — `Some` only in `AwaitingDisposition`.
+    pub pending: Option<PendingDisposition>,
+    /// `continue(requirement_delta)` — the next retrieval task's goal.
+    pub next_goal: Option<String>,
+    /// Most recent result digest (close record / §4.4 idempotency key).
+    pub result_digest: Option<String>,
+    /// Submitted disposition ids → canonical full payloads, ACROSS
+    /// assessments (activation-lifetime). §4.4 replay idempotency: a
+    /// replayed id must journal byte-identical payload — a late replay of
+    /// a pre-continue disposition must be recognized even after the
+    /// pending was replaced.
+    pub submitted: Vec<(String, Vec<u8>)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActivationStatus {
+    /// Retrieval may run (new task or continue).
+    Active,
+    /// Result formed + assessed — the parent must submit a structured
+    /// disposition before any further retrieval (ADR-0010 §4.4).
+    AwaitingDisposition,
+    /// Close committed — live state cleared; the next retrieval creates
+    /// a new activation (new seq, revision 0).
+    Closed,
+}
+
+/// The assessment context a parent disposition must bind (ADR-0010 §4.4:
+/// disposition binds activation_id + expected_contract_revision +
+/// assessment_id).
+#[derive(Debug, Clone)]
+pub(crate) struct PendingDisposition {
+    pub assessment_id: String,
+    /// CAS: the disposition's `expected_contract_revision` must equal the
+    /// assessment's `contract_revision`.
+    pub expected_contract_revision: u32,
+    /// A decision already submitted for this assessment (`close` or
+    /// `continue`) — a conflicting second decision is rejected
+    /// (`rejected_conflicting`).
+    pub decided: Option<String>,
+}
+
+/// §4.4 judgment outcome — the `outcome` field of the disposition event
+/// (replay idempotency is handled before the judgment — the original
+/// payload is re-journaled and the handler returns early).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DispositionVerdict {
+    AcceptedClose,
+    AcceptedContinue,
+    RejectedStale,
+    RejectedConflicting,
 }
 
 /// IP2a denial counter state (D-3; ADR-0010 §3.5.4 / V11-IMPL-012): the
@@ -208,22 +308,22 @@ pub struct AgentLoopController {
 /// anti-runaway is owned by the 120-round budget (FUS-BUDGET), the breaker
 /// only corrects tool-belief/availability.
 #[derive(Debug, Default)]
-struct DenialState {
-    consecutive_rounds: u32,
+pub(crate) struct DenialState {
+    pub(crate) consecutive_rounds: u32,
     /// Normalized key of the last counted denial round; used to reset on
     /// key change.
-    last_key: Option<DenialKey>,
+    pub(crate) last_key: Option<DenialKey>,
 }
 
 /// Normalized denial key (ADR-0010 §3.5.4): same key across rounds is what
 /// accumulates; tool, reason code or policy revision changes reset it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DenialKey {
-    tool_name: String,
-    reason_code: String,
+pub(crate) struct DenialKey {
+    pub(crate) tool_name: String,
+    pub(crate) reason_code: String,
     /// Session policy is currently fixed for a session (no mid-session
     /// revision mechanism), so this is 0 today; wired when revisions exist.
-    policy_revision: u32,
+    pub(crate) policy_revision: u32,
 }
 
 /// Feedback from a host tool call for the round-level denial aggregator.
@@ -232,7 +332,7 @@ struct DenialKey {
 /// not count as a deny round (ADR-0010 §3.5.4: "用户取消、timeout、tool
 /// error 与 permission deny 分开记账").
 #[derive(Debug)]
-enum PolicyFeedback {
+pub(crate) enum PolicyFeedback {
     /// The call was refused by the permission gate, with its normalized key.
     Denied(DenialKey),
     /// The call executed successfully — resets the consecutive streak.
@@ -252,7 +352,7 @@ pub const DENIAL_BREAKER_CONSECUTIVE: u32 = 3;
 /// 2026-08-08 blackboard partition: compact display form of one edit record
 /// — `{file} {old_lines}→{new_lines}行变动`, e.g. `1.py 12→34行变动`
 /// (old_lines == 0 = new-file creation: `1.py 新建(5行)`).
-fn format_edit_record(record: &EditRecord) -> String {
+pub(crate) fn format_edit_record(record: &EditRecord) -> String {
     if record.old_lines == 0 {
         format!("{} 新建({}行)", record.file, record.new_lines)
     } else {
@@ -263,15 +363,47 @@ fn format_edit_record(record: &EditRecord) -> String {
     }
 }
 
+/// M4 (GAP-SUBAGENT-RUNTIME 2026-08-10): the `retrieval_parent_disposition`
+/// event payload (ADR-0010 §5.2 — disposition/parent/subagent/activation/
+/// assessment identity + expected revision + decision + delta +
+/// capability-gate + mechanical outcome). `capability_gate` is
+/// `not_applicable` until the capability-receipt slice lands (scope
+/// expansion re-runs the task-contract gate there).
+fn disposition_payload(
+    disposition_id: &str,
+    act: &ActivationState,
+    pending: &PendingDisposition,
+    decision: &str,
+    requirement_delta: &Option<String>,
+    outcome: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "disposition_id": disposition_id,
+        "parent_session_id": act.parent_session_id,
+        "subagent_session_id": act.subagent_session_id,
+        "activation_id": act.activation_id,
+        "assessment_id": pending.assessment_id,
+        "expected_contract_revision": pending.expected_contract_revision,
+        "decision": decision,
+        "requirement_delta": if decision == "continue" {
+            requirement_delta.clone()
+        } else {
+            None
+        },
+        "capability_gate": "not_applicable",
+        "outcome": outcome,
+    })
+}
+
 /// Result of one explicit context compaction (A6).
-struct CompactionStats {
-    rounds_dropped: u32,
-    messages_dropped: usize,
-    messages_kept: usize,
-    estimated_tokens_after: u64,
+pub(crate) struct CompactionStats {
+    pub(crate) rounds_dropped: u32,
+    pub(crate) messages_dropped: usize,
+    pub(crate) messages_kept: usize,
+    pub(crate) estimated_tokens_after: u64,
     /// Index at which the caller must insert the compaction marker — the
     /// cut point: after the preamble, before the first kept round.
-    marker_index: usize,
+    pub(crate) marker_index: usize,
 }
 
 /// A6: estimated tokens of one message — chars/2 (a conservative CJK-aware
@@ -310,7 +442,7 @@ fn estimate_messages_tokens(messages: &[Message]) -> u64 {
 ///
 /// The caller inserts the marker (`context_compressed_marker`) at
 /// `marker_index` and journals the `context_compressed` event.
-fn compact_messages(messages: &mut Vec<Message>, target_tokens: u64) -> CompactionStats {
+pub(crate) fn compact_messages(messages: &mut Vec<Message>, target_tokens: u64) -> CompactionStats {
     let round_starts: Vec<usize> = messages
         .iter()
         .enumerate()
@@ -416,6 +548,8 @@ impl AgentLoopController {
             context_compact: ContextCompactConfig::default(),
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
+            activations: Mutex::new(ActivationRegistry::default()),
+            dc_state: Mutex::new(crate::diagnostic_coverage::DebugEpisodeState::default()),
         }
     }
 
@@ -424,6 +558,15 @@ impl AgentLoopController {
     /// knowable targets get tracked before execution.
     pub fn with_snapshot_store(mut self, store: Option<Arc<SnapshotStore>>) -> Self {
         self.snapshot_store = store;
+        self
+    }
+
+    /// GAP-SUBAGENT-RUNTIME (M4/M5 tests): an independent small budget —
+    /// the main loop AND the subagent loops share the configured cap
+    /// (env override mirrors the main; ADR-0010 §3.4.6 independent
+    /// accounting means each loop instance counts separately).
+    pub fn with_max_tool_rounds(mut self, rounds: u32) -> Self {
+        self.max_tool_rounds = rounds;
         self
     }
 
@@ -565,7 +708,7 @@ impl AgentLoopController {
     /// dropped rounds dominate the totals, and the exact per-round
     /// breakdown is available via blackboard_read). Labeled 累计 because it
     /// covers the session's blackboard, not just the dropped rounds.
-    fn blackboard_summary_line(&self) -> Option<String> {
+    pub(crate) fn blackboard_summary_line(&self) -> Option<String> {
         let bb = self.blackboard.read();
         if bb.edits.is_empty() && bb.tool_actions.is_empty() {
             return None;
@@ -595,7 +738,7 @@ impl AgentLoopController {
     /// plan section — `None` when no plan is set (zero injection). The block
     /// is a pure function of plan state, so it is byte-identical across
     /// rounds while the plan is unchanged (prefix-cache discipline).
-    fn render_status_line(&self) -> Option<String> {
+    pub(crate) fn render_status_line(&self) -> Option<String> {
         let bb = self.blackboard.read();
         if bb.plan.goal.is_none() && bb.plan.steps.is_empty() {
             return None;
@@ -621,6 +764,8 @@ impl AgentLoopController {
             context_compact: ContextCompactConfig::default(),
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
+            activations: Mutex::new(ActivationRegistry::default()),
+            dc_state: Mutex::new(crate::diagnostic_coverage::DebugEpisodeState::default()),
         }
     }
 
@@ -852,6 +997,17 @@ impl AgentLoopController {
                 Ok((response, writer.seq(), writer.prev_hash()))
             }
             Err(e) => {
+                // M4 (GAP-SUBAGENT-RUNTIME 2026-08-10): a cancelled run
+                // closes every pending activation with a terminal close
+                // record BEFORE the run terminal (ADR-0010 §4.4: cancel is a
+                // terminal authority; the close records reference the same
+                // run journal). `session_cancelled` is indistinguishable
+                // from a user cancel on the current ACP path — mapped to
+                // `user_cancelled` (registered decision).
+                if matches!(e, AgentLoopError::Cancelled) {
+                    self.close_all_activations(&mut writer, "user_cancelled")
+                        .await;
+                }
                 // Terminal event — best effort; the journal must end on a
                 // terminal event, never a mid-sequence orphan. A user cancel
                 // records `run_cancelled` (already terminal, schema-valid);
@@ -937,13 +1093,11 @@ impl AgentLoopController {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         mut grill: Option<&mut GrillTurn<'_>>,
-        mut orientation: Option<&mut OrientationSessionState>,
+        orientation: Option<&mut OrientationSessionState>,
     ) -> Result<String, AgentLoopError> {
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
         *self.denial_state.lock().unwrap() = DenialState::default();
-
-        let workspace_trust = host.workspace_trust();
 
         // 1. tool_availability_check — mechanical probe over the host
         // registry, BEFORE run_started (Python conformance: the probe must
@@ -1051,6 +1205,43 @@ impl AgentLoopController {
                 }),
             });
         }
+        // M4 (GAP-SUBAGENT-RUNTIME 2026-08-10): the parent's structured
+        // disposition control tool (ADR-0010 §4.4 — the ONLY way a parent
+        // submits close/continue; never guessed from free text). Declared
+        // every turn (stable prefix cache — never added/removed by state);
+        // call-time refused without a pending activation. Grill turns skip
+        // it (grill has no retrieval lifecycle); the subagent projection
+        // strips it (control tool is main-only).
+        if grill.is_none() && !tool_defs.iter().any(|t| t.name == "retrieval_disposition") {
+            tool_defs.push(ToolDef {
+                name: "retrieval_disposition".to_string(),
+                description: "Submit a structured parent disposition for a \
+                     retrieval subagent activation: close (retrieval task \
+                     complete) or continue(requirement_delta) (retrieval \
+                     must continue with the given delta). Call it when a \
+                     retrieval tool result ends with an `[ASSESSMENT ...]` \
+                     line — that assessment awaits your disposition."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "role": {
+                            "type": "string",
+                            "enum": ["internal_retrieval", "external_retrieval"],
+                        },
+                        "decision": {
+                            "type": "string",
+                            "enum": ["close", "continue"],
+                        },
+                        "requirement_delta": {
+                            "type": "string",
+                            "description": "decision=continue 时必填——下一轮检索需求",
+                        },
+                    },
+                    "required": ["role", "decision"],
+                }),
+            });
+        }
         let specs: Vec<ToolSpec> = tool_defs
             .iter()
             .map(|t| {
@@ -1136,650 +1327,85 @@ impl AgentLoopController {
                 reasoning_content: None,
             }],
         };
-        let mut tool_rounds = 0u32;
-        // The `None` seed is required by Rust's initialization rules (the
-        // value is overwritten on every break path before the read at the
-        // end — clippy's unused_assignments is a false positive here).
-        #[allow(unused_assignments)]
-        let mut last_text: Option<String> = None;
-        // D-8: after the budget is exhausted the model gets ONE final
-        // no-tools round to report a partial result; if it still requests
-        // tools, the run ends there (no execution of post-budget calls).
-        let mut budget_exhausted = false;
-        // §4.6 wiring state: the final-answer counterexample gate fires once
-        // per run. The old mixed inquiry counters are gone (GAP-INQUIRY-SPLIT
-        // 2026-08-09) — orientation counts live in the session-level
-        // `OrientationSessionState` threaded through the turn chain; output
-        // repetition belongs to the runtime stagnation guard only.
-        let mut counterexample_fired = false;
-        // A6 (2026-08-08, §8 C.1): explicit context compaction state — the
-        // previous round's MEASURED prompt tokens (provider usage; None
-        // until the first round reports usage), the rounds since the last
-        // compaction (per-turn — the conversation is per-turn too), and
-        // whether the previous round was a TOOL round (declaration +
-        // execution + pushes) — the rhythm compaction fires only in the
-        // gap after the model's LAST tool round (candidate answer round:
-        // `!last_round_had_tools` while `counterexample_fired`).
-        let mut last_prompt_tokens: Option<u64> = None;
-        let mut rounds_since_compact: u32 = 0;
-        let mut last_round_had_tools = false;
-
-        loop {
-            // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
-            // BEFORE the pacing sleep so a cancel never waits on
-            // TEXT_DELTA_PACING. Returning here terminates the run with a
-            // `run_cancelled` journal event (recorded by `run_turn`).
-            if cancel.is_some_and(|c| c.is_cancelled()) {
-                return Err(AgentLoopError::Cancelled);
-            }
-
-            // Streaming ordering guard (Phase 3 slice #6): this round's text
-            // deltas reach a live client at arrival rate, but the previous
-            // round's `model_output` lands via the TUI journal tail — the
-            // tail thread polls the file every 50ms AND the runner drains
-            // its channel on a separate 50ms tick, so worst-case projection
-            // is ~100ms after the fsync ack; TEXT_DELTA_PACING (2 ticks)
-            // covers that alignment. Starting a new round's deltas before
-            // that journal event is projected would append them to the
-            // previous round's card (the dedup only clears
-            // `current_model_index` on a matching model_output). The counter
-            // lives on the controller (not per-turn) so a turn ≥ 2's FIRST
-            // round is paced too — a programmatic client may chain prompts
-            // faster than the tail projects the previous turn's terminal
-            // events (review P3-5); user-paced TUIs are naturally safe.
-            // Residual boundary (2026-08-05 review): a render stall beyond
-            // ~10ms could still race — accepted. Note the sleep applies per
-            // extra round even headless (deltas go nowhere): ~120ms × rounds
-            // is the recorded cost of keeping the guard universal.
-            if self
-                .pacing_rounds
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                > 0
-            {
-                tokio::time::sleep(TEXT_DELTA_PACING).await;
-            }
-
-            // A6 (2026-08-08, §8 C.1 用户裁决): explicit context compaction
-            // — triggered by the previous round's MEASURED prompt tokens
-            // (provider usage prompt_tokens; `None` until the first round
-            // reports usage). Two triggers:
-            //   - SAFETY (window guard, review D1-1): measured >
-            //     `safety_tokens` — fires at any inter-batch gap, ignoring
-            //     rhythm conditions; the cost of an extra cache miss is
-            //     trivially cheaper than a window-overflow run failure.
-            //     Resets the round counter so a later rhythm compaction
-            //     judges normally (user decision).
-            //   - RHYTHM: measured > `trigger_tokens` with a ≥ min_rounds
-            //     cooldown, AND the model just finished its LAST tool batch
-            //     (the candidate-answer round — no tool calls — means the
-            //     action sequence is complete and the final answer is next
-            //     behind the counterexample gate). Mid-task gaps (after
-            //     tool rounds) are NEVER compacted — the run's action flow
-            //     stays smooth and stable; the final answer round then runs
-            //     on a compacted context (~90K) with low look-back pressure.
-            //     This gap exists exactly once per run (the gate fires
-            //     once), so the rhythm compaction is at most once.
-            // Compaction keeps the preamble (original prompt + whitelist)
-            // and the newest rounds verbatim; older rounds are dropped
-            // whole (declaration + tool replies + injected pushes stay
-            // paired); the marker tells the model history was compressed
-            // (explicit notice — the model has no metacognition to guess,
-            // design §5 A6) and blackboard_read is the look-back window.
-            let rhythm_gap = !last_round_had_tools && counterexample_fired;
-            let compact_now = match last_prompt_tokens {
-                Some(measured) => {
-                    measured > self.context_compact.safety_tokens
-                        || (rhythm_gap
-                            && measured > self.context_compact.trigger_tokens
-                            && rounds_since_compact >= self.context_compact.min_rounds)
-                }
-                None => false,
-            };
-            if compact_now
-                && let Some(measured) = last_prompt_tokens
-            {
-                let stats = compact_messages(&mut messages, self.context_compact.target_tokens);
-                if stats.rounds_dropped > 0 {
-                    let rounds_since = rounds_since_compact;
-                    rounds_since_compact = 0;
-                    messages.insert(
-                        stats.marker_index,
-                        Message {
-                            role: Role::User,
-                            content: crate::prompt::context_compressed_marker(
-                                stats.rounds_dropped,
-                                measured,
-                                self.blackboard_summary_line().as_deref(),
-                            ),
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                        },
-                    );
-                    writer
-                        .record(
-                            EventType::ContextCompressed,
-                            serde_json::json!({
-                                "trigger_tokens": measured,
-                                "target_tokens": self.context_compact.target_tokens,
-                                "rounds_since_last_compaction": rounds_since,
-                                "rounds_dropped": stats.rounds_dropped,
-                                "messages_dropped": stats.messages_dropped,
-                                // The marker message was inserted above —
-                                // the final conversation is +1.
-                                "messages_kept": stats.messages_kept + 1,
-                                "estimated_tokens_after": stats.estimated_tokens_after,
-                            }),
-                        )
-                        .await?;
-                }
-            }
-
-            // GAP-INQUIRY-SPLIT (2026-08-09) — FALLBACK orientation injection
-            // point (loop-top): a post-tool-batch gap exists only on tool
-            // rounds. When the 7th completed round is a FINAL round (no tool
-            // batch — the turn breaks right after), the crossing is carried
-            // here on the next loop-top: pacing + compaction done, before
-            // the system prompt is built. (A deny round DOES have a tool
-            // batch — its crossing fires in the post-tool-batch gap like any
-            // tool round; review D3-1.) This is also the recovery resume
-            // point (a restored session's persisted count crosses here).
-            // Fires at most once per loop iteration (commit resets the
-            // lane), so the two injection points never double-fire.
-            self.maybe_fire_orientation(
-                writer,
-                &mut messages,
-                orientation.as_deref_mut(),
-                AgentRole::Main,
-                "loop_top_gap",
-            )
-            .await?;
-
-            let avail_block = build_tool_availability_block(
-                &report.available,
-                &report.unavailable,
-                &report.degraded,
-                &report.unprobed,
-            );
-            // D-8 (FIX_PLAN 2026-08-06): the round budget is declared to the
-            // model up front — it does not guess or drift. The remaining
-            // count is re-declared mechanically after every tool round.
-            // Cache-prefix fix (2026-08-07): the session block is static
-            // (BUDGET only) so the rebuilt system prompt is byte-identical
-            // across rounds — the provider's prefix cache keeps hitting.
-            let budget_block =
-                crate::prompt::tool_round_budget_session_block(self.max_tool_rounds);
-            // A4 (2026-08-08): the resident status line — plan state only
-            // (goal + steps + current), rendered from the blackboard plan
-            // section. Absent when no plan is set; byte-identical across
-            // rounds while the plan is unchanged (same cache discipline as
-            // the budget block). Edit counts are deliberately NOT here:
-            // per-round edit deltas arrive via `[本轮编辑]` and totals via
-            // blackboard_read — a per-round counter in the system prompt
-            // would recreate the 17.7%→98% cache regression (2026-08-07).
-            let mut system_blocks = format!("{avail_block}\n\n{budget_block}");
-            if let Some(status_line) = self.render_status_line() {
-                system_blocks.push_str(&format!("\n\n{status_line}"));
-            }
-            let system = self
-                .main_agent
-                .prompt_builder
-                .build_system_prompt(Some(&system_blocks));
-
-            let mut partial_text: Vec<String> = Vec::new();
-            let response = match self
-                .main_agent
-                .run_round(
-                    &system,
-                    messages.clone(),
-                    tool_defs.clone(),
-                    self.main_agent_max_tokens(),
-                    cancel,
-                    heartbeat,
-                    &mut |chunk| {
-                        // F-06 (2026-08-07 review): accumulate the streamed
-                        // content deltas — on an abort (watchdog/timeout)
-                        // the partial output must still reach the journal.
-                        partial_text.push(chunk.to_string());
-                        host.on_text_delta(chunk);
-                    },
-                )
-                .await
-            {
-                Ok(r) => r,
-                // Phase 3 slice #11 (P3-7): a cancellation observed mid-stream
-                // is a cancel, not a model failure — it must end the run with
-                // `run_cancelled`, not a spurious `run_failed`.
-                Err(crate::gateway::model::GatewayError::Cancelled) => {
-                    return Err(AgentLoopError::Cancelled);
-                }
-                Err(other) => {
-                    // F-06 (D-7 "保留输出 + incomplete 标记 + 明确终止原因"): a
-                    // stream that aborted after producing partial content
-                    // must not lose it from the audit trail — journal it as
-                    // an incomplete model output BEFORE the terminal event
-                    // records the failure. Previously the partial text went
-                    // only to live deltas; the journal had a run_failed with
-                    // no trace of what was produced (2026-08-07 review).
-                    if !partial_text.is_empty() {
-                        writer
-                            .record(
-                                EventType::ModelOutput,
-                                serde_json::json!({
-                                    "text": partial_text.concat(),
-                                    "tool_calls": [],
-                                    // No natural finish reached — closest
-                                    // enum value; the terminal run_failed
-                                    // carries the real abort reason.
-                                    "finish_reason": "length",
-                                    "reasoning_tokens": null,
-                                    "completion_tokens": null,
-                                    "cache_hit_tokens": null,
-                                    "cache_miss_tokens": null,
-                                    "incomplete": true,
-                                }),
-                            )
-                            .await?;
-                    }
-                    return Err(AgentLoopError::Model(other.to_string()));
-                }
-            };
-
-            // Cooperative cancellation checkpoint (Phase 3 slice #7): a
-            // cancelled run may omit this round's `model_output` — the chain
-            // stays valid (the terminal event follows).
-            if cancel.is_some_and(|c| c.is_cancelled()) {
-                return Err(AgentLoopError::Cancelled);
-            }
-
-            writer
-                .record(
-                    EventType::ModelOutput,
-                    serde_json::json!({
-                        "text": response.text,
-                        "tool_calls": response.tool_calls.iter().map(|tc| {
-                            serde_json::json!({
-                                "name": tc.name,
-                                "arguments": tc.arguments,
-                                "call_id": tc.call_id,
-                            })
-                        }).collect::<Vec<_>>(),
-                        "finish_reason": match response.finish_reason {
-                            FinishReason::Stop => "stop",
-                            FinishReason::ToolCalls => "tool_calls",
-                            FinishReason::Length => "length",
-                        },
-                        // D-6 usage observation — reasoning tokens per round
-                        // calibrate the 160K budget decision (data → whether
-                        // the budget rolls back).
-                        "reasoning_tokens": response.reasoning_tokens,
-                        "completion_tokens": response.completion_tokens,
-                        // Cache-hit observation (2026-08-07 fix): per-round
-                        // hit/miss tokens verify the prefix-cache fix — the
-                        // hit rate jumped from ~17% (per-round REMAINING in
-                        // the rebuilt system prompt) to 98%+ steady-state /
-                        // ~80% incl. cold start (live-verified 2026-08-07).
-                        "cache_hit_tokens": response.cache_hit_tokens,
-                        "cache_miss_tokens": response.cache_miss_tokens,
-                    }),
-                )
-                .await?;
-
-            // A6: track the round — measured prompt tokens feed the next
-            // loop-top trigger check; the round counter is the compaction
-            // cooldown; the tool-round flag gates the rhythm compaction to
-            // the gap after the LAST tool round (§8 C.1).
-            last_prompt_tokens = response.prompt_tokens;
-            rounds_since_compact += 1;
-            last_round_had_tools = !response.tool_calls.is_empty();
-
-            // GAP-INQUIRY-SPLIT (2026-08-09): the model round just COMPLETED —
-            // count it against the session-level orientation counter (ADR-0010
-            // §4.2: completed logical model rounds; this point is the only
-            // completion point that every round passes — tool rounds, deny
-            // rounds and gate-answer rounds alike — while transport retries
-            // never reach it, so they never count). Output repetition is
-            // consumed ONLY by the runtime stagnation guard at end of turn —
-            // the old per-round double-consumption is deleted.
-            if let Some(o) = orientation.as_deref_mut() {
-                o.feed_round(AgentRole::Main);
-            }
-
-            // D-8: the post-exhaustion final round may only produce TEXT — a
-            // tool request there is refused (no execution after the budget is
-            // gone) and the run ends with the partial result. Checked BEFORE
-            // the final-answer path so the exhaustion round never triggers
-            // the counterexample gate's extra model round.
-            if budget_exhausted {
-                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
-                    messages.push(Message {
-                        role: Role::Assistant,
-                        content: text,
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                    });
-                }
-                last_text = response.text;
-                break;
-            }
-
-            if response.tool_calls.is_empty() {
-                // §4.6.1/4.6.2: the first no-tool-call response is a
-                // final-answer candidate — before committing it, the
-                // counterexample gate fires ONCE (the block explicitly tells
-                // the model it appears only once). The candidate is journaled
-                // as model_output (evidence) but not committed to the
-                // conversation; the post-gate response is the final answer
-                // (D6). A post-gate round that returns tool calls continues
-                // the loop normally — the gate never fires again this run.
-                // Grill mode (2026-08-08): the counterexample gate is a
-                // run-semantic (final answers); a grill question is not one
-                // — skipped.
-                if !counterexample_fired && grill.is_none() {
-                    writer
-                        .record(
-                            EventType::CounterexampleGate,
-                            serde_json::json!({
-                                "position": "final_answer",
-                                "message_block": COUNTEREXAMPLE_GATE_BLOCK,
-                                "once_only": true,
-                            }),
-                        )
-                        .await?;
-                    messages.push(Message {
-                        role: Role::User,
-                        content: COUNTEREXAMPLE_GATE_BLOCK.to_string(),
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                    });
-                    counterexample_fired = true;
-                    continue;
-                }
-                // Include the final assistant message in the conversation so
-                // stagnation sees the model's actual output and the rebuilt
-                // dialogue matches what a real transport would have received
-                // (2026-08-04 review P2-2).
-                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
-                    messages.push(Message {
-                        role: Role::Assistant,
-                        content: text,
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                    });
-                }
-                last_text = response.text;
-                break;
-            }
-
-            // IP3a: instruction provenance gate — evaluated once per tool
-            // phase. A block stops every tool and ends the phase without
-            // further model calls (the instruction stream is poisoned).
-            let ipg = ToolDispatcher::evaluate_ipg(prompt, workspace_trust);
-            if matches!(ipg, GateDecision::Block { .. }) {
-                writer
-                    .record(
-                        EventType::InstructionProvenanceGate,
-                        serde_json::json!({
-                            "decision": ipg.decision_str(),
-                            "entries": 1,
-                        }),
-                    )
-                    .await?;
-                writer
-                    .record(
-                        EventType::GateDecision,
-                        serde_json::json!({
-                            "gate": "instruction_provenance_gate",
-                            "decision": "block",
-                            "tools": response.tool_calls.iter().map(|tc| tc.name.clone()).collect::<Vec<_>>(),
-                        }),
-                    )
-                    .await?;
-                {
-                    let mut w = self.blackboard.write();
-                    w.gate_log
-                        .gate_decisions
-                        .push("IPG: block (tool phase)".to_string());
-                }
-                last_text = response.text;
-                break;
-            }
-
-            // Execute tool calls, feeding results back into the conversation.
-            // Cooperative cancellation checkpoints (Phase 3 slice #7): the
-            // loop-top check before dispatch plus a per-tool re-check inside
-            // — a cancel landing while tool #k runs must not start tools
-            // #k+1..N of the same round (2026-08-05 review P2-2; the comment
-            // "never starts a new tool" holds per tool, not per round).
-            if cancel.is_some_and(|c| c.is_cancelled()) {
-                return Err(AgentLoopError::Cancelled);
-            }
-            // Replay the assistant's call declarations BEFORE their results:
-            // the provider protocol requires each tool message's
-            // `tool_call_id` to match a declaration in the history, and
-            // DeepSeek rejects unmatched ids (2026-08-06 design review D2-1).
-            // The reasoning content rides the same declaration message —
-            // DeepSeek expects it replayed with the assistant turn
-            // (alpha-test 2026-08-06 closure).
-            messages.push(Message {
-                role: Role::Assistant,
-                content: String::new(),
-                tool_call_id: None,
-                tool_calls: response.tool_calls.clone(),
-                reasoning_content: response.reasoning_content.clone(),
-            });
-            let mut assistant_parts: Vec<String> = Vec::new();
-            // Pending policy messages (denial breaker) — appended AFTER the
-            // tool batch completes so no user message lands between the
-            // assistant declaration and its tool replies (provider protocol;
-            // 2026-08-07 wordy 400 + review P1).
-            let mut pending_policy: Vec<Message> = Vec::new();
-            // ADR-0010 §3.5.4 round-level denial aggregation: the breaker
-            // counts ROUNDS (a round with N denied calls and no success
-            // counts 1), keyed by (tool, reason_code, policy_revision).
-            let mut round_denials: Vec<DenialKey> = Vec::new();
-            let mut round_had_success = false;
-            // 2026-08-08 blackboard partition (A2): snapshot the edit-action
-            // length BEFORE this round's tools — the incremental push after
-            // the batch reports exactly the records this round added.
-            let round_edit_count = self.blackboard.read().edits.len();
-            for tc in &response.tool_calls {
-                if cancel.is_some_and(|c| c.is_cancelled()) {
-                    return Err(AgentLoopError::Cancelled);
-                }
-                let target = route(&tc.name);
-                let result = match target {
-                    DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval => {
-                        self.run_retrieval_subagent(
-                            host,
-                            writer,
-                            target.clone(),
-                            tc,
-                            &mut messages,
-                            prompt,
-                            cancel,
-                            heartbeat,
-                        )
-                        .await?
-                    }
-                    DispatchTarget::Host => {
-                        let (result, feedback) =
-                            self.run_host_tool(
-                                host,
-                                writer,
-                                tc,
-                                prompt,
-                                workspace_trust,
-                                &mut messages,
-                                tool_rounds,
-                                heartbeat,
-                            )
-                            .await?;
-                        match feedback {
-                            Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
-                            // A successful call resets the breaker; None
-                            // (timeout / tool error) is neutral — it neither
-                            // resets nor counts (ADR-0010 §3.5.4 分开记账).
-                            Some(PolicyFeedback::Succeeded) => round_had_success = true,
-                            None => {}
-                        }
-                        result
-                    }
-                };
-                assistant_parts.push(format!("[{}] {}", tc.name, result.output));
-
-                // GAP-INQUIRY-SPLIT (2026-08-09): the old per-tool-call
-                // counter feeds are deleted — `tool_calls` / `tool_variety`
-                // are not orientation 判定点 (§4.2) and subagent output
-                // repetition belongs to the stagnation guard only. The main
-                // lane's orientation round count happens at the model-round
-                // completion point (one completed logical model round counts
-                // 1 regardless of tool-call count).
-            }
-            if !assistant_parts.is_empty() {
-                messages.push(Message {
-                    role: Role::Assistant,
-                    content: assistant_parts.join("\n"),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                });
-            }
-            // Post-tool-batch injections — AFTER every tool reply of this
-            // round, so no user message breaks the assistant-declaration →
-            // tool-replies sequence (provider protocol; 2026-08-07 review
-            // P1/P2). Semantics are unchanged: the neutral inquiry fires at
-            // most once per round (counters reset on trigger), so hoisting
-            // it out of the per-tool loop is equivalent.
-            // ADR-0010 §3.5.4 round-level denial aggregation: success resets
-            // the count; otherwise the round counts only when ALL its denials
-            // share one normalized key (a round mixing tools is a key change
-            // → reset). At 3 consecutive same-key rounds the breaker message
-            // fires once and the count restarts.
-            {
-                let mut denial = self.denial_state.lock().unwrap();
-                let all_same_key = round_denials
-                    .first()
-                    .is_some_and(|k0| round_denials.iter().all(|k| k == k0));
-                if round_had_success || !all_same_key {
-                    denial.consecutive_rounds = 0;
-                    denial.last_key = None;
-                } else if let Some(key) = round_denials.first() {
-                    if denial.last_key.as_ref() == Some(key) {
-                        denial.consecutive_rounds += 1;
-                    } else {
-                        denial.consecutive_rounds = 1;
-                        denial.last_key = Some(key.clone());
-                    }
-                    if denial.consecutive_rounds >= DENIAL_BREAKER_CONSECUTIVE {
-                        denial.consecutive_rounds = 0; // injected once per burst
-                        pending_policy.push(Message {
-                            role: Role::User,
-                            content: crate::prompt::tool_policy_breaker_block(
-                                &key.tool_name,
-                                DENIAL_BREAKER_CONSECUTIVE,
-                            ),
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                        });
-                    }
-                }
-            }
-            for pm in pending_policy {
-                messages.push(pm);
-            }
-            // 2026-08-08 blackboard partition (A2): incremental push — the
-            // edits this round actually made, replayed as ONE compact user
-            // message right after the tool batch (mechanical, deterministic;
-            // the model sees "本轮发生了什么" — the delta, never the whole
-            // blackboard). Entries before this round were pushed on their
-            // own rounds and are already in history; the blackboard keeps
-            // the full list for blackboard_read look-backs.
-            let round_edits = self.blackboard.read().edits.clone();
-            // `round_edit_count` was the section length BEFORE this round's
-            // tools — it IS the start index of this round's records.
-            let edits_start = round_edit_count.min(round_edits.len());
-            let round_summary: Vec<String> = round_edits[edits_start..]
-                .iter()
-                .map(format_edit_record)
-                .collect();
-            if !round_summary.is_empty() {
-                messages.push(Message {
-                    role: Role::User,
-                    content: format!("[本轮编辑] {}", round_summary.join("；")),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                });
-            }
-            // GAP-INQUIRY-SPLIT (2026-08-09) — MAIN orientation injection
-            // point: the post-tool-batch gap (a safe action gap: the tool
-            // results are in, the next generate has not started). The fired
-            // block rides into the SAME turn's next generate. When this is
-            // the budget-exhausting round, the final (post-budget) round
-            // answers both the orientation block and the exhaustion notice
-            // (review D2-1, 2026-08-10: two competing directives on the
-            // closing round — accepted; the run is ending anyway).
-            self.maybe_fire_orientation(
-                writer,
-                &mut messages,
-                orientation.as_deref_mut(),
-                AgentRole::Main,
-                "post_tool_batch_gap",
-            )
-            .await?;
-
-            tool_rounds += 1;
-            // D-8: mechanically re-declare the remaining budget after each
-            // tool round — the model does not guess or drift (the previous
-            // round's `[TOOL_ROUND_BUDGET]` text is already in history).
-            messages.push(Message {
-                role: Role::User,
-                content: crate::prompt::tool_round_budget_remaining_block(
-                    self.max_tool_rounds.saturating_sub(tool_rounds),
-                ),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            });
-            if tool_rounds >= self.max_tool_rounds {
-                // Anti-runaway backstop — mark the truncation so the journal
-                // records why pending tool calls were dropped. D-8: the cap
-                // is a backstop, not a target — the run gets ONE final
-                // no-tools round to report its partial result, then ends.
-                writer
-                    .record(
-                        EventType::GateDecision,
-                        serde_json::json!({
-                            "gate": "tool_rounds_limit",
-                            "decision": "stop",
-                            "reason": "max_tool_rounds_reached",
-                            "tool_rounds": tool_rounds,
-                            "max_tool_rounds": self.max_tool_rounds,
-                        }),
-                    )
-                    .await?;
-                messages.push(Message {
-                    role: Role::User,
-                    content: crate::prompt::tool_round_budget_exhaustion_block(
-                        self.max_tool_rounds,
-                    ),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                });
-                budget_exhausted = true;
-            }
-        }
+        // GAP-SUBAGENT-RUNTIME (2026-08-10): the model↔tool loop body is
+        // the shared `run_agent_loop` (agent_loop.rs) — the main agent and
+        // both retrieval subagents run the SAME loop; the main profile
+        // preserves the pre-split event sequences byte-for-byte (locked by
+        // EXPECTED_SEQUENCES_V02 + conformance capture).
+        let profile = if grill.is_some() {
+            LoopProfile::grill(self.max_tool_rounds)
+        } else {
+            LoopProfile::main(self.max_tool_rounds)
+        };
+        let outcome = run_agent_loop(
+            &SharedLoopServices {
+                blackboard: &self.blackboard,
+                denial_state: &self.denial_state,
+                pacing_rounds: &self.pacing_rounds,
+                context_compact: &self.context_compact,
+                dc_state: &self.dc_state,
+            },
+            self,
+            writer,
+            host,
+            &self.main_agent,
+            &profile,
+            prompt,
+            &report,
+            &tool_defs,
+            &mut messages,
+            orientation,
+            cancel,
+            heartbeat,
+        )
+        .await?;
+        let LoopOutcome { last_text, tool_rounds, .. } = outcome;
 
         // 5. runtime_stagnation_guard — mechanical, per-turn
-        // Runtime-injected inquiry blocks are excluded (D7): fixed injected
-        // text is not model output, and repeated blocks would pollute the
-        // consecutive/ngram statistics.
+        let stagnation_decision = self.evaluate_stagnation(writer, &messages).await?;
+
+        // 6. terminal — decision-aware: a non-continue stagnation decision
+        // invalidates the run (Python: run_finished iff decision == continue,
+        // else run_invalidated).
+        let (terminal_event, status) = match &stagnation_decision {
+            StagnationDecision::Continue => (EventType::RunFinished, "completed"),
+            StagnationDecision::RestartRequested { .. } => {
+                (EventType::RunInvalidated, "restart_requested")
+            }
+            StagnationDecision::HandoffRequired => (EventType::RunInvalidated, "handoff_required"),
+        };
+        writer
+            .record(
+                terminal_event,
+                serde_json::json!({
+                    "status": status,
+                    "turn_count": 1,
+                    "tool_rounds": tool_rounds,
+                }),
+            )
+            .await?;
+
+        // Grill mode (2026-08-08): persist the full conversation (incl. tool
+        // rounds) as the next turn's history — the session is multi-turn.
+        // Error paths skip this: a failed turn keeps the previous history.
+        if let Some(g) = &mut grill {
+            *g.history = messages;
+        }
+
+        Ok(last_text.unwrap_or_default())
+    }
+
+    /// Runtime stagnation guard — mechanical, per-turn (§4.5 FUS-STAGNATION;
+    /// shared by the main loop and the retrieval subagent loops — ADR-0010
+    /// §3.1: the same guard defaults apply to every agent). Runtime-injected
+    /// inquiry blocks are excluded (D7): fixed injected text is not model
+    /// output, and repeated blocks would pollute the consecutive/ngram
+    /// statistics.
+    pub(crate) async fn evaluate_stagnation(
+        &self,
+        writer: &mut EventWriter<'_>,
+        messages: &[Message],
+    ) -> Result<StagnationDecision, AgentLoopError> {
         let public_outputs: Vec<String> = messages
             .iter()
             .filter(|m| {
@@ -1822,44 +1448,17 @@ impl AgentLoopController {
                 }
             ));
         }
-
-        // 6. terminal — decision-aware: a non-continue stagnation decision
-        // invalidates the run (Python: run_finished iff decision == continue,
-        // else run_invalidated).
-        let (terminal_event, status) = match &stagnation_decision {
-            StagnationDecision::Continue => (EventType::RunFinished, "completed"),
-            StagnationDecision::RestartRequested { .. } => {
-                (EventType::RunInvalidated, "restart_requested")
-            }
-            StagnationDecision::HandoffRequired => (EventType::RunInvalidated, "handoff_required"),
-        };
-        writer
-            .record(
-                terminal_event,
-                serde_json::json!({
-                    "status": status,
-                    "turn_count": 1,
-                    "tool_rounds": tool_rounds,
-                }),
-            )
-            .await?;
-
-        // Grill mode (2026-08-08): persist the full conversation (incl. tool
-        // rounds) as the next turn's history — the session is multi-turn.
-        // Error paths skip this: a failed turn keeps the previous history.
-        if let Some(g) = &mut grill {
-            *g.history = messages;
-        }
-
-        Ok(last_text.unwrap_or_default())
+        Ok(stagnation_decision)
     }
 
     /// Default max tokens for the main agent (configurable later).
     /// D-6 (FIX_PLAN 2026-08-06): 160K total budget (the transport's
     /// `ModelConfig::max_tokens` is the cap; this request-level value is
     /// min-capped by it — equal here so the full budget is available).
-    fn main_agent_max_tokens(&self) -> u32 {
-        160_000
+    /// Review F3 (2026-08-10): the retrieval lane reads the SAME constant
+    /// (`agent_loop::REQUEST_MAX_TOKENS`) — one source for all three agents.
+    pub(crate) fn main_agent_max_tokens(&self) -> u32 {
+        crate::agent_loop::REQUEST_MAX_TOKENS
     }
 
     /// GAP-INQUIRY-SPLIT (2026-08-09) — the ORIENTATION producer (ADR-0010
@@ -1875,7 +1474,7 @@ impl AgentLoopController {
     /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a
     /// journal-write failure propagates before the counter is reset, so a
     /// failed run never persists a reset-but-never-fired counter.
-    async fn maybe_fire_orientation(
+    pub(crate) async fn maybe_fire_orientation(
         &self,
         writer: &mut EventWriter<'_>,
         messages: &mut Vec<Message>,
@@ -1927,7 +1526,7 @@ impl AgentLoopController {
     /// 8 args is the documented cost; a context struct would churn all
     /// call sites for no readability gain.)
     #[allow(clippy::too_many_arguments)]
-    async fn run_retrieval_subagent(
+    pub(crate) async fn run_retrieval_subagent(
         &self,
         host: &dyn LoopHost,
         writer: &mut EventWriter<'_>,
@@ -1935,6 +1534,9 @@ impl AgentLoopController {
         tc: &ToolCall,
         messages: &mut Vec<Message>,
         prompt: &str,
+        report: &ToolAvailabilityReport,
+        tool_defs: &[ToolDef],
+        orientation: Option<&mut OrientationSessionState>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
     ) -> Result<ToolResult, AgentLoopError> {
@@ -1944,6 +1546,9 @@ impl AgentLoopController {
             }
             DispatchTarget::ExternalRetrieval => {
                 (SubagentRole::ExternalRetrieval, "external_retrieval")
+            }
+            DispatchTarget::ParentDisposition => {
+                unreachable!("disposition calls go to handle_parent_disposition")
             }
             DispatchTarget::Host => unreachable!("host calls go to run_host_tool"),
         };
@@ -1964,37 +1569,232 @@ impl AgentLoopController {
             .and_then(|q| q.as_str())
             .unwrap_or(prompt)
             .to_string();
-        let spec = SubagentSpec {
-            role,
-            goal,
-            budget_turns: 1,
+
+        // Activation resolution (ADR-0010 §3.3): the state is REMOVED from
+        // the registry so the std::Mutex guard never crosses an await; it is
+        // re-inserted after the loop on every path (the conversation is
+        // evidence — never deleted on reset, §4.4).
+        //
+        // Identity (D3-3 upgrade, GAP-SUBAGENT-RUNTIME 2026-08-10): the
+        // session-scoped identities replace the temporary call-derived ones.
+        let session_id = orientation
+            .as_ref()
+            .map(|o| o.session_id.clone())
+            .unwrap_or_else(|| writer.run_id().to_string());
+        let session8: String = session_id.chars().take(8).collect();
+        // Refusal check FIRST (no guard held across the await — the std
+        // Mutex guard is not Send; M4 makes this branch reachable).
+        let awaiting_activation_id = self
+            .activations
+            .lock()
+            .unwrap()
+            .states
+            .get(&role)
+            .filter(|a| a.status == ActivationStatus::AwaitingDisposition)
+            .map(|a| a.activation_id.clone());
+        if let Some(act_id) = awaiting_activation_id {
+            // ADR-0010 §4.4: an unresolved activation refuses new
+            // retrieval — the parent must submit a structured disposition
+            // first (never guessed from free text; the
+            // `retrieval_disposition` control tool is the only path, M4).
+            let msg = format!(
+                "retrieval '{target_name}' refused — activation {act_id} is awaiting \
+                 parent disposition; submit retrieval_disposition close or \
+                 continue(requirement_delta) first",
+            );
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "target": target_name,
+                        "status": "error",
+                        "error": "activation_awaiting_disposition",
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(ToolResult {
+                output: msg,
+                exit_code: Some(1),
+            });
+        }
+        let (mut act, task_goal) = {
+            let mut reg = self.activations.lock().unwrap();
+            match reg.states.get(&role) {
+                Some(_) => {
+                    // Same activation, new task iteration. M4: a `continue`
+                    // re-entry's requirement_delta IS the new task goal
+                    // (§3.3: the next retrieval loop runs under the new
+                    // contract); otherwise the new query is the task.
+                    let mut a = reg.states.remove(&role).unwrap();
+                    let task_goal = a.next_goal.take().unwrap_or_else(|| goal.clone());
+                    a.conversation.push(Message {
+                        role: Role::User,
+                        content: task_goal.clone(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                    (a, task_goal)
+                }
+                None => {
+                    let seq = reg.next_seq.entry(role).or_insert(0);
+                    let activation_id =
+                        format!("retrieval-{}-{}-{:02}", role.as_str(), session8, *seq);
+                    *seq += 1;
+                    (
+                        ActivationState {
+                            activation_id,
+                            parent_session_id: session_id.clone(),
+                            subagent_session_id: format!("SUB-{}-{}", role.as_str(), session8),
+                            contract_id: format!("retrieval-contract-{}", role.as_str()),
+                            contract_revision: 0,
+                            status: ActivationStatus::Active,
+                            conversation: vec![Message {
+                                role: Role::User,
+                                content: goal.clone(),
+                                tool_call_id: None,
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                            }],
+                            pending: None,
+                            next_goal: None,
+                            result_digest: None,
+                            submitted: Vec::new(),
+                        },
+                        goal.clone(),
+                    )
+                }
+            }
+        };
+        let goal = task_goal;
+
+        // The subagent's tool projection = the parent's registry minus the
+        // main-only control/whitelist tools (the retrieval lane never sees
+        // compaction_whitelist_add — a main-run session concept — nor the
+        // parent-disposition control tool). The availability block is
+        // filtered the same way — it must not advertise tools the lane
+        // cannot call.
+        let sub_tool_defs: Vec<ToolDef> = tool_defs
+            .iter()
+            .filter(|t| {
+                t.name != "compaction_whitelist_add" && t.name != "retrieval_disposition"
+            })
+            .cloned()
+            .collect();
+        let sub_report = ToolAvailabilityReport {
+            probes: Vec::new(),
+            available: report
+                .available
+                .iter()
+                .filter(|t| {
+                    t.as_str() != "compaction_whitelist_add"
+                        && t.as_str() != "retrieval_disposition"
+                })
+                .cloned()
+                .collect(),
+            unavailable: report.unavailable.clone(),
+            unprobed: report.unprobed.clone(),
+            degraded: report.degraded.clone(),
         };
         let subagent = match role {
             SubagentRole::InternalRetrieval => &self.internal_retrieval,
             SubagentRole::ExternalRetrieval => &self.external_retrieval,
         };
 
-        let result = match subagent
-            .run_retrieval(
-                &self.blackboard,
-                &spec,
-                // F-03 (2026-08-07 review): the run's cancel token flows into
-                // the subagent's stream — Ctrl+C mid-retrieval now stops the
-                // round instead of waiting for the request to complete.
-                cancel,
-                // P1-1 (2026-08-08 stall guards): subagent wire frames keep
-                // the stall heartbeat alive too.
-                heartbeat,
-            )
-            .await
-        {
-            Ok(response) => {
+        // GAP-SUBAGENT-RUNTIME (2026-08-10): the subagent runs the SAME
+        // shared loop as the main agent — its own budget accounting
+        // (`profile.max_tool_rounds` — independent 120), its own journal
+        // events in the same hash chain (run terminal uniqueness stays with
+        // the parent), the retrieval task contract as IPG input. The lane
+        // feeding (orientation) is wired in M5; the session identity above
+        // still derives from the session state.
+        let profile = LoopProfile::retrieval(role, &goal, self.max_tool_rounds);
+        // Box::pin: the subagent loop is a recursive call through the
+        // dispatch edge (main loop → subagent loop; depth is capped at one
+        // by the nested-dispatch gate, E0733 requires the box).
+        let loop_outcome = Box::pin(run_agent_loop(
+            &SharedLoopServices {
+                blackboard: &self.blackboard,
+                denial_state: &self.denial_state,
+                pacing_rounds: &self.pacing_rounds,
+                context_compact: &self.context_compact,
+                dc_state: &self.dc_state,
+            },
+            self,
+            writer,
+            host,
+            subagent,
+            &profile,
+            &goal, // IPG evaluates the task contract (a query may carry injected content)
+            &sub_report,
+            &sub_tool_defs,
+            &mut act.conversation,
+            // M5: the shared session state is threaded in — the retrieval
+            // profile feeds the internal/external lane (§4.2).
+            orientation,
+            cancel,
+            heartbeat,
+        ))
+        .await;
+
+        // The subagent's own stagnation guard — evaluated over the subagent
+        // conversation (shared with the main path). A non-continue decision
+        // fails the retrieval: a subagent has no handoff target (registered
+        // decision 2026-08-10; the terminal close record arrives in M4).
+        let result: Result<LoopOutcome, AgentLoopError> = match &loop_outcome {
+            Ok(_) => {
+                let decision = self.evaluate_stagnation(writer, &act.conversation).await?;
+                if matches!(decision, StagnationDecision::Continue) {
+                    loop_outcome
+                } else {
+                    Err(AgentLoopError::Assurance(
+                        "retrieval subagent stagnation — no handoff target in a retrieval lane"
+                            .to_string(),
+                    ))
+                }
+            }
+            Err(_) => loop_outcome,
+        };
+
+        // Re-insert the activation — the conversation is preserved on every
+        // path (§4.4: journal, docs, ledger, receipts never deleted).
+        let activation_identity = (
+            act.activation_id.clone(),
+            act.contract_id.clone(),
+            act.contract_revision,
+        );
+        self.activations.lock().unwrap().states.insert(role, act);
+
+        let tool_result = match result {
+            Ok(outcome) => {
                 // IP2a (D-3): 失败必显式 — a subagent that returned no text
                 // must not leave a blank tool message for the model.
-                let output = response
-                    .text
+                let output = outcome
+                    .last_text
                     .filter(|t| !t.trim().is_empty())
                     .unwrap_or_else(|| format!("retrieval '{target_name}' returned no text"));
+                // GAP-SUBAGENT-RUNTIME: result formation — the [DOC]/[SOURCE]
+                // line contract writes the subagent's own blackboard section
+                // (single-writer discipline; the stable interface real
+                // retrieval semantics plug into).
+                let (docs, sources) =
+                    crate::agents::retrieval::parse_retrieval_text(&output);
+                crate::agents::retrieval::write_section(
+                    role,
+                    &self.blackboard,
+                    output.clone(),
+                    docs,
+                    sources,
+                );
                 writer
                     .record(
                         EventType::ToolCompleted,
@@ -2016,8 +1816,8 @@ impl AgentLoopController {
                 // `status=indeterminate` — this slice has no mechanical
                 // coverage requirement, and §4.3 says exactly that case must
                 // be `indeterminate`, never a model-filled verdict. The
-                // disposition/close chain arrives with the subagent
-                // isomorphism slice (the verifier accepts orphan assessments).
+                // disposition/close chain arrives in M4 (the verifier
+                // accepts orphan assessments).
                 let (ledger_entries, categories) = {
                     let r = self.blackboard.read();
                     match role {
@@ -2053,14 +1853,37 @@ impl AgentLoopController {
                     &result_digest[..16],
                     &sha256_hex(tc.call_id.as_bytes())[..8],
                 );
+                // D3-3 upgrade: session-scoped activation identity (the old
+                // `{target}-{call_id}` temporary identity is gone). The
+                // digest rides the activation for the M4 close record.
+                let (activation_id, contract_id, contract_revision) = activation_identity;
+                {
+                    let mut reg = self.activations.lock().unwrap();
+                    if let Some(a) = reg.states.get_mut(&role) {
+                        a.result_digest = Some(result_digest.clone());
+                    }
+                }
+                // M4: the activation moves to awaiting_parent_disposition —
+                // the assessment context a disposition must bind (§4.4).
+                {
+                    let mut reg = self.activations.lock().unwrap();
+                    if let Some(a) = reg.states.get_mut(&role) {
+                        a.status = ActivationStatus::AwaitingDisposition;
+                        a.pending = Some(PendingDisposition {
+                            assessment_id: assessment_id.clone(),
+                            expected_contract_revision: contract_revision,
+                            decided: None,
+                        });
+                    }
+                }
                 writer
                     .record(
                         EventType::InformationSufficiencyAssessment,
                         serde_json::json!({
                             "assessment_id": assessment_id,
-                            "activation_id": format!("{target_name}-{}", tc.call_id),
-                            "contract_id": format!("retrieval-contract-{target_name}"),
-                            "contract_revision": 0,
+                            "activation_id": activation_id,
+                            "contract_id": contract_id,
+                            "contract_revision": contract_revision,
                             "result_digest": result_digest,
                             "ledger_digest": ledger_digest,
                             "source_counts": {
@@ -2083,6 +1906,29 @@ impl AgentLoopController {
                         }),
                     )
                     .await?;
+                // M4: budget exhaustion on the subagent loop is a TERMINAL
+                // authority — a partial result was formed and assessed, then
+                // the activation closes with `budget_exhausted` (assessment +
+                // digest bound, no disposition; §4.4 terminal close).
+                if outcome.budget_exhausted {
+                    self.close_activation(
+                        writer,
+                        role,
+                        "budget_exhausted",
+                        Some(&assessment_id),
+                        Some(&result_digest),
+                    )
+                    .await?;
+                }
+                // The model must know the assessment exists and how to
+                // dispose it (ADR-0010 §4.4: the parent submits the
+                // structured disposition via the control tool — never
+                // guessed from free text).
+                let output = format!(
+                    "{output}\n[ASSESSMENT {assessment_id} rev {contract_revision} \
+                     status=indeterminate —— 提交 retrieval_disposition \
+                     (close|continue) 以关闭或继续该检索激活]"
+                );
                 ToolResult {
                     output,
                     exit_code: Some(0),
@@ -2100,6 +1946,15 @@ impl AgentLoopController {
                             "error": e.to_string(),
                         }),
                     )
+                    .await?;
+                // M4: terminal authority close — the subagent failed (or was
+                // cancelled mid-run); no result was formed, so the close
+                // carries no assessment/digest (resumable=true).
+                let reason = match &e {
+                    AgentLoopError::Cancelled => "subagent_cancelled",
+                    _ => "subagent_failed",
+                };
+                self.close_activation(writer, role, reason, None, None)
                     .await?;
                 ToolResult {
                     output: format!("retrieval error: {e}"),
@@ -2122,26 +1977,595 @@ impl AgentLoopController {
             });
             w.exec
                 .results
-                .push(format!("[{}] {}", tc.name, result.output));
+                .push(format!("[{}] {}", tc.name, tool_result.output));
         }
         messages.push(Message {
             role: Role::Tool,
-            content: result.output.clone(),
+            content: tool_result.output.clone(),
             // The provider protocol needs the call this result answers; the
             // call_id travels from the model's request through the journal.
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
-        let _ = host;
-        Ok(result)
+        Ok(tool_result)
+    }
+
+    /// M4 (GAP-SUBAGENT-RUNTIME 2026-08-10): the parent's structured
+    /// disposition control tool handler (ADR-0010 §4.4). The proposal is
+    /// judged MECHANICALLY — mirroring the §4.4 verifier rules in priority
+    /// order (replay idempotency → stale revision → conflicting decision →
+    /// accepted) — and journaled as `retrieval_parent_disposition` with the
+    /// mechanical `outcome`. Accepted close commits the close record in the
+    /// same handler (controller single writer — close commit and state
+    /// switch are one commit, §4.4); accepted continue increments the
+    /// contract revision and keeps the activation active.
+    pub(crate) async fn handle_parent_disposition(
+        &self,
+        writer: &mut EventWriter<'_>,
+        tc: &ToolCall,
+        messages: &mut Vec<Message>,
+    ) -> Result<ToolResult, AgentLoopError> {
+        let role = match tc.arguments.get("role").and_then(|v| v.as_str()) {
+            Some("internal_retrieval") => SubagentRole::InternalRetrieval,
+            Some("external_retrieval") => SubagentRole::ExternalRetrieval,
+            _ => {
+                let msg = "retrieval_disposition: unknown `role` — use \
+                           internal_retrieval or external_retrieval"
+                    .to_string();
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok(ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                });
+            }
+        };
+        let decision = match tc.arguments.get("decision").and_then(|v| v.as_str()) {
+            Some("close") | Some("continue") => tc
+                .arguments
+                .get("decision")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .to_string(),
+            _ => {
+                let msg =
+                    "retrieval_disposition: `decision` must be close or continue".to_string();
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok(ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                });
+            }
+        };
+        let requirement_delta = tc
+            .arguments
+            .get("requirement_delta")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        if decision == "continue"
+            && requirement_delta.as_deref().map(str::trim).unwrap_or("").is_empty()
+        {
+            let msg = "retrieval_disposition: continue requires a non-empty \
+                       requirement_delta"
+                .to_string();
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(ToolResult {
+                output: msg,
+                exit_code: Some(1),
+            });
+        }
+        if decision == "close" && requirement_delta.is_some() {
+            let msg =
+                "retrieval_disposition: close cannot carry requirement_delta".to_string();
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(ToolResult {
+                output: msg,
+                exit_code: Some(1),
+            });
+        }
+
+        // The control call is an executed tool — journal it like any other
+        // (audit discipline: a declared tool's round is visible in the
+        // chain).
+        writer
+            .record(
+                EventType::ToolStarted,
+                serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                }),
+            )
+            .await?;
+
+        // Take the activation — the temporary guard drops at the end of the
+        // let statement, so no guard ever crosses an await (the state is
+        // re-inserted on every path below).
+        let act = self.activations.lock().unwrap().states.remove(&role);
+        let mut act = match act {
+            Some(a) => a,
+            None => {
+                let msg = format!(
+                    "retrieval_disposition: no activation for role '{}'",
+                    role.as_str()
+                );
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "status": "error",
+                            "error": "no_activation",
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok(ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                });
+            }
+        };
+
+        // ── replay idempotency FIRST (the id derives from the PRE-OUTCOME
+        // proposal ONLY — a retried call yields the same id regardless of
+        // activation state; the outcome is the judgment's product, never
+        // part of the id). A replayed call re-journals the ORIGINAL payload
+        // byte-identically and moves no state — recognized even after the
+        // activation closed (pending cleared), which is exactly when a
+        // retry would arrive.
+        let proposal_canonical = canonical_json(&serde_json::json!({
+            "role": role.as_str(),
+            "decision": decision,
+            "requirement_delta": requirement_delta,
+        }))
+        .unwrap_or_default();
+        let disposition_id = format!(
+            "DISP-{}-{}",
+            &sha256_hex(&proposal_canonical)[..16],
+            &sha256_hex(tc.call_id.as_bytes())[..8],
+        );
+        if let Some((_, original_canonical)) = act
+            .submitted
+            .iter()
+            .find(|(id, _)| id == &disposition_id)
+        {
+            let original: serde_json::Value = serde_json::from_slice(original_canonical)
+                .unwrap_or(serde_json::Value::Null);
+            writer
+                .record(EventType::RetrievalParentDisposition, original)
+                .await?;
+            let output = format!("[{disposition_id}] replayed_idempotent — already recorded");
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                    }),
+                )
+                .await?;
+            self.activations.lock().unwrap().states.insert(role, act);
+            messages.push(Message {
+                role: Role::Tool,
+                content: output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(ToolResult {
+                output,
+                exit_code: Some(0),
+            });
+        }
+
+        // §4.4: the disposition binds an assessment — an activation without
+        // a pending one (Active mid-task / Closed) refuses.
+        if act.pending.is_none() {
+            let msg = format!(
+                "retrieval_disposition: activation {} has no pending \
+                 assessment to dispose",
+                act.activation_id,
+            );
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "status": "error",
+                        "error": "no_pending_assessment",
+                    }),
+                )
+                .await?;
+            self.activations.lock().unwrap().states.insert(role, act);
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(ToolResult {
+                output: msg,
+                exit_code: Some(1),
+            });
+        }
+        let pending = act.pending.as_ref().unwrap().clone();
+
+        // ── judgment (mirrors the §4.4 verifier; priority order — replay
+        // was handled above, before the pending check) ─────────────────────
+        let (verdict, payload): (DispositionVerdict, serde_json::Value) = {
+            if pending.expected_contract_revision != act.contract_revision {
+                // 2. Stale — a late close after a continue, or a disposition
+                //    on a superseded revision (§4.4 rejected_stale).
+                let payload = disposition_payload(
+                    &disposition_id,
+                    &act,
+                    &pending,
+                    &decision,
+                    &requirement_delta,
+                    "rejected_stale",
+                );
+                (DispositionVerdict::RejectedStale, payload)
+            } else if pending.decided.is_some() {
+                // 3. Conflicting — the same assessment already decided:
+                //    ONE accepted decision per assessment (§4.4 同 assessment
+                //    单 decision; a second accepted disposition would fail
+                //    the verifier regardless of direction). Defense-in-depth:
+                //    in the current flow a continue bumps the revision first,
+                //    so the stale branch usually catches it — registered.
+                let payload = disposition_payload(
+                    &disposition_id,
+                    &act,
+                    &pending,
+                    &decision,
+                    &requirement_delta,
+                    "rejected_conflicting",
+                );
+                (DispositionVerdict::RejectedConflicting, payload)
+            } else if decision == "close" {
+                // 4. Accepted close.
+                let payload = disposition_payload(
+                    &disposition_id,
+                    &act,
+                    &pending,
+                    &decision,
+                    &requirement_delta,
+                    "accepted",
+                );
+                (DispositionVerdict::AcceptedClose, payload)
+            } else {
+                // 5. Accepted continue.
+                let payload = disposition_payload(
+                    &disposition_id,
+                    &act,
+                    &pending,
+                    &decision,
+                    &requirement_delta,
+                    "accepted",
+                );
+                (DispositionVerdict::AcceptedContinue, payload)
+            }
+        };
+
+        // ── commit (the verdict's state switch; §4.4 single writer) ────────
+        // The disposition event + the close record (for an accepted close)
+        // + the state switch are ONE commit; the ToolCompleted closes the
+        // control call after it. Review F7 (2026-08-10): every error path
+        // re-inserts the activation BEFORE leaving — a journal write
+        // failure is run-fatal (it propagates to run_failed), but the
+        // registry must never silently drop a live activation.
+        let commit: Result<(), AgentLoopError> = async {
+            // Journal the disposition event — every verdict is journaled
+            // (the refusal records document the rejection, §4.4).
+            writer
+                .record(EventType::RetrievalParentDisposition, payload.clone())
+                .await?;
+            let payload_canonical = canonical_json(&payload).unwrap_or_default();
+            match verdict {
+                DispositionVerdict::AcceptedClose => {
+                    let p = act.pending.as_mut().unwrap();
+                    p.decided = Some(decision.clone());
+                    act.submitted
+                        .push((disposition_id.clone(), payload_canonical));
+                    let assessment_id = p.assessment_id.clone();
+                    let result_digest = act.result_digest.clone();
+                    // Close commit: the close record references the
+                    // validated disposition (normal_close) and the state
+                    // switch follows in the same handler — no window for a
+                    // late disposition.
+                    self.write_close_record(
+                        writer,
+                        &act.activation_id,
+                        &act.parent_session_id,
+                        &act.subagent_session_id,
+                        &act.contract_id,
+                        act.contract_revision,
+                        "normal_close",
+                        Some(&disposition_id),
+                        Some(&assessment_id),
+                        result_digest.as_deref(),
+                    )
+                    .await?;
+                    act.status = ActivationStatus::Closed;
+                    act.pending = None;
+                    act.next_goal = None;
+                }
+                DispositionVerdict::AcceptedContinue => {
+                    let p = act.pending.as_mut().unwrap();
+                    p.decided = Some(decision.clone());
+                    act.submitted
+                        .push((disposition_id.clone(), payload_canonical));
+                    // §4.4: revision + 1, activation stays ACTIVE, the
+                    // current assessment is marked consumed/superseded (the
+                    // pending is KEPT as the consumed record — a late
+                    // disposition on it is rejected stale/conflicting and
+                    // the rejection is recorded; the next assessment
+                    // replaces the pending).
+                    act.contract_revision += 1;
+                    act.next_goal = Some(requirement_delta.clone().unwrap_or_default());
+                    act.status = ActivationStatus::Active;
+                }
+                DispositionVerdict::RejectedStale | DispositionVerdict::RejectedConflicting => {
+                    // Pure record — no state movement (§4.4: refusal
+                    // records document the rejection).
+                    act.submitted
+                        .push((disposition_id.clone(), payload_canonical));
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        // The verdict's message — read AFTER the commit so the continue
+        // message shows the bumped revision (`pending` is a clone taken
+        // before the commit; the rejection messages read its fields).
+        let (output, exit_code) = match verdict {
+            DispositionVerdict::AcceptedClose => (
+                format!(
+                    "[{disposition_id}] close accepted — activation {} closed \
+                     (normal_close)",
+                    act.activation_id,
+                ),
+                0,
+            ),
+            DispositionVerdict::AcceptedContinue => (
+                format!(
+                    "[{disposition_id}] continue accepted — contract revision \
+                     {} -> {}; activation {} stays active",
+                    act.contract_revision - 1,
+                    act.contract_revision,
+                    act.activation_id,
+                ),
+                0,
+            ),
+            DispositionVerdict::RejectedStale => (
+                format!(
+                    "[{disposition_id}] rejected_stale — expected contract \
+                     revision {} does not match the current {}",
+                    pending.expected_contract_revision, act.contract_revision,
+                ),
+                1,
+            ),
+            DispositionVerdict::RejectedConflicting => (
+                format!(
+                    "[{disposition_id}] rejected_conflicting — assessment {} \
+                     already decided {}",
+                    pending.assessment_id,
+                    pending.decided.as_deref().unwrap_or("?"),
+                ),
+                1,
+            ),
+        };
+
+        // Re-insert the activation on EVERY path (review F7) — before any
+        // error leaves, so a failed commit never drops a live activation.
+        self.activations.lock().unwrap().states.insert(role, act);
+        commit?;
+
+        writer
+            .record(
+                EventType::ToolCompleted,
+                serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": exit_code,
+                }),
+            )
+            .await?;
+        messages.push(Message {
+            role: Role::Tool,
+            content: output.clone(),
+            tool_call_id: Some(tc.call_id.clone()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        // Audit mirror — the control call is one semantic action.
+        {
+            let mut w = self.blackboard.write();
+            w.tool_actions.push(ToolActionRecord {
+                category: "other",
+                tool: tc.name.clone(),
+                timestamp: chrono_utc_now(),
+            });
+            w.exec.results.push(format!("[{}] {}", tc.name, output));
+        }
+        Ok(ToolResult {
+            output,
+            exit_code: Some(exit_code),
+        })
+    }
+
+    /// Journal a `retrieval_close_record` (ADR-0010 §4.4) for the given
+    /// activation identity. `validated_disposition_id` is non-null only for
+    /// `normal_close` (a committed close disposition); terminal authorities
+    /// carry assessment/digest when a result was formed. `resumable=true`
+    /// uniformly — the conversation/journal/ledger are preserved (§4.4;
+    /// registered decision 2026-08-10).
+    #[allow(clippy::too_many_arguments)] // the full close-record identity
+    async fn write_close_record(
+        &self,
+        writer: &mut EventWriter<'_>,
+        activation_id: &str,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        contract_id: &str,
+        contract_revision: u32,
+        terminal_reason: &str,
+        validated_disposition_id: Option<&str>,
+        assessment_id: Option<&str>,
+        result_digest: Option<&str>,
+    ) -> Result<(), AgentLoopError> {
+        let close_record_id = format!(
+            "CLOSE-{}-{:04}",
+            &sha256_hex(
+                &canonical_json(&serde_json::json!({
+                    "activation_id": activation_id,
+                    "contract_revision": contract_revision,
+                    "terminal_reason": terminal_reason,
+                    "assessment_id": assessment_id,
+                }))
+                .unwrap_or_default()
+            )[..16],
+            contract_revision,
+        );
+        writer
+            .record(
+                EventType::RetrievalCloseRecord,
+                serde_json::json!({
+                    "close_record_id": close_record_id,
+                    "parent_session_id": parent_session_id,
+                    "subagent_session_id": subagent_session_id,
+                    "activation_id": activation_id,
+                    "contract_id": contract_id,
+                    "contract_revision": contract_revision,
+                    "result_digest": result_digest,
+                    "assessment_id": assessment_id,
+                    "validated_disposition_id": validated_disposition_id,
+                    "terminal_reason": terminal_reason,
+                    "resumable": true,
+                    "live_state_reset": true,
+                    "archive_ref": format!("run-journal:{}", writer.run_id()),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Close the role's activation with a TERMINAL authority reason (user
+    /// cancel / subagent failed/cancelled / budget exhausted): journal the
+    /// close record and commit the state switch. Idempotent — already-closed
+    /// activations are skipped (the verifier rejects a second close record
+    /// on an activation).
+    async fn close_activation(
+        &self,
+        writer: &mut EventWriter<'_>,
+        role: SubagentRole,
+        terminal_reason: &str,
+        assessment_id: Option<&str>,
+        result_digest: Option<&str>,
+    ) -> Result<(), AgentLoopError> {
+        // Capture the identity (short critical section — the guard never
+        // crosses an await).
+        let snapshot = {
+            let reg = self.activations.lock().unwrap();
+            match reg.states.get(&role) {
+                Some(a) if a.status != ActivationStatus::Closed => Some((
+                    a.activation_id.clone(),
+                    a.parent_session_id.clone(),
+                    a.subagent_session_id.clone(),
+                    a.contract_id.clone(),
+                    a.contract_revision,
+                )),
+                _ => None,
+            }
+        };
+        let Some((
+            activation_id,
+            parent_session_id,
+            subagent_session_id,
+            contract_id,
+            contract_revision,
+        )) = snapshot
+        else {
+            return Ok(());
+        };
+        self.write_close_record(
+            writer,
+            &activation_id,
+            &parent_session_id,
+            &subagent_session_id,
+            &contract_id,
+            contract_revision,
+            terminal_reason,
+            None,
+            assessment_id,
+            result_digest,
+        )
+        .await?;
+        let mut reg = self.activations.lock().unwrap();
+        if let Some(act) = reg.states.get_mut(&role) {
+            act.status = ActivationStatus::Closed;
+            act.pending = None;
+            act.next_goal = None;
+        }
+        Ok(())
+    }
+
+    /// Close every pending activation with a terminal authority reason —
+    /// used by the run-level cancellation path (a user cancel closes the
+    /// activations BEFORE the run_cancelled terminal event; best-effort).
+    async fn close_all_activations(
+        &self,
+        writer: &mut EventWriter<'_>,
+        terminal_reason: &str,
+    ) {
+        let roles: Vec<SubagentRole> = {
+            let reg = self.activations.lock().unwrap();
+            reg.states.keys().copied().collect()
+        };
+        for role in roles {
+            let _ = self.close_activation(writer, role, terminal_reason, None, None).await;
+        }
     }
 
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
     #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel/run_retrieval_subagent
-    async fn run_host_tool(
+    pub(crate) async fn run_host_tool(
         &self,
         host: &dyn LoopHost,
         writer: &mut EventWriter<'_>,
@@ -2717,7 +3141,9 @@ impl Default for AgentLoopController {
 }
 
 /// Hash-chained event writer — owns the journal sequence state within a turn.
-struct EventWriter<'a> {
+/// `pub(crate)` (GAP-SUBAGENT-RUNTIME 2026-08-10): the shared loop in
+/// `agent_loop.rs` records through it.
+pub(crate) struct EventWriter<'a> {
     /// `None` = grill mode (2026-08-08): the turn runs the full model↔tool
     /// loop but records nothing — the grill session's conversation is
     /// persisted by the host to `{cwd}/.gsa/grill/<session>.jsonl`, never
@@ -2733,6 +3159,14 @@ struct EventWriter<'a> {
     /// P1-1 (2026-08-08 stall guards): stamped on every recorded event —
     /// journaled activity keeps the stall watchdog armed.
     heartbeat: Option<crate::gateway::model::ActivityClock>,
+}
+
+/// GAP-SUBAGENT-RUNTIME M5 (2026-08-10): a discard-mode writer (grill
+/// semantics — `journal: None`) for unit tests that exercise producer
+/// logic without a journal.
+#[cfg(test)]
+pub(crate) fn discard_event_writer(run_id: &str) -> EventWriter<'static> {
+    EventWriter::new(None, EventTrack::V02, run_id, "", 0, None, None)
 }
 
 impl<'a> EventWriter<'a> {
@@ -2756,7 +3190,7 @@ impl<'a> EventWriter<'a> {
         }
     }
 
-    async fn record(
+    pub(crate) async fn record(
         &mut self,
         event_type: EventType,
         payload: serde_json::Value,
@@ -2825,7 +3259,7 @@ impl<'a> EventWriter<'a> {
     }
 
     /// The run this writer appends to (checkpoint_ids embed the run id).
-    fn run_id(&self) -> &str {
+    pub(crate) fn run_id(&self) -> &str {
         &self.run_id
     }
 
@@ -4710,9 +5144,11 @@ mod tests {
         // compaction_whitelist_add likewise — A6 §8 C.2, in-memory write
         // only, ReadOnly class).
         let system = first.system.clone();
+        // M4: `retrieval_disposition` is the parent's control tool — always
+        // declared (call-time-refused without a pending activation).
         assert!(
             system.contains(
-                "AVAILABLE: blackboard_read, compaction_whitelist_add, grep, list_dir, read_file, search_replace"
+                "AVAILABLE: blackboard_read, compaction_whitelist_add, grep, list_dir, read_file, retrieval_disposition, search_replace"
             ),
             "availability block = policy-filtered set: {system}"
         );
@@ -4757,9 +5193,13 @@ mod tests {
                 "grep",
                 "list_dir",
                 "read_file",
+                // M4: the parent's disposition control tool (read-class —
+                // no file/network/shell side effect).
+                "retrieval_disposition",
             ],
             "ReadOnly declares read-class tools only (blackboard_read + \
-             compaction_whitelist_add are read-class and always declared): \
+             compaction_whitelist_add are read-class and always declared; \
+             retrieval_disposition is the parent's control tool): \
              {declared:?}"
         );
 
@@ -5286,6 +5726,980 @@ mod tests {
         );
         // External section untouched.
         assert!(r.external_ret.web_sources.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GAP-SUBAGENT-RUNTIME (2026-08-10): shared-loop subagent semantics ──
+
+    /// A retrieval dispatch whose subagent runs MULTIPLE rounds, including a
+    /// host-tool round — the shared loop's journal events (subagent
+    /// model_output ×2, the host ToolCompleted, the subagent stagnation
+    /// guard) land in the same chain inside the parent's wrapper.
+    #[tokio::test]
+    async fn subagent_loop_runs_multi_round_with_host_tool() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "file contents".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        // main declares retrieval → subagent round 1 calls read_file (host
+        // tool, allowed in the lane) → subagent round 2 forms the result →
+        // main concludes (gate + final).
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-MR", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        // Subagent: 2 model rounds + 1 host tool round + its own stagnation
+        // guard — all inside the parent's tool_started/tool_completed pair.
+        let sub_outputs = types
+            .iter()
+            .filter(|t| **t == EventType::ModelOutput)
+            .count();
+        assert_eq!(sub_outputs, 5, "{types:?}"); // main 3 (decl/gate-answer/final) + subagent 2
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::ToolCompleted)
+                .count(),
+            2, // read_file + the retrieval wrapper
+            "{types:?}"
+        );
+        assert!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::RuntimeStagnationGuard)
+                .count()
+                >= 2, // subagent + main
+            "{types:?}"
+        );
+        // The read_file host tool executed inside the lane.
+        let events = events(&dir);
+        let read_completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+            })
+            .expect("read_file ToolCompleted");
+        assert_eq!(read_completed.payload.get("exit_code"), Some(&serde_json::json!(0)));
+        // Result formed into the section.
+        let bb = controller.blackboard();
+        let r = bb.read();
+        assert_eq!(r.internal_ret.project_docs, vec!["design.md"]);
+        assert!(r.internal_ret.response.as_deref().unwrap().contains("检索完成"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ADR-0010 §3.2 deny-only write domain: a mutation-class tool call
+    /// inside the retrieval lane is structurally refused (never reaching the
+    /// host permission bridge) and journaled as ToolCompleted(status=error).
+    #[tokio::test]
+    async fn subagent_denies_mutation_tools_with_structured_reason() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("search_replace", "call-2")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-WG", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let denied = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("role-gate denial journaled");
+        assert_eq!(
+            denied.payload.get("error").and_then(|v| v.as_str()),
+            Some("retrieval_role_write_denied")
+        );
+        // The host tool never executed — no second success completion.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("exit_code") == Some(&serde_json::json!(0))
+                })
+                .count(),
+            1, // only the retrieval wrapper succeeded
+        );
+        // The model saw the refusal in its tool reply.
+        let conversation_denial = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").is_some()
+            });
+        assert!(conversation_denial.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One seat per role: a retrieval lane never dispatches another
+    /// retrieval (ADR-0010 §11.3) — refused with a structured denial.
+    #[tokio::test]
+    async fn subagent_refuses_nested_subagent_dispatch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-NS", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let denied = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("nested-dispatch denial journaled");
+        assert_eq!(
+            denied.payload.get("error").and_then(|v| v.as_str()),
+            Some("nested_subagent_dispatch_refused")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Identity normalization (D3-3 upgrade) + M4 continue re-entry: the
+    /// activation identity is session-scoped and STABLE across dispatches —
+    /// a `continue` disposition keeps the activation (revision +1, the
+    /// requirement delta becomes the next task goal), and the next retrieval
+    /// re-enters the same activation.
+    #[tokio::test]
+    async fn subagent_activation_identity_is_session_scoped_and_reused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let continue_call = ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "internal_retrieval",
+                "decision": "continue",
+                "requirement_delta": "补充 gate.rs 的线索",
+            }),
+            call_id: "call-d1".to_string(),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n第一批"),
+            ScriptedResponse::tool_calls(vec![continue_call]),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] b.md\n第二批"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-ID",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let assessments: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .collect();
+        assert_eq!(assessments.len(), 2);
+        let p0 = &assessments[0].payload;
+        let p1 = &assessments[1].payload;
+        // session8 = "sess-abc" — the first 8 chars of the session id.
+        assert_eq!(
+            p0.get("activation_id").and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-sess-abc-00")
+        );
+        assert_eq!(p0.get("activation_id"), p1.get("activation_id"));
+        assert_eq!(
+            p0.get("contract_id").and_then(|v| v.as_str()),
+            Some("retrieval-contract-internal_retrieval")
+        );
+        // continue bumped the revision — the second assessment carries +1
+        // (verifier §4.4 continue+1 rule).
+        assert_eq!(p0.get("contract_revision"), Some(&serde_json::json!(0)));
+        assert_eq!(p1.get("contract_revision"), Some(&serde_json::json!(1)));
+        // The ledger accumulates across the reused activation.
+        assert_eq!(p1.get("source_counts").unwrap()["total"], 2);
+        // The continue disposition was accepted (outcome=accepted) and bound
+        // the first assessment.
+        let dispositions: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .collect();
+        assert_eq!(dispositions.len(), 1);
+        assert_eq!(
+            dispositions[0].payload.get("outcome").and_then(|v| v.as_str()),
+            Some("accepted")
+        );
+        assert_eq!(
+            dispositions[0].payload.get("decision").and_then(|v| v.as_str()),
+            Some("continue")
+        );
+        assert_eq!(
+            dispositions[0]
+                .payload
+                .get("requirement_delta")
+                .and_then(|v| v.as_str()),
+            Some("补充 gate.rs 的线索")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn disposition_call(role: &str, decision: &str, delta: Option<&str>, call_id: &str) -> ToolCall {
+        let mut arguments = serde_json::json!({
+            "role": role,
+            "decision": decision,
+        });
+        if let Some(d) = delta {
+            arguments["requirement_delta"] = serde_json::Value::String(d.to_string());
+        }
+        ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments,
+            call_id: call_id.to_string(),
+        }
+    }
+
+    /// M4: an accepted close commits the close record (normal_close with
+    /// the validated disposition + assessment + digest bound) and FREEZES
+    /// the activation — a later disposition is refused (no second
+    /// disposition event, no second close).
+    #[tokio::test]
+    async fn disposition_close_accepted_writes_close_record_and_freezes() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d1",
+            )]),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d2",
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-CLOSE",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let dispositions: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .collect();
+        assert_eq!(dispositions.len(), 1, "second disposition refused");
+        let d = &dispositions[0].payload;
+        assert_eq!(d.get("decision").and_then(|v| v.as_str()), Some("close"));
+        assert_eq!(d.get("outcome").and_then(|v| v.as_str()), Some("accepted"));
+        let disposition_id = d.get("disposition_id").and_then(|v| v.as_str()).unwrap();
+
+        let closes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .collect();
+        assert_eq!(closes.len(), 1);
+        let c = &closes[0].payload;
+        assert_eq!(
+            c.get("terminal_reason").and_then(|v| v.as_str()),
+            Some("normal_close")
+        );
+        assert_eq!(
+            c.get("validated_disposition_id").and_then(|v| v.as_str()),
+            Some(disposition_id)
+        );
+        assert_eq!(c.get("assessment_id"), d.get("assessment_id"));
+        assert_eq!(c.get("activation_id"), d.get("activation_id"));
+        let digest = c.get("result_digest").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(digest.len(), 64, "64-hex sha256 for normal_close");
+        assert_eq!(c.get("contract_revision"), Some(&serde_json::json!(0)));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4: the same disposition call replayed journals byte-identical
+    /// payloads (replayed_idempotent) and does NOT re-commit the close.
+    #[tokio::test]
+    async fn disposition_replay_idempotent() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d1",
+            )]),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d1",
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-REPLAY", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let dispositions: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .collect();
+        assert_eq!(dispositions.len(), 2);
+        let p0 = &dispositions[0].payload;
+        let p1 = &dispositions[1].payload;
+        // Byte-identical payloads (the outcome rides the first occurrence).
+        assert_eq!(p0, p1, "replayed disposition must be canonical-identical");
+        assert_eq!(
+            p1.get("outcome").and_then(|v| v.as_str()),
+            Some("accepted")
+        );
+        // ONE close record — the replay never re-commits.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+                .count(),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4: a disposition on a CONSUMED assessment (after an accepted
+    /// continue bumped the revision) is rejected_stale — the rejection is
+    /// recorded, not silently dropped (§4.4).
+    #[tokio::test]
+    async fn disposition_stale_after_continue_rejected() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n第一批"),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "continue",
+                Some("补充 gate.rs"),
+                "call-d1",
+            )]),
+            // A late close on the consumed assessment — stale (rev 0 vs 1).
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d2",
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-STALE", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let dispositions: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .collect();
+        assert_eq!(dispositions.len(), 2);
+        assert_eq!(
+            dispositions[0].payload.get("outcome").and_then(|v| v.as_str()),
+            Some("accepted")
+        );
+        assert_eq!(
+            dispositions[1].payload.get("outcome").and_then(|v| v.as_str()),
+            Some("rejected_stale")
+        );
+        // No close record — the stale close never commits.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+                .count(),
+            0
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4: a retrieval while the activation awaits disposition is refused
+    /// with a structured error (no second assessment, no silent accept).
+    #[tokio::test]
+    async fn retrieval_while_awaiting_disposition_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-AWAIT", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // One assessment only — the second dispatch was refused.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+                .count(),
+            1
+        );
+        let refused = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("activation_awaiting_disposition")
+            })
+            .expect("refusal journaled");
+        assert_eq!(
+            refused.payload.get("status").and_then(|v| v.as_str()),
+            Some("error")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4: a user cancel closes every pending activation with a terminal
+    /// close record BEFORE the run_cancelled terminal event.
+    #[tokio::test]
+    async fn user_cancel_closes_pending_activations_before_run_cancelled() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        // Slow-chunked subagent response — the cancel lands inside the
+        // subagent stream (→ subagent_cancelled close), then propagates to
+        // the run level (→ run_cancelled). The subagent_cancelled close
+        // covers the activation; the user-cancel pass skips it (idempotent).
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+                ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ])
+            .with_chunk_delay(std::time::Duration::from_millis(60)),
+        );
+        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let token = tokio_util::sync::CancellationToken::new();
+
+        let c = controller.clone();
+        let t = token.clone();
+        let run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(
+                &host,
+                "查找项目文档",
+                "RUN-UC",
+                MANIFEST,
+                0,
+                None,
+                Some(&t),
+                None,
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        token.cancel();
+        let result = run.await.unwrap();
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+
+        let events = events(&dir);
+        let close_reasons: Vec<Option<String>> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .map(|e| {
+                e.payload
+                    .get("terminal_reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        // The cancel may land before or during the subagent round — either
+        // way exactly ONE close per activation, with a cancel-family reason.
+        assert_eq!(close_reasons.len(), 1, "{close_reasons:?}");
+        assert!(
+            close_reasons[0].as_deref() == Some("user_cancelled")
+                || close_reasons[0].as_deref() == Some("subagent_cancelled"),
+            "{close_reasons:?}"
+        );
+        // The close precedes the run terminal.
+        let close_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .unwrap();
+        let cancel_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::RunCancelled)
+            .unwrap();
+        assert!(close_idx < cancel_idx, "close before run_cancelled");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4: budget exhaustion on the subagent loop is a terminal authority —
+    /// a partial result is assessed, then the activation closes with
+    /// `budget_exhausted` (assessment + digest bound, no disposition).
+    #[tokio::test]
+    async fn subagent_budget_exhaustion_closes_activation() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        // Subagent budget 2: three subagent tool rounds exhaust it, then a
+        // final no-tool round reports the partial result.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-3")]),
+            ScriptedResponse::text("[DOC] a.md\n部分结果"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_max_tool_rounds(2);
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-BUD", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // Assessment precedes the close (verifier ordering).
+        let assessment_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .unwrap();
+        let close = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .expect("budget close record");
+        assert_eq!(
+            close.payload.get("terminal_reason").and_then(|v| v.as_str()),
+            Some("budget_exhausted")
+        );
+        assert!(close.payload.get("assessment_id").is_some());
+        assert_eq!(close.payload.get("validated_disposition_id"), Some(&serde_json::Value::Null));
+        let close_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .unwrap();
+        assert!(assessment_idx < close_idx, "assessment before close");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── M5 (2026-08-10): orientation lane feeding + Diagnostic Coverage ────
+
+    /// The subagent's completed model rounds feed the internal lane — 7
+    /// rounds cross the threshold and fire an `orientation_checkpoint` with
+    /// `agent_role=internal_retrieval`, injected into the SUBAGENT
+    /// conversation (ADR-0010 §4.2).
+    #[tokio::test]
+    async fn subagent_lane_feeds_and_fires_orientation() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        // The subagent runs 7 read_file tool rounds (7 feeds), then a text
+        // round forms the result; the main wraps it with 3 rounds total.
+        let mut script = vec![ScriptedResponse::tool_calls(vec![tool_call(
+            "retrieve_project_docs",
+            "call-1",
+        )])];
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-s{i}"),
+            )]));
+        }
+        script.push(ScriptedResponse::text("[DOC] doc.md\n检索完成"));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new("sess-lane1234567");
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-LANE",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let fires: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
+        let p = &fires[0].payload;
+        assert_eq!(p.get("agent_role").and_then(|v| v.as_str()), Some("internal_retrieval"));
+        assert_eq!(p.get("trigger").and_then(|v| v.as_str()), Some("completed_turns_interval"));
+        assert_eq!(p.get("completed_turns_since_orientation"), Some(&serde_json::json!(7)));
+        assert_eq!(p.get("injection_position").and_then(|v| v.as_str()), Some("post_tool_batch_gap"));
+        assert!(p.get("message_block").and_then(|v| v.as_str()).unwrap().starts_with("[ORIENTATION"));
+        // Lanes count independently: the main's 3 rounds never fed the
+        // subagent lane and vice versa. The fire COMMIT reset the internal
+        // lane (7 → 0); the 8th (result-forming) round re-fed it to 1.
+        assert_eq!(orientation.internal.completed_rounds, 1);
+        assert_eq!(orientation.main.completed_rounds, 3);
+        assert_eq!(orientation.external.completed_rounds, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host whose fixed test runner returns scripted results — the DC
+    /// hard-signal source (ADR-0010 §4.6.2).
+    struct ScriptedTestRunnerHost {
+        journal: JournalRecorder,
+        results: std::sync::Mutex<std::collections::VecDeque<crate::host::TestRunResult>>,
+    }
+    #[async_trait]
+    impl LoopHost for ScriptedTestRunnerHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &FullRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            crate::host::ToolPolicy::Benchmark
+        }
+        fn test_runner(&self) -> Option<crate::host::TestRunner> {
+            Some(crate::host::TestRunner {
+                command: vec!["pytest-stub".to_string()],
+                timeout: None,
+            })
+        }
+        async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
+            let r = self
+                .results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted test results exhausted");
+            Ok(r)
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::Deny)
+        }
+    }
+
+    fn failing_test_run() -> crate::host::TestRunResult {
+        crate::host::TestRunResult {
+            output: "FAILED tests/test_x.py::test_y".to_string(),
+            exit_code: Some(1),
+            full_output_path: Some("D:/test-output.txt".to_string()),
+        }
+    }
+    fn passing_test_run() -> crate::host::TestRunResult {
+        crate::host::TestRunResult {
+            output: "1 passed".to_string(),
+            exit_code: Some(0),
+            full_output_path: Some("D:/test-output.txt".to_string()),
+        }
+    }
+
+    /// DC: the threshold progresses 2 → 3 (each fire clears the count), the
+    /// checkpoint carries the mechanical payload, and the run continues
+    /// past the checkpoint (not a hard gate — §4.6.4). The DC-answer round
+    /// counts toward the orientation seven-round counter like any round.
+    #[tokio::test]
+    async fn dc_threshold_progresses_and_fires_mechanical_checkpoint() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(
+                vec![failing_test_run(), failing_test_run(), failing_test_run()].into(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t3")]),
+            ScriptedResponse::text("根据失败继续修复"),
+            ScriptedResponse::text("修复完成。"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new("sess-dc12345678");
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let checkpoints: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        // Each failing call yields 2 signals (the failure fingerprint +
+        // the error class): call 1 (2 signals) ≥ threshold 2 → fire; calls
+        // 2+3 (4 signals) ≥ threshold 3 → fire. 5 tool rounds total.
+        assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
+        let p0 = &checkpoints[0].payload;
+        let p1 = &checkpoints[1].payload;
+        assert_eq!(p0.get("threshold_stage"), Some(&serde_json::json!(2)));
+        assert_eq!(p1.get("threshold_stage"), Some(&serde_json::json!(3)));
+        assert_eq!(p0.get("trigger_count"), Some(&serde_json::json!(0)));
+        assert_eq!(p1.get("trigger_count"), Some(&serde_json::json!(1)));
+        assert_eq!(p0.get("inquiry_family").and_then(|v| v.as_str()), Some("neutral"));
+        assert_eq!(
+            p0.get("inquiry_kind").and_then(|v| v.as_str()),
+            Some("diagnostic_coverage_checkpoint")
+        );
+        assert!(p0.get("signals").and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty()));
+        assert!(
+            p0.get("message_block")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .starts_with("[DIAGNOSTIC_COVERAGE")
+        );
+        // The run CONTINUED past the checkpoint (not a hard gate) and the
+        // DC-answer rounds counted toward the orientation counter: 5
+        // completed main rounds, no orientation fire (threshold 7 never
+        // crossed — the DC fire is a separate mechanism).
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished,
+            "run continues past the checkpoint"
+        );
+        assert_eq!(orientation.main.completed_rounds, 5);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DC: each stage fires exactly once — after a fire, the count resets
+    /// and the NEXT fire needs the next threshold (2 → 3).
+    #[tokio::test]
+    async fn dc_fires_once_per_stage() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(
+                vec![failing_test_run(), failing_test_run()].into(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "修复测试失败", "RUN-DC2", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let checkpoints: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        // Call 1's signals (≥ 2) fire exactly once at threshold 2; call 2's
+        // signals (2 < 3) do not reach the next threshold — one checkpoint.
+        assert_eq!(checkpoints.len(), 1, "{:?}", event_types(&dir));
+        assert_eq!(
+            checkpoints[0].payload.get("threshold_stage"),
+            Some(&serde_json::json!(2))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DC: a passing test suite is mechanically-verifiable bug resolution —
+    /// the threshold resets to 2 and the next failures fire again at 2.
+    #[tokio::test]
+    async fn dc_resolves_on_tests_pass_reset_to_2() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(
+                vec![
+                    failing_test_run(),
+                    failing_test_run(),
+                    passing_test_run(),
+                    failing_test_run(),
+                    failing_test_run(),
+                ]
+                .into(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t3")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t4")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t5")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "修复测试失败", "RUN-DC3", MANIFEST, 0, None, None)
+            .await
+            .unwrap();
+
+        let checkpoints: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        // fail ×2 → fire at 2; pass → reset; fail ×2 → fire at 2 again.
+        assert_eq!(checkpoints.len(), 2);
+        for c in &checkpoints {
+            assert_eq!(c.payload.get("threshold_stage"), Some(&serde_json::json!(2)));
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
