@@ -176,16 +176,24 @@ impl WebSearchClient {
                 format!("Failed to read response body: {e}"),
             )
         })?;
-        let response_obj: rs::Response = serde_json::from_slice(&bytes).map_err(|e| {
+        // 2026-08-11 (direction correction): parsed as raw JSON — the
+        // typed `rs::Response` shape does not match the DeepSeek backend
+        // (its `web_search_call` search action carries `queries`, while
+        // async-openai requires `query`; the typed parse would fail).
+        // `response_content`/`extract_citations` walk the raw output.
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
             xai_tool_runtime::ToolError::execution(
                 xai_tool_protocol::ToolId::new("web_search").expect("valid"),
                 format!("Failed to parse response: {e}"),
             )
         })?;
-        let content = response_obj
-            .output_text()
-            .unwrap_or_else(|| "No search results found.".to_string());
-        let citations = extract_citations(&response_obj);
+        let content = response_content(&value);
+        let content = if content.is_empty() {
+            "No search results found.".to_string()
+        } else {
+            content
+        };
+        let citations = extract_citations(&value);
         Ok((content, citations))
     }
     /// Same as [`Self::search`] but also extracts per-citation titles when
@@ -267,64 +275,143 @@ impl WebSearchClient {
                 format!("Failed to read response body: {e}"),
             )
         })?;
-        let response_obj: rs::Response = serde_json::from_slice(&bytes).map_err(|e| {
+        // Raw-JSON parse — same rationale as [`Self::search`].
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
             xai_tool_runtime::ToolError::execution(
                 xai_tool_protocol::ToolId::new("web_search").expect("valid"),
                 format!("Failed to parse response: {e}"),
             )
         })?;
-        let content = response_obj
-            .output_text()
-            .unwrap_or_else(|| "No search results found.".to_string());
-        let pairs = extract_citation_pairs(&response_obj);
+        let content = response_content(&value);
+        let content = if content.is_empty() {
+            "No search results found.".to_string()
+        } else {
+            content
+        };
+        let pairs = extract_citation_pairs(&value);
         Ok((content, pairs))
     }
 }
-/// Extract citation URLs from the Response output items.
-/// The async-openai crate doesn't provide a helper for this, and the `url` field
-/// in `UrlCitationBody` is private, so we serialize to JSON to extract it.
-fn extract_citations(response: &rs::Response) -> Vec<String> {
+/// The `output` array of a Responses API payload (as raw JSON).
+fn response_output(response: &serde_json::Value) -> Vec<&serde_json::Value> {
+    response
+        .get("output")
+        .and_then(|o| o.as_array())
+        .map(|a| a.iter().collect())
+        .unwrap_or_default()
+}
+
+/// Concatenated `output_text` content from all message items (mirrors the
+/// typed `output_text()` helper on raw JSON).
+fn response_content(response: &serde_json::Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for item in response_output(response) {
+        if item.get("type").and_then(|v| v.as_str()) != Some("message") {
+            continue;
+        }
+        if let Some(contents) = item.get("content").and_then(|c| c.as_array()) {
+            for c in contents {
+                if c.get("type").and_then(|v| v.as_str()) == Some("output_text")
+                    && let Some(t) = c.get("text").and_then(|v| v.as_str())
+                {
+                    parts.push(t.to_string());
+                }
+            }
+        }
+    }
+    parts.join("")
+}
+
+/// Extract citation URLs from the raw Response payload.
+///
+/// Two backend shapes are merged (2026-08-11 direction correction — the
+/// executor targets the DeepSeek Responses API, which serves server-side
+/// web search with the SAME key as the main transport):
+/// - xAI style: `url_citation` annotations on the output text;
+/// - DeepSeek style: `web_search_call` items whose `open_page` action
+///   succeeded (annotations come back empty — the opened URLs ARE the
+///   citations). A `#ws_call_id=...` fragment DeepSeek appends is stripped.
+fn extract_citations(response: &serde_json::Value) -> Vec<String> {
     let mut citations = Vec::new();
-    for output_item in &response.output {
-        if let rs::OutputItem::Message(output_message) = output_item {
-            for message_content in &output_message.content {
-                if let rs::OutputMessageContent::OutputText(text_content) = message_content {
-                    for annotation in &text_content.annotations {
-                        if let rs::Annotation::UrlCitation(url_citation) = annotation
-                            && let Ok(json) = serde_json::to_value(url_citation)
-                            && let Some(url) = json.get("url").and_then(|v| v.as_str())
+    for item in response_output(response) {
+        match item.get("type").and_then(|v| v.as_str()) {
+            Some("message") => {
+                // xAI path: url_citation annotations (DeepSeek: empty).
+                for c in item
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .into_iter()
+                    .flatten()
+                {
+                    for ann in c
+                        .get("annotations")
+                        .and_then(|a| a.as_array())
+                        .into_iter()
+                        .flatten()
+                    {
+                        if ann.get("type").and_then(|v| v.as_str()) == Some("url_citation")
+                            && let Some(url) = ann.get("url").and_then(|v| v.as_str())
                         {
                             citations.push(url.to_string());
                         }
                     }
                 }
             }
+            Some("web_search_call") => {
+                if item.get("status").and_then(|v| v.as_str()) == Some("completed")
+                    && item
+                        .get("action")
+                        .and_then(|a| a.get("type"))
+                        .and_then(|v| v.as_str())
+                        == Some("open_page")
+                    && let Some(url) = item
+                        .get("action")
+                        .and_then(|a| a.get("url"))
+                        .and_then(|v| v.as_str())
+                {
+                    citations.push(url.split('#').next().unwrap_or(url).trim().to_string());
+                }
+            }
+            _ => {}
         }
     }
     let mut seen = std::collections::HashSet::new();
-    citations.retain(|url| seen.insert(url.clone()));
+    citations.retain(|url| !url.is_empty() && seen.insert(url.clone()));
     citations
 }
-/// Extract `(title, url)` pairs from the Responses API annotations.
+/// Extract `(title, url)` pairs from the Responses API output.
 ///
-/// `title` may be an empty string when upstream doesn't supply one. URLs
-/// are deduplicated while preserving the first-seen order so the rendered
-/// `Links:` list is stable and free of duplicates.
-fn extract_citation_pairs(response: &rs::Response) -> Vec<(String, String)> {
+/// Same backend merge as [`extract_citations`] (2026-08-11): annotation
+/// titles (xAI) plus DeepSeek `web_search_call` `open_page` URLs (title is
+/// empty — DeepSeek does not surface per-page titles). `title` may be an
+/// empty string when upstream doesn't supply one. URLs are deduplicated
+/// while preserving the first-seen order so the rendered `Links:` list is
+/// stable and free of duplicates.
+fn extract_citation_pairs(response: &serde_json::Value) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = Vec::new();
-    for output_item in &response.output {
-        if let rs::OutputItem::Message(output_message) = output_item {
-            for message_content in &output_message.content {
-                if let rs::OutputMessageContent::OutputText(text_content) = message_content {
-                    for annotation in &text_content.annotations {
-                        if let rs::Annotation::UrlCitation(url_citation) = annotation
-                            && let Ok(json) = serde_json::to_value(url_citation)
+    for item in response_output(response) {
+        match item.get("type").and_then(|v| v.as_str()) {
+            Some("message") => {
+                // xAI path: annotation titles + urls.
+                for c in item
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .into_iter()
+                    .flatten()
+                {
+                    for ann in c
+                        .get("annotations")
+                        .and_then(|a| a.as_array())
+                        .into_iter()
+                        .flatten()
+                    {
+                        if ann.get("type").and_then(|v| v.as_str()) == Some("url_citation")
+                            && let Some(url) = ann.get("url").and_then(|v| v.as_str())
                         {
-                            let url = json.get("url").and_then(|v| v.as_str()).unwrap_or("");
                             if url.is_empty() {
                                 continue;
                             }
-                            let title = json
+                            let title = ann
                                 .get("title")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
@@ -334,6 +421,26 @@ fn extract_citation_pairs(response: &rs::Response) -> Vec<(String, String)> {
                     }
                 }
             }
+            Some("web_search_call") => {
+                // DeepSeek path: opened page URLs (no titles upstream).
+                if item.get("status").and_then(|v| v.as_str()) == Some("completed")
+                    && item
+                        .get("action")
+                        .and_then(|a| a.get("type"))
+                        .and_then(|v| v.as_str())
+                        == Some("open_page")
+                    && let Some(url) = item
+                        .get("action")
+                        .and_then(|a| a.get("url"))
+                        .and_then(|v| v.as_str())
+                {
+                    let clean = url.split('#').next().unwrap_or(url).trim().to_string();
+                    if !clean.is_empty() {
+                        pairs.push((String::new(), clean));
+                    }
+                }
+            }
+            _ => {}
         }
     }
     let mut seen = std::collections::HashSet::new();
@@ -344,15 +451,16 @@ fn extract_citation_pairs(response: &rs::Response) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use indexmap::IndexMap;
-    /// Helper to create a Response from JSON for testing.
-    fn response_from_json(json: serde_json::Value) -> rs::Response {
-        serde_json::from_value(json).expect("Failed to parse test Response JSON")
+    /// Helper to create a raw Response payload for testing (the parse is
+    /// raw JSON since the typed shape does not match DeepSeek).
+    fn response_from_json(json: serde_json::Value) -> serde_json::Value {
+        json
     }
     #[test]
     fn test_new_client_uses_configured_model() {
         let config = WebSearchConfig::Enabled {
             api_key: "test-key".to_string(),
-            base_url: "https://api.x.ai/v1".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
             model: "custom-enterprise-model".to_string(),
             extra_headers: IndexMap::new(),
             alpha_test_key: None,
@@ -382,7 +490,7 @@ mod tests {
         let cb_dyn: crate::attribution::SharedAttributionCallback = cb.clone();
         let config = WebSearchConfig::Enabled {
             api_key: "ignored".to_string(),
-            base_url: "https://api.x.ai/v1".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
             model: "test-model".to_string(),
             extra_headers: IndexMap::new(),
             alpha_test_key: None,
@@ -406,7 +514,7 @@ mod tests {
     fn record_401_attribution_is_noop_without_callback() {
         let config = WebSearchConfig::Enabled {
             api_key: "test-key".to_string(),
-            base_url: "https://api.x.ai/v1".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
             model: "test-model".to_string(),
             extra_headers: IndexMap::new(),
             alpha_test_key: None,
@@ -748,5 +856,112 @@ mod tests {
         }));
         let citations = extract_citations(&response);
         assert!(citations.is_empty());
+    }
+
+    /// 2026-08-11 (direction correction): the DeepSeek Responses backend
+    /// returns citations in `web_search_call` items (annotations come back
+    /// empty) — completed `open_page` URLs are the citations, `search`
+    /// actions and failed pages are not, and the appended
+    /// `#ws_call_id=...` fragment is stripped.
+    #[test]
+    fn test_extract_citations_deepseek_web_search_call() {
+        let response = response_from_json(serde_json::json!({
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1234567890,
+            "status": "completed",
+            "model": "deepseek-v4-flash",
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "id": "call_00",
+                    "status": "completed",
+                    "action": {"type": "search", "queries": ["xAI 2026 release"]}
+                },
+                {
+                    "type": "web_search_call",
+                    "id": "call_01",
+                    "status": "completed",
+                    "action": {"type": "open_page", "url": "https://example.com/a#ws_call_id=call_01"}
+                },
+                {
+                    "type": "web_search_call",
+                    "id": "call_02",
+                    "status": "failed",
+                    "action": {"type": "open_page", "url": "https://blocked.example.com"}
+                },
+                {
+                    "type": "web_search_call",
+                    "id": "call_03",
+                    "status": "completed",
+                    "action": {"type": "open_page", "url": "https://example.com/a"}
+                },
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "综合结果", "annotations": []}]
+                }
+            ]
+        }));
+        let citations = extract_citations(&response);
+        assert_eq!(citations, vec!["https://example.com/a"]);
+    }
+
+    /// 2026-08-11: end-to-end search() over a DeepSeek-shaped response —
+    /// content from the final output_text, citations from the completed
+    /// open_page calls.
+    #[tokio::test]
+    async fn deepseek_search_parses_web_search_call_citations() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "resp_ds",
+                "object": "response",
+                "created_at": 1234567890,
+                "status": "completed",
+                "model": "deepseek-v4-flash",
+                "output": [
+                    {
+                        "type": "web_search_call",
+                        "id": "call_00",
+                        "status": "completed",
+                        "action": {"type": "search", "queries": ["query"]}
+                    },
+                    {
+                        "type": "web_search_call",
+                        "id": "call_01",
+                        "status": "completed",
+                        "action": {"type": "open_page", "url": "https://deepseek-served.example/1#ws_call_id=call_01"}
+                    },
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "搜索结果综合", "annotations": []}]
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let config = WebSearchConfig::Enabled {
+            api_key: "deepseek-key".to_string(),
+            base_url: server.uri(),
+            model: "deepseek-v4-flash".to_string(),
+            extra_headers: IndexMap::new(),
+            alpha_test_key: None,
+        };
+        let client = WebSearchClient::new(&config, None).expect("client should build");
+        let (content, citations) = client
+            .search("test query", None)
+            .await
+            .expect("search must succeed");
+        assert_eq!(content, "搜索结果综合");
+        assert_eq!(citations, vec!["https://deepseek-served.example/1"]);
     }
 }

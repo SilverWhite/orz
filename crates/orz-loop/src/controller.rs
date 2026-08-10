@@ -3827,6 +3827,12 @@ impl AgentLoopController {
         messages: &mut Vec<Message>,
         tool_rounds: u32,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        // C2-1 (2026-08-11): whether the per-call permission bridge is
+        // consulted. The main lane passes `true`; retrieval-lane
+        // self-execution (web tools inside a retrieval lane) passes
+        // `false` — the explicit retrieval-mode gate (§3.7.1) is its
+        // authorization chain (2026-08-11 user adjudication).
+        permission_gated: bool,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         // The second tuple element is a pending policy feedback (a denial
         // key) that the caller aggregates at the END of the whole tool round
@@ -3841,12 +3847,65 @@ impl AgentLoopController {
         // after a transition to off; the refusal is the ToolCompleted(error)
         // alone).
         if self.retrieval_mode == RetrievalMode::Off
-            && crate::relay::is_retrieval_mode_gated_host_tool(&tc.name)
+            && (crate::relay::is_retrieval_mode_gated_host_tool(&tc.name)
+                // C2-1 (2026-08-11): the web family joins the off gate —
+                // lane self-execution routes web tools through the host
+                // path, so "off means no retrieval tools" must cover them
+                // here too (belt and braces over the dispatch gate).
+                || crate::relay::is_web_retrieval_tool(&tc.name))
         {
             let msg = format!(
                 "retrieval '{}' refused — retrieval mode is 'off' for this \
                  session (ADR-0010 §3.7.1); no retrieval tools are available.",
                 tc.name,
+            );
+            let target = if crate::relay::is_web_retrieval_tool(&tc.name) {
+                "external_retrieval"
+            } else {
+                "internal_retrieval"
+            };
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "target": target,
+                        "status": "error",
+                        "error": "retrieval_mode_off",
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                },
+                None,
+            ));
+        }
+        // C2-1 (2026-08-11): the mirror lane gate for the web family —
+        // web tools are only reachable in framework_fallback mode (the
+        // web-tool lane). Without this gate, lane self-execution would let
+        // web tools run under local_browser (cross-lane), violating the
+        // explicit mode semantics (ADR-0010 §3.7.1). No ToolStarted — same
+        // refusal shape as the off gate and the browser_read gate.
+        if crate::relay::is_web_retrieval_tool(&tc.name)
+            && self.retrieval_mode != RetrievalMode::FrameworkFallback
+        {
+            let msg = format!(
+                "retrieval '{}' refused — retrieval mode is '{}' for this \
+                 session; web tools require framework_fallback mode \
+                 (ADR-0010 §3.7.1); no silent fallback to the browser lane.",
+                tc.name,
+                self.retrieval_mode.as_str(),
             );
             writer
                 .record(
@@ -3854,9 +3913,9 @@ impl AgentLoopController {
                     serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
-                        "target": "internal_retrieval",
+                        "target": "external_retrieval",
                         "status": "error",
-                        "error": "retrieval_mode_off",
+                        "error": "retrieval_mode_requires_framework_fallback",
                     }),
                 )
                 .await?;
@@ -4003,36 +4062,44 @@ impl AgentLoopController {
             return Ok((tool_result, Some(PolicyFeedback::Succeeded)));
         }
 
-        // Permission gate.
-        let risk = ToolDispatcher::risk_class(&tc.name);
-        writer
-            .record(
-                EventType::PermissionRequested,
-                serde_json::json!({
-                    "tool": tc.name,
-                    "risk": format!("{risk:?}"),
-                    "call_id": tc.call_id,
-                }),
-            )
-            .await?;
-        let decision = host
-            .request_permission(risk, &tc.name, &tc.arguments)
-            .await
-            .map_err(|e| AgentLoopError::Session(e.to_string()))?;
-        writer
-            .record(
-                EventType::PermissionDecision,
-                serde_json::json!({
-                    "tool": tc.name,
-                    "decision": match decision {
-                        PermitDecision::AllowOnce => "allow_once",
-                        PermitDecision::AllowAlways => "allow_always",
-                        PermitDecision::Deny => "deny",
-                        PermitDecision::Defer => "defer",
-                    },
-                }),
-            )
-            .await?;
+        // Permission gate. C2-1 (2026-08-11): lane self-execution skips
+        // the bridge entirely (no PermissionRequested/PermissionDecision
+        // events) — the explicit retrieval-mode gate above is its
+        // authorization chain; the main lane keeps the per-call bridge.
+        let decision = if permission_gated {
+            let risk = ToolDispatcher::risk_class(&tc.name);
+            writer
+                .record(
+                    EventType::PermissionRequested,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "risk": format!("{risk:?}"),
+                        "call_id": tc.call_id,
+                    }),
+                )
+                .await?;
+            let d = host
+                .request_permission(risk, &tc.name, &tc.arguments)
+                .await
+                .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            writer
+                .record(
+                    EventType::PermissionDecision,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "decision": match d {
+                            PermitDecision::AllowOnce => "allow_once",
+                            PermitDecision::AllowAlways => "allow_always",
+                            PermitDecision::Deny => "deny",
+                            PermitDecision::Defer => "defer",
+                        },
+                    }),
+                )
+                .await?;
+            d
+        } else {
+            PermitDecision::AllowOnce
+        };
 
         if matches!(decision, PermitDecision::Deny | PermitDecision::Defer) {
             // Deny and Defer both refuse execution — the headless host has no
@@ -7936,6 +8003,9 @@ mod tests {
 
     /// One seat per role: a retrieval lane never dispatches another
     /// retrieval (ADR-0010 §11.3) — refused with a structured denial.
+    /// C2-1 (2026-08-11): the anti-recursion guard now covers ONLY the
+    /// retrieval-dispatch family (`retrieve_project_*`); the web family
+    /// self-executes (see `retrieval_lane_web_search_routes_to_host`).
     #[tokio::test]
     async fn subagent_refuses_nested_subagent_dispatch() {
         let dir = test_dir();
@@ -7947,7 +8017,9 @@ mod tests {
 
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
-            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            // Inside the retrieval lane: dispatching ANOTHER retrieval is
+            // still refused (recursion guard intact).
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
             ScriptedResponse::text("检索完成"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
@@ -7974,8 +8046,188 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Identity normalization (D3-3 upgrade) + M4 continue re-entry: the
-    /// activation identity is session-scoped and STABLE across dispatches —
+    /// C2-1 (2026-08-11, ADR-0006 web-search slice): inside a retrieval
+    /// lane, a web tool self-executes through the HOST instead of being
+    /// refused as a nested dispatch — the lane IS the web lane (ADR-0010
+    /// §3.7.8). With TestHost the call reaches `call_tool` (the NotFound
+    /// proves it) and no `nested_subagent_dispatch_refused` is journaled;
+    /// the lane also skips the permission bridge (no PermissionRequested
+    /// for the web call — the mode gate is the authorization chain).
+    #[tokio::test]
+    async fn retrieval_lane_web_search_routes_to_host() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查找项目文档", "RUN-R2H", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        assert!(
+            !events.iter().any(|e| {
+                e.payload.get("error").and_then(|v| v.as_str())
+                    == Some("nested_subagent_dispatch_refused")
+            }),
+            "the web tool must not be refused as a nested dispatch"
+        );
+        // The web call reached the host toolset (TestHost has no tool
+        // result — NotFound proves the call arrived at call_tool).
+        let host_failure = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_search")
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("web_search host failure journaled");
+        let err = host_failure
+            .payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .expect("error field");
+        assert!(
+            err.contains("test host has no tool result"),
+            "web_search must reach the host call_tool: {err}"
+        );
+        // Lane self-execution skips the permission bridge (no
+        // PermissionRequested for the web call).
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::PermissionRequested
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_search")
+            }),
+            "lane self-execution must not consult the permission bridge"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// C2-1 (2026-08-11): the mode=off gate covers the web family at the
+    /// host path too (belt and braces — "off means no retrieval tools",
+    /// ADR-0010 §3.7.1). Topologically the lane self-execution path can
+    /// only carry web tools under framework_fallback, so this exercises
+    /// run_host_tool directly (in-flight mode transitions are the edge it
+    /// defends).
+    #[tokio::test]
+    async fn mode_off_gate_covers_lane_web_search() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        // Default controller — mode=off.
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("x"),
+        ])));
+        let tc = ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({"query": "t"}),
+            call_id: "call-woff".to_string(),
+        };
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer =
+            EventWriter::new(None, EventTrack::V02, "RUN-WOFF", "", 0, None, None);
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &tc,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("refused") && result.output.contains("off"),
+            "{}",
+            result.output
+        );
+        assert!(feedback.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// C2-1 (2026-08-11): the mirror lane gate — web tools are only
+    /// reachable under framework_fallback; under local_browser the
+    /// subagent's self-executed web call is refused with an explicit
+    /// `retrieval_mode_requires_framework_fallback` (no silent cross-lane
+    /// fallback, ADR-0010 §3.7.1). No ToolStarted for the refused call.
+    #[tokio::test]
+    async fn local_browser_lane_refuses_web_tools() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_retrieval_mode(RetrievalMode::LocalBrowser, RetrievalCapability::Available, false, None, None);
+        controller
+            .run_turn(&host, "查网页", "RUN-LBW", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // The lane-internal web call is refused by the framework_fallback
+        // gate (the ONLY refusal — the dispatch-level off gate does not
+        // fire under local_browser).
+        let refused: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .collect();
+        assert!(
+            refused.iter().any(|e| e.payload["error"]
+                == serde_json::json!("retrieval_mode_requires_framework_fallback")),
+            "{refused:?}"
+        );
+        // The refused lane-internal web call (call-2) has NO ToolStarted —
+        // same refusal shape as the other mode gates. (The main-lane
+        // dispatch wrapper for call-1 does start — that is the subagent
+        // dispatch, not the web execution.)
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-2")
+            }),
+            "refused web tool must not start"
+        );
+        assert!(
+            !events.iter().any(|e| {
+                e.payload.get("error").and_then(|v| v.as_str())
+                    == Some("nested_subagent_dispatch_refused")
+            }),
+            "the web tool must self-execute (and be mode-refused), not be nested-refused"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     /// a `continue` disposition keeps the activation (revision +1, the
     /// requirement delta becomes the next task goal), and the next retrieval
     /// re-enters the same activation.

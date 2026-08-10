@@ -11,30 +11,36 @@ use std::sync::Arc;
 use orz_tools::computer::local::file_system::LocalFs;
 use orz_tools::computer::local::terminal::LocalTerminalBackend;
 use orz_tools::computer::types::{AsyncFileSystem, TerminalBackend};
+use orz_tools::implementations::web_search::WebSearchConfig;
 use orz_tools::registry::types::{
     FinalizedToolset, SessionContext, ToolRegistryBuilder, ToolServerConfig,
 };
 
-/// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_search client config from the
-/// environment — `ORZ_WEB_SEARCH_API_KEY` enables the xAI Grok search
-/// client (ADR-0010 §3.7.1 framework_fallback; ADR-0006 seam — the key
-/// channel is explicit env, credential-registry wiring is a later slice).
-/// `ORZ_WEB_SEARCH_BASE_URL`/`ORZ_WEB_SEARCH_MODEL` override the defaults.
-/// Absent key = Disabled = the tool is not declared and the capability
-/// probe records it (never a silent fallback).
-pub fn web_search_config_from_env() -> orz_tools::implementations::web_search::WebSearchConfig {
-    use orz_tools::implementations::web_search::WebSearchConfig;
-    match std::env::var("ORZ_WEB_SEARCH_API_KEY") {
-        Ok(key) if !key.trim().is_empty() => WebSearchConfig::Enabled {
-            api_key: key.trim().to_string(),
+use crate::credentials::CredentialReader;
+
+/// 2026-08-11 (direction correction): the web_search client config — the
+/// reader supplies the DeepSeek API key (the SAME key as the main
+/// transport; the earlier xAI Grok search backend was withdrawn by user
+/// adjudication — retrieval must come from the current provider).
+/// `ORZ_WEB_SEARCH_BASE_URL`/`ORZ_WEB_SEARCH_MODEL` override the DeepSeek
+/// defaults (non-secret configuration). Absent key = Disabled = the client
+/// is not injected and the capability probe records it (never a silent
+/// fallback).
+pub fn web_search_config(reader: &dyn CredentialReader) -> WebSearchConfig {
+    match reader.read() {
+        Ok(key) => WebSearchConfig::Enabled {
+            api_key: key,
             base_url: std::env::var("ORZ_WEB_SEARCH_BASE_URL")
-                .unwrap_or_else(|_| "https://api.x.ai/v1".to_string()),
+                .unwrap_or_else(|_| "https://api.deepseek.com".to_string()),
             model: std::env::var("ORZ_WEB_SEARCH_MODEL")
-                .unwrap_or_else(|_| "grok-4-fast".to_string()),
+                .unwrap_or_else(|_| "deepseek-v4-flash".to_string()),
             extra_headers: Default::default(),
             alpha_test_key: None,
         },
-        _ => WebSearchConfig::Disabled,
+        Err(e) => {
+            tracing::warn!("web_search credential read failed: {}", e.message);
+            WebSearchConfig::Disabled
+        }
     }
 }
 
@@ -76,9 +82,14 @@ pub fn web_fetch_config_default() -> orz_tools::implementations::grok_build::web
 /// SessionContext is constructed with minimal-but-functional defaults:
 /// local terminal backend, local fs rooted at `cwd`, noop notification
 /// handle, all optional backends (memory/MCP/LSP/image) disabled. Web
-/// retrieval is config-driven (GAP-RETRIEVAL-TOOLS 2026-08-10): web_fetch
-/// always enabled, web_search gated on the env API key.
-pub fn build_toolset(cwd: &Path) -> Result<Arc<FinalizedToolset>, String> {
+/// retrieval is config-driven (GAP-RETRIEVAL-TOOLS 2026-08-10 / ADR-0006
+/// 2026-08-11): web_fetch always enabled, web_search gated on the
+/// credential-read config (the caller constructs it once and stores it —
+/// single source of truth, no double read).
+pub fn build_toolset(
+    cwd: &Path,
+    web_search_config: &WebSearchConfig,
+) -> Result<Arc<FinalizedToolset>, String> {
     let backend: Arc<dyn TerminalBackend> = Arc::new(LocalTerminalBackend::new());
     let fs: Arc<dyn AsyncFileSystem> = Arc::new(LocalFs);
 
@@ -95,7 +106,7 @@ pub fn build_toolset(cwd: &Path) -> Result<Arc<FinalizedToolset>, String> {
         skills: Vec::new(),
         state_path: cwd.join(".gsa").join("state.json"),
         memory_backend: None,
-        web_search_config: web_search_config_from_env(),
+        web_search_config: web_search_config.clone(),
         web_fetch_config: web_fetch_config_default(),
         lsp: None,
         image_gen_config: Default::default(),
@@ -308,46 +319,55 @@ mod tests {
     use super::*;
     use orz_tools::implementations::web_search::WebSearchConfig;
 
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_search env wiring —
-    /// absent key = Disabled (tool not declared, capability probe reports
-    /// degraded); present key = Enabled with the xAI defaults/overrides.
-    /// P2-1 (review 2026-08-10): serialized with the semaphore tests via the
-    /// shared `TESTS_ENV_LOCK`; every var is restored on drop (this test
-    /// previously leaked `ORZ_WEB_SEARCH_API_KEY=test-key` into every later
-    /// test in the binary — any `OrzHost::new` after it saw web_search
-    /// configured).
+    /// A fake credential reader with a scripted outcome.
+    struct FakeReader {
+        result: Result<String, crate::credentials::CredentialError>,
+    }
+    impl crate::credentials::CredentialReader for FakeReader {
+        fn read(&self) -> Result<String, crate::credentials::CredentialError> {
+            self.result.clone()
+        }
+    }
+
+    /// 2026-08-11: the web_search config follows the credential reader —
+    /// Err = Disabled (tool client not injected, capability probe reports
+    /// degraded); Ok = Enabled with the DeepSeek defaults; the non-secret
+    /// `ORZ_WEB_SEARCH_BASE_URL`/`ORZ_WEB_SEARCH_MODEL` env overrides still
+    /// apply. P2-1 (review 2026-08-10): the env overrides are serialized
+    /// via the shared `TESTS_ENV_LOCK` and restored on drop.
     #[tokio::test]
-    async fn web_search_config_follows_env_key() {
+    async fn web_search_config_follows_credential_source() {
         let _env_lock = crate::tests::tests_env_lock().lock().await;
-        let _key = crate::tests::EnvVarGuard::new("ORZ_WEB_SEARCH_API_KEY");
         let _base = crate::tests::EnvVarGuard::new("ORZ_WEB_SEARCH_BASE_URL");
         let _model = crate::tests::EnvVarGuard::new("ORZ_WEB_SEARCH_MODEL");
-        // Unset → Disabled.
-        unsafe {
-            std::env::remove_var("ORZ_WEB_SEARCH_API_KEY");
-        }
+
+        // Err → Disabled.
+        let err = crate::credentials::CredentialError {
+            message: "test: no credential".into(),
+        };
         assert!(matches!(
-            web_search_config_from_env(),
+            web_search_config(&FakeReader { result: Err(err.clone()) }),
             WebSearchConfig::Disabled
         ));
-        assert!(!web_search_config_from_env().is_enabled());
+        assert!(!web_search_config(&FakeReader { result: Err(err) }).is_enabled());
 
-        // Set → Enabled with defaults.
+        // Ok → Enabled with DeepSeek defaults.
         unsafe {
-            std::env::set_var("ORZ_WEB_SEARCH_API_KEY", "test-key");
             std::env::remove_var("ORZ_WEB_SEARCH_BASE_URL");
             std::env::remove_var("ORZ_WEB_SEARCH_MODEL");
         }
-        match web_search_config_from_env() {
+        match web_search_config(&FakeReader {
+            result: Ok("sk-test-key".into()),
+        }) {
             WebSearchConfig::Enabled {
                 api_key,
                 base_url,
                 model,
                 ..
             } => {
-                assert_eq!(api_key, "test-key");
-                assert_eq!(base_url, "https://api.x.ai/v1");
-                assert!(!model.is_empty());
+                assert_eq!(api_key, "sk-test-key");
+                assert_eq!(base_url, "https://api.deepseek.com");
+                assert_eq!(model, "deepseek-v4-flash");
             }
             other => panic!("expected Enabled, got {other:?}"),
         }
@@ -356,12 +376,30 @@ mod tests {
         unsafe {
             std::env::set_var("ORZ_WEB_SEARCH_BASE_URL", "https://example.invalid/v1");
         }
-        match web_search_config_from_env() {
+        match web_search_config(&FakeReader {
+            result: Ok("sk-test-key".into()),
+        }) {
             WebSearchConfig::Enabled { base_url, .. } => {
                 assert_eq!(base_url, "https://example.invalid/v1");
             }
             other => panic!("expected Enabled, got {other:?}"),
         }
+    }
+
+    /// 2026-08-11: `redacted()` is the only sanctioned exit — serializing
+    /// it must never leak the api_key (the DeepSeek key is the main
+    /// credential — the discipline matters MORE after the direction
+    /// correction). Production wiring regression: both the config level and
+    /// the host accessor assert `***REDACTED***` in place of the key.
+    #[test]
+    fn web_search_config_redacted_never_leaks_key() {
+        let config = web_search_config(&FakeReader {
+            result: Ok("sk-test-9f8e7d6c5b4a".into()),
+        });
+        let redacted = config.redacted();
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(json.contains("***REDACTED***"), "{json}");
+        assert!(!json.contains("sk-test-9f8e7d6c5b4a"), "{json}");
     }
 
     /// web_fetch is always enabled (no key dependency).

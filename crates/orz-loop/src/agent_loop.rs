@@ -772,8 +772,27 @@ pub(crate) async fn run_agent_loop(
                 return Err(AgentLoopError::Cancelled);
             }
             let target = route(&tc.name);
+            // C2-1 (2026-08-11, ADR-0006 web-search slice): lane
+            // self-execution — inside a retrieval lane, web tools (routed
+            // ExternalRetrieval by relay) execute through the host instead
+            // of dispatching a nested retrieval: the retrieval lane IS the
+            // web lane (ADR-0010 §3.7.8 — the delegated search must
+            // actually run). The nested-dispatch refusal keeps its
+            // anti-recursion meaning for `retrieve_project_*`. The host
+            // path preserves the write gate, the semaphore, the evidence
+            // ledger and the mode gates; the permission bridge is skipped
+            // — the explicit retrieval-mode gate (ADR-0010 §3.7.1) is the
+            // authorization chain (2026-08-11 user adjudication; the main
+            // lane's delegated path has no per-call gate either).
+            let lane_self_execute = target == DispatchTarget::ExternalRetrieval
+                && profile.tool_filter.denies_nested_dispatch();
+            let effective = if lane_self_execute {
+                DispatchTarget::Host
+            } else {
+                target.clone()
+            };
             let mut round_feedback: Option<PolicyFeedback> = None;
-            let result = match target {
+            let result = match effective {
                 DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval => {
                     if profile.tool_filter.denies_nested_dispatch() {
                         // One seat per role — a retrieval lane never
@@ -854,6 +873,11 @@ pub(crate) async fn run_agent_loop(
                                 messages,
                                 tool_rounds,
                                 heartbeat,
+                                // C2-1 (2026-08-11): lane self-execution skips
+                                // the per-call permission bridge — the mode
+                                // gate is the authorization chain (see the
+                                // lane_self_execute comment above).
+                                !lane_self_execute,
                             )
                             .await?;
                         // GAP-RETRIEVAL-TOOLS (2026-08-10): evidence

@@ -27,7 +27,7 @@ pub enum DispatchTarget {
 
 /// Match the external retrieval tool family: bare `web_search`/`web_fetch`
 /// (Grok tool names) or any `web_search_*` / `web_fetch_*` variant.
-fn is_web_retrieval_tool(name: &str) -> bool {
+pub(crate) fn is_web_retrieval_tool(name: &str) -> bool {
     (name == "web_search" || name.starts_with("web_search_"))
         || (name == "web_fetch" || name.starts_with("web_fetch_"))
 }

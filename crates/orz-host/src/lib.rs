@@ -12,6 +12,7 @@ pub mod local_browser;
 pub mod approval;
 pub mod codex_app;
 pub mod codex_permission;
+pub mod credentials;
 pub mod grok_home;
 pub mod keystore;
 pub mod permission;
@@ -29,6 +30,7 @@ use agent_client_protocol as acp;
 use async_trait::async_trait;
 use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::JournalRecorder;
+use orz_tools::implementations::web_search::WebSearchConfig;
 // NOTE: `PermitError` (orz_loop::host) is the LoopHost contract error; the
 // assurance permit error is aliased to keep the two distinct.
 use orz_assurance::permit::{
@@ -87,10 +89,12 @@ pub struct OrzHost {
     /// internal retrieval lane's real discovery/query tool (ADR-0010
     /// §3.7.4/§3.7.5; host-owned, run_tests precedent).
     project_doc_index: crate::project_doc_index::ProjectDocIndex,
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): whether the web_search client is
-    /// configured (env API key) — drives the framework_fallback capability
-    /// probe (ADR-0010 §3.7.1; never a silent fallback).
-    web_search_configured: bool,
+    /// ADR-0006 (2026-08-11): the web_search client config — single source
+    /// of truth built once from the credential reader (was: env-only bool).
+    /// Drives the framework_fallback capability probe (ADR-0010 §3.7.1;
+    /// never a silent fallback). The secret may only leave via
+    /// [`OrzHost::web_search_config_redacted`].
+    web_search_config: WebSearchConfig,
     /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the global `web_search`
     /// concurrency gate (ADR-0010 §3.7.7/§11.3 — global web_search
     /// concurrency is fixed at 1; the main agent and the external-retrieval
@@ -133,7 +137,35 @@ impl OrzHost {
         workspace_trust: WorkspaceTrust,
         permission: Option<PermissionBridge>,
     ) -> Result<Self, String> {
-        let toolset = tools::build_toolset(cwd)?;
+        Self::with_credential_reader(
+            journal,
+            cwd,
+            workspace_trust,
+            permission,
+            crate::credentials::web_search_reader(),
+        )
+    }
+
+    /// ADR-0006 (2026-08-11): build a host with an injected credential
+    /// reader — the test seam. A failing reader fixes `web_search` to
+    /// Disabled regardless of the platform (so semaphore tests fast-fail
+    /// even on a machine that has registered `orz-grok/search`).
+    pub(crate) fn with_credential_reader(
+        journal: JournalRecorder,
+        cwd: &Path,
+        workspace_trust: WorkspaceTrust,
+        permission: Option<PermissionBridge>,
+        reader: Arc<dyn crate::credentials::CredentialReader>,
+    ) -> Result<Self, String> {
+        let web_search_config = tools::web_search_config(reader.as_ref());
+        let toolset = tools::build_toolset(cwd, &web_search_config)?;
+        // ADR-0006 (2026-08-11): the only sanctioned serialization exit for
+        // the config — never log the raw `WebSearchConfig` (its `Debug`
+        // contains the api_key; `redacted()` is the production surface).
+        tracing::info!(
+            "web_search client configured: {:?}",
+            web_search_config.redacted()
+        );
         Ok(Self {
             journal,
             registry: ToolsetRegistry::new(toolset),
@@ -152,7 +184,7 @@ impl OrzHost {
             project_doc_index: crate::project_doc_index::ProjectDocIndex::new(
                 cwd.to_path_buf(),
             ),
-            web_search_configured: crate::tools::web_search_config_from_env().is_enabled(),
+            web_search_config,
             web_search_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             browser: Arc::new(crate::local_browser::UnavailableBrowserSession::new(
                 "no browser handle injected".to_string(),
@@ -191,7 +223,16 @@ impl OrzHost {
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): whether the web_search client is
     /// configured (the framework_fallback capability probe).
     pub fn web_search_configured(&self) -> bool {
-        self.web_search_configured
+        self.web_search_config.is_enabled()
+    }
+
+    /// ADR-0006 (2026-08-11): the redacted web_search config — the only
+    /// sanctioned serialization exit for the client configuration (the
+    /// api_key is replaced with `***REDACTED***`; the raw config's `Debug`
+    /// contains the key and must never be logged or journaled).
+    pub fn web_search_config_redacted(&self) -> Option<WebSearchConfig> {
+        self.web_search_config.is_enabled()
+            .then(|| self.web_search_config.redacted())
     }
 
     /// P0-1 (2026-08-08 stall guards): set the per-tool-call wall-clock
@@ -726,16 +767,21 @@ mod tests {
     use super::*;
     use orz_loop::AgentLoopController;
     use orz_loop::gateway::fake::FakeProvider;
-    use orz_loop::gateway::model::ModelGateway;
+    use orz_loop::gateway::model::{ModelGateway, ToolCall};
+    use orz_assurance::journal::{EventType, RunEvent};
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// P2-1 (review 2026-08-10): every test that mutates the web_search env
-    /// vars takes this lock — `web_search_config_follows_env_key` (tools.rs)
-    /// and the semaphore tests here share one test binary and would
-    /// otherwise race on `ORZ_WEB_SEARCH_API_KEY` (a cross-test flake).
+    /// vars takes this lock — `web_search_config_follows_credential_source`
+    /// (tools.rs) and the semaphore tests here share one test binary and
+    /// would otherwise race on the `ORZ_WEB_SEARCH_BASE_URL`/`_MODEL`
+    /// overrides (a cross-test flake). (2026-08-11: `ORZ_WEB_SEARCH_API_KEY`
+    /// was removed with the direction correction — the key now comes from
+    /// the credential reader; the lock guards the remaining non-secret env
+    /// overrides.)
     /// tokio mutex: the async tests hold it across awaits (clippy
     /// await_holding_lock would flag a std guard); OnceLock because tokio's
     /// `Mutex::new` is not const.
@@ -779,13 +825,47 @@ mod tests {
         dir
     }
 
+    /// 2026-08-11: a credential reader that always fails — fixes
+    /// `web_search` to Disabled regardless of the platform (semaphore and
+    /// routing tests must fast-fail even on a machine whose DeepSeek
+    /// credential is registered; without this seam they would attempt real
+    /// API calls).
+    fn failing_reader() -> Arc<dyn crate::credentials::CredentialReader> {
+        struct Fail;
+        impl crate::credentials::CredentialReader for Fail {
+            fn read(&self) -> Result<String, crate::credentials::CredentialError> {
+                Err(crate::credentials::CredentialError {
+                    message: "test: no credential registered".into(),
+                })
+            }
+        }
+        Arc::new(Fail)
+    }
+
+    /// Host with the failing reader injected (see [`failing_reader`]).
+    fn host_with_failing_reader(
+        journal: JournalRecorder,
+        dir: &std::path::Path,
+    ) -> OrzHost {
+        OrzHost::with_credential_reader(
+            journal,
+            dir,
+            WorkspaceTrust::ObservedTrusted,
+            None,
+            failing_reader(),
+        )
+        .expect("host build")
+    }
+
     /// Toolset construction is expensive (builder finalize) — share one.
     static SHARED_TOOLSET: OnceLock<Arc<orz_tools::registry::types::FinalizedToolset>> =
         OnceLock::new();
 
     fn shared_toolset() -> &'static Arc<orz_tools::registry::types::FinalizedToolset> {
-        SHARED_TOOLSET
-            .get_or_init(|| tools::build_toolset(&std::env::temp_dir()).expect("shared toolset"))
+        SHARED_TOOLSET.get_or_init(|| {
+            tools::build_toolset(&std::env::temp_dir(), &WebSearchConfig::Disabled)
+                .expect("shared toolset")
+        })
     }
 
     #[tokio::test]
@@ -873,21 +953,14 @@ mod tests {
     #[tokio::test]
     async fn web_search_call_waits_for_global_permit() {
         let dir = test_dir();
-        // P2-1 (review 2026-08-10): serialize with the env-mutating test in
-        // tools.rs and restore the var on drop (no cross-test leakage).
-        let _env_lock = tests_env_lock().lock().await;
-        let _key = EnvVarGuard::new("ORZ_WEB_SEARCH_API_KEY");
-        unsafe {
-            std::env::remove_var("ORZ_WEB_SEARCH_API_KEY");
-        }
-        let host = Arc::new(
-            OrzHost::new(
-                JournalRecorder::new(dir.clone()),
-                &dir,
-                WorkspaceTrust::ObservedTrusted,
-            )
-            .unwrap(),
-        );
+        // ADR-0006 (2026-08-11): the injected failing reader fixes
+        // web_search to Disabled on every platform (was: env removal — a
+        // machine with a registered `orz-grok/search` credential would
+        // otherwise enable the client and hit the real API).
+        let host = Arc::new(host_with_failing_reader(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+        ));
 
         // Hold the single permit.
         let permit = host
@@ -930,19 +1003,11 @@ mod tests {
     #[tokio::test]
     async fn web_search_timeout_releases_the_permit() {
         let dir = test_dir();
-        let _env_lock = tests_env_lock().lock().await;
-        let _key = EnvVarGuard::new("ORZ_WEB_SEARCH_API_KEY");
-        unsafe {
-            std::env::remove_var("ORZ_WEB_SEARCH_API_KEY");
-        }
+        // ADR-0006 (2026-08-11): injected failing reader (see the waiting
+        // test above) — platform-independent Disabled, no real API risk.
         let host = Arc::new(
-            OrzHost::new(
-                JournalRecorder::new(dir.clone()),
-                &dir,
-                WorkspaceTrust::ObservedTrusted,
-            )
-            .unwrap()
-            .with_tool_timeout(std::time::Duration::from_millis(100)),
+            host_with_failing_reader(JournalRecorder::new(dir.clone()), &dir)
+                .with_tool_timeout(std::time::Duration::from_millis(100)),
         );
 
         // Hold the single permit so the call can only wait.
@@ -998,14 +1063,10 @@ mod tests {
         let dir = test_dir();
         let path = dir.join("gate.txt");
         std::fs::write(&path, "gate").unwrap();
-        let host = Arc::new(
-            OrzHost::new(
-                JournalRecorder::new(dir.clone()),
-                &dir,
-                WorkspaceTrust::ObservedTrusted,
-            )
-            .unwrap(),
-        );
+        let host = Arc::new(host_with_failing_reader(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+        ));
 
         let permit = host
             .web_search_semaphore
@@ -1030,6 +1091,162 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         assert!(result.output.contains("gate"), "{}", result.output);
         drop(permit);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-11 (direction correction): live DeepSeek backend check —
+    /// the web_search executor against the real `/v1/responses` endpoint
+    /// with the real key. Evidence that the request shape (async-openai
+    /// `CreateResponseArgs`) is accepted and the raw-JSON parse extracts
+    /// content + citations (the typed Responses parse does not match the
+    /// DeepSeek backend). Double-gated: `--ignored` + `ORZ_TEST_LIVE=1`.
+    #[tokio::test]
+    #[ignore = "live: requires a real DeepSeek key (ORZ_TEST_LIVE=1)"]
+    async fn live_deepseek_web_search_roundtrip() {
+        if std::env::var("ORZ_TEST_LIVE").as_deref() != Ok("1") {
+            eprintln!("skipping live web search test (ORZ_TEST_LIVE != 1)");
+            return;
+        }
+        let key = orz_loop::gateway::credentials::read_agent_api_key()
+            .expect("DeepSeek key (orz-deepseek/agent)");
+        let config = WebSearchConfig::Enabled {
+            api_key: key,
+            base_url: "https://api.deepseek.com".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            extra_headers: Default::default(),
+            alpha_test_key: None,
+        };
+        let client =
+            orz_tools::implementations::web_search::client::WebSearchClient::new(&config, None)
+                .expect("client build");
+        let (content, citations) = client
+            .search("2026 年 xAI 最新发布的技术", None)
+            .await
+            .expect("live search");
+        assert!(!content.is_empty(), "search content must not be empty");
+        assert!(
+            !citations.is_empty(),
+            "DeepSeek open_page citations expected; content head: {}",
+            &content[..content.len().min(80)]
+        );
+    }
+
+    /// ADR-0006 (2026-08-11): the host's redacted-config accessor — the
+    /// only sanctioned serialization exit (the raw config's Debug contains
+    /// the api_key and must never be logged or journaled).
+    #[tokio::test]
+    async fn host_web_search_config_redacted_never_leaks_key() {
+        struct OkReader;
+        impl crate::credentials::CredentialReader for OkReader {
+            fn read(&self) -> Result<String, crate::credentials::CredentialError> {
+                Ok("sk-test-9f8e7d6c5b4a".to_string())
+            }
+        }
+        let dir = test_dir();
+        let host = OrzHost::with_credential_reader(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+            None,
+            Arc::new(OkReader),
+        )
+        .expect("host build");
+        assert!(host.web_search_configured());
+        let redacted = host
+            .web_search_config_redacted()
+            .expect("enabled config redacted");
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(json.contains("***REDACTED***"), "{json}");
+        assert!(!json.contains("sk-test-9f8e7d6c5b4a"), "{json}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// C2-1 (2026-08-11, ADR-0006 web-search slice): end-to-end through the
+    /// shared agent loop with a REAL host — the main lane delegates
+    /// web_search to the external retrieval subagent, and the subagent
+    /// SELF-EXECUTES the web tool through the host (no
+    /// `nested_subagent_dispatch_refused`). With the failing credential
+    /// reader the client is not injected, so the call fast-fails at the
+    /// toolset sink ("missing required resource") — proving the routing
+    /// change without any real API call.
+    #[tokio::test]
+    async fn retrieval_lane_web_search_routes_to_host_and_fast_fails() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.join("j"));
+        let host = host_with_failing_reader(journal, &dir);
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            orz_loop::gateway::fake::ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_search".to_string(),
+                arguments: serde_json::json!({"query": "t"}),
+                call_id: "call-1".to_string(),
+            }]),
+            orz_loop::gateway::fake::ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_search".to_string(),
+                arguments: serde_json::json!({"query": "t"}),
+                call_id: "call-2".to_string(),
+            }]),
+            orz_loop::gateway::fake::ScriptedResponse::text("检索完成"),
+            orz_loop::gateway::fake::ScriptedResponse::text("完成"),
+            orz_loop::gateway::fake::ScriptedResponse::text("完成"),
+        ]));
+        let controller = orz_loop::AgentLoopController::with_gateway(gateway)
+            .with_retrieval_mode(
+                orz_loop::controller::RetrievalMode::FrameworkFallback,
+                orz_loop::controller::RetrievalCapability::Available,
+                false,
+                None,
+                None,
+            );
+        controller
+            .run_turn(
+                &host,
+                "查一下",
+                "RUN-R2H",
+                "manifest-sha",
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("run turn");
+
+        let content = std::fs::read_to_string(dir.join("j").join("events.jsonl")).unwrap();
+        let events: Vec<RunEvent> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        // The web tool was never refused as a nested dispatch.
+        assert!(
+            !events.iter().any(|e| {
+                e.payload.get("error").and_then(|v| v.as_str())
+                    == Some("nested_subagent_dispatch_refused")
+            }),
+            "the lane-internal web call must self-execute, not be nested-refused"
+        );
+        // The lane-internal call (call-2) reached the REAL toolset and
+        // fast-failed: client not injected (failing reader) →
+        // "missing required resource" at the call_tool sink.
+        let failure = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-2")
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("web_search host failure journaled");
+        let err = failure
+            .payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .expect("error field");
+        assert!(
+            err.contains("missing required resource"),
+            "web_search must reach the toolset sink: {err}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
