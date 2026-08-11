@@ -36,6 +36,7 @@ use async_openai::{
     },
 };
 use async_trait::async_trait;
+use backoff::backoff::Backoff;
 use futures::StreamExt;
 use serde_json::Value;
 use std::sync::Arc;
@@ -348,6 +349,99 @@ impl DeepSeekTransport {
         }
     }
 
+    /// GAP-STREAM-RETRY (2026-08-12): mark a streaming failure retryable.
+    /// A zero-chunk failure — NO SSE chunk decoded (reasoning deltas
+    /// included) — means the provider produced no output for this request,
+    /// so re-sending the identical body is side-effect-free (idempotent;
+    /// ADR-0007 §3 known-boundary premise). Once any chunk landed, output
+    /// existed: re-sending could duplicate tool calls, so those failures
+    /// stay plain errors (§2.1 已见输出不重试). Only wire-level failures
+    /// (transport / timeout) are wrapped: model rejections (permanent, e.g.
+    /// 400 — the fork's ApiError carries no HTTP status, so 429/5xx cannot
+    /// be classified reliably on this path) and parse errors are never
+    /// retried, and a user cancel must never be re-sent.
+    fn wrap_zero_chunk(&self, saw_chunk: bool, e: GatewayError) -> GatewayError {
+        if saw_chunk {
+            return e;
+        }
+        match e {
+            GatewayError::Transport(detail) | GatewayError::Timeout(detail) => {
+                GatewayError::StreamInterrupted { attempts: 0, detail }
+            }
+            other => other,
+        }
+    }
+
+    /// GAP-STREAM-RETRY (2026-08-12): one logical stream attempt with
+    /// zero-chunk interruption retry. `stream_once` is the raw single
+    /// connection; this wrapper re-sends the IDENTICAL request body when the
+    /// attempt failed before any chunk existed (no model output — idempotent).
+    /// Retry discipline mirrors the fork's non-streaming `execute_raw`
+    /// (D-7): bounded by BOTH `request_max_retries` AND the backoff's
+    /// elapsed-time window (`request_retry_window`) — whichever ends first.
+    /// Cancel during a backoff aborts the chain immediately (/stop must not
+    /// be held hostage by a retry wait); a user cancel is never re-sent.
+    async fn stream_once_with_retry(
+        &self,
+        request: &ModelRequest,
+        thinking: ThinkingMode,
+        cancel: Option<&CancellationToken>,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ModelResponse, GatewayError> {
+        let policy = &self.config.retry;
+        // Same backoff shape as the fork's client: default ExponentialBackoff
+        // with the window capped at `request_retry_window` (§2.3 parameter
+        // surface — no new knobs).
+        let mut backoff = backoff::ExponentialBackoff {
+            max_elapsed_time: Some(policy.request_retry_window),
+            ..Default::default()
+        };
+        let mut attempts: u32 = 0;
+        loop {
+            match self
+                .stream_once(request, thinking, cancel, heartbeat, on_chunk)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(GatewayError::StreamInterrupted { detail, .. }) => {
+                    if attempts >= policy.request_max_retries {
+                        tracing::warn!(
+                            "stream zero-chunk interruption: retry cap reached ({attempts} retries), giving up: {detail}"
+                        );
+                        return Err(GatewayError::StreamInterrupted { attempts, detail });
+                    }
+                    let Some(delay) = backoff.next_backoff() else {
+                        tracing::warn!(
+                            "stream zero-chunk interruption: retry window exhausted, giving up: {detail}"
+                        );
+                        return Err(GatewayError::StreamInterrupted { attempts, detail });
+                    };
+                    tracing::warn!(
+                        "stream zero-chunk interruption (attempt {} of {}): retrying in {delay:?}: {detail}",
+                        attempts + 1,
+                        policy.request_max_retries
+                    );
+                    match cancel {
+                        Some(c) => tokio::select! {
+                            biased;
+                            _ = c.cancelled() => return Err(GatewayError::Cancelled),
+                            _ = tokio::time::sleep(delay) => {}
+                        },
+                        None => tokio::time::sleep(delay).await,
+                    }
+                    // P1-1 (2026-08-08 stall guards): the backoff is quiet
+                    // time the stall watchdog must not trip over.
+                    if let Some(h) = heartbeat {
+                        h.stamp();
+                    }
+                    attempts += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     async fn stream_once(
         &self,
         request: &ModelRequest,
@@ -385,13 +479,21 @@ impl DeepSeekTransport {
         )
         .await
         .map_err(|_| {
-            GatewayError::Timeout(
-                "stream handshake hung — no response headers within the idle timeout"
-                    .to_string(),
+            self.wrap_zero_chunk(
+                false,
+                GatewayError::Timeout(
+                    "stream handshake hung — no response headers within the idle timeout"
+                        .to_string(),
+                ),
             )
         })?
-        .map_err(|e| self.map_error(e))?;
+        .map_err(|e| self.wrap_zero_chunk(false, self.map_error(e)))?;
 
+        // GAP-STREAM-RETRY (2026-08-12): a stream attempt that produced NO
+        // decoded chunk before failing is retryable (see `wrap_zero_chunk`).
+        // Any successfully decoded SSE item counts — reasoning-only deltas
+        // included — because the provider then owns output for this request.
+        let mut saw_chunk = false;
         let mut text_parts: Vec<String> = Vec::new();
         // DeepSeek interleaves reasoning_content deltas with content deltas;
         // accumulated separately, then joined verbatim onto the response
@@ -444,15 +546,21 @@ impl DeepSeekTransport {
                     biased;
                     _ = c.cancelled() => return Err(GatewayError::Cancelled),
                     _ = tokio::time::sleep_until(last_activity + idle_timeout) => {
-                        return Err(GatewayError::Timeout(format!(
-                            "stream idle: no data for {idle_timeout:?}"
-                        )));
+                        return Err(self.wrap_zero_chunk(
+                            saw_chunk,
+                            GatewayError::Timeout(format!(
+                                "stream idle: no data for {idle_timeout:?}"
+                            )),
+                        ));
                     }
                     _ = tokio::time::sleep_until(total_deadline) => {
-                        return Err(GatewayError::Timeout(format!(
-                            "stream total budget {:?} exceeded",
-                            self.config.retry.stream_total_timeout
-                        )));
+                        return Err(self.wrap_zero_chunk(
+                            saw_chunk,
+                            GatewayError::Timeout(format!(
+                                "stream total budget {:?} exceeded",
+                                self.config.retry.stream_total_timeout
+                            )),
+                        ));
                     }
                     _ = tokio::time::sleep_until(last_activity + idle_warn), if !warned => {
                         tracing::warn!(
@@ -466,15 +574,21 @@ impl DeepSeekTransport {
                 None => tokio::select! {
                     biased;
                     _ = tokio::time::sleep_until(last_activity + idle_timeout) => {
-                        return Err(GatewayError::Timeout(format!(
-                            "stream idle: no data for {idle_timeout:?}"
-                        )));
+                        return Err(self.wrap_zero_chunk(
+                            saw_chunk,
+                            GatewayError::Timeout(format!(
+                                "stream idle: no data for {idle_timeout:?}"
+                            )),
+                        ));
                     }
                     _ = tokio::time::sleep_until(total_deadline) => {
-                        return Err(GatewayError::Timeout(format!(
-                            "stream total budget {:?} exceeded",
-                            self.config.retry.stream_total_timeout
-                        )));
+                        return Err(self.wrap_zero_chunk(
+                            saw_chunk,
+                            GatewayError::Timeout(format!(
+                                "stream total budget {:?} exceeded",
+                                self.config.retry.stream_total_timeout
+                            )),
+                        ));
                     }
                     _ = tokio::time::sleep_until(last_activity + idle_warn), if !warned => {
                         tracing::warn!(
@@ -498,7 +612,9 @@ impl DeepSeekTransport {
             if let Some(h) = heartbeat {
                 h.stamp();
             }
-            let chunk: CreateChatCompletionStreamResponse = item.map_err(|e| self.map_error(e))?;
+            let chunk: CreateChatCompletionStreamResponse = item
+                .map_err(|e| self.wrap_zero_chunk(saw_chunk, self.map_error(e)))?;
+            saw_chunk = true;
             // D-6: the final chunk carries the aggregate usage (choices
             // empty, usage populated) when include_usage is honored.
             if let Some(u) = &chunk.usage {
@@ -523,8 +639,9 @@ impl DeepSeekTransport {
         // surfacing it as an error keeps the journal honest (no half-answer
         // recorded as a completed `stop`).
         if !saw_finish_reason {
-            return Err(GatewayError::Transport(
-                "stream ended without finish_reason".to_string(),
+            return Err(self.wrap_zero_chunk(
+                saw_chunk,
+                GatewayError::Transport("stream ended without finish_reason".to_string()),
             ));
         }
 
@@ -741,20 +858,44 @@ impl ModelGateway for DeepSeekTransport {
         // degrade. Only ZERO-OUTPUT streams are re-attempted — a stream
         // that produced any chunk is never retried (D-7 已见输出不重试:
         // re-sending would duplicate tool execution).
+        //
+        // Each stage additionally carries the GAP-STREAM-RETRY zero-chunk
+        // interruption retry (`stream_once_with_retry`): a stage that fails
+        // before any chunk existed re-sends the identical body with bounded
+        // backoff. Orthogonal to the D-6 chain — a stage succeeds only when
+        // a stream ran to completion (its own retries included).
         let first = self
-            .stream_once(&request, self.effective_thinking(&request), cancel, heartbeat, on_chunk)
+            .stream_once_with_retry(
+                &request,
+                self.effective_thinking(&request),
+                cancel,
+                heartbeat,
+                on_chunk,
+            )
             .await?;
         if !Self::empty_content_abnormal(&first) {
             return Ok(first);
         }
         let second = self
-            .stream_once(&request, self.effective_thinking(&request), cancel, heartbeat, on_chunk)
+            .stream_once_with_retry(
+                &request,
+                self.effective_thinking(&request),
+                cancel,
+                heartbeat,
+                on_chunk,
+            )
             .await?;
         if !Self::empty_content_abnormal(&second) {
             return Ok(second);
         }
         let degraded = self
-            .stream_once(&request, ThinkingMode::Disabled, cancel, heartbeat, on_chunk)
+            .stream_once_with_retry(
+                &request,
+                ThinkingMode::Disabled,
+                cancel,
+                heartbeat,
+                on_chunk,
+            )
             .await?;
         if !Self::empty_content_abnormal(&degraded) {
             return Ok(degraded);
@@ -1251,6 +1392,11 @@ mod tests {
         /// `stream_idle_timeout` must be shorter than this for the test to
         /// observe a timeout.
         pre_delay: std::time::Duration,
+        /// GAP-STREAM-RETRY: write the response head claiming the FULL
+        /// content-length, deliver only the first half of the body, then
+        /// close — the client's read errors with the exact TB job1
+        /// signature (`error decoding response body`).
+        write_truncated: bool,
     }
 
     impl MockResponse {
@@ -1261,6 +1407,7 @@ mod tests {
                 body: body.into(),
                 frame_delay: std::time::Duration::ZERO,
                 pre_delay: std::time::Duration::ZERO,
+                write_truncated: false,
             }
         }
 
@@ -1278,7 +1425,25 @@ mod tests {
                 body: frames.join(""),
                 frame_delay,
                 pre_delay: std::time::Duration::ZERO,
+                write_truncated: false,
             }
+        }
+
+        /// A stalled upstream (handshake-hang tests): headers are withheld
+        /// for `pre_delay`, then the response is written as-is.
+        fn sse_delayed(frames: Vec<&str>, pre_delay: std::time::Duration) -> Self {
+            Self {
+                pre_delay,
+                ..Self::sse(frames, std::time::Duration::ZERO)
+            }
+        }
+
+        /// GAP-STREAM-RETRY: deliver only the first half of the body, then
+        /// close — the client's read errors with the exact TB job1 signature
+        /// (`error decoding response body`) before any chunk lands.
+        fn truncated(mut self) -> Self {
+            self.write_truncated = true;
+            self
         }
     }
 
@@ -1358,7 +1523,19 @@ mod tests {
         );
         socket.write_all(head.as_bytes()).await?;
         if response.frame_delay.is_zero() {
-            socket.write_all(response.body.as_bytes()).await?;
+            if response.write_truncated {
+                // Content-length claims the full body; deliver a FIXED 100
+                // bytes and close — a mid-frame wire drop (the client sees
+                // `error decoding response body`). The cut is decoupled from
+                // the frame layout (2026-08-12 review P2-2): the smallest
+                // SSE frame is ~150 bytes, so 100 always splits the first
+                // frame; a `len()/2` cut would flip to "one full frame
+                // delivered" if a test body shrank.
+                let cut = 100usize.min(response.body.len());
+                socket.write_all(&response.body.as_bytes()[..cut]).await?;
+            } else {
+                socket.write_all(response.body.as_bytes()).await?;
+            }
         } else {
             // SSE: write frame by frame so a mid-stream cancel is observable.
             for frame in response.body.split("\n\n") {
@@ -1936,8 +2113,18 @@ mod tests {
     async fn generate_stream_idle_watchdog_aborts_silence() {
         // D-7: the idle watchdog aborts a stream that goes completely silent
         // (no data at all past `stream_idle_timeout`) — slow thinking with
-        // progress is not a timeout, a dead wire is.
-        let base = spawn_mock(|_line, _body| {
+        // progress is not a timeout, a dead wire is. GAP-STREAM-RETRY
+        // (2026-08-12): a zero-chunk idle is now retried, so a persistently
+        // silent upstream surfaces as `StreamInterrupted` after the retry
+        // cap — never as a silent `Timeout` with unanswered retries.
+        let policy = RetryPolicy {
+            request_max_retries: 1,
+            ..short_timeout_policy()
+        };
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             MockResponse::json_delayed(
                 200,
                 r#"{"id":"x","object":"chat.completion","created":0,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"never-arrives"},"finish_reason":"stop"}]}"#,
@@ -1945,17 +2132,292 @@ mod tests {
             )
         })
         .await;
-        let t = mock_transport_with_retry(&base, short_timeout_policy());
+        let t = mock_transport_with_retry(&base, policy);
         let mut chunks = Vec::new();
         let err = t
             .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::Timeout(m) if m.contains("idle")),
-            "silent stream must abort via idle watchdog, got {err:?}"
+            matches!(&err, GatewayError::StreamInterrupted { attempts, detail } if *attempts == 1 && detail.contains("idle")),
+            "silent stream must retry once then fail via StreamInterrupted, got {err:?}"
         );
         assert!(chunks.is_empty());
+        // max_retries=1 → 2 total attempts (1 initial + 1 retry).
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 2, "idle retry cap violated: {n} attempts for max_retries=1");
+    }
+
+    // ── GAP-STREAM-RETRY (2026-08-12): zero-chunk interruption retry ──────
+
+    /// A well-formed SSE stream body with one text chunk and a finish block.
+    fn ok_sse_body(text: &str) -> String {
+        let frame = |delta: &str, finish: Option<&str>| {
+            let finish = finish
+                .map(|f| format!("\"{f}\""))
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":{finish}}}]}}\n\n",
+            )
+        };
+        format!(
+            "{}{}data: [DONE]\n\n",
+            frame(&format!(r#"{{"role":"assistant","content":"{text}"}}"#), None),
+            frame("{}", Some("stop")),
+        )
+    }
+
+    #[tokio::test]
+    async fn generate_stream_zero_chunk_transport_error_retries_then_succeeds() {
+        // GAP-STREAM-RETRY (2026-08-12): the TB job1 signature — the
+        // provider's streaming endpoint died with ZERO chunks produced
+        // (`transport error: error decoding response body`). The identical
+        // request is re-sent; the retried attempt succeeds. Only the
+        // retried response's chunks may be projected (no duplicate output).
+        let ok = ok_sse_body("ok-after-retry");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                // Mid-frame wire drop — the read dies before any chunk.
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO).truncated()
+            } else {
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let mut chunks = Vec::new();
+        let r = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok-after-retry"));
+        assert_eq!(chunks, vec!["ok-after-retry"]);
+        // NOTE: connection-count assertion is intentionally loose (>=2) —
+        // the fork's EventSource ALSO auto-reconnects on read errors
+        // (pre-existing, registered in the audit), so the total may exceed
+        // orz's own retry count. The precise "exactly one orz retry"
+        // contract is asserted by the EOF variant (`..._eof_...`), where the
+        // clean end-of-stream does not trigger the fork's reconnect.
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            n >= 2,
+            "zero-chunk interruption must be retried (orz or fork reconnect): {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_zero_chunk_eof_retries_then_succeeds() {
+        // A clean EOF with zero frames (`data: [DONE]` only) is also a
+        // zero-chunk truncation — no finish_reason, no output — and retries.
+        let ok = ok_sse_body("ok-after-eof");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                MockResponse::sse(vec!["data: [DONE]\n\n"], std::time::Duration::ZERO)
+            } else {
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let mut chunks = Vec::new();
+        let r = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok-after-eof"));
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 2, "zero-chunk EOF must retry exactly once: {n}");
+    }
+
+    #[tokio::test]
+    async fn generate_stream_after_chunk_interruption_is_not_retried() {
+        // The retry boundary (user ruling 2026-08-12): once ANY chunk
+        // landed, output existed — re-sending would duplicate tool calls.
+        // A mid-stream drop after a chunk must fail immediately (exactly
+        // one connection).
+        let frame = |delta: &str| {
+            format!(
+                "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":null}}]}}\n\n",
+            )
+        };
+        let body = format!(
+            "{}{}data: [DONE]\n\n",
+            frame(r#"{"role":"assistant","content":"half"}"#),
+            frame(r#"{"content":"-done"}"#),
+        );
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let mut chunks = Vec::new();
+        let err = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Transport(m) if m.contains("finish_reason")),
+            "after-chunk truncation must stay a plain transport error: {err:?}"
+        );
+        assert_eq!(chunks, vec!["half", "-done"]);
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 1, "after-chunk interruption must NOT retry: {n} connections");
+    }
+
+    #[tokio::test]
+    async fn generate_stream_zero_chunk_retry_capped_by_max_retries() {
+        // GAP-STREAM-RETRY: retries are capped by `request_max_retries` —
+        // a persistently interrupted upstream fails after the cap with the
+        // attempt count visible in the error (journal observability).
+        let policy = RetryPolicy {
+            request_max_retries: 3,
+            ..short_retry_policy()
+        };
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec!["data: [DONE]\n\n"], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, policy);
+        let mut chunks = Vec::new();
+        let err = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { attempts, detail } if *attempts == 3 && detail.contains("finish_reason")),
+            "persistent interruption must surface StreamInterrupted with the retry count: {err:?}"
+        );
+        assert!(chunks.is_empty());
+        // max_retries=3 → exactly 4 total attempts (1 + 3 retries).
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 4, "retry cap violated: {n} attempts for max_retries=3");
+    }
+
+    #[tokio::test]
+    async fn generate_stream_zero_chunk_retry_window_caps_before_max_retries() {
+        // GAP-STREAM-RETRY: the backoff window is an INDEPENDENT bound (same
+        // semantics as the fork's non-streaming execute_raw) — a tight
+        // window stops retries before `request_max_retries` is reached.
+        //
+        // Window sizing (2026-08-12 review P2-1): backoff 0.4.0 only grants
+        // a delay when `elapsed + randomized_interval <= max_elapsed_time`.
+        // At 250ms the FIRST next_backoff already returns None (elapsed≈2ms
+        // + min interval 250ms > 250ms), so the test would pass with zero
+        // retries — asserting nothing. At 1s the first retry is guaranteed
+        // (2ms + ≤750ms ≤ 1s) and the window exhausts well before
+        // max_retries=10: retries stack ≥250ms each, so n lands in {2..=5}.
+        let policy = RetryPolicy {
+            request_max_retries: 10,
+            request_retry_window: std::time::Duration::from_millis(1000),
+            ..short_retry_policy()
+        };
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec!["data: [DONE]\n\n"], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, policy);
+        let mut chunks = Vec::new();
+        let err = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, GatewayError::StreamInterrupted { attempts, .. } if attempts >= 1),
+            "window-exhausted interruption must surface StreamInterrupted after ≥1 re-send: {err:?}"
+        );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            (2..=5).contains(&n),
+            "window must cap attempts well below max_retries=10 and still allow the first retry: {n}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_cancel_during_retry_backoff_aborts_promptly() {
+        // GAP-STREAM-RETRY: /stop must not be held hostage by a retry
+        // backoff — a cancel during the sleep aborts the chain immediately
+        // (no second connection, well under the first backoff delay).
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec!["data: [DONE]\n\n"], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                // The first backoff delay is [250, 750]ms (randomization
+                // factor 0.5) — cancel long before it.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                cancel.cancel();
+            }
+        });
+        let mut chunks = Vec::new();
+        // 400ms budget: a retry backoff (500ms) would exceed it; the cancel
+        // must win long before.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(400),
+            t.generate_stream(request(), Some(&cancel), None, &mut |c| chunks.push(c.to_string())),
+        )
+        .await;
+        let err = result.expect("cancel during backoff must return promptly").unwrap_err();
+        assert!(
+            matches!(err, GatewayError::Cancelled),
+            "cancel during backoff must surface as Cancelled: {err:?}"
+        );
+        assert!(chunks.is_empty());
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 1, "no connection may follow the cancel: {n}");
+    }
+
+    #[tokio::test]
+    async fn generate_stream_handshake_hang_retried_then_succeeds() {
+        // GAP-STREAM-RETRY: a stalled handshake (no response headers within
+        // the idle timeout — F-08) is also a zero-chunk failure and retries.
+        let ok = ok_sse_body("ok-after-hang");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                // Upstream accepts the connection but withholds headers for
+                // 2s — far past the 150ms idle timeout of the test policy.
+                MockResponse::sse_delayed(
+                    vec![&ok],
+                    std::time::Duration::from_secs(2),
+                )
+            } else {
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_timeout_policy());
+        let mut chunks = Vec::new();
+        let r = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok-after-hang"));
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 2, "handshake hang must retry exactly once: {n}");
     }
 
     #[tokio::test]

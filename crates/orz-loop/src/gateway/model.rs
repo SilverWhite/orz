@@ -239,6 +239,22 @@ pub enum GatewayError {
     /// (the loop surfaces it as a model error), never a user cancel.
     #[error("generation timed out: {0}")]
     Timeout(String),
+    /// GAP-STREAM-RETRY (2026-08-12): a streaming attempt failed BEFORE any
+    /// chunk was produced — no model output existed, so re-sending the
+    /// identical request body is side-effect-free (idempotent; ADR-0007 §3
+    /// known-boundary premise). The transport retries these with bounded
+    /// backoff; `attempts` records how many re-sends happened before the
+    /// final failure, so the journal shows the retry history. The display
+    /// word is "re-sends" — `attempts` counts RETRIES, so the journal text
+    /// never reads as total attempts (off-by-one; 2026-08-12 review D2-1).
+    #[error("stream interrupted before any chunk (after {attempts} re-sends): {detail}")]
+    StreamInterrupted {
+        /// Retries already consumed when this error escaped. `0` = the
+        /// transport surfaced it without a retry (or surfaced the very
+        /// first attempt's failure).
+        attempts: u32,
+        detail: String,
+    },
 }
 
 /// P1-1 (2026-08-08 stall guards): process-level heartbeat clock. Any
