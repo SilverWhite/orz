@@ -8,6 +8,10 @@ description = "orz agent loop engine — AgentLoopController, Blackboard, Mechan
 [dependencies]
 # Self-built
 orz-assurance = { path = "../orz-assurance" }
+# RT-002 (2026-08-11): test-output scrubbing before it enters the model
+# context (redact_secrets/redact_user_paths) — self-built workspace crate,
+# zero new third-party deps.
+orz-secrets = { workspace = true }
 
 # Runtime
 tokio = { workspace = true, features = ["full"] }

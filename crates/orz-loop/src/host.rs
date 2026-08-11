@@ -185,16 +185,47 @@ pub struct TestRunner {
     pub command: Vec<String>,
     /// Wall-clock cap for one execution (None = `RUN_TESTS_TIMEOUT`).
     pub timeout: Option<Duration>,
+    /// RT-002 (2026-08-11): explicit environment allowlist entries — the
+    /// harness's required test-environment variables (PYTHONPATH, venv
+    /// activation, sitecustomize shim, …). The host runs the command with
+    /// `env_clear()` plus a fixed minimal platform allowlist (PATH and the
+    /// like) PLUS these entries; the host's full environment (secrets, host
+    /// paths) is never inherited.
+    pub env: Vec<(String, String)>,
+}
+
+/// One workspace change observed across a `run_tests` invocation
+/// (RT-003, 2026-08-11) — tests may write files, populate caches, etc.;
+/// the change list is the audit trace of that side effect.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorkspaceDeltaEntry {
+    /// Worktree-relative path (forward-slash normalized on Windows).
+    pub path: String,
+    pub kind: WorkspaceDeltaKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceDeltaKind {
+    Added,
+    Modified,
+    Deleted,
 }
 
 /// Result of running the fixed test command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TestRunResult {
     pub output: String,
     pub exit_code: Option<i32>,
     /// Path of the full (capped) output written by the host — readable via
     /// `read_file`; `None` when the host could not write it (or timed out).
     pub full_output_path: Option<String>,
+    /// RT-003: workspace changes the test run caused (capped list; the
+    /// overall change count is recoverable via `workspace_delta_truncated`
+    /// only as a binary signal — the cap is the only bound).
+    pub workspace_delta: Vec<WorkspaceDeltaEntry>,
+    /// RT-003: true when the delta list was truncated at the host cap.
+    pub workspace_delta_truncated: bool,
 }
 
 /// Trait for looking up tools by name.

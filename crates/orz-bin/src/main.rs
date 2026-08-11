@@ -1027,9 +1027,32 @@ fn build_cli_host(
     let test_runner = std::env::var("ORZ_TEST_RUNNER").ok().map(|cmd| {
         // argv-style: split on spaces (the harness builds the command; the
         // test path is injected as a single token).
+        // RT-002 (2026-08-11): `ORZ_TEST_RUNNER_ENV` — a JSON object of
+        // explicit environment allowlist entries for the test process
+        // (PYTHONPATH, venv activation, sitecustomize shim, …). The test
+        // command runs env_clear()ed with only the platform allowlist plus
+        // these entries; host secrets are never inherited.
+        let env = std::env::var("ORZ_TEST_RUNNER_ENV")
+            .ok()
+            .map(|raw| {
+                serde_json::from_str::<std::collections::BTreeMap<String, String>>(&raw).unwrap_or_else(|e| {
+                    // P2 (review 2026-08-11): a typo'd harness env JSON must
+                    // not silently drop PYTHONPATH/venv entries — the
+                    // failure mode ("module not found" in a broken test
+                    // environment) is otherwise invisible. Fail-safe: env
+                    // stays empty (env_clear still applies), but the harness
+                    // sees the parse error in the log.
+                    tracing::warn!(raw, "ORZ_TEST_RUNNER_ENV parse failed: {e}");
+                    std::collections::BTreeMap::new()
+                })
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<(String, String)>>();
         orz_loop::host::TestRunner {
             command: cmd.split_whitespace().map(str::to_string).collect(),
             timeout: None,
+            env,
         }
     });
     // P0-1 (2026-08-08 review D2-3): per-tool timeout escape hatch for the
@@ -1472,6 +1495,18 @@ mod conformance_capture {
                 text: "Example Domain — This domain is for use in illustrative examples."
                     .to_string(),
             })
+        }
+
+        async fn download_or_read(
+            &self,
+            url: &str,
+            _download_dir: &std::path::Path,
+        ) -> Result<orz_host::local_browser::BrowserDownloadOutcome, orz_host::local_browser::CdpError>
+        {
+            // Conformance stub: never a real download — read the page
+            // instead (the stub's read_page is the deterministic path).
+            let page = self.read_page(url).await?;
+            Ok(orz_host::local_browser::BrowserDownloadOutcome::Page(page))
         }
 
         fn ready(&self) -> bool {

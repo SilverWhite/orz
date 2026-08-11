@@ -428,6 +428,164 @@ async fn read_capped<R: tokio::io::AsyncRead + Unpin>(mut reader: R, buf: &mut V
     }
 }
 
+/// RT-002 (2026-08-11): the fixed test command's minimal environment
+/// allowlist — the ONLY host environment the test process inherits (plus the
+/// harness's explicit `TestRunner::env` entries). Everything else is cleared:
+/// host secrets, `ORZ_*` session variables, arbitrary paths.
+#[cfg(windows)]
+const TEST_ENV_ALLOWLIST: &[&str] = &[
+    // PATH: command lookup (the runner command often names an interpreter
+    // by bare name). SystemRoot/PATHEXT/COMSPEC: Windows process bootstrap
+    // (DLL search, batch invocation). TEMP/TMP: temp files. USERPROFILE:
+    // many tools want a writable home for caches.
+    "PATH", "SystemRoot", "PATHEXT", "COMSPEC", "TEMP", "TMP", "USERPROFILE",
+];
+#[cfg(not(windows))]
+const TEST_ENV_ALLOWLIST: &[&str] = &[
+    // PATH: command lookup. HOME: cache/config dirs. TMPDIR: temp files.
+    // LANG: locale output stability.
+    "PATH", "HOME", "TMPDIR", "LANG",
+];
+
+/// RT-003 (2026-08-11): directories excluded from the run_tests delta walk —
+/// VCS metadata, the host's own `.gsa` tree, and the heavyweight
+/// dependency/cache directories a test run would never legitimately write
+/// (recording node_modules churn would drown the trace). `__pycache__` /
+/// `.pytest_cache` / `.mypy_cache` / `.ruff_cache` / `.tox` are the Python
+/// test-runner's own cache surface (the primary harness deployment) —
+/// every run rewrites them, so without the exclusion the 200-entry cap is
+/// consumed by cache noise and the real side effects get truncated away
+/// (review D2-1/P1, 2026-08-11).
+const DELTA_EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    ".gsa",
+    "node_modules",
+    ".venv",
+    "venv",
+    "target",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+];
+
+/// RT-003: cap on the workspace-delta entries recorded per run_tests call.
+const RUN_TESTS_DELTA_MAX_ENTRIES: usize = 200;
+
+/// D2-2 (2026-08-11): true for symlinks AND Windows directory junctions /
+/// other reparse points — the delta walk must not follow either. Junctions
+/// report `file_type().is_dir() == true` with `is_symlink() == false`, so
+/// the reliable signal is the FILE_ATTRIBUTE_REPARSE_POINT (0x400) bit on
+/// the entry's own metadata (`symlink_metadata` — NOT `metadata`, which
+/// would follow the junction and hide the bit).
+fn is_reparse_or_symlink(ft: &std::fs::FileType, path: &Path) -> bool {
+    if ft.is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        std::fs::symlink_metadata(path)
+            .map(|m| m.file_attributes() & 0x400 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// RT-003: worktree metadata walk (zero content reads) — the run_tests
+/// delta baseline. Symlinks are not followed (a target outside the worktree
+/// is not a delta; a dangling link is not a file change).
+fn workspace_delta_walk(cwd: &Path) -> std::collections::HashMap<String, (u64, u64, u32)> {
+    let mut map = std::collections::HashMap::new();
+    let mut stack = vec![cwd.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            // Review D2-2 (2026-08-11): Windows junctions are DIRECTORY
+            // reparse points — `file_type().is_symlink()` is false for them,
+            // so without this check a junction pointing at an ancestor (or
+            // at a huge tree like C:\Users) would be walked unboundedly
+            // (this walk runs OUTSIDE the test-run timeout). Skip every
+            // reparse point, symlink or junction — both are linkage, not
+            // file content, in the delta semantics.
+            if is_reparse_or_symlink(&ft, &path) {
+                continue;
+            }
+            if ft.is_dir() {
+                if !DELTA_EXCLUDED_DIRS.contains(&name.as_str()) {
+                    stack.push(path);
+                }
+            } else if ft.is_file()
+                && let Ok(md) = std::fs::metadata(&path)
+            {
+                let (mtime_secs, mtime_nanos) = match md.modified() {
+                    Ok(t) => {
+                        let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                        (d.as_secs(), d.subsec_nanos())
+                    }
+                    // No mtime support: (0,0) — every file diffs as
+                    // "modified" after a run (conservative; same
+                    // registered trade-off as the doc-index walk).
+                    Err(_) => (0, 0),
+                };
+                let rel = path
+                    .strip_prefix(cwd)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                map.insert(rel, (md.len(), mtime_secs, mtime_nanos));
+            }
+        }
+    }
+    map
+}
+
+/// RT-003: diff two delta walks into the capped change list.
+fn workspace_delta_diff(
+    before: &std::collections::HashMap<String, (u64, u64, u32)>,
+    after: &std::collections::HashMap<String, (u64, u64, u32)>,
+) -> (Vec<orz_loop::host::WorkspaceDeltaEntry>, bool) {
+    use orz_loop::host::{WorkspaceDeltaEntry, WorkspaceDeltaKind};
+    let mut entries: Vec<WorkspaceDeltaEntry> = Vec::new();
+    for (path, after_stat) in after {
+        match before.get(path) {
+            None => entries.push(WorkspaceDeltaEntry {
+                path: path.clone(),
+                kind: WorkspaceDeltaKind::Added,
+            }),
+            Some(before_stat) if before_stat != after_stat => entries.push(WorkspaceDeltaEntry {
+                path: path.clone(),
+                kind: WorkspaceDeltaKind::Modified,
+            }),
+            _ => {}
+        }
+    }
+    for path in before.keys() {
+        if !after.contains_key(path) {
+            entries.push(WorkspaceDeltaEntry {
+                path: path.clone(),
+                kind: WorkspaceDeltaKind::Deleted,
+            });
+        }
+    }
+    // Deterministic order (same discipline as the doc-index sorted entries).
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    let truncated = entries.len() > RUN_TESTS_DELTA_MAX_ENTRIES;
+    entries.truncate(RUN_TESTS_DELTA_MAX_ENTRIES);
+    (entries, truncated)
+}
+
 #[async_trait]
 impl LoopHost for OrzHost {
     fn journal(&self) -> &JournalRecorder {
@@ -473,6 +631,11 @@ impl LoopHost for OrzHost {
             return Err(ToolError::ExecutionFailed("empty test command".into()));
         }
         let timeout = runner.timeout.unwrap_or(orz_loop::host::RUN_TESTS_TIMEOUT);
+        // RT-003 (2026-08-11): workspace delta — snapshot the worktree
+        // metadata before the run; after the run the diff (added/modified/
+        // deleted, capped) is the audit trace of the test's file side
+        // effects (ADR §3.8.2 requires workspace-delta/journal recording).
+        let before = workspace_delta_walk(&self.cwd);
         // F-09 (2026-08-07 review): bounded execution + context gating. The
         // command runs under a wall-clock cap (default 30min — the cap only
         // catches true hangs; context size, not wall time, is the priority);
@@ -481,11 +644,26 @@ impl LoopHost for OrzHost {
         // (capped) output is written to a file the model can read
         // (read_file), and the controller injects only the final 32KB into
         // the conversation.
-        let mut child = tokio::process::Command::new(&runner.command[0])
-            .args(&runner.command[1..])
+        let mut cmd = tokio::process::Command::new(&runner.command[0]);
+        cmd.args(&runner.command[1..])
             .current_dir(&self.cwd)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // RT-002 (2026-08-11): the test process must NOT inherit the host's
+        // environment wholesale — it would see host secrets and paths
+        // (ADV §3.8.2: secret/host-path leakage through test output). Clear
+        // everything, then restore a fixed minimal platform allowlist plus
+        // the harness's explicit `TestRunner::env` entries.
+        cmd.env_clear();
+        for var in TEST_ENV_ALLOWLIST {
+            if let Ok(value) = std::env::var(var) {
+                cmd.env(var, value);
+            }
+        }
+        for (k, v) in &runner.env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| ToolError::ExecutionFailed(format!("test runner spawn: {e}")))?;
         // Stability fix (2026-08-07, design review D2 #3/#4): bind the child
@@ -536,6 +714,10 @@ impl LoopHost for OrzHost {
                 // 52-minute forth hang). Kill the whole tree on Windows via
                 // TaskKill; unix keeps the plain kill (recorded limitation).
                 kill_process_tree(&mut child).await;
+                // RT-003: the timed-out run may still have written files —
+                // record what it changed before returning.
+                let (workspace_delta, workspace_delta_truncated) =
+                    workspace_delta_diff(&before, &workspace_delta_walk(&self.cwd));
                 return Ok(orz_loop::host::TestRunResult {
                     output: format!(
                         "[test runner TIMED OUT after {timeout:?} — process tree killed; \
@@ -544,6 +726,8 @@ impl LoopHost for OrzHost {
                     ),
                     exit_code: None,
                     full_output_path: None,
+                    workspace_delta,
+                    workspace_delta_truncated,
                 });
             }
         };
@@ -571,10 +755,17 @@ impl LoopHost for OrzHost {
                 None
             }
         };
+        // RT-003: workspace delta — diff the post-run walk against the
+        // pre-run baseline (`.gsa` is excluded, so the output file written
+        // above does not pollute the trace).
+        let (workspace_delta, workspace_delta_truncated) =
+            workspace_delta_diff(&before, &workspace_delta_walk(&self.cwd));
         Ok(orz_loop::host::TestRunResult {
             output: text,
             exit_code: status.code(),
             full_output_path,
+            workspace_delta,
+            workspace_delta_truncated,
         })
     }
 
@@ -1649,6 +1840,7 @@ mod tests {
         let runner = orz_loop::host::TestRunner {
             command: vec!["python".to_string(), "-c".to_string(), script.clone()],
             timeout: Some(std::time::Duration::from_secs(2)),
+            env: Vec::new(),
         };
         let host = OrzHost::new(
             JournalRecorder::new(dir.join("j")),
@@ -1682,6 +1874,156 @@ mod tests {
             "grandchild {gcid} survived the tree kill: {text}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-002 (2026-08-11): the fixed test command runs env_clear()ed — the
+    /// test process sees ONLY the platform allowlist (TEST_ENV_ALLOWLIST)
+    /// plus the harness's explicit `TestRunner::env` entries. Host
+    /// environment (session variables, arbitrary paths, secrets) is never
+    /// inherited.
+    #[tokio::test]
+    async fn run_tests_env_is_isolated_from_host() {
+        let dir = test_dir();
+        let runner = orz_loop::host::TestRunner {
+            command: vec![
+                "python".to_string(),
+                "-c".to_string(),
+                "import os; print('KEYS:' + ','.join(sorted(os.environ.keys()))); \
+                 print('INJECTED:' + os.environ.get('ORZ_TEST_RUNNER_INJECTED', '<absent>'))"
+                    .to_string(),
+            ],
+            timeout: Some(std::time::Duration::from_secs(30)),
+            env: vec![("ORZ_TEST_RUNNER_INJECTED".to_string(), "visible".to_string())],
+        };
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host")
+        .with_test_runner(Some(runner));
+        let result = host.run_tests().await.expect("run_tests returns a result");
+        let keys_line = result
+            .output
+            .lines()
+            .find(|l| l.starts_with("KEYS:"))
+            .expect("KEYS line in output");
+        let keys: Vec<&str> = keys_line["KEYS:".len()..].split(',').collect();
+        // Windows env vars are case-insensitive — compare uppercase.
+        let mut allowed: std::collections::HashSet<String> =
+            TEST_ENV_ALLOWLIST.iter().map(|k| k.to_uppercase()).collect();
+        allowed.insert("ORZ_TEST_RUNNER_INJECTED".to_string());
+        for key in &keys {
+            assert!(
+                allowed.contains(&key.to_uppercase()),
+                "test process saw host env var '{key}' that is not in the allowlist"
+            );
+        }
+        assert!(
+            keys.iter().any(|k| k.eq_ignore_ascii_case("PATH")),
+            "PATH (command lookup) is always in the allowlist"
+        );
+        assert!(
+            result.output.contains("INJECTED:visible"),
+            "harness-injected env entry must be visible: {}",
+            result.output
+        );
+        assert!(
+            !result.output.contains("ORZ_TEST_RUNNER="),
+            "the runner's own env var must not leak into the test process"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-003 (2026-08-11): the workspace delta records added/modified/
+    /// deleted files across a run_tests call (ADR-0010 §3.8.2
+    /// workspace-delta recording — tests may write files, populate caches,
+    /// etc.; the change list is the audit trace).
+    #[tokio::test]
+    async fn run_tests_records_workspace_delta() {
+        let dir = test_dir();
+        std::fs::write(dir.join("existing.txt"), "v1").unwrap();
+        std::fs::write(dir.join("todelete.txt"), "x").unwrap();
+        let runner = orz_loop::host::TestRunner {
+            command: vec![
+                "python".to_string(),
+                "-c".to_string(),
+                "from pathlib import Path; \
+                 Path('new.txt').write_text('n'); \
+                 Path('existing.txt').write_text('version two - longer'); \
+                 Path('todelete.txt').unlink()"
+                    .to_string(),
+            ],
+            timeout: Some(std::time::Duration::from_secs(30)),
+            env: Vec::new(),
+        };
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host")
+        .with_test_runner(Some(runner));
+        let result = host.run_tests().await.expect("run_tests returns a result");
+        use orz_loop::host::WorkspaceDeltaKind;
+        let kinds: Vec<(String, WorkspaceDeltaKind)> = result
+            .workspace_delta
+            .iter()
+            .map(|e| (e.path.clone(), e.kind.clone()))
+            .collect();
+        assert!(
+            kinds.contains(&("new.txt".to_string(), WorkspaceDeltaKind::Added)),
+            "added file in delta: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&("existing.txt".to_string(), WorkspaceDeltaKind::Modified)),
+            "modified file in delta: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&("todelete.txt".to_string(), WorkspaceDeltaKind::Deleted)),
+            "deleted file in delta: {kinds:?}"
+        );
+        assert!(
+            !result.workspace_delta_truncated,
+            "small delta must not be flagged truncated"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-003: the delta diff caps the entry list (deterministic order,
+    /// truncation flag) so a test that churns thousands of files cannot
+    /// drown the journal event.
+    #[test]
+    fn workspace_delta_diff_caps_and_sorts() {
+        let mut before = std::collections::HashMap::new();
+        let mut after = std::collections::HashMap::new();
+        // Seed one untouched file (not in the diff).
+        before.insert("stable.txt".to_string(), (1, 1, 0));
+        after.insert("stable.txt".to_string(), (1, 1, 0));
+        // More changes than the cap — all "added".
+        for i in 0..(RUN_TESTS_DELTA_MAX_ENTRIES + 50) {
+            after.insert(format!("gen/{i}.txt"), (1, 2, 0));
+        }
+        let (entries, truncated) = workspace_delta_diff(&before, &after);
+        assert!(truncated, "over-cap diff must be flagged truncated");
+        assert_eq!(entries.len(), RUN_TESTS_DELTA_MAX_ENTRIES);
+        // Deterministic order.
+        let mut sorted = entries.clone();
+        sorted.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(entries, sorted);
+        // Deleted detection — a separate small diff (an over-cap diff
+        // truncates away later-sorted entries, which is the cap working).
+        let mut before2 = std::collections::HashMap::new();
+        before2.insert("gone.txt".to_string(), (1, 1, 0));
+        before2.insert("stable.txt".to_string(), (1, 1, 0));
+        let after2 = std::collections::HashMap::from([("stable.txt".to_string(), (1, 1, 0))]);
+        let (entries, truncated) = workspace_delta_diff(&before2, &after2);
+        assert!(!truncated);
+        assert!(
+            entries.iter().any(|e| e.path == "gone.txt"
+                && e.kind == orz_loop::host::WorkspaceDeltaKind::Deleted),
+            "deleted file detected"
+        );
     }
 
     /// P0-1 (2026-08-08 stall guards): a tool call that exceeds the host's

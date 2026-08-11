@@ -1336,25 +1336,34 @@ fn compose_test_output_message(result: &crate::host::TestRunResult) -> String {
         Some(code) => format!("[test-run complete] exit_code={code}"),
         None => "[test-run complete] exit_code=none (no status — timed out?)".to_string(),
     };
+    // RT-002 (2026-08-11): secret/host-path scrubbing at the CONTEXT
+    // boundary (ADR-0010 §3.8.2: "secret、host path 和无关环境信息不得通过
+    // 失败输出泄露"). The artifact on disk keeps the raw output; only what
+    // enters the conversation is scrubbed — and scrubbing happens BEFORE
+    // the tail truncation so a cut-off secret fragment cannot survive as
+    // a partial match. Orz-secrets covers known secret shapes plus
+    // user-path/home/username segments.
+    let secret_scanned = orz_secrets::redact_secrets(&result.output);
+    let scrubbed = orz_secrets::redact_user_paths(&secret_scanned);
     let Some(path) = result.full_output_path.as_deref() else {
         // No file on disk (timeout path or write failure): inject the whole
         // (already capped) output rather than lose it.
-        return format!("{reminder}\n{}", result.output);
+        return format!("{reminder}\n{}", scrubbed);
     };
-    if result.output.len() > crate::host::RUN_TESTS_CONTEXT_CAP {
+    if scrubbed.len() > crate::host::RUN_TESTS_CONTEXT_CAP {
         // Byte-slicing must not split a UTF-8 char — step to the next
         // char boundary.
-        let mut start = result.output.len() - crate::host::RUN_TESTS_CONTEXT_CAP;
-        while start < result.output.len() && !result.output.is_char_boundary(start) {
+        let mut start = scrubbed.len() - crate::host::RUN_TESTS_CONTEXT_CAP;
+        while start < scrubbed.len() && !scrubbed.is_char_boundary(start) {
             start += 1;
         }
         format!(
             "{reminder}\n[test-run output capped at final {}KB; full output: {path}]\n{}",
             crate::host::RUN_TESTS_CONTEXT_CAP / 1024,
-            &result.output[start..],
+            &scrubbed[start..],
         )
     } else {
-        format!("{reminder}\n[full output: {path}]\n{}", result.output)
+        format!("{reminder}\n[full output: {path}]\n{}", scrubbed)
     }
 }
 
@@ -2112,8 +2121,20 @@ impl AgentLoopController {
         // D-9 (FIX_PLAN 2026-08-06): when the host carries a fixed test
         // runner, the `run_tests` tool is declared to the model — the
         // Aider-model feedback loop inside a single run (stdout/stderr/exit
-        // code only; the test files stay hidden).
-        if host.test_runner().is_some()
+        // code only; the test files stay hidden). RT-001 (2026-08-11):
+        // `run_tests` is controlled code execution (LocalMutation class) —
+        // a policy that refuses LocalMutation by name (ReadOnly: read-class
+        // tools only) must not declare it either; the declaration filter
+        // mirrors the permission gate so the model never attempts a tool
+        // the policy refuses. Benchmark (harness) keeps it: LocalMutation
+        // non-shell tools stay declared and auto-allow. Grill turns skip it
+        // (same guard as `compaction_whitelist_add`/`retrieval_disposition`:
+        // the grill promise is "read-only tools only" — P3-5 review
+        // 2026-08-11, previously only ReadOnly policy filtered it, leaving
+        // the Benchmark+grill combination with a declared run_tests).
+        if grill.is_none()
+            && host.test_runner().is_some()
+            && !ToolDispatcher::policy_refuses(policy, "run_tests")
             && !tool_defs.iter().any(|t| t.name == "run_tests")
         {
             tool_defs.push(ToolDef {
@@ -4038,94 +4059,6 @@ impl AgentLoopController {
                 None,
             ));
         }
-        // D-9 (FIX_PLAN 2026-08-06): `run_tests` executes the host's FIXED
-        // command — the model supplies no argv, so the permission gate is
-        // skipped by design (the command itself is host-owned and hidden;
-        // the tool is only declared when the host carries a test runner).
-        // The execution still leaves an audit trail: ToolStarted/
-        // ToolCompleted mirror the permission-gated path — the tool event
-        // chain is the audit surface (D-5; 2026-08-07 review F-02: this
-        // path previously recorded zero journal events).
-        if tc.name == "run_tests" {
-            let fixed_command: Option<String> = host
-                .test_runner()
-                .map(|r| r.command.join(" "));
-            writer
-                .record(
-                    EventType::ToolStarted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "fixed_command": fixed_command,
-                    }),
-                )
-                .await?;
-            // P1-1 (2026-08-08 stall guards): a legit long test run (up to
-            // the 30min F-09 cap) journals nothing between ToolStarted and
-            // ToolCompleted — without periodic stamps the stall watchdog
-            // would fire mid-run (2026-08-08 review P1-2/D1-2: the original
-            // before/after stamps only reset the idle counter at the
-            // boundaries; a 30min run idles past the 6min window).
-            if let Some(h) = heartbeat {
-                h.stamp();
-            }
-            let result = {
-                let fut = host.run_tests();
-                tokio::pin!(fut);
-                loop {
-                    tokio::select! {
-                        r = &mut fut => break r,
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-                            if let Some(h) = heartbeat {
-                                h.stamp();
-                            }
-                        }
-                    }
-                }
-            }
-            .map_err(|e| AgentLoopError::Session(e.to_string()))?;
-            if let Some(h) = heartbeat {
-                h.stamp();
-            }
-            writer
-                .record(
-                    EventType::ToolCompleted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "exit_code": result.exit_code,
-                        "full_output_path": result.full_output_path,
-                    }),
-                )
-                .await?;
-            // 2026-08-08 blackboard partition: fold the executed call into
-            // the tool-action section (terminal — a fixed command run).
-            self.blackboard.write().tool_actions.push(ToolActionRecord {
-                category: ToolDispatcher::action_category(&tc.name),
-                tool: tc.name.clone(),
-                timestamp: chrono_utc_now(),
-            });
-            let tool_result = ToolResult {
-                // F-09 (2026-08-07 review): mechanical context gate — only
-                // the completion reminder + the final output (tail-capped)
-                // enter the conversation; the full (capped) output is on
-                // disk and the model reads it via read_file when it wants
-                // more than the tail.
-                output: compose_test_output_message(&result),
-                exit_code: result.exit_code,
-            };
-            messages.push(Message {
-                role: Role::Tool,
-                content: tool_result.output.clone(),
-                tool_call_id: Some(tc.call_id.clone()),
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            });
-            // run_tests executed the host's fixed command — a success for
-            // the denial streak (ADR-0010 §3.5.4: only actual success resets).
-            return Ok((tool_result, Some(PolicyFeedback::Succeeded)));
-        }
-
         // Permission gate. C2-1 (2026-08-11): lane self-execution skips
         // the bridge entirely (no PermissionRequested/PermissionDecision
         // events) — the explicit retrieval-mode gate above is its
@@ -4225,6 +4158,108 @@ impl AgentLoopController {
                     policy_revision: 0,
                 })),
             ));
+        }
+
+        // D-9 (FIX_PLAN 2026-08-06) + RT-001 (2026-08-11): `run_tests`
+        // executes the host's FIXED command — the model supplies no argv
+        // (the command itself is host-owned and hidden; the tool is only
+        // declared when the host carries a test runner), but it IS controlled
+        // code execution (ADR-0010 §3.8.2: the test process can write files,
+        // hit the network, spawn children), so it passes the SAME permission
+        // gate as any LocalMutation tool above: Interactive prompts the user,
+        // Benchmark (harness — ORZ_ALLOW_WRITE) auto-allows via the host
+        // bridge (permission.rs), the retrieval lane never reaches this point
+        // (its write-domain gate refuses run_tests with
+        // `retrieval_role_execution_denied` first). The execution leaves a
+        // full audit trail: PermissionRequested/PermissionDecision (denials
+        // are no-ToolStarted, same shape as every other tool) then
+        // ToolStarted/ToolCompleted (D-5; 2026-08-07 review F-02: this path
+        // previously recorded zero journal events).
+        if tc.name == "run_tests" {
+            let fixed_command: Option<String> = host
+                .test_runner()
+                .map(|r| r.command.join(" "));
+            writer
+                .record(
+                    EventType::ToolStarted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "fixed_command": fixed_command,
+                    }),
+                )
+                .await?;
+            // P1-1 (2026-08-08 stall guards): a legit long test run (up to
+            // the 30min F-09 cap) journals nothing between ToolStarted and
+            // ToolCompleted — without periodic stamps the stall watchdog
+            // would fire mid-run (2026-08-08 review P1-2/D1-2: the original
+            // before/after stamps only reset the idle counter at the
+            // boundaries; a 30min run idles past the 6min window).
+            if let Some(h) = heartbeat {
+                h.stamp();
+            }
+            let result = {
+                let fut = host.run_tests();
+                tokio::pin!(fut);
+                loop {
+                    tokio::select! {
+                        r = &mut fut => break r,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                            if let Some(h) = heartbeat {
+                                h.stamp();
+                            }
+                        }
+                    }
+                }
+            }
+            .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            if let Some(h) = heartbeat {
+                h.stamp();
+            }
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": result.exit_code,
+                        "full_output_path": result.full_output_path,
+                        // RT-003 (2026-08-11): workspace changes the test
+                        // run caused (capped list; schema extended in
+                        // `tool-completed-event-payload-v0.1.schema.json`
+                        // — Schema first, ADR-0010 §5.3).
+                        "workspace_delta": result.workspace_delta,
+                        "workspace_delta_truncated": result.workspace_delta_truncated,
+                    }),
+                )
+                .await?;
+            // 2026-08-08 blackboard partition: fold the executed call into
+            // the tool-action section (terminal — a fixed command run).
+            self.blackboard.write().tool_actions.push(ToolActionRecord {
+                category: ToolDispatcher::action_category(&tc.name),
+                tool: tc.name.clone(),
+                timestamp: chrono_utc_now(),
+            });
+            let tool_result = ToolResult {
+                // F-09 (2026-08-07 review): mechanical context gate — only
+                // the completion reminder + the final output (tail-capped
+                // and secret/path-scrubbed, RT-002 2026-08-11) enter the
+                // conversation; the full (capped) output is on disk and the
+                // model reads it via read_file when it wants more than the
+                // tail.
+                output: compose_test_output_message(&result),
+                exit_code: result.exit_code,
+            };
+            messages.push(Message {
+                role: Role::Tool,
+                content: tool_result.output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            // run_tests executed the host's fixed command — a success for
+            // the denial streak (ADR-0010 §3.5.4: only actual success resets).
+            return Ok((tool_result, Some(PolicyFeedback::Succeeded)));
         }
 
         // IP5: pre-mutation snapshot — record the pre-tool worktree state of
@@ -9064,6 +9099,7 @@ mod tests {
             Some(crate::host::TestRunner {
                 command: vec!["pytest-stub".to_string()],
                 timeout: None,
+                env: Vec::new(),
             })
         }
         async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
@@ -9081,7 +9117,10 @@ mod tests {
             _tool: &str,
             _args: &serde_json::Value,
         ) -> Result<PermitDecision, PermitError> {
-            Ok(PermitDecision::Deny)
+            // RT-001 (2026-08-11): run_tests passes the permission gate —
+            // this host models the Benchmark (harness) policy, where the
+            // bridge auto-allows LocalMutation non-shell tools.
+            Ok(PermitDecision::AllowOnce)
         }
     }
 
@@ -9090,6 +9129,7 @@ mod tests {
             output: "FAILED tests/test_x.py::test_y".to_string(),
             exit_code: Some(1),
             full_output_path: Some("D:/test-output.txt".to_string()),
+            ..Default::default()
         }
     }
     fn passing_test_run() -> crate::host::TestRunResult {
@@ -9097,6 +9137,7 @@ mod tests {
             output: "1 passed".to_string(),
             exit_code: Some(0),
             full_output_path: Some("D:/test-output.txt".to_string()),
+            ..Default::default()
         }
     }
 
@@ -9294,6 +9335,7 @@ mod tests {
             Some(crate::host::TestRunner {
                 command: vec!["pytest-stub".to_string()],
                 timeout: None,
+                env: Vec::new(),
             })
         }
         async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
@@ -9301,6 +9343,7 @@ mod tests {
                 output: "1 passed".to_string(),
                 exit_code: Some(0),
                 full_output_path: Some("D:/test-output.txt".to_string()),
+                ..Default::default()
             })
         }
         async fn request_permission(
@@ -9309,7 +9352,9 @@ mod tests {
             _tool: &str,
             _args: &serde_json::Value,
         ) -> Result<PermitDecision, PermitError> {
-            Ok(PermitDecision::Deny)
+            // RT-001 (2026-08-11): same as ScriptedTestRunnerHost — this
+            // host models the Benchmark (harness) auto-allow policy.
+            Ok(PermitDecision::AllowOnce)
         }
         async fn call_tool(
             &self,
@@ -9371,6 +9416,259 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// RT-001 (2026-08-11): a test-runner host with an injectable policy and
+    /// permission decision — models Interactive (user denies), ReadOnly
+    /// (declaration filter) and the scripted result path.
+    struct PolicyTestRunnerHost {
+        journal: JournalRecorder,
+        policy: crate::host::ToolPolicy,
+        decision: PermitDecision,
+        result: Option<crate::host::TestRunResult>,
+    }
+    #[async_trait]
+    impl LoopHost for PolicyTestRunnerHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &FullRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            self.policy
+        }
+        fn test_runner(&self) -> Option<crate::host::TestRunner> {
+            Some(crate::host::TestRunner {
+                command: vec!["pytest-stub".to_string()],
+                timeout: None,
+                env: Vec::new(),
+            })
+        }
+        async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
+            Ok(self.result.clone().unwrap_or_default())
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(self.decision.clone())
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            unreachable!("run_tests is handled before the generic call_tool path")
+        }
+    }
+
+    /// RT-001: under the Interactive policy a user denial refuses run_tests
+    /// through the SAME permission gate as any LocalMutation tool — the
+    /// call is answered with the deny message, and the refusal is
+    /// no-ToolStarted (the event chain says what happened: Permission
+    /// events, no execution events).
+    #[tokio::test]
+    async fn d9_run_tests_permission_gate_denies_under_interactive() {
+        let dir = test_dir();
+        let host = PolicyTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            policy: crate::host::ToolPolicy::Interactive,
+            decision: PermitDecision::Deny,
+            result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let all = events(&dir);
+        let types = event_types(&dir);
+        assert!(
+            types.contains(&EventType::PermissionRequested),
+            "permission request journaled: {types:?}"
+        );
+        assert!(
+            types.contains(&EventType::PermissionDecision),
+            "permission decision journaled: {types:?}"
+        );
+        assert!(
+            !all.iter().any(|e| e.event_type == EventType::ToolStarted
+                && e.payload.get("tool").and_then(|v| v.as_str()) == Some("run_tests")),
+            "a denied run_tests must not produce ToolStarted"
+        );
+        assert!(
+            !all.iter().any(|e| e.event_type == EventType::ToolCompleted
+                && e.payload.get("tool").and_then(|v| v.as_str()) == Some("run_tests")),
+            "a denied run_tests must not produce ToolCompleted"
+        );
+        // The model sees the explicit refusal (and is told not to retry).
+        let round2 = &fake.received_requests()[1].messages;
+        let tool_msg = round2
+            .iter()
+            .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-t"))
+            .expect("denied call answered with a tool message");
+        assert!(
+            tool_msg.content.contains("denied by permission gate"),
+            "deny message: {}",
+            tool_msg.content
+        );
+        // P3-6: the blackboard gate log records the refusal (same shape as
+        // every other denied tool).
+        let gate_log = controller.blackboard.read();
+        assert!(
+            gate_log
+                .gate_log
+                .gate_decisions
+                .iter()
+                .any(|d| d.contains("run_tests")),
+            "gate log records the run_tests denial: {:?}",
+            gate_log.gate_log.gate_decisions
+        );
+        drop(gate_log);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-001: a policy that refuses LocalMutation by name (ReadOnly —
+    /// read-class tools only) filters `run_tests` out of the model's tool
+    /// declarations, so the model never attempts it (mirror of the
+    /// permission gate at declaration time).
+    #[tokio::test]
+    async fn d9_run_tests_not_declared_under_readonly_policy() {
+        let dir = test_dir();
+        let host = PolicyTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            policy: crate::host::ToolPolicy::ReadOnly,
+            decision: PermitDecision::AllowOnce,
+            result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            !fake.received_requests()[0]
+                .tools
+                .iter()
+                .any(|t| t.name == "run_tests"),
+            "run_tests must not be declared under ReadOnly"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-003: the ToolCompleted journal event carries the workspace-delta
+    /// the host measured across the run (Schema was extended first —
+    /// `tool-completed-event-payload-v0.1.schema.json`).
+    #[tokio::test]
+    async fn d9_run_tests_tool_completed_carries_workspace_delta() {
+        let dir = test_dir();
+        let result = crate::host::TestRunResult {
+            output: "1 passed".to_string(),
+            exit_code: Some(0),
+            full_output_path: None,
+            workspace_delta: vec![crate::host::WorkspaceDeltaEntry {
+                path: "cache/artifact.json".to_string(),
+                kind: crate::host::WorkspaceDeltaKind::Added,
+            }],
+            workspace_delta_truncated: false,
+        };
+        let host = PolicyTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            policy: crate::host::ToolPolicy::Benchmark,
+            decision: PermitDecision::AllowOnce,
+            result: Some(result),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "验证", "RUN-TEST", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let all = events(&dir);
+        let completed = all
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("run_tests")
+            })
+            .expect("run_tests ToolCompleted journaled");
+        let delta = completed
+            .payload
+            .get("workspace_delta")
+            .and_then(|v| v.as_array())
+            .expect("workspace_delta array present");
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0]["path"], serde_json::json!("cache/artifact.json"));
+        assert_eq!(delta[0]["kind"], serde_json::json!("added"));
+        assert_eq!(
+            completed.payload.get("workspace_delta_truncated"),
+            Some(&serde_json::json!(false))
+        );
+
+        // P3-6: the truncation flag round-trips into the payload too.
+        let truncated = crate::host::TestRunResult {
+            output: "1 passed".to_string(),
+            exit_code: Some(0),
+            full_output_path: None,
+            workspace_delta: Vec::new(),
+            workspace_delta_truncated: true,
+        };
+        let host = PolicyTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            policy: crate::host::ToolPolicy::Benchmark,
+            decision: PermitDecision::AllowOnce,
+            result: Some(truncated),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "验证", "RUN-TEST2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let all = events(&dir);
+        let completed2 = all
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("run_tests")
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-t2")
+            })
+            .expect("second run_tests ToolCompleted journaled");
+        assert_eq!(
+            completed2.payload.get("workspace_delta_truncated"),
+            Some(&serde_json::json!(true))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn compose_test_output_message_gates_context() {
         // F-09: small output → reminder + full-output pointer; huge output
@@ -9379,6 +9677,7 @@ mod tests {
             output: "1 passed".to_string(),
             exit_code: Some(0),
             full_output_path: Some("out.txt".to_string()),
+            ..Default::default()
         };
         let msg = compose_test_output_message(&small);
         assert!(msg.starts_with("[test-run complete] exit_code=0"));
@@ -9390,6 +9689,7 @@ mod tests {
             output: big_out,
             exit_code: Some(1),
             full_output_path: Some("out.txt".to_string()),
+            ..Default::default()
         };
         let msg = compose_test_output_message(&big);
         assert!(msg.contains("capped at final 32KB"));
@@ -9399,10 +9699,27 @@ mod tests {
             output: "partial".to_string(),
             exit_code: None,
             full_output_path: None,
+            ..Default::default()
         };
         let msg = compose_test_output_message(&no_path);
         assert!(msg.starts_with("[test-run complete] exit_code=none"));
         assert!(msg.ends_with("partial"));
+
+        // RT-002: scrubbing happens at the CONTEXT boundary — a secret shape
+        // in the output is replaced before it enters the conversation, and
+        // the artifact path is unaffected (the message carries the path).
+        let secret = crate::host::TestRunResult {
+            output: "KEY=sk-0123456789abcdef0123456789abcdef\nFailed on line 3".to_string(),
+            exit_code: Some(1),
+            full_output_path: Some("out.txt".to_string()),
+            ..Default::default()
+        };
+        let msg = compose_test_output_message(&secret);
+        assert!(
+            !msg.contains("sk-0123456789abcdef0123456789abcdef"),
+            "secret shape must be scrubbed: {msg}"
+        );
+        assert!(msg.contains("Failed on line 3"), "non-secret text passes through");
     }
 
     #[tokio::test]
