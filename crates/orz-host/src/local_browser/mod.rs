@@ -3,10 +3,13 @@
 //! boundary, 2026-08-10: capability was explicitly `Unsupported`).
 //!
 //! MVP scope (user ruling 2026-08-10): pure webpage reading — gate the URL,
-//! navigate, extract rendered text, record evidence. NO PDF pipeline, NO
-//! form interaction, NO arbitrary JS evaluation (ADR-0010 §3.7.3 keeps those
-//! out of the MVP; the only `Runtime.evaluate` calls are host-owned fixed
-//! expressions).
+//! navigate, extract rendered text, record evidence. The PDF evidence
+//! pipeline (2026-08-11) adds `download_or_read` — an owned-tab download
+//! into an isolated staging dir for whitelisted paper-library domains
+//! (`ORZ_PDF_BROWSER_DOMAINS`), consumed by the host's PDF evidence store.
+//! Still NO form interaction, NO arbitrary JS evaluation (ADR-0010 §3.7.3
+//! keeps those out of the MVP; the only `Runtime.evaluate` calls are
+//! host-owned fixed expressions).
 //!
 //! Architecture:
 //! - [`BrowserSession`] trait — the tool side depends on this, so tests and
@@ -50,12 +53,33 @@ pub const MAX_READ_CHARS: usize = 100_000;
 /// separates the footer from page text).
 pub const TRUNCATED_FOOTER_PREFIX: &str = "\n\n[browser_read content truncated:";
 
+/// Outcome of one `download_or_read` call.
+#[derive(Debug, Clone)]
+pub enum BrowserDownloadOutcome {
+    /// A download completed into the staging dir. The file is NOT yet
+    /// validated — the PDF evidence pipeline verifies magic/parse.
+    Pdf { path: PathBuf, final_url: String },
+    /// The navigation produced a rendered page instead of a download.
+    Page(PageReadOutcome),
+}
+
 /// The read-only browser surface the tools and probe rely on.
 #[async_trait]
 pub trait BrowserSession: Send + Sync {
     /// Read one URL. Implementations must enforce the URL gate themselves
     /// (fail-closed) and return explicit errors — never a silent fallback.
     async fn read_page(&self, url: &str) -> Result<PageReadOutcome, CdpError>;
+
+    /// Download-or-read one URL into `download_dir` (PDF evidence pipeline,
+    /// 2026-08-11). The URL gate applies on entry and on every redirect; a
+    /// canceled download is an explicit error, never a fallback to a read.
+    /// Implementations must clean the staging dir before downloading so
+    /// "newest file" semantics are exact.
+    async fn download_or_read(
+        &self,
+        url: &str,
+        download_dir: &Path,
+    ) -> Result<BrowserDownloadOutcome, CdpError>;
 
     /// True when a browser is actually available (drives tool declaration).
     fn ready(&self) -> bool;
@@ -101,6 +125,18 @@ impl BrowserSession for LocalBrowserManager {
         session.read_page(url).await
     }
 
+    async fn download_or_read(
+        &self,
+        url: &str,
+        download_dir: &Path,
+    ) -> Result<BrowserDownloadOutcome, CdpError> {
+        let mut guard = self.inner.lock().await;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| CdpError::Io("browser session not launched".into()))?;
+        session.download_or_read(url, download_dir).await
+    }
+
     fn ready(&self) -> bool {
         // try_lock: a read in progress must not block declaration checks.
         // The process must be alive too — a browser killed out-of-band (crash,
@@ -137,6 +173,17 @@ impl UnavailableBrowserSession {
 #[async_trait]
 impl BrowserSession for UnavailableBrowserSession {
     async fn read_page(&self, _url: &str) -> Result<PageReadOutcome, CdpError> {
+        Err(CdpError::Io(format!(
+            "browser unavailable: {}",
+            self.reason
+        )))
+    }
+
+    async fn download_or_read(
+        &self,
+        _url: &str,
+        _download_dir: &Path,
+    ) -> Result<BrowserDownloadOutcome, CdpError> {
         Err(CdpError::Io(format!(
             "browser unavailable: {}",
             self.reason
@@ -416,14 +463,78 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&workspace);
     }
 
+    /// PDF evidence (2026-08-11 review C1-1): real-Chrome download e2e —
+    /// download a public test PDF through the CDP channel, assert the file
+    /// lands in the staging dir with %PDF magic, and that the final URL
+    /// comes from the download events (not about:blank). This is the live
+    /// check the browser download channel needs: the scripted ws tests
+    /// cannot catch a silently-suppressed event family (P1-1) or a lost
+    /// source_url (P1-2).
+    #[tokio::test]
+    #[ignore = "live browser e2e — GSA_RUN_LIVE_BROWSER_TESTS=1 cargo test -p orz-host -- --ignored local_browser_e2e_pdf_download"]
+    async fn local_browser_e2e_pdf_download() {
+        if std::env::var_os(LIVE_BROWSER_ENV).is_none() {
+            return; // env-gated; the #[ignore] marker is the primary switch
+        }
+        let workspace = std::env::temp_dir().join(format!(
+            "orz-browser-e2e-pdf-{:?}",
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let mut session = CdpBrowserSession::launch(
+            find_browser(None).expect("a Chrome/Edge binary must be discoverable").path,
+            LocalBrowserManager::profile_dir_for(&workspace, "RUN-E2E-PDF"),
+            CdpConfig::default(),
+        )
+        .await
+        .expect("headless browser must launch");
+
+        let staging = workspace.join("staging");
+        let url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf";
+        let outcome = session
+            .download_or_read(url, &staging)
+            .await
+            .expect("real Chrome must download the PDF");
+        match outcome {
+            BrowserDownloadOutcome::Pdf { path, final_url } => {
+                assert!(path.exists(), "downloaded file must exist");
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(
+                    bytes.starts_with(b"%PDF-"),
+                    "downloaded bytes must be a real PDF (magic)"
+                );
+                assert!(
+                    final_url.contains("dummy.pdf"),
+                    "final_url must be the downloaded resource URL, got: {final_url}"
+                );
+                assert_ne!(final_url, "about:blank", "P1-2: source_url must not degrade");
+            }
+            other => panic!("expected a PDF download, got {other:?}"),
+        }
+
+        session.shutdown().await;
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
     struct StubBrowser {
         outcome: Result<PageReadOutcome, CdpError>,
+        download: Result<BrowserDownloadOutcome, CdpError>,
     }
 
     #[async_trait]
     impl BrowserSession for StubBrowser {
         async fn read_page(&self, _url: &str) -> Result<PageReadOutcome, CdpError> {
             self.outcome.clone()
+        }
+
+        async fn download_or_read(
+            &self,
+            _url: &str,
+            _download_dir: &Path,
+        ) -> Result<BrowserDownloadOutcome, CdpError> {
+            self.download.clone()
         }
 
         fn ready(&self) -> bool {
@@ -445,6 +556,7 @@ pub(crate) mod tests {
     pub(crate) fn ready_stub_browser() -> SharedBrowser {
         Arc::new(StubBrowser {
             outcome: Ok(sample_outcome("hello page")),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome("hello page"))),
         })
     }
 
@@ -452,6 +564,7 @@ pub(crate) mod tests {
     async fn read_success_wraps_text_with_meta() {
         let browser = StubBrowser {
             outcome: Ok(sample_outcome("hello world")),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome("hello world"))),
         };
         let result = handle_browser_read(&browser, &json!({"url": "https://example.com/"})).await.unwrap();
         assert_eq!(result.exit_code, Some(0));
@@ -466,6 +579,7 @@ pub(crate) mod tests {
         let long = "x".repeat(MAX_READ_CHARS + 500);
         let browser = StubBrowser {
             outcome: Ok(sample_outcome(&long)),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome(&long))),
         };
         let result = handle_browser_read(&browser, &json!({"url": "https://example.com/"})).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -486,6 +600,9 @@ pub(crate) mod tests {
             outcome: Err(CdpError::UrlGate(UrlGateError::PrivateAddress {
                 host: "10.0.0.1".into(),
             })),
+            download: Err(CdpError::UrlGate(UrlGateError::PrivateAddress {
+                host: "10.0.0.1".into(),
+            })),
         };
         let err = handle_browser_read(&browser, &json!({"url": "http://10.0.0.1/"})).await.unwrap_err();
         assert!(err.to_string().contains("refused"), "{err}");
@@ -501,6 +618,7 @@ pub(crate) mod tests {
     async fn empty_content_is_explicit_error_not_success() {
         let browser = StubBrowser {
             outcome: Err(CdpError::EmptyContent),
+            download: Err(CdpError::EmptyContent),
         };
         let err = handle_browser_read(&browser, &json!({"url": "https://example.com/"})).await.unwrap_err();
         assert!(err.to_string().contains("no readable text"), "{err}");
@@ -510,6 +628,7 @@ pub(crate) mod tests {
     async fn missing_url_is_invalid_arguments() {
         let browser = StubBrowser {
             outcome: Ok(sample_outcome("x")),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome("x"))),
         };
         let err = handle_browser_read(&browser, &json!({})).await.unwrap_err();
         assert!(err.to_string().contains("`url`"), "{err}");
@@ -521,6 +640,7 @@ pub(crate) mod tests {
     async fn unknown_arguments_are_rejected() {
         let browser = StubBrowser {
             outcome: Ok(sample_outcome("x")),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome("x"))),
         };
         let err = handle_browser_read(
             &browser,

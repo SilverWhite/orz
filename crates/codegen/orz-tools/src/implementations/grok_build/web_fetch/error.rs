@@ -56,6 +56,9 @@ pub enum WebFetchError {
 
     #[error("content body does not match claimed content type {content_type} from {url}")]
     ContentTypeMismatch { content_type: String, url: String },
+
+    #[error("PDF evidence pipeline failed: {0}")]
+    PdfEvidence(#[from] crate::implementations::pdf_evidence::PdfEvidenceError),
 }
 
 /// Extra recovery guidance appended to an [`WebFetchError::SsrfBlocked`] message.

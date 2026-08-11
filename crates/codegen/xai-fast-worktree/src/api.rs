@@ -1603,6 +1603,7 @@ pub mod gc {
 
     /// Asserts the scan can observe this process's own CWD.
     /// Production use: linux/macos `live_process_cwds` fail-closed validation.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     fn scan_contains_cwd(cwds: &[PathBuf], path: &Path) -> bool {
         let path_canon = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         cwds.iter().any(|c| {
@@ -1618,6 +1619,7 @@ pub mod gc {
     /// process is outside every candidate path without knowing CWD.
     /// Production use: linux/macos `live_process_cwds` (was cfg(test)-only;
     /// linux build first attempted 2026-08-07).
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     fn validate_cwd_scan(cwds: Vec<PathBuf>) -> LiveCwdScan {
         match std::env::current_dir() {
             Ok(cwd) if scan_contains_cwd(&cwds, &cwd) => LiveCwdScan::Ok(cwds),

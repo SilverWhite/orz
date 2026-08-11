@@ -34,6 +34,7 @@ impl MainAgent {
     /// gateway — the transport stamps it on every wire frame (reasoning
     /// deltas included) so a long max-effort thinking round counts as
     /// activity for the stall watchdog.
+    #[allow(clippy::too_many_arguments)] // RoundAgent trait signature — every param is wired
     pub async fn run_round(
         &self,
         system: &str,

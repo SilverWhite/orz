@@ -14,6 +14,8 @@ use super::http::HttpClient;
 use super::overflow::{OverflowHandler, RecoveryTools, inline_budget};
 use super::ssrf;
 use crate::implementations::grok_build::storage::SessionFileWriter;
+use crate::implementations::pdf_evidence::ingest_pdf_bytes;
+use crate::implementations::read_file::pdf::MAX_PDF_BYTES;
 use crate::types::output::{WebFetchContent, WebFetchOutput, WebFetchSourceArtifact};
 use scraper::{Html, Selector};
 
@@ -99,13 +101,7 @@ impl WebFetchClient {
 
         // Make request and build output.
         let http = self.http.get_or_rebuild()?;
-        let result = match fetch_url(
-            &http,
-            &url,
-            self.params.max_content_length(),
-            self.params.allow_local(),
-        )
-        .await
+        let result = match fetch_url(&http, &url, self.params.allow_local()).await
         {
             Ok(result) => result,
             Err(e @ WebFetchError::HttpRequest(_)) => {
@@ -133,8 +129,47 @@ impl WebFetchClient {
             }
         };
 
-        // PDF: save raw bytes to disk instead of lossy UTF-8 conversion.
+        // Size cap applied after the content type is known: PDFs use the
+        // evidence-store cap (50 MB), everything else the configured cap
+        // (ADR-0010 §3.7.7 download size limits).
+        let max_bytes = if is_pdf(&content_type) {
+            MAX_PDF_BYTES
+        } else {
+            self.params.max_content_length()
+        };
+        if body.len() > max_bytes {
+            return Err(WebFetchError::ResponseTooLarge { max: max_bytes });
+        }
+
+        // PDF: when an evidence root is configured, ingest into the
+        // content-addressed store and return an inline text preview with a
+        // document id (ADR-0010 §3.7.6). Otherwise save raw bytes to disk
+        // instead of lossy UTF-8 conversion (legacy behavior).
         if is_pdf(&content_type) {
+            if let Some(root) = self.params.pdf_evidence_root.as_deref() {
+                let pdf_bytes_len = body.len();
+                let ingest = ingest_pdf_bytes(body, root, &final_url)
+                    .await
+                    .map_err(WebFetchError::PdfEvidence)?;
+                let truncated = ingest.truncated;
+                let output = WebFetchOutput::Content(WebFetchContent {
+                    url: final_url,
+                    content: ingest.return_text.clone(),
+                    content_type,
+                    status_code,
+                    bytes: pdf_bytes_len,
+                    source_artifact: None,
+                    inline_fallback: Some(ingest.return_text.clone()),
+                    output_location: None,
+                });
+                // Truncated evidence previews never enter the cache (same
+                // discipline as truncated text content).
+                if !truncated {
+                    let mut cache = self.cache.write();
+                    cache.insert_text(url_str, output.clone(), false);
+                }
+                return Ok(output);
+            }
             let media_session_folder = require_media_session_folder(session_folder)?;
             let output = save_pdf(
                 &self.download_writer,
@@ -361,7 +396,6 @@ enum FetchResult {
 async fn fetch_url(
     client: &reqwest::Client,
     url: &Url,
-    max_content_length: usize,
     allow_local: bool,
 ) -> Result<FetchResult, WebFetchError> {
     let mut current_url = url.clone();
@@ -425,11 +459,8 @@ async fn fetch_url(
 
         let body = resp.bytes().await?;
 
-        if body.len() > max_content_length {
-            return Err(WebFetchError::ResponseTooLarge {
-                max: max_content_length,
-            });
-        }
+        // Size cap is applied by the caller after the content type is known
+        // (PDFs use the evidence-store cap, other types the configured cap).
 
         return Ok(FetchResult::Content {
             body: body.to_vec(),
@@ -1534,5 +1565,123 @@ mod tests {
         assert_eq!(media_extension("image/x-custom"), "bin");
         assert_eq!(media_extension("video/x-custom"), "bin");
         assert_eq!(media_extension("application/octet-stream"), "bin");
+    }
+
+    // ── PDF evidence pipeline (direct fetch) ────────────────────────────
+
+    /// Serve `bytes` as `application/pdf` from a local wiremock server.
+    async fn serve_pdf(bytes: Vec<u8>) -> (wiremock::MockServer, String) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/paper.pdf"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/pdf")
+                    .set_body_bytes(bytes),
+            )
+            .mount(&server)
+            .await;
+        let url = format!("{}/paper.pdf", server.uri());
+        (server, url)
+    }
+
+    #[tokio::test]
+    async fn web_fetch_inline_pdf_pipeline() {
+        use crate::implementations::pdf_evidence::read_pages;
+        use crate::implementations::read_file::pdf::make_test_pdf;
+
+        let (_server, url) = serve_pdf(make_test_pdf(&["Alpha", "Beta"])).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let evidence_root = tmp.path().join("evidence");
+        let client = WebFetchClient::new(&WebFetchParams {
+            pdf_evidence_root: Some(evidence_root.clone()),
+            allow_local: Some(true),
+            ..WebFetchParams::default()
+        })
+        .unwrap();
+
+        let out = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap();
+        let WebFetchOutput::Content(c) = out else {
+            panic!("expected Content");
+        };
+        assert!(c.content.contains("PDF evidence: 2 pages"), "{}", c.content);
+        assert!(c.content.contains("document_id=sha256:"), "{}", c.content);
+        assert!(c.content.contains("text_layer=yes"), "{}", c.content);
+        assert!(c.content.contains("--- Page 1 ---"));
+        assert!(c.content.contains("Alpha"));
+        assert!(c.content.contains("Beta"));
+
+        // Evidence store populated; pages readable by document id.
+        let doc_id = c
+            .content
+            .split("document_id=")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap();
+        assert!(doc_id.starts_with("sha256:"));
+        let pages = read_pages(&evidence_root, doc_id, &[0, 1]).unwrap();
+        assert_eq!(pages[0].text, "Alpha");
+        assert_eq!(pages[1].text, "Beta");
+    }
+
+    #[tokio::test]
+    async fn web_fetch_inline_invalid_pdf_is_hard_error() {
+        let (_server, url) = serve_pdf(b"<html><body>login wall</body></html>".to_vec()).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let client = WebFetchClient::new(&WebFetchParams {
+            pdf_evidence_root: Some(tmp.path().join("evidence")),
+            allow_local: Some(true),
+            ..WebFetchParams::default()
+        })
+        .unwrap();
+
+        let err = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap_err();
+        assert!(
+            err.to_string().contains("not a valid PDF"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn web_fetch_unconfigured_keeps_legacy_save_pdf() {
+        let (_server, url) = serve_pdf(b"%PDF-1.4\ndummy".to_vec()).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let client = WebFetchClient::new(&WebFetchParams {
+            allow_local: Some(true),
+            ..WebFetchParams::default()
+        })
+        .unwrap();
+
+        let out = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap();
+        let WebFetchOutput::Content(c) = out else {
+            panic!("expected Content");
+        };
+        assert!(c.content.contains("PDF downloaded"), "{}", c.content);
+        // Legacy path saves raw bytes without validation or hashing.
+        assert!(!c.content.contains("document_id="), "{}", c.content);
+    }
+
+    #[tokio::test]
+    async fn web_fetch_pdf_size_cap_applies() {
+        // PDFs use the evidence-store cap (50 MB), not the 10 MB inline cap.
+        let (_server, url) = serve_pdf(vec![0u8; crate::implementations::read_file::pdf::MAX_PDF_BYTES + 1]).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let client = WebFetchClient::new(&WebFetchParams {
+            pdf_evidence_root: Some(tmp.path().join("evidence")),
+            allow_local: Some(true),
+            ..WebFetchParams::default()
+        })
+        .unwrap();
+
+        let err = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap_err();
+        assert!(
+            matches!(err, WebFetchError::ResponseTooLarge { .. }),
+            "got: {err}"
+        );
     }
 }

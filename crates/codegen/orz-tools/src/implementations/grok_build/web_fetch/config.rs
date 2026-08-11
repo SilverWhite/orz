@@ -1,5 +1,6 @@
 //! Runtime-configurable parameters for the `web_fetch` tool.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,13 @@ pub struct WebFetchParams {
     /// allow_local = true` or `GROK_WEB_FETCH_ALLOW_LOCAL=1`.
     #[serde(default)]
     pub allow_local: Option<bool>,
+    /// When set, fetched PDFs are ingested into the content-addressed PDF
+    /// evidence store rooted at this directory (see `implementations/
+    /// pdf_evidence`) and inline page text is returned. When unset, the
+    /// legacy behavior applies: raw bytes are saved to the session
+    /// downloads directory with no validation or hashing.
+    #[serde(default)]
+    pub pdf_evidence_root: Option<PathBuf>,
 }
 
 register_resource!("grok_build", "WebFetch", WebFetchParams);

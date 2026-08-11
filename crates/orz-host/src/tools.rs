@@ -59,8 +59,11 @@ pub fn is_web_search_tool(name: &str) -> bool {
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the web_fetch client config — always
 /// enabled (direct HTTP fetch, no key dependency); bounded by the
-/// fail-closed defaults (SSRF guard, size caps).
-pub fn web_fetch_config_default() -> orz_tools::implementations::grok_build::web_fetch::WebFetchConfig {
+/// fail-closed defaults (SSRF guard, size caps). PDF evidence pipeline
+/// (2026-08-11): the cwd-level evidence store is wired so direct fetches of
+/// PDFs are ingested inline (ADR-0010 §3.7.6). Other orz-tools hosts that
+/// don't configure a root keep the legacy save-to-downloads behavior.
+pub fn web_fetch_config_default(cwd: &Path) -> orz_tools::implementations::grok_build::web_fetch::WebFetchConfig {
     use orz_tools::implementations::grok_build::web_fetch::{WebFetchConfig, WebFetchParams};
     WebFetchConfig::Enabled {
         params: WebFetchParams {
@@ -73,6 +76,7 @@ pub fn web_fetch_config_default() -> orz_tools::implementations::grok_build::web
             allowed_domains: None,
             proxy_endpoint: None,
             allow_local: None,
+            pdf_evidence_root: Some(crate::pdf_evidence::evidence_root(cwd)),
         },
     }
 }
@@ -107,7 +111,7 @@ pub fn build_toolset(
         state_path: cwd.join(".gsa").join("state.json"),
         memory_backend: None,
         web_search_config: web_search_config.clone(),
-        web_fetch_config: web_fetch_config_default(),
+        web_fetch_config: web_fetch_config_default(cwd),
         lsp: None,
         image_gen_config: Default::default(),
         video_gen_config: Default::default(),
@@ -247,6 +251,12 @@ impl orz_loop::host::ToolRegistry for ToolsetRegistry {
         if name == "browser_read" && self.browser_ready {
             return Some(crate::local_browser::browser_read_tool_def());
         }
+        // PDF evidence (2026-08-11): `pdf_read` reads the local evidence
+        // store — no browser dependency, always declared (project_doc_index
+        // pattern). The mode gate lives in the relay.
+        if name == "pdf_read" {
+            return Some(crate::pdf_evidence::pdf_read_tool_def());
+        }
         self.toolset
             .tool_definitions()
             .into_iter()
@@ -277,6 +287,11 @@ impl orz_loop::host::ToolRegistry for ToolsetRegistry {
         // local_browser (2026-08-10): declared only when the lane is ready.
         if self.browser_ready && !defs.iter().any(|d| d.name == "browser_read") {
             defs.push(crate::local_browser::browser_read_tool_def());
+        }
+        // PDF evidence (2026-08-11): always declared (local store, no
+        // browser dependency).
+        if !defs.iter().any(|d| d.name == "pdf_read") {
+            defs.push(crate::pdf_evidence::pdf_read_tool_def());
         }
         defs
     }
@@ -405,7 +420,7 @@ mod tests {
     /// web_fetch is always enabled (no key dependency).
     #[test]
     fn web_fetch_config_is_always_enabled() {
-        assert!(web_fetch_config_default().is_enabled());
+        assert!(web_fetch_config_default(std::path::Path::new(".")).is_enabled());
     }
 
     /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the semaphore matches the

@@ -31,6 +31,10 @@ infer = { workspace = true }
 globset = { workspace = true }
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }
 pdf_oxide = { workspace = true }
+# PDF evidence store (implementations/pdf_evidence.rs) content hashing.
+# Already pinned in the workspace (0.10, force-soft) — no new transitive
+# entries; used by read_file metadata detection too.
+sha2 = { workspace = true }
 # PPTX text extraction (implementations/read_file/pptx.rs). Deliberately NOT
 # `workspace = true`: the workspace `zip` pin has default features on, which
 # drag aes/bzip2/lzma/zstd into the shipped pager binary. PPTX entries are

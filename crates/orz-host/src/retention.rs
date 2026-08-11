@@ -79,6 +79,14 @@ pub struct PruneReport {
     /// GAP-PROJECT-DOC-INDEX-CACHE (2026-08-11): the doc-index cache file
     /// (`project-doc-index/cache.json`) — rebuildable, so swept by age.
     pub removed_project_doc_caches: Vec<String>,
+    /// PDF evidence (2026-08-11): content-addressed PDF evidence documents
+    /// (`pdf-evidence/{p2}/{full64}/`) — rebuildable from the source URL, so
+    /// swept by age (document ids referenced by older runs lapse — explicit
+    /// `[pdf_read_not_found]`, same semantics as lapsed conversations).
+    pub removed_pdf_evidence_dirs: Vec<String>,
+    /// PDF evidence (2026-08-11): browser download staging dirs
+    /// (`pdf-downloads-*`) — disposable, swept by age.
+    pub removed_pdf_download_dirs: Vec<String>,
 }
 
 /// Best-effort retention sweep over `gsa_root` (the `.gsa` directory).
@@ -119,7 +127,49 @@ pub fn prune_old_records(
     // dir behind; age-based sweep covers it (a LIVE session's profile is
     // recent by definition; the active run's own browser stays untouched).
     prune_old_dirs(&mut report.removed_browser_profiles, gsa_root, cutoff, "chrome-profile-");
+    // PDF evidence (2026-08-11): content-addressed evidence docs
+    // (`pdf-evidence/{p2}/{full64}/`) — the two-level layout is swept
+    // deepest-first; the evidence dir itself and the `{p2}` shard dirs are
+    // never removed (they have no age semantics of their own).
+    prune_pdf_evidence(&mut report, &gsa_root.join("pdf-evidence"), cutoff);
+    // PDF evidence (2026-08-11): browser download staging dirs — crash
+    // leftovers from interrupted downloads (ingest deletes them on success;
+    // retention is the backstop).
+    prune_old_dirs(
+        &mut report.removed_pdf_download_dirs,
+        gsa_root,
+        cutoff,
+        "pdf-downloads-",
+    );
     report
+}
+
+/// Sweep `pdf-evidence/{p2}/{full64}/` document dirs older than `cutoff`.
+/// Shard dirs (`.gsa/pdf-evidence/{p2}`) are container entries — swept
+/// inside-out per document, never removed themselves. Any over-age `{full64}`
+/// dir is removed regardless of its contents (evidence is 100% rebuildable
+/// from the source URL — review 2026-08-11 C3-4: the fail-safe only applies
+/// to a dir that cannot be statted at all, via `entry_older_than`).
+fn prune_pdf_evidence(report: &mut PruneReport, evidence_dir: &Path, cutoff: SystemTime) {
+    let Ok(shards) = std::fs::read_dir(evidence_dir) else {
+        return; // no evidence tree yet
+    };
+    for shard in shards.flatten() {
+        let shard_path = shard.path();
+        let Ok(docs) = std::fs::read_dir(&shard_path) else {
+            continue;
+        };
+        for doc in docs.flatten() {
+            let path = doc.path();
+            if !entry_older_than(&path, cutoff) {
+                continue;
+            }
+            let name = doc.file_name().to_string_lossy().into_owned();
+            if std::fs::remove_dir_all(&path).is_ok() {
+                report.removed_pdf_evidence_dirs.push(name);
+            }
+        }
+    }
 }
 
 /// Prune first-level dirs under `root` whose names start with `prefix` and
@@ -567,6 +617,61 @@ mod tests {
         assert_eq!(report.removed_project_doc_caches, vec!["cache.json"]);
         assert!(!old.exists());
         assert!(caches.join("fresh.json").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// PDF evidence (2026-08-11): old content-addressed evidence docs are
+    /// swept by age (rebuildable from the source URL); fresh ones survive;
+    /// the shard dirs are container entries, never removed themselves.
+    #[test]
+    fn sweep_removes_old_pdf_evidence_keeps_fresh_and_shards() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        let evidence = gsa.join("pdf-evidence");
+        let shard = evidence.join("ab");
+        std::fs::create_dir_all(&shard).unwrap();
+        let old = shard.join("ab".repeat(32));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("metadata.json"), "{}").unwrap();
+        backdate(&old, 10);
+        let fresh = shard.join("cd".repeat(32));
+        std::fs::create_dir_all(&fresh).unwrap();
+        std::fs::write(fresh.join("metadata.json"), "{}").unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(report.removed_pdf_evidence_dirs, vec!["ab".repeat(32)]);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        assert!(shard.exists(), "shard dirs are containers — never swept");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// PDF evidence (2026-08-11): crash-leftover download staging dirs are
+    /// swept by age; a live one survives.
+    #[test]
+    fn sweep_removes_old_pdf_download_staging() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        let old = gsa.join("pdf-downloads-OLD1234");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("paper.pdf"), b"%PDF-1.4\n").unwrap();
+        backdate(&old, 10);
+        let fresh = gsa.join("pdf-downloads-FRESH5678");
+        std::fs::create_dir_all(&fresh).unwrap();
+        std::fs::write(fresh.join("paper.pdf"), b"%PDF-1.4\n").unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(
+            report.removed_pdf_download_dirs,
+            vec!["pdf-downloads-OLD1234"]
+        );
+        assert!(!old.exists());
+        assert!(fresh.exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }

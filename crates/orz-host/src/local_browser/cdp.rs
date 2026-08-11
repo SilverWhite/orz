@@ -29,14 +29,24 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use super::url_gate::{check_navigation_url, UrlGateError};
+use super::BrowserDownloadOutcome;
 
 /// Every CDP method this client may send. Anything else fails closed at the
-/// send boundary (a test asserts the set is exactly what `read_page` needs).
+/// send boundary (a test asserts the set is exactly what `read_page` and
+/// `download_or_read` need).
+///
+/// `Browser.setDownloadBehavior` (2026-08-11, PDF evidence pipeline) is the
+/// single download affordance: it points the browser's default context at an
+/// isolated staging dir. It is NOT a `Network.`/`Input.`/`Storage.` method —
+/// no network interception, no input synthesis, no storage access. Download
+/// *events* (`Page.downloadWillBegin`/`Page.downloadProgress`) are received,
+/// not sent, so they need no entry here.
 pub const ALLOWED_CDP_METHODS: &[&str] = &[
     "Target.createTarget",
     "Target.closeTarget",
     "Page.enable",
     "Page.navigate",
+    "Browser.setDownloadBehavior",
     "Runtime.enable",
     "Runtime.evaluate",
 ];
@@ -111,6 +121,12 @@ pub enum CdpError {
 
     #[error("page produced no readable text (empty innerText)")]
     EmptyContent,
+
+    #[error("browser download was canceled")]
+    DownloadCanceled,
+
+    #[error("browser download failed: {0}")]
+    DownloadFailed(String),
 
     #[error("{0}")]
     Io(String),
@@ -254,10 +270,24 @@ async fn ws_reader_task(
             // must keep routing responses, so a full channel drops them. A
             // dropped `frameNavigated` only skips one redirect re-check —
             // the pre-navigation gate and the post-load final-URL gate still
-            // bound the landing page.
+            // bound the landing page. A dropped `downloadProgress{completed}`
+            // surfaces as an explicit download timeout (never a silent
+            // success) — the download loop re-polls the staging dir for a
+            // bounded window, so a single lost event is self-healing there.
             if method == "Page.loadEventFired" {
                 let _ = event_tx.send(v).await;
-            } else if method == "Page.frameNavigated" {
+            } else if method == "Page.frameNavigated"
+                || method == "Page.downloadWillBegin"
+                || method == "Page.downloadProgress"
+                // PDF evidence (2026-08-11 review P1-1): newer Chrome
+                // versions mark the `Page.*` download events deprecated and
+                // gate them behind `eventsEnabled: true` on
+                // `Browser.setDownloadBehavior`. The `Browser.*` variants
+                // are the current protocol surface — forward BOTH families
+                // so the download loop works across Chrome generations.
+                || method == "Browser.downloadWillBegin"
+                || method == "Browser.downloadProgress"
+            {
                 let _ = event_tx.try_send(v);
             }
         }
@@ -400,6 +430,92 @@ impl CdpBrowserSession {
         outcome.map_err(|_| budget_err)?
     }
 
+    /// One download-or-read of one URL: gate → staging-dir reset → create
+    /// tab → arm download behavior → navigate → wait for either a completed
+    /// download (file in the staging dir) or a rendered page. Shares the
+    /// read path's tab lifecycle: one owned tab per call, teardown on every
+    /// path under a fixed 5s cap, total-budget bounded (ADR-0010 §3.7.2 —
+    /// a download that neither completes nor navigates is an explicit
+    /// timeout, never a silent fallback).
+    pub async fn download_or_read(
+        &mut self,
+        url: &str,
+        download_dir: &Path,
+    ) -> Result<BrowserDownloadOutcome, CdpError> {
+        check_navigation_url(url).await?;
+
+        // Fresh staging dir per call: the "newest file in dir" semantics of
+        // `wait_for_new_file` must not pick up a leftover from an earlier
+        // call (or a crash before retention swept it).
+        let _ = std::fs::remove_dir_all(download_dir);
+        std::fs::create_dir_all(download_dir).map_err(|e| CdpError::Io(e.to_string()))?;
+        // Absolute path without a UNC prefix — Chrome rejects `\\?\`-style
+        // download paths (dunce precedent).
+        let download_path = dunce::canonicalize(download_dir)
+            .unwrap_or_else(|_| download_dir.to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+
+        let total_budget = self.config.total_budget;
+        let deadline = tokio::time::Instant::now() + total_budget;
+        let budget_err = CdpError::TotalTimeout {
+            timeout: total_budget.as_secs(),
+        };
+
+        let target_id = tokio::time::timeout_at(deadline, async {
+            if self.browser_ws.is_none() {
+                self.browser_ws =
+                    Some(WsSession::connect(&self.browser_ws_url, "browser ws").await?);
+            }
+            let browser = self.browser_ws.as_mut().unwrap();
+            let resp = browser
+                .send_command("Target.createTarget", json!({ "url": "about:blank" }))
+                .await?;
+            Ok::<String, CdpError>(
+                resp["targetId"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        CdpError::Discovery("no targetId from Target.createTarget".into())
+                    })?
+                    .to_string(),
+            )
+        })
+        .await
+        .map_err(|_| budget_err.clone())??;
+
+        let page_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{target_id}", self.port);
+        let outcome = tokio::time::timeout_at(deadline, async {
+            let mut page = WsSession::connect(&page_ws_url, "page ws").await?;
+            // Arm the default browser context for downloads, pointing at the
+            // staging dir. Re-sent per call: idempotent, and the browser may
+            // have been restarted between calls. A navigation that produces
+            // a rendered page instead of a download falls through to the
+            // read path.
+            page.send_command(
+                "Browser.setDownloadBehavior",
+                // `eventsEnabled: true` (review 2026-08-11 P1-1) — without it
+                // Chromium's `download_events_enabled_` flag stays false and
+                // the browser-domain download events are silently suppressed
+                // on modern Chrome.
+                json!({ "behavior": "allow", "downloadPath": download_path, "eventsEnabled": true }),
+            )
+            .await?;
+            page.send_command("Page.enable", json!({})).await?;
+            page.send_command("Runtime.enable", json!({})).await?;
+            page.send_command("Page.navigate", json!({ "url": url })).await?;
+            wait_download_or_load(&mut page, url, download_dir, self.config.load_timeout).await
+        })
+        .await;
+
+        let browser = self.browser_ws.as_mut().unwrap();
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            browser.send_command("Target.closeTarget", json!({ "targetId": target_id })),
+        )
+        .await;
+        outcome.map_err(|_| budget_err)?
+    }
+
     /// Kill the process tree and best-effort delete the profile dir.
     ///
     /// Profile deletion retries for ~2s: Windows releases file locks held by
@@ -443,13 +559,22 @@ async fn read_in_page(
     page.send_command("Page.navigate", json!({ "url": url })).await?;
     wait_for_load(page, load_timeout).await?;
 
-    // Final-URL gate runs BEFORE any text extraction — nothing is read from
-    // a page whose landing location failed the policy (defense in depth: a
-    // redirect chain the event stream did not surface is caught here, and a
-    // gated page never has expressions evaluated against it).
+    extract_page(page, url).await
+}
+
+/// Extract the three host-owned expressions from a loaded page. The
+/// final-URL gate runs BEFORE any text extraction — nothing is read from a
+/// page whose landing location failed the policy (defense in depth: a
+/// redirect chain the event stream did not surface is caught here, and a
+/// gated page never has expressions evaluated against it). Shared by the
+/// read path and the download-or-read path's non-download branch.
+async fn extract_page(
+    page: &mut WsSession,
+    fallback_url: &str,
+) -> Result<PageReadOutcome, CdpError> {
     let final_url = page.evaluate_string(EXPR_FINAL_URL).await?;
     let final_url = if final_url.is_empty() || final_url == "about:blank" {
-        url.to_string()
+        fallback_url.to_string()
     } else {
         check_navigation_url(&final_url).await?;
         final_url
@@ -514,6 +639,179 @@ async fn wait_for_load(page: &mut WsSession, timeout: Duration) -> Result<(), Cd
             Some("Page.loadEventFired") => return Ok(()),
             _ => {}
         }
+    }
+}
+
+/// Wait for either a completed download (file in the staging dir) or a
+/// rendered page, re-checking the full URL gate on every top-frame redirect.
+///
+/// Event semantics (both `Page.*` and the current-protocol `Browser.*`
+/// families are matched — review 2026-08-11 P1-1):
+/// - `downloadWillBegin` → remember the download guid AND the resource URL
+///   (`params.url` — the real downloaded resource; the tab's
+///   `location.href` stays `about:blank` because the download navigation is
+///   canceled in the renderer). From that point on, `loadEventFired` is NOT
+///   the terminal signal (a download navigation also fires a load event on
+///   its empty frame) — only a completed download is.
+/// - `downloadProgress {state:"completed"}` → re-poll the staging dir for
+///   the new file (Chrome flushes it asynchronously; Windows file locks are
+///   retried) and return `Pdf` with the gated `downloadWillBegin` URL.
+/// - `{state:"canceled"}` → explicit `DownloadCanceled` (ADR-0010 §3.7.2,
+///   no silent fallback to a page read).
+/// - `loadEventFired` with no pending download → the ordinary read path
+///   (`extract_page`), gated as usual.
+/// - Polling backstop (review 2026-08-11 P2-4): a lost `completed` event
+///   (best-effort channel) must not hang the call — while a download is
+///   pending, the staging dir is polled every ~500ms; a file that is
+///   stable across two samples counts as complete.
+async fn wait_download_or_load(
+    page: &mut WsSession,
+    request_url: &str,
+    download_dir: &Path,
+    timeout: Duration,
+) -> Result<BrowserDownloadOutcome, CdpError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut pending_guid: Option<String> = None;
+    let mut pending_url: Option<String> = None;
+    // Stable-file polling backstop: previous sample's size for the newest
+    // file. `None` = no file observed yet.
+    let mut last_sample: Option<u64> = None;
+    loop {
+        // Polling backstop first: a download already in progress (guid seen)
+        // with a stable file in the staging dir is complete even if the
+        // `completed` event was dropped. The dir is per-call fresh, so any
+        // file is this call's download.
+        if pending_guid.is_some()
+            && let Some((path, size)) = newest_file(download_dir)
+        {
+            if last_sample == Some(size) {
+                // Stable across two samples (~500ms apart) — flushed.
+                let final_url = pending_url.clone().unwrap_or_else(|| request_url.to_string());
+                gate_download_final_url(&final_url).await?;
+                return Ok(BrowserDownloadOutcome::Pdf { path, final_url });
+            }
+            last_sample = Some(size);
+        }
+
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        // Fragmented wait: the backstop poll runs even when no events arrive
+        // (a flood that dropped the terminal event). A fragment timeout is
+        // NOT a LoadTimeout — only the total budget is.
+        let ev = match tokio::time::timeout(
+            remaining.min(DOWNLOAD_POLL_INTERVAL),
+            page.events.recv(),
+        )
+        .await
+        {
+            Ok(Some(ev)) => ev,
+            Ok(None) => return Err(CdpError::Io("CDP event channel closed".into())),
+            Err(_elapsed) => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(CdpError::LoadTimeout {
+                        timeout: timeout.as_secs(),
+                    });
+                }
+                // Fragment elapsed: back to the top of the loop — the poll
+                // backstop runs before the next wait.
+                continue;
+            }
+        };
+        match ev["method"].as_str() {
+            Some("Page.downloadWillBegin") | Some("Browser.downloadWillBegin") => {
+                if let Some(guid) = ev["params"]["guid"].as_str() {
+                    pending_guid = Some(guid.to_string());
+                }
+                if let Some(url) = ev["params"]["url"].as_str() {
+                    pending_url = Some(url.to_string());
+                }
+            }
+            Some("Page.downloadProgress") | Some("Browser.downloadProgress") => {
+                match ev["params"]["state"].as_str() {
+                    Some("completed") => {
+                        // The file may not be flushed yet — Chrome writes it
+                        // asynchronously and may briefly hold a Windows lock.
+                        let path = wait_for_new_file(download_dir, DOWNLOAD_FLUSH_TIMEOUT)
+                            .await?;
+                        let final_url =
+                            pending_url.clone().unwrap_or_else(|| request_url.to_string());
+                        gate_download_final_url(&final_url).await?;
+                        return Ok(BrowserDownloadOutcome::Pdf { path, final_url });
+                    }
+                    Some("canceled") => return Err(CdpError::DownloadCanceled),
+                    _ => {} // "in_progress": keep waiting.
+                }
+            }
+            Some("Page.frameNavigated") => {
+                let frame = &ev["params"]["frame"];
+                if frame["parentId"].is_null()
+                    && let Some(new_url) = frame["url"].as_str()
+                    && new_url != "about:blank"
+                {
+                    check_navigation_url(new_url).await?;
+                }
+            }
+            // A download navigation also fires a load event; only a
+            // download-less load is the terminal read signal. The real URL
+            // is re-read from location.href inside extract_page.
+            Some("Page.loadEventFired") if pending_guid.is_none() => {
+                let outcome = extract_page(page, request_url).await?;
+                return Ok(BrowserDownloadOutcome::Page(outcome));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Same final-URL gate as the read path (`extract_page`): a download's
+/// landing URL must pass policy before its bytes are ingested (review
+/// 2026-08-11 P1-1 — a whitelisted-but-compromised site must not redirect a
+/// download to an internal address and smuggle its bytes into evidence).
+async fn gate_download_final_url(final_url: &str) -> Result<(), CdpError> {
+    if final_url != "about:blank" && !final_url.is_empty() {
+        check_navigation_url(final_url).await?;
+    }
+    Ok(())
+}
+
+/// Staging-dir poll cadence for the backstop (see `wait_download_or_load`).
+const DOWNLOAD_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Poll the staging dir for the newest regular file. Windows Chrome may
+/// hold the file open briefly after `downloadProgress{completed}` — the
+/// poll retries until a file is visible or the window elapses.
+const DOWNLOAD_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Newest regular file in `dir` (path + size), or `None` when empty or
+/// unreadable. Shared by the completed-event flush wait and the poll
+/// backstop — "newest" is exact because the staging dir is per-call fresh.
+fn newest_file(dir: &Path) -> Option<(PathBuf, u64)> {
+    let mut newest: Option<(std::time::SystemTime, PathBuf, u64)> = None;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            if let Ok(meta) = entry.metadata()
+                && meta.is_file()
+                && let Ok(modified) = meta.modified()
+                && newest.as_ref().is_none_or(|(t, _, _)| modified > *t)
+            {
+                newest = Some((modified, entry.path(), meta.len()));
+            }
+        }
+    }
+    newest.map(|(_, path, size)| (path, size))
+}
+
+async fn wait_for_new_file(dir: &Path, timeout: Duration) -> Result<PathBuf, CdpError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some((path, _)) = newest_file(dir) {
+            return Ok(path);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(CdpError::DownloadFailed(
+                "no file appeared in the staging dir".to_string(),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -661,6 +959,7 @@ mod tests {
         assert_eq!(
             set,
             vec![
+                "Browser.setDownloadBehavior",
                 "Page.enable",
                 "Page.navigate",
                 "Runtime.enable",
@@ -669,15 +968,19 @@ mod tests {
                 "Target.createTarget",
             ]
         );
-        // The set must never include mutation/network/input domains.
+        // The set must never include mutation/network/input/storage domains.
+        // `Browser.` is allowed EXACTLY as the download affordance — no
+        // other Browser-domain command may ever be sent.
         for m in ALLOWED_CDP_METHODS {
             assert!(
                 !m.starts_with("Network.")
                     && !m.starts_with("Input.")
-                    && !m.starts_with("Storage.")
-                    && !m.starts_with("Browser."),
+                    && !m.starts_with("Storage."),
                 "{m}"
             );
+            if m.starts_with("Browser.") {
+                assert_eq!(*m, "Browser.setDownloadBehavior", "{m}");
+            }
         }
     }
 
@@ -687,7 +990,13 @@ mod tests {
         // boundary — before any bytes hit the wire (the ws pair proves the
         // gate fires without a real server round-trip).
         let (_, mut ws) = inprocess_ws_pair().await;
-        for method in ["Network.enable", "Storage.getCookies", "Runtime.evaluate"] {
+        for method in [
+            "Network.enable",
+            "Storage.getCookies",
+            "Browser.getVersion",
+            "Browser.close",
+            "Runtime.evaluate",
+        ] {
             // Runtime.evaluate is allowed BY NAME — the model-text injection
             // vector is closed at the host-owned-expression layer, not here.
             if method == "Runtime.evaluate" {
@@ -981,5 +1290,245 @@ mod tests {
         let err = http_get_json(port, "/json/version").await.unwrap_err();
         assert!(err.to_string().contains("Content-Length"), "{err}");
         server.abort();
+    }
+
+    // ── download-or-read event loop ──────────────────────────────────────
+
+    /// A loopback ws pair whose server replays an event script, then answers
+    /// commands. When `download_dir` is set, the file is pre-created before
+    /// the events are sent (Chrome's async flush is the client's problem).
+    async fn ws_pair_with_events(
+        events: Vec<Value>,
+        download_dir: Option<std::path::PathBuf>,
+        evaluate_value: String,
+    ) -> (tokio::task::JoinHandle<()>, WsSession) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            if let Some(dir) = &download_dir {
+                std::fs::create_dir_all(dir).unwrap();
+                std::fs::write(dir.join("paper.pdf"), b"%PDF-1.4\nx").unwrap();
+            }
+            for ev in events {
+                let _ = write.send(WsMessage::Text(ev.to_string().into())).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            while let Some(Ok(WsMessage::Text(t))) = read.next().await {
+                let v: Value = serde_json::from_str(&t).unwrap();
+                let id = v["id"].as_u64().unwrap();
+                let method = v["method"].as_str().unwrap_or("");
+                let resp = if method == "Runtime.evaluate" {
+                    json!({"id": id, "result": {"result": {"type": "string", "value": evaluate_value.clone()}}})
+                } else {
+                    json!({"id": id, "result": {}})
+                };
+                let _ = write.send(WsMessage::Text(resp.to_string().into())).await;
+            }
+        });
+        let ws = WsSession::connect(&format!("ws://{addr}/devtools/page/test"), "page ws")
+            .await
+            .unwrap();
+        (server, ws)
+    }
+
+    /// Unique temp dir per test label (no tempfile dev-dep — codebase
+    /// pattern: `std::env::temp_dir` + pid + label).
+    fn test_tmp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("orz-cdp-{label}-{}", std::process::id()))
+    }
+
+    #[tokio::test]
+    async fn download_completed_returns_pdf_file() {
+        let dir = test_tmp_dir("dl-completed");
+        let (server, mut page) = ws_pair_with_events(
+            vec![
+                // final_url comes from the event's params.url (the real
+                // resource URL) — NOT from evaluate_string, which reports
+                // about:blank for a canceled download navigation (P1-2).
+                json!({"method": "Page.downloadWillBegin", "params": {"guid": "g1", "suggestedFilename": "paper.pdf", "url": "https://example.com/paper.pdf"}}),
+                json!({"method": "Page.downloadProgress", "params": {"guid": "g1", "state": "in_progress"}}),
+                json!({"method": "Page.downloadProgress", "params": {"guid": "g1", "state": "completed"}}),
+            ],
+            Some(dir.clone()),
+            "https://example.com/paper.pdf".to_string(),
+        )
+        .await;
+        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
+            .await
+            .unwrap();
+        match outcome {
+            BrowserDownloadOutcome::Pdf { path, final_url } => {
+                assert_eq!(path.file_name().unwrap().to_str().unwrap(), "paper.pdf");
+                assert_eq!(final_url, "https://example.com/paper.pdf");
+            }
+            other => panic!("expected Pdf, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn download_missing_event_url_falls_back_to_request_url() {
+        let dir = test_tmp_dir("dl-fallback-url");
+        let (server, mut page) = ws_pair_with_events(
+            vec![
+                // No params.url on downloadWillBegin — fall back to the
+                // request URL (never evaluate_string's about:blank).
+                json!({"method": "Page.downloadWillBegin", "params": {"guid": "g4"}}),
+                json!({"method": "Page.downloadProgress", "params": {"guid": "g4", "state": "completed"}}),
+            ],
+            Some(dir.clone()),
+            "https://example.com/other.pdf".to_string(),
+        )
+        .await;
+        let outcome = wait_download_or_load(&mut page, "https://example.com/requested.pdf", &dir, Duration::from_secs(5))
+            .await
+            .unwrap();
+        match outcome {
+            BrowserDownloadOutcome::Pdf { final_url, .. } => {
+                assert_eq!(final_url, "https://example.com/requested.pdf");
+            }
+            other => panic!("expected Pdf, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn browser_domain_download_events_are_matched() {
+        // Current-protocol event family (P1-1): Browser.* events drive the
+        // same loop as Page.*.
+        let dir = test_tmp_dir("dl-browser-events");
+        let (server, mut page) = ws_pair_with_events(
+            vec![
+                json!({"method": "Browser.downloadWillBegin", "params": {"guid": "g5", "url": "https://example.com/paper.pdf"}}),
+                json!({"method": "Browser.downloadProgress", "params": {"guid": "g5", "state": "completed"}}),
+            ],
+            Some(dir.clone()),
+            "https://example.com/paper.pdf".to_string(),
+        )
+        .await;
+        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
+            .await
+            .unwrap();
+        match outcome {
+            BrowserDownloadOutcome::Pdf { final_url, .. } => {
+                assert_eq!(final_url, "https://example.com/paper.pdf");
+            }
+            other => panic!("expected Pdf, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn lost_completed_event_is_recovered_by_stable_file_polling() {
+        // P2-4 backstop: only downloadWillBegin arrives (the completed
+        // event is dropped) — the staging file stabilizes and the loop
+        // returns Pdf instead of timing out.
+        let dir = test_tmp_dir("dl-poll-backstop");
+        let (server, mut page) = ws_pair_with_events(
+            vec![json!({"method": "Page.downloadWillBegin", "params": {"guid": "g6", "url": "https://example.com/paper.pdf"}})],
+            Some(dir.clone()),
+            "https://example.com/paper.pdf".to_string(),
+        )
+        .await;
+        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
+            .await
+            .unwrap();
+        match outcome {
+            BrowserDownloadOutcome::Pdf { final_url, .. } => {
+                assert_eq!(final_url, "https://example.com/paper.pdf");
+            }
+            other => panic!("expected Pdf, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn download_canceled_is_explicit_error() {
+        let dir = test_tmp_dir("dl-canceled");
+        let (server, mut page) = ws_pair_with_events(
+            vec![
+                json!({"method": "Page.downloadWillBegin", "params": {"guid": "g2"}}),
+                json!({"method": "Page.downloadProgress", "params": {"guid": "g2", "state": "canceled"}}),
+            ],
+            None,
+            "https://example.com/".to_string(),
+        )
+        .await;
+        let err = wait_download_or_load(&mut page, "https://example.com/", &dir, Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CdpError::DownloadCanceled), "{err:?}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn load_without_pending_download_falls_through_to_page_read() {
+        let dir = test_tmp_dir("dl-load-page");
+        let (server, mut page) = ws_pair_with_events(
+            vec![json!({"method": "Page.loadEventFired"})],
+            None,
+            "https://example.com/page".to_string(),
+        )
+        .await;
+        let outcome = wait_download_or_load(&mut page, "https://example.com/requested", &dir, Duration::from_secs(5))
+            .await
+            .unwrap();
+        match outcome {
+            BrowserDownloadOutcome::Page(outcome) => {
+                assert_eq!(outcome.final_url, "https://example.com/page");
+            }
+            other => panic!("expected Page, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn load_after_download_will_begin_still_waits_for_completion() {
+        let dir = test_tmp_dir("dl-load-skip");
+        let (server, mut page) = ws_pair_with_events(
+            vec![
+                json!({"method": "Page.downloadWillBegin", "params": {"guid": "g3"}}),
+                // The download navigation's empty-frame load must NOT be
+                // mistaken for a terminal page read.
+                json!({"method": "Page.loadEventFired"}),
+                json!({"method": "Page.downloadProgress", "params": {"guid": "g3", "state": "completed"}}),
+            ],
+            Some(dir.clone()),
+            "https://example.com/paper.pdf".to_string(),
+        )
+        .await;
+        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
+            .await
+            .unwrap();
+        match outcome {
+            BrowserDownloadOutcome::Pdf { path, .. } => {
+                assert_eq!(path.file_name().unwrap().to_str().unwrap(), "paper.pdf");
+            }
+            other => panic!("expected Pdf, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn download_loop_times_out_when_no_terminal_event() {
+        let dir = test_tmp_dir("dl-timeout");
+        let (server, mut page) = ws_pair_with_events(vec![], None, "".to_string()).await;
+        let err = wait_download_or_load(&mut page, "https://example.com/", &dir, Duration::from_millis(250))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CdpError::LoadTimeout { .. }), "{err:?}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn wait_for_new_file_returns_newest_file() {
+        let dir = test_tmp_dir("dl-new-file");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.pdf"), b"a").unwrap();
+        let path = wait_for_new_file(&dir, Duration::from_secs(1)).await.unwrap();
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "a.pdf");
     }
 }

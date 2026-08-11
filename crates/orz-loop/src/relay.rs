@@ -47,9 +47,11 @@ pub fn is_retrieval_dispatch_name(name: &str) -> bool {
 /// dispatch gate cover them too (ADR-0010 §3.7.1 — off means no retrieval
 /// tools; a model must not bypass the gate by switching to one of these
 /// names). local_browser (2026-08-10): `browser_read` joins the family —
-/// its reachability is mode-gated (local_browser mode only).
+/// its reachability is mode-gated (local_browser mode only). PDF evidence
+/// (2026-08-11): `pdf_read` reads externally-sourced evidence — gated like
+/// the other retrieval tools.
 pub fn is_retrieval_mode_gated_host_tool(name: &str) -> bool {
-    name == "project_doc_index" || name == "browser_read"
+    name == "project_doc_index" || name == "browser_read" || name == "pdf_read"
 }
 
 /// Route a function name to the appropriate dispatch target.
@@ -115,16 +117,20 @@ mod tests {
     /// local_browser (2026-08-10): the host-routed retrieval family covers
     /// `project_doc_index` AND `browser_read` (mode=off projection + the
     /// dispatch gate both key on it — a model must not bypass the gate by
-    /// switching names). `browser_read` itself routes to Host.
+    /// switching names). PDF evidence (2026-08-11): `pdf_read` joins the
+    /// family — it reads externally-sourced local evidence. These tools
+    /// route to Host (not a subagent dispatch lane).
     #[test]
     fn gated_host_tools_include_browser_read() {
         assert!(is_retrieval_mode_gated_host_tool("project_doc_index"));
         assert!(is_retrieval_mode_gated_host_tool("browser_read"));
+        assert!(is_retrieval_mode_gated_host_tool("pdf_read"));
         for name in ["web_search", "web_fetch", "retrieve_project_docs", "read_file", "bash"] {
             assert!(!is_retrieval_mode_gated_host_tool(name), "{name}");
         }
         // browser_read is a Host lane tool (not a subagent dispatch lane).
         assert_eq!(route("browser_read"), DispatchTarget::Host);
+        assert_eq!(route("pdf_read"), DispatchTarget::Host);
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub mod credentials;
 pub mod grok_home;
 pub mod keystore;
 pub mod permission;
+pub mod pdf_evidence;
 pub mod project_doc_index;
 pub mod retention;
 pub mod session;
@@ -648,6 +649,33 @@ impl LoopHost for OrzHost {
             }
             return crate::local_browser::handle_browser_read(self.browser.as_ref(), &args).await;
         }
+        // PDF evidence (2026-08-11): `pdf_read` reads the local evidence
+        // store — synchronous, workspace-local (project_doc_index pattern).
+        if name == "pdf_read" {
+            return crate::pdf_evidence::handle_pdf_read(&self.cwd, &args).await;
+        }
+        // PDF evidence routing (2026-08-11): a `web_fetch` whose URL matches
+        // ORZ_PDF_BROWSER_DOMAINS is intercepted BEFORE the toolset — the
+        // whitelisted paper-library fetch happens through the browser
+        // (operator login). Everything else falls through to the toolset
+        // (direct channel, where PDFs are ingested inline). A whitelist hit
+        // with an unavailable browser is an explicit failure — never an
+        // automatic direct fallback (user ruling; §3.7.2).
+        if name == "web_fetch"
+            && crate::pdf_evidence::route_for_url(args.get("url").and_then(|u| u.as_str()).unwrap_or(""))
+        {
+            let url = args
+                .get("url")
+                .and_then(|u| u.as_str())
+                .unwrap_or_default();
+            return crate::pdf_evidence::handle_browser_pdf(
+                &self.cwd,
+                self.session_id.as_deref(),
+                self.browser.as_ref(),
+                url,
+            )
+            .await;
+        }
         // GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): global `web_search`
         // concurrency is fixed at 1 (ADR-0010 §3.7.7/§11.3 — the main agent
         // and the external-retrieval subagent share this semaphore; internal
@@ -943,6 +971,62 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         assert!(result.output.contains("hello page"), "{}", result.output);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PDF evidence (2026-08-11): `call_tool("web_fetch", whitelisted url)`
+    /// is intercepted at the chokepoint and routed through the browser lane;
+    /// without a ready lane it fails explicitly with the whitelist failure
+    /// code (user ruling — no automatic fallback to direct fetch).
+    #[tokio::test]
+    async fn call_web_fetch_whitelist_routes_through_browser() {
+        let _env_lock = crate::tests::tests_env_lock().lock().await;
+        let dir = test_dir();
+        crate::pdf_evidence::set_domains_override(Some("*.cnki.net".to_string()));
+
+        // No browser handle → explicit whitelist failure, no fallback.
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap();
+        let err = host
+            .call_tool(
+                "web_fetch",
+                serde_json::json!({"url": "https://kns.cnki.net/paper.pdf"}),
+                "p1",
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("web_fetch_pdf_browser_unavailable"),
+            "{err}"
+        );
+
+        // Ready lane → intercepted: the stub's download path runs (returns
+        // a Page outcome — shaped like browser_read, no document_id).
+        let stub = crate::local_browser::tests::ready_stub_browser();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_browser_session(stub);
+        let result = host
+            .call_tool(
+                "web_fetch",
+                serde_json::json!({"url": "https://kns.cnki.net/kcms/detail"}),
+                "p2",
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.output.contains("hello page"), "{}", result.output);
+        assert!(!result.output.contains("document_id="), "{}", result.output);
+
+        crate::pdf_evidence::set_domains_override(None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

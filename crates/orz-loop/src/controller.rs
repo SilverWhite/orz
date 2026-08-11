@@ -290,6 +290,7 @@ pub(crate) fn build_evidence_record(
     let identity = arg("path")
         .or_else(|| arg("url"))
         .or_else(|| arg("query"))
+        .or_else(|| arg("document_id"))
         .unwrap_or(tool)
         .to_string();
     let title = match tool {
@@ -300,6 +301,25 @@ pub(crate) fn build_evidence_record(
             .to_string(),
         _ => identity.clone(),
     };
+    // PDF evidence (2026-08-11): when web_fetch output carries the inline
+    // evidence marker, the content digest is the PDF's own sha256 (parsed
+    // from the marker), not a hash of the preview text. The parsed value is
+    // shape-checked (64 hex chars — review P3-8) so page text that merely
+    // CONTAINS a `document_id=sha256:` fragment cannot fabricate a
+    // pdf_document record.
+    let pdf_hex = (tool == "web_fetch")
+        .then(|| {
+            output
+                .split("document_id=sha256:")
+                .nth(1)?
+                .split(',')
+                .next()
+                .map(|s| s.trim().to_string())
+        })
+        .flatten()
+        .filter(|s| {
+            s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+        });
     let (source_type, visibility, observed_scope, missing_scope) = match tool {
         "read_file" => (
             "local_file",
@@ -308,20 +328,64 @@ pub(crate) fn build_evidence_record(
             "none",
         ),
         "web_fetch" => {
-            // H2 (review 2026-08-10): the fetch pipeline's truncation
-            // footer is "[web_fetch content truncated: ..." (codegen
-            // overflow.rs) — matching that prefix (plus the bounded-budget
-            // "[truncated]" fallback marker and a length backstop) is what
-            // actually detects a truncated page; the old substrings missed
-            // the real footer and granted full-level attribution to
-            // truncated text (§3.7.5).
-            let truncated = output.contains("[web_fetch content truncated")
-                || output.contains("[truncated")
+            // PDF evidence (2026-08-11): the inline marker
+            // "PDF evidence: {N} pages, document_id=sha256:{hex},
+            // text_layer={yes|no}" drives the visibility table — a
+            // text-layer-less document is metadata only (never full-text
+            // attribution); truncated previews are partial (§3.7.5).
+            if pdf_hex.is_some() {
+                let no_text = output.contains("text_layer=no");
+                let truncated = output.contains("[web_fetch pdf content truncated")
+                    || output.len() > 200_000;
+                if no_text {
+                    ("pdf_document", "metadata_only", "metadata only (no text layer)", "page text")
+                } else if truncated {
+                    ("pdf_document", "partial_text_observed", "first portion", "rest of document")
+                } else {
+                    ("pdf_document", "full_text_observed", "extracted text layer", "none")
+                }
+            } else if output.contains("PDF downloaded") {
+                // Legacy save-to-downloads path (host without an evidence
+                // root): the output is a download hint, NOT document text.
+                // 2026-08-11 bug fix — this was previously mis-attributed
+                // full_text_observed.
+                ("web_page", "metadata_only", "download metadata only", "page content")
+            } else {
+                // H2 (review 2026-08-10): the fetch pipeline's truncation
+                // footer is "[web_fetch content truncated: ..." (codegen
+                // overflow.rs) — matching that prefix (plus the bounded-budget
+                // "[truncated]" fallback marker and a length backstop) is what
+                // actually detects a truncated page; the old substrings missed
+                // the real footer and granted full-level attribution to
+                // truncated text (§3.7.5).
+                //
+                // PDF evidence (2026-08-11 review D1-1): a whitelisted
+                // `web_fetch` intercepted to the browser lane renders an
+                // HTML page shaped like browser_read — its truncation footer
+                // ("[browser_read content truncated: ...") must count here
+                // too, or truncated intercepted pages get full-level
+                // attribution.
+                let truncated = output.contains("[web_fetch content truncated")
+                    || output.contains("[browser_read content truncated")
+                    || output.contains("[truncated")
+                    || output.len() > 200_000;
+                if truncated {
+                    ("web_page", "partial_text_observed", "first portion", "rest of page")
+                } else {
+                    ("web_page", "full_text_observed", "full document", "none")
+                }
+            }
+        }
+        // PDF evidence (2026-08-11): `pdf_read` returns requested pages
+        // from the local evidence store — truncated output is partial, else
+        // the requested pages were fully observed.
+        "pdf_read" => {
+            let truncated = output.contains("[pdf_read content truncated")
                 || output.len() > 200_000;
             if truncated {
-                ("web_page", "partial_text_observed", "first portion", "rest of page")
+                ("pdf_document", "partial_text_observed", "requested pages", "rest of document")
             } else {
-                ("web_page", "full_text_observed", "full document", "none")
+                ("pdf_document", "full_text_observed", "requested pages", "none")
             }
         }
         // A search result's snippet is partial text (never full-text
@@ -356,7 +420,7 @@ pub(crate) fn build_evidence_record(
         title,
         source_type: source_type.to_string(),
         visibility: visibility.to_string(),
-        content_sha256: Some(sha256_hex(output.as_bytes())),
+        content_sha256: pdf_hex.or_else(|| Some(sha256_hex(output.as_bytes()))),
         observed_scope: observed_scope.to_string(),
         missing_scope: missing_scope.to_string(),
         accessed_at: chrono::Utc::now().to_rfc3339(),
@@ -5490,6 +5554,59 @@ mod tests {
         assert_eq!(bt.visibility, "partial_text_observed");
         let bl = build_evidence_record("browser_read", &call("browser_read", serde_json::json!({"url": "https://x.com"})), &ok(&"x".repeat(200_001))).unwrap();
         assert_eq!(bl.visibility, "partial_text_observed");
+        // PDF evidence (2026-08-11): the inline marker
+        // "PDF evidence: N pages, document_id=sha256:..., text_layer=..."
+        // drives visibility; content_sha256 is the DOCUMENT digest parsed
+        // from the marker, not a hash of the preview text.
+        let marker = |text_layer: &str, body: &str| format!(
+            "PDF evidence: 2 pages, document_id=sha256:ab{}, text_layer={text_layer}\n\n{body}",
+            "c".repeat(62)
+        );
+        let p = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/paper.pdf"})), &ok(&marker("yes", "page text"))).unwrap();
+        assert_eq!(p.visibility, "full_text_observed");
+        assert_eq!(p.source_type, "pdf_document");
+        assert_eq!(
+            p.content_sha256.as_deref(),
+            Some("abcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+        );
+        let pt = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/paper.pdf"})), &ok(&marker("yes", "first\n\n[web_fetch pdf content truncated: 50000 chars]"))).unwrap();
+        assert_eq!(pt.visibility, "partial_text_observed");
+        let pn = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/scan.pdf"})), &ok(&marker("no", ""))).unwrap();
+        assert_eq!(pn.visibility, "metadata_only");
+        assert_eq!(pn.source_type, "pdf_document");
+        // Legacy save-to-downloads hint (no evidence root): download
+        // metadata only — never full-text attribution (bug fix).
+        let legacy = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/paper.pdf"})), &ok("PDF downloaded (12345 bytes) and saved to /tmp/x.pdf.")).unwrap();
+        assert_eq!(legacy.visibility, "metadata_only");
+        // pdf_read: full when untruncated, partial with the mechanical footer.
+        let r = build_evidence_record("pdf_read", &call("pdf_read", serde_json::json!({"document_id": "sha256:abcd"})), &ok("--- Page 1 ---\ntext")).unwrap();
+        assert_eq!(r.visibility, "full_text_observed");
+        assert_eq!(r.source_type, "pdf_document");
+        assert_eq!(r.identity, "sha256:abcd");
+        let rt = build_evidence_record("pdf_read", &call("pdf_read", serde_json::json!({"document_id": "sha256:abcd"})), &ok("page\n\n[pdf_read content truncated: 100000 chars]")).unwrap();
+        assert_eq!(rt.visibility, "partial_text_observed");
+        // Intercepted browser-channel page (review D1-1): a whitelisted
+        // web_fetch that renders an HTML page outputs browser_read-shaped
+        // JSON with the browser_read truncation footer — must be partial.
+        let intercepted = build_evidence_record(
+            "web_fetch",
+            &call("web_fetch", serde_json::json!({"url": "https://kns.cnki.net/kcms/detail"})),
+            &ok("{\"url\":\"https://kns.cnki.net/kcms/detail\",\"title\":\"x\",\"content\":\"page text\\n\\n[browser_read content truncated: 100000 chars, page text only]\",\"truncated\":true}"),
+        )
+        .unwrap();
+        assert_eq!(intercepted.visibility, "partial_text_observed");
+        assert_eq!(intercepted.source_type, "web_page");
+        // A fake marker fragment inside ordinary page text must NOT fabricate
+        // a pdf_document record (review P3-8 — the hex shape check rejects
+        // it), and a non-hex marker stays a plain web page.
+        let fake_marker = build_evidence_record(
+            "web_fetch",
+            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
+            &ok("this page mentions document_id=sha256:nothex at the end"),
+        )
+        .unwrap();
+        assert_eq!(fake_marker.source_type, "web_page");
+        assert_eq!(fake_marker.visibility, "full_text_observed");
         // Unknown tool → no evidence.
         assert!(build_evidence_record("bash", &call("bash", serde_json::json!({})), &ok("x")).is_none());
     }
