@@ -17,6 +17,19 @@
     "error": { "type": "string" },
     "section": { "type": "string" },
     "full_output_path": { "type": "string" },
+    "workspace_delta": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind"],
+        "properties": {
+          "path": { "type": "string" },
+          "kind": { "enum": ["added", "modified", "deleted"] }
+        }
+      }
+    },
+    "workspace_delta_truncated": { "type": "boolean" },
     "edits": {
       "type": "array",
       "items": {
