@@ -34,6 +34,12 @@
 | Grill | **不声明**（`grill.is_none()` 守卫，审查 P3-5 补入——与 compaction_whitelist_add/retrieval_disposition 先例一致；此前仅 ReadOnly 过滤，Benchmark+grill 组合仍声明） | —（不可达） |
 | 检索 lane | — | 不达此点：写域 deny-only 门禁先拒（`retrieval_role_execution_denied`） |
 
+> **2026-08-12 回填（ADR-0010 v1.5 补写裁决，§3.5 条 1/2 修订）**：上表"声明"列的
+> 名级过滤语义已被裁决废止——模型可见工具列表 = registry 能力目录全量（零可用性承诺），
+> `run_tests` 声明条件简化为"host 携带 test runner"（ReadOnly/Grill 下同样声明），
+> 可用性/授权由执行层 permission gate 逐次判定（ReadOnly/Grill 只读保证由 gate 承担）。
+> 上表保留为 2026-08-11 时点的事实记录；当前语义以 ADR-0010 §3.5 v1.5 为准。
+
 ## 4. 验证
 
 - orz-host **198 passed / 4 ignored**（基线 195/4 → +3：`run_tests_env_is_isolated_from_host`、`run_tests_records_workspace_delta`、`workspace_delta_diff_caps_and_sorts`；timeout 树杀等既有测试零改动通过）
@@ -54,7 +60,7 @@
 7. **子代理调用 run_tests**：`retrieval_role_execution_denied` 前置拒绝保持不变（本切片零改动）。**lane-aware 声明**（pre-existing F6 形状）：检索子代理若宿主带 test runner 仍会看到 run_tests 被声明、随后被写域门拒绝，浪费一轮——声明过滤未来需 lane-aware，本切片不修。
 8. orz-secrets 成为 orz-loop 新直接依赖（workspace codegen crate，零第三方新增）。
 9. **delta 盲区**：symlink 与 junction 条目整体跳过（重定向不记录；文件被替换为 symlink 时报 Deleted 而非 Modified）；空目录创建不记录（walk 只记文件）；非 UTF-8 文件名经 `to_string_lossy` 可能碰撞为同一 key。均为登记，不修。
-10. **grill 声明守卫**（审查 P3-5）：`grill.is_none()` 加入 run_tests 声明条件——grill 只读承诺与 compaction_whitelist_add/retrieval_disposition 先例一致。
+10. **grill 声明守卫**（审查 P3-5）：`grill.is_none()` 加入 run_tests 声明条件——grill 只读承诺与 compaction_whitelist_add/retrieval_disposition 先例一致。**2026-08-12 回填**：该守卫随 ADR-0010 v1.5 裁决（名级过滤废止、只读保证移入执行层 gate）移除。
 11. **artifact 读取通道（pre-existing 偏差，2026-08-11 修复）**：F-09/ADR §3.8.3 语义是"完整输出可按 permission 读取"，但 `permission.rs access_in_scope` 显式排除 `.gsa` 树——模型 `read_file` 读 `{cwd}/.gsa/run_tests_output.txt` 实际被 permission 拒绝（e2e 实测发现）。**已修复**：access_in_scope 对 `.gsa` 树排除加**精确单文件白名单**——`{cwd}/.gsa/run_tests_output.txt`（规范化后逐字节相等，无通配）允许 Read/Grep；其余 `.gsa` 内容（journals/keystore/snapshots/session 状态）保持 agent-invisible。单测：白名单路径 AllowOnce + `.bak` 邻居路径仍 Deny（`read_scope_enforced_before_manager` 扩展）；e2e 实测模型 read_file 读到完整 artifact 并正确报告首行。安全面：白名单只放行一个固定文件（内容本就可经上下文 tail 看到大部分），无通配放大。**SWE-bench harness 适配验证**（2026-08-11，run_swebench.py `run_orz`）：`env["ORZ_TEST_RUNNER_ENV"] = json.dumps(env_extra)`——PYTHONPATH source-import 兜底与 django ORZ_SWE_APPS/ORZ_SWE_WORKTREE conftest 注册通道经显式注入恢复；e2e 冒烟实测注入项到达测试进程（`PROBE_PYTHONPATH`/`PROBE_SWE_APPS` 可见）且宿主 secret 不可见（env_clear 生效），双仓验证通过。
 
 ## 6. 三面审查与修复批回填（2026-08-11，用户发起"全面检查"）

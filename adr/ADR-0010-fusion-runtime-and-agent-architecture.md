@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -19,6 +19,7 @@
   - **2026-08-09 登记**：ADR-0011 承担受信控制与动作授权面（ACAF）的决策权威；ACAF 派生自本 ADR §2.4、§3.2、§3.8、§4、§5.3、§5.4 与 §11.3，不改变本 ADR 任何既有条款；登记见 §11.8。
   - **v1.2 补充（2026-08-10）**：显式化子代理工具轮预算的 session 累计语义——`continue(requirement_delta)` 重入是同一检索 session 的延续，预算跨 dispatch 累计、不得因重入重置；仅 activation 关闭后新激活从 0 起；主 Agent 维持每 run 独立起算的既有语义。正文见 §3.4.6，索引见 §14.2；来源：GAP-SUBAGENT-RUNTIME 实施审计 D-18（用户裁决）。
   - **2026-08-11 登记（含方向修正）**：C2-1 解禁闭合——外部检索 lane 内 web 工具 Host 直执行（lane 自执行，嵌套门对 `retrieve_project_*` 防递归保留），lane 内豁免 per-call 权限门、授权链由 §3.7.1 显式 mode 门承担（用户裁决）。web_search 执行器 = **DeepSeek 服务端 web search**（Responses API `/v1/responses`，同一把 DeepSeek key，服务端执行搜索——曾提议 xAI Grok 搜索后端独立 key（`orz-grok/search`），被用户裁决否决：检索必须来自当前接入的 provider，不依赖外部检索 API）。凭据无新增（ADR-0006 表不变）。**v1.3 补写 §3.7.10**（2026-08-11，用户裁决升级为正文条款）：「禁止引入独立检索 API 供应商」；正文见 §3.7 条 10，索引见 §14.3；C2-1 解禁与 lane 内权限豁免裁决索引见 §14.3 条 2；实施审计见 `docs/audits/ADR_0006_WEB_SEARCH_CREDENTIAL_AND_C2_1_UNBLOCK_IMPL_AUDIT_2026-08-11.md`。
+  - **v1.5 补写（2026-08-12，用户裁决）**：工具可用性机制重构——名级策略过滤废止，模型可见工具列表 = registry 能力目录全量（零可用性承诺），可用性判定完全发生在调用时（permission gate 逐次判定）；ReadOnly/Grill 只读保证由执行层 gate 承担；AVAILABLE 块不再注入 prompt；deny 消息只陈述本次调用事实。正文 §3.5 条 1/2 修订，索引见 §14.5。动机：2026-08-11 TB 复盘（声明层与执行层不一致的"假 available"对 DeepSeek 行为不可预测）。
 
 ## 1. 背景
 
@@ -228,10 +229,22 @@ active -> failed/cancelled -> closing -> closed_resumable
 
 ### 3.5 Tool availability、permission 与失败反馈
 
-1. session bootstrap 在 permission policy 确定后机械探查一次工具状态；tool registry 相同表示三个
-   Agent 具有同一能力目录，不表示每个参数组合都被授权。
-2. 名级策略拒绝的工具从模型可见声明中移除；作用域/参数级拒绝的工具保留声明，并在执行时返回明确
-   的结构化拒绝原因。由此保证“同一 registry”与子代理 deny-only 写策略可以同时成立。
+1. session bootstrap 生成一次 **registry 能力目录**（`tool_availability_check` 目录快照事件）；
+   模型可见工具定义列表 = 完整 registry，**零可用性承诺**——可用性判定完全发生在调用时：每次工具
+   调用由 permission gate 逐次判定（AllowOnce/Deny）并返回明确结构化结果。tool registry 相同表示
+   三个 Agent 具有同一能力目录，不表示每个参数组合都被授权。（v1.5 修订 2026-08-12：原“机械探查
+   一次工具状态”语义更新——探查保留为目录快照，不再携带可用性承诺；§3.7.1 检索 mode 门禁对检索
+   工具族的 off 投影不受影响，属显式模式语义而非策略过滤。）
+2. **名级策略过滤废止（2026-08-12 用户裁决）**：模型可见声明不再按 policy 过滤——Interactive /
+   ReadOnly / Benchmark 统一声明完整 registry 目录；可用性/授权在调用时由 permission gate 逐次判定，
+   拒绝返回明确结构化原因（“denied by the permission gate for this call”，只陈述本次调用事实，
+   不承诺策略级不可用）。ReadOnly/Grill 的只读保证由执行层 gate 承担（ReadOnly policy 拒非读），
+   不由可见性承担。**唯一保留的名级排除：MCP 名称（`{server}__{tool}`）**——prefix-spoof 防御
+   （slice #16 D2-1），执行层同款 deny 纵深兜底。动机：声明层与执行层不一致的“假 available”对
+   DeepSeek 行为不可预测（2026-08-11 TB 复盘：path-tracing 对被拒工具重试 4 次 / gpt2 盲改并声称
+   完成）；消除静态声明后模型无法误解不存在的信号。polyglot 烧轮教训（web_search×4，D-3/IP2a 的
+   直接动机）由调用时明确拒绝 + 本条 4 连续拒绝熔断承担。子代理 deny-only 写策略不受影响（lane
+   门禁在执行层，GAP-SUBAGENT-RUNTIME）。
 3. 所有 tool path 必须返回非空 success/error/deny/timeout/cancel 结果；不得让模型从空字符串猜测状态。
 4. 保留**同类拒绝连续三轮**的机械熔断，删除“每 run 累计拒绝 10 次”的总量机制。计数单位是已完成的
    tool-call round，不是同一 assistant response 中并列的每个 tool call；只有连续三轮都没有成功工具，
@@ -893,3 +906,20 @@ Schema 与机械证据：
    可重建）；`pdf_read(document_id, page_range)` 读取已入库证据（≤20 页/调用，跨 run 复用，retrieval
    mode 门禁）。来源：PDF 证据管线实施审计
    `docs/audits/GAP_PDF_EVIDENCE_IMPL_AUDIT_2026-08-11.md`（2026-08-11，用户裁决 D-1/D-2/D-3/D-4）。
+
+### 14.5 v1.5 补写裁决索引（2026-08-12）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写不改变本 ADR 任何既有条款的语义。
+
+1. **工具可用性机制重构（用户裁决，§3.5 条 1/2 修订）**：模型可见工具列表 = registry 能力目录
+   全量，零可用性承诺；可用性判定完全发生在调用时，permission gate 逐次判定（AllowOnce/Deny）并
+   返回明确结构化结果。名级策略过滤（D-3/IP2a）废止——Interactive/ReadOnly/Benchmark 统一全量目录；
+   ReadOnly/Grill 只读保证由执行层 gate 承担；唯一保留名级排除 = MCP `{server}__{tool}`（prefix-spoof
+   防御，slice #16 D2-1）。AVAILABLE 块（`[TOOL_AVAILABILITY v0.1]`）不再注入 prompt；deny 消息改为
+   只陈述本次调用事实（“denied by the permission gate for this call”）。`tool_availability_check`
+   事件保留为 registry 目录快照（审计面）。动机：2026-08-11 TB 复盘——声明层放行而执行层拒绝的
+   “假 available”对 DeepSeek 行为不可预测（path-tracing 对被拒 run_terminal_cmd 重试 4 次 / gpt2
+   盲改并声称完成）；polyglot 烧轮教训由调用时明确拒绝 + §3.5.4 连续拒绝熔断承担。实现：orz
+   `tool.rs`（policy_refuses 缩减为仅 MCP 防御）、`controller.rs`（全量目录 / run_tests 声明条件
+   简化为 host 携带 runner / deny 措辞）、`agent_loop.rs`+`prompt.rs`（AVAILABLE 块删除）；测试锁定
+   （orz-loop 174/0/3、orz-bin 6+13 capture 全绿）。
