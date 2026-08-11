@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/control-ticket-issued-event-payload-v0.2.schema.json",
+  "title": "Control ticket issued runtime event payload v0.2",
+  "description": "ACAF Slice 1 (设计文档 §4.2（ADR-0011 §2）): a one-time HMAC-SHA256 ControlTicket was issued by the independent signer for a control event (orientation / disposition / close / goal revision). The journal records the issue fact and the binding fields — never the HMAC tag, which stays inside the issuing process. Binding fields are re-derived by the verifier; template_sha256 is non-null only for orientation (signer-held template, §4.2 check 2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ticket_id",
+    "ticket_kind",
+    "session_id",
+    "agent_id",
+    "activation_id",
+    "goal_version",
+    "goal_digest",
+    "policy_revision",
+    "sequence",
+    "capability_scope",
+    "template_sha256",
+    "canonical_arguments_sha256",
+    "issued_at",
+    "expires_at",
+    "signer_revision",
+    "signer_measurement"
+  ],
+  "properties": {
+    "ticket_id": { "type": "string", "pattern": "^TKT-[A-Za-z0-9._-]+$" },
+    "ticket_kind": {
+      "type": "string",
+      "enum": [
+        "orientation_v1",
+        "disposition_v1",
+        "close_v1",
+        "goal_revision_v1"
+      ]
+    },
+    "session_id": { "type": "string", "minLength": 1 },
+    "agent_id": { "type": "string", "minLength": 1 },
+    "activation_id": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "goal_version": { "type": "integer", "minimum": 0 },
+    "goal_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "policy_revision": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "capability_scope": {
+      "type": "string",
+      "enum": [
+        "orientation_injection",
+        "disposition_submit",
+        "close_record",
+        "goal_revision"
+      ]
+    },
+    "template_sha256": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "canonical_arguments_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "signer_revision": { "type": "integer", "minimum": 0 },
+    "signer_measurement": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "ticket_kind": { "const": "orientation_v1" } }, "required": ["ticket_kind"] },
+      "then": { "properties": { "template_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } },
+      "else": { "properties": { "template_sha256": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "ticket_kind": { "const": "orientation_v1" } }, "required": ["ticket_kind"] },
+      "then": {
+        "properties": { "capability_scope": { "const": "orientation_injection" } }
+      }
+    },
+    {
+      "if": { "properties": { "ticket_kind": { "const": "disposition_v1" } }, "required": ["ticket_kind"] },
+      "then": {
+        "properties": { "capability_scope": { "const": "disposition_submit" } }
+      }
+    },
+    {
+      "if": { "properties": { "ticket_kind": { "const": "close_v1" } }, "required": ["ticket_kind"] },
+      "then": {
+        "properties": { "capability_scope": { "const": "close_record" } }
+      }
+    },
+    {
+      "if": { "properties": { "ticket_kind": { "const": "goal_revision_v1" } }, "required": ["ticket_kind"] },
+      "then": {
+        "properties": { "capability_scope": { "const": "goal_revision" } }
+      }
+    },
+    {
+      "if": { "properties": { "ticket_kind": { "const": "orientation_v1" } }, "required": ["ticket_kind"] },
+      "then": {
+        "properties": { "activation_id": { "type": "null" } }
+      },
+      "else": {
+        "properties": { "activation_id": { "type": "string", "minLength": 1 } }
+      }
+    }
+  ]
+}

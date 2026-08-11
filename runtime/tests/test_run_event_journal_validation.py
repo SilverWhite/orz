@@ -1014,6 +1014,192 @@ class V02LifecycleChainTests(unittest.TestCase):
         self.assertTrue(any("replayed with a conflicting payload" in e for e in errors))
 
 
+def _issued_ticket(
+    ticket_id: str, kind: str, seq: int, activation: str | None, template: str | None = None
+) -> dict:
+    """A schema-valid `control_ticket_issued` payload (ACAF Slice 1 —
+    ADR-0011 §4.2 binding fields; the HMAC never reaches the journal)."""
+    return {
+        "ticket_id": ticket_id,
+        "ticket_kind": kind,
+        "session_id": "sess-main-1",
+        "agent_id": "main",
+        "activation_id": activation,
+        "goal_version": 0,
+        "goal_digest": _ZERO,
+        "policy_revision": 0,
+        "sequence": seq,
+        "capability_scope": {
+            "orientation_v1": "orientation_injection",
+            "disposition_v1": "disposition_submit",
+            "close_v1": "close_record",
+            "goal_revision_v1": "goal_revision",
+        }[kind],
+        "template_sha256": template,
+        "canonical_arguments_sha256": _ZERO,
+        "issued_at": "2026-08-12T00:00:00Z",
+        "expires_at": "2026-08-12T00:00:05Z",
+        "signer_revision": 1,
+        "signer_measurement": _ZERO,
+    }
+
+
+def _consumed_ticket(ticket_id: str, kind: str) -> dict:
+    return {
+        "ticket_id": ticket_id,
+        "ticket_kind": kind,
+        "consumed_at": "2026-08-12T00:00:01Z",
+        "outcome": "accepted",
+    }
+
+
+def _rejected_ticket(ticket_id: str | None, kind: str, code: str) -> dict:
+    return {
+        "ticket_id": ticket_id,
+        "ticket_kind": kind,
+        "rejected_at": "2026-08-12T00:00:01Z",
+        "reject_code": code,
+        "detail": "review fixture",
+    }
+
+
+class ControlTicketPairingTests(unittest.TestCase):
+    """ACAF Slice 1 (ADR-0011 §4.2/§4.6) — the issued → consumed|rejected
+    pairing rule on synthetic v0.2 journals (review C1-1 2026-08-12: the
+    rule must have its own positive/negative coverage, not just the
+    captured-journal path)."""
+
+    def test_issued_then_consumed_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "control_ticket_issued",
+                    _issued_ticket("TKT-0001", "orientation_v1", 1, None, template=_ZERO),
+                    0,
+                    None,
+                ),
+                _mk_v02_event(
+                    "control_ticket_consumed",
+                    _consumed_ticket("TKT-0001", "orientation_v1"),
+                    1,
+                    _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_consumed_references_unknown_ticket(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "control_ticket_consumed",
+                    _consumed_ticket("TKT-9999", "close_v1"),
+                    0,
+                    None,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("references unknown ticket TKT-9999" in e for e in errors))
+
+    def test_consumed_precedes_issued(self) -> None:
+        # The consumed event exists BEFORE the issued event for the same id
+        # (a synthetic "consume before issue" journal must be rejected — the
+        # single-pass verifier surfaces it as the unknown-ticket rejection).
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "control_ticket_consumed",
+                    _consumed_ticket("TKT-0001", "close_v1"),
+                    0,
+                    None,
+                ),
+                _mk_v02_event(
+                    "control_ticket_issued",
+                    _issued_ticket("TKT-0001", "close_v1", 1, "ACT-1"),
+                    1,
+                    _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("references unknown ticket TKT-0001" in e for e in errors),
+            f"expected consume-before-issue rejection, got: {errors}",
+        )
+
+    def test_terminal_kind_mismatch(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "control_ticket_issued",
+                    _issued_ticket("TKT-0001", "close_v1", 1, "ACT-1"),
+                    0,
+                    None,
+                ),
+                _mk_v02_event(
+                    "control_ticket_consumed",
+                    _consumed_ticket("TKT-0001", "disposition_v1"),
+                    1,
+                    _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("disagrees with issued" in e for e in errors),
+            f"expected kind-mismatch error, got: {errors}",
+        )
+
+    def test_one_shot_terminal_is_exclusive(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "control_ticket_issued",
+                    _issued_ticket("TKT-0001", "close_v1", 1, "ACT-1"),
+                    0,
+                    None,
+                ),
+                _mk_v02_event(
+                    "control_ticket_consumed",
+                    _consumed_ticket("TKT-0001", "close_v1"),
+                    1,
+                    _ZERO,
+                ),
+                _mk_v02_event(
+                    "control_ticket_rejected",
+                    _rejected_ticket("TKT-0001", "close_v1", "replay_detected"),
+                    2,
+                    _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("after it was already" in e for e in errors),
+            f"expected one-shot error, got: {errors}",
+        )
+
+    def test_rejected_after_issued_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "control_ticket_issued",
+                    _issued_ticket("TKT-0001", "orientation_v1", 1, None, template=_ZERO),
+                    0,
+                    None,
+                ),
+                _mk_v02_event(
+                    "control_ticket_rejected",
+                    _rejected_ticket("TKT-0001", "orientation_v1", "expired"),
+                    1,
+                    _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+
 class TrackResolutionTests(unittest.TestCase):
     def test_rust_track_string_resolves_via_registry(self) -> None:
         mode, path = _resolve_payload_schema(

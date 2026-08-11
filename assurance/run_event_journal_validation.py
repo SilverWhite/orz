@@ -123,6 +123,20 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "retrieval-activation-restored",
         RUNTIME / "retrieval-activation-restored-event-payload-v0.2.schema.json",
     ),
+    # ACAF Slice 1 (设计文档 §4.2/§4.6): control-ticket lifecycle events —
+    # issued → consumed|rejected pairing enforced by _verify_v02_control_tickets.
+    "control_ticket_issued": (
+        "control-ticket-issued",
+        RUNTIME / "control-ticket-issued-event-payload-v0.2.schema.json",
+    ),
+    "control_ticket_consumed": (
+        "control-ticket-consumed",
+        RUNTIME / "control-ticket-consumed-event-payload-v0.2.schema.json",
+    ),
+    "control_ticket_rejected": (
+        "control-ticket-rejected",
+        RUNTIME / "control-ticket-rejected-event-payload-v0.2.schema.json",
+    ),
 }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -647,6 +661,71 @@ def _verify_v02_activation_restore(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+def _verify_v02_control_tickets(events: list[dict[str, Any]]) -> list[str]:
+    """ACAF Slice 1 (设计文档 §4.2/§4.6) ticket lifecycle on the v0.2 track:
+
+    - a `control_ticket_consumed` / `control_ticket_rejected` must reference a
+      `control_ticket_issued` for the same `ticket_id` EARLIER in the same
+      journal (a ticket cannot be consumed before it was issued, and there is
+      no cross-run ticket import on the v0.2 track);
+    - issued/consumed/rejected for one ticket_id must agree on `ticket_kind`;
+    - one ticket has at most one terminal event (consumed XOR rejected) —
+      the one-shot contract of ADR-0011 §2.1 / the nonce consumption of 设计文档 §4.2 check 3.
+    """
+    errors: list[str] = []
+    issued: dict[str, tuple[int, dict[str, Any]]] = {}
+    terminals: dict[str, tuple[int, str, dict[str, Any]]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type not in (
+            "control_ticket_issued",
+            "control_ticket_consumed",
+            "control_ticket_rejected",
+        ):
+            continue
+        payload = event.get("payload", {})
+        ticket_id = payload.get("ticket_id")
+        kind = payload.get("ticket_kind")
+        if not isinstance(ticket_id, str) or not isinstance(kind, str):
+            continue  # envelope/payload schema violations are reported elsewhere
+        if event_type == "control_ticket_issued":
+            issued[ticket_id] = (index, event)
+            continue
+        # terminal event — must follow its issue. A single-pass scan cannot
+        # see a LATER issue, so a consume-before-issue surfaces as the
+        # unknown-ticket rejection (equally refusing, sharper message is a
+        # two-pass upgrade).
+        if ticket_id not in issued:
+            errors.append(
+                f"event {index}: {event_type} references unknown ticket "
+                f"{ticket_id} (not issued in this journal)"
+            )
+            continue
+        issue_index, issue_event = issued[ticket_id]
+        if index <= issue_index:
+            errors.append(
+                f"event {index}: {event_type} for {ticket_id} precedes its "
+                f"issue at event {issue_index}"
+            )
+        if kind != issue_event["payload"].get("ticket_kind"):
+            errors.append(
+                f"event {index}: {event_type} ticket_kind {kind!r} disagrees "
+                f"with issued {issue_event['payload'].get('ticket_kind')!r} "
+                f"for {ticket_id}"
+            )
+        if ticket_id in terminals:
+            first_index, first_type, _ = terminals[ticket_id]
+            errors.append(
+                f"event {index}: {event_type} for {ticket_id} after it was "
+                f"already {first_type} at event {first_index} (one-shot)"
+            )
+        else:
+            terminals[ticket_id] = (index, event_type, event)
+    return errors
+
+
 def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §4.4 mechanical lifecycle facts on the v0.2 track:
 
@@ -1109,6 +1188,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))
         errors.extend(_verify_v02_activation_restore(events))
+        errors.extend(_verify_v02_control_tickets(events))
     return errors
 
 

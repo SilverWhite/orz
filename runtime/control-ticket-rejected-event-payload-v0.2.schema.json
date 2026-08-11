@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/control-ticket-rejected-event-payload-v0.2.schema.json",
+  "title": "Control ticket rejected runtime event payload v0.2",
+  "description": "ACAF Slice 1 (设计文档 §4.2（ADR-0011 §2）): a ControlTicket failed one of the seven verification checks (or the signer was unreachable) and the control event was refused / recorded as an unauthenticated control attempt. Reject codes map to §4.2 checks 1-7; signer_unreachable covers the fail-closed requirement (§9.5) under shadow mode, where the control event proceeds but is journaled as unticketed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ticket_id",
+    "ticket_kind",
+    "rejected_at",
+    "reject_code",
+    "detail"
+  ],
+  "properties": {
+    "ticket_id": {
+      "oneOf": [
+        { "type": "string", "pattern": "^TKT-[A-Za-z0-9._-]+$" },
+        { "type": "null" }
+      ]
+    },
+    "ticket_kind": {
+      "type": "string",
+      "enum": [
+        "orientation_v1",
+        "disposition_v1",
+        "close_v1",
+        "goal_revision_v1"
+      ]
+    },
+    "rejected_at": { "type": "string", "format": "date-time" },
+    "reject_code": {
+      "type": "string",
+      "enum": [
+        "signature_invalid",
+        "template_mismatch",
+        "replay_detected",
+        "context_mismatch",
+        "target_mismatch",
+        "expired",
+        "chain_mismatch",
+        "signer_unreachable"
+      ]
+    },
+    "detail": { "type": "string", "minLength": 1 }
+  }
+}

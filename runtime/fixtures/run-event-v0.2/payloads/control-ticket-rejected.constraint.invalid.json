@@ -1,0 +1,7 @@
+{
+  "ticket_id": "TKT-CONF-0002",
+  "ticket_kind": "disposition_v1",
+  "rejected_at": "2026-08-06T00:00:00Z",
+  "reject_code": "forged",
+  "detail": "unknown reject code"
+}

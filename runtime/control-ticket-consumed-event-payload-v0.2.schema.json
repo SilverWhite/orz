@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/control-ticket-consumed-event-payload-v0.2.schema.json",
+  "title": "Control ticket consumed runtime event payload v0.2",
+  "description": "ACAF Slice 1 (设计文档 §4.2/§4.5（ADR-0011 §2）): a ControlTicket passed all seven verification checks and was consumed for its control event. The event chain (previous_event_sha256) binds consumption to the issued event; the receipt chaining contract of §4.6 means a consumed ticket must have been issued in the same run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ticket_id",
+    "ticket_kind",
+    "consumed_at",
+    "outcome"
+  ],
+  "properties": {
+    "ticket_id": { "type": "string", "pattern": "^TKT-[A-Za-z0-9._-]+$" },
+    "ticket_kind": {
+      "type": "string",
+      "enum": [
+        "orientation_v1",
+        "disposition_v1",
+        "close_v1",
+        "goal_revision_v1"
+      ]
+    },
+    "consumed_at": { "type": "string", "format": "date-time" },
+    "outcome": { "type": "string", "const": "accepted" }
+  }
+}

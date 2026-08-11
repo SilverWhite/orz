@@ -1,6 +1,8 @@
 # ADR-0011：受信控制与动作授权面（Authenticated Control and Action Fabric，ACAF）
 
-- 状态：**accepted**（2026-08-09；设计定稿，尚未实施）
+- 状态：**accepted**（2026-08-09；设计定稿。2026-08-12 Slice 1 已实施——签发器 v1 +
+  控制事件票据，见 [`GAP_ACAF_SLICE1_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE1_IMPL_AUDIT_2026-08-12.md)；
+  Slice 2~4 待实施）
 - 决策范围：跨信任边界控制事件与外部效果动作的票据授权面；独立签发器；三运行模式；
   威胁模型边界；实施切片的独立性
 - 详细设计权威：[`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](../docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)

@@ -1,6 +1,8 @@
 # Authenticated Control and Action Fabric（受信控制与动作授权面，ACAF）设计
 
-> 状态：**design finalized / 未实施**（2026-08-09 定稿）
+> 状态：**design finalized**（2026-08-09 定稿；**Slice 1 已实施** 2026-08-12——
+> 实施记录见 [`GAP_ACAF_SLICE1_IMPL_AUDIT`](audits/GAP_ACAF_SLICE1_IMPL_AUDIT_2026-08-12.md)，
+> v1 简化决策 D1~D10 登记在该审计 §3）
 > 权威关系：本文件是 ACAF 的**详细设计权威**；`adr/ADR-0011` 是其**决策权威登记**；两者均由
 > ADR-0010 派生且不改变 ADR-0010 任何既有条款（登记见 ADR-0010 §11.8）。
 > 实施排期：**独立于 ADR-0010 §9 Phase C**；与 Phase C 只共享若干缺口闭合的前置依赖（见 §7）。

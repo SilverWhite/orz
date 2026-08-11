@@ -1,6 +1,6 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.0；状态：`current`；最近整理：2026-08-09。
+> 索引版本：v2.0；状态：`current`；最近整理：2026-08-12。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >
@@ -90,7 +90,7 @@
 - **IMPL-DEEPSEEK-TRANSPORT** (`partial`; 2026-08-09)：默认模型族为 DeepSeek，当前配置为 V4；transport、重试和 thinking 必须与主/子代理同构约束一起复核。关键词：DeepSeek V4、deepseek-v4-flash、transport retry、thinking。入口：[`DEEPSEEK_ADAPTER_CONTRACT`](architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md) / [`ADR-0007`](adr/ADR-0007-transport-retry-policy.md)。
 - **IMPL-WRITE-PLACEMENT** (`implemented`; 2026-08-09)：工作区、本体状态和系统必要状态按 ADR-0009 分域，Grill 使用独立只读审计链。关键词：GROK_HOME、write placement、Grill、read-only。入口：[`ADR-0009`](adr/ADR-0009-write-placement-policy.md) / [`WRITE_PLACEMENT_AND_GRILL_DESIGN`](docs/WRITE_PLACEMENT_AND_GRILL_DESIGN_2026-08-08.md)。
 - **IMPL-GLOBAL-REVIEW** (`implemented`; 2026-08-09)：显式 Global Review Mode 负责激活全局审查义务，其 receipt 不冒充最终审查结论。关键词：global review、activation receipt、L1-L7。入口：[`global_review_mode.py`](assurance/global_review_mode.py) / [`GSA_GLOBAL_REVIEW_RECORD`](docs/GSA_GLOBAL_REVIEW_RECORD_2026-08-01.md)。
-- **IMPL-CONTROL-FABRIC** (`pending`; 2026-08-09)：ACAF 设计已定稿（ADR-0011 accepted），四切片实施独立于 Phase C；Slice 2 前置 GAP-RUN-TESTS RT-001~003 闭合与 policy_revision 接线。关键词：ACAF 切片、签发器、fail-closed、shadow mode。入口：[`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
+- **IMPL-CONTROL-FABRIC** (`partial`; 2026-08-12)：ACAF 四切片实施独立于 Phase C；**Slice 1（签发器 v1 + 控制事件票据）已闭合**，Slice 2~4 待实施（Slice 2 前置 RT-001~003 已闭合 + policy_revision 接线）。关键词：ACAF 切片、签发器、fail-closed、shadow mode、ControlTicket。入口：[`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
 
 ### 3.1 已登记实现差距
 
@@ -106,6 +106,7 @@
 - **GAP-PDF-EVIDENCE** (`implemented`; 2026-08-11)：内容寻址 PDF 证据管线——**双通道路由**（`ORZ_PDF_BROWSER_DOMAINS` env 通配域名白名单：命中→浏览器 CDP 下载（登录态文献库），未命中→web_fetch 直连内联；未配置=全直连；白名单内失败显式 `[web_fetch_pdf_*]` 不回退）+ 证据核心（orz-tools `pdf_evidence.rs`：magic/解析校验、sha256 内容寻址 `{cwd}/.gsa/pdf-evidence/{p2}/{full64}/{original.pdf,pages.jsonl,metadata.json}`、pdf_oxide 逐页抽文本、NO_TEXT_LAYER 显式 metadata、50MB 上限、marker 契约 `PDF evidence: N pages, document_id=sha256:…, text_layer=…`）+ `pdf_read(document_id, page_range)`（显式 range ≤20 页/调用、省略读全部页截断输出，跨 run 复用，relay mode 门禁）+ evidence 记账（PDF 分支 full/partial/metadata + `content_sha256` 取文档 hex + **legacy "PDF downloaded" 短提示误判 full_text_observed 修复**）+ retention 7 天清扫（rebuildable→sweepable）。零新第三方依赖（pdf_oxide 已有）；零 schema 变更。关键词：PDF 证据、document_id、pdf_read、白名单路由、INVALID_PDF。入口：[`GAP_PDF_EVIDENCE_IMPL_AUDIT`](docs/audits/GAP_PDF_EVIDENCE_IMPL_AUDIT_2026-08-11.md) / [`pdf_evidence.rs`](orz/crates/codegen/orz-tools/src/implementations/pdf_evidence.rs) / [`pdf_evidence.rs`](orz/crates/orz-host/src/pdf_evidence.rs) / [`cdp.rs`](orz/crates/orz-host/src/local_browser/cdp.rs) / [`ADR-0010 §3.7 条 11`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（v1.4 补写，2026-08-11）。
 - **GAP-RUN-TESTS** (`implemented`; 2026-08-11)：RT-001~003 全部闭合——run_tests 分支移入通用 permission gate（Interactive 弹窗确认 / Benchmark 自动放行；2026-08-12 ADR-0010 v1.5 裁决后声明条件=host 携带 runner，ReadOnly/Grill 同样声明、只读保证由 gate 承担）；env_clear + 最小平台 allowlist + `TestRunner::env` 显式注入（`ORZ_TEST_RUNNER_ENV` JSON）；上下文注入前 orz-secrets 脱敏（先脱敏后截断，artifact 原样）；workspace delta 前后元数据 diff（200 条上限 + truncated 标志）写入 ToolCompleted 事件（Schema 先行扩展）；Job Object/timeout/输出上限维持达标。关键词：run_tests、D-9、execution permission、env allowlist、workspace delta、hidden test。入口：[`GAP_RUN_TESTS_IMPL_AUDIT`](docs/audits/GAP_RUN_TESTS_IMPL_AUDIT_2026-08-11.md) / [`V11_IMPL_005_RUN_TESTS_SECURITY_REVIEW`](docs/audits/V11_IMPL_005_RUN_TESTS_SECURITY_REVIEW_2026-08-09.md) / [`controller.rs`](orz/crates/orz-loop/src/controller.rs) / [`lib.rs`](orz/crates/orz-host/src/lib.rs)。
 - **GAP-STREAM-RETRY** (`implemented`; 2026-08-12)：流式中断重试已实施——**零 chunk 产出**中断（连接握手/首字节前失败；任何成功解码的 SSE item 含 reasoning delta 均计 chunk）且错误类 ∈ {Transport, Timeout} → `stream_once_with_retry` 重发同一请求体（幂等），`request_max_retries` 次数与 `request_retry_window` 退避窗口双约束先到者止（fork `execute_raw` 同节奏）；已产出 chunk / Cancelled / Model / Parse 不重试；新变体 `GatewayError::StreamInterrupted { attempts, detail }`（journal 可见重试历史）。边界：fork EventSource 读错误另有内部重连（叠加双保险，不改 fork）；握手 429/5xx 不重试（fork ApiError 无 status 字段）。关键词：stream retry、transport error、decoding response body、零 chunk。入口：[`ADR-0007 §4`](adr/ADR-0007-transport-retry-policy.md) / [`transport.rs`](orz/crates/orz-loop/src/gateway/transport.rs) / [`GAP_STREAM_RETRY_IMPL_AUDIT`](docs/audits/GAP_STREAM_RETRY_IMPL_AUDIT_2026-08-12.md)。
+- **GAP-ACAF-SLICE1** (`implemented`; 2026-08-12)：ACAF Slice 1 已闭合——独立签发器进程 `orz-signer`（manifest 自校验启动、DPAPI K_install 非 Windows fail-closed、枚举化 stdio JSON-lines 接口、orientation 模板签发器持有）+ host 客户端（K_session HKDF 派生下发、七项验票、one-shot ledger）+ 四类控制事件持票接线（Orientation fire / accepted disposition / close record / goal revision，影子模式：失败仅记录 `control_ticket_rejected` 不阻断）+ 新事件类型 issued/consumed/rejected 先 Schema 后 producer（v0.2 枚举 42、verifier 机械配对、fixture 重生成）。边界：IPC=stdio（命名管道 v2）、manifest 无独立发布密钥签名（v2）、goal_version/policy_revision 恒 0（Slice 2 接线）、E2E Windows-only。关键词：ACAF、ControlTicket、签发器、影子模式、control_ticket_issued。入口：[`GAP_ACAF_SLICE1_IMPL_AUDIT`](docs/audits/GAP_ACAF_SLICE1_IMPL_AUDIT_2026-08-12.md) / [`acaf/mod.rs`](orz/crates/orz-assurance/src/acaf/mod.rs) / [`acaf.rs`](orz/crates/orz-loop/src/acaf.rs) / [`orz-signer.rs`](orz/crates/orz-bin/src/bin/orz-signer.rs)。
 - **GAP-DENIAL-POLICY-REVISION** (`partial`; 2026-08-09)：DenialKey.policy_revision 当前恒 0 且无接线来源——ADR §3.5.4"policy revision 变化重置"结构上不可触发；未来引入 mid-session revision 机制时必须接入。关键词：denial breaker、policy_revision、V11-IMPL-012。入口：[`ADR-0010 §3.5.4`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`controller.rs`](orz/crates/orz-loop/src/controller.rs)。
 - **GAP-WINDOWS-EVIDENCE** (`partial`; 2026-08-09)：三个案例候选（ORZ-WIN-PROC-001/002/003，晋级自 child-tree 探针三场景）已登记并引用探针 digest，均标 `candidate` 未宣称闭环；事故路由保留 WIN-LIM-001（raw TCP）与 WIN-INC-001（observer leak）。关键词：Windows incident、case selection、compatibility evidence、WIN-LIM、ORZ-WIN-PROC。入口：[`docs/incidents/windows/`](docs/incidents/windows/) / [`docs/cases/windows/`](docs/cases/windows/)。
 
@@ -139,7 +140,7 @@
 | ADR-0008 | accepted / numeric value partially superseded | [`ADR-0008`](adr/ADR-0008-tool-round-budget.md) |
 | ADR-0009 | accepted | [`ADR-0009`](adr/ADR-0009-write-placement-policy.md) |
 | ADR-0010 | accepted / frozen / current authority | [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) |
-| ADR-0011 | accepted | [`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) |
+| ADR-0011 | accepted / Slice 1 已实施 | [`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) |
 
 ## 6. 评测与回归入口
 
@@ -168,9 +169,8 @@
 本节只列 canonical ID，不重复定义：
 
 - `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC。
-- `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、IMPL-RUN-EVENT-SCHEMA、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-RETRIEVAL-TOOLS、GAP-LOCAL-BROWSER、GAP-WEB-SEARCH-SEMAPHORE、GAP-CONVERSATION-RESTORE、GAP-PROJECT-DOC-INDEX-CACHE、GAP-PDF-EVIDENCE、GAP-RUN-TESTS、GAP-STREAM-RETRY。
-- `partial`：IMPL-RUST-RUNTIME、IMPL-DEEPSEEK-TRANSPORT、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER、GAP-DENIAL-POLICY-REVISION。
-- `pending`：IMPL-CONTROL-FABRIC。
+- `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、IMPL-RUN-EVENT-SCHEMA、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-RETRIEVAL-TOOLS、GAP-LOCAL-BROWSER、GAP-WEB-SEARCH-SEMAPHORE、GAP-CONVERSATION-RESTORE、GAP-PROJECT-DOC-INDEX-CACHE、GAP-PDF-EVIDENCE、GAP-RUN-TESTS、GAP-STREAM-RETRY、GAP-ACAF-SLICE1。
+- `partial`：IMPL-RUST-RUNTIME、IMPL-DEEPSEEK-TRANSPORT、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER、GAP-DENIAL-POLICY-REVISION、IMPL-CONTROL-FABRIC。
 - `reference`：AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 

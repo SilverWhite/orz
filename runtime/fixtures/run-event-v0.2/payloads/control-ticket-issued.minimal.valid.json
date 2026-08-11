@@ -1,0 +1,18 @@
+{
+  "ticket_id": "TKT-CONF-0001",
+  "ticket_kind": "orientation_v1",
+  "session_id": "sess-main-1",
+  "agent_id": "main",
+  "activation_id": null,
+  "goal_version": 0,
+  "goal_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "policy_revision": 0,
+  "sequence": 0,
+  "capability_scope": "orientation_injection",
+  "template_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "canonical_arguments_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "issued_at": "2026-08-06T00:00:00Z",
+  "expires_at": "2026-08-06T00:00:00Z",
+  "signer_revision": 1,
+  "signer_measurement": "0000000000000000000000000000000000000000000000000000000000000000"
+}

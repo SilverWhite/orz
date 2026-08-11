@@ -117,6 +117,9 @@ V02_EVENT_TYPES = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
+    "control_ticket_issued",
+    "control_ticket_consumed",
+    "control_ticket_rejected",
     "context_compressed",
     "snapshot_created",
     "snapshot_restored",
@@ -140,6 +143,9 @@ SLUGS_V02 = {
     "retrieval_mode_transition": "retrieval-mode-transition",
     "retrieval_result_committed": "retrieval-result",
     "retrieval_activation_restored": "retrieval-activation-restored",
+    "control_ticket_issued": "control-ticket-issued",
+    "control_ticket_consumed": "control-ticket-consumed",
+    "control_ticket_rejected": "control-ticket-rejected",
 }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
@@ -154,6 +160,10 @@ V02_PAYLOAD_EVENTS = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
+    # ACAF Slice 1 (设计文档 §4.2/§4.6) — control-ticket lifecycle events.
+    "control_ticket_issued",
+    "control_ticket_consumed",
+    "control_ticket_rejected",
 ]
 
 SLUGS = {
@@ -679,6 +689,38 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
     },
+    # ACAF Slice 1 (设计文档 §4.2/§4.6) — control-ticket lifecycle events.
+    "control_ticket_issued": {
+        "ticket_id": "TKT-CONF-0001",
+        "ticket_kind": "orientation_v1",
+        "session_id": "sess-main-1",
+        "agent_id": "main",
+        "activation_id": None,
+        "goal_version": 0,
+        "goal_digest": ZERO_HASH,
+        "policy_revision": 0,
+        "sequence": 0,
+        "capability_scope": "orientation_injection",
+        "template_sha256": ZERO_HASH,
+        "canonical_arguments_sha256": ZERO_HASH,
+        "issued_at": TIMESTAMP,
+        "expires_at": TIMESTAMP,
+        "signer_revision": 1,
+        "signer_measurement": ZERO_HASH,
+    },
+    "control_ticket_consumed": {
+        "ticket_id": "TKT-CONF-0001",
+        "ticket_kind": "orientation_v1",
+        "consumed_at": TIMESTAMP,
+        "outcome": "accepted",
+    },
+    "control_ticket_rejected": {
+        "ticket_id": "TKT-CONF-0002",
+        "ticket_kind": "disposition_v1",
+        "rejected_at": TIMESTAMP,
+        "reject_code": "replay_detected",
+        "detail": "nonce already consumed",
+    },
 }
 
 # One constraint violation per v0.2 event (never a bare missing-required when
@@ -852,6 +894,41 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "origin_run_id": "RUN-CONF-0001",
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
+    },
+    # ACAF Slice 1 (设计文档 §4.2) — constraint violations: capability_scope
+    # disagrees with ticket_kind (conditional allOf; the activation binding
+    # stays valid so exactly ONE constraint is violated — review C2-4),
+    # consumed outcome outside the accepted const, unknown reject_code.
+    "control_ticket_issued": {
+        "ticket_id": "TKT-CONF-0001",
+        "ticket_kind": "close_v1",
+        "session_id": "sess-main-1",
+        "agent_id": "main",
+        "activation_id": "ACT-1",
+        "goal_version": 0,
+        "goal_digest": ZERO_HASH,
+        "policy_revision": 0,
+        "sequence": 0,
+        "capability_scope": "orientation_injection",
+        "template_sha256": None,
+        "canonical_arguments_sha256": ZERO_HASH,
+        "issued_at": TIMESTAMP,
+        "expires_at": TIMESTAMP,
+        "signer_revision": 1,
+        "signer_measurement": ZERO_HASH,
+    },
+    "control_ticket_consumed": {
+        "ticket_id": "TKT-CONF-0001",
+        "ticket_kind": "orientation_v1",
+        "consumed_at": TIMESTAMP,
+        "outcome": "rejected",
+    },
+    "control_ticket_rejected": {
+        "ticket_id": "TKT-CONF-0002",
+        "ticket_kind": "disposition_v1",
+        "rejected_at": TIMESTAMP,
+        "reject_code": "forged",
+        "detail": "unknown reject code",
     },
 }
 
