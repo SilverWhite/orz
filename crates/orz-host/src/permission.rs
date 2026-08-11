@@ -276,8 +276,18 @@ impl PermissionBridge {
             normalize_lexical(&self.cwd.join(path).to_path_buf())
         };
         let canonical = dunce::canonicalize(&resolved).unwrap_or(resolved);
+        let gsa_root = self.cwd.join(".gsa");
         path_under(self.cwd.as_path(), &canonical)
-            && !path_under(&self.cwd.join(".gsa").to_path_buf(), &canonical)
+            && (!path_under(gsa_root.as_path(), &canonical)
+                // GAP-RUN-TESTS (2026-08-11): the run_tests output artifact
+                // (`{cwd}/.gsa/run_tests_output.txt`) is the model's
+                // permission-gated window into the FULL test output —
+                // ADR-0010 §3.8.3 / F-09: "完整输出保存在受控任务 artifact
+                // 中，可按 permission 读取"; the conversation only carries
+                // the 32KB tail. The whitelist is an exact fixed filename —
+                // everything else under `.gsa` (journals, session state,
+                // keystore, snapshots) stays agent-invisible.
+                || canonical == normalize_lexical(gsa_root.join("run_tests_output.txt").as_path()))
     }
 }
 
@@ -639,6 +649,32 @@ mod tests {
                 &dir.join(".gsa")
                     .join("runs")
                     .join("events.jsonl")
+                    .to_string_lossy()
+            )
+            .await,
+            PermitDecision::Deny
+        );
+        // GAP-RUN-TESTS (2026-08-11): the run_tests output artifact is the
+        // model's permission-gated window into the full test output — the
+        // EXACT filename under `.gsa` is allowed...
+        std::fs::write(dir.join(".gsa").join("run_tests_output.txt"), "1 passed").unwrap();
+        assert_eq!(
+            read_req(
+                &bridge,
+                &dir.join(".gsa")
+                    .join("run_tests_output.txt")
+                    .to_string_lossy()
+            )
+            .await,
+            PermitDecision::AllowOnce,
+            "run_tests output artifact readable per ADR §3.8.3"
+        );
+        // ...and everything else under `.gsa` stays denied (no wildcard).
+        assert_eq!(
+            read_req(
+                &bridge,
+                &dir.join(".gsa")
+                    .join("run_tests_output.txt.bak")
                     .to_string_lossy()
             )
             .await,
