@@ -277,6 +277,30 @@ fn retrieval_mode_from_env() -> Option<orz_loop::controller::RetrievalMode> {
         .and_then(|v| orz_loop::controller::RetrievalMode::from_wire(Some(&v)))
 }
 
+/// ACAF Slice 1 (ADR-0011 §4.4): spawn the signer-process client when the
+/// launch chain configures it (`ORZ_ACAF_MANIFEST` + `ORZ_ACAF_KEYSTORE`
+/// both set). Unconfigured → `None` (unticketed control events, zero
+/// behaviour change). The signer binary defaults to `orz-signer` on PATH
+/// (`ORZ_ACAF_BINARY` overrides — the trusted launcher pins the path).
+async fn build_acaf_client() -> Result<
+    Option<std::sync::Arc<tokio::sync::Mutex<orz_loop::acaf::AcafClient>>>,
+    Box<dyn std::error::Error>,
+> {
+    let manifest = std::env::var("ORZ_ACAF_MANIFEST").ok();
+    let keystore = std::env::var("ORZ_ACAF_KEYSTORE").ok();
+    let (Some(manifest), Some(keystore)) = (manifest, keystore) else {
+        return Ok(None);
+    };
+    let binary = std::env::var("ORZ_ACAF_BINARY").ok().map(std::path::PathBuf::from);
+    let client = orz_loop::acaf::AcafClient::spawn(&orz_loop::acaf::AcafConfig {
+        manifest_path: std::path::PathBuf::from(manifest),
+        keystore_root: std::path::PathBuf::from(keystore),
+        signer_binary: binary,
+    })
+    .await?;
+    Ok(Some(std::sync::Arc::new(tokio::sync::Mutex::new(client))))
+}
+
 /// ACP stdio server entry: serve `session/new` + `session/prompt` over the
 /// persistent stdio JSON-RPC stream until the client closes stdin.
 fn run_stdio() {
@@ -947,7 +971,11 @@ async fn run(
         let host = build_cli_host(&handle, &run_id, &cwd)?;
 
         let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
-            .with_snapshot_store(Some(handle.snapshot_store.clone()));
+            .with_snapshot_store(Some(handle.snapshot_store.clone()))
+            // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client
+            // (env-gated; unconfigured → unticketed control events, zero
+            // behaviour change). Shadow mode.
+            .with_acaf(build_acaf_client().await?);
         let (response, _, _) = controller
             .run_turn_with_guards(
                 &host,

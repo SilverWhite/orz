@@ -369,6 +369,42 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("激活恢复: {status}")]
         }
+        // ACAF Slice 1 (ADR-0011 §4.6): control-ticket projections — the
+        // ticket lifecycle is a mechanism event; the TUI shows kind + reject
+        // code (never the HMAC or binding digests).
+        TuiEvent::ControlTicketIssued {
+            ticket_id,
+            ticket_kind,
+            capability_scope,
+            ..
+        } => {
+            app.content.add_system_message(
+                &format!("[票据签发] {ticket_id}: {ticket_kind} ({capability_scope})"),
+                false,
+            );
+            vec!["票据签发".into()]
+        }
+        TuiEvent::ControlTicketConsumed {
+            ticket_id,
+            ticket_kind,
+        } => {
+            app.content.add_system_message(
+                &format!("[票据消费] {ticket_id}: {ticket_kind}"),
+                false,
+            );
+            vec!["票据消费".into()]
+        }
+        TuiEvent::ControlTicketRejected {
+            ticket_id,
+            ticket_kind,
+            reject_code,
+        } => {
+            app.content.add_system_message(
+                &format!("[票据拒绝] {ticket_id}: {ticket_kind} ({reject_code})"),
+                false,
+            );
+            vec![format!("票据拒绝: {reject_code}")]
+        }
 
         // ── A6 explicit context compaction ──
         TuiEvent::ContextCompressed {

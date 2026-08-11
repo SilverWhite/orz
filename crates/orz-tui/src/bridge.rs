@@ -26,6 +26,11 @@ fn get_u64(payload: &Value, key: &str) -> u64 {
     payload.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
+/// Extract an optional u64 field.
+fn get_opt_u64(payload: &Value, key: &str) -> Option<u64> {
+    payload.get(key).and_then(Value::as_u64)
+}
+
 /// Extract an i64 field from a payload with a default.
 fn get_i64(payload: &Value, key: &str) -> i64 {
     payload.get(key).and_then(Value::as_i64).unwrap_or(0)
@@ -229,6 +234,24 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             restore_id: get_str(p, "restore_id"),
             activation_id: get_str(p, "activation_id"),
             status: get_str(p, "status"),
+        },
+        // ACAF Slice 1 (ADR-0011 §4.6): control-ticket lifecycle projections
+        // (mechanism events — the HMAC never reaches the TUI; binding fields
+        // and reject codes only).
+        EventType::ControlTicketIssued => TuiEvent::ControlTicketIssued {
+            ticket_id: get_str(p, "ticket_id"),
+            ticket_kind: get_str(p, "ticket_kind"),
+            capability_scope: get_str(p, "capability_scope"),
+            sequence: get_opt_u64(p, "sequence"),
+        },
+        EventType::ControlTicketConsumed => TuiEvent::ControlTicketConsumed {
+            ticket_id: get_str(p, "ticket_id"),
+            ticket_kind: get_str(p, "ticket_kind"),
+        },
+        EventType::ControlTicketRejected => TuiEvent::ControlTicketRejected {
+            ticket_id: get_str(p, "ticket_id"),
+            ticket_kind: get_str(p, "ticket_kind"),
+            reject_code: get_str(p, "reject_code"),
         },
         EventType::ContextCompressed => TuiEvent::ContextCompressed {
             trigger_tokens: get_u64(p, "trigger_tokens"),

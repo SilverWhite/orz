@@ -181,6 +181,22 @@ pub enum TuiEvent {
         activation_id: String,
         status: String,
     },
+    // ACAF Slice 1 (ADR-0011 §4.6): control-ticket lifecycle projections.
+    ControlTicketIssued {
+        ticket_id: String,
+        ticket_kind: String,
+        capability_scope: String,
+        sequence: Option<u64>,
+    },
+    ControlTicketConsumed {
+        ticket_id: String,
+        ticket_kind: String,
+    },
+    ControlTicketRejected {
+        ticket_id: String,
+        ticket_kind: String,
+        reject_code: String,
+    },
 
     // ── A6 explicit context compaction ──
     ContextCompressed {
@@ -284,6 +300,9 @@ impl TuiEvent {
             TuiEvent::RetrievalModeTransition { .. } => "retrieval_mode_transition",
             TuiEvent::RetrievalResultCommitted { .. } => "retrieval_result_committed",
             TuiEvent::RetrievalActivationRestored { .. } => "retrieval_activation_restored",
+            TuiEvent::ControlTicketIssued { .. } => "control_ticket_issued",
+            TuiEvent::ControlTicketConsumed { .. } => "control_ticket_consumed",
+            TuiEvent::ControlTicketRejected { .. } => "control_ticket_rejected",
             TuiEvent::ContextCompressed { .. } => "context_compressed",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
             TuiEvent::SnapshotRestored { .. } => "snapshot_restored",

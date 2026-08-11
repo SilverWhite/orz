@@ -2,8 +2,10 @@
 //
 // Ported from Python assurance/ (spec reference).
 // Modules: journal (Phase 1), gates, orientation, plan (Phase 2),
-// session/snapshot, sandbox/job_object, credential, permit (Phase 3).
+// session/snapshot, sandbox/job_object, credential, permit (Phase 3),
+// acaf (ACAF Slice 1 — ADR-0011 control tickets).
 
+pub mod acaf;
 pub mod credential;
 pub mod gates;
 pub mod journal;

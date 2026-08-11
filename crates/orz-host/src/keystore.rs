@@ -290,6 +290,16 @@ impl WindowsDpapiInstallationKeyStore {
 
     /// Read, validate and unprotect the stored secret. Callers must zeroise
     /// the returned buffer (RAII in this module — see `sign`).
+    ///
+    /// Public for the ACAF signer (orz-signer) which needs the raw install
+    /// key to derive `K_session` (ADR-0011 §4.3); the caller MUST zeroise the
+    /// returned buffer after use.
+    pub fn secret_bytes(&self) -> Result<Vec<u8>, KeystoreError> {
+        self.load_secret()
+    }
+
+    /// Read, validate and unprotect the stored secret. Callers must zeroise
+    /// the returned buffer (RAII in this module — see `sign`).
     fn load_secret(&self) -> Result<Vec<u8>, KeystoreError> {
         let blob_path = self.root.join(BLOB_NAME);
         let metadata_path = self.root.join(METADATA_NAME);

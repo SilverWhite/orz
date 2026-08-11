@@ -74,6 +74,13 @@ pub enum EventType {
     RetrievalResultCommitted,
     RetrievalActivationRestored,
 
+    // ACAF Slice 1 (ADR-0011 §4.2/§4.6): control-ticket lifecycle — issued /
+    // consumed / rejected. All three are non-terminal v0.2 mechanism events
+    // journaled by the controller's control producers.
+    ControlTicketIssued,
+    ControlTicketConsumed,
+    ControlTicketRejected,
+
     // A6 explicit context compaction (2026-08-08 — controller-written;
     // mirrors run-event schema)
     ContextCompressed,

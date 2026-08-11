@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use orz_assurance::acaf::TicketKind;
 use orz_assurance::gates::tool_availability::{
     Capability, ToolSpec, gate_decision, probe_tool_availability,
 };
@@ -243,6 +244,15 @@ pub struct AgentLoopController {
     /// sidecar at build time — journaled as `retrieval_activation_restored`
     /// once at the next run's startup (per activation per prompt).
     pub(crate) restored_activations: Mutex<Vec<StoredActivation>>,
+    /// ACAF Slice 1 (ADR-0011 §4.4): the host-side signer client for
+    /// control-event tickets. `None` = ACAF disabled (zero behaviour change).
+    /// Shadow mode: issuance/verification failures are journaled
+    /// (`control_ticket_rejected`) but the control event still proceeds.
+    pub(crate) acaf: Option<Arc<tokio::sync::Mutex<crate::acaf::AcafClient>>>,
+    /// ACAF Slice 1: the current task-goal digest (set at run start from the
+    /// prompt; the ticket's goal binding — check 4). `None` = no goal seen
+    /// yet (control events stay unticketed until one exists).
+    goal_digest: Mutex<Option<String>>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -1406,7 +1416,111 @@ impl AgentLoopController {
             session_id: None,
             evidence: Mutex::new(Vec::new()),
             restored_activations: Mutex::new(Vec::new()),
+            acaf: None,
+            goal_digest: Mutex::new(None),
         }
+    }
+
+    /// ACAF Slice 1 (ADR-0011 §4.4): attach the host-side signer client.
+    /// `None` (default) keeps the control events unticketed.
+    pub fn with_acaf(
+        mut self,
+        acaf: Option<Arc<tokio::sync::Mutex<crate::acaf::AcafClient>>>,
+    ) -> Self {
+        self.acaf = acaf;
+        self
+    }
+
+    /// ACAF Slice 1: pin the run's task goal (the prompt) as the ticket goal
+    /// binding (check 4). Called at run start by the loop entry.
+    pub(crate) fn set_goal_digest(&self, goal: &str) {
+        let digest = sha256_hex(
+            &canonical_json(&serde_json::json!({ "goal": goal }))
+                .unwrap_or_else(|_| goal.as_bytes().to_vec()),
+        );
+        *self.goal_digest.lock().unwrap() = Some(digest);
+    }
+
+    /// ACAF Slice 1 (ADR-0011 §4.2/§4.6): sign → journal issued → verify →
+    /// journal consumed|rejected for one control event. Shadow mode: every
+    /// failure path journals `control_ticket_rejected` (first reject code,
+    /// or `signer_unreachable`) and the control event still proceeds.
+    /// Unticketed paths (no client / no goal yet) journal nothing.
+    pub(crate) async fn acaf_control_event(
+        &self,
+        writer: &mut EventWriter<'_>,
+        kind: TicketKind,
+        activation_id: Option<String>,
+        args: &serde_json::Value,
+    ) -> Result<(), AgentLoopError> {
+        let Some(acaf) = &self.acaf else {
+            return Ok(());
+        };
+        let Some(goal_digest) = self.goal_digest.lock().unwrap().clone() else {
+            return Ok(());
+        };
+        let mut client = acaf.lock().await;
+        let session_id = self
+            .session_id
+            .clone()
+            .unwrap_or_else(|| writer.run_id().to_string());
+        let canonical = crate::acaf::canonical_arguments_digest(kind, args);
+        let now = chrono::Utc::now();
+        // Slice 1 binding constants: goal_version 0 (no goal-version counter
+        // in the controller yet), policy_revision 0 (GAP-DENIAL-POLICY-
+        // REVISION wiring is Slice 2).
+        let outcome = match client
+            .ensure_initialized(&session_id, "main", 0, &goal_digest, 0)
+            .await
+        {
+            Ok(()) => match client.sign_ticket(kind, activation_id.clone(), &canonical).await {
+                Ok(ticket) => {
+                    writer
+                        .record(
+                            EventType::ControlTicketIssued,
+                            crate::acaf::issued_payload(&ticket),
+                        )
+                        .await?;
+                    match client
+                        .verify_and_consume(&ticket, &canonical, activation_id.clone())
+                        .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(e) => crate::acaf::TicketOutcome::SignerUnreachable {
+                            kind,
+                            detail: e.to_string(),
+                        },
+                    }
+                }
+                Err(e) => crate::acaf::TicketOutcome::SignerUnreachable {
+                    kind,
+                    detail: e.to_string(),
+                },
+            },
+            Err(e) => crate::acaf::TicketOutcome::SignerUnreachable {
+                kind,
+                detail: e.to_string(),
+            },
+        };
+        match outcome {
+            crate::acaf::TicketOutcome::Consumed { .. } => {
+                writer
+                    .record(
+                        EventType::ControlTicketConsumed,
+                        crate::acaf::consumed_payload(&outcome, &now),
+                    )
+                    .await?;
+            }
+            _ => {
+                writer
+                    .record(
+                        EventType::ControlTicketRejected,
+                        crate::acaf::rejected_payload(&outcome, &now),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): attach the session-level retrieval
@@ -1740,6 +1854,8 @@ impl AgentLoopController {
             session_id: None,
             evidence: Mutex::new(Vec::new()),
             restored_activations: Mutex::new(Vec::new()),
+            acaf: None,
+            goal_digest: Mutex::new(None),
         }
     }
 
@@ -2099,6 +2215,9 @@ impl AgentLoopController {
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
         *self.denial_state.lock().unwrap() = DenialState::default();
+        // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
+        // goal binding (check 4) — pinned before any control event can fire.
+        self.set_goal_digest(prompt);
 
         // 1. tool_availability_check — registry CATALOG snapshot BEFORE
         // run_started (Python conformance: the probe must precede run_started).
@@ -2632,6 +2751,16 @@ impl AgentLoopController {
         let Some(rec) = state.build_fire_record(role, &run_id, injection_position) else {
             return Ok(());
         };
+        // ACAF Slice 1 (ADR-0011 §4.2/§4.6): an orientation fire is a control
+        // event — ticket it first (shadow mode: rejected tickets journal
+        // `control_ticket_rejected` but the orientation still fires).
+        self.acaf_control_event(
+            writer,
+            TicketKind::OrientationV1,
+            None,
+            &serde_json::json!({ "agent_role": role.as_str() }),
+        )
+        .await?;
         writer
             .record(
                 EventType::OrientationCheckpoint,
@@ -3568,6 +3697,28 @@ impl AgentLoopController {
         // re-inserts the activation BEFORE leaving — a journal write
         // failure is run-fatal (it propagates to run_failed), but the
         // registry must never silently drop a live activation.
+        //
+        // ACAF Slice 1 (ADR-0011 §4.2): an ACCEPTED disposition is a control
+        // event — ticket it before the commit (shadow mode). Rejected
+        // verdicts and replay idempotency are mechanical records, not
+        // state-moving control events — they stay unticketed (registered
+        // boundary).
+        if matches!(
+            verdict,
+            DispositionVerdict::AcceptedClose | DispositionVerdict::AcceptedContinue
+        ) {
+            self.acaf_control_event(
+                writer,
+                TicketKind::DispositionV1,
+                Some(act.activation_id.clone()),
+                &serde_json::json!({
+                    "role": role.as_str(),
+                    "decision": decision,
+                    "requirement_delta": requirement_delta,
+                }),
+            )
+            .await?;
+        }
         let commit: Result<(), AgentLoopError> = async {
             // Journal the disposition event — every verdict is journaled
             // (the refusal records document the rejection, §4.4).
@@ -3616,6 +3767,21 @@ impl AgentLoopController {
                     // the rejection is recorded; the next assessment
                     // replaces the pending).
                     act.contract_revision += 1;
+                    // ACAF Slice 1 (ADR-0011 §4.2): a continue's requirement
+                    // delta REVISES the activation's task goal — a
+                    // goal-revision control event, ticketed (shadow mode;
+                    // Slice 1 binds the OLD goal context — the session key
+                    // re-derivation on goal change is the Slice 2 wiring,
+                    // registered boundary).
+                    self.acaf_control_event(
+                        writer,
+                        TicketKind::GoalRevisionV1,
+                        Some(act.activation_id.clone()),
+                        &serde_json::json!({
+                            "new_goal": requirement_delta.clone().unwrap_or_default(),
+                        }),
+                    )
+                    .await?;
                     act.next_goal = Some(requirement_delta.clone().unwrap_or_default());
                     act.status = ActivationStatus::Active;
                 }
@@ -3729,6 +3895,20 @@ impl AgentLoopController {
         assessment_id: Option<&str>,
         result_digest: Option<&str>,
     ) -> Result<(), AgentLoopError> {
+        // ACAF Slice 1 (ADR-0011 §4.2): a close record is a control event —
+        // ticket it before the record (shadow mode). Covers every terminal
+        // reason (normal_close / subagent_failed / budget_exhausted / …).
+        self.acaf_control_event(
+            writer,
+            TicketKind::CloseV1,
+            Some(activation_id.to_string()),
+            &serde_json::json!({
+                "activation_id": activation_id,
+                "terminal_reason": terminal_reason,
+                "validated_disposition_id": validated_disposition_id,
+            }),
+        )
+        .await?;
         let close_record_id = format!(
             "CLOSE-{}-{:04}",
             &sha256_hex(

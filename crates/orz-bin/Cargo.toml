@@ -14,11 +14,14 @@ orz-assurance = { path = "../orz-assurance" }
 orz-loop = { path = "../orz-loop" }
 orz-host = { path = "../orz-host" }
 orz-tui = { path = "../orz-tui" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
 
 
 
