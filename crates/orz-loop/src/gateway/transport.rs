@@ -54,6 +54,13 @@ pub const DEFAULT_DEEPSEEK_API_BASE: &str = "https://api.deepseek.com";
 /// between the two).
 pub const MAIN_AGENT_MODEL: &str = "deepseek-v4-flash";
 
+/// Main-agent model id for the production gateway — `ORZ_MAIN_AGENT_MODEL`
+/// env override for evaluation/model-swap runs (e.g. TB B 组 flash→pro
+/// 对照, 2026-08-11); the constant remains the production default.
+pub fn main_agent_model() -> String {
+    std::env::var("ORZ_MAIN_AGENT_MODEL").unwrap_or_else(|_| MAIN_AGENT_MODEL.to_string())
+}
+
 /// Build the production real-model gateway from the ADR-0006 credential
 /// registry (main-agent target `orz-deepseek/agent`).
 ///
@@ -66,7 +73,7 @@ pub fn real_gateway_from_credentials()
     let key = crate::gateway::credentials::read_agent_api_key()?;
     Ok(Arc::new(DeepSeekTransport::deepseek_v4(
         key,
-        MAIN_AGENT_MODEL,
+        main_agent_model(),
     )))
 }
 
@@ -838,6 +845,30 @@ mod tests {
             tools: Vec::new(),
             max_tokens: 512,
             thinking: None,
+        }
+    }
+
+    /// ORZ_MAIN_AGENT_MODEL env override for evaluation/model-swap runs
+    /// (2026-08-11 TB B 组 flash→pro 对照) — the constant remains the
+    /// production default; the env wins only when set. Env writes are
+    /// serialized behind a static lock (orz-host TESTS_ENV_LOCK precedent)
+    /// so parallel tests cannot race set_var.
+    #[test]
+    fn main_agent_model_env_override() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+        let original = std::env::var("ORZ_MAIN_AGENT_MODEL").ok();
+        // Rust 2024 edition: env mutation is unsafe — serialized by the
+        // static lock above (single-threaded env access in this test).
+        unsafe {
+            std::env::remove_var("ORZ_MAIN_AGENT_MODEL");
+            assert_eq!(main_agent_model(), MAIN_AGENT_MODEL);
+            std::env::set_var("ORZ_MAIN_AGENT_MODEL", "deepseek-v4-pro");
+            assert_eq!(main_agent_model(), "deepseek-v4-pro");
+            match original {
+                Some(v) => std::env::set_var("ORZ_MAIN_AGENT_MODEL", v),
+                None => std::env::remove_var("ORZ_MAIN_AGENT_MODEL"),
+            }
         }
     }
 

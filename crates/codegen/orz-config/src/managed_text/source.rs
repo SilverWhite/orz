@@ -233,7 +233,7 @@ impl FileIdentity {
             use std::os::unix::fs::MetadataExt as _;
             Some(Self {
                 dev: _metadata.dev(),
-                ino: metadata.ino(),
+                ino: _metadata.ino(),
             })
         }
         #[cfg(windows)]

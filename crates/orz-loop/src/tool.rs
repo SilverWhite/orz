@@ -149,30 +149,24 @@ impl ToolDispatcher {
         )
     }
 
-    /// IP2a (D-3): whether the session policy refuses the tool by NAME —
-    /// the name-level denial layer. Policy-refused tools are FILTERED from
-    /// the model-visible tool declarations at session bootstrap (the model
-    /// never sees them, so it never attempts them — the polyglot probe
-    /// burned whole rounds on `web_search`/`web_fetch` under Benchmark).
+    /// Name-level declaration filter — reduced to the MCP prefix defense
+    /// only (2026-08-12 裁决，ADR-0010 §3.5 v1.x)。
     ///
-    /// `Interactive` refuses nothing by name (denial is scope/argument-level
-    /// at permission time); `ReadOnly` declares read-class tools only;
-    /// `Benchmark` declares read + local file edits, excluding shell and
-    /// network/escape. MCP names (`{server}__{tool}`) are always refused
-    /// (prefix-spoof defense, slice #16 D2-1).
-    pub fn policy_refuses(policy: ToolPolicy, tool: &str) -> bool {
-        if tool.contains("__") {
-            return true;
-        }
-        match policy {
-            ToolPolicy::Interactive => false,
-            ToolPolicy::ReadOnly => Self::risk_class(tool) != RiskClass::ReadOnly,
-            ToolPolicy::Benchmark => match Self::risk_class(tool) {
-                RiskClass::ReadOnly => false,
-                RiskClass::LocalMutation => Self::is_shell_tool(tool),
-                RiskClass::NetworkCall | RiskClass::SandboxEscape => true,
-            },
-        }
+    /// IP2a (D-3) 名级过滤废止：模型可见工具列表 = registry 能力目录
+    /// （全量），可用性判定完全发生在调用时——每次调用由 permission gate
+    /// 逐次判定并返回明确结构化结果（§3.5.1/3.5.2 修订）。动机（2026-08-11
+    /// TB 复盘）：声明层放行而执行层拒绝产生"声明 available 却调用被拒"
+    /// 的假可用性，DeepSeek 对矛盾信号行为不可预测（path-tracing 重试
+    /// 4 次 / gpt2 盲改并声称完成）；消除静态声明后模型无法误解不存在的
+    /// 信号。polyglot 烧轮教训（web_search×4）由调用时明确拒绝 + §3.5.4
+    /// 连续拒绝熔断承担。
+    ///
+    /// 唯一保留的名级拒绝：MCP 名称（`{server}__{tool}`）恒不声明——
+    /// prefix-spoof defense（slice #16 D2-1）；MCP 工具当前零接线
+    /// （`mcp_tools()` 默认空），执行层 permission gate 同款 `__` deny
+    /// 纵深兜底。
+    pub fn policy_refuses(_policy: ToolPolicy, tool: &str) -> bool {
+        tool.contains("__")
     }
 
     /// IP5: extract the mutation tool's target paths from its arguments,

@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use orz_assurance::gates::tool_availability::{
-    Capability, ToolAvailabilityReport, ToolSpec, gate_decision, probe_tool_availability,
+    Capability, ToolSpec, gate_decision, probe_tool_availability,
 };
 use orz_assurance::orientation::stagnation::{
     StagnationDecision, StagnationInput, evaluate_runtime_stagnation_guard,
@@ -2100,43 +2100,26 @@ impl AgentLoopController {
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
         *self.denial_state.lock().unwrap() = DenialState::default();
 
-        // 1. tool_availability_check — mechanical probe over the host
-        // registry, BEFORE run_started (Python conformance: the probe must
-        // precede run_started; the model never sees tool state before the
-        // availability gate has run).
+        // 1. tool_availability_check — registry CATALOG snapshot BEFORE
+        // run_started (Python conformance: the probe must precede run_started).
         //
-        // IP2a (FIX_PLAN 2026-08-06 D-3): the probe is SESSION-POLICY-AWARE —
-        // tools the policy refuses by name are filtered out of the model's
-        // visible declarations entirely (the model never sees them, so it
-        // never attempts them; polyglot probe P3 burned whole rounds on
-        // `web_search`×4 under Benchmark). The availability block then
-        // reflects the policy-filtered set.
-        let policy = host.tool_policy();
-        let mut tool_defs: Vec<ToolDef> = host
-            .tools_registry()
-            .list()
-            .into_iter()
-            .filter(|t| !ToolDispatcher::policy_refuses(policy, &t.name))
-            .collect();
+        // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：模型可见工具列表 = registry
+        // 能力目录全量，零可用性承诺——可用性判定完全发生在调用时，每次
+        // 调用由 permission gate 逐次判定并返回明确结构化结果。名级过滤
+        // 废止（D-3/IP2a 被替换）：静态"available 声明"与调用时拒绝相互
+        // 矛盾时，DeepSeek 行为不可预测（TB 2026-08-11 复盘：path-tracing
+        // 重试 4 次 / gpt2 盲改并声称完成）。目录不承诺，模型无法误解
+        // 不存在的信号。唯一名级过滤 = MCP `__` 防御（`policy_refuses`）。
+        let mut tool_defs: Vec<ToolDef> = host.tools_registry().list().into_iter().collect();
         // D-9 (FIX_PLAN 2026-08-06): when the host carries a fixed test
-        // runner, the `run_tests` tool is declared to the model — the
-        // Aider-model feedback loop inside a single run (stdout/stderr/exit
-        // code only; the test files stay hidden). RT-001 (2026-08-11):
-        // `run_tests` is controlled code execution (LocalMutation class) —
-        // a policy that refuses LocalMutation by name (ReadOnly: read-class
-        // tools only) must not declare it either; the declaration filter
-        // mirrors the permission gate so the model never attempts a tool
-        // the policy refuses. Benchmark (harness) keeps it: LocalMutation
-        // non-shell tools stay declared and auto-allow. Grill turns skip it
-        // (same guard as `compaction_whitelist_add`/`retrieval_disposition`:
-        // the grill promise is "read-only tools only" — P3-5 review
-        // 2026-08-11, previously only ReadOnly policy filtered it, leaving
-        // the Benchmark+grill combination with a declared run_tests).
-        if grill.is_none()
-            && host.test_runner().is_some()
-            && !ToolDispatcher::policy_refuses(policy, "run_tests")
-            && !tool_defs.iter().any(|t| t.name == "run_tests")
-        {
+        // runner, the `run_tests` tool is in the catalog — the Aider-model
+        // feedback loop inside a single run (stdout/stderr/exit code only;
+        // the test files stay hidden). 2026-08-12: declaration condition
+        // reduced to "host carries a runner" — availability is judged at
+        // call time by the permission gate (RT-001 语义保持：run_tests 走
+        // 通用 permission gate；grill/ReadOnly 的只读保证由 gate 承担，
+        // 不再由声明面承担——2026-08-12 用户裁决"ReadOnly/Grill 一并移除"）。
+        if host.test_runner().is_some() && !tool_defs.iter().any(|t| t.name == "run_tests") {
             tool_defs.push(ToolDef {
                 name: "run_tests".to_string(),
                 description: "Run the task's hidden test suite and return \
@@ -2159,11 +2142,9 @@ impl AgentLoopController {
         // must survive context compaction. Declared whenever the loop runs
         // (ReadOnly class → auto-allowed under every policy); the WINDOW is
         // enforced at call time: only the FIRST tool batch may write.
-        // Grill mode (2026-08-08 review P3-4): `compaction_whitelist_add`
-        // is ReadOnly-class (auto-allows under every policy) yet WRITES to
-        // `.gsa` — the grill promise is "read-only tools only", so it is
-        // not declared in grill turns.
-        if grill.is_none() && !tool_defs.iter().any(|t| t.name == "compaction_whitelist_add") {
+        // 2026-08-12 裁决：grill/ReadOnly 的只读保证由 gate 承担（ReadOnly
+        // policy 执行层拒非读），声明面不再过滤——grill 守卫移除。
+        if !tool_defs.iter().any(|t| t.name == "compaction_whitelist_add") {
             tool_defs.push(ToolDef {
                 name: "compaction_whitelist_add".to_string(),
                 description: "Write an entry to the context-compaction \
@@ -2222,10 +2203,10 @@ impl AgentLoopController {
         // disposition control tool (ADR-0010 §4.4 — the ONLY way a parent
         // submits close/continue; never guessed from free text). Declared
         // every turn (stable prefix cache — never added/removed by state);
-        // call-time refused without a pending activation. Grill turns skip
-        // it (grill has no retrieval lifecycle); the subagent projection
-        // strips it (control tool is main-only).
-        if grill.is_none() && !tool_defs.iter().any(|t| t.name == "retrieval_disposition") {
+        // call-time refused without a pending activation. Grill 下由 gate
+        // 拒绝（2026-08-12 裁决：声明面不承担只读保证）；subagent
+        // projection strips it (control tool is main-only).
+        if !tool_defs.iter().any(|t| t.name == "retrieval_disposition") {
             tool_defs.push(ToolDef {
                 name: "retrieval_disposition".to_string(),
                 description: "Submit a structured parent disposition for a \
@@ -2334,9 +2315,10 @@ impl AgentLoopController {
             .collect();
         let mut probe_registry: HashMap<String, Option<bool>> = HashMap::new();
         for t in &tool_defs {
-            // Every tool that survived policy filtering is available (the
-            // probe is mechanical over the registry — the policy IS the
-            // availability).
+            // 2026-08-12：目录快照语义——registry 全量工具均记为 available
+            // （能力目录存在）；可用性判定在调用时由 permission gate 逐次
+            // 做出，probe 不承诺任何调用结果。事件仅作审计面（registry
+            // 目录快照），gate_decision 恒 Pass。
             probe_registry.insert(t.name.clone(), Some(true));
         }
         let report = probe_tool_availability(&specs, &probe_registry);
@@ -2450,7 +2432,6 @@ impl AgentLoopController {
             &self.main_agent,
             &profile,
             prompt,
-            &report,
             &tool_defs,
             &mut messages,
             orientation,
@@ -2696,7 +2677,6 @@ impl AgentLoopController {
         tc: &ToolCall,
         messages: &mut Vec<Message>,
         prompt: &str,
-        report: &ToolAvailabilityReport,
         tool_defs: &[ToolDef],
         orientation: Option<&mut OrientationSessionState>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
@@ -2947,21 +2927,6 @@ impl AgentLoopController {
             })
             .cloned()
             .collect();
-        let sub_report = ToolAvailabilityReport {
-            probes: Vec::new(),
-            available: report
-                .available
-                .iter()
-                .filter(|t| {
-                    t.as_str() != "compaction_whitelist_add"
-                        && t.as_str() != "retrieval_disposition"
-                })
-                .cloned()
-                .collect(),
-            unavailable: report.unavailable.clone(),
-            unprobed: report.unprobed.clone(),
-            degraded: report.degraded.clone(),
-        };
         let subagent = match role {
             SubagentRole::InternalRetrieval => &self.internal_retrieval,
             SubagentRole::ExternalRetrieval => &self.external_retrieval,
@@ -3006,7 +2971,6 @@ impl AgentLoopController {
             subagent,
             &profile,
             &goal, // IPG evaluates the task contract (a query may carry injected content)
-            &sub_report,
             &sub_tool_defs,
             &mut act.conversation,
             // M5: the shared session state is threaded in — the retrieval
@@ -4122,13 +4086,13 @@ impl AgentLoopController {
                 _ => unreachable!("decision narrowed to Deny|Defer above"),
             };
             let result = ToolResult {
-                // Explicit unavailability semantics (P3, 2026-08-06 polyglot
-                // findings): the tool is NOT available under the current
-                // policy — naming the tool and telling the model not to
-                // retry stops the retry loops that burned the whole tool
-                // budget on denied tools (web_search×4 etc.).
+                // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：可用性判定完全发生
+                // 在调用时，逐次独立——deny 消息陈述本次调用的事实，不
+                // 承诺策略级不可用（旧措辞 "NOT available in the current
+                // policy" 是静态声明残留，与逐次判定语义矛盾）。烧轮防护
+                // 由 §3.5.4 连续拒绝熔断承担，不依赖消息措辞。
                 output: format!(
-                    "tool '{tool_name}' denied by permission gate — this tool is NOT available in the current policy; do not retry it. Use only the tools listed as available.",
+                    "tool '{tool_name}' denied by the permission gate for this call.",
                     tool_name = tc.name,
                 ),
                 exit_code: Some(1),
@@ -4201,7 +4165,7 @@ impl AgentLoopController {
             let result = {
                 let fut = host.run_tests();
                 tokio::pin!(fut);
-                loop {
+                let r = loop {
                     tokio::select! {
                         r = &mut fut => break r,
                         _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
@@ -4210,9 +4174,49 @@ impl AgentLoopController {
                             }
                         }
                     }
+                };
+                // Tool-level failure (spawn/wait/pipe — e.g. the fixed test
+                // command's interpreter missing from the environment's PATH)
+                // feeds back to the model as an ORDINARY tool failure instead
+                // of terminating the session; the model can pivot (bash,
+                // different approach) and the run continues. Exposed by the
+                // 2026-08-11 TB B 组重跑: a python-less task container called
+                // run_tests → spawn failed → the old `map_err(Session)`
+                // killed the whole session.
+                match r {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let msg = format!("run_tests failed: {e}");
+                        writer
+                            .record(
+                                EventType::ToolCompleted,
+                                serde_json::json!({
+                                    "tool": tc.name,
+                                    "call_id": tc.call_id,
+                                    "status": "error",
+                                    "error": msg,
+                                }),
+                            )
+                            .await?;
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: msg.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        // None = neutral for the denial streak (only actual
+                        // success resets — ADR-0010 §3.5.4).
+                        return Ok((
+                            ToolResult {
+                                output: msg,
+                                exit_code: None,
+                            },
+                            None,
+                        ));
+                    }
                 }
-            }
-            .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            };
             if let Some(h) = heartbeat {
                 h.stamp();
             }
@@ -7312,9 +7316,13 @@ mod tests {
             "denial surfaced to the model: {:?}",
             tool_msg.content
         );
+        // 2026-08-12：deny 消息只陈述本次调用事实（"denied by the
+        // permission gate for this call"），不再承诺策略级不可用
+        // （"do not retry" 措辞随静态声明一同移除——判定逐次发生，
+        // 烧轮防护由 §3.5.4 熔断承担）。
         assert!(
-            tool_msg.content.contains("do not retry"),
-            "unavailability semantics (P3): {:?}",
+            tool_msg.content.contains("permission gate"),
+            "denial names the gate: {:?}",
             tool_msg.content
         );
 
@@ -7335,7 +7343,16 @@ mod tests {
     }
     impl FullRegistry {
         fn list_all() -> Vec<ToolDef> {
-            ["read_file", "list_dir", "grep", "search_replace", "web_search", "web_fetch", "bash"]
+            [
+                "read_file",
+                "list_dir",
+                "grep",
+                "search_replace",
+                "run_terminal_cmd",
+                "web_search",
+                "web_fetch",
+                "bash",
+            ]
                 .iter()
                 .map(|n| ToolDef {
                     name: n.to_string(),
@@ -7382,12 +7399,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ip2a_benchmark_policy_filters_network_and_shell_declarations() {
-        // P3 (2026-08-06 polyglot): the model tried `web_search`/`web_fetch`
-        // repeatedly under Benchmark — the tools were declared but the policy
-        // refused them at permission time. IP2a: policy-refused tools are
-        // FILTERED from the model-visible declarations, so the model never
-        // sees (or attempts) them.
+    async fn benchmark_policy_declares_full_registry_catalog() {
+        // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：模型可见工具列表 = registry
+        // 能力目录全量（零可用性承诺），可用性判定完全发生在调用时——
+        // Benchmark 下 shell/网络工具同样被声明（可见），调用时由
+        // permission gate 逐次判定。D-3/IP2a 名级过滤废止（动机：声明层
+        // 与执行层不一致的"假 available"对 DeepSeek 行为不可预测，
+        // TB 2026-08-11 复盘）；polyglot 烧轮防护由调用时明确拒绝 +
+        // §3.5.4 连续拒绝熔断承担。
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = PolicyHost {
@@ -7403,49 +7422,51 @@ mod tests {
             .await
             .unwrap();
 
-        // The first request's tool declarations exclude web_search/bash —
-        // the model must not even see them under Benchmark.
+        // The first request's tool declarations = the registry catalog
+        // (FullRegistry 8 tools + blackboard_read/compaction_whitelist_add/
+        // retrieval_disposition trio) — shell tools INCLUDED; no policy
+        // filtering. web_search/web_fetch absent via the §3.7.1 mode=off
+        // projection (retrieval mode gate, NOT policy filtering).
         let received = fake.received_requests();
         let first = &received[0];
-        let declared: Vec<&str> = first
+        let mut declared: Vec<&str> = first
             .tools
             .iter()
             .map(|t| t.name.as_str())
             .collect();
-        assert!(
-            !declared.iter().any(|n| *n == "web_search" || *n == "bash"),
-            "network/shell tools must not be declared under Benchmark: {declared:?}"
+        declared.sort();
+        assert_eq!(
+            declared,
+            vec![
+                "bash",
+                "blackboard_read",
+                "compaction_whitelist_add",
+                "grep",
+                "list_dir",
+                "read_file",
+                "retrieval_disposition",
+                "run_terminal_cmd",
+                "search_replace",
+            ],
+            "registry catalog declared under Benchmark (mode=off 移除检索族): {declared:?}"
         );
-        assert!(
-            declared.contains(&"read_file") && declared.contains(&"search_replace"),
-            "read + local-edit tools stay declared: {declared:?}"
-        );
-        // The availability block reflects the policy-filtered set
-        // (blackboard_read is always declared — ReadOnly class, allowed
-        // under every policy; 2026-08-08 blackboard partition A3;
-        // compaction_whitelist_add likewise — A6 §8 C.2, in-memory write
-        // only, ReadOnly class).
+        // The system prompt carries NO availability block (2026-08-12: 可用
+        // 性声明不固定在 prompt 中——prompt 只保留 budget/status 块)。
         let system = first.system.clone();
-        // M4: `retrieval_disposition` is the parent's control tool — always
-        // declared (call-time-refused without a pending activation).
         assert!(
-            system.contains(
-                "AVAILABLE: blackboard_read, compaction_whitelist_add, grep, list_dir, read_file, retrieval_disposition, search_replace"
-            ),
-            "availability block = policy-filtered set: {system}"
-        );
-        assert!(
-            !system.contains("web_search") && !system.contains("bash"),
-            "availability block must not name policy-refused tools: {system}"
+            !system.contains("[TOOL_AVAILABILITY")
+                && !system.contains("AVAILABLE:"),
+            "no availability block in system prompt: {system}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
-    async fn ip2a_readonly_policy_filters_mutations() {
-        // ReadOnly declares read-class tools only — mutation/network/escape
-        // are invisible to the model.
+    async fn readonly_policy_declares_full_registry_catalog() {
+        // 2026-08-12 裁决：ReadOnly/Grill 的"只读声明"语义一并移除——
+        // 模型可见工具列表 = registry 目录全量（含写/执行工具）；只读
+        // 保证由执行层 permission gate 承担（ReadOnly policy 拒非读）。
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = PolicyHost {
@@ -7470,19 +7491,18 @@ mod tests {
         assert_eq!(
             declared,
             vec![
+                "bash",
                 "blackboard_read",
                 "compaction_whitelist_add",
                 "grep",
                 "list_dir",
                 "read_file",
-                // M4: the parent's disposition control tool (read-class —
-                // no file/network/shell side effect).
                 "retrieval_disposition",
+                "run_terminal_cmd",
+                "search_replace",
             ],
-            "ReadOnly declares read-class tools only (blackboard_read + \
-             compaction_whitelist_add are read-class and always declared; \
-             retrieval_disposition is the parent's control tool): \
-             {declared:?}"
+            "registry catalog declared in full under ReadOnly (只读保证由 \
+             gate 承担): {declared:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -9517,7 +9537,7 @@ mod tests {
             .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-t"))
             .expect("denied call answered with a tool message");
         assert!(
-            tool_msg.content.contains("denied by permission gate"),
+            tool_msg.content.contains("denied by the permission gate"),
             "deny message: {}",
             tool_msg.content
         );
@@ -9538,20 +9558,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// RT-001: a policy that refuses LocalMutation by name (ReadOnly —
-    /// read-class tools only) filters `run_tests` out of the model's tool
-    /// declarations, so the model never attempts it (mirror of the
-    /// permission gate at declaration time).
+    /// RT-001（2026-08-12 语义更新）：`run_tests` 的声明条件 = host 携带
+    /// test runner（目录语义——能力目录全量，零政策过滤）；ReadOnly 下
+    /// 同样被声明，只读保证由执行层 permission gate 承担（ReadOnly
+    /// policy 拒非读）。
     #[tokio::test]
-    async fn d9_run_tests_not_declared_under_readonly_policy() {
+    async fn d9_run_tests_declared_under_readonly_gate_denies() {
         let dir = test_dir();
         let host = PolicyTestRunnerHost {
             journal: JournalRecorder::new(dir.clone()),
             policy: crate::host::ToolPolicy::ReadOnly,
-            decision: PermitDecision::AllowOnce,
+            decision: PermitDecision::Deny,
             result: None,
         };
         let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-rt1")]),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -9562,11 +9583,31 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !fake.received_requests()[0]
+            fake.received_requests()[0]
                 .tools
                 .iter()
                 .any(|t| t.name == "run_tests"),
-            "run_tests must not be declared under ReadOnly"
+            "run_tests declared under ReadOnly (catalog semantics): {}",
+            fake.received_requests()[0]
+                .tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        // The gate denies at call time — no ToolStarted for the denied call.
+        let types = event_types(&dir);
+        assert!(!types.contains(&EventType::ToolStarted));
+        let round2 = &fake.received_requests()[1];
+        let deny_msg = round2
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-rt1"))
+            .expect("denied call answered with a tool message");
+        assert!(
+            deny_msg.content.contains("denied by the permission gate"),
+            "deny message: {}",
+            deny_msg.content
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -9664,6 +9705,124 @@ mod tests {
         assert_eq!(
             completed2.payload.get("workspace_delta_truncated"),
             Some(&serde_json::json!(true))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host whose fixed test runner FAILS to spawn — the 2026-08-11 TB
+    /// B 组重跑 scenario: a python-less task container called run_tests and
+    /// `spawn` returned "No such file or directory".
+    struct FailingRunnerHost {
+        journal: JournalRecorder,
+    }
+    #[async_trait]
+    impl LoopHost for FailingRunnerHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &FullRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            crate::host::ToolPolicy::Benchmark
+        }
+        fn test_runner(&self) -> Option<crate::host::TestRunner> {
+            Some(crate::host::TestRunner {
+                command: vec!["no-such-interpreter".to_string()],
+                timeout: None,
+                env: Vec::new(),
+            })
+        }
+        async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
+            Err(ToolError::ExecutionFailed(
+                "test runner spawn: No such file or directory (os error 2)".into(),
+            ))
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            unreachable!("run_tests is handled before the generic call_tool path")
+        }
+    }
+
+    /// run_tests tool-level failure (spawn/wait/pipe — e.g. the fixed test
+    /// command's interpreter missing from the environment) must NOT
+    /// terminate the session: the failure feeds back to the model as an
+    /// ordinary tool message, ToolCompleted carries status/error, and the
+    /// run continues to a normal finish. Previously `map_err(Session)` —
+    /// the whole session died on the first unusable test runner.
+    #[tokio::test]
+    async fn run_tests_spawn_failure_feedbacks_not_fatal() {
+        let dir = test_dir();
+        let host = FailingRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            ScriptedResponse::text("pytest 不可用，改用 bash 编译"),
+            ScriptedResponse::text("完成。"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "跑测试", "RUN-TEST", MANIFEST, 0, None, None, None)
+            .await
+            .expect("tool-level failure must not kill the session");
+
+        // The failed call is answered with a tool message the model can
+        // act on (it pivoted to bash in the scripted next round).
+        let received = fake.received_requests();
+        let tool_msg = received[1]
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-t1"))
+            .expect("failed run_tests call answered with a tool message");
+        assert!(tool_msg.content.contains("run_tests failed"));
+        assert!(tool_msg.content.contains("No such file or directory"));
+
+        // Event chain: ToolStarted (unconditional for run_tests) then
+        // ToolCompleted{status:error, error:...}, then the run finished
+        // normally — no Session-fatal path.
+        let all = events(&dir);
+        let started = all
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolStarted)
+            .count();
+        let completed = all
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .count();
+        assert_eq!(started, 1, "{:?}", event_types(&dir));
+        assert_eq!(completed, 1, "{:?}", event_types(&dir));
+        let tc = all
+            .iter()
+            .find(|e| e.event_type == EventType::ToolCompleted)
+            .expect("ToolCompleted journaled");
+        assert_eq!(tc.payload.get("status").and_then(|v| v.as_str()), Some("error"));
+        assert!(
+            tc.payload
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .contains("spawn")
+        );
+        assert_eq!(
+            all.last().unwrap().event_type,
+            EventType::RunFinished,
+            "run continues to a normal finish: {:?}",
+            event_types(&dir)
         );
 
         let _ = std::fs::remove_dir_all(&dir);

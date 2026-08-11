@@ -17,7 +17,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use orz_assurance::gates::tool_availability::ToolAvailabilityReport;
 use orz_assurance::{EventType, GateDecision};
 
 use crate::agents::SubagentRole;
@@ -32,7 +31,7 @@ use crate::gateway::model::{
 };
 use crate::host::{LoopHost, RiskClass, ToolDef, ToolResult};
 use crate::orientation::{AgentRole, OrientationSessionState};
-use crate::prompt::{COUNTEREXAMPLE_GATE_BLOCK, build_tool_availability_block};
+use crate::prompt::COUNTEREXAMPLE_GATE_BLOCK;
 use crate::relay::{DispatchTarget, route};
 use crate::tool::ToolDispatcher;
 
@@ -255,11 +254,12 @@ pub(crate) struct LoopOutcome {
 /// (role-gated) → batch injections (denial breaker / edit push /
 /// orientation post-tool-batch gap) → budget re-declaration.
 ///
-/// `report` / `tool_defs` come from the caller's ONE availability probe —
-/// the subagent loop does not re-probe (no second `tool_availability_check`
-/// event; §3.5.1 per-session probe). `messages` is in/out: the conversation
-/// continues across rounds; the caller owns the seed and the post-loop
-/// use (stagnation / grill history writeback).
+/// `tool_defs` come from the caller's ONE registry-catalog snapshot — the
+/// subagent loop does not re-probe (no second `tool_availability_check`
+/// event; §3.5.1 per-session catalog — 2026-08-12 语义：目录快照，零可用
+/// 性承诺，判定在调用时)。`messages` is in/out: the conversation continues
+/// across rounds; the caller owns the seed and the post-loop use (stagnation
+/// / grill history writeback).
 #[allow(clippy::too_many_arguments)] // the shared loop's full contract
 pub(crate) async fn run_agent_loop(
     svc: &SharedLoopServices<'_>,
@@ -269,7 +269,6 @@ pub(crate) async fn run_agent_loop(
     agent: &dyn RoundAgent,
     profile: &LoopProfile,
     prompt: &str,
-    report: &ToolAvailabilityReport,
     tool_defs: &[ToolDef],
     messages: &mut Vec<Message>,
     mut orientation: Option<&mut OrientationSessionState>,
@@ -450,12 +449,10 @@ pub(crate) async fn run_agent_loop(
             maybe_fire_dc(svc.dc_state, writer, messages).await?;
         }
 
-        let avail_block = build_tool_availability_block(
-            &report.available,
-            &report.unavailable,
-            &report.degraded,
-            &report.unprobed,
-        );
+        // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：AVAILABLE 块不再注入——
+        // 模型可见工具列表 = API tools 参数中的 registry 能力目录（全量，
+        // 零可用性承诺）；可用性判定完全发生在调用时。prompt 不再承载
+        // 任何"可用性声明"（不固定在 prompt 中）。
         // D-8 (FIX_PLAN 2026-08-06): the round budget is declared to the
         // model up front — it does not guess or drift. The remaining
         // count is re-declared mechanically after every tool round.
@@ -473,7 +470,7 @@ pub(crate) async fn run_agent_loop(
         // would recreate the 17.7%→98% cache regression (2026-08-07).
         let system = match &profile.system_kind {
             SystemPromptKind::Main => {
-                let mut system_blocks = format!("{avail_block}\n\n{budget_block}");
+                let mut system_blocks = budget_block.clone();
                 if profile.role == AgentRole::Main
                     && let Some(status_line) = controller.render_status_line()
                 {
@@ -487,11 +484,11 @@ pub(crate) async fn run_agent_loop(
             SystemPromptKind::Retrieval { role, goal } => {
                 // ADR-0010 §3.2 task contract — the subagent's own system
                 // (citation rules + [DOC]/[SOURCE] delivery contract), with
-                // the shared availability + budget declarations.
+                // the shared budget declaration.
                 crate::prompt::build_retrieval_system_prompt(
                     role.section_name(),
                     goal,
-                    &format!("{avail_block}\n\n{budget_block}"),
+                    &budget_block,
                 )
             }
         };
@@ -816,7 +813,6 @@ pub(crate) async fn run_agent_loop(
                                 tc,
                                 messages,
                                 prompt,
-                                report,
                                 tool_defs,
                                 orientation.as_deref_mut(),
                                 cancel,
@@ -1095,8 +1091,8 @@ async fn role_gate_denied(
         )
         .await?;
     let output = format!(
-        "tool '{}' denied — {}; this tool is NOT available in this retrieval \
-         lane; do not retry it. Use only the tools listed as available.",
+        "tool '{}' denied — {}; this retrieval lane refuses this tool \
+         (write-domain deny-only gate, GAP-SUBAGENT-RUNTIME).",
         tc.name, reason,
     );
     writer

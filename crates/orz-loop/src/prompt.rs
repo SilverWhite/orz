@@ -336,47 +336,6 @@ pub fn build_retrieval_system_prompt(section_name: &str, goal: &str, blocks: &st
     )
 }
 
-pub fn build_tool_availability_block(
-    available: &[String],
-    unavailable: &[String],
-    degraded: &[String],
-    unprobed: &[String],
-) -> String {
-    // Sorted per category, matching Python's `sorted(...)` joins.
-    let mut available = available.to_vec();
-    let mut unavailable = unavailable.to_vec();
-    let mut degraded = degraded.to_vec();
-    let mut unprobed = unprobed.to_vec();
-    available.sort();
-    unavailable.sort();
-    degraded.sort();
-    unprobed.sort();
-
-    let mut lines = vec!["[TOOL_AVAILABILITY v0.1]".to_string()];
-    if !available.is_empty() {
-        lines.push(format!("AVAILABLE: {}", available.join(", ")));
-    }
-    if !unavailable.is_empty() {
-        lines.push(format!("UNAVAILABLE: {}", unavailable.join(", ")));
-    }
-    if !degraded.is_empty() {
-        lines.push(format!("DEGRADED: {}", degraded.join(", ")));
-    }
-    if !unprobed.is_empty() {
-        lines.push(format!("UNPROBED: {}", unprobed.join(", ")));
-    }
-    lines.push(String::new());
-    lines.push("GATE: runtime_probe_authoritative".to_string());
-    lines.push("STATUS: descriptive_projection_only".to_string());
-    lines.push(
-        "ENFORCEMENT: tool calls, provider errors, and capability claims are \
-checked by runtime gates and observers outside this text block."
-            .to_string(),
-    );
-    lines.push("[/TOOL_AVAILABILITY]".to_string());
-    lines.join("\n")
-}
-
 /// Builds prompts with injected assurance context.
 #[derive(Debug, Clone, Default)]
 pub struct PromptBuilder;
@@ -401,28 +360,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_availability_block_format_matches_python() {
-        let block = build_tool_availability_block(
-            &["read_file".to_string(), "bash".to_string()],
-            &[],
-            &["web_search".to_string()],
-            &[],
-        );
-        assert!(block.starts_with("[TOOL_AVAILABILITY v0.1]"));
-        assert!(block.ends_with("[/TOOL_AVAILABILITY]"));
-        assert!(block.contains("AVAILABLE: bash, read_file"));
-        assert!(block.contains("DEGRADED: web_search"));
-        assert!(block.contains("GATE: runtime_probe_authoritative"));
-        assert!(!block.contains("UNAVAILABLE:"));
-    }
-
-    #[test]
     fn system_prompt_injects_block() {
+        // 2026-08-12 裁决：AVAILABLE 块已删除（prompt 不承载工具可用性
+        // 声明——工具列表 = API tools 目录，判定在调用时）；build_system_prompt
+        // 保留 None/Some 形态以兼容 budget/status 块。
         let builder = PromptBuilder::new();
-        let block = build_tool_availability_block(&[], &[], &[], &["grep".to_string()]);
-        let prompt = builder.build_system_prompt(Some(&block));
-        assert!(prompt.contains("[TOOL_AVAILABILITY v0.1]"));
-        assert!(prompt.contains(BASE_SYSTEM_PROMPT));
         let bare = builder.build_system_prompt(None);
         assert_eq!(bare, BASE_SYSTEM_PROMPT);
     }
