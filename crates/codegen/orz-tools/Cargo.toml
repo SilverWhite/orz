@@ -80,6 +80,7 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 wildmatch = { workspace = true }
 orz-env = { workspace = true }
+orz-paths = { workspace = true }
 serde_yaml = { workspace = true }
 shellexpand = "3.1"
 tempfile = { workspace = true }

@@ -6,23 +6,34 @@
 //! consumption point re-parses the live object and re-derives the digest
 //! (check 5 TOCTOU — never trusts the ticket's own values).
 //!
-//! The lexical rules mirror the observable semantics of
-//! `resolve_model_path` (orz-tools `types/resources.rs`) with three
-//! registered differences: (1) verbatim/device (`\\?\`, `\\?\UNC\`,
-//! `\\.\`) prefixes are rejected outright (they bypass lexical
-//! normalisation); (2) `..` components are collapsed lexically — the
-//! reparse scan runs on the UN-FOLDED candidate first so a
-//! `<junction>\..` spelling cannot hide the link (review D1-1 2026-08-12);
-//! (3) `~user` is refused (review P1-2 — shellexpand expands it on Unix
-//! but not Windows; the ambiguous form is never ticketable). The two
-//! resolvers are semantically mirrored, not single-sourced
-//! (orz-assurance must not depend on orz-tools) — a divergence surfaces
-//! as a ticket `target_mismatch` in shadow mode (registered drift
-//! surface).
+//! The lexical primitives are single-sourced in `orz-paths::resolve`
+//! (2026-08-12 decision); this module keeps the ticket-side orchestration
+//! and the registered differences from the lenient tool resolver
+//! (`orz-tools` `resolve_model_path` — now a thin shell over the same
+//! primitives):
+//! (1) verbatim/device (`\\?\`, `\\?\UNC\`, `\\.\`) prefixes are rejected
+//! outright (they bypass lexical normalisation);
+//! (2) `..` components are collapsed lexically via
+//! `orz_paths::normalize_lexically` — the reparse scan runs on the
+//! UN-FOLDED candidate first so a `<junction>\..` spelling cannot hide the
+//! link (review D1-1 2026-08-12). Registered consequence: the
+//! drive-relative `C:..\x` spelling keeps its `..` (prefix-preserving
+//! fold) instead of the old copy's prefix-drop — conservative direction,
+//! locked by `fold_drive_relative_preserves_parent_prefix`;
+//! (3) `~user` is refused (`orz-paths` `tilde_expand_strict`, review
+//! P1-2 — shellexpand expands it on Unix but not Windows; the ambiguous
+//! form is never ticketable);
+//! (4) the ticket side is single-base (worktree) — display_cwd ≡ cwd
+//! simplification.
+//! A residual divergence surfaces as a ticket `target_mismatch` in shadow
+//! mode (observable, not silent).
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::Component;
 
 use crate::journal::sha256_hex;
+use orz_paths::resolve::{sanitize_model_path_arg, tilde_expand_strict, TildeExpandError};
 
 /// Why a model-supplied target could not be resolved.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -92,24 +103,40 @@ fn parse_target(
     if sanitized.is_empty() {
         return Err(TargetResolveError::Empty);
     }
-    let expanded = expand_tilde(sanitized, home)?;
+    let expanded = tilde_expand_strict(sanitized, home).map_err(|e| match e {
+        TildeExpandError::TildeUserUnsupported => TargetResolveError::TildeUserUnsupported,
+    })?;
     let input_path = Path::new(&expanded);
     let candidate = if input_path.has_root() {
         input_path.to_path_buf()
     } else {
-        worktree.join(input_path)
+        // Mirror the tool resolver's "forgot leading slash" recovery
+        // (orz-paths `resolve_lexical`, review D2-1 2026-08-12): a
+        // relative spelling whose components repeat the worktree path
+        // (`data/user/...` for worktree `/data/user/...`) binds the REAL
+        // object, not a doubled phantom — the tool side would resolve the
+        // same input to the real path, so a phantom binding would be
+        // self-consistent on both ticket sides and escape target_mismatch
+        // detection.
+        let as_absolute = PathBuf::from(format!("/{expanded}"));
+        if as_absolute.starts_with(worktree)
+            && let Ok(suffix) = as_absolute.strip_prefix(worktree)
+        {
+            worktree.join(suffix)
+        } else {
+            worktree.join(input_path)
+        }
     };
     reject_verbatim(&candidate)?;
-    let folded = normalize_lexical(&candidate);
+    let folded = orz_paths::normalize_lexically(&candidate);
     Ok((candidate, folded))
 }
 
 /// IO check: does any component from the target itself up to the root carry a
 /// reparse point or symlink? A new file's final component does not exist yet —
 /// only its ancestors are checked (`symlink_metadata` on a missing path
-/// yields Err → not a reparse). Mirrors `orz-host` `is_reparse_or_symlink`
-/// (Windows junction/reparse-point 0x400 bit + symlink); registered duplicate
-/// implementation, to be single-sourced when the host moves onto this crate.
+/// yields Err → not a reparse). Single-sourced with `orz-host`
+/// (2026-08-12): both consume `orz-paths::resolve::is_reparse_or_symlink`.
 pub fn has_reparse_or_symlink_component(target: &Path) -> bool {
     let mut cur = target.to_path_buf();
     loop {
@@ -148,80 +175,10 @@ pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
 /// `symlink_metadata`-based reparse check — does NOT follow the link (a
 /// junction reports `is_dir() == true` with `is_symlink() == false`, so the
 /// reliable Windows signal is the FILE_ATTRIBUTE_REPARSE_POINT (0x400) bit on
-/// the entry's own metadata).
+/// the entry's own metadata). Thin shell over the single-sourced
+/// `orz-paths::resolve::is_reparse_or_symlink` (2026-08-12).
 pub fn is_reparse_or_symlink(path: &Path) -> bool {
-    let Ok(md) = std::fs::symlink_metadata(path) else {
-        // Missing (or unreadable) → not a reparse (new-file scenario).
-        return false;
-    };
-    if md.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        md.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
-fn sanitize_model_path_arg(input: &str) -> &str {
-    let trimmed = input.trim();
-    let quote_wrapped =
-        trimmed.len() >= 2 && trimmed.starts_with(['"', '\'']) && trimmed.ends_with(['"', '\'']);
-    let unquoted = trimmed.trim_matches(['"', '\'']).trim();
-    if !quote_wrapped {
-        return unquoted;
-    }
-    let mut result = unquoted;
-    while let Some(stripped) = result
-        .strip_suffix("\\n")
-        .or_else(|| result.strip_suffix("\\r"))
-        .or_else(|| result.strip_suffix("\\t"))
-    {
-        result = stripped.trim_end();
-    }
-    result
-}
-
-/// `~` / `~/` → home (like `shellexpand::tilde`). `~user` is REFUSED
-/// (review P1-2 2026-08-12): shellexpand expands `~user` on Unix (getpwnam)
-/// but leaves it literal on Windows — mirroring either side forks behaviour,
-/// so the ticket side never binds the ambiguous form (fail-closed; a `~user`
-/// target is never ticketable). `home == None` leaves `~`/`~/` in place
-/// (treated as a relative path).
-fn expand_tilde(input: &str, home: Option<&Path>) -> Result<String, TargetResolveError> {
-    if let Some(home) = home {
-        if input == "~" {
-            return Ok(home.to_string_lossy().into_owned());
-        }
-        if let Some(rest) = input.strip_prefix("~/") {
-            return Ok(home.join(rest).to_string_lossy().into_owned());
-        }
-    }
-    if input.starts_with('~') && input != "~" && !input.starts_with("~/") {
-        return Err(TargetResolveError::TildeUserUnsupported);
-    }
-    Ok(input.to_string())
-}
-
-/// Lexically resolve `.` / `..` components (mirror of orz-host
-/// `permission::normalize_lexical`).
-fn normalize_lexical(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
+    orz_paths::resolve::is_reparse_or_symlink(path)
 }
 
 #[cfg(windows)]
@@ -270,6 +227,33 @@ mod tests {
     }
 
     #[test]
+    fn forgot_leading_slash_recovery_binds_real_object() {
+        // Review D2-1 (2026-08-12): mirror the tool resolver's
+        // forgot-leading-slash recovery (`orz-paths` `resolve_lexical`) — a
+        // relative spelling whose components repeat the worktree path binds
+        // the REAL object, not a doubled phantom (which would be
+        // self-consistent on both ticket sides and escape target_mismatch
+        // detection). Unix-style paths: the component-wise comparison holds
+        // on both platforms.
+        let worktree = Path::new("/data/user/workspace/repo/project");
+        assert_eq!(
+            resolve_action_path(worktree, "data/user/workspace/repo/project/src/main.rs", None)
+                .unwrap(),
+            PathBuf::from("/data/user/workspace/repo/project/src/main.rs")
+        );
+        // Exact worktree spelling (no suffix) → the worktree itself.
+        assert_eq!(
+            resolve_action_path(worktree, "data/user/workspace/repo/project", None).unwrap(),
+            PathBuf::from("/data/user/workspace/repo/project")
+        );
+        // Unrelated relative paths are unaffected (normal join).
+        assert_eq!(
+            resolve_action_path(worktree, "src/main.rs", None).unwrap(),
+            PathBuf::from("/data/user/workspace/repo/project/src/main.rs")
+        );
+    }
+
+    #[test]
     fn resolve_dotted_and_escaped_inputs() {
         assert_eq!(
             resolve_action_path(&worktree(), "src/./lib/../main.rs", None).unwrap(),
@@ -294,6 +278,24 @@ mod tests {
         // the literal `..` component).
         assert_eq!(
             resolve_action_path(&worktree(), "../secret.txt", None).unwrap(),
+            PathBuf::from(r"C:\secret.txt")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fold_drive_relative_preserves_parent_prefix() {
+        // Single-sourced fold (`orz_paths::normalize_lexically`,
+        // 2026-08-12): a drive-relative `C:..\x` spelling KEEPS its `..`
+        // (prefix-preserving) — the old local copy popped the prefix and
+        // produced `C:x` (drive-relative). Conservative direction, locked
+        // here; rooted escapes still collapse to the drive root.
+        assert_eq!(
+            resolve_action_path(&worktree(), r"C:..\outside.rs", None).unwrap(),
+            PathBuf::from(r"C:..\outside.rs")
+        );
+        assert_eq!(
+            resolve_action_path(&worktree(), r"C:\worktree\..\..\secret.txt", None).unwrap(),
             PathBuf::from(r"C:\secret.txt")
         );
     }

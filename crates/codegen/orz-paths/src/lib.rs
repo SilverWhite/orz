@@ -1,5 +1,7 @@
 //! Type-safe path wrappers for absolute and relative UTF-8 paths.
 
+pub mod resolve;
+
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::ffi::OsStr;

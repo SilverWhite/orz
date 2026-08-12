@@ -249,10 +249,22 @@ pub struct AgentLoopController {
     /// Shadow mode: issuance/verification failures are journaled
     /// (`control_ticket_rejected`) but the control event still proceeds.
     pub(crate) acaf: Option<Arc<tokio::sync::Mutex<crate::acaf::AcafClient>>>,
-    /// ACAF Slice 1: the current task-goal digest (set at run start from the
-    /// prompt; the ticket's goal binding — check 4). `None` = no goal seen
-    /// yet (control events stay unticketed until one exists).
-    goal_digest: Mutex<Option<String>>,
+    /// ACAF (Slice 1 + goal wiring 2026-08-12): the current task-goal
+    /// binding — digest (set at run start from the prompt; check 4) plus the
+    /// revision counter. `digest: None` = no goal seen yet (control events
+    /// stay unticketed until one exists). An accepted `continue` consumes a
+    /// GoalRevisionV1 ticket under the OLD context, then
+    /// [`AgentLoopController::update_goal`] swaps the digest and bumps the
+    /// version — the next ticket's `ensure_initialized` re-derives
+    /// `K_session` (ADR-0011 决策 5: goal change → old tickets die).
+    goal_context: Mutex<GoalContext>,
+    /// GAP-DENIAL-POLICY-REVISION wiring (2026-08-12): live policy revision
+    /// for the ACAF binding (HKDF input + check 4) and the denial breaker
+    /// key (ADR-0010 §3.5.4 — a revision change resets the consecutive
+    /// count). Per-run reset to 0 alongside `denial_state`. The first
+    /// production increment source is Slice 3's ModeChangeTicket
+    /// (ADR-0011 决策 9) — the mechanism is wired and test-covered today.
+    pub(crate) policy_revision: std::sync::atomic::AtomicU64,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -1169,9 +1181,23 @@ pub(crate) struct DenialState {
 pub(crate) struct DenialKey {
     pub(crate) tool_name: String,
     pub(crate) reason_code: String,
-    /// Session policy is currently fixed for a session (no mid-session
-    /// revision mechanism), so this is 0 today; wired when revisions exist.
-    pub(crate) policy_revision: u32,
+    /// GAP-DENIAL-POLICY-REVISION (2026-08-12): the controller's live
+    /// `policy_revision` (u64, aligned with the ACAF binding) — a bump is a
+    /// key change, so the breaker resets. First production increment source
+    /// = Slice 3 ModeChangeTicket.
+    pub(crate) policy_revision: u64,
+}
+
+/// ACAF goal binding (Slice 1 + goal wiring 2026-08-12): the task-goal
+/// digest plus its revision counter, read/written as one lock-protected
+/// snapshot so the ticket paths always see a self-consistent pair. A
+/// `GoalRevisionV1` consumption bumps `version` — the next ticket
+/// `ensure_initialized` sees the mismatch and re-derives `K_session`
+/// (ADR-0011 决策 5: goal change → old tickets die).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GoalContext {
+    pub(crate) digest: Option<String>,
+    pub(crate) version: u64,
 }
 
 /// Feedback from a host tool call for the round-level denial aggregator.
@@ -1417,7 +1443,8 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
-            goal_digest: Mutex::new(None),
+            goal_context: Mutex::new(GoalContext::default()),
+            policy_revision: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1432,13 +1459,50 @@ impl AgentLoopController {
     }
 
     /// ACAF Slice 1: pin the run's task goal (the prompt) as the ticket goal
-    /// binding (check 4). Called at run start by the loop entry.
+    /// binding (check 4). Called at run start by the loop entry; resets the
+    /// revision counter to 0 (a fresh run starts a fresh goal epoch).
     pub(crate) fn set_goal_digest(&self, goal: &str) {
-        let digest = sha256_hex(
+        *self.goal_context.lock().unwrap() = GoalContext {
+            digest: Some(Self::goal_digest_of(goal)),
+            version: 0,
+        };
+    }
+
+    /// The canonical goal-binding digest: sha256(canonical_json({"goal": …})).
+    fn goal_digest_of(goal: &str) -> String {
+        sha256_hex(
             &canonical_json(&serde_json::json!({ "goal": goal }))
                 .unwrap_or_else(|_| goal.as_bytes().to_vec()),
-        );
-        *self.goal_digest.lock().unwrap() = Some(digest);
+        )
+    }
+
+    /// ACAF goal wiring (Slice 2, 2026-08-12): after a GoalRevisionV1
+    /// ticket is consumed under the OLD goal context, swap the run-level
+    /// goal binding to the continue's new goal and bump the version. The
+    /// caller guarantees the update happens strictly AFTER the ticket's
+    /// verify-and-consume (which reads the old cached session) — the next
+    /// ticket call re-derives `K_session` and old unconsumed tickets die
+    /// (ADR-0011 决策 5). Harmless no-op when ACAF is not configured.
+    pub(crate) fn update_goal(&self, new_goal: &str) {
+        let mut g = self.goal_context.lock().unwrap();
+        g.digest = Some(Self::goal_digest_of(new_goal));
+        g.version += 1;
+    }
+
+    /// GAP-DENIAL-POLICY-REVISION (2026-08-12): increment the live policy
+    /// revision — a policy-identity change. Wired and test-covered; the
+    /// first production caller is Slice 3's ModeChangeTicket (ADR-0011
+    /// 决策 9 — mode switch increments policy_revision).
+    #[allow(dead_code)] // Slice 3 ModeChangeTicket is the first production caller (registered)
+    pub(crate) fn bump_policy_revision(&self) {
+        self.policy_revision
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Current policy revision (ACAF binding + DenialKey input).
+    pub(crate) fn policy_revision(&self) -> u64 {
+        self.policy_revision
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Journal the terminal outcome of a ticket lifecycle (consumed /
@@ -1488,8 +1552,12 @@ impl AgentLoopController {
         let Some(acaf) = &self.acaf else {
             return Ok(());
         };
-        let Some(goal_digest) = self.goal_digest.lock().unwrap().clone() else {
-            return Ok(());
+        let (goal_digest, goal_version) = {
+            let g = self.goal_context.lock().unwrap();
+            let Some(digest) = g.digest.clone() else {
+                return Ok(());
+            };
+            (digest, g.version)
         };
         let mut client = acaf.lock().await;
         let session_id = self
@@ -1498,11 +1566,18 @@ impl AgentLoopController {
             .unwrap_or_else(|| writer.run_id().to_string());
         let canonical = crate::acaf::canonical_arguments_digest(kind, args);
         let now = chrono::Utc::now();
-        // Slice 1 binding constants: goal_version 0 (no goal-version counter
-        // in the controller yet), policy_revision 0 (GAP-DENIAL-POLICY-
-        // REVISION wiring is Slice 2).
+        // Goal/policy wiring (2026-08-12): the live goal version and policy
+        // revision — a mismatch against the client's cached session
+        // re-derives K_session (accepted continue / policy bump → old
+        // tickets die, ADR-0011 决策 5).
         let outcome = match client
-            .ensure_initialized(&session_id, "main", 0, &goal_digest, 0)
+            .ensure_initialized(
+                &session_id,
+                "main",
+                goal_version,
+                &goal_digest,
+                self.policy_revision(),
+            )
             .await
         {
             Ok(()) => match client
@@ -1671,8 +1746,12 @@ impl AgentLoopController {
         let canonical_args =
             crate::acaf::file_write_canonical_args(tool, &effective_str, operation, tc_args);
         let canonical_digest = crate::acaf::canonical_arguments_digest(kind, &canonical_args);
-        let Some(goal_digest) = self.goal_digest.lock().unwrap().clone() else {
-            return Ok(());
+        let (goal_digest, goal_version) = {
+            let g = self.goal_context.lock().unwrap();
+            let Some(digest) = g.digest.clone() else {
+                return Ok(());
+            };
+            (digest, g.version)
         };
         let session_id = self
             .session_id
@@ -1687,7 +1766,13 @@ impl AgentLoopController {
             };
             let mut client = acaf.lock().await;
             match client
-                .ensure_initialized(&session_id, "main", 0, &goal_digest, 0)
+                .ensure_initialized(
+                    &session_id,
+                    "main",
+                    goal_version,
+                    &goal_digest,
+                    self.policy_revision(),
+                )
                 .await
             {
                 Ok(()) => match client
@@ -2112,7 +2197,8 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
-            goal_digest: Mutex::new(None),
+            goal_context: Mutex::new(GoalContext::default()),
+            policy_revision: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -2472,6 +2558,10 @@ impl AgentLoopController {
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
         *self.denial_state.lock().unwrap() = DenialState::default();
+        // GAP-DENIAL-POLICY-REVISION (2026-08-12): policy revision is also
+        // per-run — a fresh run starts at 0 (same window as the breaker).
+        self.policy_revision
+            .store(0, std::sync::atomic::Ordering::SeqCst);
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
@@ -2801,6 +2891,7 @@ impl AgentLoopController {
                 dc_state: &self.dc_state,
                 // Main lane: no retrieval evidence collection.
                 evidence: None,
+                policy_revision: &self.policy_revision,
             },
             self,
             writer,
@@ -3350,6 +3441,7 @@ impl AgentLoopController {
                 dc_state: &self.dc_state,
                 // Retrieval lane: collect tool-call evidence (§3.7.4).
                 evidence: Some(&self.evidence),
+                policy_revision: &self.policy_revision,
             },
             self,
             writer,
@@ -4024,12 +4116,17 @@ impl AgentLoopController {
                     // the rejection is recorded; the next assessment
                     // replaces the pending).
                     act.contract_revision += 1;
-                    // ACAF Slice 1 (ADR-0011 §4.2): a continue's requirement
-                    // delta REVISES the activation's task goal — a
-                    // goal-revision control event, ticketed (shadow mode;
-                    // Slice 1 binds the OLD goal context — the session key
-                    // re-derivation on goal change is the Slice 2 wiring,
-                    // registered boundary).
+                    // ACAF (Slice 1 + goal wiring 2026-08-12): a continue's
+                    // requirement delta REVISES the activation's task goal —
+                    // a goal-revision control event, ticketed. The
+                    // GoalRevisionV1 ticket is signed and consumed under the
+                    // OLD goal context (ensure_initialized → sign →
+                    // verify_and_consume all read the old cached session —
+                    // the ticket authorizes the transition itself); ONLY
+                    // NOW does the run-level goal binding switch, so the
+                    // next ticket call re-derives K_session and old
+                    // unconsumed tickets die (ADR-0011 决策 5 — goal change
+                    // → new key; Slice 1 audit D5 closed).
                     self.acaf_control_event(
                         writer,
                         TicketKind::GoalRevisionV1,
@@ -4039,7 +4136,9 @@ impl AgentLoopController {
                         }),
                     )
                     .await?;
-                    act.next_goal = Some(requirement_delta.clone().unwrap_or_default());
+                    let new_goal = requirement_delta.clone().unwrap_or_default();
+                    self.update_goal(&new_goal);
+                    act.next_goal = Some(new_goal);
                     act.status = ActivationStatus::Active;
                 }
                 DispositionVerdict::RejectedStale | DispositionVerdict::RejectedConflicting => {
@@ -4556,7 +4655,10 @@ impl AgentLoopController {
                 Some(PolicyFeedback::Denied(DenialKey {
                     tool_name: tc.name.clone(),
                     reason_code,
-                    policy_revision: 0,
+                    // GAP-DENIAL-POLICY-REVISION (2026-08-12): live value — a
+                    // bump is a key change, resetting the breaker
+                    // (ADR-0010 §3.5.4).
+                    policy_revision: self.policy_revision(),
                 })),
             ));
         }
@@ -5334,6 +5436,68 @@ mod tests {
 
     fn event_types(dir: &Path) -> Vec<EventType> {
         events(dir).into_iter().map(|e| e.event_type).collect()
+    }
+
+    // ── GAP-DENIAL-POLICY-REVISION / goal wiring (2026-08-12) ──
+
+    /// `update_goal` swaps the run-level goal digest and bumps the version;
+    /// `set_goal_digest` (run start) resets the version — a fresh run
+    /// starts a fresh goal epoch. The version/digest pair moves as one
+    /// lock-protected snapshot.
+    #[tokio::test]
+    async fn goal_context_update_increments_version_and_digest() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        controller.set_goal_digest("goal-1");
+        let (d1, v0) = {
+            let g = controller.goal_context.lock().unwrap();
+            (g.digest.clone().unwrap(), g.version)
+        };
+        assert_eq!(v0, 0);
+        assert_eq!(d1, AgentLoopController::goal_digest_of("goal-1"));
+        controller.update_goal("goal-2");
+        let g = controller.goal_context.lock().unwrap();
+        assert_eq!(g.version, 1);
+        assert_eq!(
+            g.digest.as_deref(),
+            Some(AgentLoopController::goal_digest_of("goal-2").as_str())
+        );
+        assert_ne!(g.digest.as_deref(), Some(d1.as_str()));
+        drop(g);
+        // Run start re-pins and resets the version to 0.
+        controller.set_goal_digest("goal-3");
+        let g = controller.goal_context.lock().unwrap();
+        assert_eq!(g.version, 0);
+        assert_eq!(
+            g.digest.as_deref(),
+            Some(AgentLoopController::goal_digest_of("goal-3").as_str())
+        );
+    }
+
+    /// `bump_policy_revision` increments the live value; a fresh run resets
+    /// it to 0 (same per-run window as the denial breaker).
+    #[tokio::test]
+    async fn policy_revision_bump_increments_and_run_resets() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("直接回答"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        assert_eq!(controller.policy_revision(), 0);
+        controller.bump_policy_revision();
+        assert_eq!(controller.policy_revision(), 1);
+        controller
+            .run_turn(&host, "hi", "RUN-POL", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(controller.policy_revision(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode authority (§3.7.1) ──

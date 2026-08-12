@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use orz_assurance::acaf::{RejectCode, TicketKind};
 use orz_assurance::gates::ipg::WorkspaceTrust;
+use orz_assurance::canonical_json;
 use orz_assurance::journal::sha256_hex;
 use orz_assurance::journal::{JournalRecorder, RunEvent};
 use orz_host::keystore::WindowsDpapiInstallationKeyStore;
@@ -649,4 +650,144 @@ async fn file_write_shadow_on_signer_unreachable() {
         types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
         "tool proceeds under shadow mode: {types:?}"
     );
+}
+
+// ── test 7: goal wiring — a continue re-derives K_session, old tickets die ──
+
+/// Goal wiring (2026-08-12): an accepted `continue` consumes a
+/// GoalRevisionV1 ticket under the OLD goal context, then the controller
+/// swaps the run-level goal binding (digest + version 0→1). The NEXT ticket
+/// call re-initializes the signer session (new K_session) — the signer's
+/// sequence ledger restarts at 1 and the close-flow tickets bind the NEW
+/// goal. This is the "goal 变 → 新 key 旧票死" path (ADR-0011 决策 5),
+/// previously unreachable (Slice 1 audit D5 boundary, now closed).
+#[tokio::test]
+async fn goal_revision_continue_flow_re_derives_session_key() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "ok".to_string(),
+            exit_code: Some(0),
+        }),
+    };
+
+    let old_goal = "查找项目文档";
+    let delta = "继续查第二批";
+    let old_goal_digest = sha256_hex(&canonical_json(&serde_json::json!({ "goal": old_goal })).unwrap());
+    let new_goal_digest = sha256_hex(&canonical_json(&serde_json::json!({ "goal": delta })).unwrap());
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+        ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
+        ScriptedResponse::text("[DOC] a.md\n第一批"),
+        ScriptedResponse::tool_calls(vec![disposition_call("continue", Some(delta), "call-d1")]),
+        ScriptedResponse::text("继续"),
+        // Re-entry into the same activation (continue semantics).
+        ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+        ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s2")]),
+        ScriptedResponse::text("[DOC] a.md\n第二批"),
+        ScriptedResponse::tool_calls(vec![disposition_call("close", None, "call-d2")]),
+        ScriptedResponse::text("完成"),
+        // counterexample gate round
+        ScriptedResponse::text("完成"),
+    ]));
+
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::FrameworkFallback,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, old_goal, "RUN-ACAF-CONT", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let issued: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+
+    // 4 tickets: disposition-continue + goal_revision (OLD context) then
+    // disposition-close + close (NEW context, after the re-derivation).
+    assert_eq!(issued.len(), 4, "expected 4 tickets: {types:?}");
+    assert_eq!(consumed.len(), 4, "all tickets consumed: {types:?}");
+    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+
+    let kinds: Vec<&str> = issued
+        .iter()
+        .map(|e| e.payload["ticket_kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["disposition_v1", "goal_revision_v1", "disposition_v1", "close_v1"],
+        "ticket order across the continue flow: {kinds:?}"
+    );
+
+    // OLD-context tickets: goal_version 0, the run-start goal digest.
+    for (i, ticket) in issued.iter().take(2).enumerate() {
+        assert_eq!(ticket.payload["goal_version"], 0, "ticket[{i}] binds the old goal");
+        assert_eq!(
+            ticket.payload["goal_digest"].as_str().unwrap(),
+            old_goal_digest,
+            "ticket[{i}] old goal digest"
+        );
+    }
+    // The goal_revision ticket carries the activation binding.
+    assert!(
+        issued[1].payload["activation_id"].as_str().unwrap().starts_with("retrieval-"),
+        "goal_revision ticket binds the activation: {:?}",
+        issued[1].payload
+    );
+
+    // NEW-context tickets (after K_session re-derivation): goal_version 1,
+    // the continue delta as the new goal binding.
+    for (i, ticket) in issued.iter().skip(2).enumerate() {
+        let i = i + 2;
+        assert_eq!(ticket.payload["goal_version"], 1, "ticket[{i}] binds the new goal");
+        assert_eq!(
+            ticket.payload["goal_digest"].as_str().unwrap(),
+            new_goal_digest,
+            "ticket[{i}] new goal digest"
+        );
+    }
+
+    // Ledger epoch: the re-derivation restarts the signer sequence — the
+    // close-flow tickets re-start at 1 (per-K_session epoch, Slice 1 D2-1).
+    let seqs: Vec<u64> = issued
+        .iter()
+        .map(|e| e.payload["sequence"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![1, 2, 1, 2], "sequence restarts on the new epoch: {seqs:?}");
+
+    // Consumed-after-issued pairing for every ticket.
+    for consumed_event in &consumed {
+        let cp = &consumed_event.payload;
+        let matching_issued = issued
+            .iter()
+            .find(|e| e.payload["ticket_id"] == cp["ticket_id"])
+            .unwrap_or_else(|| panic!("consumed references unknown ticket: {cp:?}"));
+        assert!(
+            matching_issued.sequence < consumed_event.sequence,
+            "consumed must follow its issued event"
+        );
+    }
 }

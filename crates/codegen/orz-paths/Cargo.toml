@@ -9,6 +9,9 @@ description = "Type-safe path wrappers for absolute and relative UTF-8 paths"
 camino = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Model path resolution (src/resolve.rs): tilde expansion. Pinned to the same
+# spec as orz-tools (3.1) — already in the lockfile graph.
+shellexpand = "3.1"
 
 [dev-dependencies]
 serde_json = { workspace = true }

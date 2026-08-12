@@ -476,73 +476,17 @@ pub struct DenyReadGlobs(pub Vec<String>);
 /// - Leading `~`/`~/` is expanded to the current user's home directory
 ///   before applying the above rules. `~username` is not expanded.
 /// - Relative paths are always joined onto `cwd`.
+///
+/// Thin shell over the single-source primitives in
+/// `orz-paths::resolve` (single-sourced 2026-08-12; behaviour byte-identical).
 pub fn resolve_model_path(
     cwd: &std::path::Path,
     display_cwd: Option<&std::path::Path>,
     input: &str,
 ) -> PathBuf {
-    let input = sanitize_model_path_arg(input);
-    let expanded = shellexpand::tilde(input);
-    let input_path = std::path::Path::new(expanded.as_ref());
-    // `has_root()` not `is_absolute()`: on Windows `/foo` is rooted but has no
-    // drive prefix, so `is_absolute()` is false — yet it is the model's
-    // absolute/display form and must get the same display-strip treatment.
-    if let Some(display) = display_cwd
-        && input_path.has_root()
-    {
-        if let Ok(suffix) = input_path.strip_prefix(display) {
-            return cwd.join(suffix);
-        }
-        return input_path.to_path_buf();
-    }
-    if !input_path.has_root() && !expanded.is_empty() {
-        let as_absolute = std::path::PathBuf::from(format!("/{}", expanded.as_ref()));
-        let effective_base = display_cwd.unwrap_or(cwd);
-        if as_absolute.starts_with(effective_base)
-            && let Ok(suffix) = as_absolute.strip_prefix(effective_base)
-        {
-            return cwd.join(suffix);
-        }
-    }
-    // Rooted inputs are absolute-form: return as-is. On Windows `cwd.join`
-    // would keep the cwd's drive prefix (`C:\etc\hosts` from `/etc/hosts`),
-    // silently retargeting the path — a security-relevant miss for the
-    // permission resolver.
-    if input_path.has_root() {
-        return input_path.to_path_buf();
-    }
-    cwd.join(input_path)
-}
-/// Strip surrounding whitespace (e.g. a trailing newline from block-form
-/// tool args) and quotes that models occasionally emit around path args.
-///
-/// When the arg was quote-wrapped, the model emitted a *string literal* (e.g.
-/// a JSON-style `"/path/file.ts\n"` pasted into a block-form arg where no
-/// JSON unescaping ever runs). In that case also strip trailing **literal**
-/// escape sequences (`\n`, `\r`, `\t` as two characters) left at the end of
-/// the unquoted value — `str::trim` only removes real whitespace, so the
-/// resolved path would otherwise end in a literal backslash-n and miss the
-/// file. Escape stripping requires the trimmed arg to both *start and end*
-/// with a quote character (true quote-wrapping): a stray unbalanced quote is
-/// still stripped, but does not enable escape stripping, so backslashes in
-/// otherwise-unquoted real paths (e.g. Windows `dir\n ame`) are never eaten.
-fn sanitize_model_path_arg(input: &str) -> &str {
-    let trimmed = input.trim();
-    let quote_wrapped =
-        trimmed.len() >= 2 && trimmed.starts_with(['"', '\'']) && trimmed.ends_with(['"', '\'']);
-    let unquoted = trimmed.trim_matches(['"', '\'']).trim();
-    if !quote_wrapped {
-        return unquoted;
-    }
-    let mut result = unquoted;
-    while let Some(stripped) = result
-        .strip_suffix("\\n")
-        .or_else(|| result.strip_suffix("\\r"))
-        .or_else(|| result.strip_suffix("\\t"))
-    {
-        result = stripped.trim_end();
-    }
-    result
+    let sanitized = orz_paths::resolve::sanitize_model_path_arg(input);
+    let expanded = orz_paths::resolve::tilde_expand(sanitized);
+    orz_paths::resolve::resolve_lexical(cwd, display_cwd, expanded.as_ref())
 }
 /// Return the display path (for model-facing output) or fall back to cwd.
 pub fn display_cwd_or_cwd(cwd: &std::path::Path, display_cwd: Option<&std::path::Path>) -> PathBuf {

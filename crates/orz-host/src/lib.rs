@@ -473,29 +473,6 @@ const DELTA_EXCLUDED_DIRS: &[&str] = &[
 /// RT-003: cap on the workspace-delta entries recorded per run_tests call.
 const RUN_TESTS_DELTA_MAX_ENTRIES: usize = 200;
 
-/// D2-2 (2026-08-11): true for symlinks AND Windows directory junctions /
-/// other reparse points — the delta walk must not follow either. Junctions
-/// report `file_type().is_dir() == true` with `is_symlink() == false`, so
-/// the reliable signal is the FILE_ATTRIBUTE_REPARSE_POINT (0x400) bit on
-/// the entry's own metadata (`symlink_metadata` — NOT `metadata`, which
-/// would follow the junction and hide the bit).
-fn is_reparse_or_symlink(ft: &std::fs::FileType, path: &Path) -> bool {
-    if ft.is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        std::fs::symlink_metadata(path)
-            .map(|m| m.file_attributes() & 0x400 != 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
 /// RT-003: worktree metadata walk (zero content reads) — the run_tests
 /// delta baseline. Symlinks are not followed (a target outside the worktree
 /// is not a delta; a dangling link is not a file change).
@@ -518,8 +495,13 @@ fn workspace_delta_walk(cwd: &Path) -> std::collections::HashMap<String, (u64, u
             // at a huge tree like C:\Users) would be walked unboundedly
             // (this walk runs OUTSIDE the test-run timeout). Skip every
             // reparse point, symlink or junction — both are linkage, not
-            // file content, in the delta semantics.
-            if is_reparse_or_symlink(&ft, &path) {
+            // file content, in the delta semantics. Single-sourced with the
+            // ACAF ticket side (2026-08-12): orz-paths
+            // `is_reparse_or_symlink` (symlink_metadata — NOT `metadata`,
+            // which would follow the junction and hide the 0x400 bit;
+            // the old local copy reused the read_dir entry type to skip the
+            // extra syscall on Unix — semantically equivalent, registered).
+            if orz_paths::resolve::is_reparse_or_symlink(&path) {
                 continue;
             }
             if ft.is_dir() {

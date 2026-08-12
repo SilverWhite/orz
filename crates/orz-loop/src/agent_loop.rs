@@ -231,6 +231,10 @@ pub(crate) struct SharedLoopServices<'a> {
     /// (ADR-0010 §3.7.4 — the mechanical source of the structured ledger).
     /// `Some` only on retrieval profiles; the main lane passes `None`.
     pub evidence: Option<&'a Mutex<Vec<crate::controller::EvidenceRecord>>>,
+    /// GAP-DENIAL-POLICY-REVISION (2026-08-12): the live policy revision —
+    /// feeds the role-gate denial key (a bump is a key change → the breaker
+    /// resets, ADR-0010 §3.5.4).
+    pub policy_revision: &'a std::sync::atomic::AtomicU64,
 }
 
 /// What the loop produced — the caller maps it to its own terminal
@@ -800,6 +804,7 @@ pub(crate) async fn run_agent_loop(
                             tc,
                             profile.role.as_str(),
                             "nested_subagent_dispatch_refused",
+                            svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
                         round_feedback = Some(f);
@@ -832,6 +837,7 @@ pub(crate) async fn run_agent_loop(
                             tc,
                             profile.role.as_str(),
                             "control_tool_lane_denied",
+                            svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
                         round_feedback = Some(f);
@@ -854,6 +860,7 @@ pub(crate) async fn run_agent_loop(
                             tc,
                             profile.role.as_str(),
                             reason,
+                            svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
                         round_feedback = Some(f);
@@ -931,39 +938,27 @@ pub(crate) async fn run_agent_loop(
         // P1/P2). Semantics are unchanged: the neutral inquiry fires at
         // most once per round (counters reset on trigger), so hoisting
         // it out of the per-tool loop is equivalent.
-        // ADR-0010 §3.5.4 round-level denial aggregation: success resets
-        // the count; otherwise the round counts only when ALL its denials
-        // share one normalized key (a round mixing tools is a key change
-        // → reset). At 3 consecutive same-key rounds the breaker message
-        // fires once and the count restarts.
+        // ADR-0010 §3.5.4 round-level denial aggregation — extracted to
+        // [`aggregate_denial_round`] (2026-08-12, behaviour unchanged): a
+        // round with any success or with denials that do NOT all share one
+        // normalized key resets the count; otherwise the round counts, and
+        // at 3 consecutive same-key rounds the breaker message fires once
+        // (count restarts).
         {
             let mut denial = svc.denial_state.lock().unwrap();
-            let all_same_key = round_denials
-                .first()
-                .is_some_and(|k0| round_denials.iter().all(|k| k == k0));
-            if round_had_success || !all_same_key {
-                denial.consecutive_rounds = 0;
-                denial.last_key = None;
-            } else if let Some(key) = round_denials.first() {
-                if denial.last_key.as_ref() == Some(key) {
-                    denial.consecutive_rounds += 1;
-                } else {
-                    denial.consecutive_rounds = 1;
-                    denial.last_key = Some(key.clone());
-                }
-                if denial.consecutive_rounds >= DENIAL_BREAKER_CONSECUTIVE {
-                    denial.consecutive_rounds = 0; // injected once per burst
-                    pending_policy.push(Message {
-                        role: Role::User,
-                        content: crate::prompt::tool_policy_breaker_block(
-                            &key.tool_name,
-                            DENIAL_BREAKER_CONSECUTIVE,
-                        ),
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                    });
-                }
+            if let Some(tool_name) =
+                aggregate_denial_round(&mut denial, &round_denials, round_had_success)
+            {
+                pending_policy.push(Message {
+                    role: Role::User,
+                    content: crate::prompt::tool_policy_breaker_block(
+                        &tool_name,
+                        DENIAL_BREAKER_CONSECUTIVE,
+                    ),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
             }
         }
         for pm in pending_policy {
@@ -1067,6 +1062,45 @@ pub(crate) async fn run_agent_loop(
     })
 }
 
+/// ADR-0010 §3.5.4 round-level denial aggregation (extracted from the
+/// post-tool-batch injection point, 2026-08-12 — behaviour unchanged): a
+/// round with any success, or whose denials do NOT all share one normalized
+/// key, resets the count; otherwise the round counts against `last_key`,
+/// and at `DENIAL_BREAKER_CONSECUTIVE` consecutive same-key rounds returns
+/// the offending tool name (the caller injects the strategy-switch message
+/// once) with the count restarted. The key includes `policy_revision` — a
+/// policy bump is a key change, so the reset path is structurally
+/// reachable (GAP-DENIAL-POLICY-REVISION, 2026-08-12).
+pub(crate) fn aggregate_denial_round(
+    denial: &mut DenialState,
+    round_denials: &[DenialKey],
+    round_had_success: bool,
+) -> Option<String> {
+    let all_same_key = round_denials
+        .first()
+        .is_some_and(|k0| round_denials.iter().all(|k| k == k0));
+    if round_had_success || !all_same_key {
+        denial.consecutive_rounds = 0;
+        denial.last_key = None;
+        None
+    } else if let Some(key) = round_denials.first() {
+        if denial.last_key.as_ref() == Some(key) {
+            denial.consecutive_rounds += 1;
+        } else {
+            denial.consecutive_rounds = 1;
+            denial.last_key = Some(key.clone());
+        }
+        if denial.consecutive_rounds >= DENIAL_BREAKER_CONSECUTIVE {
+            denial.consecutive_rounds = 0; // injected once per burst
+            Some(key.tool_name.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
 /// Structured refusal for a role-gated tool (ADR-0010 §3.2 deny-only write
 /// domain / §11.3 nested dispatch guard): the call is journaled as
 /// ToolStarted → ToolCompleted(status=error) — a refused call is visible in
@@ -1079,6 +1113,7 @@ async fn role_gate_denied(
     tc: &ToolCall,
     target: &str,
     reason: &str,
+    policy_revision: u64,
 ) -> Result<(ToolResult, PolicyFeedback), AgentLoopError> {
     writer
         .record(
@@ -1123,7 +1158,9 @@ async fn role_gate_denied(
         PolicyFeedback::Denied(DenialKey {
             tool_name: tc.name.clone(),
             reason_code: reason.to_string(),
-            policy_revision: 0,
+            // GAP-DENIAL-POLICY-REVISION (2026-08-12): live value — a bump is
+            // a key change, resetting the breaker (ADR-0010 §3.5.4).
+            policy_revision,
         }),
     ))
 }
@@ -1162,5 +1199,94 @@ mod tests {
         // The main lane's gate refuses nothing.
         assert_eq!(ToolFilter::None.write_gate("search_replace"), None);
         assert_eq!(ToolFilter::None.write_gate("bash"), None);
+    }
+
+    fn denial_key(tool: &str, reason: &str, policy_revision: u64) -> DenialKey {
+        DenialKey {
+            tool_name: tool.to_string(),
+            reason_code: reason.to_string(),
+            policy_revision,
+        }
+    }
+
+    /// Same normalized key across three consecutive rounds fires the breaker
+    /// exactly once (count restarts — injected once per burst).
+    #[test]
+    fn aggregate_denial_round_same_key_fires_at_three() {
+        let mut denial = DenialState::default();
+        let key = denial_key("read_file", "permission_denied", 0);
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&key), false),
+            None
+        );
+        assert_eq!(denial.consecutive_rounds, 1);
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&key), false),
+            None
+        );
+        assert_eq!(denial.consecutive_rounds, 2);
+        // Third round → fires, count restarts (burst-once semantics).
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&key), false),
+            Some("read_file".to_string())
+        );
+        assert_eq!(denial.consecutive_rounds, 0);
+    }
+
+    /// GAP-DENIAL-POLICY-REVISION (2026-08-12): a policy revision change is
+    /// a DenialKey change — the consecutive count resets, so a
+    /// `0,0,1`-sequence never fires (ADR-0010 §3.5.4 reset path now
+    /// structurally reachable).
+    #[test]
+    fn aggregate_denial_round_policy_revision_change_resets() {
+        let mut denial = DenialState::default();
+        let rev0 = denial_key("read_file", "permission_denied", 0);
+        let rev1 = denial_key("read_file", "permission_denied", 1);
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&rev0), false),
+            None
+        );
+        // Two rounds at revision 0…
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&rev0), false),
+            None
+        );
+        assert_eq!(denial.consecutive_rounds, 2);
+        // …then the policy bumps: the third round's key differs → reset.
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&rev1), false),
+            None
+        );
+        assert_eq!(denial.consecutive_rounds, 1);
+        // 0,0,1 then 1,1 — a fresh 3-round run at the new revision would
+        // still fire; the bump itself never does.
+        assert_eq!(denial.last_key, Some(rev1));
+    }
+
+    /// A round with any success resets the consecutive count.
+    #[test]
+    fn aggregate_denial_round_success_resets() {
+        let mut denial = DenialState::default();
+        let key = denial_key("read_file", "permission_denied", 0);
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&key), false),
+            None
+        );
+        assert_eq!(denial.consecutive_rounds, 1);
+        // A mixed round (denial + success) is a key change → reset.
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&key), true),
+            None
+        );
+        assert_eq!(denial.consecutive_rounds, 0);
+        // A pure-success round also resets.
+        assert_eq!(
+            aggregate_denial_round(&mut denial, std::slice::from_ref(&key), true),
+            None
+        );
+        assert_eq!(denial.consecutive_rounds, 0);
+        // Empty round (no denials) resets too (conservative baseline).
+        assert_eq!(aggregate_denial_round(&mut denial, &[], false), None);
+        assert_eq!(denial.consecutive_rounds, 0);
     }
 }
