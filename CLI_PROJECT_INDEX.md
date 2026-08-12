@@ -90,7 +90,7 @@
 - **IMPL-DEEPSEEK-TRANSPORT** (`partial`; 2026-08-09)：默认模型族为 DeepSeek，当前配置为 V4；transport、重试和 thinking 必须与主/子代理同构约束一起复核。关键词：DeepSeek V4、deepseek-v4-flash、transport retry、thinking。入口：[`DEEPSEEK_ADAPTER_CONTRACT`](architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md) / [`ADR-0007`](adr/ADR-0007-transport-retry-policy.md)。
 - **IMPL-WRITE-PLACEMENT** (`implemented`; 2026-08-09)：工作区、本体状态和系统必要状态按 ADR-0009 分域，Grill 使用独立只读审计链。关键词：GROK_HOME、write placement、Grill、read-only。入口：[`ADR-0009`](adr/ADR-0009-write-placement-policy.md) / [`WRITE_PLACEMENT_AND_GRILL_DESIGN`](docs/WRITE_PLACEMENT_AND_GRILL_DESIGN_2026-08-08.md)。
 - **IMPL-GLOBAL-REVIEW** (`implemented`; 2026-08-09)：显式 Global Review Mode 负责激活全局审查义务，其 receipt 不冒充最终审查结论。关键词：global review、activation receipt、L1-L7。入口：[`global_review_mode.py`](assurance/global_review_mode.py) / [`GSA_GLOBAL_REVIEW_RECORD`](docs/GSA_GLOBAL_REVIEW_RECORD_2026-08-01.md)。
-- **IMPL-CONTROL-FABRIC** (`partial`; 2026-08-12)：ACAF 四切片实施独立于 Phase C；**Slice 1（签发器 v1 + 控制事件票据）已闭合**，**Slice 2 两阶段已闭合（四类动作票就位：file_write 全链 + credential_read 机制先建零接线 + command_exec/network 同型扩展，全程影子模式）**，goal/policy 接线（GAP-DENIAL-POLICY-REVISION 消费面）已闭合，Slice 2 fail-closed 切换（用户裁决）与 Slice 3/4 待实施。关键词：ACAF 切片、签发器、fail-closed、shadow mode、ControlTicket、resolved_target_sha256。入口：[`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md) / [`GAP_ACAF_SLICE2A_IMPL_AUDIT`](docs/audits/GAP_ACAF_SLICE2A_IMPL_AUDIT_2026-08-12.md) / [`GAP_ACAF_SLICE2B_IMPL_AUDIT`](docs/audits/GAP_ACAF_SLICE2B_IMPL_AUDIT_2026-08-12.md) / [`GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT`](docs/audits/GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md)。
+- **IMPL-CONTROL-FABRIC** (`partial`; 2026-08-12)：ACAF 四切片实施独立于 Phase C；**Slice 1（签发器 v1 + 控制事件票据）已闭合**，**Slice 2 两阶段已闭合（四类动作票就位：file_write 全链 + credential_read 机制先建零接线 + command_exec/network 同型扩展，全程影子模式）**，goal/policy 接线（GAP-DENIAL-POLICY-REVISION 消费面）已闭合，Slice 2 fail-closed 切换的用户裁决已登记（设计文档 §11 D-12~D-16，实施待办）与 Slice 3/4 待实施。关键词：ACAF 切片、签发器、fail-closed、shadow mode、ControlTicket、resolved_target_sha256。入口：[`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md) / [`GAP_ACAF_SLICE2A_IMPL_AUDIT`](docs/audits/GAP_ACAF_SLICE2A_IMPL_AUDIT_2026-08-12.md) / [`GAP_ACAF_SLICE2B_IMPL_AUDIT`](docs/audits/GAP_ACAF_SLICE2B_IMPL_AUDIT_2026-08-12.md) / [`GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT`](docs/audits/GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md)。
 
 ### 3.1 已登记实现差距
 
@@ -142,7 +142,7 @@
 | ADR-0008 | accepted / numeric value partially superseded | [`ADR-0008`](adr/ADR-0008-tool-round-budget.md) |
 | ADR-0009 | accepted | [`ADR-0009`](adr/ADR-0009-write-placement-policy.md) |
 | ADR-0010 | accepted / frozen / current authority | [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) |
-| ADR-0011 | accepted / Slice 1+2 已实施（fail-closed 未切换） | [`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) |
+| ADR-0011 | accepted / Slice 1+2 已实施（fail-closed 未切换；用户裁决 D-12~D-16 已登记，设计文档 §11） | [`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) |
 
 ## 6. 评测与回归入口
 

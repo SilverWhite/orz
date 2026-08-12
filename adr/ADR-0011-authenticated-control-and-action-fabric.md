@@ -15,7 +15,9 @@
   就位（决策 9，Slice 3 ModeChangeTicket 为首个生产递增来源）；目标解析原语单源
   orz-paths（设计文档 §4.5 镜像），见
   [`GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT`](../docs/audits/GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md)；
-  Slice 2 fail-closed 切换（用户裁决）与 Slice 3/4 待实施）
+  Slice 2 fail-closed 切换的用户裁决已登记（设计文档 §11 D-12~D-16：
+  web_search 显式排除、子代理 activation 必绑、缺参/缺依赖硬拒绝、
+  rejected GoalRevisionV1 不迁移；实施待办）与 Slice 3/4 待实施）
 - 决策范围：跨信任边界控制事件与外部效果动作的票据授权面；独立签发器；三运行模式；
   威胁模型边界；实施切片的独立性
 - 详细设计权威：[`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](../docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)

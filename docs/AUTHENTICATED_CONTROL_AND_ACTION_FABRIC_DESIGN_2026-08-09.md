@@ -410,6 +410,7 @@ ModeChangeTicket:
 - 目标解析（规范化 argv/绝对路径）与 TOCTOU 验票；
 - 影子模式：记录"应签未签/应拒放行"差异 → 确认无误后 fail-closed；
 - 验收入口：模型注入探针（伪造参数/重放/越权）全部被拒；真实动作零误阻断（影子台账）。
+- 用户裁决（2026-08-12）：fail-closed 翻转前置决策已登记，见 §11 D-12~D-16；实施待办。
 
 ### Slice 3：Auto-Staged No-Run
 
@@ -492,3 +493,8 @@ ModeChangeTicket:
 | D-9 | 影子模式先行 | 每个切片先记录差异台账，再 fail-closed |
 | D-10 | 票据对模型不可见 | 不进入上下文，无 token 负担；receipt 全量入审计链 |
 | D-11 | 沙箱 backend 选型 | **采用 Windows Sandbox**（Hyper-V 轻量 VM，满足进程可运行 + VM 级隔离 + 一次性销毁）；完整 Hyper-V VM 为强档，仅高风险任务启用；Docker 仅评测侧等价路径，不作为产品侧默认（2026-08-09 用户拍板） |
+| D-12 | web_search 票据形态（用户裁决 2026-08-12） | 保持无映射：DeepSeek 原生服务端搜索、无模型可见 URL 目标，不发 network 票；显式排除并登记（不产生影子台账事件）。来源质量筛选属检索结果层，另行设计 |
+| D-13 | 检索子代理动作票 activation 绑定（用户裁决 2026-08-12） | 必须绑定：子代理 lane 内 web_fetch 等动作票持真实 activation_id；接线为 fail-closed 翻转前置条件（当前仍 null，Slice 2B 核查⑧） |
+| D-14 | 缺参静默跳过（用户裁决 2026-08-12） | fail-closed 时转硬拒绝：file_path/url/command 缺失或空 → `control_ticket_rejected`（missing_target_argument，ticket_id=null）+ 工具不执行 |
+| D-15 | 未配置/缺依赖静默 skip（用户裁决 2026-08-12） | fail-closed 时禁止静默：acaf 未配置=启动期 fail-fast 或显式降级开关；snapshot_store 缺失 → file_write 硬拒绝（missing_snapshot_store）；goal_digest 缺失 → 动作/控制票硬拒绝（missing_goal_context） |
+| D-16 | rejected GoalRevisionV1 状态迁移（用户裁决 2026-08-12） | fail-closed 时 consumed-only：票 rejected → update_goal 与 AcceptedContinue 状态迁移不执行、goal 绑定不动、写安全事件并向父 Agent 表面未授权 |
