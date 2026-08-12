@@ -81,7 +81,9 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 
 1. 白名单/劣质源初始域名清单与配置入口（已定范围：白名单=政府与机关单位；劣质源含
    CSDN、知乎、百家号、哔哩哔哩个人专栏、独立新闻媒体、自媒体新闻号/财经号、
-   小型个人站点；具体域名列表与配置文件/env 注入在实现时落地，不硬编码）；
+   小型个人站点；初始种子名单见
+   [`SOURCE_QUALITY_SEED_LISTS_2026-08-12.md`](SOURCE_QUALITY_SEED_LISTS_2026-08-12.md)，
+   具体域名列表与配置文件/env 注入在实现时落地，不硬编码）；
 2. 单次检索候选核验数量上限（建议 ≤3-5，按工具轮预算校准）；
 3. 结构化结果 schema 是否新增 weight/tier 字段（若加，遵循"先 Schema/fixture 扩展、
    再改 producer"纪律）。
