@@ -1348,6 +1348,215 @@ async fn fail_closed_startup_refuses_unconfigured_fabric() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// ── Review fixes (2026-08-13): sign→verify RPC failure + D-16 rejection ──
+
+/// Review fix (2026-08-13): a verify RPC failure between sign and consume
+/// journals EXACTLY ONE `control_ticket_rejected` (signer_unreachable) and,
+/// under fail-closed, refuses the tool (no ToolStarted). Regression lock
+/// for the double-journal defect found in review.
+#[tokio::test]
+async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+    // Seam: the NEXT network_v1 verify_and_consume fails as if the signer
+    // died between sign and verify (the real signer is self-consistent, so
+    // an external kill cannot target this exact point).
+    client
+        .lock()
+        .await
+        .inject_verify_failure(
+            TicketKind::NetworkV1,
+            "simulated signer death between sign and verify",
+        );
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "page text".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com/doc" }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(&host, "抓取网页", "RUN-FC-VERIFY", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "verify RPC failure must journal exactly ONE rejection: {types:?} payloads={:?}",
+        rejected.iter().map(|e| &e.payload).collect::<Vec<_>>()
+    );
+    assert_eq!(rejected[0].payload["ticket_kind"], "network_v1");
+    assert_eq!(rejected[0].payload["reject_code"], "signer_unreachable");
+    assert!(
+        rejected[0].payload["ticket_id"].is_null(),
+        "pre-signing-style refusal has no ticket: {:?}",
+        rejected[0].payload
+    );
+    assert!(
+        !types.iter().any(|t| t == "tool_started"),
+        "fail-closed must not start the tool: {types:?}"
+    );
+    let completed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "tool_completed")
+        .collect();
+    assert_eq!(
+        completed[0].payload["error"],
+        "control_ticket_rejected:signer_unreachable"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review fix (2026-08-13): D-16's rejection branch — a rejected
+/// GoalRevisionV1 under fail-closed must NOT migrate the goal/contract
+/// state (the disposition surfaces unauthorized, exit 1). The injected
+/// verify failure forces the rejection at the exact GoalRevisionV1
+/// consumption point.
+#[tokio::test]
+async fn fail_closed_goal_revision_rejected_does_not_migrate() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+    client
+        .lock()
+        .await
+        .inject_verify_failure(
+            TicketKind::GoalRevisionV1,
+            "simulated signer death at goal revision",
+        );
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "ok".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+        ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
+        ScriptedResponse::text("[DOC] a.md\n第一批"),
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "internal_retrieval",
+                "decision": "continue",
+                "requirement_delta": "补充检索第二批",
+            }),
+            call_id: "call-d1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::FrameworkFallback,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(&host, "检索项目", "RUN-FC-D16REJ", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "exactly one rejection (the GoalRevisionV1 verify failure): {types:?}"
+    );
+    assert_eq!(rejected[0].payload["ticket_kind"], "goal_revision_v1");
+    assert_eq!(rejected[0].payload["reject_code"], "signer_unreachable");
+    // DispositionV1 consumed; GoalRevisionV1 must NOT be consumed (D-16:
+    // rejected goal revision does not migrate state).
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    assert!(
+        consumed.iter().any(|e| e.payload["ticket_kind"] == "disposition_v1"),
+        "DispositionV1 must still consume: {:?}",
+        consumed.iter().map(|e| &e.payload).collect::<Vec<_>>()
+    );
+    assert!(
+        !consumed.iter().any(|e| e.payload["ticket_kind"] == "goal_revision_v1"),
+        "GoalRevisionV1 must NOT consume on rejection: {:?}",
+        consumed.iter().map(|e| &e.payload).collect::<Vec<_>>()
+    );
+    // The disposition tool surfaces unauthorized (exit 1).
+    let completed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "tool_completed")
+        .collect();
+    let disposition = completed
+        .iter()
+        .find(|e| e.payload["tool"] == "retrieval_disposition")
+        .expect("disposition tool completed");
+    // D-16 surfaces unauthorized via the disposition tool's exit code (the
+    // goal-revision rejection itself is the journaled security event).
+    assert_eq!(disposition.payload["exit_code"], 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// D-14: a missing `url` under fail-closed is a HARD refusal — the
 /// `control_ticket_rejected(missing_target_argument, null ticket_id)` is
 /// journaled, ToolStarted never fires, and the tool does not execute.

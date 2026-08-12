@@ -1858,6 +1858,21 @@ impl AgentLoopController {
                 )
                 .await;
         };
+        // D-14 review fix (2026-08-13): an EMPTY file_path is a missing
+        // target argument — fail-closed surfaces `missing_target_argument`
+        // (same code as the missing case); shadow keeps the registered
+        // resolver-error ledger (`target_mismatch`).
+        if self.acaf_fail_closed && file_path.trim().is_empty() {
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    kind,
+                    orz_assurance::acaf::RejectCode::MissingTargetArgument,
+                    "file_path argument missing or empty".to_string(),
+                    &now,
+                )
+                .await;
+        }
         // Resolve AND reparse-scan in one call (review D1-1 2026-08-12: the
         // scan runs on the UN-FOLDED candidate, so a `<junction>\..` spelling
         // cannot hide the link).
@@ -2020,21 +2035,14 @@ impl AgentLoopController {
         };
         let outcome = match live_outcome {
             Ok(outcome) => outcome,
-            Err(e) => {
-                self.journal_ticket_outcome(
-                    writer,
-                    &crate::acaf::TicketOutcome::SignerUnreachable {
-                        kind,
-                        detail: e.to_string(),
-                    },
-                    &now,
-                )
-                .await?;
-                crate::acaf::TicketOutcome::SignerUnreachable {
-                    kind,
-                    detail: e.to_string(),
-                }
-            }
+            // Review fix (2026-08-13): do NOT journal inside the arm — the
+            // shared journal below emits exactly ONE terminal event per
+            // ticket (the fail-closed slice originally journaled this
+            // path twice).
+            Err(e) => crate::acaf::TicketOutcome::SignerUnreachable {
+                kind,
+                detail: e.to_string(),
+            },
         };
         self.journal_ticket_outcome(writer, &outcome, &now).await?;
         match crate::acaf::ticket_outcome_reject(&outcome) {
@@ -2086,6 +2094,22 @@ impl AgentLoopController {
                 .await;
         };
         let url = url.to_string();
+        // D-14 review fix (2026-08-13): an EMPTY/whitespace url is a
+        // missing target argument in fail-closed (`missing_target_argument`,
+        // same as the missing case); shadow keeps the registered
+        // `target_mismatch` ledger (the resolver treats it as Empty).
+        if self.acaf_fail_closed && url.trim().is_empty() {
+            let now = chrono::Utc::now();
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    TicketKind::NetworkV1,
+                    orz_assurance::acaf::RejectCode::MissingTargetArgument,
+                    "url argument missing or empty".to_string(),
+                    &now,
+                )
+                .await;
+        }
         // Review P1-1 (2026-08-12, three-agent review): the URL target needs
         // NO worktree-relative resolution — a snapshot_store gate here was
         // an error copy of the file path branch and would have created an
@@ -2430,21 +2454,14 @@ impl AgentLoopController {
         };
         let outcome = match live_outcome {
             Ok(outcome) => outcome,
-            Err(e) => {
-                self.journal_ticket_outcome(
-                    writer,
-                    &crate::acaf::TicketOutcome::SignerUnreachable {
-                        kind,
-                        detail: e.to_string(),
-                    },
-                    &now,
-                )
-                .await?;
-                crate::acaf::TicketOutcome::SignerUnreachable {
-                    kind,
-                    detail: e.to_string(),
-                }
-            }
+            // Review fix (2026-08-13): do NOT journal inside the arm — the
+            // shared journal below emits exactly ONE terminal event per
+            // ticket (the fail-closed slice originally journaled this
+            // path twice).
+            Err(e) => crate::acaf::TicketOutcome::SignerUnreachable {
+                kind,
+                detail: e.to_string(),
+            },
         };
         self.journal_ticket_outcome(writer, &outcome, &now).await?;
         match crate::acaf::ticket_outcome_reject(&outcome) {

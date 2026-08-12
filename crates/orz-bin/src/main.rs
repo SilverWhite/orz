@@ -301,6 +301,17 @@ async fn build_acaf_client() -> Result<
     Ok(Some(std::sync::Arc::new(tokio::sync::Mutex::new(client))))
 }
 
+/// Slice 2 fail-closed switch (2026-08-13): enabled only by an explicit
+/// `ORZ_ACAF_FAIL_CLOSED=1` / `=true` (case-insensitive). Any other value
+/// (including `0`, `false`, or unset) keeps the default shadow mode —
+/// value semantics, not presence: `ORZ_ACAF_FAIL_CLOSED=0` must not
+/// silently flip a security gate on (review fix 2026-08-13).
+fn acaf_fail_closed_enabled() -> bool {
+    std::env::var("ORZ_ACAF_FAIL_CLOSED")
+        .map(|v| v.eq_ignore_ascii_case("1") || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// ACP stdio server entry: serve `session/new` + `session/prompt` over the
 /// persistent stdio JSON-RPC stream until the client closes stdin.
 fn run_stdio() {
@@ -979,7 +990,7 @@ async fn run(
             // switch (D-14/D-15/D-16 — an unconfigured fabric then refuses
             // to start at all).
             .with_acaf(build_acaf_client().await?)
-            .with_acaf_fail_closed(std::env::var("ORZ_ACAF_FAIL_CLOSED").is_ok());
+            .with_acaf_fail_closed(acaf_fail_closed_enabled());
         let (response, _, _) = controller
             .run_turn_with_guards(
                 &host,

@@ -131,6 +131,12 @@ pub struct AcafClient {
     next_id: u64,
     ledger: TicketLedger,
     session: Option<ClientSession>,
+    /// e2e-only seam (2026-08-13 review fix): when set, the next
+    /// `verify_and_consume` for the matching kind fails BEFORE any signer
+    /// RPC — simulates the signer dying between sign and verify (the
+    /// sign→verify RPC-failure path no external test can force against the
+    /// self-consistent real signer).
+    injected_verify_failure: std::sync::Mutex<Option<(TicketKind, String)>>,
 }
 
 /// Spawn a signer child and take its stdio (shared by `spawn` and `respawn`).
@@ -183,7 +189,18 @@ impl AcafClient {
             next_id: 1,
             ledger: TicketLedger::new(),
             session: None,
+            injected_verify_failure: std::sync::Mutex::new(None),
         })
+    }
+
+    /// e2e-only seam (2026-08-13 review fix): make the NEXT
+    /// `verify_and_consume` for `kind` fail with `detail` before any wire
+    /// call. Hidden from production docs; used by the orz-bin ACAF e2e
+    /// suite to lock the sign→verify RPC-failure path (single terminal
+    /// journal) and the D-16 GoalRevisionV1 rejection branch.
+    #[doc(hidden)]
+    pub fn inject_verify_failure(&self, kind: TicketKind, detail: &str) {
+        *self.injected_verify_failure.lock().unwrap() = Some((kind, detail.to_string()));
     }
 
     /// Kill the current signer child and spawn a fresh one, re-initialising
@@ -397,6 +414,22 @@ impl AcafClient {
         live_activation_id: Option<String>,
         live_resolved_target_sha256: Option<String>,
     ) -> Result<TicketOutcome, AcafClientError> {
+        // e2e-only seam (2026-08-13 review fix): a matching injected
+        // failure returns Err before the wire call — the caller journals
+        // exactly ONE `signer_unreachable` terminal for the failed ticket.
+        // The snapshot is taken in its own statement so the std Mutex guard
+        // is dropped before the body may lock again (a guard held across
+        // the if-let body would deadlock on the inner clear).
+        let injected = self.injected_verify_failure.lock().unwrap().clone();
+        if let Some((fail_kind, detail)) = injected {
+            if fail_kind.as_str() == ticket.ticket_kind {
+                *self.injected_verify_failure.lock().unwrap() = None;
+                return Err(AcafClientError::Closed(format!(
+                    "injected verify failure for {} (e2e seam): {detail}",
+                    ticket.ticket_kind,
+                )));
+            }
+        }
         let session = self
             .session
             .as_ref()
