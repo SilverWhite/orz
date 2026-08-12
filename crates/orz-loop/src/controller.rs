@@ -150,6 +150,21 @@ pub enum AgentLoopError {
     Cancelled,
 }
 
+/// ACAF Slice 2 fail-closed (2026-08-13): the ticket lifecycle's decision
+/// for one control event or external-effect action. Shadow mode always
+/// returns `Proceed` (the ledger IS the journal events); fail-closed
+/// returns `Blocked` on every rejection path (D-14/D-15/D-16) — the caller
+/// must not execute the event/action, and the refusal has already been
+/// journaled as `control_ticket_rejected`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TicketGate {
+    Proceed,
+    Blocked {
+        code: orz_assurance::acaf::RejectCode,
+        detail: String,
+    },
+}
+
 /// The main agent loop controller.
 ///
 /// Owns the prompt processing lifecycle. Stateless between turns —
@@ -249,6 +264,12 @@ pub struct AgentLoopController {
     /// Shadow mode: issuance/verification failures are journaled
     /// (`control_ticket_rejected`) but the control event still proceeds.
     pub(crate) acaf: Option<Arc<tokio::sync::Mutex<crate::acaf::AcafClient>>>,
+    /// ACAF Slice 2 fail-closed switch (D-9 → full Slice 2 milestone,
+    /// 2026-08-13): when true, every ticket failure REFUSES the control
+    /// event / external-effect action instead of the shadow-mode
+    /// journal-and-proceed. D-14/D-15/D-16 semantics apply only here; the
+    /// shadow ledger keeps its registered silent-skip behavior.
+    acaf_fail_closed: bool,
     /// ACAF (Slice 1 + goal wiring 2026-08-12): the current task-goal
     /// binding — digest (set at run start from the prompt; check 4) plus the
     /// revision counter. `digest: None` = no goal seen yet (control events
@@ -1443,6 +1464,7 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
+            acaf_fail_closed: false,
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
         }
@@ -1455,6 +1477,14 @@ impl AgentLoopController {
         acaf: Option<Arc<tokio::sync::Mutex<crate::acaf::AcafClient>>>,
     ) -> Self {
         self.acaf = acaf;
+        self
+    }
+
+    /// ACAF Slice 2 (2026-08-13): flip the fail-closed switch. Shadow mode
+    /// (default) journals rejections and proceeds; fail-closed refuses the
+    /// ticketed event/action on every rejection path (D-14/D-15/D-16).
+    pub fn with_acaf_fail_closed(mut self, fail_closed: bool) -> Self {
+        self.acaf_fail_closed = fail_closed;
         self
     }
 
@@ -1540,7 +1570,9 @@ impl AgentLoopController {
     /// `signer_unreachable`) and the event still proceeds. Unticketed paths
     /// (no client / no goal yet) journal nothing. `resolved_target` (Slice 2
     /// first phase) binds the parsed real target — action kinds only;
-    /// control kinds pass None.
+    /// control kinds pass None. Slice 2 fail-closed (2026-08-13): a
+    /// rejected outcome returns `TicketGate::Blocked` — the caller refuses
+    /// the event/action (D-14/D-15/D-16).
     async fn ticket_flow(
         &self,
         writer: &mut EventWriter<'_>,
@@ -1548,16 +1580,32 @@ impl AgentLoopController {
         activation_id: Option<String>,
         args: &serde_json::Value,
         resolved_target: Option<String>,
-    ) -> Result<(), AgentLoopError> {
+    ) -> Result<TicketGate, AgentLoopError> {
         let Some(acaf) = &self.acaf else {
-            return Ok(());
+            // D-15 fail-closed: an unconfigured fabric is caught at run
+            // start (startup fail-fast). This defensive branch keeps the
+            // zero-behaviour-change guarantee for unconfigured shadow runs.
+            return Ok(TicketGate::Proceed);
         };
-        let (goal_digest, goal_version) = {
-            let g = self.goal_context.lock().unwrap();
-            let Some(digest) = g.digest.clone() else {
-                return Ok(());
-            };
-            (digest, g.version)
+        let Some((goal_digest, goal_version)) = self.goal_binding_snapshot() else {
+            // D-15 (2026-08-13): no goal context → action/control
+            // tickets cannot bind check 4. Shadow: silent skip
+            // (registered boundary); fail-closed: journal
+            // `missing_goal_context` + refuse.
+            if self.acaf_fail_closed {
+                let now = chrono::Utc::now();
+                return self
+                    .fail_closed_refusal(
+                        writer,
+                        kind,
+                        orz_assurance::acaf::RejectCode::MissingGoalContext,
+                        "goal digest not pinned (run goal must be set before ticketed events)"
+                            .to_string(),
+                        &now,
+                    )
+                    .await;
+            }
+            return Ok(TicketGate::Proceed);
         };
         let mut client = acaf.lock().await;
         let session_id = self
@@ -1617,7 +1665,17 @@ impl AgentLoopController {
                 detail: e.to_string(),
             },
         };
-        self.journal_ticket_outcome(writer, &outcome, &now).await
+        self.journal_ticket_outcome(writer, &outcome, &now).await?;
+        Ok(match crate::acaf::ticket_outcome_reject(&outcome) {
+            None => TicketGate::Proceed,
+            Some((code, detail)) => {
+                if self.acaf_fail_closed {
+                    TicketGate::Blocked { code, detail }
+                } else {
+                    TicketGate::Proceed
+                }
+            }
+        })
     }
 
     /// ACAF Slice 1 (ADR-0011 §4.2/§4.6) — the control-event ticket
@@ -1629,32 +1687,81 @@ impl AgentLoopController {
         kind: TicketKind,
         activation_id: Option<String>,
         args: &serde_json::Value,
-    ) -> Result<(), AgentLoopError> {
+    ) -> Result<TicketGate, AgentLoopError> {
         self.ticket_flow(writer, kind, activation_id, args, None).await
     }
 
-    /// Shadow rejection for an unticketable action target (D7): no ticket
-    /// was issued, so the `control_ticket_rejected` event carries a null
+    /// Rejection for an unticketable action target (D7): no ticket was
+    /// issued, so the `control_ticket_rejected` event carries a null
     /// ticket_id with `target_mismatch` (mirrors the signer_unreachable
-    /// null-ticket_id precedent).
+    /// null-ticket_id precedent). Journaled in BOTH modes; fail-closed
+    /// additionally returns `Blocked`.
     async fn shadow_action_rejection(
         &self,
         writer: &mut EventWriter<'_>,
         kind: TicketKind,
         detail: String,
         now: &chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), AgentLoopError> {
+    ) -> Result<TicketGate, AgentLoopError> {
         self.journal_ticket_outcome(
             writer,
             &crate::acaf::TicketOutcome::Rejected {
                 ticket_id: None,
                 kind,
                 code: orz_assurance::acaf::RejectCode::TargetMismatch,
-                detail,
+                detail: detail.clone(),
             },
             now,
         )
-        .await
+        .await?;
+        if self.acaf_fail_closed {
+            Ok(TicketGate::Blocked {
+                code: orz_assurance::acaf::RejectCode::TargetMismatch,
+                detail,
+            })
+        } else {
+            Ok(TicketGate::Proceed)
+        }
+    }
+
+    /// D-14/D-15 fail-closed refusal (2026-08-13): a PRE-SIGNING refusal —
+    /// a required target argument is missing/empty or a dependency
+    /// (snapshot store / goal context) is absent. Shadow mode stays SILENT
+    /// (registered boundary: these paths journal nothing in the shadow
+    /// ledger); fail-closed journals `control_ticket_rejected` with a null
+    /// ticket_id and returns `Blocked` (the tool/event is not executed).
+    async fn fail_closed_refusal(
+        &self,
+        writer: &mut EventWriter<'_>,
+        kind: TicketKind,
+        code: orz_assurance::acaf::RejectCode,
+        detail: String,
+        now: &chrono::DateTime<chrono::Utc>,
+    ) -> Result<TicketGate, AgentLoopError> {
+        if !self.acaf_fail_closed {
+            return Ok(TicketGate::Proceed);
+        }
+        self.journal_ticket_outcome(
+            writer,
+            &crate::acaf::TicketOutcome::Rejected {
+                ticket_id: None,
+                kind,
+                code,
+                detail: detail.clone(),
+            },
+            now,
+        )
+        .await?;
+        Ok(TicketGate::Blocked { code, detail })
+    }
+
+    /// Read the goal binding snapshot (digest + version) WITHOUT holding
+    /// the `std::sync::MutexGuard` across an await — the fail-closed
+    /// missing-goal-context refusal journals (awaits) and the guard is not
+    /// `Send` (review D-15 2026-08-13, tokio::spawn test compile).
+    fn goal_binding_snapshot(&self) -> Option<(String, u64)> {
+        let g = self.goal_context.lock().unwrap();
+        g.digest.clone().map(|digest| (digest, g.version))
     }
 
     /// ACAF Slice 2 first phase (2026-08-12) — action-ticket lifecycle for
@@ -1672,9 +1779,10 @@ impl AgentLoopController {
         writer: &mut EventWriter<'_>,
         tool: &str,
         tc_args: &serde_json::Value,
-    ) -> Result<(), AgentLoopError> {
+        activation_id: Option<String>,
+    ) -> Result<TicketGate, AgentLoopError> {
         let Some(kind) = crate::acaf::action_kind_for_tool(tool) else {
-            return Ok(());
+            return Ok(TicketGate::Proceed);
         };
         // Unticketed paths journal nothing (zero behaviour change when ACAF
         // is unconfigured — same gate as the control events). This MUST
@@ -1682,27 +1790,43 @@ impl AgentLoopController {
         // fabric would otherwise journal shadow rejections for invalid
         // URLs/commands.
         if self.acaf.is_none() {
-            return Ok(());
+            return Ok(TicketGate::Proceed);
         }
         // Slice 2 full phase (2026-08-12): the network and command branches
         // resolve their own target shapes (canonical URL / argv-cwd-env
         // triple) and share the `run_action_ticket` lifecycle; the proven
         // file_write path below stays untouched.
         if kind == TicketKind::NetworkV1 {
-            return self.acaf_network_event(writer, tool, tc_args).await;
+            return self
+                .acaf_network_event(writer, tool, tc_args, activation_id)
+                .await;
         }
         if kind == TicketKind::CommandExecV1 {
             // `run_tests` never reaches this generic path (the
             // `run_host_tool` branch handles it with the host-owned fixed
             // command BEFORE ToolStarted); `run_terminal_cmd` binds the
             // model-supplied shell command here.
-            return self.acaf_command_event(writer, tool, tc_args).await;
+            return self
+                .acaf_command_event(writer, tool, tc_args, activation_id)
+                .await;
         }
         // Defensive: no snapshot store → no worktree base → the real target
         // cannot be resolved; skip the ticket (production always carries the
         // store — the run_host_tool snapshot block uses the same source).
+        // D-15 (2026-08-13): fail-closed turns the silent skip into a hard
+        // refusal (`missing_snapshot_store`); shadow stays silent.
+        let now = chrono::Utc::now();
         let Some(store) = &self.snapshot_store else {
-            return Ok(());
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    kind,
+                    orz_assurance::acaf::RejectCode::MissingSnapshotStore,
+                    "no snapshot store configured — file_write target cannot be resolved"
+                        .to_string(),
+                    &now,
+                )
+                .await;
         };
         let worktree = store.worktree();
         // Review P2-7 (2026-08-12): HOMEDRIVE+HOMEPATH join is the dirs
@@ -1721,13 +1845,19 @@ impl AgentLoopController {
             })
             .map(std::path::PathBuf::from);
         let Some(file_path) = tc_args.get("file_path").and_then(serde_json::Value::as_str) else {
-            // No target in the args — nothing to ticket (the tool call fails
-            // on its own later; shadow mode journals nothing for a missing
-            // argument — registered P2-4/P2-5: the fail-closed flip must
-            // turn this silent skip into a hard refusal).
-            return Ok(());
+            // D-14 (2026-08-13): missing/empty file_path → hard refusal in
+            // fail-closed (`missing_target_argument`, null ticket_id);
+            // shadow mode keeps the registered silent skip.
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    kind,
+                    orz_assurance::acaf::RejectCode::MissingTargetArgument,
+                    "file_path argument missing or empty".to_string(),
+                    &now,
+                )
+                .await;
         };
-        let now = chrono::Utc::now();
         // Resolve AND reparse-scan in one call (review D1-1 2026-08-12: the
         // scan runs on the UN-FOLDED candidate, so a `<junction>\..` spelling
         // cannot hide the link).
@@ -1763,12 +1893,21 @@ impl AgentLoopController {
         let canonical_args =
             crate::acaf::file_write_canonical_args(tool, &effective_str, operation, tc_args);
         let canonical_digest = crate::acaf::canonical_arguments_digest(kind, &canonical_args);
-        let (goal_digest, goal_version) = {
-            let g = self.goal_context.lock().unwrap();
-            let Some(digest) = g.digest.clone() else {
-                return Ok(());
-            };
-            (digest, g.version)
+        let Some((goal_digest, goal_version)) = self.goal_binding_snapshot() else {
+            // D-15 (2026-08-13): same missing-goal-context refusal as
+            // the shared ticket_flow path.
+            if self.acaf_fail_closed {
+                return self
+                    .fail_closed_refusal(
+                        writer,
+                        kind,
+                        orz_assurance::acaf::RejectCode::MissingGoalContext,
+                        "goal digest not pinned".to_string(),
+                        &now,
+                    )
+                    .await;
+            }
+            return Ok(TicketGate::Proceed);
         };
         let session_id = self
             .session_id
@@ -1779,7 +1918,7 @@ impl AgentLoopController {
         // with a signer respawn and must not block later control tickets).
         let signed = {
             let Some(acaf) = &self.acaf else {
-                return Ok(());
+                return Ok(TicketGate::Proceed);
             };
             let mut client = acaf.lock().await;
             match client
@@ -1793,7 +1932,12 @@ impl AgentLoopController {
                 .await
             {
                 Ok(()) => match client
-                    .sign_ticket(kind, None, &canonical_digest, Some(resolved_digest.clone()))
+                    .sign_ticket(
+                        kind,
+                        activation_id.clone(),
+                        &canonical_digest,
+                        Some(resolved_digest.clone()),
+                    )
                     .await
                 {
                     Ok(t) => Ok(t),
@@ -1811,9 +1955,17 @@ impl AgentLoopController {
         let ticket = match signed {
             Ok(t) => t,
             Err(outcome) => {
-                return self
+                self
                     .journal_ticket_outcome(writer, &outcome, &now)
-                    .await
+                    .await?;
+                return match crate::acaf::ticket_outcome_reject(&outcome) {
+                    None => Ok(TicketGate::Proceed),
+                    Some((code, detail)) => Ok(if self.acaf_fail_closed {
+                        TicketGate::Blocked { code, detail }
+                    } else {
+                        TicketGate::Proceed
+                    }),
+                };
             }
         };
         writer
@@ -1847,14 +1999,14 @@ impl AgentLoopController {
                     crate::acaf::canonical_arguments_digest(kind, &live_canonical);
                 // Lock scope 2 — verify only.
                 let Some(acaf) = &self.acaf else {
-                    return Ok(());
+                    return Ok(TicketGate::Proceed);
                 };
                 let mut client = acaf.lock().await;
                 client
                     .verify_and_consume(
                         &ticket,
                         &live_canonical_digest,
-                        None,
+                        activation_id.clone(),
                         Some(live_target_digest),
                     )
                     .await
@@ -1866,8 +2018,8 @@ impl AgentLoopController {
                 detail: format!("live target resolution failed: {e}"),
             }),
         };
-        match live_outcome {
-            Ok(outcome) => self.journal_ticket_outcome(writer, &outcome, &now).await,
+        let outcome = match live_outcome {
+            Ok(outcome) => outcome,
             Err(e) => {
                 self.journal_ticket_outcome(
                     writer,
@@ -1877,8 +2029,21 @@ impl AgentLoopController {
                     },
                     &now,
                 )
-                .await
+                .await?;
+                crate::acaf::TicketOutcome::SignerUnreachable {
+                    kind,
+                    detail: e.to_string(),
+                }
             }
+        };
+        self.journal_ticket_outcome(writer, &outcome, &now).await?;
+        match crate::acaf::ticket_outcome_reject(&outcome) {
+            None => Ok(TicketGate::Proceed),
+            Some((code, detail)) => Ok(if self.acaf_fail_closed {
+                TicketGate::Blocked { code, detail }
+            } else {
+                TicketGate::Proceed
+            }),
         }
     }
 
@@ -1900,17 +2065,25 @@ impl AgentLoopController {
         writer: &mut EventWriter<'_>,
         tool: &str,
         tc_args: &serde_json::Value,
-    ) -> Result<(), AgentLoopError> {
+        activation_id: Option<String>,
+    ) -> Result<TicketGate, AgentLoopError> {
         if self.acaf.is_none() {
-            return Ok(());
+            return Ok(TicketGate::Proceed);
         }
         let Some(url) = tc_args.get("url").and_then(serde_json::Value::as_str) else {
-            // No URL target in the args — nothing to ticket (the tool call
-            // fails on its own later; shadow mode journals nothing for a
-            // missing argument — registered P2-4/P2-5 class: the
-            // fail-closed flip must turn this silent skip into a hard
-            // refusal).
-            return Ok(());
+            // D-14 (2026-08-13): missing/empty url → hard refusal in
+            // fail-closed (`missing_target_argument`); shadow keeps the
+            // registered silent skip.
+            let now = chrono::Utc::now();
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    TicketKind::NetworkV1,
+                    orz_assurance::acaf::RejectCode::MissingTargetArgument,
+                    "url argument missing or empty".to_string(),
+                    &now,
+                )
+                .await;
         };
         let url = url.to_string();
         // Review P1-1 (2026-08-12, three-agent review): the URL target needs
@@ -1937,14 +2110,21 @@ impl AgentLoopController {
         let canonical_args = crate::acaf::network_canonical_args(tool, &canonical_url);
         let target_digest = orz_assurance::acaf::target::network_target_digest(&canonical_url);
         let tool_owned = tool.to_string();
-        self.run_action_ticket(writer, kind, canonical_args, target_digest, move || {
-            let canonical_url =
-                orz_assurance::acaf::target::resolve_network_url(&url)
-                    .map_err(|e| e.to_string())?;
-            let canonical = crate::acaf::network_canonical_args(&tool_owned, &canonical_url);
-            let digest = orz_assurance::acaf::target::network_target_digest(&canonical_url);
-            Ok((canonical, digest))
-        })
+        self.run_action_ticket(
+            writer,
+            kind,
+            canonical_args,
+            target_digest,
+            activation_id,
+            move || {
+                let canonical_url =
+                    orz_assurance::acaf::target::resolve_network_url(&url)
+                        .map_err(|e| e.to_string())?;
+                let canonical = crate::acaf::network_canonical_args(&tool_owned, &canonical_url);
+                let digest = orz_assurance::acaf::target::network_target_digest(&canonical_url);
+                Ok((canonical, digest))
+            },
+        )
         .await
     }
 
@@ -1961,19 +2141,43 @@ impl AgentLoopController {
         writer: &mut EventWriter<'_>,
         tool: &str,
         tc_args: &serde_json::Value,
-    ) -> Result<(), AgentLoopError> {
+        activation_id: Option<String>,
+    ) -> Result<TicketGate, AgentLoopError> {
         if self.acaf.is_none() {
-            return Ok(());
+            return Ok(TicketGate::Proceed);
         }
         let Some(command) = tc_args.get("command").and_then(serde_json::Value::as_str) else {
-            // Missing command — the tool call fails on its own later; same
-            // silent-skip registration as file_path/url (P2-4/P2-5 class).
-            return Ok(());
+            // D-14 (2026-08-13): missing command → hard refusal in
+            // fail-closed; shadow keeps the registered silent skip.
+            let now = chrono::Utc::now();
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    TicketKind::CommandExecV1,
+                    orz_assurance::acaf::RejectCode::MissingTargetArgument,
+                    "command argument missing or empty".to_string(),
+                    &now,
+                )
+                .await;
         };
         let command = command.trim().to_string();
         let kind = TicketKind::CommandExecV1;
         let now = chrono::Utc::now();
         if command.is_empty() {
+            // Empty command: shadow keeps the registered target_mismatch
+            // ledger; fail-closed surfaces D-14's missing_target_argument
+            // and refuses.
+            if self.acaf_fail_closed {
+                return self
+                    .fail_closed_refusal(
+                        writer,
+                        kind,
+                        orz_assurance::acaf::RejectCode::MissingTargetArgument,
+                        "command argument missing or empty".to_string(),
+                        &now,
+                    )
+                    .await;
+            }
             return self
                 .shadow_action_rejection(
                     writer,
@@ -1984,7 +2188,18 @@ impl AgentLoopController {
                 .await;
         }
         let Some(store) = &self.snapshot_store else {
-            return Ok(());
+            // D-15 (2026-08-13): the command cwd binds the worktree — no
+            // store → no cwd → fail-closed refuses; shadow stays silent.
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    kind,
+                    orz_assurance::acaf::RejectCode::MissingSnapshotStore,
+                    "no snapshot store configured — command cwd cannot be bound"
+                        .to_string(),
+                    &now,
+                )
+                .await;
         };
         let cwd = store.worktree().to_string_lossy().into_owned();
         let env_sha = crate::acaf::command_env_sha256(&[]);
@@ -1993,12 +2208,19 @@ impl AgentLoopController {
             crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
         let target_digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
         let tool_owned = tool.to_string();
-        self.run_action_ticket(writer, kind, canonical_args, target_digest, move || {
-            let canonical =
-                crate::acaf::command_exec_canonical_args(&tool_owned, &argv, &cwd, &env_sha);
-            let digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
-            Ok((canonical, digest))
-        })
+        self.run_action_ticket(
+            writer,
+            kind,
+            canonical_args,
+            target_digest,
+            activation_id,
+            move || {
+                let canonical =
+                    crate::acaf::command_exec_canonical_args(&tool_owned, &argv, &cwd, &env_sha);
+                let digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
+                Ok((canonical, digest))
+            },
+        )
         .await
     }
 
@@ -2015,17 +2237,40 @@ impl AgentLoopController {
         writer: &mut EventWriter<'_>,
         tool: &str,
         runner: &crate::host::TestRunner,
-    ) -> Result<(), AgentLoopError> {
+        activation_id: Option<String>,
+    ) -> Result<TicketGate, AgentLoopError> {
         if self.acaf.is_none() {
-            return Ok(());
+            return Ok(TicketGate::Proceed);
         }
         let Some(store) = &self.snapshot_store else {
-            return Ok(());
+            // D-15 (2026-08-13): command cwd binds the worktree — fail-closed
+            // refuses; shadow keeps the registered silent skip.
+            let now = chrono::Utc::now();
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    TicketKind::CommandExecV1,
+                    orz_assurance::acaf::RejectCode::MissingSnapshotStore,
+                    "no snapshot store configured — command cwd cannot be bound"
+                        .to_string(),
+                    &now,
+                )
+                .await;
         };
         if runner.command.is_empty() {
-            // The tool would fail on its own (host side refuses an empty
-            // command) — nothing to ticket.
-            return Ok(());
+            // D-14 (2026-08-13): empty host command → hard refusal in
+            // fail-closed; shadow stays silent (the tool would fail on its
+            // own, and the host should never present an empty runner).
+            let now = chrono::Utc::now();
+            return self
+                .fail_closed_refusal(
+                    writer,
+                    TicketKind::CommandExecV1,
+                    orz_assurance::acaf::RejectCode::MissingTargetArgument,
+                    "run_tests command is empty".to_string(),
+                    &now,
+                )
+                .await;
         }
         let cwd = store.worktree().to_string_lossy().into_owned();
         let argv = runner.command.clone();
@@ -2034,12 +2279,19 @@ impl AgentLoopController {
             crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
         let target_digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
         let tool_owned = tool.to_string();
-        self.run_action_ticket(writer, TicketKind::CommandExecV1, canonical_args, target_digest, move || {
-            let canonical =
-                crate::acaf::command_exec_canonical_args(&tool_owned, &argv, &cwd, &env_sha);
-            let digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
-            Ok((canonical, digest))
-        })
+        self.run_action_ticket(
+            writer,
+            TicketKind::CommandExecV1,
+            canonical_args,
+            target_digest,
+            activation_id,
+            move || {
+                let canonical =
+                    crate::acaf::command_exec_canonical_args(&tool_owned, &argv, &cwd, &env_sha);
+                let digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
+                Ok((canonical, digest))
+            },
+        )
         .await
     }
 
@@ -2060,15 +2312,26 @@ impl AgentLoopController {
         kind: TicketKind,
         canonical_args: serde_json::Value,
         target_digest: String,
+        activation_id: Option<String>,
         live: impl Fn() -> Result<(serde_json::Value, String), String>,
-    ) -> Result<(), AgentLoopError> {
+    ) -> Result<TicketGate, AgentLoopError> {
         let canonical_digest = crate::acaf::canonical_arguments_digest(kind, &canonical_args);
-        let (goal_digest, goal_version) = {
-            let g = self.goal_context.lock().unwrap();
-            let Some(digest) = g.digest.clone() else {
-                return Ok(());
-            };
-            (digest, g.version)
+        let Some((goal_digest, goal_version)) = self.goal_binding_snapshot() else {
+            // D-15 (2026-08-13): no goal context → fail-closed refuses
+            // (`missing_goal_context`); shadow keeps the silent skip.
+            if self.acaf_fail_closed {
+                let now = chrono::Utc::now();
+                return self
+                    .fail_closed_refusal(
+                        writer,
+                        kind,
+                        orz_assurance::acaf::RejectCode::MissingGoalContext,
+                        "goal digest not pinned".to_string(),
+                        &now,
+                    )
+                    .await;
+            }
+            return Ok(TicketGate::Proceed);
         };
         let session_id = self
             .session_id
@@ -2079,7 +2342,7 @@ impl AgentLoopController {
         // the signer RPCs, NOT the live re-derivation below).
         let signed = {
             let Some(acaf) = &self.acaf else {
-                return Ok(());
+                return Ok(TicketGate::Proceed);
             };
             let mut client = acaf.lock().await;
             match client
@@ -2093,7 +2356,12 @@ impl AgentLoopController {
                 .await
             {
                 Ok(()) => match client
-                    .sign_ticket(kind, None, &canonical_digest, Some(target_digest.clone()))
+                    .sign_ticket(
+                        kind,
+                        activation_id.clone(),
+                        &canonical_digest,
+                        Some(target_digest.clone()),
+                    )
                     .await
                 {
                     Ok(t) => Ok(t),
@@ -2111,9 +2379,17 @@ impl AgentLoopController {
         let ticket = match signed {
             Ok(t) => t,
             Err(outcome) => {
-                return self
+                self
                     .journal_ticket_outcome(writer, &outcome, &now)
-                    .await
+                    .await?;
+                return match crate::acaf::ticket_outcome_reject(&outcome) {
+                    None => Ok(TicketGate::Proceed),
+                    Some((code, detail)) => Ok(if self.acaf_fail_closed {
+                        TicketGate::Blocked { code, detail }
+                    } else {
+                        TicketGate::Proceed
+                    }),
+                };
             }
         };
         writer
@@ -2133,14 +2409,14 @@ impl AgentLoopController {
                 let live_canonical_digest =
                     crate::acaf::canonical_arguments_digest(kind, &live_args);
                 let Some(acaf) = &self.acaf else {
-                    return Ok(());
+                    return Ok(TicketGate::Proceed);
                 };
                 let mut client = acaf.lock().await;
                 client
                     .verify_and_consume(
                         &ticket,
                         &live_canonical_digest,
-                        None,
+                        activation_id.clone(),
                         Some(live_target_digest),
                     )
                     .await
@@ -2152,8 +2428,8 @@ impl AgentLoopController {
                 detail: format!("live target resolution failed: {e}"),
             }),
         };
-        match live_outcome {
-            Ok(outcome) => self.journal_ticket_outcome(writer, &outcome, &now).await,
+        let outcome = match live_outcome {
+            Ok(outcome) => outcome,
             Err(e) => {
                 self.journal_ticket_outcome(
                     writer,
@@ -2163,8 +2439,21 @@ impl AgentLoopController {
                     },
                     &now,
                 )
-                .await
+                .await?;
+                crate::acaf::TicketOutcome::SignerUnreachable {
+                    kind,
+                    detail: e.to_string(),
+                }
             }
+        };
+        self.journal_ticket_outcome(writer, &outcome, &now).await?;
+        match crate::acaf::ticket_outcome_reject(&outcome) {
+            None => Ok(TicketGate::Proceed),
+            Some((code, detail)) => Ok(if self.acaf_fail_closed {
+                TicketGate::Blocked { code, detail }
+            } else {
+                TicketGate::Proceed
+            }),
         }
     }
 
@@ -2500,6 +2789,7 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
+            acaf_fail_closed: false,
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
         }
@@ -2714,6 +3004,19 @@ impl AgentLoopController {
         orientation: Option<&mut OrientationSessionState>,
         conversation: Option<&mut Vec<Message>>,
     ) -> Result<(String, u64, Option<String>), AgentLoopError> {
+        // ACAF Slice 2 fail-closed D-15 (2026-08-13): fail-closed with an
+        // unconfigured fabric is a STARTUP error — there is no unticketed
+        // channel and no silent downgrade (ADR-0011 §2 fail-closed
+        // principle; the explicit-downgrade alternative is a future
+        // explicit switch).
+        if self.acaf_fail_closed && self.acaf.is_none() {
+            return Err(AgentLoopError::Assurance(
+                "ACAF fail-closed is enabled but no signer client is \
+                 configured (ORZ_ACAF_MANIFEST + ORZ_ACAF_KEYSTORE); \
+                 refusing to start the run"
+                    .to_string(),
+            ));
+        }
         let journal = host.journal();
         let mut writer = EventWriter::new(
             Some(journal),
@@ -3404,14 +3707,20 @@ impl AgentLoopController {
         };
         // ACAF Slice 1 (ADR-0011 §4.2/§4.6): an orientation fire is a control
         // event — ticket it first (shadow mode: rejected tickets journal
-        // `control_ticket_rejected` but the orientation still fires).
-        self.acaf_control_event(
+        // `control_ticket_rejected` but the orientation still fires;
+        // fail-closed 2026-08-13: a Blocked gate skips the fire — no
+        // injection, no checkpoint record, no commit).
+        let gate = self
+            .acaf_control_event(
             writer,
             TicketKind::OrientationV1,
             None,
             &serde_json::json!({ "agent_role": role.as_str() }),
-        )
-        .await?;
+            )
+            .await?;
+        if let TicketGate::Blocked { .. } = &gate {
+            return Ok(());
+        }
         writer
             .record(
                 EventType::OrientationCheckpoint,
@@ -3727,6 +4036,7 @@ impl AgentLoopController {
             &goal,
             self.max_tool_rounds,
             act.tool_rounds_used,
+            &act.activation_id,
         );
         // Box::pin: the subagent loop is a recursive call through the
         // dispatch edge (main loop → subagent loop; depth is capped at one
@@ -4354,12 +4664,15 @@ impl AgentLoopController {
         // event — ticket it before the commit (shadow mode). Rejected
         // verdicts and replay idempotency are mechanical records, not
         // state-moving control events — they stay unticketed (registered
-        // boundary).
-        if matches!(
+        // boundary). Slice 2 fail-closed (2026-08-13): a Blocked gate
+        // refuses the disposition — no commit, no state movement; the
+        // parent sees an unauthorized tool result.
+        let disposition_gate = if matches!(
             verdict,
             DispositionVerdict::AcceptedClose | DispositionVerdict::AcceptedContinue
         ) {
-            self.acaf_control_event(
+            Some(
+                self.acaf_control_event(
                 writer,
                 TicketKind::DispositionV1,
                 Some(act.activation_id.clone()),
@@ -4368,9 +4681,48 @@ impl AgentLoopController {
                     "decision": decision,
                     "requirement_delta": requirement_delta,
                 }),
+                )
+                .await?,
             )
-            .await?;
+        } else {
+            None
+        };
+        if let Some(TicketGate::Blocked { code, detail }) = &disposition_gate {
+            let msg = format!(
+                "[{disposition_id}] disposition unauthorized — DispositionV1 \
+                 ticket rejected ({}: {}); activation {} unchanged",
+                code.as_str(),
+                detail,
+                act.activation_id,
+            );
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "status": "error",
+                        "error": format!("control_ticket_rejected:{}", code.as_str()),
+                    }),
+                )
+                .await?;
+            self.activations.lock().unwrap().states.insert(role, act);
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok(ToolResult {
+                output: msg,
+                exit_code: Some(1),
+            });
         }
+        // D-16 (2026-08-13): a rejected GoalRevisionV1 under fail-closed
+        // blocks the continue's state migration — captured for the message.
+        let mut continue_unauthorized: Option<(String, String)> = None;
+        let mut close_unauthorized: Option<(String, String)> = None;
         let commit: Result<(), AgentLoopError> = async {
             // Journal the disposition event — every verdict is journaled
             // (the refusal records document the rejection, §4.4).
@@ -4390,35 +4742,34 @@ impl AgentLoopController {
                     // validated disposition (normal_close) and the state
                     // switch follows in the same handler — no window for a
                     // late disposition.
-                    self.write_close_record(
-                        writer,
-                        &act.activation_id,
-                        &act.parent_session_id,
-                        &act.subagent_session_id,
-                        &act.contract_id,
-                        act.contract_revision,
-                        "normal_close",
-                        Some(&disposition_id),
-                        Some(&assessment_id),
-                        result_digest.as_deref(),
-                    )
-                    .await?;
-                    act.status = ActivationStatus::Closed;
-                    act.pending = None;
-                    act.next_goal = None;
+                    let close_gate = self
+                        .write_close_record(
+                            writer,
+                            &act.activation_id,
+                            &act.parent_session_id,
+                            &act.subagent_session_id,
+                            &act.contract_id,
+                            act.contract_revision,
+                            "normal_close",
+                            Some(&disposition_id),
+                            Some(&assessment_id),
+                            result_digest.as_deref(),
+                        )
+                        .await?;
+                    if let TicketGate::Blocked { code, detail } = close_gate {
+                        close_unauthorized =
+                            Some((code.as_str().to_string(), detail.clone()));
+                    } else {
+                        act.status = ActivationStatus::Closed;
+                        act.pending = None;
+                        act.next_goal = None;
+                    }
                 }
                 DispositionVerdict::AcceptedContinue => {
                     let p = act.pending.as_mut().unwrap();
                     p.decided = Some(decision.clone());
                     act.submitted
                         .push((disposition_id.clone(), payload_canonical));
-                    // §4.4: revision + 1, activation stays ACTIVE, the
-                    // current assessment is marked consumed/superseded (the
-                    // pending is KEPT as the consumed record — a late
-                    // disposition on it is rejected stale/conflicting and
-                    // the rejection is recorded; the next assessment
-                    // replaces the pending).
-                    act.contract_revision += 1;
                     // ACAF (Slice 1 + goal wiring 2026-08-12): a continue's
                     // requirement delta REVISES the activation's task goal —
                     // a goal-revision control event, ticketed. The
@@ -4430,19 +4781,31 @@ impl AgentLoopController {
                     // next ticket call re-derives K_session and old
                     // unconsumed tickets die (ADR-0011 决策 5 — goal change
                     // → new key; Slice 1 audit D5 closed).
-                    self.acaf_control_event(
+                    let goal_gate = self
+                        .acaf_control_event(
                         writer,
                         TicketKind::GoalRevisionV1,
                         Some(act.activation_id.clone()),
                         &serde_json::json!({
                             "new_goal": requirement_delta.clone().unwrap_or_default(),
                         }),
-                    )
-                    .await?;
-                    let new_goal = requirement_delta.clone().unwrap_or_default();
-                    self.update_goal(&new_goal);
-                    act.next_goal = Some(new_goal);
-                    act.status = ActivationStatus::Active;
+                        )
+                        .await?;
+                    if let TicketGate::Blocked { code, detail } = &goal_gate {
+                        // D-16: consumed-only — the state migration does NOT
+                        // run; the rejection was already journaled.
+                        continue_unauthorized =
+                            Some((code.as_str().to_string(), detail.clone()));
+                    } else {
+                        // §4.4: revision + 1, activation stays ACTIVE, the
+                        // current assessment is marked consumed/superseded
+                        // (the pending is KEPT as the consumed record).
+                        act.contract_revision += 1;
+                        let new_goal = requirement_delta.clone().unwrap_or_default();
+                        self.update_goal(&new_goal);
+                        act.next_goal = Some(new_goal);
+                        act.status = ActivationStatus::Active;
+                    }
                 }
                 DispositionVerdict::RejectedStale | DispositionVerdict::RejectedConflicting => {
                     // Pure record — no state movement (§4.4: refusal
@@ -4460,23 +4823,42 @@ impl AgentLoopController {
         // before the commit; the rejection messages read its fields).
         let (output, exit_code) = match verdict {
             DispositionVerdict::AcceptedClose => (
-                format!(
-                    "[{disposition_id}] close accepted — activation {} closed \
-                     (normal_close)",
-                    act.activation_id,
-                ),
-                0,
+                match &close_unauthorized {
+                    Some((code, detail)) => format!(
+                        "[{disposition_id}] close unauthorized — CloseV1 \
+                         ticket rejected ({code}: {detail}); activation {} \
+                         unchanged",
+                        act.activation_id,
+                    ),
+                    None => format!(
+                        "[{disposition_id}] close accepted — activation {} \
+                         closed (normal_close)",
+                        act.activation_id,
+                    ),
+                },
+                if close_unauthorized.is_some() { 1 } else { 0 },
             ),
-            DispositionVerdict::AcceptedContinue => (
-                format!(
-                    "[{disposition_id}] continue accepted — contract revision \
-                     {} -> {}; activation {} stays active",
-                    act.contract_revision - 1,
-                    act.contract_revision,
-                    act.activation_id,
+            DispositionVerdict::AcceptedContinue => match &continue_unauthorized {
+                Some((code, detail)) => (
+                    format!(
+                        "[{disposition_id}] continue unauthorized — \
+                         GoalRevisionV1 ticket rejected ({code}: {detail}); \
+                         activation {} unchanged",
+                        act.activation_id,
+                    ),
+                    1,
                 ),
-                0,
-            ),
+                None => (
+                    format!(
+                        "[{disposition_id}] continue accepted — contract \
+                         revision {} -> {}; activation {} stays active",
+                        act.contract_revision - 1,
+                        act.contract_revision,
+                        act.activation_id,
+                    ),
+                    0,
+                ),
+            },
             DispositionVerdict::RejectedStale => (
                 format!(
                     "[{disposition_id}] rejected_stale — expected contract \
@@ -4553,11 +4935,15 @@ impl AgentLoopController {
         validated_disposition_id: Option<&str>,
         assessment_id: Option<&str>,
         result_digest: Option<&str>,
-    ) -> Result<(), AgentLoopError> {
+    ) -> Result<TicketGate, AgentLoopError> {
         // ACAF Slice 1 (ADR-0011 §4.2): a close record is a control event —
         // ticket it before the record (shadow mode). Covers every terminal
         // reason (normal_close / subagent_failed / budget_exhausted / …).
-        self.acaf_control_event(
+        // Slice 2 fail-closed (2026-08-13): a Blocked gate refuses the
+        // close record — no `retrieval_close_record` event, no state
+        // switch; the rejection is already journaled.
+        let gate = self
+            .acaf_control_event(
             writer,
             TicketKind::CloseV1,
             Some(activation_id.to_string()),
@@ -4566,8 +4952,11 @@ impl AgentLoopController {
                 "terminal_reason": terminal_reason,
                 "validated_disposition_id": validated_disposition_id,
             }),
-        )
-        .await?;
+            )
+            .await?;
+        if let TicketGate::Blocked { .. } = &gate {
+            return Ok(gate);
+        }
         let close_record_id = format!(
             "CLOSE-{}-{:04}",
             &sha256_hex(
@@ -4609,7 +4998,7 @@ impl AgentLoopController {
                 }),
             )
             .await?;
-        Ok(())
+        Ok(gate)
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): the activation's committed-result
@@ -4662,19 +5051,28 @@ impl AgentLoopController {
         else {
             return Ok(());
         };
-        self.write_close_record(
-            writer,
-            &activation_id,
-            &parent_session_id,
-            &subagent_session_id,
-            &contract_id,
-            contract_revision,
-            terminal_reason,
-            None,
-            assessment_id,
-            result_digest,
-        )
-        .await?;
+        let gate = self
+            .write_close_record(
+                writer,
+                &activation_id,
+                &parent_session_id,
+                &subagent_session_id,
+                &contract_id,
+                contract_revision,
+                terminal_reason,
+                None,
+                assessment_id,
+                result_digest,
+            )
+            .await?;
+        if let TicketGate::Blocked { .. } = &gate {
+            // Slice 2 fail-closed (2026-08-13): the close record ticket was
+            // rejected — the close control event is REFUSED, so the
+            // activation stays open (no unticketed state switch). The
+            // rejection is in the journal; terminal paths treat this as
+            // best-effort (the run itself is already ending).
+            return Ok(());
+        }
         let mut reg = self.activations.lock().unwrap();
         if let Some(act) = reg.states.get_mut(&role) {
             act.status = ActivationStatus::Closed;
@@ -4701,6 +5099,52 @@ impl AgentLoopController {
         }
     }
 
+    /// ACAF Slice 2 fail-closed (2026-08-13): surface a ticket refusal as a
+    /// no-ToolStarted tool error (the same shape as the retrieval-mode
+    /// refusals) — the `control_ticket_rejected` security event is already
+    /// in the journal; the tool itself never starts.
+    async fn refuse_ticketed_tool(
+        writer: &mut EventWriter<'_>,
+        messages: &mut Vec<Message>,
+        tc: &ToolCall,
+        gate: &TicketGate,
+    ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+        let TicketGate::Blocked { code, detail } = gate else {
+            unreachable!("refuse_ticketed_tool called with Proceed");
+        };
+        let msg = format!(
+            "ACAF ticket refused for '{}' — {} ({}); the action was not executed.",
+            tc.name,
+            detail,
+            code.as_str(),
+        );
+        writer
+            .record(
+                EventType::ToolCompleted,
+                serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "status": "error",
+                    "error": format!("control_ticket_rejected:{}", code.as_str()),
+                }),
+            )
+            .await?;
+        messages.push(Message {
+            role: Role::Tool,
+            content: msg.clone(),
+            tool_call_id: Some(tc.call_id.clone()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        Ok((
+            ToolResult {
+                output: msg,
+                exit_code: Some(1),
+            },
+            None,
+        ))
+    }
+
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
@@ -4715,6 +5159,10 @@ impl AgentLoopController {
         messages: &mut Vec<Message>,
         tool_rounds: u32,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        // ACAF Slice 2 fail-closed D-13 (2026-08-13): the current lane's
+        // activation (retrieval lanes bind web_fetch etc.; the main lane is
+        // None). Threaded from the loop profile.
+        activation_id: Option<&str>,
         // C2-1 (2026-08-11): whether the per-call permission bridge is
         // consulted. The main lane passes `true`; retrieval-lane
         // self-execution (web tools inside a retrieval lane) passes
@@ -4986,9 +5434,21 @@ impl AgentLoopController {
             // ACAF Slice 2 (2026-08-12): command_exec_v1 for the host-owned
             // fixed command — issued/verified BEFORE ToolStarted (same
             // ordering discipline as every other action ticket). Shadow
-            // mode: rejections are journaled and the run proceeds.
+            // mode: rejections are journaled and the run proceeds;
+            // fail-closed (2026-08-13): a Blocked gate refuses the run
+            // (no ToolStarted).
             if let Some(runner) = &runner {
-                self.acaf_command_exec_event(writer, &tc.name, runner).await?;
+                let gate = self
+                    .acaf_command_exec_event(
+                        writer,
+                        &tc.name,
+                        runner,
+                        activation_id.map(str::to_string),
+                    )
+                    .await?;
+                if let TicketGate::Blocked { .. } = &gate {
+                    return Self::refuse_ticketed_tool(writer, messages, tc, &gate).await;
+                }
             }
             let fixed_command: Option<String> = runner.map(|r| r.command.join(" "));
             writer
@@ -5122,7 +5582,17 @@ impl AgentLoopController {
         // evidence. Shadow mode: failures journal `control_ticket_rejected`
         // and the tool proceeds.
         if crate::acaf::action_kind_for_tool(&tc.name).is_some() {
-            self.acaf_action_event(writer, &tc.name, &tc.arguments).await?;
+            let gate = self
+                .acaf_action_event(
+                    writer,
+                    &tc.name,
+                    &tc.arguments,
+                    activation_id.map(str::to_string),
+                )
+                .await?;
+            if let TicketGate::Blocked { .. } = &gate {
+                return Self::refuse_ticketed_tool(writer, messages, tc, &gate).await;
+            }
         }
 
         // IP5: pre-mutation snapshot — record the pre-tool worktree state of
@@ -9387,6 +9857,7 @@ mod tests {
                 orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
                 &mut messages,
                 0,
+                None,
                 None,
                 true,
             )

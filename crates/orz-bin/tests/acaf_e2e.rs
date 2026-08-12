@@ -1318,3 +1318,464 @@ async fn missing_network_arg_silently_skips_with_configured_acaf() {
         "tool path unchanged: {types:?}"
     );
 }
+
+// ── Slice 2 fail-closed (2026-08-13): D-14/D-15/D-16 ──────────────────────
+
+/// D-15: fail-closed with an unconfigured fabric is a STARTUP error — no
+/// unticketed channel exists (ADR-0011 §2 fail-closed; the explicit
+/// downgrade switch is a future option).
+#[tokio::test]
+async fn fail_closed_startup_refuses_unconfigured_fabric() {
+    let dir = test_dir();
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: None,
+        test_runner: None,
+    };
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway).with_acaf_fail_closed(true);
+    let err = controller
+        .run_turn(&host, "任何任务", "RUN-FC-NOACAF", MANIFEST, 0, None, None, None)
+        .await
+        .expect_err("fail-closed + no signer must refuse startup");
+    assert!(
+        err.to_string().contains("fail-closed"),
+        "startup error must name fail-closed: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// D-14: a missing `url` under fail-closed is a HARD refusal — the
+/// `control_ticket_rejected(missing_target_argument, null ticket_id)` is
+/// journaled, ToolStarted never fires, and the tool does not execute.
+#[tokio::test]
+async fn fail_closed_missing_url_blocks_network_tool() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "page text".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "foo": "bar" }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(&host, "抓取网页", "RUN-FC-NOURL", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert_eq!(rejected.len(), 1, "one hard refusal: {types:?}");
+    let rejection = &rejected[0].payload;
+    assert_eq!(rejection["ticket_kind"], "network_v1");
+    assert_eq!(rejection["reject_code"], "missing_target_argument");
+    assert!(rejection["ticket_id"].is_null(), "pre-signing refusal: {rejection:?}");
+    // No ToolStarted → the tool never executed.
+    assert!(
+        !types.iter().any(|t| t == "tool_started"),
+        "fail-closed must not start the tool: {types:?}"
+    );
+    // The ToolCompleted error surfaces the refusal to the model.
+    let completed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "tool_completed")
+        .collect();
+    assert_eq!(
+        completed[0].payload["error"],
+        "control_ticket_rejected:missing_target_argument"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// D-14: a missing `command` under fail-closed hard-refuses
+/// `run_terminal_cmd` the same way (no ToolStarted, no execution).
+#[tokio::test]
+async fn fail_closed_missing_command_blocks_run_terminal_cmd() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "done".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "run_terminal_cmd".to_string(),
+            arguments: serde_json::json!({ "description": "noop" }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(&host, "运行命令", "RUN-FC-NOCMD", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert_eq!(rejected.len(), 1, "one hard refusal: {types:?}");
+    let rejection = &rejected[0].payload;
+    assert_eq!(rejection["ticket_kind"], "command_exec_v1");
+    assert_eq!(rejection["reject_code"], "missing_target_argument");
+    assert!(rejection["ticket_id"].is_null());
+    assert!(
+        !types.iter().any(|t| t == "tool_started"),
+        "fail-closed must not start the tool: {types:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Fail-closed + signer unreachable: the ticket lifecycle failure becomes a
+/// HARD refusal (the shadow counterpart of the registered
+/// `file_write_shadow_on_signer_unreachable` test) — `signer_unreachable`
+/// is journaled and the tool never starts.
+#[tokio::test]
+async fn fail_closed_signer_unreachable_blocks_file_write() {
+    let fixture = SignerFixture::new();
+    let mut client = spawn_client(&fixture).await;
+    client.shutdown().await;
+    std::fs::remove_file(&fixture.manifest).expect("remove manifest");
+    let client = Arc::new(tokio::sync::Mutex::new(client));
+
+    let dir = test_dir();
+    let target = dir.join("src").join("main.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "original").unwrap();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "patched".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "search_replace".to_string(),
+            arguments: serde_json::json!({
+                "file_path": "src/main.rs",
+                "old_string": "original",
+                "new_string": "patched",
+            }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(&host, "改文件", "RUN-FC-DEAD", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert!(!rejected.is_empty(), "dead signer must journal rejections: {types:?}");
+    assert!(
+        rejected.iter().any(|e| e.payload["reject_code"] == "signer_unreachable"),
+        "expected signer_unreachable: {:?}",
+        rejected.iter().map(|e| &e.payload).collect::<Vec<_>>()
+    );
+    assert!(
+        !types.iter().any(|t| t == "tool_started"),
+        "fail-closed must not start the tool: {types:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// D-13 (2026-08-13): a retrieval-lane web_fetch binds its REAL activation
+/// on the network_v1 ticket (previously null). The subagent's lane
+/// self-execution path carries `activation_id` from the loop profile.
+#[tokio::test]
+async fn fail_closed_retrieval_lane_web_fetch_binds_activation_d13() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "page text".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        // Main: delegate to the external retrieval lane.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com/doc" }),
+            call_id: "call-1".to_string(),
+        }]),
+        // Subagent: lane self-execution — the REAL web_fetch host call.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com/doc" }),
+            call_id: "call-s1".to_string(),
+        }]),
+        ScriptedResponse::text("[SOURCE] https://example.com/doc\n内容"),
+        // Main: close the external activation.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "external_retrieval",
+                "decision": "close",
+            }),
+            call_id: "call-d1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::FrameworkFallback,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(&host, "抓取文档", "RUN-ACAF-D13", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let issued: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let network_issues: Vec<_> = issued
+        .iter()
+        .filter(|e| e.payload["ticket_kind"] == "network_v1")
+        .collect();
+    assert_eq!(
+        network_issues.len(),
+        1,
+        "exactly one lane network ticket: {types:?}"
+    );
+    let activation = network_issues[0].payload["activation_id"]
+        .as_str()
+        .expect("D-13: network ticket must bind the lane activation");
+    assert!(
+        activation.starts_with("retrieval-external_retrieval-")
+            && activation.ends_with("-00"),
+        "unexpected activation binding: {activation}"
+    );
+    // The ticket still pairs to a consumed terminal.
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    assert!(
+        consumed.iter().any(|e| {
+            e.payload["ticket_id"] == network_issues[0].payload["ticket_id"]
+                && e.payload["ticket_kind"] == "network_v1"
+        }),
+        "network ticket must be consumed: {:?}",
+        consumed.iter().map(|e| &e.payload).collect::<Vec<_>>()
+    );
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert!(rejected.is_empty(), "happy path — no rejections: {types:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// D-16 happy path under fail-closed: an ACCEPTED continue consumes BOTH
+/// the DispositionV1 and the GoalRevisionV1 tickets and only THEN migrates
+/// the goal binding / contract revision (the fail-closed gate is
+/// transparent when every ticket verifies).
+#[tokio::test]
+async fn fail_closed_continue_consumes_goal_revision_ticket() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "ok".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+        ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
+        ScriptedResponse::text("[DOC] a.md\n第一批"),
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "internal_retrieval",
+                "decision": "continue",
+                "requirement_delta": "补充检索第二批",
+            }),
+            call_id: "call-d1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::FrameworkFallback,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(&host, "检索项目", "RUN-FC-CONT", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let issued: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    let goal_issues: Vec<_> = issued
+        .iter()
+        .filter(|e| e.payload["ticket_kind"] == "goal_revision_v1")
+        .collect();
+    assert_eq!(
+        goal_issues.len(),
+        1,
+        "continue must carry a GoalRevisionV1 ticket: {types:?}"
+    );
+    assert!(
+        consumed
+            .iter()
+            .any(|e| e.payload["ticket_id"] == goal_issues[0].payload["ticket_id"]),
+        "GoalRevisionV1 must be consumed: {:?}",
+        consumed.iter().map(|e| &e.payload).collect::<Vec<_>>()
+    );
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert!(rejected.is_empty(), "happy path — no rejections: {types:?}");
+    // The disposition tool reports the accepted continue (exit 0).
+    let completed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "tool_completed")
+        .collect();
+    assert!(
+        completed.iter().any(|e| {
+            e.payload["tool"] == "retrieval_disposition"
+                && e.payload["exit_code"] == 0
+        }),
+        "continue accepted under fail-closed: {:?}",
+        completed.iter().map(|e| &e.payload).collect::<Vec<_>>()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

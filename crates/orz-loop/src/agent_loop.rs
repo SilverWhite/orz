@@ -151,6 +151,11 @@ pub(crate) struct LoopProfile {
     /// creation starts at 0). The main agent keeps the inherited per-run
     /// semantic (`main`/`grill` = 0).
     pub initial_tool_rounds: u32,
+    /// ACAF Slice 2 fail-closed D-13 (2026-08-13): the retrieval lane's
+    /// real activation_id — bound on the lane's action tickets (web_fetch /
+    /// browser_read). The main lane is `None` (main-lane actions stay
+    /// activation-less).
+    pub activation_id: Option<String>,
 }
 
 impl LoopProfile {
@@ -164,6 +169,7 @@ impl LoopProfile {
             dc_enabled: true,
             max_tool_rounds,
             initial_tool_rounds: 0,
+            activation_id: None,
         }
     }
 
@@ -180,6 +186,7 @@ impl LoopProfile {
             dc_enabled: false,
             max_tool_rounds,
             initial_tool_rounds: 0,
+            activation_id: None,
         }
     }
 
@@ -195,6 +202,7 @@ impl LoopProfile {
         goal: &str,
         max_tool_rounds: u32,
         initial_tool_rounds: u32,
+        activation_id: &str,
     ) -> Self {
         let agent_role = match role {
             SubagentRole::InternalRetrieval => AgentRole::InternalRetrieval,
@@ -212,6 +220,7 @@ impl LoopProfile {
             dc_enabled: false,
             max_tool_rounds,
             initial_tool_rounds,
+            activation_id: Some(activation_id.to_string()),
         }
     }
 }
@@ -876,6 +885,9 @@ pub(crate) async fn run_agent_loop(
                                 messages,
                                 tool_rounds,
                                 heartbeat,
+                                // ACAF Slice 2 D-13 (2026-08-13): the lane's
+                                // real activation — bound on web_fetch etc.
+                                profile.activation_id.as_deref(),
                                 // C2-1 (2026-08-11): lane self-execution skips
                                 // the per-call permission bridge — the mode
                                 // gate is the authorization chain (see the

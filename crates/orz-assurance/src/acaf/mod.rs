@@ -105,13 +105,22 @@ impl TicketKind {
         matches!(self, TicketKind::OrientationV1)
     }
 
-    /// Whether this kind is bound to a subagent activation (activation_id
-    /// must be Some). Orientation is session-level and must be None.
+    /// Whether this kind is REQUIRED to bind a subagent activation
+    /// (activation_id must be Some). Orientation is session-level and must
+    /// be None; action kinds (Slice 2) MAY carry an activation — a
+    /// retrieval-lane web_fetch binds the lane's activation (D-13,
+    /// 2026-08-13) while the main lane leaves it None.
     pub fn requires_activation(&self) -> bool {
         matches!(
             self,
             TicketKind::DispositionV1 | TicketKind::CloseV1 | TicketKind::GoalRevisionV1
         )
+    }
+
+    /// Whether this kind FORBIDS an activation binding (session-level
+    /// events). Action kinds are the middle ground: activation optional.
+    pub fn forbids_activation(&self) -> bool {
+        matches!(self, TicketKind::OrientationV1)
     }
 
     /// Whether this kind binds a parsed real target (action class): the
@@ -142,6 +151,16 @@ pub enum RejectCode {
     Expired,
     ChainMismatch,
     SignerUnreachable,
+    /// Fail-closed D-14 (2026-08-13): a required target argument
+    /// (`file_path` / `url` / `command`) is missing or empty — the refusal
+    /// happens BEFORE signing, so `ticket_id` is null.
+    MissingTargetArgument,
+    /// Fail-closed D-15 (2026-08-13): the file_write path cannot resolve a
+    /// worktree target because no snapshot store is configured.
+    MissingSnapshotStore,
+    /// Fail-closed D-15 (2026-08-13): no goal digest is pinned yet — action
+    /// and control tickets cannot bind check 4 without it.
+    MissingGoalContext,
 }
 
 impl RejectCode {
@@ -155,6 +174,9 @@ impl RejectCode {
             RejectCode::Expired => "expired",
             RejectCode::ChainMismatch => "chain_mismatch",
             RejectCode::SignerUnreachable => "signer_unreachable",
+            RejectCode::MissingTargetArgument => "missing_target_argument",
+            RejectCode::MissingSnapshotStore => "missing_snapshot_store",
+            RejectCode::MissingGoalContext => "missing_goal_context",
         }
     }
 }
@@ -296,7 +318,12 @@ pub fn issue_ticket(
     if kind.requires_activation() && ctx.activation_id.is_none() {
         return Err(AcafError::MissingActivation);
     }
-    if !kind.requires_activation() && ctx.activation_id.is_some() {
+    // Slice 2 fail-closed (D-13, 2026-08-13): action kinds MAY bind a
+    // subagent activation (retrieval-lane web_fetch); only session-level
+    // kinds forbid it. `UnexpectedActivation` is now reserved for
+    // Orientation (the signer-side protocol still decides which methods
+    // accept the parameter).
+    if kind.forbids_activation() && ctx.activation_id.is_some() {
         return Err(AcafError::UnexpectedActivation);
     }
     // Slice 2 first phase: action kinds must bind a resolved target; control
@@ -1171,5 +1198,36 @@ mod tests {
         ctx.goal_digest = "not-a-digest".to_string();
         let err = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
         assert!(matches!(err, AcafError::InvalidSha256 { .. }));
+    }
+
+    #[test]
+    fn action_kind_may_carry_activation_slice2_d13() {
+        let signer = session_signer();
+        // D-13 (2026-08-13): a retrieval-lane network ticket binds the
+        // lane's activation — action kinds are activation-OPTIONAL (the
+        // main lane stays null; the lane binds the real activation_id).
+        let mut ctx = issue_ctx("SESS-0001", TicketKind::NetworkV1);
+        ctx.activation_id =
+            Some("retrieval-external_retrieval-sess-abc-00".to_string());
+        let ticket =
+            issue_ticket(&signer, &ctx, TicketKind::NetworkV1, 1, "n1", 300, 1_700_000_000)
+                .expect("network ticket with activation must issue");
+        assert_eq!(
+            ticket.activation_id.as_deref(),
+            Some("retrieval-external_retrieval-sess-abc-00")
+        );
+        // The main-lane form (no activation) still issues.
+        let ctx = issue_ctx("SESS-0001", TicketKind::NetworkV1);
+        let ticket =
+            issue_ticket(&signer, &ctx, TicketKind::NetworkV1, 2, "n2", 300, 1_700_000_000)
+                .expect("network ticket without activation must issue");
+        assert_eq!(ticket.activation_id, None);
+        // Orientation remains the only kind that FORBIDS an activation.
+        let mut ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
+        ctx.activation_id = Some("ACT-0001".to_string());
+        let err =
+            issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 3, "n3", 300, 1_700_000_000)
+                .unwrap_err();
+        assert!(matches!(err, AcafError::UnexpectedActivation));
     }
 }

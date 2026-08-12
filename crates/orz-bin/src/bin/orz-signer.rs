@@ -39,7 +39,11 @@
 //!   sign_command_exec_v1    { session_id, canonical_arguments_sha256,
 //!                            resolved_target_sha256 }       // Slice 2 (2026-08-12)
 //!   sign_network_v1         { session_id, canonical_arguments_sha256,
-//!                            resolved_target_sha256 }       // Slice 2 (2026-08-12)
+//!                            resolved_target_sha256, activation_id? }
+//!                            // Slice 2 (2026-08-12); activation_id
+//!                            // OPTIONAL since D-13 (2026-08-13) —
+//!                            // retrieval-lane web_fetch binds the lane's
+//!                            // activation; the main lane omits it
 //!   close_session          { session_id }
 //!
 //! A goal revision re-derives the session key when the host re-initialises
@@ -319,11 +323,13 @@ fn handle_request(signer: &mut Signer, line: &str) -> Value {
             None,
             Some("resolved_target_sha256"),
         ),
-        "sign_network_v1" => handle_sign(
+        // Slice 2 fail-closed D-13 (2026-08-13): retrieval-lane web_fetch /
+        // browser_read tickets bind the lane's real activation_id. The
+        // parameter is OPTIONAL — the main lane's network calls omit it.
+        "sign_network_v1" => handle_sign_optional_activation(
             signer,
             &params,
             TicketKind::NetworkV1,
-            None,
             Some("resolved_target_sha256"),
         ),
         "close_session" => match param_str(&params, "session_id") {
@@ -374,6 +380,38 @@ fn handle_sign(
     let activation_id = match activation_param {
         Some(p) => Some(param_str(params, p)?),
         None => None,
+    };
+    let canonical_arguments_sha256 = param_str(params, "canonical_arguments_sha256")?;
+    let resolved_target_sha256 = match target_param {
+        Some(p) => Some(param_str(params, p)?),
+        None => None,
+    };
+    let now = chrono::Utc::now().timestamp();
+    let ticket = signer.sign_ticket(
+        &session_id,
+        kind,
+        activation_id,
+        canonical_arguments_sha256,
+        resolved_target_sha256,
+        now,
+    )?;
+    Ok(ticket)
+}
+
+/// Slice 2 fail-closed D-13 (2026-08-13): like [`handle_sign`], but the
+/// `activation_id` parameter is OPTIONAL — absent or null → `None`. Only
+/// `sign_network_v1` uses this: a retrieval-lane web_fetch binds the lane's
+/// real activation; the main lane's network calls omit it.
+fn handle_sign_optional_activation(
+    signer: &mut Signer,
+    params: &Value,
+    kind: TicketKind,
+    target_param: Option<&str>,
+) -> Result<Value, SignerError> {
+    let session_id = param_str(params, "session_id")?;
+    let activation_id = match params.get("activation_id") {
+        Some(v) if !v.is_null() => Some(param_str(params, "activation_id")?),
+        _ => None,
     };
     let canonical_arguments_sha256 = param_str(params, "canonical_arguments_sha256")?;
     let resolved_target_sha256 = match target_param {
@@ -766,6 +804,51 @@ mod tests {
         assert_eq!(ticket["capability_scope"], "network");
         assert_eq!(ticket["activation_id"], Value::Null);
         assert_eq!(ticket["resolved_target_sha256"], "f".repeat(64));
+    }
+
+    #[test]
+    fn sign_network_v1_with_activation_slice2_d13() {
+        let mut signer = test_signer();
+        let _ = handle_initialize(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1", "agent_id": "main", "goal_version": 0,
+                "goal_digest": "0".repeat(64), "policy_revision": 0,
+            }),
+        )
+        .unwrap();
+        // Retrieval-lane form (D-13): activation_id present → bound.
+        let ticket = handle_sign_optional_activation(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1",
+                "canonical_arguments_sha256": "e".repeat(64),
+                "resolved_target_sha256": "f".repeat(64),
+                "activation_id": "retrieval-external_retrieval-sess-abc-00",
+            }),
+            TicketKind::NetworkV1,
+            Some("resolved_target_sha256"),
+        )
+        .unwrap();
+        assert_eq!(ticket["ticket_kind"], "network_v1");
+        assert_eq!(
+            ticket["activation_id"],
+            "retrieval-external_retrieval-sess-abc-00"
+        );
+        assert_eq!(ticket["resolved_target_sha256"], "f".repeat(64));
+        // Main-lane form: omitted → null (the pre-D-13 shape still works).
+        let ticket = handle_sign_optional_activation(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1",
+                "canonical_arguments_sha256": "e".repeat(64),
+                "resolved_target_sha256": "f".repeat(64),
+            }),
+            TicketKind::NetworkV1,
+            Some("resolved_target_sha256"),
+        )
+        .unwrap();
+        assert_eq!(ticket["activation_id"], Value::Null);
     }
 
     #[test]

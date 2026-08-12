@@ -79,6 +79,25 @@ pub enum TicketOutcome {
     SignerUnreachable { kind: TicketKind, detail: String },
 }
 
+/// Slice 2 fail-closed (2026-08-13): extract the rejection (code + detail)
+/// from a terminal ticket outcome; `Consumed` → `None`. The controller uses
+/// this to decide `TicketGate::Blocked` — a rejected ticket refuses the
+/// ticketed event/action once fail-closed is on.
+pub fn ticket_outcome_reject(
+    outcome: &TicketOutcome,
+) -> Option<(orz_assurance::acaf::RejectCode, String)> {
+    match outcome {
+        TicketOutcome::Consumed { .. } => None,
+        TicketOutcome::Rejected {
+            code, detail, ..
+        } => Some((*code, detail.clone())),
+        TicketOutcome::SignerUnreachable { detail, .. } => Some((
+            orz_assurance::acaf::RejectCode::SignerUnreachable,
+            detail.clone(),
+        )),
+    }
+}
+
 #[derive(Debug)]
 struct ClientSession {
     session_id: String,

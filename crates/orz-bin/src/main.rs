@@ -974,8 +974,12 @@ async fn run(
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client
             // (env-gated; unconfigured → unticketed control events, zero
-            // behaviour change). Shadow mode.
-            .with_acaf(build_acaf_client().await?);
+            // behaviour change). Shadow mode by default; Slice 2
+            // fail-closed (2026-08-13): `ORZ_ACAF_FAIL_CLOSED` flips the
+            // switch (D-14/D-15/D-16 — an unconfigured fabric then refuses
+            // to start at all).
+            .with_acaf(build_acaf_client().await?)
+            .with_acaf_fail_closed(std::env::var("ORZ_ACAF_FAIL_CLOSED").is_ok());
         let (response, _, _) = controller
             .run_turn_with_guards(
                 &host,
