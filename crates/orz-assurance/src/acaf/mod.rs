@@ -1,5 +1,9 @@
-//! ACAF control tickets (ADR-0011 §4.2/§4.3) — one-time HMAC-SHA256 tickets
-//! for control events (orientation / disposition / close / goal revision).
+//! ACAF tickets (ADR-0011 §4.2/§4.3) — one-time HMAC-SHA256 tickets for
+//! control events (orientation / disposition / close / goal revision) and,
+//! from Slice 2 first phase (2026-08-12), action kinds
+//! (`file_write_v1` / `credential_read_v1`) carrying
+//! `resolved_target_sha256` — the digest of the parsed real target object
+//! (§4.2 check 5 TOCTOU; target resolution lives in [`target`]).
 //!
 //! This is the *mechanism* core, deliberately independent of the signer
 //! process and its IPC: signing goes through the same [`PermitSigner`] seam
@@ -30,8 +34,8 @@
 //!      by the run journal's `previous_event_sha256` hash chain plus the
 //!      Python verifier's issued→consumed|rejected pairing rule (a consumed
 //!      ticket must reference an earlier issued event, one terminal state
-//!      per ticket). Slice 2's action tickets add `resolved_target_sha256`;
-//!      a ticket-level receipt chain is the v2 upgrade path.
+//!      per ticket). Action tickets carry `resolved_target_sha256` (Slice 2
+//!      first phase); a ticket-level receipt chain is the v2 upgrade path.
 //! A failure is a rejection: the caller must write a
 //! `control_ticket_rejected` event and (outside shadow mode) refuse the
 //! control event.
@@ -44,11 +48,17 @@ use serde::{Deserialize, Serialize};
 use crate::journal::canonical_json;
 use crate::permit::PermitSigner;
 
+/// Action target resolution (Slice 2 first phase) — the parsed real target
+/// object whose digest binds into action tickets.
+pub mod target;
+
 /// Ticket envelope schema version (control-ticket payload v0.2 track).
 pub const TICKET_SCHEMA_VERSION: &str = "0.2.0-draft";
 
-/// Control ticket kinds — Slice 1 (ADR-0011 §7 Slice 1): the four control
-/// events wired in this slice.
+/// Ticket kinds — Slice 1 (ADR-0011 §7 Slice 1): the four control events;
+/// Slice 2 first phase (2026-08-12): `FileWriteV1` / `CredentialReadV1`
+/// action kinds (command_exec / network join when their target shapes are
+/// designed — each later phase extends this enum).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TicketKind {
@@ -56,6 +66,8 @@ pub enum TicketKind {
     DispositionV1,
     CloseV1,
     GoalRevisionV1,
+    FileWriteV1,
+    CredentialReadV1,
 }
 
 impl TicketKind {
@@ -65,6 +77,8 @@ impl TicketKind {
             TicketKind::DispositionV1 => "disposition_v1",
             TicketKind::CloseV1 => "close_v1",
             TicketKind::GoalRevisionV1 => "goal_revision_v1",
+            TicketKind::FileWriteV1 => "file_write_v1",
+            TicketKind::CredentialReadV1 => "credential_read_v1",
         }
     }
 
@@ -76,6 +90,8 @@ impl TicketKind {
             TicketKind::DispositionV1 => "disposition_submit",
             TicketKind::CloseV1 => "close_record",
             TicketKind::GoalRevisionV1 => "goal_revision",
+            TicketKind::FileWriteV1 => "file_write",
+            TicketKind::CredentialReadV1 => "credential_read",
         }
     }
 
@@ -91,6 +107,14 @@ impl TicketKind {
             self,
             TicketKind::DispositionV1 | TicketKind::CloseV1 | TicketKind::GoalRevisionV1
         )
+    }
+
+    /// Whether this kind binds a parsed real target (action class): the
+    /// ticket carries `resolved_target_sha256` and check 5 additionally
+    /// compares it against the re-derived live target digest (Slice 2 —
+    /// action tickets must bind the real target, Slice 1 audit D3).
+    pub fn requires_target(&self) -> bool {
+        matches!(self, TicketKind::FileWriteV1 | TicketKind::CredentialReadV1)
     }
 }
 
@@ -140,6 +164,10 @@ pub struct ControlTicket {
     pub capability_scope: String,
     pub template_sha256: Option<String>,
     pub canonical_arguments_sha256: String,
+    /// Digest of the parsed real target object — action kinds only (Slice 2
+    /// first phase; control kinds leave it None). Check 5 compares it against
+    /// the live re-derived digest at the consumption point (TOCTOU).
+    pub resolved_target_sha256: Option<String>,
     pub sequence: u64,
     pub nonce: String,
     pub issued_at: String,
@@ -171,6 +199,9 @@ pub struct IssueContext {
     /// disposition decision/delta, close disposition_id, goal old/new
     /// digests, orientation empty arguments).
     pub canonical_arguments_sha256: String,
+    /// Digest of the parsed real target — action kinds only (Slice 2 first
+    /// phase; control kinds None).
+    pub resolved_target_sha256: Option<String>,
 }
 
 /// Context a ticket is verified against — the *current* context at the
@@ -188,6 +219,10 @@ pub struct VerifyContext {
     pub template_sha256: Option<String>,
     /// Re-derived canonical arguments digest of the real object (check 5).
     pub canonical_arguments_sha256: String,
+    /// Live re-derived target digest — action kinds only (Slice 2 first
+    /// phase; control kinds None). Compare with the ticket's
+    /// `resolved_target_sha256` (check 5, TOCTOU).
+    pub resolved_target_sha256: Option<String>,
     /// Unix timestamp (seconds) of the verification moment.
     pub now_unix_secs: i64,
 }
@@ -253,6 +288,17 @@ pub fn issue_ticket(
     if !kind.requires_activation() && ctx.activation_id.is_some() {
         return Err(AcafError::UnexpectedActivation);
     }
+    // Slice 2 first phase: action kinds must bind a resolved target; control
+    // kinds must not carry one (mirror of the activation pair above).
+    if kind.requires_target() && ctx.resolved_target_sha256.is_none() {
+        return Err(AcafError::MissingTarget);
+    }
+    if !kind.requires_target() && ctx.resolved_target_sha256.is_some() {
+        return Err(AcafError::UnexpectedTarget);
+    }
+    if let Some(t) = &ctx.resolved_target_sha256 {
+        validate_sha256(t, "resolved_target_sha256")?;
+    }
     if ttl_secs == 0 {
         return Err(AcafError::InvalidTtl);
     }
@@ -277,6 +323,7 @@ pub fn issue_ticket(
         capability_scope: kind.capability_scope().to_string(),
         template_sha256: ctx.template_sha256.clone(),
         canonical_arguments_sha256: ctx.canonical_arguments_sha256.clone(),
+        resolved_target_sha256: ctx.resolved_target_sha256.clone(),
         sequence,
         nonce: nonce.to_string(),
         issued_at: format_utc(issued_at),
@@ -472,6 +519,47 @@ pub fn verify_ticket(
                 .to_string(),
         );
     }
+    // Check 5b (Slice 2 first phase) — the action kinds bind the parsed real
+    // target: an action ticket without a target, a control ticket carrying
+    // one, or a ticket whose target digest disagrees with the live
+    // re-derived digest are all rejected (TOCTOU — the consumption point
+    // re-parses the real object, never trusts the ticket's own values).
+    // `kind` is the parse_kind result from check 2 (unknown kinds already
+    // returned ContextMismatch there).
+    if kind.requires_target() {
+        match (&ticket.resolved_target_sha256, &vctx.resolved_target_sha256) {
+            (None, _) => fail(
+                &mut errors,
+                &mut reject_codes,
+                RejectCode::TargetMismatch,
+                "action ticket carries no resolved_target_sha256".to_string(),
+            ),
+            (Some(_), None) => fail(
+                &mut errors,
+                &mut reject_codes,
+                RejectCode::TargetMismatch,
+                "action ticket verified without a live resolved target digest".to_string(),
+            ),
+            (Some(t), Some(live)) if t != live => fail(
+                &mut errors,
+                &mut reject_codes,
+                RejectCode::TargetMismatch,
+                "ticket resolved_target_sha256 does not match the live re-derived target"
+                    .to_string(),
+            ),
+            _ => {}
+        }
+    } else if ticket.resolved_target_sha256.is_some() || vctx.resolved_target_sha256.is_some() {
+        // Review P2-2 (2026-08-12): symmetric — a control ticket verified
+        // against a live context that (incorrectly) carries a target digest
+        // is equally a protocol anomaly (a caller-side bug).
+        fail(
+            &mut errors,
+            &mut reject_codes,
+            RejectCode::TargetMismatch,
+            "control ticket carries a resolved_target_sha256".to_string(),
+        );
+    }
 
     // Check 6 — not expired.
     match parse_utc(&ticket.expires_at) {
@@ -601,6 +689,12 @@ pub enum AcafError {
     #[error("orientation ticket must not carry an activation binding")]
     UnexpectedActivation,
 
+    #[error("action ticket requires a resolved target digest (Slice 2)")]
+    MissingTarget,
+
+    #[error("control ticket must not carry a resolved target digest")]
+    UnexpectedTarget,
+
     #[error("ticket TTL must be positive")]
     InvalidTtl,
 
@@ -647,6 +741,8 @@ fn parse_kind(value: &str) -> Result<TicketKind, String> {
         "disposition_v1" => Ok(TicketKind::DispositionV1),
         "close_v1" => Ok(TicketKind::CloseV1),
         "goal_revision_v1" => Ok(TicketKind::GoalRevisionV1),
+        "file_write_v1" => Ok(TicketKind::FileWriteV1),
+        "credential_read_v1" => Ok(TicketKind::CredentialReadV1),
         other => Err(format!("unknown ticket_kind: {other}")),
     }
 }
@@ -661,6 +757,7 @@ fn verification_context_from(ctx: &IssueContext, now_unix_secs: i64) -> VerifyCo
         policy_revision: ctx.policy_revision,
         template_sha256: ctx.template_sha256.clone(),
         canonical_arguments_sha256: ctx.canonical_arguments_sha256.clone(),
+        resolved_target_sha256: ctx.resolved_target_sha256.clone(),
         now_unix_secs,
     }
 }
@@ -732,6 +829,7 @@ mod tests {
             signer_measurement: ZERO64.to_string(),
             template_sha256: kind.requires_template().then(|| ZERO64.to_string()),
             canonical_arguments_sha256: ZERO64.to_string(),
+            resolved_target_sha256: kind.requires_target().then(|| ZERO64.to_string()),
         }
     }
 
@@ -780,13 +878,15 @@ mod tests {
     }
 
     #[test]
-    fn all_four_kinds_issue_and_verify() {
+    fn all_six_kinds_issue_and_verify() {
         let signer = session_signer();
         for (i, kind) in [
             TicketKind::OrientationV1,
             TicketKind::DispositionV1,
             TicketKind::CloseV1,
             TicketKind::GoalRevisionV1,
+            TicketKind::FileWriteV1,
+            TicketKind::CredentialReadV1,
         ]
         .iter()
         .enumerate()
@@ -796,7 +896,80 @@ mod tests {
             let vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
             let result = verify_ticket(&signer, &ticket, &vctx);
             assert!(result.valid, "kind {kind:?}: {:?}", result.errors);
+            // Action kinds carry the resolved target on the ticket face.
+            assert_eq!(
+                ticket.resolved_target_sha256.is_some(),
+                kind.requires_target(),
+                "kind {kind:?}"
+            );
         }
+    }
+
+    #[test]
+    fn action_ticket_requires_resolved_target() {
+        let signer = session_signer();
+        let mut ctx = issue_ctx("SESS-0001", TicketKind::FileWriteV1);
+        ctx.resolved_target_sha256 = None;
+        let err = issue_ticket(&signer, &ctx, TicketKind::FileWriteV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        assert!(matches!(err, AcafError::MissingTarget), "{err:?}");
+        // Control kinds must not carry a target.
+        let mut ctl = issue_ctx("SESS-0001", TicketKind::CloseV1);
+        ctl.resolved_target_sha256 = Some(ZERO64.to_string());
+        let err = issue_ticket(&signer, &ctl, TicketKind::CloseV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        assert!(matches!(err, AcafError::UnexpectedTarget), "{err:?}");
+    }
+
+    #[test]
+    fn action_target_mismatch_rejects() {
+        let signer = session_signer();
+        let ctx = issue_ctx("SESS-0001", TicketKind::FileWriteV1);
+        let ticket = issue_ticket(&signer, &ctx, TicketKind::FileWriteV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        // The live target digest differs from the ticket's binding.
+        let mut vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
+        vctx.resolved_target_sha256 = Some("1".repeat(64));
+        let result = verify_ticket(&signer, &ticket, &vctx);
+        assert!(!result.valid);
+        assert_eq!(result.reject_codes[0], RejectCode::TargetMismatch);
+    }
+
+    #[test]
+    fn action_kind_without_target_field_rejects() {
+        let signer = session_signer();
+        let ctx = issue_ctx("SESS-0001", TicketKind::CredentialReadV1);
+        let mut ticket = issue_ticket(&signer, &ctx, TicketKind::CredentialReadV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        // Re-sign a face-stripped ticket — a signer bug that issued an action
+        // ticket without a target. The (None, _) branch of check 5b rejects it
+        // (check 1 would reject a plain tamper; re-signing isolates 5b).
+        ticket.resolved_target_sha256 = None;
+        let body = canonical_body(&ticket).unwrap();
+        ticket.hmac = base64url_encode(&signer.sign(&body).unwrap());
+        let vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
+        let result = verify_ticket(&signer, &ticket, &vctx);
+        assert!(!result.valid);
+        assert_eq!(result.reject_codes[0], RejectCode::TargetMismatch);
+        // And the mirror: live context without a target for an action ticket
+        // (caller-side omission — the (Some, None) branch).
+        let mut vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
+        vctx.resolved_target_sha256 = None;
+        let result = verify_ticket(&signer, &ticket, &vctx);
+        assert!(!result.valid);
+        assert_eq!(result.reject_codes[0], RejectCode::TargetMismatch);
+    }
+
+    #[test]
+    fn control_kind_with_target_field_rejects() {
+        let signer = session_signer();
+        let ctx = issue_ctx("SESS-0001", TicketKind::DispositionV1);
+        let mut ticket = issue_ticket(&signer, &ctx, TicketKind::DispositionV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        // Re-signed control ticket carrying a target — a signer bug that
+        // bound a target to a control kind. Check 5b rejects it.
+        ticket.resolved_target_sha256 = Some(ZERO64.to_string());
+        let body = canonical_body(&ticket).unwrap();
+        ticket.hmac = base64url_encode(&signer.sign(&body).unwrap());
+        let vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
+        let result = verify_ticket(&signer, &ticket, &vctx);
+        assert!(!result.valid);
+        assert_eq!(result.reject_codes[0], RejectCode::TargetMismatch);
     }
 
     #[test]

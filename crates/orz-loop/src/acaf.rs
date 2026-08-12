@@ -322,32 +322,36 @@ impl AcafClient {
     ///
     /// `canonical_arguments_sha256` is the digest of the parsed real object
     /// (check 5 — the controller re-derives it from the live arguments).
+    /// `resolved_target_sha256` binds the parsed real target — action kinds
+    /// only (Slice 2 first phase; control kinds pass None).
     pub async fn sign_ticket(
         &mut self,
         kind: TicketKind,
         activation_id: Option<String>,
         canonical_arguments_sha256: &str,
+        resolved_target_sha256: Option<String>,
     ) -> Result<ControlTicket, AcafClientError> {
         let session = self
             .session
             .as_ref()
             .ok_or(AcafClientError::SessionNotInitialised)?;
-        let params = match activation_id {
-            Some(activation) => serde_json::json!({
-                "session_id": session.session_id,
-                "activation_id": activation,
-                "canonical_arguments_sha256": canonical_arguments_sha256,
-            }),
-            None => serde_json::json!({
-                "session_id": session.session_id,
-                "canonical_arguments_sha256": canonical_arguments_sha256,
-            }),
-        };
+        let mut params = serde_json::json!({
+            "session_id": session.session_id,
+            "canonical_arguments_sha256": canonical_arguments_sha256,
+        });
+        if let Some(activation) = &activation_id {
+            params["activation_id"] = serde_json::json!(activation);
+        }
+        if let Some(target) = &resolved_target_sha256 {
+            params["resolved_target_sha256"] = serde_json::json!(target);
+        }
         let method = match kind {
             TicketKind::OrientationV1 => "sign_orientation_v1",
             TicketKind::DispositionV1 => "sign_disposition_v1",
             TicketKind::CloseV1 => "sign_close_v1",
             TicketKind::GoalRevisionV1 => "sign_goal_revision_v1",
+            TicketKind::FileWriteV1 => "sign_file_write_v1",
+            TicketKind::CredentialReadV1 => "sign_credential_read_v1",
         };
         let result = self.call(method, params).await?;
         serde_json::from_value(result).map_err(|e| AcafClientError::Protocol(e.to_string()))
@@ -362,11 +366,15 @@ impl AcafClient {
     /// against the live context — using the ticket's own field would be a
     /// self-referential tautology that lets an activation-A ticket verify
     /// on activation-B's path.
+    /// `live_resolved_target_sha256` (Slice 2 first phase) is the digest
+    /// re-derived from the live parsed real target — action kinds only;
+    /// control kinds pass None (check 5b).
     pub async fn verify_and_consume(
         &mut self,
         ticket: &ControlTicket,
         canonical_arguments_sha256: &str,
         live_activation_id: Option<String>,
+        live_resolved_target_sha256: Option<String>,
     ) -> Result<TicketOutcome, AcafClientError> {
         let session = self
             .session
@@ -385,6 +393,7 @@ impl AcafClient {
             // of the canonical body), this is the independent second layer.
             template_sha256: Some(session.template_sha256.clone()),
             canonical_arguments_sha256: canonical_arguments_sha256.to_string(),
+            resolved_target_sha256: live_resolved_target_sha256,
             now_unix_secs: chrono::Utc::now().timestamp(),
         };
         let verification = verify_ticket(&session.k_session, ticket, &vctx);
@@ -397,6 +406,8 @@ impl AcafClient {
             "disposition_v1" => TicketKind::DispositionV1,
             "close_v1" => TicketKind::CloseV1,
             "goal_revision_v1" => TicketKind::GoalRevisionV1,
+            "file_write_v1" => TicketKind::FileWriteV1,
+            "credential_read_v1" => TicketKind::CredentialReadV1,
             other => {
                 return Err(AcafClientError::Protocol(format!(
                     "unknown ticket_kind {other}"
@@ -562,6 +573,7 @@ pub fn issued_payload(ticket: &ControlTicket) -> Value {
         "capability_scope": ticket.capability_scope,
         "template_sha256": ticket.template_sha256,
         "canonical_arguments_sha256": ticket.canonical_arguments_sha256,
+        "resolved_target_sha256": ticket.resolved_target_sha256,
         "issued_at": ticket.issued_at,
         "expires_at": ticket.expires_at,
         "signer_revision": ticket.signer_revision,
@@ -614,6 +626,65 @@ pub fn reject_code_str(code: &RejectCode) -> &'static str {
     code.as_str()
 }
 
+/// Map a host tool name to its action ticket kind (Slice 2 first phase, D5 —
+/// ONE place to extend when command_exec / network join in later phases).
+pub(crate) fn action_kind_for_tool(tool: &str) -> Option<TicketKind> {
+    match tool {
+        "search_replace" => Some(TicketKind::FileWriteV1),
+        _ => None,
+    }
+}
+
+/// Classify the file_write operation against the REAL target (review P1-1
+/// 2026-08-12): the tool's create path is "empty `old_string` AND the
+/// target does not exist or is empty" — an empty `old_string` on an
+/// existing non-empty file is a FULL OVERWRITE (search_replace
+/// `handle_new_file_creation`, `empty_old_string_does_not_override=false`
+/// by default), which must bind as `modify`. The consumption point calls
+/// this again against the live file state (symmetric probe — a file
+/// created between issue and verify flips the operation and the ticket
+/// mismatches, which is the honest TOCTOU signal).
+pub fn file_write_operation(effective: &std::path::Path, args: &Value) -> &'static str {
+    let create_path = args
+        .get("old_string")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.is_empty());
+    if !create_path {
+        return "modify";
+    }
+    let empty_or_missing = std::fs::metadata(effective)
+        .map(|md| md.len() == 0)
+        .unwrap_or(true); // missing → create
+    if empty_or_missing {
+        "create"
+    } else {
+        "modify"
+    }
+}
+
+/// Canonical arguments for a `file_write_v1` action ticket (Slice 2 first
+/// phase, D5): the resolved absolute path, the create/modify operation
+/// (`file_write_operation`) and the content digest all bind into the
+/// ticket. The consumption point re-derives this from the LIVE tool
+/// arguments (check 5) — a tampered `new_string` or a retargeted
+/// `file_path` is a `target_mismatch`.
+pub fn file_write_canonical_args(
+    tool: &str,
+    resolved_file_path: &str,
+    operation: &str,
+    args: &Value,
+) -> Value {
+    let content_sha256 = orz_assurance::sha256_hex(
+        args.get("new_string").and_then(Value::as_str).unwrap_or_default().as_bytes(),
+    );
+    serde_json::json!({
+        "tool": tool,
+        "file_path": resolved_file_path,
+        "operation": operation,
+        "content_sha256": content_sha256,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,12 +703,26 @@ mod tests {
             signer_measurement: "0".repeat(64),
             template_sha256: kind.requires_template().then(|| "0".repeat(64)),
             canonical_arguments_sha256: "0".repeat(64),
+            resolved_target_sha256: kind.requires_target().then(|| "0".repeat(64)),
         };
         issue_ticket(&signer, &ctx, kind, 1, nonce, 300, 1_700_000_000).unwrap()
     }
 
     fn test_key() -> [u8; 32] {
         [7u8; 32]
+    }
+
+    fn temp_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "orz-acaf-fw-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -709,5 +794,79 @@ mod tests {
         let payload = rejected_payload(&unreachable, &now);
         assert_eq!(payload["reject_code"], "signer_unreachable");
         assert!(payload["ticket_id"].is_null());
+
+        // Slice 2: an action-kind issued payload carries the target digest;
+        // control-kind payloads leave it null (D11).
+        let action = test_ticket(TicketKind::FileWriteV1, &key, "n2");
+        let issued = issued_payload(&action);
+        assert_eq!(issued["resolved_target_sha256"], "0".repeat(64));
+        let control = test_ticket(TicketKind::CloseV1, &key, "n3");
+        let issued = issued_payload(&control);
+        assert!(issued["resolved_target_sha256"].is_null());
+        assert!(issued.get("hmac").is_none(), "HMAC must never be journaled");
+    }
+
+    #[test]
+    fn file_write_operation_matches_tool_semantics() {
+        // Review P1-1 (2026-08-12): the tool's create path is empty
+        // `old_string` AND a missing-or-empty target. An existing non-empty
+        // file with an empty `old_string` is a FULL OVERWRITE → modify.
+        let dir = temp_dir();
+        let existing = dir.join("main.rs");
+        std::fs::write(&existing, "original").unwrap();
+        let empty_file = dir.join("empty.rs");
+        std::fs::write(&empty_file, "").unwrap();
+        let missing = dir.join("new.rs");
+        let create_args = serde_json::json!({"old_string": "", "new_string": "x"});
+        let modify_args = serde_json::json!({"old_string": "a", "new_string": "b"});
+
+        assert_eq!(file_write_operation(&existing, &create_args), "modify");
+        assert_eq!(file_write_operation(&existing, &modify_args), "modify");
+        assert_eq!(file_write_operation(&empty_file, &create_args), "create");
+        assert_eq!(file_write_operation(&missing, &create_args), "create");
+        assert_eq!(file_write_operation(&missing, &modify_args), "modify");
+        // Missing old_string → modify (conservative; the tool call itself
+        // fails on its own).
+        let no_old = serde_json::json!({"new_string": "x"});
+        assert_eq!(file_write_operation(&missing, &no_old), "modify");
+    }
+
+    #[test]
+    fn file_write_canonical_args_shape() {
+        let resolved = r"C:\worktree\src\main.rs";
+        let create = file_write_canonical_args("search_replace", resolved, "create", &serde_json::json!({
+            "file_path": "src/main.rs",
+            "old_string": "",
+            "new_string": "fn main() {}",
+        }));
+        assert_eq!(create["operation"], "create");
+        assert_eq!(create["file_path"], resolved);
+        assert_eq!(create["content_sha256"].as_str().unwrap().len(), 64);
+        let modify = file_write_canonical_args("search_replace", resolved, "modify", &serde_json::json!({
+            "file_path": "src/main.rs",
+            "old_string": "fn main() {}",
+            "new_string": "fn main() { println!(\"hi\"); }",
+        }));
+        assert_eq!(modify["operation"], "modify");
+        // The content digest is stable for identical input and sensitive to
+        // the new_string bytes.
+        let modify_again = file_write_canonical_args("search_replace", resolved, "modify", &serde_json::json!({
+            "file_path": "src/main.rs",
+            "old_string": "fn main() {}",
+            "new_string": "fn main() { println!(\"hi\"); }",
+        }));
+        assert_eq!(modify["content_sha256"], modify_again["content_sha256"]);
+        assert_ne!(create["content_sha256"], modify["content_sha256"]);
+    }
+
+    #[test]
+    fn action_kind_for_tool_mapping() {
+        assert_eq!(
+            action_kind_for_tool("search_replace"),
+            Some(TicketKind::FileWriteV1)
+        );
+        assert_eq!(action_kind_for_tool("read_file"), None);
+        assert_eq!(action_kind_for_tool("bash"), None);
+        assert_eq!(action_kind_for_tool("run_tests"), None);
     }
 }

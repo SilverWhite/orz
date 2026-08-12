@@ -1441,17 +1441,49 @@ impl AgentLoopController {
         *self.goal_digest.lock().unwrap() = Some(digest);
     }
 
-    /// ACAF Slice 1 (ADR-0011 §4.2/§4.6): sign → journal issued → verify →
-    /// journal consumed|rejected for one control event. Shadow mode: every
-    /// failure path journals `control_ticket_rejected` (first reject code,
-    /// or `signer_unreachable`) and the control event still proceeds.
-    /// Unticketed paths (no client / no goal yet) journal nothing.
-    pub(crate) async fn acaf_control_event(
+    /// Journal the terminal outcome of a ticket lifecycle (consumed /
+    /// rejected) — the shared tail of the control and action paths.
+    async fn journal_ticket_outcome(
+        &self,
+        writer: &mut EventWriter<'_>,
+        outcome: &crate::acaf::TicketOutcome,
+        now: &chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AgentLoopError> {
+        match outcome {
+            crate::acaf::TicketOutcome::Consumed { .. } => {
+                writer
+                    .record(
+                        EventType::ControlTicketConsumed,
+                        crate::acaf::consumed_payload(outcome, now),
+                    )
+                    .await?;
+            }
+            _ => {
+                writer
+                    .record(
+                        EventType::ControlTicketRejected,
+                        crate::acaf::rejected_payload(outcome, now),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// ACAF (ADR-0011 §4.2/§4.6): sign → journal issued → verify → journal
+    /// consumed|rejected for ONE ticket. Shadow mode: every failure path
+    /// journals `control_ticket_rejected` (first reject code, or
+    /// `signer_unreachable`) and the event still proceeds. Unticketed paths
+    /// (no client / no goal yet) journal nothing. `resolved_target` (Slice 2
+    /// first phase) binds the parsed real target — action kinds only;
+    /// control kinds pass None.
+    async fn ticket_flow(
         &self,
         writer: &mut EventWriter<'_>,
         kind: TicketKind,
         activation_id: Option<String>,
         args: &serde_json::Value,
+        resolved_target: Option<String>,
     ) -> Result<(), AgentLoopError> {
         let Some(acaf) = &self.acaf else {
             return Ok(());
@@ -1473,7 +1505,10 @@ impl AgentLoopController {
             .ensure_initialized(&session_id, "main", 0, &goal_digest, 0)
             .await
         {
-            Ok(()) => match client.sign_ticket(kind, activation_id.clone(), &canonical).await {
+            Ok(()) => match client
+                .sign_ticket(kind, activation_id.clone(), &canonical, resolved_target.clone())
+                .await
+            {
                 Ok(ticket) => {
                     writer
                         .record(
@@ -1482,7 +1517,12 @@ impl AgentLoopController {
                         )
                         .await?;
                     match client
-                        .verify_and_consume(&ticket, &canonical, activation_id.clone())
+                        .verify_and_consume(
+                            &ticket,
+                            &canonical,
+                            activation_id.clone(),
+                            resolved_target,
+                        )
                         .await
                     {
                         Ok(outcome) => outcome,
@@ -1502,25 +1542,242 @@ impl AgentLoopController {
                 detail: e.to_string(),
             },
         };
-        match outcome {
-            crate::acaf::TicketOutcome::Consumed { .. } => {
-                writer
-                    .record(
-                        EventType::ControlTicketConsumed,
-                        crate::acaf::consumed_payload(&outcome, &now),
+        self.journal_ticket_outcome(writer, &outcome, &now).await
+    }
+
+    /// ACAF Slice 1 (ADR-0011 §4.2/§4.6) — the control-event ticket
+    /// lifecycle (orientation / disposition / close / goal revision).
+    /// Control kinds carry no resolved target.
+    pub(crate) async fn acaf_control_event(
+        &self,
+        writer: &mut EventWriter<'_>,
+        kind: TicketKind,
+        activation_id: Option<String>,
+        args: &serde_json::Value,
+    ) -> Result<(), AgentLoopError> {
+        self.ticket_flow(writer, kind, activation_id, args, None).await
+    }
+
+    /// Shadow rejection for an unticketable action target (D7): no ticket
+    /// was issued, so the `control_ticket_rejected` event carries a null
+    /// ticket_id with `target_mismatch` (mirrors the signer_unreachable
+    /// null-ticket_id precedent).
+    async fn shadow_action_rejection(
+        &self,
+        writer: &mut EventWriter<'_>,
+        kind: TicketKind,
+        detail: String,
+        now: &chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AgentLoopError> {
+        self.journal_ticket_outcome(
+            writer,
+            &crate::acaf::TicketOutcome::Rejected {
+                ticket_id: None,
+                kind,
+                code: orz_assurance::acaf::RejectCode::TargetMismatch,
+                detail,
+            },
+            now,
+        )
+        .await
+    }
+
+    /// ACAF Slice 2 first phase (2026-08-12) — action-ticket lifecycle for
+    /// an external-effect tool call. The live target is resolved and bound
+    /// (`resolved_target_sha256`, check 5b), the canonical arguments bind the
+    /// resolved path + operation + content digest (D5), and the consumption
+    /// point RE-RESOLVES and re-derives both digests from the live arguments
+    /// — never trusting the ticket's own values. Shadow mode (D7): every
+    /// failure path journals `control_ticket_rejected` (unticketable target
+    /// → null ticket_id + `target_mismatch`) and the tool proceeds —
+    /// the shadow ledger IS the journal events. Fail-closed flips at the
+    /// full Slice 2 milestone.
+    async fn acaf_action_event(
+        &self,
+        writer: &mut EventWriter<'_>,
+        tool: &str,
+        tc_args: &serde_json::Value,
+    ) -> Result<(), AgentLoopError> {
+        let Some(kind) = crate::acaf::action_kind_for_tool(tool) else {
+            return Ok(());
+        };
+        // Unticketed paths journal nothing (zero behaviour change when ACAF
+        // is unconfigured — same gate as the control events).
+        if self.acaf.is_none() {
+            return Ok(());
+        }
+        // Defensive: no snapshot store → no worktree base → the real target
+        // cannot be resolved; skip the ticket (production always carries the
+        // store — the run_host_tool snapshot block uses the same source).
+        let Some(store) = &self.snapshot_store else {
+            return Ok(());
+        };
+        let worktree = store.worktree();
+        // Review P2-7 (2026-08-12): HOMEDRIVE+HOMEPATH join is the dirs
+        // crate fallback shellexpand uses — a session without USERPROFILE
+        // but with HOMEDRIVE/HOMEPATH still expands `~` identically.
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .or_else(|| {
+                std::env::var_os("HOMEDRIVE").and_then(|drive| {
+                    std::env::var_os("HOMEPATH").map(|path| {
+                        let mut joined = drive;
+                        joined.push(path);
+                        joined
+                    })
+                })
+            })
+            .map(std::path::PathBuf::from);
+        let Some(file_path) = tc_args.get("file_path").and_then(serde_json::Value::as_str) else {
+            // No target in the args — nothing to ticket (the tool call fails
+            // on its own later; shadow mode journals nothing for a missing
+            // argument — registered P2-4/P2-5: the fail-closed flip must
+            // turn this silent skip into a hard refusal).
+            return Ok(());
+        };
+        let now = chrono::Utc::now();
+        // Resolve AND reparse-scan in one call (review D1-1 2026-08-12: the
+        // scan runs on the UN-FOLDED candidate, so a `<junction>\..` spelling
+        // cannot hide the link).
+        let target = match orz_assurance::acaf::target::resolve_action_path_checked(
+            worktree,
+            file_path,
+            home.as_deref(),
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                // Shadow rejection for an unticketable target (D7): no
+                // ticket exists, so the rejected event carries a null
+                // ticket_id.
+                return self
+                    .shadow_action_rejection(
+                        writer,
+                        kind,
+                        format!("target resolution failed: {e}"),
+                        &now,
                     )
-                    .await?;
+                    .await;
             }
-            _ => {
-                writer
-                    .record(
-                        EventType::ControlTicketRejected,
-                        crate::acaf::rejected_payload(&outcome, &now),
+        };
+        // Case/short-name normalisation when the target exists (a new file
+        // keeps its lexical spelling — `dunce::canonicalize` fails on it).
+        let effective = orz_assurance::acaf::target::canonicalize_if_exists(&target);
+        let resolved_digest = orz_assurance::acaf::target::resolved_target_digest(&effective);
+        let effective_str = effective.to_string_lossy().into_owned();
+        // Review P1-1 (2026-08-12): the operation classifies against the
+        // REAL target state (missing/empty → create, else modify — an empty
+        // `old_string` on an existing non-empty file is a full overwrite).
+        let operation = crate::acaf::file_write_operation(&effective, tc_args);
+        let canonical_args =
+            crate::acaf::file_write_canonical_args(tool, &effective_str, operation, tc_args);
+        let canonical_digest = crate::acaf::canonical_arguments_digest(kind, &canonical_args);
+        let Some(goal_digest) = self.goal_digest.lock().unwrap().clone() else {
+            return Ok(());
+        };
+        let session_id = self
+            .session_id
+            .clone()
+            .unwrap_or_else(|| writer.run_id().to_string());
+        // Sign (lock scope 1 — review P2-6 2026-08-12: the mutex covers only
+        // the signer RPCs, NOT the re-resolution below; the RPC may self-heal
+        // with a signer respawn and must not block later control tickets).
+        let signed = {
+            let Some(acaf) = &self.acaf else {
+                return Ok(());
+            };
+            let mut client = acaf.lock().await;
+            match client
+                .ensure_initialized(&session_id, "main", 0, &goal_digest, 0)
+                .await
+            {
+                Ok(()) => match client
+                    .sign_ticket(kind, None, &canonical_digest, Some(resolved_digest.clone()))
+                    .await
+                {
+                    Ok(t) => Ok(t),
+                    Err(e) => Err(crate::acaf::TicketOutcome::SignerUnreachable {
+                        kind,
+                        detail: e.to_string(),
+                    }),
+                },
+                Err(e) => Err(crate::acaf::TicketOutcome::SignerUnreachable {
+                    kind,
+                    detail: e.to_string(),
+                }),
+            }
+        };
+        let ticket = match signed {
+            Ok(t) => t,
+            Err(outcome) => {
+                return self
+                    .journal_ticket_outcome(writer, &outcome, &now)
+                    .await
+            }
+        };
+        writer
+            .record(
+                EventType::ControlTicketIssued,
+                crate::acaf::issued_payload(&ticket),
+            )
+            .await?;
+        // Verify: RE-RESOLVE the live target and re-derive both digests —
+        // a symlink swapped in between sign and verify, a file created
+        // between the two operation probes (P1-1), or any drift of the live
+        // arguments hits `target_mismatch` (check 5/5b).
+        let live_outcome = match orz_assurance::acaf::target::resolve_action_path_checked(
+            worktree,
+            file_path,
+            home.as_deref(),
+        ) {
+            Ok(target2) => {
+                let effective2 = orz_assurance::acaf::target::canonicalize_if_exists(&target2);
+                let live_target_digest =
+                    orz_assurance::acaf::target::resolved_target_digest(&effective2);
+                let live_effective_str = effective2.to_string_lossy().into_owned();
+                let live_operation = crate::acaf::file_write_operation(&effective2, tc_args);
+                let live_canonical = crate::acaf::file_write_canonical_args(
+                    tool,
+                    &live_effective_str,
+                    live_operation,
+                    tc_args,
+                );
+                let live_canonical_digest =
+                    crate::acaf::canonical_arguments_digest(kind, &live_canonical);
+                // Lock scope 2 — verify only.
+                let Some(acaf) = &self.acaf else {
+                    return Ok(());
+                };
+                let mut client = acaf.lock().await;
+                client
+                    .verify_and_consume(
+                        &ticket,
+                        &live_canonical_digest,
+                        None,
+                        Some(live_target_digest),
                     )
-                    .await?;
+                    .await
+            }
+            Err(e) => Ok(crate::acaf::TicketOutcome::Rejected {
+                ticket_id: Some(ticket.ticket_id.clone()),
+                kind,
+                code: orz_assurance::acaf::RejectCode::TargetMismatch,
+                detail: format!("live target resolution failed: {e}"),
+            }),
+        };
+        match live_outcome {
+            Ok(outcome) => self.journal_ticket_outcome(writer, &outcome, &now).await,
+            Err(e) => {
+                self.journal_ticket_outcome(
+                    writer,
+                    &crate::acaf::TicketOutcome::SignerUnreachable {
+                        kind,
+                        detail: e.to_string(),
+                    },
+                    &now,
+                )
+                .await
             }
         }
-        Ok(())
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): attach the session-level retrieval
@@ -4444,6 +4701,17 @@ impl AgentLoopController {
             // run_tests executed the host's fixed command — a success for
             // the denial streak (ADR-0010 §3.5.4: only actual success resets).
             return Ok((tool_result, Some(PolicyFeedback::Succeeded)));
+        }
+
+        // ACAF Slice 2 first phase (2026-08-12): action tickets for
+        // external-effect tools. The ticket is issued and verified AFTER the
+        // permission gate allowed the call (denied calls need no ticket —
+        // two-layer gate, ADR-0011 §2.4/§4.5: permission decides policy, the
+        // ticket decides this-call authorization) and BEFORE the ToolStarted
+        // evidence. Shadow mode: failures journal `control_ticket_rejected`
+        // and the tool proceeds.
+        if crate::acaf::action_kind_for_tool(&tc.name).is_some() {
+            self.acaf_action_event(writer, &tc.name, &tc.arguments).await?;
         }
 
         // IP5: pre-mutation snapshot — record the pre-tool worktree state of
@@ -8109,6 +8377,71 @@ mod tests {
                 .join(format!("{hash}.json"))
                 .is_file(),
             "missing manifest for {hash}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ACAF Slice 2 first phase (2026-08-12): with no client configured the
+    /// `search_replace` action path journals ZERO control-ticket events — the
+    /// zero-behaviour-change guarantee of an unconfigured fabric (D8), on the
+    /// real `run_host_tool` gate order (permission → action ticket → IP5 →
+    /// ToolStarted).
+    #[tokio::test]
+    async fn search_replace_with_acaf_disabled_zero_ticket_events() {
+        let dir = test_dir();
+        let store_root = dir.join(".gsa").join("snapshots");
+        let target = dir.join("src").join("main.rs");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "original").unwrap();
+
+        let store = Arc::new(SnapshotStore::new(store_root.clone(), dir.clone()).unwrap());
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "patched".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "src/main.rs",
+                    "old_string": "original",
+                    "new_string": "patched",
+                }),
+                call_id: "call-1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        // No .with_acaf — unconfigured fabric (zero behaviour change).
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_snapshot_store(Some(store.clone()));
+        controller
+            .run_turn(&host, "改文件", "RUN-NOACAF", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        assert!(
+            !types
+                .iter()
+                .any(|t| matches!(
+                    t,
+                    EventType::ControlTicketIssued
+                        | EventType::ControlTicketConsumed
+                        | EventType::ControlTicketRejected
+                )),
+            "unconfigured ACAF must journal zero ticket events: {types:?}"
+        );
+        // The tool still ran through the full gate chain (IP5 + ToolStarted).
+        assert!(
+            types.contains(&EventType::ToolStarted) && types.contains(&EventType::ToolCompleted),
+            "tool path unchanged: {types:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

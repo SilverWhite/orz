@@ -32,6 +32,10 @@
 //!   sign_close_v1          { session_id, activation_id, canonical_arguments_sha256 }
 //!   sign_goal_revision_v1  { session_id, activation_id,
 //!                            canonical_arguments_sha256 }   // old-context ticket
+//!   sign_file_write_v1     { session_id, canonical_arguments_sha256,
+//!                            resolved_target_sha256 }       // Slice 2 (2026-08-12)
+//!   sign_credential_read_v1 { session_id, canonical_arguments_sha256,
+//!                            resolved_target_sha256 }       // mechanism-only (D8)
 //!   close_session          { session_id }
 //!
 //! A goal revision re-derives the session key when the host re-initialises
@@ -167,6 +171,7 @@ impl Signer {
         kind: TicketKind,
         activation_id: Option<String>,
         canonical_arguments_sha256: String,
+        resolved_target_sha256: Option<String>,
         now_unix_secs: i64,
     ) -> Result<Value, SignerError> {
         let session = self
@@ -187,6 +192,7 @@ impl Signer {
                 .requires_template()
                 .then(|| self.template_sha256.clone()),
             canonical_arguments_sha256,
+            resolved_target_sha256,
         };
         // Review P2-3 (2026-08-12): byte slicing a possibly multi-byte UTF-8
         // session id can panic — derive the key id from chars instead.
@@ -271,12 +277,37 @@ fn handle_request(signer: &mut Signer, line: &str) -> Value {
     let params = request.get("params").cloned().unwrap_or(Value::Null);
     let result = match method.as_str() {
         "initialize_session" => handle_initialize(signer, &params),
-        "sign_orientation_v1" => handle_sign(signer, &params, TicketKind::OrientationV1, None),
-        "sign_disposition_v1" => handle_sign(signer, &params, TicketKind::DispositionV1, Some("activation_id")),
-        "sign_close_v1" => handle_sign(signer, &params, TicketKind::CloseV1, Some("activation_id")),
-        "sign_goal_revision_v1" => {
-            handle_sign(signer, &params, TicketKind::GoalRevisionV1, Some("activation_id"))
+        "sign_orientation_v1" => handle_sign(signer, &params, TicketKind::OrientationV1, None, None),
+        "sign_disposition_v1" => {
+            handle_sign(signer, &params, TicketKind::DispositionV1, Some("activation_id"), None)
         }
+        "sign_close_v1" => {
+            handle_sign(signer, &params, TicketKind::CloseV1, Some("activation_id"), None)
+        }
+        "sign_goal_revision_v1" => handle_sign(
+            signer,
+            &params,
+            TicketKind::GoalRevisionV1,
+            Some("activation_id"),
+            None,
+        ),
+        // Slice 2 first phase (2026-08-12): action kinds bind the parsed
+        // real target — the signer accepts the resolved digest as a parameter
+        // (TOCTOU lives on the verification side, D3).
+        "sign_file_write_v1" => handle_sign(
+            signer,
+            &params,
+            TicketKind::FileWriteV1,
+            None,
+            Some("resolved_target_sha256"),
+        ),
+        "sign_credential_read_v1" => handle_sign(
+            signer,
+            &params,
+            TicketKind::CredentialReadV1,
+            None,
+            Some("resolved_target_sha256"),
+        ),
         "close_session" => match param_str(&params, "session_id") {
             Ok(session_id) => {
                 signer.sessions.remove(&session_id);
@@ -319,6 +350,7 @@ fn handle_sign(
     params: &Value,
     kind: TicketKind,
     activation_param: Option<&str>,
+    target_param: Option<&str>,
 ) -> Result<Value, SignerError> {
     let session_id = param_str(params, "session_id")?;
     let activation_id = match activation_param {
@@ -326,12 +358,17 @@ fn handle_sign(
         None => None,
     };
     let canonical_arguments_sha256 = param_str(params, "canonical_arguments_sha256")?;
+    let resolved_target_sha256 = match target_param {
+        Some(p) => Some(param_str(params, p)?),
+        None => None,
+    };
     let now = chrono::Utc::now().timestamp();
     let ticket = signer.sign_ticket(
         &session_id,
         kind,
         activation_id,
         canonical_arguments_sha256,
+        resolved_target_sha256,
         now,
     )?;
     Ok(ticket)
@@ -467,6 +504,7 @@ mod tests {
             }),
             TicketKind::OrientationV1,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(ticket["ticket_kind"], "orientation_v1");
@@ -501,6 +539,7 @@ mod tests {
             &serde_json::json!({"session_id": "S1", "activation_id": "ACT-1", "canonical_arguments_sha256": "0".repeat(64)}),
             TicketKind::DispositionV1,
             Some("activation_id"),
+            None,
         )
         .unwrap();
         let t2 = handle_sign(
@@ -508,6 +547,7 @@ mod tests {
             &serde_json::json!({"session_id": "S1", "activation_id": "ACT-1", "canonical_arguments_sha256": "0".repeat(64)}),
             TicketKind::DispositionV1,
             Some("activation_id"),
+            None,
         )
         .unwrap();
         assert_eq!(t1["sequence"], 1);
@@ -518,6 +558,7 @@ mod tests {
             &serde_json::json!({"session_id": "S2", "activation_id": "ACT-2", "canonical_arguments_sha256": "0".repeat(64)}),
             TicketKind::CloseV1,
             Some("activation_id"),
+            None,
         )
         .unwrap();
         assert_eq!(t3["sequence"], 1);
@@ -562,6 +603,7 @@ mod tests {
             }),
             TicketKind::GoalRevisionV1,
             Some("activation_id"),
+            None,
         )
         .unwrap();
         assert_eq!(ticket["goal_digest"], "0".repeat(64));
@@ -584,9 +626,107 @@ mod tests {
             &serde_json::json!({"session_id": "S1", "activation_id": "ACT-1", "canonical_arguments_sha256": "a".repeat(64)}),
             TicketKind::GoalRevisionV1,
             Some("activation_id"),
+            None,
         )
         .unwrap();
         assert_ne!(fresh["hmac"], old["hmac"]);
+    }
+
+    #[test]
+    fn sign_file_write_v1_roundtrip() {
+        let mut signer = test_signer();
+        let _ = handle_initialize(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1", "agent_id": "main", "goal_version": 0,
+                "goal_digest": "0".repeat(64), "policy_revision": 0,
+            }),
+        )
+        .unwrap();
+        let ticket = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1",
+                "canonical_arguments_sha256": "a".repeat(64),
+                "resolved_target_sha256": "b".repeat(64),
+            }),
+            TicketKind::FileWriteV1,
+            None,
+            Some("resolved_target_sha256"),
+        )
+        .unwrap();
+        assert_eq!(ticket["ticket_kind"], "file_write_v1");
+        assert_eq!(ticket["capability_scope"], "file_write");
+        assert_eq!(ticket["activation_id"], Value::Null);
+        assert_eq!(ticket["template_sha256"], Value::Null);
+        assert_eq!(ticket["resolved_target_sha256"], "b".repeat(64));
+        assert_eq!(ticket["sequence"], 1);
+    }
+
+    #[test]
+    fn sign_credential_read_v1_roundtrip() {
+        let mut signer = test_signer();
+        let _ = handle_initialize(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1", "agent_id": "main", "goal_version": 0,
+                "goal_digest": "0".repeat(64), "policy_revision": 0,
+            }),
+        )
+        .unwrap();
+        let ticket = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1",
+                "canonical_arguments_sha256": "c".repeat(64),
+                "resolved_target_sha256": "d".repeat(64),
+            }),
+            TicketKind::CredentialReadV1,
+            None,
+            Some("resolved_target_sha256"),
+        )
+        .unwrap();
+        assert_eq!(ticket["ticket_kind"], "credential_read_v1");
+        assert_eq!(ticket["capability_scope"], "credential_read");
+        assert_eq!(ticket["activation_id"], Value::Null);
+        assert_eq!(ticket["resolved_target_sha256"], "d".repeat(64));
+    }
+
+    #[test]
+    fn file_write_missing_target_param_errors() {
+        let mut signer = test_signer();
+        let _ = handle_initialize(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1", "agent_id": "main", "goal_version": 0,
+                "goal_digest": "0".repeat(64), "policy_revision": 0,
+            }),
+        )
+        .unwrap();
+        // Missing resolved_target_sha256 → BadRequest (the param is required
+        // for the action kinds; the signer never issues a target-less action
+        // ticket).
+        let err = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1",
+                "canonical_arguments_sha256": "a".repeat(64),
+            }),
+            TicketKind::FileWriteV1,
+            None,
+            Some("resolved_target_sha256"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignerError::BadRequest(_)), "{err:?}");
+        // The JSON-lines path surfaces the same failure as a signer_error.
+        let response = handle_request(
+            &mut signer,
+            r#"{"id": 3, "method": "sign_file_write_v1", "params": {"session_id": "S1", "canonical_arguments_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+        );
+        assert!(
+            response["error"]["code"].as_str().unwrap().contains("signer_error"),
+            "{response}"
+        );
     }
 
     #[test]

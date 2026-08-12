@@ -193,7 +193,7 @@ async fn signer_process_full_lifecycle() {
         .await
         .expect("initialize");
     let ticket = client
-        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64))
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
         .await
         .expect("sign orientation");
     assert_eq!(ticket.ticket_kind, "orientation_v1");
@@ -205,7 +205,7 @@ async fn signer_process_full_lifecycle() {
     // against the version downloaded at initialize_session).
 
     let outcome = client
-        .verify_and_consume(&ticket, &"0".repeat(64), None)
+        .verify_and_consume(&ticket, &"0".repeat(64), None, None)
         .await
         .expect("verify");
     assert!(
@@ -215,7 +215,7 @@ async fn signer_process_full_lifecycle() {
 
     // Replay — same ticket again → replay_detected.
     let outcome = client
-        .verify_and_consume(&ticket, &"0".repeat(64), None)
+        .verify_and_consume(&ticket, &"0".repeat(64), None, None)
         .await
         .expect("verify again");
     assert!(
@@ -225,11 +225,11 @@ async fn signer_process_full_lifecycle() {
 
     // Target mismatch — the LIVE canonical args differ from the ticket's.
     let ticket2 = client
-        .sign_ticket(TicketKind::DispositionV1, Some("ACT-1".into()), &"0".repeat(64))
+        .sign_ticket(TicketKind::DispositionV1, Some("ACT-1".into()), &"0".repeat(64), None)
         .await
         .expect("sign disposition");
     let outcome = client
-        .verify_and_consume(&ticket2, &"1".repeat(64), Some("ACT-1".into()))
+        .verify_and_consume(&ticket2, &"1".repeat(64), Some("ACT-1".into()), None)
         .await
         .expect("verify with wrong args");
     assert!(
@@ -430,12 +430,12 @@ async fn signer_crash_respawns_and_recovers() {
         .await
         .expect("initialize");
     let ticket = client
-        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64))
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
         .await
         .expect("sign before crash");
     assert!(matches!(
         client
-            .verify_and_consume(&ticket, &"0".repeat(64), None)
+            .verify_and_consume(&ticket, &"0".repeat(64), None, None)
             .await
             .expect("verify before crash"),
         TicketOutcome::Consumed { .. }
@@ -444,7 +444,7 @@ async fn signer_crash_respawns_and_recovers() {
     // Crash the signer hard (kill without shutdown — the client must not
     // know).
     let outcome = client
-        .sign_ticket(TicketKind::DispositionV1, Some("ACT-9".into()), &"0".repeat(64))
+        .sign_ticket(TicketKind::DispositionV1, Some("ACT-9".into()), &"0".repeat(64), None)
         .await;
     // The FIRST request after the crash races the dying child: it may fail
     // (closed channel → the failure path respawns) or succeed (the signer
@@ -458,7 +458,7 @@ async fn signer_crash_respawns_and_recovers() {
     // nonce. The sequence strictly increases (crashed request consumed a
     // sequence when it succeeded — never decreases).
     let ticket2 = client
-        .sign_ticket(TicketKind::DispositionV1, Some("ACT-9".into()), &"0".repeat(64))
+        .sign_ticket(TicketKind::DispositionV1, Some("ACT-9".into()), &"0".repeat(64), None)
         .await
         .expect("sign after self-heal");
     assert!(
@@ -470,7 +470,7 @@ async fn signer_crash_respawns_and_recovers() {
     assert!(
         matches!(
             client
-                .verify_and_consume(&ticket2, &"0".repeat(64), Some("ACT-9".into()))
+                .verify_and_consume(&ticket2, &"0".repeat(64), Some("ACT-9".into()), None)
                 .await
                 .expect("verify after self-heal"),
             TicketOutcome::Consumed { .. }
@@ -478,4 +478,175 @@ async fn signer_crash_respawns_and_recovers() {
         "the respawned signer signs with the same K_session — verification passes"
     );
     client.shutdown().await;
+}
+
+// ── test 5: Slice 2 first phase — file_write action ticket full chain ──────
+
+#[tokio::test]
+async fn file_write_ticket_full_chain() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let target = dir.join("src").join("main.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "original").unwrap();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "patched".to_string(),
+            exit_code: Some(0),
+        }),
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "search_replace".to_string(),
+            arguments: serde_json::json!({
+                "file_path": "src/main.rs",
+                "old_string": "original",
+                "new_string": "patched",
+            }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "改文件", "RUN-ACAF-FW", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let issued: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+
+    assert_eq!(issued.len(), 1, "one file_write ticket: {types:?}");
+    assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
+    assert!(rejected.is_empty(), "no rejections in the happy path: {types:?}");
+
+    let issue = &issued[0].payload;
+    assert_eq!(issue["ticket_kind"], "file_write_v1");
+    assert_eq!(issue["capability_scope"], "file_write");
+    assert!(issue["activation_id"].is_null(), "main lane — no activation (D2)");
+    assert_eq!(
+        issue["resolved_target_sha256"].as_str().unwrap().len(),
+        64,
+        "the parsed real target is bound (check 5b)"
+    );
+    // The consumed event pairs with the issued one (same ticket_id, same kind).
+    assert_eq!(
+        consumed[0].payload["ticket_id"], issue["ticket_id"],
+        "consumed must pair with issued"
+    );
+    assert_eq!(consumed[0].payload["ticket_kind"], "file_write_v1");
+    assert_eq!(consumed[0].payload["outcome"], "accepted");
+    // The tool itself ran through the gate chain.
+    assert!(types.iter().any(|t| t == "tool_started"), "{types:?}");
+    assert!(types.iter().any(|t| t == "tool_completed"), "{types:?}");
+    // The ticket lifecycle wraps the tool call in the journal.
+    let started = types.iter().position(|t| t == "tool_started").unwrap();
+    let issued_idx = types
+        .iter()
+        .position(|t| t == "control_ticket_issued")
+        .unwrap();
+    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+}
+
+// ── test 6: Slice 2 first phase — signer down → shadow rejection + proceed ──
+
+#[tokio::test]
+async fn file_write_shadow_on_signer_unreachable() {
+    // Same permanence trick as the control-event shadow test: kill the
+    // signer AND remove its manifest so the self-heal cannot revive it.
+    let fixture = SignerFixture::new();
+    let mut client = spawn_client(&fixture).await;
+    client.shutdown().await;
+    std::fs::remove_file(&fixture.manifest).expect("remove manifest");
+    let client = Arc::new(tokio::sync::Mutex::new(client));
+
+    let dir = test_dir();
+    let target = dir.join("src").join("main.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "original").unwrap();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "patched".to_string(),
+            exit_code: Some(0),
+        }),
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "search_replace".to_string(),
+            arguments: serde_json::json!({
+                "file_path": "src/main.rs",
+                "old_string": "original",
+                "new_string": "patched",
+            }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "改文件", "RUN-ACAF-SHADOW-FW", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert!(
+        !rejected.is_empty(),
+        "signer-unreachable must journal a rejection: {types:?}"
+    );
+    let fw_rejected: Vec<_> = rejected
+        .iter()
+        .filter(|e| e.payload["ticket_kind"] == "file_write_v1")
+        .collect();
+    assert_eq!(fw_rejected.len(), 1, "file_write rejection: {types:?}");
+    assert_eq!(fw_rejected[0].payload["reject_code"], "signer_unreachable");
+    // Shadow mode: the write still executed.
+    assert!(
+        types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
+        "tool proceeds under shadow mode: {types:?}"
+    );
 }
