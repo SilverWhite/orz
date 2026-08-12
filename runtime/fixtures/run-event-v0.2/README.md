@@ -40,13 +40,13 @@ extension 2026-08-10):
   The cross-validator resolves the eleven v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
 - **ACAF ticket kinds are payload-level** (Slice 1, 2026-08-12; Slice 2
-  first phase 2026-08-12): the control-ticket trio's event types are stable;
-  the `ticket_kind` / `capability_scope` enums extend inside the payload
-  schemas (`orientation_v1` / `disposition_v1` / `close_v1` /
-  `goal_revision_v1`; plus `file_write_v1` / `credential_read_v1` from
-  Slice 2). Action kinds bind `resolved_target_sha256` (digest of the parsed
-  real target object, §4.2 check 5 TOCTOU); control kinds leave it null or
-  absent so historical journals remain valid.
+  2026-08-12): the control-ticket trio's event types are stable; the
+  `ticket_kind` / `capability_scope` enums extend inside the payload schemas
+  (`orientation_v1` / `disposition_v1` / `close_v1` / `goal_revision_v1`;
+  plus `file_write_v1` / `credential_read_v1` / `command_exec_v1` /
+  `network_v1` from Slice 2). Action kinds bind `resolved_target_sha256`
+  (digest of the parsed real target object, §4.2 check 5 TOCTOU); control
+  kinds leave it null or absent so historical journals remain valid.
 - **Producer/consumer/verifier** (§5.2): `information_sufficiency_assessment`,
   `retrieval_parent_disposition` and `retrieval_close_record` — plus the
   GAP-RETRIEVAL-TOOLS trio `retrieval_mode_transition`,

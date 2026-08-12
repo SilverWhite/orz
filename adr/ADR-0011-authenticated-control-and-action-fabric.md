@@ -2,16 +2,20 @@
 
 - 状态：**accepted**（2026-08-09；设计定稿。2026-08-12 Slice 1 已实施——签发器 v1 +
   控制事件票据，见 [`GAP_ACAF_SLICE1_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE1_IMPL_AUDIT_2026-08-12.md)；
-  2026-08-12 Slice 2 第一阶段已实施——动作票据 file_write 全链贯通 +
-  credential_read 机制先建（**全程影子模式**：验票失败照常执行并记
-  `control_ticket_rejected`；fail-closed 切换与 command_exec/network 接线待后续），
-  见 [`GAP_ACAF_SLICE2A_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2A_IMPL_AUDIT_2026-08-12.md)；
+  2026-08-12 Slice 2 已实施（两阶段）——四类动作票就位：file_write 全链贯通
+  + credential_read 机制先建（第一阶段，见
+  [`GAP_ACAF_SLICE2A_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2A_IMPL_AUDIT_2026-08-12.md)），
+  command_exec（run_tests + run_terminal_cmd）与 network（web_fetch +
+  browser_read URL 目标解析）同型扩展（第二阶段，见
+  [`GAP_ACAF_SLICE2B_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2B_IMPL_AUDIT_2026-08-12.md)；
+  **全程影子模式**：验票失败照常执行并记 `control_ticket_rejected`；
+  web_search 无 URL 目标暂不映射，登记 fail-closed 翻转前核查）；
   2026-08-12 goal/policy 接线已实施——GoalRevisionV1 消费后 goal_version+1 重派生
   K_session（决策 5 "goal 变→旧票死"首次真实触发）；`bump_policy_revision` 机制
   就位（决策 9，Slice 3 ModeChangeTicket 为首个生产递增来源）；目标解析原语单源
   orz-paths（设计文档 §4.5 镜像），见
   [`GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT`](../docs/audits/GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md)；
-  Slice 2 fail-closed 与 Slice 3/4 待实施）
+  Slice 2 fail-closed 切换（用户裁决）与 Slice 3/4 待实施）
 - 决策范围：跨信任边界控制事件与外部效果动作的票据授权面；独立签发器；三运行模式；
   威胁模型边界；实施切片的独立性
 - 详细设计权威：[`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](../docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)

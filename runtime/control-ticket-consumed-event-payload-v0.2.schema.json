@@ -21,7 +21,9 @@
         "close_v1",
         "goal_revision_v1",
         "file_write_v1",
-        "credential_read_v1"
+        "credential_read_v1",
+        "command_exec_v1",
+        "network_v1"
       ]
     },
     "consumed_at": { "type": "string", "format": "date-time" },

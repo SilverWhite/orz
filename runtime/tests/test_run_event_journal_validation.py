@@ -1044,6 +1044,8 @@ def _issued_ticket(
             "goal_revision_v1": "goal_revision",
             "file_write_v1": "file_write",
             "credential_read_v1": "credential_read",
+            "command_exec_v1": "command_exec",
+            "network_v1": "network",
         }[kind],
         "template_sha256": template,
         "canonical_arguments_sha256": _ZERO,
@@ -1213,8 +1215,8 @@ class ControlTicketPairingTests(unittest.TestCase):
         self.assertEqual(validate_journal_text(journal), [])
 
     def test_action_kind_pairing_is_kind_agnostic(self) -> None:
-        """Slice 2 first phase: a file_write_v1 pair goes through the same
-        issued → consumed rule (the pairing rule is kind-agnostic)."""
+        """Slice 2: a file_write_v1 / command_exec_v1 pair goes through the
+        same issued → consumed rule (the pairing rule is kind-agnostic)."""
         journal = _v02_journal(
             [
                 _mk_v02_event(
@@ -1233,12 +1235,32 @@ class ControlTicketPairingTests(unittest.TestCase):
         )
         self.assertEqual(validate_journal_text(journal), [])
 
+    def test_command_exec_pairing_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event(
+                    "control_ticket_issued",
+                    _issued_ticket("TKT-0002", "command_exec_v1", 1, None, resolved_target=_ZERO),
+                    0,
+                    None,
+                ),
+                _mk_v02_event(
+                    "control_ticket_consumed",
+                    _consumed_ticket("TKT-0002", "command_exec_v1"),
+                    1,
+                    _ZERO,
+                ),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
 
 class ActionTicketSchemaTests(unittest.TestCase):
-    """ACAF Slice 2 first phase (2026-08-12) — the file_write / credential_read
-    ticket kinds on the issued payload schema: resolved_target_sha256 binding
-    (action kinds required non-null, control kinds null-or-absent),
-    activation must be null for action kinds (main lane has no activation)."""
+    """ACAF Slice 2 (2026-08-12) — the file_write / credential_read /
+    command_exec / network ticket kinds on the issued payload schema:
+    resolved_target_sha256 binding (action kinds required non-null, control
+    kinds null-or-absent), activation must be null for action kinds (main
+    lane has no activation)."""
 
     def _journal_errors(self, issued: dict) -> list[str]:
         return validate_journal_text(
@@ -1267,6 +1289,18 @@ class ActionTicketSchemaTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
+    def test_command_exec_valid_with_target(self) -> None:
+        errors = self._journal_errors(
+            _issued_ticket("TKT-0001", "command_exec_v1", 1, None, resolved_target=_ZERO)
+        )
+        self.assertEqual(errors, [])
+
+    def test_network_valid_with_target(self) -> None:
+        errors = self._journal_errors(
+            _issued_ticket("TKT-0001", "network_v1", 1, None, resolved_target=_ZERO)
+        )
+        self.assertEqual(errors, [])
+
     def test_file_write_missing_target_rejected(self) -> None:
         errors = self._journal_errors(_issued_ticket("TKT-0001", "file_write_v1", 1, None))
         self.assertTrue(any("'resolved_target_sha256' is a required property" in e for e in errors))
@@ -1289,11 +1323,11 @@ class ActionTicketSchemaTests(unittest.TestCase):
         self.assertTrue(any("is not of type 'null'" in e for e in errors))
 
     def test_unknown_kind_rejected(self) -> None:
-        """A kind outside the closed enum is rejected (command_exec/network
-        arrive in later phases — D1). Built by hand: the helper's
-        capability map is keyed on known kinds only."""
+        """A kind outside the closed enum is rejected (mode_change_v1 stays
+        a later-phase kind). Built by hand: the helper's capability map is
+        keyed on known kinds only."""
         issued = _issued_ticket("TKT-0001", "file_write_v1", 1, None, resolved_target=_ZERO)
-        issued["ticket_kind"] = "command_exec_v1"
+        issued["ticket_kind"] = "mode_change_v1"
         errors = self._journal_errors(issued)
         self.assertTrue(any("is not one of" in e for e in errors))
 
