@@ -36,6 +36,10 @@
 //!                            resolved_target_sha256 }       // Slice 2 (2026-08-12)
 //!   sign_credential_read_v1 { session_id, canonical_arguments_sha256,
 //!                            resolved_target_sha256 }       // mechanism-only (D8)
+//!   sign_command_exec_v1    { session_id, canonical_arguments_sha256,
+//!                            resolved_target_sha256 }       // Slice 2 (2026-08-12)
+//!   sign_network_v1         { session_id, canonical_arguments_sha256,
+//!                            resolved_target_sha256 }       // Slice 2 (2026-08-12)
 //!   close_session          { session_id }
 //!
 //! A goal revision re-derives the session key when the host re-initialises
@@ -305,6 +309,20 @@ fn handle_request(signer: &mut Signer, line: &str) -> Value {
             signer,
             &params,
             TicketKind::CredentialReadV1,
+            None,
+            Some("resolved_target_sha256"),
+        ),
+        "sign_command_exec_v1" => handle_sign(
+            signer,
+            &params,
+            TicketKind::CommandExecV1,
+            None,
+            Some("resolved_target_sha256"),
+        ),
+        "sign_network_v1" => handle_sign(
+            signer,
+            &params,
+            TicketKind::NetworkV1,
             None,
             Some("resolved_target_sha256"),
         ),
@@ -690,6 +708,64 @@ mod tests {
         assert_eq!(ticket["capability_scope"], "credential_read");
         assert_eq!(ticket["activation_id"], Value::Null);
         assert_eq!(ticket["resolved_target_sha256"], "d".repeat(64));
+    }
+
+    #[test]
+    fn sign_command_exec_v1_roundtrip() {
+        let mut signer = test_signer();
+        let _ = handle_initialize(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1", "agent_id": "main", "goal_version": 0,
+                "goal_digest": "0".repeat(64), "policy_revision": 0,
+            }),
+        )
+        .unwrap();
+        let ticket = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1",
+                "canonical_arguments_sha256": "c".repeat(64),
+                "resolved_target_sha256": "d".repeat(64),
+            }),
+            TicketKind::CommandExecV1,
+            None,
+            Some("resolved_target_sha256"),
+        )
+        .unwrap();
+        assert_eq!(ticket["ticket_kind"], "command_exec_v1");
+        assert_eq!(ticket["capability_scope"], "command_exec");
+        assert_eq!(ticket["activation_id"], Value::Null);
+        assert_eq!(ticket["resolved_target_sha256"], "d".repeat(64));
+    }
+
+    #[test]
+    fn sign_network_v1_roundtrip() {
+        let mut signer = test_signer();
+        let _ = handle_initialize(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1", "agent_id": "main", "goal_version": 0,
+                "goal_digest": "0".repeat(64), "policy_revision": 0,
+            }),
+        )
+        .unwrap();
+        let ticket = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "S1",
+                "canonical_arguments_sha256": "e".repeat(64),
+                "resolved_target_sha256": "f".repeat(64),
+            }),
+            TicketKind::NetworkV1,
+            None,
+            Some("resolved_target_sha256"),
+        )
+        .unwrap();
+        assert_eq!(ticket["ticket_kind"], "network_v1");
+        assert_eq!(ticket["capability_scope"], "network");
+        assert_eq!(ticket["activation_id"], Value::Null);
+        assert_eq!(ticket["resolved_target_sha256"], "f".repeat(64));
     }
 
     #[test]

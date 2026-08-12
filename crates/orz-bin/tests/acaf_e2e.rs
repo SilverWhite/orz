@@ -14,6 +14,12 @@
 //! Test 3: signer unavailable → `control_ticket_rejected(signer_unreachable)`
 //! — shadow mode records the security event but does NOT block the control
 //! event (Slice 1 semantics; fail-closed flips with Slice 2).
+//! Tests 8-13 (Slice 2 full phase, 2026-08-12): network_v1
+//! (`browser_read` — the host-lane URL tool; `web_fetch` main-lane calls
+//! dispatch to the external retrieval subagent, whose lane ticket-binding
+//! surface is registered in the audit) and command_exec_v1
+//! (`run_terminal_cmd` + host-owned
+//! `run_tests`) full chains, plus the invalid-URL shadow ledger.
 
 #![cfg(windows)]
 
@@ -21,17 +27,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orz_assurance::acaf::{RejectCode, TicketKind};
+use orz_assurance::acaf::target::network_target_digest;
 use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::canonical_json;
 use orz_assurance::journal::sha256_hex;
 use orz_assurance::journal::{JournalRecorder, RunEvent};
 use orz_host::keystore::WindowsDpapiInstallationKeyStore;
-use orz_loop::acaf::{AcafClient, AcafConfig, TicketOutcome};
+use orz_loop::acaf::{
+    AcafClient, AcafConfig, TicketOutcome, command_env_sha256, command_exec_target_digest,
+};
 use orz_loop::controller::{AgentLoopController, RetrievalCapability, RetrievalMode};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{ModelGateway, ToolCall};
 use orz_loop::host::{
-    LoopHost, PermitDecision, PermitError, ToolDef, ToolError, ToolResult, ToolRegistry,
+    LoopHost, PermitDecision, PermitError, TestRunResult, TestRunner, ToolDef, ToolError,
+    ToolResult, ToolRegistry,
 };
 use serde_json::Value;
 
@@ -52,6 +62,7 @@ impl ToolRegistry for EmptyRegistry {
 struct TestHost {
     journal: JournalRecorder,
     tool_result: Option<ToolResult>,
+    test_runner: Option<TestRunner>,
 }
 
 #[async_trait::async_trait]
@@ -82,6 +93,18 @@ impl LoopHost for TestHost {
     }
     fn workspace_trust(&self) -> WorkspaceTrust {
         WorkspaceTrust::ObservedTrusted
+    }
+    fn test_runner(&self) -> Option<TestRunner> {
+        self.test_runner.clone()
+    }
+    async fn run_tests(&self) -> Result<TestRunResult, ToolError> {
+        Ok(TestRunResult {
+            output: "tests ok".to_string(),
+            exit_code: Some(0),
+            full_output_path: None,
+            workspace_delta: Vec::new(),
+            workspace_delta_truncated: false,
+        })
     }
 }
 
@@ -256,6 +279,7 @@ async fn controller_control_events_carry_tickets() {
             output: "ok".to_string(),
             exit_code: Some(0),
         }),
+        test_runner: None,
     };
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -369,6 +393,7 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
             output: "ok".to_string(),
             exit_code: Some(0),
         }),
+        test_runner: None,
     };
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
@@ -506,6 +531,7 @@ async fn file_write_ticket_full_chain() {
             output: "patched".to_string(),
             exit_code: Some(0),
         }),
+        test_runner: None,
     };
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -606,6 +632,7 @@ async fn file_write_shadow_on_signer_unreachable() {
             output: "patched".to_string(),
             exit_code: Some(0),
         }),
+        test_runner: None,
     };
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -674,6 +701,7 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
             output: "ok".to_string(),
             exit_code: Some(0),
         }),
+        test_runner: None,
     };
 
     let old_goal = "查找项目文档";
@@ -790,4 +818,503 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
             "consumed must follow its issued event"
         );
     }
+}
+
+// ── test 8: Slice 2 full phase — network_v1 (browser_read) full chain ─────
+
+#[tokio::test]
+async fn network_ticket_full_chain() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "page text".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({
+                "url": "HTTP://Example.COM:80/docs/guide?q=1#frag",
+            }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "抓取网页", "RUN-ACAF-NET", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let issued: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+
+    assert_eq!(issued.len(), 1, "one network ticket: {types:?}");
+    assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
+    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+
+    let issue = &issued[0].payload;
+    assert_eq!(issue["ticket_kind"], "network_v1");
+    assert_eq!(issue["capability_scope"], "network");
+    assert!(issue["activation_id"].is_null(), "main lane — no activation (D2)");
+    assert_eq!(
+        issue["resolved_target_sha256"].as_str().unwrap().len(),
+        64,
+        "the canonical URL target is bound (check 5b)"
+    );
+    // Review P2-1 (2026-08-12): pin the EXACT canonical target — the raw
+    // input `HTTP://Example.COM:80/docs/guide?q=1#frag` must bind
+    // `http://example.com/docs/guide?q=1`, not the original spelling.
+    assert_eq!(
+        issue["resolved_target_sha256"].as_str().unwrap(),
+        network_target_digest("http://example.com/docs/guide?q=1"),
+        "the canonical URL digest is bound, not the raw input"
+    );
+    assert_eq!(consumed[0].payload["ticket_id"], issue["ticket_id"]);
+    assert_eq!(consumed[0].payload["ticket_kind"], "network_v1");
+    assert_eq!(consumed[0].payload["outcome"], "accepted");
+    let started = types.iter().position(|t| t == "tool_started").unwrap();
+    let issued_idx = types
+        .iter()
+        .position(|t| t == "control_ticket_issued")
+        .unwrap();
+    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+}
+
+// ── test 9: command_exec_v1 — model-supplied run_terminal_cmd ─────────────
+
+#[tokio::test]
+async fn run_terminal_cmd_command_ticket_full_chain() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "done".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "run_terminal_cmd".to_string(),
+            arguments: serde_json::json!({
+                "command": "python -c print('hi')",
+                "description": "say hi",
+            }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "运行命令", "RUN-ACAF-CMD", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let issued: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+
+    assert_eq!(issued.len(), 1, "one command_exec ticket: {types:?}");
+    assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
+    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+
+    let issue = &issued[0].payload;
+    assert_eq!(issue["ticket_kind"], "command_exec_v1");
+    assert_eq!(issue["capability_scope"], "command_exec");
+    assert!(issue["activation_id"].is_null(), "main lane — no activation (D2)");
+    assert_eq!(
+        issue["resolved_target_sha256"].as_str().unwrap().len(),
+        64,
+        "the argv/cwd/env target is bound (check 5b)"
+    );
+    // Review P2-1 (2026-08-12): pin the exact argv/cwd/env target digest.
+    let cmd_cwd = dir.to_string_lossy().into_owned();
+    let cmd_argv = vec!["python -c print('hi')".to_string()];
+    let cmd_env_sha = command_env_sha256(&[]);
+    assert_eq!(
+        issue["resolved_target_sha256"].as_str().unwrap(),
+        command_exec_target_digest(&cmd_argv, &cmd_cwd, &cmd_env_sha),
+        "the command target digest matches the canonical argv/cwd/env triple"
+    );
+    assert_eq!(consumed[0].payload["ticket_id"], issue["ticket_id"]);
+    assert_eq!(consumed[0].payload["ticket_kind"], "command_exec_v1");
+    let started = types.iter().position(|t| t == "tool_started").unwrap();
+    let issued_idx = types
+        .iter()
+        .position(|t| t == "control_ticket_issued")
+        .unwrap();
+    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+}
+
+// ── test 10: command_exec_v1 — host-owned run_tests fixed command ──────────
+
+#[tokio::test]
+async fn run_tests_command_ticket_full_chain() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "tests ok".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: Some(TestRunner {
+            command: vec!["python".to_string(), "-m".to_string(), "pytest".to_string()],
+            timeout: None,
+            env: vec![("PYTHONPATH".to_string(), "src".to_string())],
+        }),
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "run_tests".to_string(),
+            arguments: serde_json::json!({}),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "运行测试", "RUN-ACAF-RT", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let issued: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+
+    assert_eq!(issued.len(), 1, "one run_tests command_exec ticket: {types:?}");
+    assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
+    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+
+    let issue = &issued[0].payload;
+    assert_eq!(issue["ticket_kind"], "command_exec_v1");
+    assert_eq!(issue["capability_scope"], "command_exec");
+    assert_eq!(
+        issue["resolved_target_sha256"].as_str().unwrap().len(),
+        64,
+        "the argv/cwd/env target is bound (check 5b)"
+    );
+    // Review P2-1 (2026-08-12): pin the exact argv/cwd/env target digest
+    // and the consumed outcome.
+    let rt_cwd = dir.to_string_lossy().into_owned();
+    let rt_argv = vec!["python".to_string(), "-m".to_string(), "pytest".to_string()];
+    let rt_env = vec![("PYTHONPATH".to_string(), "src".to_string())];
+    let rt_env_sha = command_env_sha256(&rt_env);
+    assert_eq!(
+        issue["resolved_target_sha256"].as_str().unwrap(),
+        command_exec_target_digest(&rt_argv, &rt_cwd, &rt_env_sha),
+        "the run_tests target digest matches the host-owned command triple"
+    );
+    assert_eq!(consumed[0].payload["ticket_id"], issue["ticket_id"]);
+    assert_eq!(consumed[0].payload["ticket_kind"], "command_exec_v1");
+    assert_eq!(consumed[0].payload["outcome"], "accepted");
+    // The ticket wraps the run BEFORE ToolStarted (ordering discipline).
+    let started = types.iter().position(|t| t == "tool_started").unwrap();
+    let issued_idx = types
+        .iter()
+        .position(|t| t == "control_ticket_issued")
+        .unwrap();
+    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+    // The fixed command is still declared on ToolStarted.
+    let started_event = &events[started];
+    assert_eq!(
+        started_event.payload["fixed_command"],
+        "python -m pytest"
+    );
+}
+
+// ── test 11: Slice 2 full phase — invalid URL → shadow ledger, tool runs ───
+
+#[tokio::test]
+async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "page text".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({
+                "url": "not a url",
+            }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "抓取网页", "RUN-ACAF-NET-BAD", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert_eq!(rejected.len(), 1, "one unticketable-URL rejection: {types:?}");
+    let rejection = &rejected[0].payload;
+    assert_eq!(rejection["ticket_kind"], "network_v1");
+    assert_eq!(rejection["reject_code"], "target_mismatch");
+    assert!(rejection["ticket_id"].is_null(), "no ticket was issued: {rejection:?}");
+    // Shadow mode: the tool still executes.
+    assert!(
+        types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
+        "tool proceeds under shadow mode: {types:?}"
+    );
+}
+
+// ── test 12: empty run_terminal_cmd command → shadow ledger, tool runs ────
+
+#[tokio::test]
+async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "done".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "run_terminal_cmd".to_string(),
+            arguments: serde_json::json!({
+                "command": "   ",
+                "description": "noop",
+            }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "运行命令", "RUN-ACAF-CMD-EMPTY", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert_eq!(rejected.len(), 1, "one unticketable-command rejection: {types:?}");
+    let rejection = &rejected[0].payload;
+    assert_eq!(rejection["ticket_kind"], "command_exec_v1");
+    assert_eq!(rejection["reject_code"], "target_mismatch");
+    assert!(rejection["ticket_id"].is_null(), "no ticket was issued: {rejection:?}");
+    // Shadow mode: the tool still executes.
+    assert!(
+        types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
+        "tool proceeds under shadow mode: {types:?}"
+    );
+}
+
+// ── test 13: missing URL key with configured ACAF → silent skip (locked) ──
+
+#[tokio::test]
+async fn missing_network_arg_silently_skips_with_configured_acaf() {
+    // Review P2-1 (2026-08-12): the missing-argument silent skip is a
+    // REGISTERED shadow-mode behaviour (fail-closed flip checklist ③/④) —
+    // locked here so the flip decision cannot forget it.
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "page text".to_string(),
+            exit_code: Some(0),
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "foo": "bar" }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(&host, "抓取网页", "RUN-ACAF-NET-NOURL", MANIFEST, 0, None, None, None)
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let ticket_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.event_type.to_string().as_str(),
+                "control_ticket_issued" | "control_ticket_consumed" | "control_ticket_rejected"
+            )
+        })
+        .collect();
+    assert!(
+        ticket_events.is_empty(),
+        "missing URL key must silently skip in shadow mode: {types:?}"
+    );
+    // The tool still runs (the host-side tool fails on its own or succeeds
+    // per the host's own argument contract).
+    assert!(
+        types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
+        "tool path unchanged: {types:?}"
+    );
 }

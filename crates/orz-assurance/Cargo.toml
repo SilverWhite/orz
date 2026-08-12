@@ -19,6 +19,7 @@ base64 = { workspace = true }
 dunce = { workspace = true }
 ring = { workspace = true }
 wildmatch = { workspace = true }
+url = { workspace = true }
 # Model path resolution primitives (acaf/target.rs single-sourcing,
 # 2026-08-12) — first internal dependency; no cycle (orz-paths has none).
 orz-paths = { workspace = true }

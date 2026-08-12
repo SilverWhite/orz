@@ -1,7 +1,7 @@
 //! ACAF tickets (ADR-0011 §4.2/§4.3) — one-time HMAC-SHA256 tickets for
 //! control events (orientation / disposition / close / goal revision) and,
-//! from Slice 2 first phase (2026-08-12), action kinds
-//! (`file_write_v1` / `credential_read_v1`) carrying
+//! from Slice 2 (2026-08-12), action kinds (`file_write_v1` /
+//! `credential_read_v1` / `command_exec_v1` / `network_v1`) carrying
 //! `resolved_target_sha256` — the digest of the parsed real target object
 //! (§4.2 check 5 TOCTOU; target resolution lives in [`target`]).
 //!
@@ -56,9 +56,8 @@ pub mod target;
 pub const TICKET_SCHEMA_VERSION: &str = "0.2.0-draft";
 
 /// Ticket kinds — Slice 1 (ADR-0011 §7 Slice 1): the four control events;
-/// Slice 2 first phase (2026-08-12): `FileWriteV1` / `CredentialReadV1`
-/// action kinds (command_exec / network join when their target shapes are
-/// designed — each later phase extends this enum).
+/// Slice 2 (2026-08-12): the four action kinds (`FileWriteV1` /
+/// `CredentialReadV1` / `CommandExecV1` / `NetworkV1`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TicketKind {
@@ -68,6 +67,8 @@ pub enum TicketKind {
     GoalRevisionV1,
     FileWriteV1,
     CredentialReadV1,
+    CommandExecV1,
+    NetworkV1,
 }
 
 impl TicketKind {
@@ -79,6 +80,8 @@ impl TicketKind {
             TicketKind::GoalRevisionV1 => "goal_revision_v1",
             TicketKind::FileWriteV1 => "file_write_v1",
             TicketKind::CredentialReadV1 => "credential_read_v1",
+            TicketKind::CommandExecV1 => "command_exec_v1",
+            TicketKind::NetworkV1 => "network_v1",
         }
     }
 
@@ -92,6 +95,8 @@ impl TicketKind {
             TicketKind::GoalRevisionV1 => "goal_revision",
             TicketKind::FileWriteV1 => "file_write",
             TicketKind::CredentialReadV1 => "credential_read",
+            TicketKind::CommandExecV1 => "command_exec",
+            TicketKind::NetworkV1 => "network",
         }
     }
 
@@ -114,7 +119,13 @@ impl TicketKind {
     /// compares it against the re-derived live target digest (Slice 2 —
     /// action tickets must bind the real target, Slice 1 audit D3).
     pub fn requires_target(&self) -> bool {
-        matches!(self, TicketKind::FileWriteV1 | TicketKind::CredentialReadV1)
+        matches!(
+            self,
+            TicketKind::FileWriteV1
+                | TicketKind::CredentialReadV1
+                | TicketKind::CommandExecV1
+                | TicketKind::NetworkV1
+        )
     }
 }
 
@@ -743,6 +754,8 @@ fn parse_kind(value: &str) -> Result<TicketKind, String> {
         "goal_revision_v1" => Ok(TicketKind::GoalRevisionV1),
         "file_write_v1" => Ok(TicketKind::FileWriteV1),
         "credential_read_v1" => Ok(TicketKind::CredentialReadV1),
+        "command_exec_v1" => Ok(TicketKind::CommandExecV1),
+        "network_v1" => Ok(TicketKind::NetworkV1),
         other => Err(format!("unknown ticket_kind: {other}")),
     }
 }
@@ -878,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn all_six_kinds_issue_and_verify() {
+    fn all_eight_kinds_issue_and_verify() {
         let signer = session_signer();
         for (i, kind) in [
             TicketKind::OrientationV1,
@@ -887,6 +900,8 @@ mod tests {
             TicketKind::GoalRevisionV1,
             TicketKind::FileWriteV1,
             TicketKind::CredentialReadV1,
+            TicketKind::CommandExecV1,
+            TicketKind::NetworkV1,
         ]
         .iter()
         .enumerate()
@@ -930,6 +945,35 @@ mod tests {
         let result = verify_ticket(&signer, &ticket, &vctx);
         assert!(!result.valid);
         assert_eq!(result.reject_codes[0], RejectCode::TargetMismatch);
+    }
+
+    #[test]
+    fn all_action_kinds_reject_live_target_mismatch() {
+        // Review D1-1 (2026-08-12, three-agent review): prove that check 5b
+        // compares against the LIVE re-derived digest for every action kind
+        // — the verification never trusts the ticket's face value, even
+        // though network/command targets are deterministic recomputes of
+        // captured inputs (no external state to drift).
+        let signer = session_signer();
+        for (i, kind) in [
+            TicketKind::FileWriteV1,
+            TicketKind::CredentialReadV1,
+            TicketKind::CommandExecV1,
+            TicketKind::NetworkV1,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let ctx = issue_ctx("SESS-0001", *kind);
+            let ticket =
+                issue_ticket(&signer, &ctx, *kind, (i + 1) as u64, &format!("n{i}"), 300, 1_700_000_000)
+                    .unwrap();
+            let mut vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
+            vctx.resolved_target_sha256 = Some("1".repeat(64));
+            let result = verify_ticket(&signer, &ticket, &vctx);
+            assert!(!result.valid, "kind {kind:?}");
+            assert_eq!(result.reject_codes[0], RejectCode::TargetMismatch, "kind {kind:?}");
+        }
     }
 
     #[test]

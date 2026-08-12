@@ -1677,9 +1677,26 @@ impl AgentLoopController {
             return Ok(());
         };
         // Unticketed paths journal nothing (zero behaviour change when ACAF
-        // is unconfigured — same gate as the control events).
+        // is unconfigured — same gate as the control events). This MUST
+        // precede the network/command dispatch below: an unconfigured
+        // fabric would otherwise journal shadow rejections for invalid
+        // URLs/commands.
         if self.acaf.is_none() {
             return Ok(());
+        }
+        // Slice 2 full phase (2026-08-12): the network and command branches
+        // resolve their own target shapes (canonical URL / argv-cwd-env
+        // triple) and share the `run_action_ticket` lifecycle; the proven
+        // file_write path below stays untouched.
+        if kind == TicketKind::NetworkV1 {
+            return self.acaf_network_event(writer, tool, tc_args).await;
+        }
+        if kind == TicketKind::CommandExecV1 {
+            // `run_tests` never reaches this generic path (the
+            // `run_host_tool` branch handles it with the host-owned fixed
+            // command BEFORE ToolStarted); `run_terminal_cmd` binds the
+            // model-supplied shell command here.
+            return self.acaf_command_event(writer, tool, tc_args).await;
         }
         // Defensive: no snapshot store → no worktree base → the real target
         // cannot be resolved; skip the ticket (production always carries the
@@ -1829,6 +1846,292 @@ impl AgentLoopController {
                 let live_canonical_digest =
                     crate::acaf::canonical_arguments_digest(kind, &live_canonical);
                 // Lock scope 2 — verify only.
+                let Some(acaf) = &self.acaf else {
+                    return Ok(());
+                };
+                let mut client = acaf.lock().await;
+                client
+                    .verify_and_consume(
+                        &ticket,
+                        &live_canonical_digest,
+                        None,
+                        Some(live_target_digest),
+                    )
+                    .await
+            }
+            Err(e) => Ok(crate::acaf::TicketOutcome::Rejected {
+                ticket_id: Some(ticket.ticket_id.clone()),
+                kind,
+                code: orz_assurance::acaf::RejectCode::TargetMismatch,
+                detail: format!("live target resolution failed: {e}"),
+            }),
+        };
+        match live_outcome {
+            Ok(outcome) => self.journal_ticket_outcome(writer, &outcome, &now).await,
+            Err(e) => {
+                self.journal_ticket_outcome(
+                    writer,
+                    &crate::acaf::TicketOutcome::SignerUnreachable {
+                        kind,
+                        detail: e.to_string(),
+                    },
+                    &now,
+                )
+                .await
+            }
+        }
+    }
+
+    /// ACAF Slice 2 full phase (2026-08-12) — `network_v1` action tickets
+    /// for the URL-carrying network tools (`web_fetch` / `browser_read`).
+    /// The live target is the canonical http(s) URL (`resolve_network_url`
+    /// — scheme/host normalisation, default-port removal, fragment drop,
+    /// userinfo refusal), the canonical arguments bind the tool + canonical
+    /// URL, and the consumption point recomputes the canonical object from
+    /// the ORIGINAL URL argument — never trusting the ticket's face values
+    /// (check 5/5b). For a pure string target this recompute is
+    /// deterministic (no external state to drift) — the TOCTOU detection
+    /// strength of file_write's FS re-read does not apply here (review
+    /// D1-1, 2026-08-12). Shadow mode: an unticketable URL journals
+    /// `control_ticket_rejected` (null ticket_id + target_mismatch) and the
+    /// tool proceeds.
+    async fn acaf_network_event(
+        &self,
+        writer: &mut EventWriter<'_>,
+        tool: &str,
+        tc_args: &serde_json::Value,
+    ) -> Result<(), AgentLoopError> {
+        if self.acaf.is_none() {
+            return Ok(());
+        }
+        let Some(url) = tc_args.get("url").and_then(serde_json::Value::as_str) else {
+            // No URL target in the args — nothing to ticket (the tool call
+            // fails on its own later; shadow mode journals nothing for a
+            // missing argument — registered P2-4/P2-5 class: the
+            // fail-closed flip must turn this silent skip into a hard
+            // refusal).
+            return Ok(());
+        };
+        let url = url.to_string();
+        // Review P1-1 (2026-08-12, three-agent review): the URL target needs
+        // NO worktree-relative resolution — a snapshot_store gate here was
+        // an error copy of the file path branch and would have created an
+        // invisible unticketed channel (configured ACAF + missing store →
+        // network tool runs with zero ticket events).
+        let kind = TicketKind::NetworkV1;
+        let now = chrono::Utc::now();
+        let canonical_url =
+            match orz_assurance::acaf::target::resolve_network_url(&url) {
+                Ok(u) => u,
+                Err(e) => {
+                    return self
+                        .shadow_action_rejection(
+                            writer,
+                            kind,
+                            format!("network target resolution failed: {e}"),
+                            &now,
+                        )
+                        .await;
+                }
+            };
+        let canonical_args = crate::acaf::network_canonical_args(tool, &canonical_url);
+        let target_digest = orz_assurance::acaf::target::network_target_digest(&canonical_url);
+        let tool_owned = tool.to_string();
+        self.run_action_ticket(writer, kind, canonical_args, target_digest, move || {
+            let canonical_url =
+                orz_assurance::acaf::target::resolve_network_url(&url)
+                    .map_err(|e| e.to_string())?;
+            let canonical = crate::acaf::network_canonical_args(&tool_owned, &canonical_url);
+            let digest = orz_assurance::acaf::target::network_target_digest(&canonical_url);
+            Ok((canonical, digest))
+        })
+        .await
+    }
+
+    /// ACAF Slice 2 full phase (2026-08-12) — `command_exec_v1` for the
+    /// model-supplied shell tool `run_terminal_cmd`. The canonical argv is
+    /// the trimmed command string (the shell parses it — the canonical form
+    /// is the whole command), the cwd is the session worktree, and the
+    /// environment digest is over an empty list (the terminal backend's
+    /// process env is host-owned and not model-controlled — registered
+    /// boundary). The target digest binds the argv/cwd/env triple
+    /// (design §3.3), re-derived at the consumption point.
+    async fn acaf_command_event(
+        &self,
+        writer: &mut EventWriter<'_>,
+        tool: &str,
+        tc_args: &serde_json::Value,
+    ) -> Result<(), AgentLoopError> {
+        if self.acaf.is_none() {
+            return Ok(());
+        }
+        let Some(command) = tc_args.get("command").and_then(serde_json::Value::as_str) else {
+            // Missing command — the tool call fails on its own later; same
+            // silent-skip registration as file_path/url (P2-4/P2-5 class).
+            return Ok(());
+        };
+        let command = command.trim().to_string();
+        let kind = TicketKind::CommandExecV1;
+        let now = chrono::Utc::now();
+        if command.is_empty() {
+            return self
+                .shadow_action_rejection(
+                    writer,
+                    kind,
+                    "command target resolution failed: empty command".to_string(),
+                    &now,
+                )
+                .await;
+        }
+        let Some(store) = &self.snapshot_store else {
+            return Ok(());
+        };
+        let cwd = store.worktree().to_string_lossy().into_owned();
+        let env_sha = crate::acaf::command_env_sha256(&[]);
+        let argv = vec![command.clone()];
+        let canonical_args =
+            crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
+        let target_digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
+        let tool_owned = tool.to_string();
+        self.run_action_ticket(writer, kind, canonical_args, target_digest, move || {
+            let canonical =
+                crate::acaf::command_exec_canonical_args(&tool_owned, &argv, &cwd, &env_sha);
+            let digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
+            Ok((canonical, digest))
+        })
+        .await
+    }
+
+    /// ACAF Slice 2 full phase (2026-08-12) — `command_exec_v1` for the
+    /// host-owned `run_tests` fixed command. The canonical argv is the
+    /// host's fixed command (the model supplies no argv), the cwd is the
+    /// session worktree (production == the host's session cwd — registered
+    /// simplification), and the environment digest covers the harness's
+    /// explicit `TestRunner::env` entries (the fixed platform allowlist is
+    /// host-process-stable and excluded — registered). The ticket wraps the
+    /// call BEFORE ToolStarted (same ordering discipline as file_write).
+    async fn acaf_command_exec_event(
+        &self,
+        writer: &mut EventWriter<'_>,
+        tool: &str,
+        runner: &crate::host::TestRunner,
+    ) -> Result<(), AgentLoopError> {
+        if self.acaf.is_none() {
+            return Ok(());
+        }
+        let Some(store) = &self.snapshot_store else {
+            return Ok(());
+        };
+        if runner.command.is_empty() {
+            // The tool would fail on its own (host side refuses an empty
+            // command) — nothing to ticket.
+            return Ok(());
+        }
+        let cwd = store.worktree().to_string_lossy().into_owned();
+        let argv = runner.command.clone();
+        let env_sha = crate::acaf::command_env_sha256(&runner.env);
+        let canonical_args =
+            crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
+        let target_digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
+        let tool_owned = tool.to_string();
+        self.run_action_ticket(writer, TicketKind::CommandExecV1, canonical_args, target_digest, move || {
+            let canonical =
+                crate::acaf::command_exec_canonical_args(&tool_owned, &argv, &cwd, &env_sha);
+            let digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
+            Ok((canonical, digest))
+        })
+        .await
+    }
+
+    /// Shared Slice-2 action-ticket lifecycle for the network / command
+    /// branches: sign → journal issued → RECOMPUTE the canonical arguments
+    /// and target digest from the issue-time inputs (never the ticket's
+    /// face values) → verify_and_consume → journal consumed|rejected.
+    /// Review D1-1 (2026-08-12): for network/command the recompute is
+    /// deterministic — these targets are pure string/argv objects, so this
+    /// is consistency checking against the captured original input, not the
+    /// external-state TOCTOU detection of file_write's FS re-read. Shadow
+    /// mode: every failure path journals `control_ticket_rejected` and the
+    /// tool proceeds; unticketed paths (no client / no goal yet) journal
+    /// nothing.
+    async fn run_action_ticket(
+        &self,
+        writer: &mut EventWriter<'_>,
+        kind: TicketKind,
+        canonical_args: serde_json::Value,
+        target_digest: String,
+        live: impl Fn() -> Result<(serde_json::Value, String), String>,
+    ) -> Result<(), AgentLoopError> {
+        let canonical_digest = crate::acaf::canonical_arguments_digest(kind, &canonical_args);
+        let (goal_digest, goal_version) = {
+            let g = self.goal_context.lock().unwrap();
+            let Some(digest) = g.digest.clone() else {
+                return Ok(());
+            };
+            (digest, g.version)
+        };
+        let session_id = self
+            .session_id
+            .clone()
+            .unwrap_or_else(|| writer.run_id().to_string());
+        let now = chrono::Utc::now();
+        // Sign (lock scope 1 — review P2-6 2026-08-12: the mutex covers only
+        // the signer RPCs, NOT the live re-derivation below).
+        let signed = {
+            let Some(acaf) = &self.acaf else {
+                return Ok(());
+            };
+            let mut client = acaf.lock().await;
+            match client
+                .ensure_initialized(
+                    &session_id,
+                    "main",
+                    goal_version,
+                    &goal_digest,
+                    self.policy_revision(),
+                )
+                .await
+            {
+                Ok(()) => match client
+                    .sign_ticket(kind, None, &canonical_digest, Some(target_digest.clone()))
+                    .await
+                {
+                    Ok(t) => Ok(t),
+                    Err(e) => Err(crate::acaf::TicketOutcome::SignerUnreachable {
+                        kind,
+                        detail: e.to_string(),
+                    }),
+                },
+                Err(e) => Err(crate::acaf::TicketOutcome::SignerUnreachable {
+                    kind,
+                    detail: e.to_string(),
+                }),
+            }
+        };
+        let ticket = match signed {
+            Ok(t) => t,
+            Err(outcome) => {
+                return self
+                    .journal_ticket_outcome(writer, &outcome, &now)
+                    .await
+            }
+        };
+        writer
+            .record(
+                EventType::ControlTicketIssued,
+                crate::acaf::issued_payload(&ticket),
+            )
+            .await?;
+        // Verify: recompute the canonical arguments and target digest from
+        // the ORIGINAL model argument / host-owned command — never from the
+        // ticket's face values. Any divergence between the two computations
+        // hits `target_mismatch` (check 5/5b). Review D1-1 (2026-08-12):
+        // for network/command this is a deterministic recompute of captured
+        // inputs (consistency check); file_write is the true FS re-read.
+        let live_outcome = match live() {
+            Ok((live_args, live_target_digest)) => {
+                let live_canonical_digest =
+                    crate::acaf::canonical_arguments_digest(kind, &live_args);
                 let Some(acaf) = &self.acaf else {
                     return Ok(());
                 };
@@ -4679,9 +4982,15 @@ impl AgentLoopController {
         // ToolStarted/ToolCompleted (D-5; 2026-08-07 review F-02: this path
         // previously recorded zero journal events).
         if tc.name == "run_tests" {
-            let fixed_command: Option<String> = host
-                .test_runner()
-                .map(|r| r.command.join(" "));
+            let runner = host.test_runner();
+            // ACAF Slice 2 (2026-08-12): command_exec_v1 for the host-owned
+            // fixed command — issued/verified BEFORE ToolStarted (same
+            // ordering discipline as every other action ticket). Shadow
+            // mode: rejections are journaled and the run proceeds.
+            if let Some(runner) = &runner {
+                self.acaf_command_exec_event(writer, &tc.name, runner).await?;
+            }
+            let fixed_command: Option<String> = runner.map(|r| r.command.join(" "));
             writer
                 .record(
                     EventType::ToolStarted,
@@ -8606,6 +8915,85 @@ mod tests {
         assert!(
             types.contains(&EventType::ToolStarted) && types.contains(&EventType::ToolCompleted),
             "tool path unchanged: {types:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ACAF Slice 2 full phase (2026-08-12): with no client configured the
+    /// network (`browser_read` — including an INVALID URL that would journal
+    /// a shadow rejection if the fabric were live) and command
+    /// (`run_terminal_cmd`) branches also journal ZERO ticket events — the
+    /// unconfigured-fabric gate must precede the new dispatch (regression
+    /// lock for the review finding where network/command were dispatched
+    /// before the `acaf.is_none()` check).
+    #[tokio::test]
+    async fn network_and_command_with_acaf_disabled_zero_ticket_events() {
+        let dir = test_dir();
+        let store = Arc::new(
+            SnapshotStore::new(dir.join(".gsa").join("snapshots"), dir.clone()).unwrap(),
+        );
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+            }),
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "browser_read".to_string(),
+                    arguments: serde_json::json!({ "url": "https://example.com" }),
+                    call_id: "call-1".to_string(),
+                },
+                ToolCall {
+                    name: "browser_read".to_string(),
+                    arguments: serde_json::json!({ "url": "not a url" }),
+                    call_id: "call-2".to_string(),
+                },
+                ToolCall {
+                    name: "run_terminal_cmd".to_string(),
+                    arguments: serde_json::json!({ "command": "python -c pass" }),
+                    call_id: "call-3".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        // No .with_acaf — unconfigured fabric (zero behaviour change).
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_retrieval_mode(
+                RetrievalMode::LocalBrowser,
+                RetrievalCapability::Available,
+                false,
+                None,
+                None,
+            )
+            .with_snapshot_store(Some(store));
+        controller
+            .run_turn(&host, "读取与命令", "RUN-NOACAF-NETCMD", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        assert!(
+            !types
+                .iter()
+                .any(|t| matches!(
+                    t,
+                    EventType::ControlTicketIssued
+                        | EventType::ControlTicketConsumed
+                        | EventType::ControlTicketRejected
+                )),
+            "unconfigured ACAF must journal zero ticket events even for an \
+             invalid URL: {types:?}"
+        );
+        assert!(
+            types.contains(&EventType::ToolStarted) && types.contains(&EventType::ToolCompleted),
+            "tool paths unchanged: {types:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

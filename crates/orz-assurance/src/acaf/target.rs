@@ -1,6 +1,8 @@
 //! ACAF action target resolution (Slice 2 first phase, ADR-0011 §4.2/§4.5) —
 //! the *parsed real target object* for action tickets: the resolved file
-//! path for `file_write_v1`, the credential target for `credential_read_v1`.
+//! path for `file_write_v1`, the credential target for `credential_read_v1`,
+//! and the canonical URL for `network_v1` (command_exec binds its
+//! argv/cwd/env triple in the caller — orz-loop canonical helpers).
 //!
 //! `resolved_target_sha256` binds the digest of this parsed object, and the
 //! consumption point re-parses the live object and re-derives the digest
@@ -46,6 +48,12 @@ pub enum TargetResolveError {
     ReparseComponent,
     #[error("~user-style paths are not supported for action tickets (ambiguous expansion)")]
     TildeUserUnsupported,
+    #[error("target URL is not a valid absolute URL")]
+    InvalidUrl,
+    #[error("target URL scheme is not http/https")]
+    UnsupportedScheme,
+    #[error("target URL carries embedded credentials (userinfo)")]
+    UrlCredentialsUnsupported,
 }
 
 /// Resolve a model-supplied path argument to the parsed real target, mirroring
@@ -170,6 +178,45 @@ pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
         Ok(c) => c,
         Err(_) => path.to_path_buf(),
     }
+}
+
+/// Resolve a model-supplied URL argument to the canonical network target
+/// (`network_v1` — web_fetch / browser_read): absolute http(s) URL with the
+/// scheme/host lowercased by the parser, explicit default ports removed,
+/// the fragment dropped (it is never sent), and embedded userinfo rejected
+/// (the URL gates already refuse credentials — a credential-bearing URL is
+/// unticketable, not bindable). Percent-encoding and path/query bytes are
+/// preserved as the parser normalises them — the digest covers the exact
+/// canonical string the request is built from.
+pub fn resolve_network_url(input: &str) -> Result<String, TargetResolveError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(TargetResolveError::Empty);
+    }
+    let parsed = url::Url::parse(trimmed).map_err(|_| TargetResolveError::InvalidUrl)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(TargetResolveError::UnsupportedScheme);
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(TargetResolveError::UrlCredentialsUnsupported);
+    }
+    let mut normalized = parsed.clone();
+    normalized.set_fragment(None);
+    let default_port = match normalized.scheme() {
+        "http" => Some(80),
+        "https" => Some(443),
+        _ => None,
+    };
+    if normalized.port() == default_port {
+        let _ = normalized.set_port(None);
+    }
+    Ok(normalized.to_string())
+}
+
+/// The digest bound as the `network_v1` resolved target: SHA-256 over the
+/// canonical URL bytes (the parsed real object being contacted).
+pub fn network_target_digest(canonical_url: &str) -> String {
+    sha256_hex(canonical_url.as_bytes())
 }
 
 /// `symlink_metadata`-based reparse check — does NOT follow the link (a
@@ -458,6 +505,55 @@ mod tests {
         let b = resolved_target_digest(Path::new(r"C:/worktree/src/main.rs"));
         let c = resolved_target_digest(Path::new(r"C:\worktree\src\other.rs"));
         // Separator-unified digest: `\` and `/` spell the same target.
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn network_url_canonicalisation() {
+        // Default ports are removed, the fragment is dropped, the host is
+        // lowercased, and an explicit non-default port survives.
+        assert_eq!(
+            resolve_network_url("HTTP://Example.COM:80/a/b?q=1#frag").unwrap(),
+            "http://example.com/a/b?q=1"
+        );
+        assert_eq!(
+            resolve_network_url("https://example.com:8443/x").unwrap(),
+            "https://example.com:8443/x"
+        );
+        // The empty input and invalid URLs are unticketable.
+        assert_eq!(
+            resolve_network_url("   "),
+            Err(TargetResolveError::Empty)
+        );
+        assert_eq!(
+            resolve_network_url("not a url"),
+            Err(TargetResolveError::InvalidUrl)
+        );
+        // Only http(s) is a network-tool target.
+        assert_eq!(
+            resolve_network_url("file:///etc/passwd"),
+            Err(TargetResolveError::UnsupportedScheme)
+        );
+        // Embedded credentials are refused — the URL gates already reject
+        // them, so the ticket side never binds a credential-bearing URL.
+        assert_eq!(
+            resolve_network_url("https://user:pass@example.com/"),
+            Err(TargetResolveError::UrlCredentialsUnsupported)
+        );
+        assert_eq!(
+            resolve_network_url("https://user@example.com/"),
+            Err(TargetResolveError::UrlCredentialsUnsupported)
+        );
+    }
+
+    #[test]
+    fn network_target_digest_is_stable_and_sensitive() {
+        let a = network_target_digest("https://example.com/a");
+        let b = network_target_digest("https://example.com/a");
+        let c = network_target_digest("https://example.com/b");
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 64);

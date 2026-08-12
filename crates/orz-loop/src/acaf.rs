@@ -352,6 +352,8 @@ impl AcafClient {
             TicketKind::GoalRevisionV1 => "sign_goal_revision_v1",
             TicketKind::FileWriteV1 => "sign_file_write_v1",
             TicketKind::CredentialReadV1 => "sign_credential_read_v1",
+            TicketKind::CommandExecV1 => "sign_command_exec_v1",
+            TicketKind::NetworkV1 => "sign_network_v1",
         };
         let result = self.call(method, params).await?;
         serde_json::from_value(result).map_err(|e| AcafClientError::Protocol(e.to_string()))
@@ -408,6 +410,8 @@ impl AcafClient {
             "goal_revision_v1" => TicketKind::GoalRevisionV1,
             "file_write_v1" => TicketKind::FileWriteV1,
             "credential_read_v1" => TicketKind::CredentialReadV1,
+            "command_exec_v1" => TicketKind::CommandExecV1,
+            "network_v1" => TicketKind::NetworkV1,
             other => {
                 return Err(AcafClientError::Protocol(format!(
                     "unknown ticket_kind {other}"
@@ -626,11 +630,19 @@ pub fn reject_code_str(code: &RejectCode) -> &'static str {
     code.as_str()
 }
 
-/// Map a host tool name to its action ticket kind (Slice 2 first phase, D5 —
-/// ONE place to extend when command_exec / network join in later phases).
+/// Map a host tool name to its action ticket kind (Slice 2, D5 — ONE place
+/// to extend). Slice 2 full phase (2026-08-12): command_exec covers the
+/// host-owned `run_tests` fixed command and the model-supplied
+/// `run_terminal_cmd` shell command; network covers the URL-carrying
+/// `web_fetch` / `browser_read`. `web_search` is deliberately NOT mapped —
+/// it has no URL target (the query goes to the config-owned DeepSeek
+/// server-side search endpoint); registered as the remaining "应签未签"
+/// surface for the fail-closed flip adjudication.
 pub(crate) fn action_kind_for_tool(tool: &str) -> Option<TicketKind> {
     match tool {
         "search_replace" => Some(TicketKind::FileWriteV1),
+        "run_tests" | "run_terminal_cmd" => Some(TicketKind::CommandExecV1),
+        "web_fetch" | "browser_read" => Some(TicketKind::NetworkV1),
         _ => None,
     }
 }
@@ -682,6 +694,73 @@ pub fn file_write_canonical_args(
         "file_path": resolved_file_path,
         "operation": operation,
         "content_sha256": content_sha256,
+    })
+}
+
+/// Deterministic digest over a command's environment entries: sorted
+/// NUL-separated `k=v` entries (values are hashed, never journaled raw —
+/// the env may carry harness-injected variables). NUL is the delimiter
+/// because environment keys/values cannot contain NUL (review P2-1
+/// 2026-08-12 — the earlier `\n` join was not strictly injective when a
+/// value contained newlines; both sides would still agree, but the
+/// encoding is now unambiguous). For `run_terminal_cmd` the caller passes
+/// an empty slice (the terminal backend's process env is host-owned and
+/// not model-controlled — registered boundary); for `run_tests` it covers
+/// the harness's explicit `TestRunner::env` entries (the fixed platform
+/// allowlist is host-process-stable and also excluded — registered).
+pub fn command_env_sha256(env: &[(String, String)]) -> String {
+    let mut entries: Vec<String> = env
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    entries.sort();
+    let joined = entries.join("\0");
+    orz_assurance::journal::sha256_hex(joined.as_bytes())
+}
+
+/// Canonical arguments for a `command_exec_v1` action ticket (Slice 2,
+/// 2026-08-12): the tool name, the canonical argv (host-owned fixed command
+/// for `run_tests`; the trimmed model command string for
+/// `run_terminal_cmd` — the shell parses it, so the canonical form is the
+/// whole command), the execution cwd, and the environment digest.
+pub fn command_exec_canonical_args(
+    tool: &str,
+    argv: &[String],
+    cwd: &str,
+    env_sha256: &str,
+) -> Value {
+    serde_json::json!({
+        "tool": tool,
+        "argv": argv,
+        "cwd": cwd,
+        "env_sha256": env_sha256,
+    })
+}
+
+/// The `command_exec_v1` resolved target: digest of the argv/cwd/env triple
+/// (design §3.3 — "命令绑定规范化 argv/cwd/env 摘要"; the parsed real
+/// object of a command IS that triple, so the target digest is the canonical
+/// object WITHOUT the tool-name wrapper, distinct from the arguments digest
+/// but re-derived identically at the consumption point).
+pub fn command_exec_target_digest(argv: &[String], cwd: &str, env_sha256: &str) -> String {
+    let value = serde_json::json!({
+        "argv": argv,
+        "cwd": cwd,
+        "env_sha256": env_sha256,
+    });
+    let canonical = orz_assurance::journal::canonical_json(&value)
+        .expect("canonical_json over a serde_json::Value is infallible");
+    orz_assurance::journal::sha256_hex(&canonical)
+}
+
+/// Canonical arguments for a `network_v1` action ticket (Slice 2,
+/// 2026-08-12): the tool name and the canonical URL (see
+/// `target::resolve_network_url` — the target digest covers the same
+/// canonical string).
+pub fn network_canonical_args(tool: &str, canonical_url: &str) -> Value {
+    serde_json::json!({
+        "tool": tool,
+        "url": canonical_url,
     })
 }
 
@@ -865,8 +944,71 @@ mod tests {
             action_kind_for_tool("search_replace"),
             Some(TicketKind::FileWriteV1)
         );
+        assert_eq!(
+            action_kind_for_tool("run_tests"),
+            Some(TicketKind::CommandExecV1)
+        );
+        assert_eq!(
+            action_kind_for_tool("run_terminal_cmd"),
+            Some(TicketKind::CommandExecV1)
+        );
+        assert_eq!(
+            action_kind_for_tool("web_fetch"),
+            Some(TicketKind::NetworkV1)
+        );
+        assert_eq!(
+            action_kind_for_tool("browser_read"),
+            Some(TicketKind::NetworkV1)
+        );
         assert_eq!(action_kind_for_tool("read_file"), None);
         assert_eq!(action_kind_for_tool("bash"), None);
-        assert_eq!(action_kind_for_tool("run_tests"), None);
+        // web_search is the registered unmapped network surface (no URL
+        // target; server-side endpoint is config-owned).
+        assert_eq!(action_kind_for_tool("web_search"), None);
+    }
+
+    #[test]
+    fn command_exec_canonical_helpers_are_stable_and_sensitive() {
+        let argv = vec!["python".to_string(), "-m".to_string(), "pytest".to_string()];
+        let env = vec![
+            ("PYTHONPATH".to_string(), "src".to_string()),
+            ("B".to_string(), "2".to_string()),
+            ("A".to_string(), "1".to_string()),
+        ];
+        let env_sha = command_env_sha256(&env);
+        let args = command_exec_canonical_args("run_tests", &argv, r"C:\worktree", &env_sha);
+        let target = command_exec_target_digest(&argv, r"C:\worktree", &env_sha);
+        assert_eq!(args["tool"], "run_tests");
+        assert_eq!(args["argv"], serde_json::json!(["python", "-m", "pytest"]));
+        assert_eq!(args["cwd"], r"C:\worktree");
+        assert_eq!(args["env_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(target.len(), 64);
+        // Sorted env → identical digest regardless of entry order.
+        let env_reversed = vec![
+            ("A".to_string(), "1".to_string()),
+            ("B".to_string(), "2".to_string()),
+            ("PYTHONPATH".to_string(), "src".to_string()),
+        ];
+        assert_eq!(command_env_sha256(&env_reversed), env_sha);
+        // A changed command / cwd changes the canonical forms.
+        let other_argv = vec!["pytest".to_string()];
+        assert_ne!(
+            command_exec_target_digest(&other_argv, r"C:\worktree", &env_sha),
+            target
+        );
+        assert_ne!(
+            command_exec_canonical_args("run_tests", &argv, r"C:\other", &env_sha)["cwd"],
+            args["cwd"]
+        );
+    }
+
+    #[test]
+    fn network_canonical_args_shape() {
+        let args = network_canonical_args("web_fetch", "https://example.com/a");
+        assert_eq!(args["tool"], "web_fetch");
+        assert_eq!(args["url"], "https://example.com/a");
+        let browser = network_canonical_args("browser_read", "https://example.com/b");
+        assert_eq!(browser["tool"], "browser_read");
+        assert_ne!(args["url"], browser["url"]);
     }
 }
