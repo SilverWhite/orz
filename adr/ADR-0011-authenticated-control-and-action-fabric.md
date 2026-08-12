@@ -6,6 +6,11 @@
   credential_read 机制先建（**全程影子模式**：验票失败照常执行并记
   `control_ticket_rejected`；fail-closed 切换与 command_exec/network 接线待后续），
   见 [`GAP_ACAF_SLICE2A_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2A_IMPL_AUDIT_2026-08-12.md)；
+  2026-08-12 goal/policy 接线已实施——GoalRevisionV1 消费后 goal_version+1 重派生
+  K_session（决策 5 "goal 变→旧票死"首次真实触发）；`bump_policy_revision` 机制
+  就位（决策 9，Slice 3 ModeChangeTicket 为首个生产递增来源）；目标解析原语单源
+  orz-paths（设计文档 §4.5 镜像），见
+  [`GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT`](../docs/audits/GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md)；
   Slice 2 fail-closed 与 Slice 3/4 待实施）
 - 决策范围：跨信任边界控制事件与外部效果动作的票据授权面；独立签发器；三运行模式；
   威胁模型边界；实施切片的独立性

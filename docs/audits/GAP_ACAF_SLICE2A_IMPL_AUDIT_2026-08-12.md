@@ -101,16 +101,23 @@ Schema 先行（主仓）→ producer（orz 仓）纪律完整执行，含修 Sl
 
 - **影子模式是验收语义**：验票失败照常执行写入；fail-closed 切换 = 完整 Slice 2
   里程碑（ADR-0011 决策 11），用户观察台账后另行裁决；
-- **双实现漂移面**：`target.rs` 与 orz-tools `resolve_model_path` 语义镜像非同源
-  （display_cwd 简化 + verbatim/`..` 有意差异）——漂移自检出（验票 target_mismatch →
-  影子记录可见）；`is_reparse_or_symlink` 与 orz-host lib.rs L482 双实现，后续单源化；
+- **双实现漂移面（已单源化 2026-08-12）**：解析原语迁入 `orz-paths::resolve`
+  （三消费方共享：orz-tools 薄壳 / orz-assurance 委托 / orz-host 直调）——
+  有意差异保留在票据侧编排（verbatim 拒绝 / `..` 折叠 scan-before-fold /
+  `~user` 拒绝 / 单基 worktree）；折叠委托 `normalize_lexically` 引入一处登记
+  行为变化（驱动器相对 `C:..\x` 保留 `..`），详见
+  [`GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT`](./GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md)；
+  漂移自检出保持（验票 target_mismatch → 影子记录可见）；
 - **verify→execute 残余窗口**：验票与执行之间 symlink 换入不可察（关闭需执行器
   进程路径，设计文档 §10 v2）；
 - **非 search_replace 的 LocalMutation**：本工具集只有 search_replace 是文件写工具
   （bash=SandboxEscape、run_terminal_cmd 未声明），"应签未签"差异面登记；
   command_exec/network 接线后续各作一步复制扩展（D1）；
-- **policy_revision 恒 0**：GAP-DENIAL-POLICY-REVISION 接线不在本阶段
-  （ADR-0011 原 Slice 2 前置含 policy 接线，本次用户裁决范围未含）；
+- **policy_revision 恒 0（已接线 2026-08-12）**：live 值穿透 5 接线点 +
+  `bump_policy_revision` 机制 + goal_version 真实接线（AcceptedContinue 消费
+  GoalRevisionV1 票后重派生 K_session，旧票死），独立审计
+  [`GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT`](./GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md)；
+  Slice 3 前无生产递增来源（登记）；
 - TTL 5s + 解析 IO（每组件一次 symlink_metadata，毫秒级）；慢路径超期 → 影子拒绝
   （沿用 Slice 1 登记）；capture 不重捕（D10）；e2e Windows-only（Linux 侧由
   签发器单测覆盖，non-Windows 下 reparse 检查退化为仅 symlink）；
@@ -120,14 +127,19 @@ Schema 先行（主仓）→ producer（orz 仓）纪律完整执行，含修 Sl
   未修）；Slice 1 已登记项延续（签发器 stderr 丢弃、AcafClient 无 Drop kill、
   MANIFEST 常量非 64hex）；
 - **审计措辞纪律**（C1-2 教训）："+N 测试"均列真实测试名；fixture 文件数 ≠ 测试数；
-- **fail-closed 翻转前置核查清单**（review D2-1/P2-3/P2-4/P2-5 登记，翻转里程碑必查）：
+- **fail-closed 翻转前置核查清单**（review D2-1/P2-3/P2-4/P2-5 登记 + 2026-08-12
+  goal/policy 接线审查 D3-2 增补，翻转里程碑必查）：
   ① 每次工具集变更重审 `action_kind_for_tool` 覆盖（"应签未签"面——未映射的
   LocalMutation 工具调用零事件，今日可达写工具集恰好全映射）；② 工具自身校验拒绝
   （gitignore 拒绝、old_string==new_string、new_string 缺失）仍记 consumed "accepted"
   ——审计语义噪声，翻转时决定是否补 rejected；③ `file_path` 键名硬编码（snapshot_targets
   认三键）+ 缺失时静默跳过——翻转时须转硬拒绝；④ acaf 未配置 / snapshot_store 缺失 /
   goal_digest 缺失的静默 skip 分支——翻转时逐项转硬拒绝或显式告警（P2-5）；
-  ⑤ capture 无 acaf 场景（当前 13/13 零票据事件）。
+  ⑤ capture 无 acaf 场景（当前 13/13 零票据事件）；⑥ **goal/policy 接线（2026-08-12
+  增补）**：影子模式下 rejected 的 GoalRevisionV1 也照常翻转 goal 绑定——翻转时必须把
+  `update_goal`（及整个 AcceptedContinue 状态迁移）gate 在票 consumed 之上；
+  跨 run 的 policy 身份变化不被 K_session 捕获（per-run 归零，TTL 5s 界）——Slice 3
+  模式切换需会话级携带计数器或显式接受（新审计 D3-1/D3-2）。
 - **fmt 漂移面**（review C2-3）：`cargo fmt --check` 全仓报 orz-agent/builder.rs 及
   六个变更文件的 pre-existing 漂移（controller 159 hunks 等，HEAD 即存在）——本次
   未全仓 fmt（避免无关 diff），变更文件由 clippy 0 + 编译保证；全仓 fmt 留待独立批次。

@@ -400,7 +400,9 @@ ModeChangeTicket:
 
 ### Slice 2：动作票据 + 执行器验票 fail-closed
 
-- **前置：RT-001/002/003 闭合（Phase C 或独立完成）+ policy_revision 接线**；
+- **前置：RT-001/002/003 闭合（Phase C 或独立完成）+ policy_revision 接线**（✅ 已满足，
+  2026-08-12——goal/policy 接线 + 目标解析单源化，见
+  `audits/GAP_ACAF_GOAL_POLICY_WIRING_IMPL_AUDIT_2026-08-12.md`）；
 - file_write / command_exec / network / credential_read 四类动作票据接入执行器；
 - 目标解析（规范化 argv/绝对路径）与 TOCTOU 验票；
 - 影子模式：记录"应签未签/应拒放行"差异 → 确认无误后 fail-closed；
