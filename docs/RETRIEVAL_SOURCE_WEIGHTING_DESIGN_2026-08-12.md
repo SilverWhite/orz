@@ -83,7 +83,8 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
    CSDN、知乎、百家号、哔哩哔哩个人专栏、独立新闻媒体、自媒体新闻号/财经号、
    小型个人站点；初始种子名单见
    [`SOURCE_QUALITY_SEED_LISTS_2026-08-12.md`](SOURCE_QUALITY_SEED_LISTS_2026-08-12.md)，
-   具体域名列表与配置文件/env 注入在实现时落地，不硬编码）；
+   具体域名列表与配置文件/env 注入在实现时落地，不硬编码；官方媒体 1.0、
+   公众号与个人主页/博客入劣质源三项确认见种子文档 §3）；
 2. 单次检索候选核验数量上限（建议 ≤3-5，按工具轮预算校准）；
 3. 结构化结果 schema 是否新增 weight/tier 字段（若加，遵循"先 Schema/fixture 扩展、
    再改 producer"纪律）。
