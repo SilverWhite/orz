@@ -41,7 +41,9 @@
 
 - **fail-closed 开关**：`AgentLoopController.acaf_fail_closed` +
   `with_acaf_fail_closed(bool)`；main.rs 接 `ORZ_ACAF_FAIL_CLOSED`
-  （存在即开）；**D-15 启动 fail-fast**：fail-closed + 未配置 fabric →
+  （值为 1/true 时启用，大小写不敏感；0/false/未设置保持影子——
+  复核修复 2026-08-13，由“存在即开”改为取值语义）；**D-15 启动 fail-fast**：
+  fail-closed + 未配置 fabric →
   `run_turn_with_guards` 直接 `Assurance` 错误，无静默降级；
 - **`TicketGate`**（Proceed / Blocked{code,detail}）：`ticket_flow`、
   `run_action_ticket`、`acaf_action_event`（file/network/command/run_tests）
@@ -49,7 +51,9 @@
 - **D-14**：`file_path` / `url` / `command` 缺失或空 → fail-closed 时
   journal `control_ticket_rejected(missing_target_argument, ticket_id=null)`
   + Blocked（工具不执行、无 ToolStarted）；影子模式保持既有静默 skip
-  （注册边界，既有测试锁定）；
+  （注册边界，既有测试锁定）；复核修复 2026-08-13：`file_path`/`url`
+  空串（含纯空白）与缺失同码 `missing_target_argument`（fail-closed），
+  影子仍走解析失败台账 `target_mismatch`（既有行为不变）；
 - **D-15**：snapshot_store 缺失（file_write/command cwd 无法绑定）→
   `missing_snapshot_store`；goal_context 缺失 → `missing_goal_context`
   （ticket_flow / file 分支 / run_action_ticket 三处）；
@@ -64,25 +68,33 @@
   activation（check 4 非自指）；
 - 拒绝呈现：`refuse_ticketed_tool`（ToolCompleted error +
   `control_ticket_rejected:{code}`，无 ToolStarted，与 mode-off 拒绝同形）。
+- **复核修复（2026-08-13）**：`run_action_ticket`/file 分支的消费期
+  RPC 失败路径原重复记账（同一 `signer_unreachable` 记两条
+  `control_ticket_rejected`），已改为单次记账；`AcafClient` 新增 e2e
+  注入 seam（`inject_verify_failure`，doc(hidden)，按 ticket_kind 精确
+  命中），用于覆盖签发后验票失败路径与 D-16 拒绝分支。
 
 ## 2. 决策登记
 
 | ID | 决策 | 依据 |
 |---|---|---|
 | D-13 | 动作票 activation 规则 = 可选（Orientation 唯一禁止） | 检索 lane web_fetch 必须绑定真实 activation；主 lane 保持 null；签发器协议只在 network 方法开放可选参数 |
-| D-14 | 空 command：fail-closed 用 `missing_target_argument`；影子保留 `target_mismatch` 台账 | D-14 语义显式；既有影子测试锁定空命令 target_mismatch（不破坏） |
+| D-14 | 缺失/空 target 参数：fail-closed 用 `missing_target_argument`（file_path/url 空串复核修复 2026-08-13 同码）；影子保留既有 `target_mismatch` 台账/静默 skip | D-14 语义显式；既有影子测试锁定空命令 target_mismatch（不破坏） |
 | D-15 | 未配置 fabric = 启动 fail-fast（非逐票拒绝） | 设计文档 §11 D-15 允许二选一；启动期拒绝更早暴露配置错误；显式降级开关留未来 |
 | D-16 | 终端 close（close_activation）Blocked → 激活保持开放（best-effort） | fail-closed 下无未持票状态迁移；运行终结路径不接受静默关闭 |
 | D-17 | `refuse_ticketed_tool` 不喂 denial breaker（feedback None） | 票据拒绝是安全事件非权限拒绝；熔断语义（ADR-0010 §3.5.4）不动 |
 
 ## 3. 验证证据
 
-- **orz-bin e2e（Windows-only，真实签发器）19/19**：新增 6 个 fail-closed
+- **orz-bin e2e（Windows-only，真实签发器）21/21**：新增 8 个 fail-closed
   测试 —— ① 未配置 fabric 启动拒绝；② 缺 url → missing_target_argument
   + 无 ToolStarted + ToolCompleted error；③ 缺 command 同；④ 死签发器 +
   fail-closed → signer_unreachable + 工具不执行；⑤ **检索 lane web_fetch
   票据绑定真实 activation（`retrieval-external_retrieval-…-00`）**；
   ⑥ continue 快乐路径：DispositionV1 + GoalRevisionV1 双票 consumed；
+  ⑦ 验票 RPC 失败（注入 seam）→ 单次 `signer_unreachable` 拒绝 +
+  工具不执行（回归锁：消费失败单次记账）；⑧ D-16 拒绝分支：GoalRevisionV1
+  验票失败 → 状态不迁移 + disposition exit 1（注入 seam 覆盖原测试边界）；
 - orz-assurance acaf **33/0**（+1：动作票 activation 可选/必须语义）；
 - orz-signer **12/0**（+1：network 带 activation 签发 + 主 lane null 回归）；
 - orz-loop **196/0/3**（既有影子/零事件回归全绿）；
@@ -98,10 +110,10 @@
 - **生产翻转待用户裁决**：机制与 env 开关已就绪，默认仍 shadow；
   `ORZ_ACAF_FAIL_CLOSED=1` 即 fail-closed；最终启用前建议按 Slice 2B
   §6 核查清单 ①-⑪ 过一遍探针矩阵（⑦⑨⑩⑪ 仍登记）；
-- **D-16 拒绝分支 e2e 注入 seam 缺位**：GoalRevisionV1 精确时点无法在
-  外部强制验票失败（签发器自洽）；该分支由快乐路径 e2e + `TicketGate`
-  统一映射（ticket_flow 覆盖 signer_unreachable 实际拒绝）共同覆盖，
-  登记为测试边界；
+- **D-16 拒绝分支 e2e 覆盖（复核修复 2026-08-13）**：真实签发器自洽，
+  外部 kill 无法精确命中 GoalRevisionV1 验票时点；现由 `AcafClient`
+  注入 seam（doc(hidden)，e2e 专用）在验票入口强制 RPC 失败，覆盖
+  D-16 状态不迁移与单次记账两个分支，原“注入 seam 缺位”边界撤销；
 - ACP 会话路径未接线 ACAF（沿用现状：controller 未挂 client，fail-closed
   默认 false，零行为变化）；
 - 终端 close 在 fail-closed 被拒时激活保持 open（best-effort，运行已终结）；
