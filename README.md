@@ -25,6 +25,8 @@ ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构
 | Python assurance | `reference` | conformance、Schema authority、fixture、审计和窄兼容路径 |
 | Component adoption register | `pending` | 逐 crate/component 所有权需按当前代码重新审计 |
 | Windows incident/case evidence | `pending` | 目录已建立，首批结构化证据尚未闭环 |
+| Source quality weighting | `pending` | FUS-SOURCE-WEIGHTING 设计已定稿（ADR-0010 §3.7 条 12/v1.7），实现待办，见索引 GAP-SOURCE-WEIGHTING-IMPL |
+| Source quality weighting | `pending` | FUS-SOURCE-WEIGHTING 设计已定稿（ADR-0010 §3.7 条 12/v1.7），实现待办，见索引 GAP-SOURCE-WEIGHTING-IMPL |
 
 实现状态不能用 Phase 完成、测试全绿或单次评测结果替代。当前差距见 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距) 和 [`ADR-0010 冻结审计`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 

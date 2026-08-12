@@ -1,6 +1,6 @@
 # 检索来源加权与原文核验设计（2026-08-12）
 
-> 状态：`current-design`（2026-08-12 用户裁决；实现待办）。
+> 状态：`current-design`（2026-08-12 用户裁决；实现待办，已登记 GAP-SOURCE-WEIGHTING-IMPL）。
 > 权威：ADR-0010 §3.7 条 12（v1.6 补写，2026-08-12）。
 > 边界：本机制属**检索结果质量层**，管"信什么、怎么标注"；不属授权层，不改变 ACAF
 > 票据边界（ADR-0011 D-12：web_search 无票据映射；D-13：子代理动作票绑定 activation）。
@@ -92,3 +92,20 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 2. 单次检索候选核验数量上限（建议 ≤3-5，按工具轮预算校准）；
 3. 结构化结果 schema 是否新增 weight/tier 字段（若加，遵循"先 Schema/fixture 扩展、
    再改 producer"纪律）。
+
+## 7. 实施待办（已登记 GAP-SOURCE-WEIGHTING-IMPL，`pending`；2026-08-13）
+
+1. 机械来源梯队判定器：白名单/劣质源域名与 URL 形态规则 + 配置加载（种子见
+   [`SOURCE_QUALITY_SEED_LISTS_2026-08-12.md`](SOURCE_QUALITY_SEED_LISTS_2026-08-12.md)），
+   输出 weight/tier 进 evidence ledger；
+2. web_search（framework_fallback）第二层：机械预筛 + 模型初选 + `web_fetch` 候选
+   原文核验，候选上限 ≤3-5（按工具轮预算校准）；
+3. 第三层：子代理模型加权标注（账号级规则），结构化结果输出 weight + 理由 +
+   采纳/标注状态；
+4. local_browser：直接分级加权（第一层+第三层），不套第二层；
+5. 结构化结果 schema 决策：是否新增 weight/tier 字段（先 Schema/fixture 扩展再改
+   producer）；
+6. 测试：判定器单测（三档/名单/URL 形态）、二存一模式门控、web_search 核验路径
+   与 local_browser 加权 e2e；
+7. 实施后：按项目惯例三面审查 + 实施审计文档登记，索引状态由 `pending` 转
+   `implemented`。
