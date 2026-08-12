@@ -33,11 +33,13 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 
 - 输入：`web_search` 引用 URL（completed `open_page`，已排除失败页并去重）或
   `browser_read` 已读页面 URL；
-- 白名单内 → weight **1.0**；
-- 白名单外（默认档：官方/政府/认证站点之外的普通来源）→ weight **0.8**；
+- 白名单内 → weight **1.1**；
+- 白名单外（默认档：普通来源，无需逐源分类）→ weight **1.0**；
 - 黑名单/营销域名、个人新闻号/非认证号 → weight **0.7**（账号级由第三层模型判断，
   URL 层无法机械识别）；
 - 输出：每条来源的 mechanical weight + tier 标签，写入 evidence ledger。
+- 语义：weight 是**相对排序乘数**（允许 >1），不是 0-1 置信度；1.1 表示白名单相对
+  普通来源的优先乘数，后续如需概率/置信度语义须另设字段。
 - 白名单为域名级：gov/edu 等官方后缀自动入列 + 手工维护官方站列表；**不硬编码**，
   初始内容与配置入口在实现前确定（§6 待定项）。
 
