@@ -11,6 +11,7 @@
   "capability_scope": "orientation_injection",
   "template_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "canonical_arguments_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "resolved_target_sha256": null,
   "issued_at": "2026-08-06T00:00:00Z",
   "expires_at": "2026-08-06T00:00:00Z",
   "signer_revision": 1,

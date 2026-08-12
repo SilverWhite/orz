@@ -7,15 +7,18 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-  legal / one-constraint-violation payloads for the **eight** v0.2 mechanism
+  legal / one-constraint-violation payloads for the **eleven** v0.2 mechanism
   events with their own v0.2 payload schema: `orientation_checkpoint`
   (v0.2 shape), `diagnostic_coverage_checkpoint`,
   `information_sufficiency_assessment`, `retrieval_parent_disposition`,
   `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
   `retrieval_mode_transition`, `retrieval_result_committed`,
-  `retrieval_activation_restored`.
+  `retrieval_activation_restored`, plus the ACAF trio (Slice 1, 2026-08-12)
+  `control_ticket_issued`, `control_ticket_consumed`,
+  `control_ticket_rejected` (ticket lifecycle binding fields — never the
+  HMAC tag, which stays inside the issuing process).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (39 events). The eight v0.2-payload events carry
+  event in the v0.2 enum (42 events). The eleven v0.2-payload events carry
   their v0.2 payload; the other 31 events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for
@@ -34,8 +37,16 @@ extension 2026-08-10):
   v0.2 enum — they exist only on the v0.1 track for historical journal
   replay (ADR-0010 §11.2).
 - The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
-  The cross-validator resolves the eight v0.2-payload events to their v0.2
+  The cross-validator resolves the eleven v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
+- **ACAF ticket kinds are payload-level** (Slice 1, 2026-08-12; Slice 2
+  first phase 2026-08-12): the control-ticket trio's event types are stable;
+  the `ticket_kind` / `capability_scope` enums extend inside the payload
+  schemas (`orientation_v1` / `disposition_v1` / `close_v1` /
+  `goal_revision_v1`; plus `file_write_v1` / `credential_read_v1` from
+  Slice 2). Action kinds bind `resolved_target_sha256` (digest of the parsed
+  real target object, §4.2 check 5 TOCTOU); control kinds leave it null or
+  absent so historical journals remain valid.
 - **Producer/consumer/verifier** (§5.2): `information_sufficiency_assessment`,
   `retrieval_parent_disposition` and `retrieval_close_record` — plus the
   GAP-RETRIEVAL-TOOLS trio `retrieval_mode_transition`,
