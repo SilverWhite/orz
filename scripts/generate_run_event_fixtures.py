@@ -934,6 +934,35 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
     },
 }
 
+# ACAF Slice 2 fail-closed (2026-08-13): extra positive payload fixtures for
+# the new reject codes — each carries a null ticket_id (no ticket was issued;
+# the refusal happens BEFORE signing, D-14/D-15). The primary GOOD fixture
+# above keeps the replay_detected shape; these three exercise the schema's
+# extended enum.
+EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
+    "control-ticket-rejected.missing-target-argument.valid": {
+        "ticket_id": None,
+        "ticket_kind": "network_v1",
+        "rejected_at": TIMESTAMP,
+        "reject_code": "missing_target_argument",
+        "detail": "url argument missing",
+    },
+    "control-ticket-rejected.missing-snapshot-store.valid": {
+        "ticket_id": None,
+        "ticket_kind": "file_write_v1",
+        "rejected_at": TIMESTAMP,
+        "reject_code": "missing_snapshot_store",
+        "detail": "no snapshot store for target resolution",
+    },
+    "control-ticket-rejected.missing-goal-context.valid": {
+        "ticket_id": None,
+        "ticket_kind": "goal_revision_v1",
+        "rejected_at": TIMESTAMP,
+        "reject_code": "missing_goal_context",
+        "detail": "goal digest not pinned",
+    },
+}
+
 
 # canonical_cli payload shapes (its own `canonical-cli-*` track). Shapes taken
 # from canonical_cli.py event_specs (fake path L900-1009, real path L1322-1360).
@@ -1164,6 +1193,11 @@ Scope:
   `control_ticket_issued`, `control_ticket_consumed`,
   `control_ticket_rejected` (ticket lifecycle binding fields — never the
   HMAC tag, which stays inside the issuing process).
+- ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
+  three extra positive payload fixtures for the new pre-signing reject codes
+  `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
+  (each carries `ticket_id: null` — no ticket exists when the refusal
+  happens, D-14/D-15).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
   event in the v0.2 enum (42 events). The eleven v0.2-payload events carry
   their v0.2 payload; the other 31 events reuse the v0.1 payload shape
@@ -1311,6 +1345,8 @@ def main() -> None:
             v02_payloads_dir / f"{slug}.constraint.invalid.json",
             PAYLOAD_BAD_V02[event_type],
         )
+    for name, payload in EXTRA_V02_PAYLOAD_POSITIVES.items():
+        write_json(v02_payloads_dir / f"{name}.json", payload)
     for event_type in V02_EVENT_TYPES:
         slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
         payload = PAYLOAD_GOOD_V02.get(event_type) or PAYLOAD_GOOD[event_type]
@@ -1331,7 +1367,7 @@ def main() -> None:
         f"payloads: {len(PAYLOAD_GOOD) * 2} files, "
         f"envelope: {len(EVENT_TYPES) + 1 + len(ENVELOPE_BAD)} files, "
         f"canonical_cli: {len(CANONICAL_CLI_GOOD)} files, "
-        f"v0.2 payloads: {len(PAYLOAD_GOOD_V02) * 2} files, "
+        f"v0.2 payloads: {len(PAYLOAD_GOOD_V02) * 2 + len(EXTRA_V02_PAYLOAD_POSITIVES)} files, "
         f"v0.2 envelope: {len(V02_EVENT_TYPES) + 1 + len(V02_ENVELOPE_BAD)} files"
     )
 

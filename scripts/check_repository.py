@@ -2010,6 +2010,18 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root / f"{slug}.minimal.valid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()
     }
+    # ACAF Slice 2 fail-closed (2026-08-13): extra positive fixtures for the
+    # new reject codes (schema enum extension). These are pre-signing
+    # refusals — `ticket_id` is null (no ticket was ever issued, D-14/D-15).
+    rejected_schema = ROOT / "runtime/control-ticket-rejected-event-payload-v0.2.schema.json"
+    for name in (
+        "control-ticket-rejected.missing-target-argument.valid.json",
+        "control-ticket-rejected.missing-snapshot-store.valid.json",
+        "control-ticket-rejected.missing-goal-context.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            rejected_schema
+        )
     run_event_v02_payload_negative_contracts = {
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()

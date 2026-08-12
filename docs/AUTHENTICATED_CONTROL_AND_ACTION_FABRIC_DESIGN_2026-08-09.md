@@ -5,7 +5,11 @@
 > v1 简化决策 D1~D10 登记在该审计 §3；**Slice 2 两阶段已实施** 2026-08-12——
 > [`GAP_ACAF_SLICE2A_IMPL_AUDIT`](audits/GAP_ACAF_SLICE2A_IMPL_AUDIT_2026-08-12.md) 与
 > [`GAP_ACAF_SLICE2B_IMPL_AUDIT`](audits/GAP_ACAF_SLICE2B_IMPL_AUDIT_2026-08-12.md)，
-> 全程影子模式，fail-closed 未切换）
+> 全程影子模式，fail-closed 未切换；**Slice 2 fail-closed 机制已实施**
+> 2026-08-13——D-12~D-16 落地（缺参/缺依赖硬拒绝、rejected GoalRevisionV1
+> 不迁移、检索 lane activation 绑定），`ORZ_ACAF_FAIL_CLOSED=1` 显式翻转，
+> 默认仍影子；生产启用待用户裁决，见
+> [`GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT`](audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)）
 > 权威关系：本文件是 ACAF 的**详细设计权威**；`adr/ADR-0011` 是其**决策权威登记**；两者均由
 > ADR-0010 派生且不改变 ADR-0010 任何既有条款（登记见 ADR-0010 §11.8）。
 > 实施排期：**独立于 ADR-0010 §9 Phase C**；与 Phase C 只共享若干缺口闭合的前置依赖（见 §7）。
@@ -410,7 +414,13 @@ ModeChangeTicket:
 - 目标解析（规范化 argv/绝对路径）与 TOCTOU 验票；
 - 影子模式：记录"应签未签/应拒放行"差异 → 确认无误后 fail-closed；
 - 验收入口：模型注入探针（伪造参数/重放/越权）全部被拒；真实动作零误阻断（影子台账）。
-- 用户裁决（2026-08-12）：fail-closed 翻转前置决策已登记，见 §11 D-12~D-16；实施待办。
+- 用户裁决（2026-08-12）：fail-closed 翻转前置决策已登记，见 §11 D-12~D-16。
+- **实施完成（2026-08-13）**：D-12 显式排除维持；D-13 activation 绑定、
+  D-14 缺参硬拒绝（missing_target_argument）、D-15 缺依赖/未配置硬拒绝
+  （missing_snapshot_store / missing_goal_context / 启动 fail-fast）、
+  D-16 rejected GoalRevisionV1 不迁移均已落地；fail-closed 经
+  `ORZ_ACAF_FAIL_CLOSED=1` 显式启用（默认影子）。实施审计：
+  `audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md`。
 
 ### Slice 3：Auto-Staged No-Run
 
@@ -498,3 +508,10 @@ ModeChangeTicket:
 | D-14 | 缺参静默跳过（用户裁决 2026-08-12） | fail-closed 时转硬拒绝：file_path/url/command 缺失或空 → `control_ticket_rejected`（missing_target_argument，ticket_id=null）+ 工具不执行 |
 | D-15 | 未配置/缺依赖静默 skip（用户裁决 2026-08-12） | fail-closed 时禁止静默：acaf 未配置=启动期 fail-fast 或显式降级开关；snapshot_store 缺失 → file_write 硬拒绝（missing_snapshot_store）；goal_digest 缺失 → 动作/控制票硬拒绝（missing_goal_context） |
 | D-16 | rejected GoalRevisionV1 状态迁移（用户裁决 2026-08-12） | fail-closed 时 consumed-only：票 rejected → update_goal 与 AcceptedContinue 状态迁移不执行、goal 绑定不动、写安全事件并向父 Agent 表面未授权 |
+
+> **实施记录（2026-08-13）**：D-12 保持显式排除；D-13~D-16 全部实施——
+> 动作票 activation 可选（Orientation 唯一禁止）、`sign_network_v1` 接受
+> 可选 activation、controller 侧 `TicketGate` + fail-closed 开关
+> （`ORZ_ACAF_FAIL_CLOSED`）、D-14/D-15 预签发拒绝码入 Schema/fixture、
+> D-16 迁移门控。默认仍影子模式，生产翻转待用户裁决；详见
+> [`GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT`](audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)。

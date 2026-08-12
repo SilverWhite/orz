@@ -1,0 +1,7 @@
+{
+  "ticket_id": null,
+  "ticket_kind": "file_write_v1",
+  "rejected_at": "2026-08-06T00:00:00Z",
+  "reject_code": "missing_snapshot_store",
+  "detail": "no snapshot store for target resolution"
+}

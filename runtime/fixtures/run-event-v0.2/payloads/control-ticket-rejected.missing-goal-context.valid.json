@@ -1,0 +1,7 @@
+{
+  "ticket_id": null,
+  "ticket_kind": "goal_revision_v1",
+  "rejected_at": "2026-08-06T00:00:00Z",
+  "reject_code": "missing_goal_context",
+  "detail": "goal digest not pinned"
+}

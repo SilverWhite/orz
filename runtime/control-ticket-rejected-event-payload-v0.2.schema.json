@@ -43,7 +43,10 @@
         "target_mismatch",
         "expired",
         "chain_mismatch",
-        "signer_unreachable"
+        "signer_unreachable",
+        "missing_target_argument",
+        "missing_snapshot_store",
+        "missing_goal_context"
       ]
     },
     "detail": { "type": "string", "minLength": 1 }
