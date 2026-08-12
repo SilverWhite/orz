@@ -138,6 +138,10 @@ pub enum TaskKind {
 #[derive(Clone)]
 pub struct TerminalRunResult {
     pub combined_output: String,
+    /// Decoding stage that produced `combined_output` (GAP-ENCODING-GATE,
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`,
+    /// comma-joined when chunks used different stages (truncated output).
+    pub output_encoding: Option<String>,
     pub exit_code: Option<i32>,
     pub truncated: bool,
     pub signal: Option<String>,

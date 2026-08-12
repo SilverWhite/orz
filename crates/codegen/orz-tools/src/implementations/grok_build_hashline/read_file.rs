@@ -222,7 +222,9 @@ impl xai_tool_runtime::Tool for HashlineReadTool {
                         .map_err(xai_tool_runtime::ToolError::invalid_arguments)?;
                     let fs = res.require::<FileSystem>()?.0.clone();
                     let content = match fs.read_file(&fc.absolute_path).await {
-                        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                        // GAP-ENCODING-GATE (OPS-PROTOCOL §8): re-read goes
+                        // through the same fixed decode chain.
+                        Ok(bytes) => crate::util::encoding::decode_text(&bytes).0,
                         Err(_) => fc.raw_output.clone(),
                     };
                     let ml = res

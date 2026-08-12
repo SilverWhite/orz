@@ -444,6 +444,7 @@ impl xai_tool_runtime::Tool for BashTool {
         Ok(BashToolOutput::Bash(BashOutput {
             output_for_prompt: BashOutput::make_output_for_prompt(&result.combined_output),
             output: result.combined_output.into_bytes(),
+            output_encoding: result.output_encoding,
             exit_code: result.exit_code.unwrap_or(-1),
             command: input.command,
             truncated: result.truncated,
@@ -499,6 +500,7 @@ mod tests {
                     timed_out: false,
                     output_file: PathBuf::from("/tmp/test.log"),
                     total_bytes: output.len(),
+                    output_encoding: None,
                     pid: None,
                 }),
             }
@@ -514,6 +516,7 @@ mod tests {
                     timed_out: true,
                     output_file: PathBuf::from("/tmp/test.log"),
                     total_bytes: output.len(),
+                    output_encoding: None,
                     pid: None,
                 }),
             }
@@ -774,6 +777,7 @@ mod tests {
                 timed_out: false,
                 output_file: PathBuf::from("/tmp/test.log"),
                 total_bytes: 100_000,
+                output_encoding: None,
                 pid: None,
             }),
         };
@@ -808,6 +812,7 @@ mod tests {
                 timed_out: false,
                 output_file: PathBuf::from("/tmp/test.log"),
                 total_bytes: 0,
+                output_encoding: None,
                 pid: None,
             }),
         };
@@ -947,6 +952,7 @@ mod tests {
         let bash = BashToolOutput::Bash(BashOutput {
             output: b"hello".to_vec(),
             output_for_prompt: "hello".to_string(),
+            output_encoding: None,
             exit_code: 0,
             command: "echo hello".to_string(),
             truncated: false,
@@ -1058,6 +1064,7 @@ mod tests {
                     timed_out: false,
                     output_file: PathBuf::from("/tmp/test.log"),
                     total_bytes: 2,
+                    output_encoding: None,
                     pid: None,
                 })
             }

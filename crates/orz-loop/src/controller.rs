@@ -3836,6 +3836,7 @@ impl AgentLoopController {
             return Ok(ToolResult {
                 output: msg,
                 exit_code: Some(1),
+                output_encoding: None,
             });
         }
         // mode=local_browser with an unavailable capability fails EXPLICITLY
@@ -3885,6 +3886,7 @@ impl AgentLoopController {
                     return Ok(ToolResult {
                         output: msg,
                         exit_code: Some(1),
+                        output_encoding: None,
                     });
                 }
             }
@@ -3961,6 +3963,7 @@ impl AgentLoopController {
             return Ok(ToolResult {
                 output: msg,
                 exit_code: Some(1),
+                output_encoding: None,
             });
         }
         let (mut act, task_goal) = {
@@ -4321,6 +4324,7 @@ impl AgentLoopController {
                 ToolResult {
                     output,
                     exit_code: Some(0),
+                    output_encoding: None,
                 }
             }
             Err(e) => {
@@ -4348,6 +4352,7 @@ impl AgentLoopController {
                 ToolResult {
                     output: format!("retrieval error: {e}"),
                     exit_code: Some(1),
+                    output_encoding: None,
                 }
             }
         };
@@ -4412,6 +4417,7 @@ impl AgentLoopController {
                 return Ok(ToolResult {
                     output: msg,
                     exit_code: Some(1),
+                    output_encoding: None,
                 });
             }
         };
@@ -4435,6 +4441,7 @@ impl AgentLoopController {
                 return Ok(ToolResult {
                     output: msg,
                     exit_code: Some(1),
+                    output_encoding: None,
                 });
             }
         };
@@ -4459,6 +4466,7 @@ impl AgentLoopController {
             return Ok(ToolResult {
                 output: msg,
                 exit_code: Some(1),
+                output_encoding: None,
             });
         }
         if decision == "close" && requirement_delta.is_some() {
@@ -4474,6 +4482,7 @@ impl AgentLoopController {
             return Ok(ToolResult {
                 output: msg,
                 exit_code: Some(1),
+                output_encoding: None,
             });
         }
 
@@ -4522,6 +4531,7 @@ impl AgentLoopController {
                 return Ok(ToolResult {
                     output: msg,
                     exit_code: Some(1),
+                    output_encoding: None,
                 });
             }
         };
@@ -4576,6 +4586,7 @@ impl AgentLoopController {
             return Ok(ToolResult {
                 output,
                 exit_code: Some(0),
+                output_encoding: None,
             });
         }
 
@@ -4609,6 +4620,7 @@ impl AgentLoopController {
             return Ok(ToolResult {
                 output: msg,
                 exit_code: Some(1),
+                output_encoding: None,
             });
         }
         let pending = act.pending.as_ref().unwrap().clone();
@@ -4734,6 +4746,7 @@ impl AgentLoopController {
             return Ok(ToolResult {
                 output: msg,
                 exit_code: Some(1),
+                output_encoding: None,
             });
         }
         // D-16 (2026-08-13): a rejected GoalRevisionV1 under fail-closed
@@ -4930,6 +4943,7 @@ impl AgentLoopController {
         Ok(ToolResult {
             output,
             exit_code: Some(exit_code),
+            output_encoding: None,
         })
     }
 
@@ -5157,6 +5171,7 @@ impl AgentLoopController {
             ToolResult {
                 output: msg,
                 exit_code: Some(1),
+                output_encoding: None,
             },
             None,
         ))
@@ -5240,6 +5255,7 @@ impl AgentLoopController {
                 ToolResult {
                     output: msg,
                     exit_code: Some(1),
+                    output_encoding: None,
                 },
                 None,
             ));
@@ -5283,6 +5299,7 @@ impl AgentLoopController {
                 ToolResult {
                     output: msg,
                     exit_code: Some(1),
+                    output_encoding: None,
                 },
                 None,
             ));
@@ -5323,6 +5340,7 @@ impl AgentLoopController {
                 ToolResult {
                     output: msg,
                     exit_code: Some(1),
+                    output_encoding: None,
                 },
                 None,
             ));
@@ -5400,6 +5418,7 @@ impl AgentLoopController {
                     tool_name = tc.name,
                 ),
                 exit_code: Some(1),
+                output_encoding: None,
             };
             // Replay the denial as a tool message — the provider protocol
             // requires a tool message answering each declared call, even a
@@ -5536,6 +5555,7 @@ impl AgentLoopController {
                             ToolResult {
                                 output: msg,
                                 exit_code: None,
+                                output_encoding: None,
                             },
                             None,
                         ));
@@ -5545,22 +5565,25 @@ impl AgentLoopController {
             if let Some(h) = heartbeat {
                 h.stamp();
             }
+            let mut completed_payload = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": result.exit_code,
+                "full_output_path": result.full_output_path,
+                // RT-003 (2026-08-11): workspace changes the test
+                // run caused (capped list; schema extended in
+                // `tool-completed-event-payload-v0.1.schema.json`
+                // — Schema first, ADR-0010 §5.3).
+                "workspace_delta": result.workspace_delta,
+                "workspace_delta_truncated": result.workspace_delta_truncated,
+            });
+            // GAP-ENCODING-GATE (OPS-PROTOCOL §8): record the decode stage
+            // that produced the test output when the host observed one.
+            if let Some(enc) = &result.output_encoding {
+                completed_payload["output_encoding"] = serde_json::json!(enc);
+            }
             writer
-                .record(
-                    EventType::ToolCompleted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "exit_code": result.exit_code,
-                        "full_output_path": result.full_output_path,
-                        // RT-003 (2026-08-11): workspace changes the test
-                        // run caused (capped list; schema extended in
-                        // `tool-completed-event-payload-v0.1.schema.json`
-                        // — Schema first, ADR-0010 §5.3).
-                        "workspace_delta": result.workspace_delta,
-                        "workspace_delta_truncated": result.workspace_delta_truncated,
-                    }),
-                )
+                .record(EventType::ToolCompleted, completed_payload)
                 .await?;
             // 2026-08-08 blackboard partition: fold the executed call into
             // the tool-action section (terminal — a fixed command run).
@@ -5578,6 +5601,7 @@ impl AgentLoopController {
                 // tail.
                 output: compose_test_output_message(&result),
                 exit_code: result.exit_code,
+                output_encoding: None,
             };
             messages.push(Message {
                 role: Role::Tool,
@@ -5719,6 +5743,7 @@ impl AgentLoopController {
                     ToolResult {
                         output,
                         exit_code: Some(1),
+                        output_encoding: None,
                     },
                     None,
                 ));
@@ -5770,6 +5795,7 @@ impl AgentLoopController {
                 ToolResult {
                     output,
                     exit_code: Some(0),
+                    output_encoding: None,
                 },
                 None,
             ));
@@ -5807,6 +5833,7 @@ impl AgentLoopController {
             let result = ToolResult {
                 output: content,
                 exit_code: Some(0),
+                output_encoding: None,
             };
             messages.push(Message {
                 role: Role::Tool,
@@ -5883,6 +5910,12 @@ impl AgentLoopController {
                 if !edits_payload.is_empty() {
                     completed_payload["edits"] = serde_json::Value::Array(edits_payload);
                 }
+                // GAP-ENCODING-GATE (OPS-PROTOCOL §8): record the decode
+                // stage that produced the tool output (run_terminal_cmd /
+                // read_file / run_tests) when the host observed one.
+                if let Some(enc) = &res.output_encoding {
+                    completed_payload["output_encoding"] = serde_json::json!(enc);
+                }
                 writer
                     .record(EventType::ToolCompleted, completed_payload)
                     .await?;
@@ -5913,6 +5946,7 @@ impl AgentLoopController {
                 (ToolResult {
                     output,
                     exit_code: res.exit_code,
+                    output_encoding: None,
                 }, true)
             }
             Err(e) => {
@@ -5954,6 +5988,7 @@ impl AgentLoopController {
                             _ => format!("tool error: {e}"),
                         },
                         exit_code: Some(1),
+                        output_encoding: None,
                     },
                     false,
                 )
@@ -6582,6 +6617,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "fn main() {}  // file content".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -6656,6 +6692,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "fn main() {}".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -6952,10 +6989,12 @@ mod tests {
         let ok = |output: &str| ToolResult {
             output: output.to_string(),
             exit_code: Some(0),
+            output_encoding: None,
         };
         let fail = ToolResult {
             output: "boom".to_string(),
             exit_code: Some(1),
+            output_encoding: None,
         };
         // Failed call → no evidence.
         assert!(build_evidence_record("read_file", &call("read_file", serde_json::json!({"path": "a.rs"})), &fail).is_none());
@@ -7197,6 +7236,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -7279,6 +7319,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "edited ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -7347,6 +7388,99 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// GAP-ENCODING-GATE (OPS-PROTOCOL §8): the decode stage observed by the
+    /// host lands on the journal's `tool_completed.output_encoding`; tools
+    /// without a decode stage leave the field absent.
+    #[tokio::test]
+    async fn tool_completed_carries_output_encoding_when_host_observed_one() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "中文".to_string(),
+                exit_code: Some(0),
+                output_encoding: Some("gb18030".to_string()),
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({
+                    "command": "echo x",
+                    "description": "encoding journal test",
+                }),
+                call_id: "call-enc1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "跑命令", "RUN-ENC", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert_eq!(
+            payloads[0]["output_encoding"],
+            serde_json::json!("gb18030"),
+            "{payloads:?}"
+        );
+        assert_eq!(payloads[0]["tool"], serde_json::json!("run_terminal_cmd"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// GAP-ENCODING-GATE: the run_tests host result carries the decode stage
+    /// observed for the test output into the journal payload.
+    #[tokio::test]
+    async fn run_tests_tool_completed_carries_output_encoding() {
+        let dir = test_dir();
+        let result = crate::host::TestRunResult {
+            output: "1 passed".to_string(),
+            exit_code: Some(0),
+            full_output_path: None,
+            output_encoding: Some("utf-8".to_string()),
+            workspace_delta: Vec::new(),
+            workspace_delta_truncated: false,
+        };
+        let host = PolicyTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            policy: crate::host::ToolPolicy::Benchmark,
+            decision: PermitDecision::AllowOnce,
+            result: Some(result),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-enc-tests")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "跑测试", "RUN-ENCT", MANIFEST, 0, None, None, None)
+            .await
+            .expect("run_tests turn");
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert_eq!(
+            payloads[0]["output_encoding"],
+            serde_json::json!("utf-8"),
+            "{payloads:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A4 (2026-08-08): an ingested plan populates the blackboard plan
     /// section (goal + steps, first step in-progress) and the resident
     /// status line appears in the system prompt.
@@ -7359,6 +7493,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -7443,6 +7578,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -7599,6 +7735,7 @@ mod tests {
                 Ok(ToolResult {
                     output: self.outputs[n % self.outputs.len()].clone(),
                     exit_code: Some(0),
+                    output_encoding: None,
                 })
             }
             async fn request_permission(
@@ -7737,6 +7874,7 @@ mod tests {
                     Ok(ToolResult {
                         output: "retry ok".to_string(),
                         exit_code: Some(0),
+                        output_encoding: None,
                     })
                 }
             }
@@ -7844,6 +7982,7 @@ mod tests {
                 Ok(ToolResult {
                     output: self.outputs[n % self.outputs.len()].clone(),
                     exit_code: Some(0),
+                    output_encoding: None,
                 })
             }
             async fn request_permission(
@@ -7991,6 +8130,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let whitelist_call = |id: &str, content: &str| ScriptedResponse::tool_calls(vec![ToolCall {
@@ -8165,6 +8305,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "x".repeat(600),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -8237,6 +8378,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -8298,6 +8440,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "x".repeat(600), // fat rounds — droppable content
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -8369,6 +8512,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "no match".to_string(),
                 exit_code: Some(1),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8415,6 +8559,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8455,6 +8600,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "edited ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8531,6 +8677,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "edited ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8615,6 +8762,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "irrelevant".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -9153,6 +9301,7 @@ mod tests {
                 Ok(ToolResult {
                     output: "ok".to_string(),
                     exit_code: Some(0),
+                    output_encoding: None,
                 })
             }
         }
@@ -9210,6 +9359,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -9269,6 +9419,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "patched".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -9362,6 +9513,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "patched".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -9426,6 +9578,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -9495,6 +9648,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "should not run".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -9600,6 +9754,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -9674,6 +9829,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "edited".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -10416,6 +10572,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -10480,6 +10637,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -10592,6 +10750,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
 
@@ -11176,6 +11335,7 @@ mod tests {
             output: "1 passed".to_string(),
             exit_code: Some(0),
             full_output_path: None,
+            output_encoding: None,
             workspace_delta: vec![crate::host::WorkspaceDeltaEntry {
                 path: "cache/artifact.json".to_string(),
                 kind: crate::host::WorkspaceDeltaKind::Added,
@@ -11226,6 +11386,7 @@ mod tests {
             output: "1 passed".to_string(),
             exit_code: Some(0),
             full_output_path: None,
+            output_encoding: None,
             workspace_delta: Vec::new(),
             workspace_delta_truncated: true,
         };
@@ -11446,6 +11607,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -11521,6 +11683,7 @@ mod tests {
             tool_result: Some(ToolResult {
                 output: "ok".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             }),
         };
         // Two tool rounds then text — but the cap is 1, so the run must end
@@ -11799,6 +11962,7 @@ mod tests {
             Ok(ToolResult {
                 output: "must not run".to_string(),
                 exit_code: Some(0),
+                output_encoding: None,
             })
         }
     }
@@ -12070,6 +12234,7 @@ mod tests {
                 Ok(ToolResult {
                     output: "ok".to_string(),
                     exit_code: None,
+                    output_encoding: None,
                 })
             }
         }

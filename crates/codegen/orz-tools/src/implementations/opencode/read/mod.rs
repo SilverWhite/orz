@@ -254,7 +254,9 @@ impl xai_tool_runtime::Tool for ReadTool {
         // ═══════════════════════════════════════════════════════════
         // BRANCH D: TEXT FILE
         // ═══════════════════════════════════════════════════════════
-        let file_content = String::from_utf8_lossy(&file_bytes).into_owned();
+        // GAP-ENCODING-GATE (OPS-PROTOCOL §8): fixed decode chain — the hit
+        // stage is recorded on the journal as `tool_completed.output_encoding`.
+        let (file_content, output_encoding) = crate::util::encoding::decode_text(&file_bytes);
         let total_lines = if file_content.is_empty() {
             0
         } else {
@@ -358,6 +360,7 @@ impl xai_tool_runtime::Tool for ReadTool {
             limit: input.limit.map(|l| l as usize),
             raw_output,
             total_lines,
+            output_encoding: Some(output_encoding.to_string()),
             extracted_images: Vec::new(),
         }))
     }
@@ -448,6 +451,7 @@ async fn read_directory(
         limit: None,
         raw_output: sliced.join("\n"),
         total_lines: total,
+        output_encoding: None,
         extracted_images: Vec::new(),
     })
 }

@@ -89,7 +89,7 @@ impl StaticShellSnapshot {
                 return None;
             }
 
-            let stdout = String::from_utf8_lossy(&stdout_buf);
+            let stdout = crate::util::encoding::decode_text(&stdout_buf).0;
             let parts: Vec<&str> = stdout.split('\x01').collect();
             parts.get(1).map(|s| s.to_string())
         })

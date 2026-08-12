@@ -700,26 +700,36 @@ impl LoopHost for OrzHost {
                 // record what it changed before returning.
                 let (workspace_delta, workspace_delta_truncated) =
                     workspace_delta_diff(&before, &workspace_delta_walk(&self.cwd));
+                let (partial_output, output_encoding) =
+                    orz_tools::util::encoding::decode_text(&out_buf);
                 return Ok(orz_loop::host::TestRunResult {
                     output: format!(
                         "[test runner TIMED OUT after {timeout:?} — process tree killed; \
                          partial output follows]\n{}",
-                        String::from_utf8_lossy(&out_buf),
+                        partial_output,
                     ),
                     exit_code: None,
                     full_output_path: None,
+                    output_encoding: Some(output_encoding.to_string()),
                     workspace_delta,
                     workspace_delta_truncated,
                 });
             }
         };
-        let mut text = String::from_utf8_lossy(&out_buf).into_owned();
+        // GAP-ENCODING-GATE (OPS-PROTOCOL §8): stdout/stderr each decode
+        // through the fixed chain; both labels are recorded (comma-joined).
+        let (mut text, stdout_encoding) = orz_tools::util::encoding::decode_text(&out_buf);
+        let mut encodings = vec![stdout_encoding];
         if !err_buf.is_empty() {
             if !text.is_empty() {
                 text.push('\n');
             }
-            text.push_str(&String::from_utf8_lossy(&err_buf));
+            let (err_text, err_encoding) = orz_tools::util::encoding::decode_text(&err_buf);
+            encodings.push(err_encoding);
+            text.push_str(&err_text);
         }
+        let output_encoding =
+            orz_tools::util::encoding::merge_encoding_labels(encodings.iter().copied());
         // F-09: write the full (capped) output to a file the model can read
         // (read_file) — the conversation only carries the final 32KB.
         let gsa_dir = self.cwd.join(".gsa");
@@ -746,6 +756,7 @@ impl LoopHost for OrzHost {
             output: text,
             exit_code: status.code(),
             full_output_path,
+            output_encoding,
             workspace_delta,
             workspace_delta_truncated,
         })
@@ -948,6 +959,10 @@ impl LoopHost for OrzHost {
             // variant (NoMatchesFound etc. are Ok outputs that changed
             // nothing → non-zero); every other successful output is 0.
             exit_code: crate::tools::exit_code_from_output(&result.output),
+            // GAP-ENCODING-GATE: forward the decode stage observed by the
+            // tool implementation (run_terminal_cmd / read_file) to the
+            // journal's `tool_completed.output_encoding`.
+            output_encoding: result.output_encoding,
         })
     }
 
@@ -1087,6 +1102,35 @@ mod tests {
             names.iter().any(|n| n == "run_terminal_cmd"),
             "expected run_terminal_cmd (GrokBuild bash), got {names:?}"
         );
+    }
+    /// GAP-ENCODING-GATE e2e: `read_file` through the host decodes a
+    /// GB18030 file with the fixed chain and forwards the observed stage to
+    /// the loop's `ToolResult.output_encoding` (journaled upstream as
+    /// `tool_completed.output_encoding`).
+    #[tokio::test]
+    async fn read_file_gb18030_forwards_output_encoding() {
+        let dir = test_dir();
+        let mut bytes = vec![0xd6, 0xd0, 0xce, 0xc4];
+        bytes.push(b'\n');
+        std::fs::write(dir.join("gb.txt"), &bytes).unwrap();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap();
+        let result = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({"target_file": "gb.txt"}),
+                "call-gb",
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.output.contains('中'), "output: {}", result.output);
+        assert_eq!(result.output_encoding.as_deref(), Some("gb18030"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// local_browser (2026-08-10): the registry declares `browser_read`

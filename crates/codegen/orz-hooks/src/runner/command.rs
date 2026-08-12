@@ -577,12 +577,20 @@ fn parse_stop_result(
     }
 }
 
-/// Truncate output bytes to MAX_OUTPUT_BYTES and convert to a lossy UTF-8 string.
+/// Truncate output bytes to MAX_OUTPUT_BYTES and convert through the fixed
+/// decode chain (GAP-ENCODING-GATE, OPS-PROTOCOL §8): strip BOM → UTF-8
+/// strict → GB18030 → lossy. Hook output is never model-visible, but the
+/// same gate keeps hook stdout/stderr deterministic across system code
+/// pages (Windows PowerShell 5.1 GB2312 consoles etc.).
 fn truncate_output(bytes: &[u8]) -> String {
     if bytes.len() <= MAX_OUTPUT_BYTES {
-        String::from_utf8_lossy(bytes).into_owned()
+        let (text, label) = orz_tools::util::encoding::decode_text(bytes);
+        tracing::debug!(encoding = label, "hook output decoded");
+        text
     } else {
-        let mut truncated = String::from_utf8_lossy(&bytes[..MAX_OUTPUT_BYTES]).into_owned();
+        let (text, label) = orz_tools::util::encoding::decode_text(&bytes[..MAX_OUTPUT_BYTES]);
+        let mut truncated = text;
+        tracing::debug!(encoding = label, "hook output decoded (truncated)");
         truncated.push_str(" [truncated]");
         tracing::warn!(
             total_bytes = bytes.len(),

@@ -1166,6 +1166,7 @@ async fn role_gate_denied(
         ToolResult {
             output,
             exit_code: Some(1),
+            output_encoding: None,
         },
         PolicyFeedback::Denied(DenialKey {
             tool_name: tc.name.clone(),

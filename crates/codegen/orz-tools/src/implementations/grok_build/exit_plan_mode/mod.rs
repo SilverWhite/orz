@@ -127,7 +127,7 @@ impl xai_tool_runtime::Tool for ExitPlanModeTool {
             let content = if let Some(fs) = res.get::<FileSystem>() {
                 match fs.0.read_file(&plan_path).await {
                     Ok(bytes) => {
-                        let text = String::from_utf8_lossy(&bytes).into_owned();
+                        let text = crate::util::encoding::decode_text(&bytes).0;
                         if text.trim().is_empty() {
                             None
                         } else {
@@ -138,9 +138,16 @@ impl xai_tool_runtime::Tool for ExitPlanModeTool {
                 }
             } else {
                 // Fallback: try tokio::fs if no FileSystem resource is available.
-                match tokio::fs::read_to_string(&plan_path).await {
-                    Ok(text) if !text.trim().is_empty() => Some(text),
-                    _ => None,
+                match tokio::fs::read(&plan_path).await {
+                    Ok(bytes) => {
+                        let text = crate::util::encoding::decode_text(&bytes).0;
+                        if text.trim().is_empty() {
+                            None
+                        } else {
+                            Some(text)
+                        }
+                    }
+                    Err(_) => None,
                 }
             };
 

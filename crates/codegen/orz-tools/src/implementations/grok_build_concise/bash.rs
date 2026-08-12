@@ -172,6 +172,7 @@ mod tests {
         BashOutput {
             output: output.as_bytes().to_vec(),
             output_for_prompt: BashOutput::make_output_for_prompt(output),
+            output_encoding: None,
             exit_code,
             command: "echo test".to_string(),
             truncated: false,

@@ -114,7 +114,7 @@ impl xai_tool_runtime::Tool for WriteTool {
 
         // ── Check if file exists and read old content ────────────
         let (existed, old_content) = match fs.read_file(&path).await {
-            Ok(bytes) => (true, Some(String::from_utf8_lossy(&bytes).into_owned())),
+            Ok(bytes) => (true, Some(crate::util::encoding::decode_text(&bytes).0)),
             Err(_) => (false, None),
         };
 

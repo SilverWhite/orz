@@ -458,6 +458,7 @@ mod tests {
         ToolResult {
             output: output.to_string(),
             exit_code,
+            output_encoding: None,
         }
     }
 

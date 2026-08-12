@@ -302,6 +302,7 @@ pub async fn handle_browser_read(
                     ToolError::ExecutionFailed(format!("browser_read serialize: {e}"))
                 })?,
                 exit_code: Some(0),
+                output_encoding: None,
             })
         }
         Err(CdpError::UrlGate(gate_err)) => Err(ToolError::ExecutionFailed(format!(

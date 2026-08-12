@@ -237,7 +237,7 @@ impl xai_tool_runtime::Tool for GlobTool {
         let _ = child.wait().await;
 
         // ── Parse file paths from stdout ────────────────────────
-        let stdout = String::from_utf8_lossy(&stdout_buf);
+        let stdout = crate::util::encoding::decode_text(&stdout_buf).0;
         let mut truncated = truncated_by_bytes;
 
         struct FileEntry {

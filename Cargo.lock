@@ -6298,6 +6298,7 @@ dependencies = [
  "dirs 5.0.1",
  "dunce",
  "educe",
+ "encoding_rs",
  "flate2",
  "fs2",
  "futures",

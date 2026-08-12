@@ -396,7 +396,7 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
                 });
             }
         };
-        let old_content = String::from_utf8_lossy(&file_bytes).into_owned();
+        let old_content = crate::util::encoding::decode_text(&file_bytes).0;
 
         let apply_result = apply::apply_edits(&old_content, &input.edits, &path, &*scheme);
 

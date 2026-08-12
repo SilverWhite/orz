@@ -2252,6 +2252,7 @@ impl xai_tool_runtime::Tool for BashTool {
             let mut bash = BashOutput {
                 output_for_prompt: BashOutput::make_output_for_prompt(&result.combined_output),
                 output: result.combined_output.into_bytes(),
+                output_encoding: result.output_encoding,
                 exit_code: result.exit_code.unwrap_or(-1),
                 command: input.command,
                 truncated: result.truncated,
@@ -2477,6 +2478,7 @@ mod tests {
                     timed_out: false,
                     output_file: PathBuf::from("/tmp/test.log"),
                     total_bytes: output.len(),
+                    output_encoding: None,
                     pid: None,
                 }),
                 bg_task_id: "task-1".to_string(),
@@ -2496,6 +2498,7 @@ mod tests {
                     timed_out: true,
                     output_file: PathBuf::from("/tmp/test.log"),
                     total_bytes: output.len(),
+                    output_encoding: None,
                     pid: None,
                 }),
                 bg_task_id: "task-1".to_string(),
@@ -2525,6 +2528,7 @@ mod tests {
                     timed_out: false,
                     output_file: PathBuf::new(),
                     total_bytes: 0,
+                    output_encoding: None,
                     pid: None,
                 }),
                 bg_task_id: task_id.to_string(),
@@ -3140,6 +3144,48 @@ mod tests {
             BashToolOutput::Background(_) => panic!("Expected foreground output"),
         }
     }
+    /// GAP-ENCODING-GATE (OPS-PROTOCOL §8): the decode stage observed by the
+    /// terminal backend flows into `BashOutput.output_encoding`, and the
+    /// toolset reads it off `ToolOutput` for the journal payload.
+    #[tokio::test]
+    async fn foreground_command_carries_output_encoding() {
+        let mock = MockTerminal {
+            foreground_result: Ok(TerminalRunResult {
+                combined_output: "中文".to_string(),
+                output_encoding: Some("gb18030".to_string()),
+                exit_code: Some(0),
+                truncated: false,
+                signal: None,
+                timed_out: false,
+                output_file: PathBuf::from("/tmp/test.log"),
+                total_bytes: 12,
+                pid: None,
+            }),
+            bg_task_id: "task-1".to_string(),
+            bg_output_file: PathBuf::from("/tmp/bg.log"),
+            bg_error: None,
+            captured_bg_request: CapturedRequest::default(),
+        };
+        let resources = make_resources(mock);
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_input("echo x"),
+        )
+        .await
+        .unwrap();
+        match result {
+            BashToolOutput::Foreground(bash) => {
+                assert_eq!(bash.output_encoding.as_deref(), Some("gb18030"));
+                assert_eq!(
+                    crate::types::output::ToolOutput::Bash(bash).output_encoding(),
+                    Some("gb18030")
+                );
+            }
+            BashToolOutput::Background(_) => panic!("Expected foreground output"),
+        }
+    }
 
     #[tokio::test]
     async fn foreground_command_timeout() {
@@ -3488,6 +3534,7 @@ mod tests {
         let mut bash = BashOutput {
             output: output.as_bytes().to_vec(),
             output_for_prompt: BashOutput::make_output_for_prompt(output),
+            output_encoding: None,
             exit_code,
             command: "cat test".to_string(),
             truncated: false,
@@ -3644,6 +3691,7 @@ mod tests {
         BashOutput {
             output: output.as_bytes().to_vec(),
             output_for_prompt: BashOutput::make_output_for_prompt(output),
+            output_encoding: None,
             exit_code: 0,
             command: command.to_string(),
             truncated: false,

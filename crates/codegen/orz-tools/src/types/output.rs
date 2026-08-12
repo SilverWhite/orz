@@ -144,6 +144,11 @@ pub struct ToolRunResult {
     /// `use_tool` → `linear__save_issue`), this carries the effective tool name.
     /// `None` means the requested tool and executed tool are the same.
     pub effective_tool_name: Option<String>,
+    /// Decode stage observed for this tool's output (GAP-ENCODING-GATE) —
+    /// `bash`/`read_file` only; other tools leave it `None`. The host
+    /// forwards it to the run-journal `tool_completed.output_encoding`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_encoding: Option<String>,
 }
 impl ToolRunResult {
     /// Like [`TypedToolOutput::from_value`], but reattaches `chat_completion_output` from `output`.
@@ -224,6 +229,12 @@ pub struct FileContent {
     /// offset-past-end vs genuinely-empty files.
     #[serde(default)]
     pub total_lines: usize,
+    /// Decoding stage that produced this file's text (GAP-ENCODING-GATE,
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
+    /// Recorded on the journal's `tool_completed.output_encoding`; `None`
+    /// for binary/document formats that have no decode stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_encoding: Option<String>,
     /// Base64 images captured before per-line truncation. The session
     /// layer turns these into multimodal `ContentPart::Image` follow-ups
     /// (same pipeline as MCP image extraction); pre-truncation capture
@@ -418,6 +429,11 @@ pub struct BashOutput {
     /// Pre-baked at construction time so `to_prompt_format` is a simple read.
     #[serde(default)]
     pub output_for_prompt: String,
+    /// Decoding stage that produced the output text (GAP-ENCODING-GATE,
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
+    /// Recorded on the journal's `tool_completed.output_encoding`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_encoding: Option<String>,
     pub exit_code: i32,
     pub command: String,
     pub truncated: bool,
@@ -666,6 +682,18 @@ pub enum ToolOutput {
     ImageEdit(MediaGenOutput),
 }
 impl ToolOutput {
+    /// The mechanical decode stage observed for this tool output, if any
+    /// (GAP-ENCODING-GATE). The loop journals it as
+    /// `tool_completed.output_encoding`; model-visible text is never
+    /// annotated with it.
+    pub fn output_encoding(&self) -> Option<&str> {
+        match self {
+            ToolOutput::Bash(b) => b.output_encoding.as_deref(),
+            ToolOutput::ReadFile(ReadFileOutput::FileContent(fc)) => fc.output_encoding.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Whether this output is a logical tool failure, for `tool.execution`'s
     /// `success`/`outcome`. Conservative: only known error variants count, so we
     /// never report a *false failure*.
@@ -767,7 +795,9 @@ impl ToolOutput {
             },
             ToolOutput::Bash(bash_output) => bash_output.output_for_prompt.clone(),
             ToolOutput::GrepSearch(grep_search_output) => {
-                String::from_utf8_lossy(&grep_search_output.stdout).into_owned()
+                // GAP-ENCODING-GATE: rg stdout is cross-process text —
+                // decode through the fixed chain (GB18030 consoles etc.).
+                crate::util::encoding::decode_text(&grep_search_output.stdout).0
             }
             ToolOutput::Todo(todo_output) => match todo_output {
                 TodoWriteOutput::TodosUpdated(success) => success.summary_for_prompt.to_owned(),
@@ -1312,6 +1342,7 @@ mod tests {
             limit: None,
             raw_output: String::new(),
             total_lines,
+            output_encoding: None,
             extracted_images: vec![],
         }
     }
@@ -1361,6 +1392,22 @@ mod tests {
         fc.content = "1→a\nb\nc".to_string();
         let output = ToolOutput::ReadFile(ReadFileOutput::FileContent(fc));
         assert_eq!(output.to_prompt_format(), "1→a\nb\nc");
+    }
+    /// GAP-ENCODING-GATE (review P3-5 closure): rg stdout renders through
+    /// the fixed decode chain — GB18030 output reaches the model as proper
+    /// text, not replacement chars.
+    #[test]
+    fn grep_search_prompt_decodes_gb18030() {
+        let mut stdout = vec![0xd6, 0xd0, 0xce, 0xc4];
+        stdout.push(b'\n');
+        let output = ToolOutput::GrepSearch(GrepSearchOutput {
+            stdout,
+            stderr: Vec::new(),
+            exit_code: 0,
+            match_count: 1,
+            file_matches: Vec::new(),
+        });
+        assert_eq!(output.to_prompt_format(), "中文\n");
     }
     #[test]
     fn text_output_to_prompt_format_omits_consumed_completion_task_id() {
@@ -2441,6 +2488,7 @@ mod tests {
         BashOutput {
             output: output.to_vec(),
             output_for_prompt: String::new(),
+            output_encoding: None,
             exit_code,
             command: "cmd".into(),
             truncated: false,
@@ -2597,6 +2645,7 @@ mod tests {
         ToolRunResult {
             prompt_text: "prompt".into(),
             effective_tool_name: None,
+            output_encoding: None,
             output,
         }
     }

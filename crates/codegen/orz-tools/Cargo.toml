@@ -14,6 +14,7 @@ dunce = { workspace = true }
 fs2 = { workspace = true }
 educe = { workspace = true, features = ["Debug"] }
 async-openai = { workspace = true }
+encoding_rs = { workspace = true }
 xai-tty-utils = { workspace = true }
 orz-config = { path = "../orz-config" }
 orz-tools-api = { path = "../orz-tools-api" }

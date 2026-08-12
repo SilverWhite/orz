@@ -309,7 +309,9 @@ async fn handle_new_file_creation(
         Err(_) => false,
     };
     let old_text = match fs.read_file(path).await {
-        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).to_string()),
+        // GAP-ENCODING-GATE: read the target through the fixed decode chain
+        // so editing a GB18030 file never mangles the match text.
+        Ok(bytes) => Some(crate::util::encoding::decode_text(&bytes).0),
         Err(_) => None,
     };
     if file_exists && empty_old_string_does_not_override {
@@ -572,7 +574,7 @@ async fn handle_replacement(
             return Ok(output);
         }
     };
-    let old_text = String::from_utf8_lossy(&bytes).into_owned();
+    let old_text = crate::util::encoding::decode_text(&bytes).0;
     let has_crlf = old_text.contains("\r\n");
     let match_text: std::borrow::Cow<'_, str> = if has_crlf {
         std::borrow::Cow::Owned(old_text.replace("\r\n", "\n"))
@@ -1035,6 +1037,29 @@ mod tests {
                 assert!(applied.tool_output_for_prompt.contains("has been updated"));
                 let content = std::fs::read_to_string(tmp.path().join("test.txt")).unwrap();
                 assert_eq!(content, "goodbye world\n");
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+    /// GAP-ENCODING-GATE（复查补充）: search_replace reads the target through
+    /// the fixed decode chain — a GB18030 file's 中文 text is matched and
+    /// replaced correctly (a lossy read would mangle the match text).
+    #[tokio::test]
+    async fn gb18030_replacement() {
+        let tmp = TempDir::new().unwrap();
+        let mut bytes = vec![0xd6, 0xd0, 0xce, 0xc4];
+        bytes.push(b'\n');
+        std::fs::write(tmp.path().join("gb.txt"), &bytes).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("gb.txt", "中文", "中文改");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                let content = std::fs::read_to_string(tmp.path().join("gb.txt")).unwrap();
+                assert_eq!(content, "中文改\n");
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
         }

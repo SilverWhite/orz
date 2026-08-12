@@ -85,7 +85,7 @@ fn collect_lines(bytes: &[u8]) -> Vec<LineRecord> {
                 end -= 1;
             }
             let raw_bytes = &bytes[start..end];
-            let raw = String::from_utf8_lossy(raw_bytes).into_owned();
+            let raw = crate::util::encoding::decode_text(raw_bytes).0;
             let display = format_display(raw_bytes);
             let indent = measure_indent(&raw);
             records.push(LineRecord {
@@ -106,7 +106,7 @@ fn collect_lines(bytes: &[u8]) -> Vec<LineRecord> {
             end -= 1;
         }
         let raw_bytes = &bytes[start..end];
-        let raw = String::from_utf8_lossy(raw_bytes).into_owned();
+        let raw = crate::util::encoding::decode_text(raw_bytes).0;
         let display = format_display(raw_bytes);
         let indent = measure_indent(&raw);
         records.push(LineRecord {

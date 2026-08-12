@@ -304,6 +304,7 @@ impl ProjectDocIndex {
         Ok(ToolResult {
             output: json,
             exit_code: Some(0),
+            output_encoding: None,
         })
     }
 

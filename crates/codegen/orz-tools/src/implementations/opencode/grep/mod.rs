@@ -212,7 +212,7 @@ impl xai_tool_runtime::Tool for GrepTool {
         let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
 
         // Exit code 1 = no matches, exit code 2 with no output = errors only.
-        let stdout_str = String::from_utf8_lossy(&stdout_buf);
+        let stdout_str = crate::util::encoding::decode_text(&stdout_buf).0;
         if exit_code == 1 || (exit_code == 2 && stdout_str.trim().is_empty()) {
             let formatted = "No files found".to_string();
             return Ok(GrepSearchOutput {

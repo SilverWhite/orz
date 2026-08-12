@@ -277,11 +277,11 @@ impl WebFetchClient {
         session_folder: Option<&Path>,
         tools: RecoveryTools<'_>,
     ) -> ProcessedText {
-        let raw_content = String::from_utf8_lossy(body);
+        let raw_content = crate::util::encoding::decode_text(body).0;
         let content = if is_html(content_type) {
             html_to_markdown(&self.converter, &raw_content)
         } else {
-            raw_content.into_owned()
+            raw_content
         };
         let content = strip_base64_data_uris(content);
         let bytes = content.len();

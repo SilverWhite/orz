@@ -45,6 +45,12 @@ pub enum ToolPolicy {
 pub struct ToolResult {
     pub output: String,
     pub exit_code: Option<i32>,
+    /// Decode stage that produced `output` (GAP-ENCODING-GATE,
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`
+    /// (comma-joined for multi-chunk streams). `None` when the tool has no
+    /// mechanical decode stage. The controller journals it as
+    /// `tool_completed.output_encoding`.
+    pub output_encoding: Option<String>,
 }
 
 /// Lightweight error from tool execution.
@@ -217,6 +223,10 @@ pub enum WorkspaceDeltaKind {
 pub struct TestRunResult {
     pub output: String,
     pub exit_code: Option<i32>,
+    /// Decoding stage(s) that produced `output` (GAP-ENCODING-GATE,
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`,
+    /// comma-joined when stdout/stderr used different stages.
+    pub output_encoding: Option<String>,
     /// Path of the full (capped) output written by the host — readable via
     /// `read_file`; `None` when the host could not write it (or timed out).
     pub full_output_path: Option<String>,

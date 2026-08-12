@@ -19,12 +19,13 @@ pub(crate) fn take_at_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..last_ok]
 }
 
-/// UTF-8 lossy decode + truncate at MAX_LINE_LENGTH.
+/// Fixed-chain decode (GAP-ENCODING-GATE, OPS-PROTOCOL §8) + truncate at
+/// MAX_LINE_LENGTH at a char boundary.
 pub(crate) fn format_display(raw: &[u8]) -> String {
-    let decoded = String::from_utf8_lossy(raw);
+    let decoded = crate::util::encoding::decode_text(raw).0;
     if decoded.len() > MAX_LINE_LENGTH {
         take_at_char_boundary(&decoded, MAX_LINE_LENGTH).to_string()
     } else {
-        decoded.into_owned()
+        decoded
     }
 }

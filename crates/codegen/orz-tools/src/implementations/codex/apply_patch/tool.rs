@@ -224,7 +224,9 @@ async fn read_file_as_string(
     path: &std::path::Path,
 ) -> Result<String, String> {
     let bytes = fs.read_file(path).await.map_err(|e| format!("{e}"))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    // GAP-ENCODING-GATE (OPS-PROTOCOL §8): the patch context reads through
+    // the fixed decode chain so GB18030 files are not mangled before patching.
+    Ok(crate::util::encoding::decode_text(&bytes).0)
 }
 
 /// Build the codex-style summary string.
@@ -603,6 +605,38 @@ mod tests {
                 assert!(tool_output_for_prompt.contains("M "));
                 let content = std::fs::read_to_string(tmp.path().join("update.txt")).unwrap();
                 assert_eq!(content, "foo\nbaz\n");
+            }
+            other => panic!("Expected Success, got: {other:?}"),
+        }
+    }
+    /// GAP-ENCODING-GATE (review P2-2 closure): `read_file_as_string` reads
+    /// the patch target through the fixed decode chain, so a GB18030 file is
+    /// patched correctly instead of being mangled by a lossy read.
+    #[tokio::test]
+    async fn update_file_gb18030_content_preserved() {
+        let tmp = TempDir::new().unwrap();
+        let mut bytes = vec![0xd6, 0xd0, 0xce, 0xc4];
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&[0xd6, 0xd0, 0xce, 0xc4]);
+        bytes.push(b'\n');
+        std::fs::write(tmp.path().join("gb.txt"), &bytes).unwrap();
+
+        let tool = ApplyPatchTool;
+        let resources = test_resources(tmp.path());
+        let shared = resources.into_shared();
+
+        let patch = wrap_patch("*** Update File: gb.txt\n@@\n 中文\n-中文\n+中文改");
+        let result =
+            xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), make_input(&patch))
+                .await
+                .unwrap();
+
+        match result {
+            ApplyPatchOutput::Success { files, .. } => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0].action, "modified");
+                let content = std::fs::read_to_string(tmp.path().join("gb.txt")).unwrap();
+                assert_eq!(content, "中文\n中文改\n");
             }
             other => panic!("Expected Success, got: {other:?}"),
         }

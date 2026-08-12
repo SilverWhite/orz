@@ -107,7 +107,7 @@ async fn run_rg_search(
         Some(0) => Ok(parse_results(&output.stdout, limit)),
         Some(1) => Ok(Vec::new()),
         _ => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = crate::util::encoding::decode_text(&output.stderr).0;
             Err(format!("rg failed: {stderr}"))
         }
     }

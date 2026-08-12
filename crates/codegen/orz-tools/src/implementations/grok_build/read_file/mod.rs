@@ -472,7 +472,11 @@ pub(crate) async fn run_read_file(
             path.display()
         )));
     }
-    let file_content = String::from_utf8_lossy(&file_bytes).into_owned();
+    // GAP-ENCODING-GATE (OPS-PROTOCOL §8): fixed decode chain — strip BOM →
+    // UTF-8 strict → GB18030 → lossy; the hit stage is recorded on the
+    // journal as `tool_completed.output_encoding` (model sees plain text).
+    let (file_content, output_encoding) = crate::util::encoding::decode_text(&file_bytes);
+    let output_encoding = Some(output_encoding.to_string());
     if file_content.is_empty() {
         let stored_offset = stored_read_offset(input.offset);
         return Ok(ReadFileOutput::FileContent(FileContent {
@@ -483,6 +487,7 @@ pub(crate) async fn run_read_file(
             limit: input.limit,
             raw_output: String::new(),
             total_lines: 0,
+            output_encoding,
             extracted_images: Vec::new(),
         }));
     }
@@ -584,6 +589,7 @@ pub(crate) async fn run_read_file(
         limit: stored_limit,
         raw_output: extracted.raw_output,
         total_lines,
+        output_encoding,
         extracted_images,
     }))
 }
@@ -774,6 +780,87 @@ mod tests {
                 assert!(content.content.contains("line3"));
                 assert!(content.raw_output.contains("line1"));
                 assert_eq!(content.total_lines, 4);
+            }
+            other => panic!("Expected FileContent, got {:?}", other),
+        }
+    }
+    /// GAP-ENCODING-GATE (OPS-PROTOCOL §8): a GB18030 file decodes through
+    /// the fixed chain and records the hit stage on `FileContent`, so the
+    /// loop can journal it as `tool_completed.output_encoding`.
+    #[tokio::test]
+    async fn read_file_gb18030_records_output_encoding() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("gb.txt");
+        // "中文" in GB18030 (also valid GBK).
+        let mut bytes = vec![0xd6, 0xd0, 0xce, 0xc4];
+        bytes.push(b'\n');
+        std::fs::write(&file_path, &bytes).unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "gb.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let shared = resources.into_shared();
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains('中'),
+                    "content: {:?}",
+                    content.content
+                );
+                assert!(
+                    content.content.contains('文'),
+                    "content: {:?}",
+                    content.content
+                );
+                assert_eq!(content.output_encoding.as_deref(), Some("gb18030"));
+                assert_eq!(content.raw_output, "中文\n");
+            }
+            other => panic!("Expected FileContent, got {:?}", other),
+        }
+    }
+    /// GAP-ENCODING-GATE: a UTF-8 file with a BOM is stripped and labeled
+    /// `utf-8-sig` (the BOM must never leak into model-visible text).
+    #[tokio::test]
+    async fn read_file_utf8_bom_stripped_and_labeled() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("bom.txt");
+        let mut bytes = b"\xef\xbb\xbf".to_vec();
+        bytes.extend_from_slice(b"hello");
+        std::fs::write(&file_path, &bytes).unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "bom.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let shared = resources.into_shared();
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("hello"),
+                    "content: {:?}",
+                    content.content
+                );
+                assert!(
+                    !content.content.contains('\u{feff}'),
+                    "BOM leaked: {:?}",
+                    content.content
+                );
+                assert_eq!(content.output_encoding.as_deref(), Some("utf-8-sig"));
             }
             other => panic!("Expected FileContent, got {:?}", other),
         }

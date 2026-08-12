@@ -1013,8 +1013,8 @@ fn finalize_grep(
     exit_code: i32,
     config: &GrepFormatConfig,
 ) -> GrepSearchOutput {
-    let stdout = String::from_utf8_lossy(&stdout_buf);
-    let stderr = String::from_utf8_lossy(&stderr_buf);
+    let stdout = crate::util::encoding::decode_text(&stdout_buf).0;
+    let stderr = crate::util::encoding::decode_text(&stderr_buf).0;
 
     // Handle exit codes.
     if (exit_code == 1 && stdout.is_empty())
@@ -1212,7 +1212,7 @@ impl<'a> BodyStreamer<'a> {
             self.done = true;
             return None;
         }
-        let line_str = String::from_utf8_lossy(line);
+        let line_str = crate::util::encoding::decode_text(line).0;
         let trimmed = trim_line(&line_str, self.config.max_chars_per_line);
         // Byte-cap; shares `exceeds_cum_byte_cap` with the batch path.
         if exceeds_cum_byte_cap(self.cum_len, trimmed.len(), self.config.max_output_bytes) {

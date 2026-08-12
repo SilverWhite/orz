@@ -247,7 +247,9 @@ impl xai_tool_runtime::Tool for CodexReadFileTool {
         // 5. Build raw_output — the unformatted file content for the read
         // range. This matches the grok-build ReadFileTool semantics where
         // raw_output is the actual file text without line-number prefixes.
-        let raw_output = String::from_utf8_lossy(&file_bytes).into_owned();
+        // GAP-ENCODING-GATE (OPS-PROTOCOL §8): fixed decode chain — the hit
+        // stage is recorded on the journal as `tool_completed.output_encoding`.
+        let (raw_output, output_encoding) = crate::util::encoding::decode_text(&file_bytes);
 
         // 6. Compute total lines.
         let total_lines = file_bytes.iter().filter(|&&b| b == b'\n').count()
@@ -266,6 +268,7 @@ impl xai_tool_runtime::Tool for CodexReadFileTool {
             limit: Some(input.limit),
             raw_output,
             total_lines,
+            output_encoding: Some(output_encoding.to_string()),
             extracted_images: Vec::new(),
         }))
     }
@@ -405,6 +408,43 @@ mod tests {
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert_eq!(fc.content, format!("L1: {}{}", '\u{FFFD}', '\u{FFFD}'));
+            }
+            other => panic!("Expected FileContent, got {:?}", other),
+        }
+    }
+    /// GAP-ENCODING-GATE (review P2-1 closure): the codex slice-mode content
+    /// path must decode GB18030 through the fixed chain — model-visible
+    /// lines carry proper text and the output records the hit stage.
+    #[tokio::test]
+    async fn slice_reads_gb18030_content() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("gb.txt");
+        let mut bytes = vec![0xd6, 0xd0, 0xce, 0xc4];
+        bytes.push(b'\n');
+        std::fs::write(&file_path, &bytes).unwrap();
+
+        let tool = CodexReadFileTool;
+        let shared = test_resources(tmp.path()).into_shared();
+        let input = CodexReadFileInput {
+            file_path: file_path.to_string_lossy().to_string(),
+            offset: 1,
+            limit: 10,
+            mode: ReadMode::Slice,
+            indentation: None,
+        };
+
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(fc) => {
+                assert_eq!(fc.content, "L1: 中文");
+                assert!(
+                    !fc.content.contains('\u{fffd}'),
+                    "content: {:?}",
+                    fc.content
+                );
+                assert_eq!(fc.output_encoding.as_deref(), Some("gb18030"));
             }
             other => panic!("Expected FileContent, got {:?}", other),
         }

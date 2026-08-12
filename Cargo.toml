@@ -121,6 +121,7 @@ dirs = "5.0"
 documented = "0.9"
 dunce = "1"
 educe = "0.6.0"
+encoding_rs = { version = "=0.8.35" }
 enum_delegate = "0.2"
 env_logger = "0.11"
 eventsource-stream = "0.2"

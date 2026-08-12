@@ -308,19 +308,29 @@ struct ProcessState {
 
 impl ProcessState {
     fn to_result(&self) -> TerminalRunResult {
-        let combined_output = if let Some(ref front) = self.front_buffer {
-            let front_str = String::from_utf8_lossy(front);
-            let back_str = String::from_utf8_lossy(&self.output_buffer);
-            format!(
+        let (combined_output, output_encoding) = if let Some(ref front) = self.front_buffer {
+            // Truncated output keeps the head and tail slices only; each
+            // slice decodes independently through the fixed chain and the
+            // labels are merged (OPS-PROTOCOL §8 — record the stages that
+            // actually produced the text).
+            let (front_str, front_label) = crate::util::encoding::decode_text(front);
+            let (back_str, back_label) = crate::util::encoding::decode_text(&self.output_buffer);
+            let combined = format!(
                 "{}\n\n... (output truncated) ...\n\n{}",
                 front_str.trim_end(),
                 back_str.trim_start()
+            );
+            (
+                combined,
+                crate::util::encoding::merge_encoding_labels([front_label, back_label]),
             )
         } else {
-            String::from_utf8_lossy(&self.output_buffer).into_owned()
+            let (text, label) = crate::util::encoding::decode_text(&self.output_buffer);
+            (text, Some(label.to_string()))
         };
         TerminalRunResult {
             combined_output,
+            output_encoding,
             exit_code: self.exit_status.as_ref().and_then(|s| s.exit_code),
             truncated: self.truncated,
             signal: match self.bg_status {
@@ -401,20 +411,24 @@ impl ProcessState {
     async fn to_task_snapshot(&self, task_id: &str) -> TaskSnapshot {
         // For completed background tasks, the in-memory buffer is cleared to free
         // memory. Fall back to reading from the output file (non-blocking).
+        // GAP-ENCODING-GATE (OPS-PROTOCOL §8): every snapshot surface goes
+        // through the fixed decode chain — a completed background task's
+        // output file is read as bytes and decoded, never strict-UTF-8.
         let output = if self.output_buffer.is_empty() && self.exit_status.is_some() {
-            tokio::fs::read_to_string(&self.output_file)
-                .await
-                .unwrap_or_default()
+            match tokio::fs::read(&self.output_file).await {
+                Ok(bytes) => crate::util::encoding::decode_text(&bytes).0,
+                Err(_) => String::new(),
+            }
         } else if let Some(ref front) = self.front_buffer {
-            let front_str = String::from_utf8_lossy(front);
-            let back_str = String::from_utf8_lossy(&self.output_buffer);
+            let (front_str, _) = crate::util::encoding::decode_text(front);
+            let (back_str, _) = crate::util::encoding::decode_text(&self.output_buffer);
             format!(
                 "{}\n\n... (output truncated) ...\n\n{}",
                 front_str.trim_end(),
                 back_str.trim_start()
             )
         } else {
-            String::from_utf8_lossy(&self.output_buffer).into_owned()
+            crate::util::encoding::decode_text(&self.output_buffer).0
         };
 
         TaskSnapshot {
@@ -2958,7 +2972,7 @@ async fn capture_login_env() -> HashMap<String, String> {
             return None;
         }
 
-        let stdout = String::from_utf8_lossy(&stdout_buf);
+        let stdout = crate::util::encoding::decode_text(&stdout_buf).0;
         let (login_path, mut env_map) = parse_login_env_capture(&stdout);
         let login_path = login_path?;
 

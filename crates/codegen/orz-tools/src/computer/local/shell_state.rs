@@ -682,7 +682,7 @@ pub async fn read_dump_from_pipe(fd: OwnedFd) -> std::io::Result<String> {
             use std::io::Read;
             let mut file = unsafe { std::fs::File::from_raw_fd(fd.as_raw_fd()) };
             std::mem::forget(fd);
-            let mut buf = String::new();
+            let mut buf: Vec<u8> = Vec::new();
             let mut chunk = [0u8; 4096];
             loop {
                 let n = file.read(&mut chunk)?;
@@ -691,15 +691,22 @@ pub async fn read_dump_from_pipe(fd: OwnedFd) -> std::io::Result<String> {
                     // expected path when no bg subprocess was spawned).
                     break;
                 }
-                buf.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                buf.extend_from_slice(&chunk[..n]);
                 // Either marker suffices; we accept whichever shell the
                 // child happens to be (bash vs zsh).
-                if buf.contains(BASH_STATE_END_MARKER) || buf.contains(ZSH_STATE_END_MARKER) {
+                let has_marker = |marker: &str| {
+                    buf.windows(marker.len())
+                        .any(|window| window == marker.as_bytes())
+                };
+                if has_marker(BASH_STATE_END_MARKER) || has_marker(ZSH_STATE_END_MARKER) {
                     break;
                 }
             }
             drop(file);
-            Ok(buf)
+            // GAP-ENCODING-GATE (OPS-PROTOCOL §8): decode the complete dump
+            // once through the fixed chain (chunk-wise lossy would split
+            // multibyte sequences across reads).
+            Ok(crate::util::encoding::decode_text(&buf).0)
         }),
     )
     .await

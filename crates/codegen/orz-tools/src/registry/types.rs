@@ -1758,10 +1758,12 @@ impl FinalizedToolset {
             let res = self.resources.lock().await;
             self.resources_persistence.save(&res);
         }
+        let output_encoding = output.output_encoding().map(str::to_owned);
         Ok(ToolRunResult {
             output,
             prompt_text,
             effective_tool_name,
+            output_encoding,
         })
     }
     /// Reverse-remap client-facing param names to canonical names.

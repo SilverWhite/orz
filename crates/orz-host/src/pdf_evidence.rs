@@ -201,6 +201,7 @@ pub async fn handle_browser_pdf(
                     ToolError::ExecutionFailed(format!("browser pdf read serialize: {e}"))
                 })?,
                 exit_code: Some(0),
+                output_encoding: None,
             })
         }
         BrowserDownloadOutcome::Pdf { path, final_url } => {
@@ -253,6 +254,7 @@ pub async fn handle_browser_pdf(
             Ok(ToolResult {
                 output: ingest.return_text,
                 exit_code: Some(0),
+                output_encoding: None,
             })
         }
     }
@@ -337,6 +339,7 @@ pub async fn handle_pdf_read(cwd: &Path, args: &Value) -> Result<ToolResult, Too
     Ok(ToolResult {
         output: text,
         exit_code: Some(0),
+        output_encoding: None,
     })
 }
 

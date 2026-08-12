@@ -32,7 +32,7 @@ async fn get_or_generate<'a>(
 ) -> Option<&'a [Anchor]> {
     if !cache.contains_key(path) {
         let bytes = fs.read_file(path).await.ok()?;
-        let content = String::from_utf8_lossy(&bytes);
+        let content = crate::util::encoding::decode_text(&bytes).0;
         let lines = split_lines(&content);
         cache.insert(path.to_path_buf(), scheme.generate_anchors(&lines));
     }
@@ -51,7 +51,7 @@ pub(crate) async fn inject_anchors(
     fs: &dyn AsyncFileSystem,
     scheme: &dyn AnchorScheme,
 ) -> Vec<u8> {
-    let stdout = String::from_utf8_lossy(stdout_bytes);
+    let stdout = crate::util::encoding::decode_text(stdout_bytes).0;
 
     let (prefix, body, suffix) = match (stdout.find(">\n"), stdout.rfind("\n</workspace_result>")) {
         (Some(start), Some(end)) => {

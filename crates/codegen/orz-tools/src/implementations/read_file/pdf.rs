@@ -262,6 +262,7 @@ pub fn raw_text_to_file_content(text: String) -> ReadFileOutput {
         limit: None,
         raw_output: text,
         total_lines,
+        output_encoding: None,
         extracted_images: Vec::new(),
     })
 }
