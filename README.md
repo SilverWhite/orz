@@ -26,7 +26,6 @@ ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构
 | Component adoption register | `pending` | 逐 crate/component 所有权需按当前代码重新审计 |
 | Windows incident/case evidence | `pending` | 目录已建立，首批结构化证据尚未闭环 |
 | Source quality weighting | `pending` | FUS-SOURCE-WEIGHTING 设计已定稿（ADR-0010 §3.7 条 12/v1.7），实现待办，见索引 GAP-SOURCE-WEIGHTING-IMPL |
-| Source quality weighting | `pending` | FUS-SOURCE-WEIGHTING 设计已定稿（ADR-0010 §3.7 条 12/v1.7），实现待办，见索引 GAP-SOURCE-WEIGHTING-IMPL |
 
 实现状态不能用 Phase 完成、测试全绿或单次评测结果替代。当前差距见 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距) 和 [`ADR-0010 冻结审计`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 
@@ -127,14 +126,12 @@ python gsa.py doctor --quick
 
 ## 已知符合性差距
 
-冻结审计至少登记了以下未闭合项：
+冻结审计（2026-08-09）登记的六项差距中，前四项已闭合
+（GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、
+IMPL-RUN-EVENT-SCHEMA / GAP-SUFFICIENCY-SCHEMA）；当前未闭合项：
 
-- Rust tool round budget 仍需从旧值迁移到 ADR-0010 冻结值，并重写相关测试。
-- 旧 inquiry producer 仍需拆分为 Orientation、Information Sufficiency、Counterexample 和 Runtime Stagnation Guard。
-- 检索子代理仍需从一次调用、零工具特殊路径迁移到共享 Agent runtime。
-- run-event Schema 仍需完整表达机械充分性、parent disposition、contract revision 和关闭 CAS。
-- Windows incident/case 需要真实 provenance、脱敏、分类和回归门槛。
-- 逐 crate/component 采用矩阵需要按当前代码重新审计。
+- Windows incident/case 需要真实 provenance、脱敏、分类和回归门槛（`partial`，见 GAP-WINDOWS-EVIDENCE）。
+- 逐 crate/component 采用矩阵需要按当前代码重新审计（`partial`，见 FUS-COMPONENT-REGISTER）。
 
 这些差距的 canonical ID 和入口维护在 [`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md)，不得在 README 中继续扩展实施流水。
 
