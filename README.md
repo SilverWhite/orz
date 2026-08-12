@@ -117,6 +117,7 @@ cargo check -p <crate>        # always target specific crates; full-workspace bu
 cargo test -p xai-grok-config # per-crate tests
 cargo clippy -p <crate>       # lint config: clippy.toml at the repo root
 cargo fmt --all               # rustfmt.toml at the repo root
+scripts/fmt_check.ps1         # formatting gate (scripts/fmt_check.sh on Linux)
 ```
 
 ## Contributing
