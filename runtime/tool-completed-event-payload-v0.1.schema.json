@@ -13,6 +13,10 @@
     "call_id": { "type": "string" },
     "target": { "enum": ["internal_retrieval", "external_retrieval"] },
     "exit_code": { "type": ["integer", "null"] },
+    "output_encoding": {
+      "type": ["string", "null"],
+      "description": "Decode stage that produced the tool output (GAP-ENCODING-GATE, OPS-PROTOCOL §8): utf-8 / utf-8-sig / gb18030 / utf-8-lossy, comma-joined for multi-chunk streams."
+    },
     "status": { "const": "error" },
     "error": { "type": "string" },
     "section": { "type": "string" },

@@ -1,0 +1,22 @@
+{
+  "endpoints": {
+    "wsl:Ubuntu": {
+      "type": "wsl",
+      "target": "Ubuntu",
+      "interpreter": "python3",
+      "executor": "/mnt/d/CLI/assurance/ops_executor.py"
+    },
+    "docker:assurance": {
+      "type": "docker",
+      "target": "assurance",
+      "interpreter": "python3",
+      "executor": "/workspace/assurance/ops_executor.py"
+    },
+    "ssh:example": {
+      "type": "ssh",
+      "target": "user@example.invalid",
+      "interpreter": "python3",
+      "executor": "/srv/ops/assurance/ops_executor.py"
+    }
+  }
+}

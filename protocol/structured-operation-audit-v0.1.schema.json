@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/structured-operation-audit-v0.1.schema.json",
+  "title": "Structured Operation Audit Event v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "audit_kind",
+    "request_id",
+    "timestamp",
+    "op",
+    "targets",
+    "resolved",
+    "policy",
+    "result",
+    "env",
+    "source"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "audit_kind": { "const": "structured_operation" },
+    "request_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "op": {
+      "type": "string",
+      "enum": ["file.read", "file.write", "file.move", "file.copy", "file.delete", "dir.list", "process.run", "env.info", "?"]
+    },
+    "targets": { "type": "array", "items": { "type": "string" } },
+    "resolved": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/resolved_target" }
+    },
+    "policy": { "$ref": "#/$defs/policy" },
+    "result": { "$ref": "#/$defs/result" },
+    "env": { "$ref": "#/$defs/env" },
+    "source": { "type": "string", "maxLength": 200 },
+    "output_encoding": { "type": ["string", "null"], "maxLength": 200 }
+  },
+  "$defs": {
+    "resolved_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "absolute", "class", "evidence"],
+      "properties": {
+        "input": { "type": "string" },
+        "absolute": { "type": ["string", "null"] },
+        "class": { "enum": ["cache", "unknown", "protected", "n/a"] },
+        "evidence": { "type": "string", "maxLength": 500 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "files": { "type": "integer", "minimum": 0 },
+        "dirs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision"],
+      "properties": {
+        "decision": { "enum": ["permit", "reject", "n/a"] },
+        "mode": { "enum": ["trash", "permanent", null] },
+        "reason": { "type": ["string", "null"], "maxLength": 500 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["ok", "dry-run", "rejected", "invalid", "error"] },
+        "detail": { "type": ["string", "null"], "maxLength": 2000 },
+        "exit_code": { "type": "integer" },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "shell", "path_style", "eol", "encoding", "cwd"],
+      "properties": {
+        "host": { "type": "string" },
+        "platform": { "type": "string" },
+        "python": { "type": "string" },
+        "shell": { "type": "string" },
+        "shell_version": { "type": "string" },
+        "path_style": { "type": "string" },
+        "eol": { "type": "string" },
+        "encoding": { "type": "string" },
+        "cwd": { "type": "string" },
+        "allow_roots": { "type": "array", "items": { "type": "string" } },
+        "audit_log": { "type": "string" }
+      }
+    }
+  }
+}

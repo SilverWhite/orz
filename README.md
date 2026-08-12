@@ -26,6 +26,7 @@ ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构
 | Component adoption register | `pending` | 逐 crate/component 所有权需按当前代码重新审计 |
 | Windows incident/case evidence | `pending` | 目录已建立，首批结构化证据尚未闭环 |
 | Source quality weighting | `pending` | FUS-SOURCE-WEIGHTING 设计已定稿（ADR-0010 §3.7 条 12/v1.7），实现待办，见索引 GAP-SOURCE-WEIGHTING-IMPL |
+| Encoding gate | `implemented` | 机械编码门控已闭合（固定解码链 + `tool_completed.output_encoding`，[实施审计](docs/audits/GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13.md)），见索引 GAP-ENCODING-GATE |
 
 实现状态不能用 Phase 完成、测试全绿或单次评测结果替代。当前差距见 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距) 和 [`ADR-0010 冻结审计`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 
@@ -101,7 +102,8 @@ python gsa.py doctor --quick
 | [`orz/`](orz/) | Rust production workspace |
 | [`assurance/`](assurance/) | Python reference/conformance 实现 |
 | [`runtime/`](runtime/) | run-event、manifest、fixture 和 runtime Schema |
-| [`protocol/`](protocol/) | 协议草案、原因码和 gate matrix |
+| [`protocol/`](protocol/) | 协议草案、原因码、gate matrix 与结构化操作协议 v0.1 |
+| [`scripts/`](scripts/) | PowerShell 探针/工具与结构化操作协议桥接脚本 |
 | [`regression/`](regression/) | 案例、fixture 和覆盖矩阵 |
 | [`evaluation/`](evaluation/) | 评测协议和结果 Schema |
 | [`adr/`](adr/) | 架构裁决记录 |
@@ -139,6 +141,7 @@ IMPL-RUN-EVENT-SCHEMA / GAP-SUFFICIENCY-SCHEMA）；当前未闭合项：
 
 - 真实 provider 凭据不得写入仓库、prompt、journal 或调试输出；真实 transport 不得静默回退 fake。
 - 工具、wallclock、停滞和权限路径必须 fail-closed，并保留可验证终态。
+- 生产接线后，命令执行默认走结构化操作协议（模型只提交操作 JSON；删除进回收站、缓存分类、超限拒绝，动作 JSONL 审计），跨环境只经固定桥接；当前为参考实现，接线待裁决。见 [结构化操作协议 v0.1](protocol/structured-operation-protocol-v0.1.md)。
 - 外部来源必须记录全文可见性；metadata、摘要或片段不得冒充全文证据。
 - 历史回归案例不得直接作为被测 Agent 的答案提示。
 - 本仓库不是 LIF/FEP 科学 claim 的事实源，不替代相应 INDEX、MAP、R、JSON、日志或原始产物。

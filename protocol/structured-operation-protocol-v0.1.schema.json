@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/structured-operation-protocol-v0.1.schema.json",
+  "title": "Structured Operation Protocol v0.1",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/file.read" },
+    { "$ref": "#/$defs/file.write" },
+    { "$ref": "#/$defs/file.move" },
+    { "$ref": "#/$defs/file.copy" },
+    { "$ref": "#/$defs/file.delete" },
+    { "$ref": "#/$defs/dir.list" },
+    { "$ref": "#/$defs/process.run" },
+    { "$ref": "#/$defs/env.info" }
+  ],
+  "$defs": {
+    "nonempty_targets": {
+      "type": "object",
+      "properties": {
+        "targets": { "minItems": 1 }
+      }
+    },
+    "common": {
+      "type": "object",
+      "properties": {
+        "proto": { "const": 1 },
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$" },
+        "op": { "type": "string", "enum": ["file.read", "file.write", "file.move", "file.copy", "file.delete", "dir.list", "process.run", "env.info"] },
+        "targets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "maxItems": 1000
+        },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+      },
+      "required": ["proto", "op", "targets"]
+    },
+    "file.read": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        { "$ref": "#/$defs/nonempty_targets" }
+      ],
+      "properties": {
+        "op": { "const": "file.read" },
+        "max_bytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 }
+      },
+      "required": ["op"],
+      "unevaluatedProperties": false
+    },
+    "file.write": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        { "$ref": "#/$defs/nonempty_targets" }
+      ],
+      "properties": {
+        "op": { "const": "file.write" },
+        "content": { "type": "string", "maxLength": 10485760 }
+      },
+      "required": ["op", "content"],
+      "unevaluatedProperties": false
+    },
+    "file.move": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        { "$ref": "#/$defs/nonempty_targets" }
+      ],
+      "properties": {
+        "op": { "const": "file.move" },
+        "dest": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      },
+      "required": ["op", "dest"],
+      "unevaluatedProperties": false
+    },
+    "file.copy": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        { "$ref": "#/$defs/nonempty_targets" }
+      ],
+      "properties": {
+        "op": { "const": "file.copy" },
+        "dest": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      },
+      "required": ["op", "dest"],
+      "unevaluatedProperties": false
+    },
+    "file.delete": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        { "$ref": "#/$defs/nonempty_targets" }
+      ],
+      "properties": {
+        "op": { "const": "file.delete" },
+        "dry_run": { "type": "boolean" }
+      },
+      "required": ["op"],
+      "unevaluatedProperties": false
+    },
+    "dir.list": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        { "$ref": "#/$defs/nonempty_targets" }
+      ],
+      "properties": {
+        "op": { "const": "dir.list" },
+        "depth": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "max_entries": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+      },
+      "required": ["op"],
+      "unevaluatedProperties": false
+    },
+    "process.run": {
+      "allOf": [{ "$ref": "#/$defs/common" }],
+      "properties": {
+        "op": { "const": "process.run" },
+        "exe": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "args": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 4096 },
+          "maxItems": 512
+        },
+        "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000 }
+      },
+      "required": ["op", "exe"],
+      "unevaluatedProperties": false
+    },
+    "env.info": {
+      "allOf": [{ "$ref": "#/$defs/common" }],
+      "properties": {
+        "op": { "const": "env.info" }
+      },
+      "required": ["op"],
+      "unevaluatedProperties": false
+    }
+  }
+}
