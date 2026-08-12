@@ -20,14 +20,17 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 `framework_fallback` 与 `local_browser` 是互斥显式模式（ADR-0010 §3.7 条 1，禁止隐式切换）：
 
 - **framework_fallback**：`web_search`（DeepSeek 原生）为检索入口；本地浏览器显式关闭；
-  引用原文核验使用 `web_fetch`，**不混用 `browser_read`**；
+  引用原文核验使用 `web_fetch`，**不混用 `browser_read`**；使用完整三层结构；
 - **local_browser**：`browser_read` 直接读取原文；`web_search` 显式关闭；无服务端综合层，
-  加权直接作用于已读页面；
+  直接分级加权（第一层+第三层，无第二层原文核验）；
 - **off**：无检索。
 
 禁止同一次检索任务混用两条通道；任何模式切换都必须产生机械 transition 事件（沿用 §3.7 条 1）。
 
 ## 3. 三层结构
+
+`web_search`（framework_fallback）使用完整三层结构；`local_browser` 直接分级加权
+（第一层+第三层），第二层不适用（`browser_read` 页面读取即原文）。
 
 ### 第一层：机械来源梯队（零额外请求）
 
@@ -50,9 +53,10 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 ### 第二层：选择性原文核验
 
 - **禁止全量抓取引用 URL**（工具轮与网络成本约束）；
+- 本层**仅适用于 `web_search`（framework_fallback）**；`local_browser` 不使用本层
+  （`browser_read` 读取即原文，直接分级加权）；
 - **framework_fallback**：机械预筛 + 子代理初选后，仅对高价值或结论依赖的候选引用 URL
   用 `web_fetch` 抓原文核验；本地浏览器在该模式显式关闭，不混用 `browser_read`；
-- **local_browser**：`browser_read` 读取即原文，核验在已读页面直接进行，无二次抓取步骤；
 - 抓到的原文走**同一套加权**，并进入现有 evidence ledger / visibility 分级
   （ADR-0010 §3.7 条 4/5 语义：不得用综合文本/片段生成全文级归因）。
 
