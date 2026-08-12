@@ -241,9 +241,9 @@ impl FileIdentity {
             use std::os::windows::ffi::OsStrExt as _;
             use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
             use windows_sys::Win32::Storage::FileSystem::{
-                CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-                FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-                FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+                BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS,
+                FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                GetFileInformationByHandle, OPEN_EXISTING,
             };
             let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
             unsafe {

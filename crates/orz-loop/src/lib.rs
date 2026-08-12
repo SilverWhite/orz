@@ -8,8 +8,8 @@
 //!
 //! No Grok crate depends on orz-loop.
 
-mod agent_loop;
 pub mod acaf;
+mod agent_loop;
 pub mod agents;
 pub mod blackboard;
 pub mod controller;

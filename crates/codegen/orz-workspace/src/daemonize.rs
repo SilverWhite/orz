@@ -775,7 +775,10 @@ mod tests {
 
         let guard = PidFile::acquire_or_take_over(&path, Duration::from_millis(100)).unwrap();
         assert!(guard.is_some());
-        assert_eq!(guard.unwrap().contents().unwrap(), process::id().to_string());
+        assert_eq!(
+            guard.unwrap().contents().unwrap(),
+            process::id().to_string()
+        );
     }
 
     #[test]

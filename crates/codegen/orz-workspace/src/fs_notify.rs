@@ -104,7 +104,9 @@ pub(crate) fn spawn_fs_event_forwarder(
     events_tx: tokio::sync::broadcast::Sender<orz_workspace_types::WorkspaceEvent>,
     cwd: PathBuf,
     cancel: tokio_util::sync::CancellationToken,
-    codebase_index: Option<std::sync::Arc<crate::file_system::codebase_graph_stub::IndexManagerHandle>>,
+    codebase_index: Option<
+        std::sync::Arc<crate::file_system::codebase_graph_stub::IndexManagerHandle>,
+    >,
 ) {
     tokio::spawn(async move {
         loop {
@@ -169,8 +171,12 @@ fn parse_diff_name_status_line(
     let path = parts.next()?;
 
     match status.chars().next()? {
-        'A' => Some(crate::file_system::codebase_graph_stub::FileEvent::created(repo_root.join(path))),
-        'D' => Some(crate::file_system::codebase_graph_stub::FileEvent::removed(repo_root.join(path))),
+        'A' => Some(crate::file_system::codebase_graph_stub::FileEvent::created(
+            repo_root.join(path),
+        )),
+        'D' => Some(crate::file_system::codebase_graph_stub::FileEvent::removed(
+            repo_root.join(path),
+        )),
         'R' | 'C' => {
             let new_path = parts.next()?;
             Some(crate::file_system::codebase_graph_stub::FileEvent::renamed(
@@ -178,9 +184,9 @@ fn parse_diff_name_status_line(
                 repo_root.join(new_path),
             ))
         }
-        _ => Some(crate::file_system::codebase_graph_stub::FileEvent::modified(
-            repo_root.join(path),
-        )),
+        _ => {
+            Some(crate::file_system::codebase_graph_stub::FileEvent::modified(repo_root.join(path)))
+        }
     }
 }
 
@@ -251,11 +257,9 @@ pub(crate) async fn refresh_codebase_graph_after_head_change(
     }
 
     if let Some(count) = files_updated {
-        let _ = events_tx.send(
-            orz_workspace_types::WorkspaceEvent::CodebaseIndexUpdated {
-                files_indexed: count,
-            },
-        );
+        let _ = events_tx.send(orz_workspace_types::WorkspaceEvent::CodebaseIndexUpdated {
+            files_indexed: count,
+        });
     }
 }
 
@@ -344,8 +348,8 @@ mod tests {
 
     #[test]
     fn parse_diff_name_status_all_variants() {
-        use std::path::Path;
         use crate::file_system::codebase_graph_stub::FileEventKind;
+        use std::path::Path;
         let root = Path::new("/repo");
 
         let ev = parse_diff_name_status_line("M\tsrc/main.rs", root).unwrap();

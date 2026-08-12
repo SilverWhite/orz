@@ -26,10 +26,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orz_assurance::acaf::{RejectCode, TicketKind};
 use orz_assurance::acaf::target::network_target_digest;
-use orz_assurance::gates::ipg::WorkspaceTrust;
+use orz_assurance::acaf::{RejectCode, TicketKind};
 use orz_assurance::canonical_json;
+use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::sha256_hex;
 use orz_assurance::journal::{JournalRecorder, RunEvent};
 use orz_host::keystore::WindowsDpapiInstallationKeyStore;
@@ -41,7 +41,7 @@ use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{ModelGateway, ToolCall};
 use orz_loop::host::{
     LoopHost, PermitDecision, PermitError, TestRunResult, TestRunner, ToolDef, ToolError,
-    ToolResult, ToolRegistry,
+    ToolRegistry, ToolResult,
 };
 use serde_json::Value;
 
@@ -154,10 +154,7 @@ impl SignerFixture {
             .unwrap(),
         )
         .unwrap();
-        Self {
-            manifest,
-            keystore,
-        }
+        Self { manifest, keystore }
     }
 
     fn config(&self) -> AcafConfig {
@@ -223,7 +220,10 @@ async fn signer_process_full_lifecycle() {
         .expect("sign orientation");
     assert_eq!(ticket.ticket_kind, "orientation_v1");
     assert_eq!(ticket.sequence, 1);
-    let template = ticket.template_sha256.as_deref().expect("orientation ticket carries the signer-held template digest");
+    let template = ticket
+        .template_sha256
+        .as_deref()
+        .expect("orientation ticket carries the signer-held template digest");
     assert_eq!(template.len(), 64);
     // The template digest is the signer-held constant, not free text — its
     // exact value comes from the signer's held template (check 2 compares it
@@ -244,13 +244,24 @@ async fn signer_process_full_lifecycle() {
         .await
         .expect("verify again");
     assert!(
-        matches!(outcome, TicketOutcome::Rejected { code: RejectCode::ReplayDetected, .. }),
+        matches!(
+            outcome,
+            TicketOutcome::Rejected {
+                code: RejectCode::ReplayDetected,
+                ..
+            }
+        ),
         "replayed ticket must reject: {outcome:?}"
     );
 
     // Target mismatch — the LIVE canonical args differ from the ticket's.
     let ticket2 = client
-        .sign_ticket(TicketKind::DispositionV1, Some("ACT-1".into()), &"0".repeat(64), None)
+        .sign_ticket(
+            TicketKind::DispositionV1,
+            Some("ACT-1".into()),
+            &"0".repeat(64),
+            None,
+        )
         .await
         .expect("sign disposition");
     let outcome = client
@@ -258,7 +269,13 @@ async fn signer_process_full_lifecycle() {
         .await
         .expect("verify with wrong args");
     assert!(
-        matches!(outcome, TicketOutcome::Rejected { code: RejectCode::TargetMismatch, .. }),
+        matches!(
+            outcome,
+            TicketOutcome::Rejected {
+                code: RejectCode::TargetMismatch,
+                ..
+            }
+        ),
         "target mismatch must reject: {outcome:?}"
     );
 
@@ -304,7 +321,16 @@ async fn controller_control_events_carry_tickets() {
         )
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "查找项目文档", "RUN-ACAF-E2E", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "查找项目文档",
+            "RUN-ACAF-E2E",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -328,9 +354,16 @@ async fn controller_control_events_carry_tickets() {
 
     // disposition (accepted close) + goal revision is not fired (decision
     // close, no continue) + close record = 2 tickets: disposition + close.
-    assert_eq!(issued.len(), 2, "expected disposition+close tickets: {types:?}");
+    assert_eq!(
+        issued.len(),
+        2,
+        "expected disposition+close tickets: {types:?}"
+    );
     assert_eq!(consumed.len(), 2, "both tickets consumed: {types:?}");
-    assert!(rejected.is_empty(), "no rejections in the happy path: {types:?}");
+    assert!(
+        rejected.is_empty(),
+        "no rejections in the happy path: {types:?}"
+    );
 
     // Order: issued(ticket A=disposition) → disposition → issued(ticket B=close)
     // → close → consumed(A) → consumed(B) — the ticket lifecycle wraps its
@@ -361,7 +394,10 @@ async fn controller_control_events_carry_tickets() {
     // Sequence monotonic across the run's tickets (per session).
     let seq_a = issued[0].payload["sequence"].as_u64().unwrap();
     let seq_b = issued[1].payload["sequence"].as_u64().unwrap();
-    assert!(seq_b > seq_a, "sequence must be monotonic: {seq_a} < {seq_b}");
+    assert!(
+        seq_b > seq_a,
+        "sequence must be monotonic: {seq_a} < {seq_b}"
+    );
 
     // Goal binding present (check 4 context).
     assert_eq!(disp_issued["goal_version"], 0);
@@ -416,7 +452,16 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
         )
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "查找项目文档", "RUN-ACAF-SHADOW", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "查找项目文档",
+            "RUN-ACAF-SHADOW",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -473,7 +518,12 @@ async fn signer_crash_respawns_and_recovers() {
     // Crash the signer hard (kill without shutdown — the client must not
     // know).
     let outcome = client
-        .sign_ticket(TicketKind::DispositionV1, Some("ACT-9".into()), &"0".repeat(64), None)
+        .sign_ticket(
+            TicketKind::DispositionV1,
+            Some("ACT-9".into()),
+            &"0".repeat(64),
+            None,
+        )
         .await;
     // The FIRST request after the crash races the dying child: it may fail
     // (closed channel → the failure path respawns) or succeed (the signer
@@ -487,7 +537,12 @@ async fn signer_crash_respawns_and_recovers() {
     // nonce. The sequence strictly increases (crashed request consumed a
     // sequence when it succeeded — never decreases).
     let ticket2 = client
-        .sign_ticket(TicketKind::DispositionV1, Some("ACT-9".into()), &"0".repeat(64), None)
+        .sign_ticket(
+            TicketKind::DispositionV1,
+            Some("ACT-9".into()),
+            &"0".repeat(64),
+            None,
+        )
         .await
         .expect("sign after self-heal");
     assert!(
@@ -555,7 +610,16 @@ async fn file_write_ticket_full_chain() {
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "改文件", "RUN-ACAF-FW", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "改文件",
+            "RUN-ACAF-FW",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -576,12 +640,18 @@ async fn file_write_ticket_full_chain() {
 
     assert_eq!(issued.len(), 1, "one file_write ticket: {types:?}");
     assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
-    assert!(rejected.is_empty(), "no rejections in the happy path: {types:?}");
+    assert!(
+        rejected.is_empty(),
+        "no rejections in the happy path: {types:?}"
+    );
 
     let issue = &issued[0].payload;
     assert_eq!(issue["ticket_kind"], "file_write_v1");
     assert_eq!(issue["capability_scope"], "file_write");
-    assert!(issue["activation_id"].is_null(), "main lane — no activation (D2)");
+    assert!(
+        issue["activation_id"].is_null(),
+        "main lane — no activation (D2)"
+    );
     assert_eq!(
         issue["resolved_target_sha256"].as_str().unwrap().len(),
         64,
@@ -603,7 +673,10 @@ async fn file_write_ticket_full_chain() {
         .iter()
         .position(|t| t == "control_ticket_issued")
         .unwrap();
-    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+    assert!(
+        issued_idx < started,
+        "ticket precedes ToolStarted: {types:?}"
+    );
 }
 
 // ── test 6: Slice 2 first phase — signer down → shadow rejection + proceed ──
@@ -657,7 +730,16 @@ async fn file_write_shadow_on_signer_unreachable() {
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "改文件", "RUN-ACAF-SHADOW-FW", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "改文件",
+            "RUN-ACAF-SHADOW-FW",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -712,8 +794,10 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
 
     let old_goal = "查找项目文档";
     let delta = "继续查第二批";
-    let old_goal_digest = sha256_hex(&canonical_json(&serde_json::json!({ "goal": old_goal })).unwrap());
-    let new_goal_digest = sha256_hex(&canonical_json(&serde_json::json!({ "goal": delta })).unwrap());
+    let old_goal_digest =
+        sha256_hex(&canonical_json(&serde_json::json!({ "goal": old_goal })).unwrap());
+    let new_goal_digest =
+        sha256_hex(&canonical_json(&serde_json::json!({ "goal": delta })).unwrap());
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
@@ -741,7 +825,16 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
         )
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, old_goal, "RUN-ACAF-CONT", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            old_goal,
+            "RUN-ACAF-CONT",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -764,7 +857,10 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
     // disposition-close + close (NEW context, after the re-derivation).
     assert_eq!(issued.len(), 4, "expected 4 tickets: {types:?}");
     assert_eq!(consumed.len(), 4, "all tickets consumed: {types:?}");
-    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+    assert!(
+        rejected.is_empty(),
+        "no rejections on the happy path: {types:?}"
+    );
 
     let kinds: Vec<&str> = issued
         .iter()
@@ -772,13 +868,21 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
         .collect();
     assert_eq!(
         kinds,
-        vec!["disposition_v1", "goal_revision_v1", "disposition_v1", "close_v1"],
+        vec![
+            "disposition_v1",
+            "goal_revision_v1",
+            "disposition_v1",
+            "close_v1"
+        ],
         "ticket order across the continue flow: {kinds:?}"
     );
 
     // OLD-context tickets: goal_version 0, the run-start goal digest.
     for (i, ticket) in issued.iter().take(2).enumerate() {
-        assert_eq!(ticket.payload["goal_version"], 0, "ticket[{i}] binds the old goal");
+        assert_eq!(
+            ticket.payload["goal_version"], 0,
+            "ticket[{i}] binds the old goal"
+        );
         assert_eq!(
             ticket.payload["goal_digest"].as_str().unwrap(),
             old_goal_digest,
@@ -787,7 +891,10 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
     }
     // The goal_revision ticket carries the activation binding.
     assert!(
-        issued[1].payload["activation_id"].as_str().unwrap().starts_with("retrieval-"),
+        issued[1].payload["activation_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("retrieval-"),
         "goal_revision ticket binds the activation: {:?}",
         issued[1].payload
     );
@@ -796,7 +903,10 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
     // the continue delta as the new goal binding.
     for (i, ticket) in issued.iter().skip(2).enumerate() {
         let i = i + 2;
-        assert_eq!(ticket.payload["goal_version"], 1, "ticket[{i}] binds the new goal");
+        assert_eq!(
+            ticket.payload["goal_version"], 1,
+            "ticket[{i}] binds the new goal"
+        );
         assert_eq!(
             ticket.payload["goal_digest"].as_str().unwrap(),
             new_goal_digest,
@@ -810,7 +920,11 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
         .iter()
         .map(|e| e.payload["sequence"].as_u64().unwrap())
         .collect();
-    assert_eq!(seqs, vec![1, 2, 1, 2], "sequence restarts on the new epoch: {seqs:?}");
+    assert_eq!(
+        seqs,
+        vec![1, 2, 1, 2],
+        "sequence restarts on the new epoch: {seqs:?}"
+    );
 
     // Consumed-after-issued pairing for every ticket.
     for consumed_event in &consumed {
@@ -874,7 +988,16 @@ async fn network_ticket_full_chain() {
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "抓取网页", "RUN-ACAF-NET", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "抓取网页",
+            "RUN-ACAF-NET",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -895,12 +1018,18 @@ async fn network_ticket_full_chain() {
 
     assert_eq!(issued.len(), 1, "one network ticket: {types:?}");
     assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
-    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+    assert!(
+        rejected.is_empty(),
+        "no rejections on the happy path: {types:?}"
+    );
 
     let issue = &issued[0].payload;
     assert_eq!(issue["ticket_kind"], "network_v1");
     assert_eq!(issue["capability_scope"], "network");
-    assert!(issue["activation_id"].is_null(), "main lane — no activation (D2)");
+    assert!(
+        issue["activation_id"].is_null(),
+        "main lane — no activation (D2)"
+    );
     assert_eq!(
         issue["resolved_target_sha256"].as_str().unwrap().len(),
         64,
@@ -922,7 +1051,10 @@ async fn network_ticket_full_chain() {
         .iter()
         .position(|t| t == "control_ticket_issued")
         .unwrap();
-    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+    assert!(
+        issued_idx < started,
+        "ticket precedes ToolStarted: {types:?}"
+    );
 }
 
 // ── test 9: command_exec_v1 — model-supplied run_terminal_cmd ─────────────
@@ -967,7 +1099,16 @@ async fn run_terminal_cmd_command_ticket_full_chain() {
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "运行命令", "RUN-ACAF-CMD", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "运行命令",
+            "RUN-ACAF-CMD",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -988,12 +1129,18 @@ async fn run_terminal_cmd_command_ticket_full_chain() {
 
     assert_eq!(issued.len(), 1, "one command_exec ticket: {types:?}");
     assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
-    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+    assert!(
+        rejected.is_empty(),
+        "no rejections on the happy path: {types:?}"
+    );
 
     let issue = &issued[0].payload;
     assert_eq!(issue["ticket_kind"], "command_exec_v1");
     assert_eq!(issue["capability_scope"], "command_exec");
-    assert!(issue["activation_id"].is_null(), "main lane — no activation (D2)");
+    assert!(
+        issue["activation_id"].is_null(),
+        "main lane — no activation (D2)"
+    );
     assert_eq!(
         issue["resolved_target_sha256"].as_str().unwrap().len(),
         64,
@@ -1015,7 +1162,10 @@ async fn run_terminal_cmd_command_ticket_full_chain() {
         .iter()
         .position(|t| t == "control_ticket_issued")
         .unwrap();
-    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+    assert!(
+        issued_idx < started,
+        "ticket precedes ToolStarted: {types:?}"
+    );
 }
 
 // ── test 10: command_exec_v1 — host-owned run_tests fixed command ──────────
@@ -1061,7 +1211,16 @@ async fn run_tests_command_ticket_full_chain() {
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "运行测试", "RUN-ACAF-RT", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "运行测试",
+            "RUN-ACAF-RT",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1080,9 +1239,16 @@ async fn run_tests_command_ticket_full_chain() {
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
 
-    assert_eq!(issued.len(), 1, "one run_tests command_exec ticket: {types:?}");
+    assert_eq!(
+        issued.len(),
+        1,
+        "one run_tests command_exec ticket: {types:?}"
+    );
     assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
-    assert!(rejected.is_empty(), "no rejections on the happy path: {types:?}");
+    assert!(
+        rejected.is_empty(),
+        "no rejections on the happy path: {types:?}"
+    );
 
     let issue = &issued[0].payload;
     assert_eq!(issue["ticket_kind"], "command_exec_v1");
@@ -1112,13 +1278,13 @@ async fn run_tests_command_ticket_full_chain() {
         .iter()
         .position(|t| t == "control_ticket_issued")
         .unwrap();
-    assert!(issued_idx < started, "ticket precedes ToolStarted: {types:?}");
+    assert!(
+        issued_idx < started,
+        "ticket precedes ToolStarted: {types:?}"
+    );
     // The fixed command is still declared on ToolStarted.
     let started_event = &events[started];
-    assert_eq!(
-        started_event.payload["fixed_command"],
-        "python -m pytest"
-    );
+    assert_eq!(started_event.payload["fixed_command"], "python -m pytest");
 }
 
 // ── test 11: Slice 2 full phase — invalid URL → shadow ledger, tool runs ───
@@ -1169,7 +1335,16 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "抓取网页", "RUN-ACAF-NET-BAD", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "抓取网页",
+            "RUN-ACAF-NET-BAD",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1179,11 +1354,18 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
         .iter()
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
-    assert_eq!(rejected.len(), 1, "one unticketable-URL rejection: {types:?}");
+    assert_eq!(
+        rejected.len(),
+        1,
+        "one unticketable-URL rejection: {types:?}"
+    );
     let rejection = &rejected[0].payload;
     assert_eq!(rejection["ticket_kind"], "network_v1");
     assert_eq!(rejection["reject_code"], "target_mismatch");
-    assert!(rejection["ticket_id"].is_null(), "no ticket was issued: {rejection:?}");
+    assert!(
+        rejection["ticket_id"].is_null(),
+        "no ticket was issued: {rejection:?}"
+    );
     // Shadow mode: the tool still executes.
     assert!(
         types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
@@ -1233,7 +1415,16 @@ async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() 
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "运行命令", "RUN-ACAF-CMD-EMPTY", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "运行命令",
+            "RUN-ACAF-CMD-EMPTY",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1243,11 +1434,18 @@ async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() 
         .iter()
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
-    assert_eq!(rejected.len(), 1, "one unticketable-command rejection: {types:?}");
+    assert_eq!(
+        rejected.len(),
+        1,
+        "one unticketable-command rejection: {types:?}"
+    );
     let rejection = &rejected[0].payload;
     assert_eq!(rejection["ticket_kind"], "command_exec_v1");
     assert_eq!(rejection["reject_code"], "target_mismatch");
-    assert!(rejection["ticket_id"].is_null(), "no ticket was issued: {rejection:?}");
+    assert!(
+        rejection["ticket_id"].is_null(),
+        "no ticket was issued: {rejection:?}"
+    );
     // Shadow mode: the tool still executes.
     assert!(
         types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
@@ -1304,7 +1502,16 @@ async fn missing_network_arg_silently_skips_with_configured_acaf() {
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
-        .run_turn(&host, "抓取网页", "RUN-ACAF-NET-NOURL", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "抓取网页",
+            "RUN-ACAF-NET-NOURL",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1345,12 +1552,20 @@ async fn fail_closed_startup_refuses_unconfigured_fabric() {
         tool_result: None,
         test_runner: None,
     };
-    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-        ScriptedResponse::text("完成"),
-    ]));
+    let gateway: Arc<dyn ModelGateway> =
+        Arc::new(FakeProvider::new(vec![ScriptedResponse::text("完成")]));
     let controller = AgentLoopController::with_gateway(gateway).with_acaf_fail_closed(true);
     let err = controller
-        .run_turn(&host, "任何任务", "RUN-FC-NOACAF", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "任何任务",
+            "RUN-FC-NOACAF",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect_err("fail-closed + no signer must refuse startup");
     assert!(
@@ -1373,13 +1588,10 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
     // Seam: the NEXT network_v1 verify_and_consume fails as if the signer
     // died between sign and verify (the real signer is self-consistent, so
     // an external kill cannot target this exact point).
-    client
-        .lock()
-        .await
-        .inject_verify_failure(
-            TicketKind::NetworkV1,
-            "simulated signer death between sign and verify",
-        );
+    client.lock().await.inject_verify_failure(
+        TicketKind::NetworkV1,
+        "simulated signer death between sign and verify",
+    );
 
     let dir = test_dir();
     let store = Arc::new(
@@ -1421,7 +1633,16 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
     controller
-        .run_turn(&host, "抓取网页", "RUN-FC-VERIFY", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "抓取网页",
+            "RUN-FC-VERIFY",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1468,13 +1689,10 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
 async fn fail_closed_goal_revision_rejected_does_not_migrate() {
     let fixture = SignerFixture::new();
     let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
-    client
-        .lock()
-        .await
-        .inject_verify_failure(
-            TicketKind::GoalRevisionV1,
-            "simulated signer death at goal revision",
-        );
+    client.lock().await.inject_verify_failure(
+        TicketKind::GoalRevisionV1,
+        "simulated signer death at goal revision",
+    );
 
     let dir = test_dir();
     let store = Arc::new(
@@ -1523,7 +1741,16 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
     controller
-        .run_turn(&host, "检索项目", "RUN-FC-D16REJ", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "检索项目",
+            "RUN-FC-D16REJ",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1547,12 +1774,16 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
         .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
         .collect();
     assert!(
-        consumed.iter().any(|e| e.payload["ticket_kind"] == "disposition_v1"),
+        consumed
+            .iter()
+            .any(|e| e.payload["ticket_kind"] == "disposition_v1"),
         "DispositionV1 must still consume: {:?}",
         consumed.iter().map(|e| &e.payload).collect::<Vec<_>>()
     );
     assert!(
-        !consumed.iter().any(|e| e.payload["ticket_kind"] == "goal_revision_v1"),
+        !consumed
+            .iter()
+            .any(|e| e.payload["ticket_kind"] == "goal_revision_v1"),
         "GoalRevisionV1 must NOT consume on rejection: {:?}",
         consumed.iter().map(|e| &e.payload).collect::<Vec<_>>()
     );
@@ -1619,7 +1850,16 @@ async fn fail_closed_missing_url_blocks_network_tool() {
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
     controller
-        .run_turn(&host, "抓取网页", "RUN-FC-NOURL", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "抓取网页",
+            "RUN-FC-NOURL",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1633,7 +1873,10 @@ async fn fail_closed_missing_url_blocks_network_tool() {
     let rejection = &rejected[0].payload;
     assert_eq!(rejection["ticket_kind"], "network_v1");
     assert_eq!(rejection["reject_code"], "missing_target_argument");
-    assert!(rejection["ticket_id"].is_null(), "pre-signing refusal: {rejection:?}");
+    assert!(
+        rejection["ticket_id"].is_null(),
+        "pre-signing refusal: {rejection:?}"
+    );
     // No ToolStarted → the tool never executed.
     assert!(
         !types.iter().any(|t| t == "tool_started"),
@@ -1691,7 +1934,16 @@ async fn fail_closed_missing_command_blocks_run_terminal_cmd() {
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
     controller
-        .run_turn(&host, "运行命令", "RUN-FC-NOCMD", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "运行命令",
+            "RUN-FC-NOCMD",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1765,7 +2017,16 @@ async fn fail_closed_signer_unreachable_blocks_file_write() {
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
     controller
-        .run_turn(&host, "改文件", "RUN-FC-DEAD", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "改文件",
+            "RUN-FC-DEAD",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1775,9 +2036,14 @@ async fn fail_closed_signer_unreachable_blocks_file_write() {
         .iter()
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
-    assert!(!rejected.is_empty(), "dead signer must journal rejections: {types:?}");
     assert!(
-        rejected.iter().any(|e| e.payload["reject_code"] == "signer_unreachable"),
+        !rejected.is_empty(),
+        "dead signer must journal rejections: {types:?}"
+    );
+    assert!(
+        rejected
+            .iter()
+            .any(|e| e.payload["reject_code"] == "signer_unreachable"),
         "expected signer_unreachable: {:?}",
         rejected.iter().map(|e| &e.payload).collect::<Vec<_>>()
     );
@@ -1853,7 +2119,16 @@ async fn fail_closed_retrieval_lane_web_fetch_binds_activation_d13() {
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
     controller
-        .run_turn(&host, "抓取文档", "RUN-ACAF-D13", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "抓取文档",
+            "RUN-ACAF-D13",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1876,8 +2151,7 @@ async fn fail_closed_retrieval_lane_web_fetch_binds_activation_d13() {
         .as_str()
         .expect("D-13: network ticket must bind the lane activation");
     assert!(
-        activation.starts_with("retrieval-external_retrieval-")
-            && activation.ends_with("-00"),
+        activation.starts_with("retrieval-external_retrieval-") && activation.ends_with("-00"),
         "unexpected activation binding: {activation}"
     );
     // The ticket still pairs to a consumed terminal.
@@ -1957,7 +2231,16 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
     controller
-        .run_turn(&host, "检索项目", "RUN-FC-CONT", MANIFEST, 0, None, None, None)
+        .run_turn(
+            &host,
+            "检索项目",
+            "RUN-FC-CONT",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("run turn");
 
@@ -1999,8 +2282,7 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
         .collect();
     assert!(
         completed.iter().any(|e| {
-            e.payload["tool"] == "retrieval_disposition"
-                && e.payload["exit_code"] == 0
+            e.payload["tool"] == "retrieval_disposition" && e.payload["exit_code"] == 0
         }),
         "continue accepted under fail-closed: {:?}",
         completed.iter().map(|e| &e.payload).collect::<Vec<_>>()

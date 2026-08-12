@@ -11,8 +11,8 @@
 use std::path::Path;
 
 use agent_client_protocol as acp;
-use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 use orz_tools::computer::types::{AsyncFileSystem, ComputerError};
+use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 
 /// Wraps xai-grok-shell's ACP gateway to satisfy xai-grok-tools' AsyncFileSystem.
 ///

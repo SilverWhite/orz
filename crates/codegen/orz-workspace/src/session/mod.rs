@@ -10,14 +10,14 @@ use crate::config::{MemoryConfig, SessionContextFactory};
 use crate::file_system::{AsyncFsWrapper, LocalFs};
 use crate::hub::{HubConfig, HubHandle};
 use crate::session::file_state::FileStateTracker;
+use orz_mcp::servers::McpState;
+use orz_tools::notification::types::{ToolNotification, ToolNotificationHandle};
+use orz_tools::registry::types::{FinalizedToolset, ToolConfig, ToolServerConfig};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use xai_computer_hub_mcp_adapter::McpBridgeHandle;
-use orz_mcp::servers::McpState;
-use orz_tools::notification::types::{ToolNotification, ToolNotificationHandle};
-use orz_tools::registry::types::{FinalizedToolset, ToolConfig, ToolServerConfig};
 use xai_hunk_tracker::HunkTrackerHandle;
 use xai_tool_protocol::ToolId;
 use xai_tool_runtime::WorkspaceViewerContext;
@@ -296,9 +296,7 @@ impl WorkspaceSession {
     }
     /// The session-lifetime terminal backend, injected into every toolset
     /// re-resolve so background tasks and shell state survive swaps.
-    pub(crate) fn terminal_backend(
-        &self,
-    ) -> &Arc<dyn orz_tools::computer::types::TerminalBackend> {
+    pub(crate) fn terminal_backend(&self) -> &Arc<dyn orz_tools::computer::types::TerminalBackend> {
         self.terminal_backend.backend()
     }
     /// Explicitly shut the session's terminal backend down (kills all of its
@@ -858,11 +856,11 @@ impl WorkspaceShared {
                         &sid,
                         SwapAction::Applied,
                     );
-                    let _ =
-                        self.events
-                            .send(orz_workspace_types::WorkspaceEvent::ToolsChanged {
-                                session_id: sid,
-                            });
+                    let _ = self
+                        .events
+                        .send(orz_workspace_types::WorkspaceEvent::ToolsChanged {
+                            session_id: sid,
+                        });
                     rebuilt += 1;
                 }
                 Err(e) => {

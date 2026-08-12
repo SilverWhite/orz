@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::io::AsyncWriteExt;
 use orz_tools::util::ProcessGroup;
+use tokio::io::AsyncWriteExt;
 
 use crate::config::HookSpec;
 use crate::event::HookEventEnvelope;
@@ -956,7 +956,6 @@ mod tests {
             process_scope: None,
         }
     }
-
 
     #[tokio::test]
     #[cfg(unix)]

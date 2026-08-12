@@ -125,7 +125,13 @@ mod tests {
         assert!(is_retrieval_mode_gated_host_tool("project_doc_index"));
         assert!(is_retrieval_mode_gated_host_tool("browser_read"));
         assert!(is_retrieval_mode_gated_host_tool("pdf_read"));
-        for name in ["web_search", "web_fetch", "retrieve_project_docs", "read_file", "bash"] {
+        for name in [
+            "web_search",
+            "web_fetch",
+            "retrieve_project_docs",
+            "read_file",
+            "bash",
+        ] {
             assert!(!is_retrieval_mode_gated_host_tool(name), "{name}");
         }
         // browser_read is a Host lane tool (not a subagent dispatch lane).

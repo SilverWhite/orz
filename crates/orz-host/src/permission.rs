@@ -547,7 +547,10 @@ mod tests {
         // Read(None) — auto-allowed, no path restriction — NOT the Edit
         // else-branch (headless deployments denied them deterministically).
         assert!(matches!(
-            access_kind("compaction_whitelist_add", &serde_json::json!({"content": "x"})),
+            access_kind(
+                "compaction_whitelist_add",
+                &serde_json::json!({"content": "x"})
+            ),
             AccessKind::Read(None)
         ));
         assert!(matches!(

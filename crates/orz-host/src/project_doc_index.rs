@@ -54,14 +54,23 @@ const CACHE_SCHEMA_VERSION: &str = "0.1.0-draft";
 
 /// Document/source extensions the index recognizes.
 const DOC_EXTENSIONS: &[&str] = &[
-    "md", "txt", "rst", "adoc", "ron", "toml", "yaml", "yml", "json", "rs", "py", "ts", "js",
-    "c", "h", "cpp", "hpp", "go", "java", "rb", "sh", "ps1", "html", "css",
+    "md", "txt", "rst", "adoc", "ron", "toml", "yaml", "yml", "json", "rs", "py", "ts", "js", "c",
+    "h", "cpp", "hpp", "go", "java", "rb", "sh", "ps1", "html", "css",
 ];
 
 /// Directory names never traversed.
 const EXCLUDED_DIRS: &[&str] = &[
-    ".git", ".gsa", "target", "node_modules", ".venv", "venv", "存档", "archive", "dist",
-    "build", ".hidden",
+    ".git",
+    ".gsa",
+    "target",
+    "node_modules",
+    ".venv",
+    "venv",
+    "存档",
+    "archive",
+    "dist",
+    "build",
+    ".hidden",
 ];
 
 /// One indexed document.
@@ -264,8 +273,9 @@ impl ProjectDocIndex {
                     Ok(bytes) => {
                         let digest =
                             orz_assurance::sha256_hex(&bytes[..bytes.len().min(max_content_bytes)]);
-                        let text = String::from_utf8_lossy(&bytes[..bytes.len().min(max_content_bytes)])
-                            .to_string();
+                        let text =
+                            String::from_utf8_lossy(&bytes[..bytes.len().min(max_content_bytes)])
+                                .to_string();
                         let content = if bytes.len() > max_content_bytes {
                             format!("{text}\n[truncated — {} bytes total]", bytes.len())
                         } else {
@@ -316,15 +326,23 @@ impl ProjectDocIndex {
     /// Concurrent callers merge into one build: the second lane reuses the
     /// freshly swapped snapshot instead of re-walking.
     fn refresh(&self) -> Arc<CachedSnapshot> {
-        let mut guard = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let force = self.force_rescan_effective();
         // First build: adopt the on-disk cache as the diff baseline
         // (skipped under the force hatch — a forced rescan must not trust
         // the cache). load_cache warns and returns None on any failure.
         let was_none = guard.is_none();
         let mut loaded = false;
-        if was_none && !force && let Some(cached) = self.load_cache() {
-            *guard = Some(Arc::new(CachedSnapshot { entries: cached.entries }));
+        if was_none
+            && !force
+            && let Some(cached) = self.load_cache()
+        {
+            *guard = Some(Arc::new(CachedSnapshot {
+                entries: cached.entries,
+            }));
             loaded = true;
         }
         // Metadata-only tree walk — runs on EVERY query by design (D-2).
@@ -384,7 +402,9 @@ impl ProjectDocIndex {
         // snapshot either way).
         let not_reused = old.len() - reused;
         new_entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
-        let snap = Arc::new(CachedSnapshot { entries: new_entries });
+        let snap = Arc::new(CachedSnapshot {
+            entries: new_entries,
+        });
         if force || changed > 0 || not_reused > 0 || (was_none && !loaded) {
             self.persist_cache(&snap);
         }
@@ -395,7 +415,10 @@ impl ProjectDocIndex {
     /// discover()'s path: force a full re-extract (skip cache load and the
     /// diff reuse), persist the result as the new baseline.
     fn refresh_forced(&self) -> Arc<CachedSnapshot> {
-        let mut guard = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (stats, root_ok) = stat_pass(&self.cwd);
         if !root_ok {
             return guard.as_ref().cloned().unwrap_or_default();
@@ -547,7 +570,9 @@ fn stat_pass(cwd: &Path) -> (Vec<FileStat>, bool) {
                 if !excluded.contains(name_str.as_str()) {
                     stack.push(path);
                 }
-            } else if is_doc_file(&path) && let Some(st) = file_stat(cwd, &path) {
+            } else if is_doc_file(&path)
+                && let Some(st) = file_stat(cwd, &path)
+            {
                 stats.push(st);
             }
         }
@@ -659,7 +684,10 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let n = std::process::id();
-        let dir = std::env::temp_dir().join(format!("orz-doc-index-test-{n}-{:?}", std::thread::current().id()));
+        let dir = std::env::temp_dir().join(format!(
+            "orz-doc-index-test-{n}-{:?}",
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("docs")).unwrap();
         dir
@@ -684,7 +712,11 @@ mod tests {
             .iter()
             .map(|e| e.relative_path.replace('\\', "/"))
             .collect();
-        assert_eq!(rels, vec!["README.md", "docs/api.md", "main.rs"], "{rels:?}");
+        assert_eq!(
+            rels,
+            vec!["README.md", "docs/api.md", "main.rs"],
+            "{rels:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -696,9 +728,7 @@ mod tests {
         let index = ProjectDocIndex::new(dir.clone());
 
         // Keyword hit on headings.
-        let out = index
-            .query(&serde_json::json!({"query": "api"}))
-            .unwrap();
+        let out = index.query(&serde_json::json!({"query": "api"})).unwrap();
         assert!(out.output.contains("api.md"), "{}", out.output);
         assert!(!out.output.contains("README.md"), "{}", out.output);
         // include_content returns capped full text with digest.
@@ -809,7 +839,9 @@ mod tests {
         let file = dir.join("README.md");
         std::fs::write(&file, "# Readme\n").unwrap();
         let index = ProjectDocIndex::new(dir.clone());
-        let _ = index.query(&serde_json::json!({"query": "readme"})).unwrap();
+        let _ = index
+            .query(&serde_json::json!({"query": "readme"}))
+            .unwrap();
         let cache = dir.join(".gsa/project-doc-index/cache.json");
         assert!(cache.exists(), "cache file should be written");
         let parsed: serde_json::Value =
@@ -818,9 +850,14 @@ mod tests {
         assert_eq!(parsed["entries"].as_array().unwrap().len(), 1);
         let mtime = std::fs::metadata(&cache).unwrap().modified().unwrap();
         // Steady state: unchanged tree → no re-persist.
-        let _ = index.query(&serde_json::json!({"query": "readme"})).unwrap();
+        let _ = index
+            .query(&serde_json::json!({"query": "readme"}))
+            .unwrap();
         let mtime2 = std::fs::metadata(&cache).unwrap().modified().unwrap();
-        assert_eq!(mtime, mtime2, "steady-state query must not rewrite the cache");
+        assert_eq!(
+            mtime, mtime2,
+            "steady-state query must not rewrite the cache"
+        );
         // Cross-run load: "# Readme\n" (8 bytes) → "# Twoooo\n" (8 bytes)
         // with the mtime restored — a fresh index loads the old cache and
         // keeps the old heading.
@@ -828,9 +865,13 @@ mod tests {
         std::fs::write(&file, "# Twoooo\n").unwrap();
         filetime::set_file_mtime(&file, filetime::FileTime::from_system_time(t0)).unwrap();
         let index2 = ProjectDocIndex::new(dir.clone());
-        let out = index2.query(&serde_json::json!({"query": "twoooo"})).unwrap();
+        let out = index2
+            .query(&serde_json::json!({"query": "twoooo"}))
+            .unwrap();
         assert!(!out.output.contains("README.md"), "{}", out.output);
-        let out = index2.query(&serde_json::json!({"query": "readme"})).unwrap();
+        let out = index2
+            .query(&serde_json::json!({"query": "readme"}))
+            .unwrap();
         assert!(out.output.contains("README.md"), "{}", out.output);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -843,7 +884,9 @@ mod tests {
         std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
         std::fs::write(&cache, "{ not json !!!").unwrap();
         let index = ProjectDocIndex::new(dir.clone());
-        let out = index.query(&serde_json::json!({"query": "readme"})).unwrap();
+        let out = index
+            .query(&serde_json::json!({"query": "readme"}))
+            .unwrap();
         assert!(out.output.contains("README.md"), "{}", out.output);
         // The corrupt file was rebuilt into valid JSON.
         let parsed: serde_json::Value =
@@ -864,7 +907,9 @@ mod tests {
         )
         .unwrap();
         let index = ProjectDocIndex::new(dir.clone());
-        let out = index.query(&serde_json::json!({"query": "readme"})).unwrap();
+        let out = index
+            .query(&serde_json::json!({"query": "readme"}))
+            .unwrap();
         assert!(out.output.contains("README.md"), "{}", out.output);
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
@@ -884,7 +929,9 @@ mod tests {
         )
         .unwrap();
         let index = ProjectDocIndex::new(dir.clone());
-        let out = index.query(&serde_json::json!({"query": "readme"})).unwrap();
+        let out = index
+            .query(&serde_json::json!({"query": "readme"}))
+            .unwrap();
         assert!(out.output.contains("README.md"), "{}", out.output);
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
@@ -935,8 +982,7 @@ mod tests {
                         });
                         let out = index.query(&args).unwrap();
                         assert_eq!(out.exit_code, Some(0));
-                        let parsed: serde_json::Value =
-                            serde_json::from_str(&out.output).unwrap();
+                        let parsed: serde_json::Value = serde_json::from_str(&out.output).unwrap();
                         assert_eq!(parsed["total"], 20, "thread {t} query {q}");
                         assert_eq!(parsed["results"].as_array().unwrap().len(), 20);
                     }
@@ -1004,15 +1050,17 @@ mod tests {
         let dir = test_dir();
         let file = dir.join("a.md");
         std::fs::write(&file, "# A\n").unwrap();
-        let secret = std::env::temp_dir().join(format!(
-            "orz-doc-index-secret-{}",
-            std::process::id()
-        ));
+        let secret =
+            std::env::temp_dir().join(format!("orz-doc-index-secret-{}", std::process::id()));
         std::fs::write(&secret, "TOP SECRET CONTENT").unwrap();
         let index = ProjectDocIndex::new(dir.clone());
         let _ = index.query(&serde_json::json!({})).unwrap();
         let md = std::fs::metadata(&file).unwrap();
-        let dur = md.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
+        let dur = md
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
         // Tamper: same relative_path + size + mtime (so the diff would
         // reuse), but `path` → the decoy secret file.
         let tampered = serde_json::json!({

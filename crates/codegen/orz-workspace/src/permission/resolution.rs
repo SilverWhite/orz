@@ -423,9 +423,7 @@ impl ResolveInputs<'static> {
         Self {
             policy_block: yolo_disabled_by_policy(),
             managed: managed_settings(),
-            managed_config_rules: managed_config_permissions(
-                &orz_config::managed_config_layers(),
-            ),
+            managed_config_rules: managed_config_permissions(&orz_config::managed_config_layers()),
             project_trusted,
         }
     }
@@ -1157,12 +1155,11 @@ impl McpServerAllowlist {
             agent_client_protocol::McpServer::Stdio(agent_client_protocol::McpServerStdio {
                 command,
                 ..
-            })
-                if !self.commands.is_empty() => {
-                    restricted = true;
-                    let command = command.to_string_lossy();
-                    matched |= self.commands.iter().any(|c| *c == command);
-                }
+            }) if !self.commands.is_empty() => {
+                restricted = true;
+                let command = command.to_string_lossy();
+                matched |= self.commands.iter().any(|c| *c == command);
+            }
             // TODO(acp-0.10): `McpServer` is #[non_exhaustive].
             _ => {}
         }
@@ -4356,8 +4353,7 @@ allow = ["Bash(evil *)"]
         )
         .unwrap();
 
-        let layers =
-            orz_config::managed_config_layers_at(Some(system.path()), Some(user.path()));
+        let layers = orz_config::managed_config_layers_at(Some(system.path()), Some(user.path()));
         assert!(layers[0].is_system && layers[0].path.starts_with(system.path()));
         assert!(!layers[1].is_system && layers[1].path.starts_with(user.path()));
         let rules = managed_config_permissions(&layers);

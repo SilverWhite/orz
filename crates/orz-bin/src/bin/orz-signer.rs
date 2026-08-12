@@ -53,9 +53,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 
-use orz_assurance::acaf::{
-    IssueContext, TicketKind, derive_session_key, issue_ticket,
-};
+use orz_assurance::acaf::{IssueContext, TicketKind, derive_session_key, issue_ticket};
 use orz_assurance::journal::sha256_hex;
 use orz_assurance::permit::HmacSha256Signer;
 use orz_host::keystore::{KeystoreError, WindowsDpapiInstallationKeyStore};
@@ -169,7 +167,8 @@ impl Signer {
             sequence: 0,
             k_session,
         };
-        self.sessions.insert(session_id.to_string(), session.clone());
+        self.sessions
+            .insert(session_id.to_string(), session.clone());
         Ok(session)
     }
 
@@ -204,7 +203,10 @@ impl Signer {
         };
         // Review P2-3 (2026-08-12): byte slicing a possibly multi-byte UTF-8
         // session id can panic — derive the key id from chars instead.
-        let key_id = format!("KEY-SESS-{}", session_id.chars().take(8).collect::<String>());
+        let key_id = format!(
+            "KEY-SESS-{}",
+            session_id.chars().take(8).collect::<String>()
+        );
         let signer = HmacSha256Signer::new(&key_id, &session.k_session);
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let ticket = issue_ticket(
@@ -241,10 +243,10 @@ fn load_manifest() -> Result<SignerManifest, SignerError> {
                 .unwrap_or_else(|| PathBuf::from("signer-manifest.json"))
         }
     };
-    let text = std::fs::read_to_string(&path)
-        .map_err(|_| SignerError::ManifestNotFound(path.clone()))?;
-    let manifest: SignerManifest = serde_json::from_str(&text)
-        .map_err(|e| SignerError::ManifestInvalid(e.to_string()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|_| SignerError::ManifestNotFound(path.clone()))?;
+    let manifest: SignerManifest =
+        serde_json::from_str(&text).map_err(|e| SignerError::ManifestInvalid(e.to_string()))?;
     if manifest.manifest_version != MANIFEST_VERSION {
         return Err(SignerError::ManifestInvalid(format!(
             "manifest_version {} != {}",
@@ -259,9 +261,11 @@ fn load_manifest() -> Result<SignerManifest, SignerError> {
 fn load_install_key() -> Result<Vec<u8>, SignerError> {
     let root = match std::env::var("ORZ_SIGNER_KEYSTORE_ROOT") {
         Ok(r) => PathBuf::from(r),
-        Err(_) => return Err(SignerError::BadRequest(
-            "ORZ_SIGNER_KEYSTORE_ROOT must point at the installation keystore root".into(),
-        )),
+        Err(_) => {
+            return Err(SignerError::BadRequest(
+                "ORZ_SIGNER_KEYSTORE_ROOT must point at the installation keystore root".into(),
+            ));
+        }
     };
     let store = WindowsDpapiInstallationKeyStore::load(&root)?;
     Ok(store.secret_bytes()?)
@@ -285,13 +289,23 @@ fn handle_request(signer: &mut Signer, line: &str) -> Value {
     let params = request.get("params").cloned().unwrap_or(Value::Null);
     let result = match method.as_str() {
         "initialize_session" => handle_initialize(signer, &params),
-        "sign_orientation_v1" => handle_sign(signer, &params, TicketKind::OrientationV1, None, None),
-        "sign_disposition_v1" => {
-            handle_sign(signer, &params, TicketKind::DispositionV1, Some("activation_id"), None)
+        "sign_orientation_v1" => {
+            handle_sign(signer, &params, TicketKind::OrientationV1, None, None)
         }
-        "sign_close_v1" => {
-            handle_sign(signer, &params, TicketKind::CloseV1, Some("activation_id"), None)
-        }
+        "sign_disposition_v1" => handle_sign(
+            signer,
+            &params,
+            TicketKind::DispositionV1,
+            Some("activation_id"),
+            None,
+        ),
+        "sign_close_v1" => handle_sign(
+            signer,
+            &params,
+            TicketKind::CloseV1,
+            Some("activation_id"),
+            None,
+        ),
         "sign_goal_revision_v1" => handle_sign(
             signer,
             &params,
@@ -463,7 +477,11 @@ fn error_response(id: Option<Value>, code: &str, message: &str) -> Value {
 }
 
 /// The stdio service loop (separable for tests).
-fn run_service<R: Read, W: Write>(signer: &mut Signer, reader: R, writer: W) -> Result<(), SignerError> {
+fn run_service<R: Read, W: Write>(
+    signer: &mut Signer,
+    reader: R,
+    writer: W,
+) -> Result<(), SignerError> {
     let mut reader = BufReader::new(reader);
     let mut writer = BufWriter::new(writer);
     let mut line = String::new();
@@ -627,16 +645,28 @@ mod tests {
             &mut signer,
             r#"{"id": 1, "method": "sign_orientation_v1", "params": {"session_id": "S1"}}"#,
         );
-        assert!(response["error"]["code"].as_str().unwrap().contains("signer_error"));
-
-        let response = handle_request(
-            &mut signer,
-            r#"{"id": 2, "method": "definitely_not_real"}"#,
+        assert!(
+            response["error"]["code"]
+                .as_str()
+                .unwrap()
+                .contains("signer_error")
         );
-        assert!(response["error"]["code"].as_str().unwrap().contains("signer_error"));
+
+        let response = handle_request(&mut signer, r#"{"id": 2, "method": "definitely_not_real"}"#);
+        assert!(
+            response["error"]["code"]
+                .as_str()
+                .unwrap()
+                .contains("signer_error")
+        );
         // Malformed JSON still yields a structured error (never a crash).
         let response = handle_request(&mut signer, "not json at all");
-        assert!(response["error"]["code"].as_str().unwrap().contains("bad_request"));
+        assert!(
+            response["error"]["code"]
+                .as_str()
+                .unwrap()
+                .contains("bad_request")
+        );
     }
 
     #[test]
@@ -673,7 +703,10 @@ mod tests {
             }),
         )
         .unwrap();
-        assert_ne!(init["session_key_hex"], serde_json::json!("0".repeat(64) /* placeholder */));
+        assert_ne!(
+            init["session_key_hex"],
+            serde_json::json!("0".repeat(64) /* placeholder */)
+        );
         // The key actually changed: sign a fresh ticket under the new key and
         // verify the old ticket fails under it.
         let old = ticket;
@@ -883,7 +916,10 @@ mod tests {
             r#"{"id": 3, "method": "sign_file_write_v1", "params": {"session_id": "S1", "canonical_arguments_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
         );
         assert!(
-            response["error"]["code"].as_str().unwrap().contains("signer_error"),
+            response["error"]["code"]
+                .as_str()
+                .unwrap()
+                .contains("signer_error"),
             "{response}"
         );
     }
@@ -897,7 +933,13 @@ mod tests {
         let text = String::from_utf8(output).unwrap();
         let response: Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(response["id"], 7);
-        assert_eq!(response["result"]["session_key_hex"].as_str().unwrap().len(), 64);
+        assert_eq!(
+            response["result"]["session_key_hex"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
     }
 
     #[test]

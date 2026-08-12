@@ -126,7 +126,12 @@ pub fn prune_old_records(
     // whose close_session ran after a hard crash leaves its `chrome-profile-*`
     // dir behind; age-based sweep covers it (a LIVE session's profile is
     // recent by definition; the active run's own browser stays untouched).
-    prune_old_dirs(&mut report.removed_browser_profiles, gsa_root, cutoff, "chrome-profile-");
+    prune_old_dirs(
+        &mut report.removed_browser_profiles,
+        gsa_root,
+        cutoff,
+        "chrome-profile-",
+    );
     // PDF evidence (2026-08-11): content-addressed evidence docs
     // (`pdf-evidence/{p2}/{full64}/`) — the two-level layout is swept
     // deepest-first; the evidence dir itself and the `{p2}` shard dirs are
@@ -174,12 +179,7 @@ fn prune_pdf_evidence(report: &mut PruneReport, evidence_dir: &Path, cutoff: Sys
 
 /// Prune first-level dirs under `root` whose names start with `prefix` and
 /// whose mtime predates `cutoff` (fail-safe: unreadable entries are kept).
-fn prune_old_dirs(
-    removed: &mut Vec<String>,
-    root: &Path,
-    cutoff: SystemTime,
-    prefix: &str,
-) {
+fn prune_old_dirs(removed: &mut Vec<String>, root: &Path, cutoff: SystemTime, prefix: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -228,15 +228,13 @@ fn prune_run_dirs(
         // dir holding only the mechanical run_preflight (open chain — a
         // grill turn is not a run); swept by age like RUN-/RST- so long
         // grill sessions cannot accumulate unbounded .gsa dirs.
-        if !(name.starts_with("RUN-") || name.starts_with("RST-") || name.starts_with("GRILL-"))
-        {
+        if !(name.starts_with("RUN-") || name.starts_with("RST-") || name.starts_with("GRILL-")) {
             continue;
         }
         if keep_run_id.is_some_and(|k| k == name) {
             continue; // the active run is never swept
         }
-        if entry_older_than(&entry.path(), cutoff)
-            && std::fs::remove_dir_all(entry.path()).is_ok()
+        if entry_older_than(&entry.path(), cutoff) && std::fs::remove_dir_all(entry.path()).is_ok()
         {
             report.removed_run_dirs.push(name);
         }
@@ -268,17 +266,14 @@ fn prune_snapshots(report: &mut PruneReport, snapshots_dir: &Path, cutoff: Syste
                 continue;
             }
             // Keep this manifest — collect the objects it references.
-            match std::fs::read(&path)
-                .and_then(|bytes| {
-                    serde_json::from_slice::<Vec<
-                        orz_assurance::session::snapshot::SnapshotEntry,
-                    >>(&bytes)
-                    .map_err(std::io::Error::other)
-                })
-            {
+            match std::fs::read(&path).and_then(|bytes| {
+                serde_json::from_slice::<Vec<orz_assurance::session::snapshot::SnapshotEntry>>(
+                    &bytes,
+                )
+                .map_err(std::io::Error::other)
+            }) {
                 Ok(snapshot_entries) => {
-                    referenced
-                        .extend(snapshot_entries.iter().map(|e| e.object_sha256.clone()));
+                    referenced.extend(snapshot_entries.iter().map(|e| e.object_sha256.clone()));
                 }
                 Err(e) => {
                     // Review D2-1: visibility — a half-written (non-atomic
@@ -380,8 +375,17 @@ mod tests {
         let gsa = base.join(".gsa");
         std::fs::create_dir_all(gsa.join("chrome-profile-OLDRUN")).unwrap();
         std::fs::create_dir_all(gsa.join("chrome-profile-FRESHRUN")).unwrap();
-        std::fs::write(gsa.join("chrome-profile-OLDRUN").join("DevToolsActivePort"), "1").unwrap();
-        std::fs::write(gsa.join("chrome-profile-FRESHRUN").join("DevToolsActivePort"), "2").unwrap();
+        std::fs::write(
+            gsa.join("chrome-profile-OLDRUN").join("DevToolsActivePort"),
+            "1",
+        )
+        .unwrap();
+        std::fs::write(
+            gsa.join("chrome-profile-FRESHRUN")
+                .join("DevToolsActivePort"),
+            "2",
+        )
+        .unwrap();
         // entry_older_than judges a profile dir by the DIR mtime (no
         // events.jsonl) — backdate the dir itself.
         backdate(&gsa.join("chrome-profile-OLDRUN"), 10);
@@ -389,7 +393,10 @@ mod tests {
         std::fs::create_dir_all(gsa.join("snapshots")).unwrap();
 
         let report = prune_old_records(&gsa, default_cutoff(), None);
-        assert_eq!(report.removed_browser_profiles, vec!["chrome-profile-OLDRUN"]);
+        assert_eq!(
+            report.removed_browser_profiles,
+            vec!["chrome-profile-OLDRUN"]
+        );
         assert!(!gsa.join("chrome-profile-OLDRUN").exists());
         assert!(gsa.join("chrome-profile-FRESHRUN").exists());
         let _ = std::fs::remove_dir_all(&base);
@@ -435,7 +442,10 @@ mod tests {
         let report = prune_old_records(&gsa, default_cutoff(), Some("RUN-ACTIVE"));
 
         assert_eq!(report.removed_run_dirs, vec!["RUN-OLD1", "RUN-OLD2"]);
-        assert!(gsa.join("runs").join("RUN-ACTIVE").exists(), "active run kept");
+        assert!(
+            gsa.join("runs").join("RUN-ACTIVE").exists(),
+            "active run kept"
+        );
         assert!(gsa.join("runs").join("OTHER").exists(), "unrelated kept");
         assert!(!gsa.join("runs").join("RUN-OLD1").exists());
 
@@ -505,8 +515,14 @@ mod tests {
         assert!(!manifests.join("old.json").exists());
         assert!(objects.join("aaaa").exists(), "referenced object kept");
         assert!(!objects.join("bbbb").exists(), "orphaned old object GC'd");
-        assert!(!objects.join("cccc").exists(), "old unreferenced object GC'd");
-        assert!(objects.join("dddd").exists(), "fresh unreferenced object kept (D2-1)");
+        assert!(
+            !objects.join("cccc").exists(),
+            "old unreferenced object GC'd"
+        );
+        assert!(
+            objects.join("dddd").exists(),
+            "fresh unreferenced object kept (D2-1)"
+        );
         // read_dir order is unspecified — compare as sets.
         let mut removed = report.removed_objects.clone();
         removed.sort();

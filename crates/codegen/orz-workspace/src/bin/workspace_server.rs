@@ -4,14 +4,14 @@
 //! server, exposes workspace tools, and refreshes tokens
 //! automatically.
 use clap::Parser;
-use std::path::PathBuf;
-use std::time::Duration;
-use url::Url;
 use orz_workspace::config::WorkspaceServerMetadata;
 use orz_workspace::daemonize;
 use orz_workspace::diag_server::{self, DiagHandle, ErrorClass};
 use orz_workspace::error::WorkspaceError;
 use orz_workspace::preview_supervisor::{self, PreviewArgs, PreviewVisibility};
+use std::path::PathBuf;
+use std::time::Duration;
+use url::Url;
 /// OTLP `service.name` for this binary's exported traces/logs/metrics and
 /// direct-OTLP fastrace export. Single source so the call sites can't drift.
 const SERVICE_NAME: &str = "prod_grok_workspace";
@@ -474,10 +474,7 @@ async fn run(args: Args, cwd: PathBuf) -> anyhow::Result<()> {
     let tracker = ws_handle.activity_tracker().clone();
     let grace_budget = orz_workspace::handle::termination_grace_from_env();
     ws_handle
-        .two_phase_drain(
-            grace_budget,
-            orz_workspace::handle::DrainReason::Sigterm,
-        )
+        .two_phase_drain(grace_budget, orz_workspace::handle::DrainReason::Sigterm)
         .await;
     tracker.set_shutting_down();
     tracing::info!("Shutting down...");

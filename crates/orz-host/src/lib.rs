@@ -8,15 +8,15 @@
 //!   No Grok crate depends on orz-host.
 
 pub mod acp_server;
-pub mod local_browser;
 pub mod approval;
 pub mod codex_app;
 pub mod codex_permission;
 pub mod credentials;
 pub mod grok_home;
 pub mod keystore;
-pub mod permission;
+pub mod local_browser;
 pub mod pdf_evidence;
+pub mod permission;
 pub mod project_doc_index;
 pub mod retention;
 pub mod session;
@@ -184,9 +184,7 @@ impl OrzHost {
             test_runner: None,
             tool_timeout: TOOL_CALL_TIMEOUT,
             cwd: cwd.to_path_buf(),
-            project_doc_index: crate::project_doc_index::ProjectDocIndex::new(
-                cwd.to_path_buf(),
-            ),
+            project_doc_index: crate::project_doc_index::ProjectDocIndex::new(cwd.to_path_buf()),
             web_search_config,
             web_search_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             browser: Arc::new(crate::local_browser::UnavailableBrowserSession::new(
@@ -234,7 +232,8 @@ impl OrzHost {
     /// api_key is replaced with `***REDACTED***`; the raw config's `Debug`
     /// contains the key and must never be logged or journaled).
     pub fn web_search_config_redacted(&self) -> Option<WebSearchConfig> {
-        self.web_search_config.is_enabled()
+        self.web_search_config
+            .is_enabled()
             .then(|| self.web_search_config.redacted())
     }
 
@@ -438,7 +437,13 @@ const TEST_ENV_ALLOWLIST: &[&str] = &[
     // by bare name). SystemRoot/PATHEXT/COMSPEC: Windows process bootstrap
     // (DLL search, batch invocation). TEMP/TMP: temp files. USERPROFILE:
     // many tools want a writable home for caches.
-    "PATH", "SystemRoot", "PATHEXT", "COMSPEC", "TEMP", "TMP", "USERPROFILE",
+    "PATH",
+    "SystemRoot",
+    "PATHEXT",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
 ];
 #[cfg(not(windows))]
 const TEST_ENV_ALLOWLIST: &[&str] = &[
@@ -664,8 +669,10 @@ impl LoopHost for OrzHost {
         if let (Some(sup), Some(pid)) = (supervisor.as_ref(), child.id())
             && let Err(e) = sup.assign_process(pid)
         {
-            tracing::warn!("run_tests: job-object assignment failed ({e}); \
-                            falling back to TaskKill on timeout");
+            tracing::warn!(
+                "run_tests: job-object assignment failed ({e}); \
+                            falling back to TaskKill on timeout"
+            );
             // Note: `supervisor` is deliberately not rebound here — the
             // assignment failure leaves a live job with no members, which is
             // harmless to drop; the TaskKill path covers the timeout case.
@@ -686,8 +693,9 @@ impl LoopHost for OrzHost {
             child.wait().await
         };
         let status = match tokio::time::timeout(timeout, collect).await {
-            Ok(status) => status
-                .map_err(|e| ToolError::ExecutionFailed(format!("test runner wait: {e}")))?,
+            Ok(status) => {
+                status.map_err(|e| ToolError::ExecutionFailed(format!("test runner wait: {e}")))?
+            }
             Err(_) => {
                 // Stability fix (2026-08-07): `Child::kill` terminates only
                 // the direct child — grandchildren that inherited our capture
@@ -846,12 +854,11 @@ impl LoopHost for OrzHost {
         // with an unavailable browser is an explicit failure — never an
         // automatic direct fallback (user ruling; §3.7.2).
         if name == "web_fetch"
-            && crate::pdf_evidence::route_for_url(args.get("url").and_then(|u| u.as_str()).unwrap_or(""))
+            && crate::pdf_evidence::route_for_url(
+                args.get("url").and_then(|u| u.as_str()).unwrap_or(""),
+            )
         {
-            let url = args
-                .get("url")
-                .and_then(|u| u.as_str())
-                .unwrap_or_default();
+            let url = args.get("url").and_then(|u| u.as_str()).unwrap_or_default();
             return crate::pdf_evidence::handle_browser_pdf(
                 &self.cwd,
                 self.session_id.as_deref(),
@@ -902,10 +909,16 @@ impl LoopHost for OrzHost {
                         )
                     })?;
                 started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
-                self.registry.toolset().call(name, args, call_id, None).await
+                self.registry
+                    .toolset()
+                    .call(name, args, call_id, None)
+                    .await
             } else {
                 started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
-                self.registry.toolset().call(name, args, call_id, None).await
+                self.registry
+                    .toolset()
+                    .call(name, args, call_id, None)
+                    .await
             }
         };
         let result = match tokio::time::timeout(self.tool_timeout, fut).await {
@@ -983,10 +996,10 @@ impl LoopHost for OrzHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orz_assurance::journal::{EventType, RunEvent};
     use orz_loop::AgentLoopController;
     use orz_loop::gateway::fake::FakeProvider;
     use orz_loop::gateway::model::{ModelGateway, ToolCall};
-    use orz_assurance::journal::{EventType, RunEvent};
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1061,10 +1074,7 @@ mod tests {
     }
 
     /// Host with the failing reader injected (see [`failing_reader`]).
-    fn host_with_failing_reader(
-        journal: JournalRecorder,
-        dir: &std::path::Path,
-    ) -> OrzHost {
+    fn host_with_failing_reader(journal: JournalRecorder, dir: &std::path::Path) -> OrzHost {
         OrzHost::with_credential_reader(
             journal,
             dir,
@@ -1166,10 +1176,17 @@ mod tests {
         )
         .unwrap();
         let err = host
-            .call_tool("browser_read", serde_json::json!({"url": "https://example.com"}), "c1")
+            .call_tool(
+                "browser_read",
+                serde_json::json!({"url": "https://example.com"}),
+                "c1",
+            )
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("browser lane not available"), "{err}");
+        assert!(
+            err.to_string().contains("browser lane not available"),
+            "{err}"
+        );
 
         // Ready session → success path with the real wrapper.
         let stub = crate::local_browser::tests::ready_stub_browser();
@@ -1182,7 +1199,11 @@ mod tests {
         .with_browser_session(stub);
         assert!(host.browser_ready());
         let result = host
-            .call_tool("browser_read", serde_json::json!({"url": "https://example.com"}), "c2")
+            .call_tool(
+                "browser_read",
+                serde_json::json!({"url": "https://example.com"}),
+                "c2",
+            )
             .await
             .unwrap();
         assert_eq!(result.exit_code, Some(0));
@@ -1217,7 +1238,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("web_fetch_pdf_browser_unavailable"),
+            err.to_string()
+                .contains("web_fetch_pdf_browser_unavailable"),
             "{err}"
         );
 
@@ -1294,7 +1316,10 @@ mod tests {
         // Release → the call proceeds (and fast-fails: no key = unregistered).
         drop(permit);
         let result = handle.await.unwrap();
-        assert!(result.is_err(), "unregistered web_search must fail: {result:?}");
+        assert!(
+            result.is_err(),
+            "unregistered web_search must fail: {result:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1324,11 +1349,7 @@ mod tests {
         let host2 = host.clone();
         let handle = tokio::spawn(async move {
             host2
-                .call_tool(
-                    "web_search",
-                    serde_json::json!({"query": "x"}),
-                    "ws-tout-1",
-                )
+                .call_tool("web_search", serde_json::json!({"query": "x"}), "ws-tout-1")
                 .await
         });
         let err = handle.await.unwrap().unwrap_err();
@@ -1342,11 +1363,7 @@ mod tests {
         let host3 = host.clone();
         let again = tokio::spawn(async move {
             host3
-                .call_tool(
-                    "web_search",
-                    serde_json::json!({"query": "y"}),
-                    "ws-tout-2",
-                )
+                .call_tool("web_search", serde_json::json!({"query": "y"}), "ws-tout-2")
                 .await
         });
         let res = again.await.unwrap();
@@ -1495,14 +1512,13 @@ mod tests {
             orz_loop::gateway::fake::ScriptedResponse::text("完成"),
             orz_loop::gateway::fake::ScriptedResponse::text("完成"),
         ]));
-        let controller = orz_loop::AgentLoopController::with_gateway(gateway)
-            .with_retrieval_mode(
-                orz_loop::controller::RetrievalMode::FrameworkFallback,
-                orz_loop::controller::RetrievalCapability::Available,
-                false,
-                None,
-                None,
-            );
+        let controller = orz_loop::AgentLoopController::with_gateway(gateway).with_retrieval_mode(
+            orz_loop::controller::RetrievalMode::FrameworkFallback,
+            orz_loop::controller::RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        );
         controller
             .run_turn(
                 &host,
@@ -1919,7 +1935,10 @@ mod tests {
                     .to_string(),
             ],
             timeout: Some(std::time::Duration::from_secs(30)),
-            env: vec![("ORZ_TEST_RUNNER_INJECTED".to_string(), "visible".to_string())],
+            env: vec![(
+                "ORZ_TEST_RUNNER_INJECTED".to_string(),
+                "visible".to_string(),
+            )],
         };
         let host = OrzHost::new(
             JournalRecorder::new(dir.join("j")),
@@ -1936,8 +1955,10 @@ mod tests {
             .expect("KEYS line in output");
         let keys: Vec<&str> = keys_line["KEYS:".len()..].split(',').collect();
         // Windows env vars are case-insensitive — compare uppercase.
-        let mut allowed: std::collections::HashSet<String> =
-            TEST_ENV_ALLOWLIST.iter().map(|k| k.to_uppercase()).collect();
+        let mut allowed: std::collections::HashSet<String> = TEST_ENV_ALLOWLIST
+            .iter()
+            .map(|k| k.to_uppercase())
+            .collect();
         allowed.insert("ORZ_TEST_RUNNER_INJECTED".to_string());
         for key in &keys {
             assert!(
@@ -2046,8 +2067,10 @@ mod tests {
         let (entries, truncated) = workspace_delta_diff(&before2, &after2);
         assert!(!truncated);
         assert!(
-            entries.iter().any(|e| e.path == "gone.txt"
-                && e.kind == orz_loop::host::WorkspaceDeltaKind::Deleted),
+            entries
+                .iter()
+                .any(|e| e.path == "gone.txt"
+                    && e.kind == orz_loop::host::WorkspaceDeltaKind::Deleted),
             "deleted file detected"
         );
     }

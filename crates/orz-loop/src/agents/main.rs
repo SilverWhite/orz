@@ -78,13 +78,7 @@ impl RoundAgent for MainAgent {
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
         self.run_round(
-            system,
-            messages,
-            tools,
-            max_tokens,
-            cancel,
-            heartbeat,
-            on_chunk,
+            system, messages, tools, max_tokens, cancel, heartbeat, on_chunk,
         )
         .await
     }

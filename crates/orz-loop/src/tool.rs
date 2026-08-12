@@ -346,7 +346,10 @@ mod tests {
         assert_eq!(ToolDispatcher::action_category("search_replace"), "edit");
         // terminal — shell tools and the fixed test runner
         assert_eq!(ToolDispatcher::action_category("bash"), "terminal");
-        assert_eq!(ToolDispatcher::action_category("run_terminal_cmd"), "terminal");
+        assert_eq!(
+            ToolDispatcher::action_category("run_terminal_cmd"),
+            "terminal"
+        );
         assert_eq!(ToolDispatcher::action_category("run_tests"), "terminal");
         // retrieval — network tools fold into the retrieval category
         assert_eq!(ToolDispatcher::action_category("web_search"), "retrieval");

@@ -80,9 +80,7 @@ pub struct LoadedPlugin {
 impl LoadedPlugin {
     /// Data directory for this plugin: `~/.grok/plugin-data/<plugin_id>/`.
     pub fn data_dir(&self) -> PathBuf {
-        orz_config::grok_home()
-            .join("plugin-data")
-            .join(&self.id.0)
+        orz_config::grok_home().join("plugin-data").join(&self.id.0)
     }
 
     /// Plugin root path as a string (for env var substitution).

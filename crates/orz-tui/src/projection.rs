@@ -319,10 +319,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             disposition_id,
             decision,
         } => {
-            app.content.add_system_message(
-                &format!("[检索处置] {disposition_id}: {decision}"),
-                false,
-            );
+            app.content
+                .add_system_message(&format!("[检索处置] {disposition_id}: {decision}"), false);
             vec![format!("检索处置: {decision}")]
         }
         TuiEvent::RetrievalCloseRecord {
@@ -388,10 +386,8 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             ticket_id,
             ticket_kind,
         } => {
-            app.content.add_system_message(
-                &format!("[票据消费] {ticket_id}: {ticket_kind}"),
-                false,
-            );
+            app.content
+                .add_system_message(&format!("[票据消费] {ticket_id}: {ticket_kind}"), false);
             vec!["票据消费".into()]
         }
         TuiEvent::ControlTicketRejected {

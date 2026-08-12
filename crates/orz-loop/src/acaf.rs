@@ -88,9 +88,7 @@ pub fn ticket_outcome_reject(
 ) -> Option<(orz_assurance::acaf::RejectCode, String)> {
     match outcome {
         TicketOutcome::Consumed { .. } => None,
-        TicketOutcome::Rejected {
-            code, detail, ..
-        } => Some((*code, detail.clone())),
+        TicketOutcome::Rejected { code, detail, .. } => Some((*code, detail.clone())),
         TicketOutcome::SignerUnreachable { detail, .. } => Some((
             orz_assurance::acaf::RejectCode::SignerUnreachable,
             detail.clone(),
@@ -320,12 +318,14 @@ impl AcafClient {
             .get("session_key_hex")
             .and_then(Value::as_str)
             .ok_or_else(|| AcafClientError::Protocol("missing session_key_hex".into()))?;
-        let k_bytes = hex_decode(session_key_hex).ok_or_else(|| {
-            AcafClientError::Protocol("session_key_hex is not valid hex".into())
-        })?;
+        let k_bytes = hex_decode(session_key_hex)
+            .ok_or_else(|| AcafClientError::Protocol("session_key_hex is not valid hex".into()))?;
         // Review P2-3 (2026-08-12): byte slicing a possibly multi-byte UTF-8
         // session id can panic — derive the key id from chars instead.
-        let key_id = format!("KEY-SESS-{}", session_id.chars().take(8).collect::<String>());
+        let key_id = format!(
+            "KEY-SESS-{}",
+            session_id.chars().take(8).collect::<String>()
+        );
         let session = ClientSession {
             session_id: session_id.to_string(),
             agent_id: agent_id.to_string(),
@@ -555,7 +555,10 @@ impl AcafClient {
             if response.get("id").and_then(Value::as_u64) != Some(id) {
                 return Err(AcafClientError::Protocol(format!(
                     "response id {} != request id {id}",
-                    response.get("id").and_then(Value::as_u64).unwrap_or_default()
+                    response
+                        .get("id")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default()
                 )));
             }
             if let Some(error) = response.get("error") {
@@ -719,11 +722,7 @@ pub fn file_write_operation(effective: &std::path::Path, args: &Value) -> &'stat
     let empty_or_missing = std::fs::metadata(effective)
         .map(|md| md.len() == 0)
         .unwrap_or(true); // missing → create
-    if empty_or_missing {
-        "create"
-    } else {
-        "modify"
-    }
+    if empty_or_missing { "create" } else { "modify" }
 }
 
 /// Canonical arguments for a `file_write_v1` action ticket (Slice 2 first
@@ -739,7 +738,10 @@ pub fn file_write_canonical_args(
     args: &Value,
 ) -> Value {
     let content_sha256 = orz_assurance::sha256_hex(
-        args.get("new_string").and_then(Value::as_str).unwrap_or_default().as_bytes(),
+        args.get("new_string")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .as_bytes(),
     );
     serde_json::json!({
         "tool": tool,
@@ -761,10 +763,7 @@ pub fn file_write_canonical_args(
 /// the harness's explicit `TestRunner::env` entries (the fixed platform
 /// allowlist is host-process-stable and also excluded — registered).
 pub fn command_env_sha256(env: &[(String, String)]) -> String {
-    let mut entries: Vec<String> = env
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect();
+    let mut entries: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
     entries.sort();
     let joined = entries.join("\0");
     orz_assurance::journal::sha256_hex(joined.as_bytes())
@@ -965,27 +964,42 @@ mod tests {
     #[test]
     fn file_write_canonical_args_shape() {
         let resolved = r"C:\worktree\src\main.rs";
-        let create = file_write_canonical_args("search_replace", resolved, "create", &serde_json::json!({
-            "file_path": "src/main.rs",
-            "old_string": "",
-            "new_string": "fn main() {}",
-        }));
+        let create = file_write_canonical_args(
+            "search_replace",
+            resolved,
+            "create",
+            &serde_json::json!({
+                "file_path": "src/main.rs",
+                "old_string": "",
+                "new_string": "fn main() {}",
+            }),
+        );
         assert_eq!(create["operation"], "create");
         assert_eq!(create["file_path"], resolved);
         assert_eq!(create["content_sha256"].as_str().unwrap().len(), 64);
-        let modify = file_write_canonical_args("search_replace", resolved, "modify", &serde_json::json!({
-            "file_path": "src/main.rs",
-            "old_string": "fn main() {}",
-            "new_string": "fn main() { println!(\"hi\"); }",
-        }));
+        let modify = file_write_canonical_args(
+            "search_replace",
+            resolved,
+            "modify",
+            &serde_json::json!({
+                "file_path": "src/main.rs",
+                "old_string": "fn main() {}",
+                "new_string": "fn main() { println!(\"hi\"); }",
+            }),
+        );
         assert_eq!(modify["operation"], "modify");
         // The content digest is stable for identical input and sensitive to
         // the new_string bytes.
-        let modify_again = file_write_canonical_args("search_replace", resolved, "modify", &serde_json::json!({
-            "file_path": "src/main.rs",
-            "old_string": "fn main() {}",
-            "new_string": "fn main() { println!(\"hi\"); }",
-        }));
+        let modify_again = file_write_canonical_args(
+            "search_replace",
+            resolved,
+            "modify",
+            &serde_json::json!({
+                "file_path": "src/main.rs",
+                "old_string": "fn main() {}",
+                "new_string": "fn main() { println!(\"hi\"); }",
+            }),
+        );
         assert_eq!(modify["content_sha256"], modify_again["content_sha256"]);
         assert_ne!(create["content_sha256"], modify["content_sha256"]);
     }

@@ -318,11 +318,7 @@ fn load_activation_sidecar(base_dir: &Path, session_id: &str) -> Option<StoredAc
 
 /// Persist the activation snapshot — best-effort (a read-only workspace must
 /// never fail the run); failures are WARNED (orientation sidecar pattern).
-fn persist_activation_sidecar(
-    base_dir: &Path,
-    session_id: &str,
-    state: &StoredActivationSnapshot,
-) {
+fn persist_activation_sidecar(base_dir: &Path, session_id: &str, state: &StoredActivationSnapshot) {
     let path = activation_sidecar_path(base_dir, session_id);
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
@@ -336,10 +332,7 @@ fn persist_activation_sidecar(
     match serde_json::to_string_pretty(state) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {
-                tracing::warn!(
-                    "activation sidecar write failed ({}): {e}",
-                    path.display()
-                );
+                tracing::warn!("activation sidecar write failed ({}): {e}", path.display());
             }
         }
         Err(e) => tracing::warn!("activation sidecar serialize failed: {e}"),
@@ -466,11 +459,7 @@ fn load_orientation_sidecar(base_dir: &Path, session_id: &str) -> Option<Orienta
 /// Persist the orientation counter — best-effort (a read-only workspace must
 /// never fail the run; the in-session write is the authoritative path).
 /// Review P2-1: failures are WARNED (same pattern as the grill JSONL).
-fn persist_orientation_sidecar(
-    base_dir: &Path,
-    session_id: &str,
-    state: &OrientationSessionState,
-) {
+fn persist_orientation_sidecar(base_dir: &Path, session_id: &str, state: &OrientationSessionState) {
     let path = orientation_sidecar_path(base_dir, session_id);
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
@@ -484,10 +473,7 @@ fn persist_orientation_sidecar(
     match serde_json::to_string_pretty(state) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {
-                tracing::warn!(
-                    "orientation sidecar write failed ({}): {e}",
-                    path.display()
-                );
+                tracing::warn!("orientation sidecar write failed ({}): {e}", path.display());
             }
         }
         Err(e) => tracing::warn!("orientation sidecar serialize failed: {e}"),
@@ -807,14 +793,8 @@ impl AcpServer {
         trust_policy: crate::session::TrustPolicy,
         policy: PermissionPolicy,
     ) -> Result<serde_json::Value, AcpError> {
-        self.handle_session_new_with_options(
-            session_id,
-            base_dir,
-            trust_policy,
-            policy,
-            None,
-        )
-        .await
+        self.handle_session_new_with_options(session_id, base_dir, trust_policy, policy, None)
+            .await
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): `retrieval_mode` is the
@@ -854,8 +834,7 @@ impl AcpServer {
             // including a change TO off (a transition like any other,
             // §3.7.1 "never implicit"); the previous persisted mode is
             // carried as the transition's real old_mode.
-            activation_snapshot.previous_retrieval_mode =
-                Some(activation_snapshot.retrieval_mode);
+            activation_snapshot.previous_retrieval_mode = Some(activation_snapshot.retrieval_mode);
             activation_snapshot.retrieval_mode = mode;
             activation_snapshot.bootstrap_transition_pending = true;
         }
@@ -1024,8 +1003,8 @@ impl AcpServer {
         // GAP-RETRIEVAL-TOOLS (S4): seed the activation registry from the
         // sidecar — a cross-run AwaitingDisposition activation is restored
         // and journaled (the parent may dispose it in this run).
-        let activation_snapshot_json = serde_json::to_value(&activation_snapshot)
-            .unwrap_or(serde_json::Value::Null);
+        let activation_snapshot_json =
+            serde_json::to_value(&activation_snapshot).unwrap_or(serde_json::Value::Null);
         // local_browser (2026-08-10): re-inject the session's browser lane
         // (launched on a previous prompt — the process stays up across runs
         // on its isolated profile) BEFORE the probe runs.
@@ -1110,10 +1089,9 @@ impl AcpServer {
             live.get("next_seq").cloned(),
             live.get("activations").cloned(),
         ) {
-            activation_snapshot.next_seq = serde_json::from_value(next_seq)
-                .unwrap_or_default();
-            activation_snapshot.activations = serde_json::from_value(activations)
-                .unwrap_or_default();
+            activation_snapshot.next_seq = serde_json::from_value(next_seq).unwrap_or_default();
+            activation_snapshot.activations =
+                serde_json::from_value(activations).unwrap_or_default();
         }
         persist_activation_sidecar(&base_dir, session_id, &activation_snapshot);
         if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
@@ -1219,7 +1197,12 @@ impl AcpServer {
         // Same host shape as a prompt run, but policy is ALWAYS ReadOnly
         // (write tools Deny before any permission wire — no dialogs).
         let bootstrap = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await?;
-        let host = self.build_host(&bootstrap, session_id, &base_dir, PermissionPolicy::ReadOnly)?;
+        let host = self.build_host(
+            &bootstrap,
+            session_id,
+            &base_dir,
+            PermissionPolicy::ReadOnly,
+        )?;
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
             .with_snapshot_store(Some(bootstrap.snapshot_store.clone()));
 
@@ -1657,8 +1640,8 @@ mod tests {
         // find_browser which tolerates concurrent set/remove (worst case a
         // degraded reason names a missing path).
         unsafe { std::env::set_var(ORZ_BROWSER_PATH_ENV, &missing) };
-        let mut host = crate::OrzHost::new(journal.clone(), &dir, WorkspaceTrust::ObservedTrusted)
-            .unwrap();
+        let mut host =
+            crate::OrzHost::new(journal.clone(), &dir, WorkspaceTrust::ObservedTrusted).unwrap();
         let cap = probe_retrieval_capability(
             RetrievalMode::LocalBrowser,
             true,
@@ -3003,10 +2986,7 @@ mod tests {
                 assert_eq!(r2, "问题二: 方案取舍……?");
 
                 // Audit JSONL: one record per turn (Q/A), nothing else.
-                let log = base
-                    .join(".gsa")
-                    .join("grill")
-                    .join("sess-gri.jsonl");
+                let log = base.join(".gsa").join("grill").join("sess-gri.jsonl");
                 let content = std::fs::read_to_string(&log).unwrap();
                 let lines: Vec<&str> = content.lines().collect();
                 assert_eq!(lines.len(), 2, "{content}");
@@ -3053,11 +3033,11 @@ mod tests {
                         RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
                     );
                 }
-                let err = server.run_grill_turn("sess-grill", "回答三").await.unwrap_err();
-                assert!(
-                    matches!(err, AcpError::InvalidRequest(_)),
-                    "{err}"
-                );
+                let err = server
+                    .run_grill_turn("sess-grill", "回答三")
+                    .await
+                    .unwrap_err();
+                assert!(matches!(err, AcpError::InvalidRequest(_)), "{err}");
                 server.runs.lock().unwrap().remove("sess-grill");
 
                 // finish: summary turn + terminal record + session cleared.
@@ -3118,7 +3098,9 @@ mod tests {
 
     fn conv_sidecar_path(base: &Path, session_id: &str) -> PathBuf {
         let suffix: String = session_id.chars().take(8).collect();
-        base.join(".gsa").join("conversations").join(format!("{suffix}.json"))
+        base.join(".gsa")
+            .join("conversations")
+            .join(format!("{suffix}.json"))
     }
 
     #[test]
@@ -3152,7 +3134,10 @@ mod tests {
         assert_eq!(stored.session_id, "sess-roundtrip");
         assert_eq!(stored.messages.len(), 3);
         assert_eq!(stored.messages[0].content, "中文问题");
-        assert_eq!(stored.messages[1].reasoning_content.as_deref(), Some("推理过程"));
+        assert_eq!(
+            stored.messages[1].reasoning_content.as_deref(),
+            Some("推理过程")
+        );
         assert_eq!(stored.messages[2].tool_call_id.as_deref(), Some("call-1"));
         // Exact path shape.
         assert!(conv_sidecar_path(&base, "sess-roundtrip").exists());

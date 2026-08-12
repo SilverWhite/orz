@@ -27,8 +27,8 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
-use toml::Value as TomlValue;
 use orz_config_types::{BoolFlag, RemoteSettings};
+use toml::Value as TomlValue;
 
 use crate::trust::{TrustStore, workspace_key};
 

@@ -3,8 +3,8 @@
 //! These are stateless functions that operate on conversation data only —
 //! no I/O, no actor state. They live in `orz-chat-state` so that both
 //! this crate and `xai-grok-shell` can share them without duplication.
-use std::collections::BTreeSet;
 use orz_sampling_types::{ContentPart, ConversationItem, ToolResultItem};
+use std::collections::BTreeSet;
 /// Drops tool results and flattens assistant `tool_calls` into
 /// `[Called tools: ...]` text annotations.
 ///
@@ -907,10 +907,9 @@ pub fn validate_compacted_history(items: &[ConversationItem]) -> Vec<String> {
                     seen_ids.insert(&tc.id);
                 }
             }
-            ConversationItem::ToolResult(tr)
-                if !seen_ids.contains(tr.tool_call_id.as_str()) => {
-                    invalid_ids.push(tr.tool_call_id.clone());
-                }
+            ConversationItem::ToolResult(tr) if !seen_ids.contains(tr.tool_call_id.as_str()) => {
+                invalid_ids.push(tr.tool_call_id.clone());
+            }
             _ => {}
         }
     }

@@ -297,9 +297,8 @@ impl ProfileName {
                 .collect();
             #[cfg(unix)]
             {
-                let files =
-                    orz_config::validated_hook_json_files_for_sources(&profile.write_deny)
-                        .map_err(|e| anyhow::anyhow!("hook JSON alias validation failed: {e}"))?;
+                let files = orz_config::validated_hook_json_files_for_sources(&profile.write_deny)
+                    .map_err(|e| anyhow::anyhow!("hook JSON alias validation failed: {e}"))?;
                 for f in files {
                     if !pairs.iter().any(|(p, _)| p == &f) {
                         pairs.push((f, false));

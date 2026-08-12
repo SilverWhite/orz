@@ -22,14 +22,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-use super::url_gate::{check_navigation_url, UrlGateError};
 use super::BrowserDownloadOutcome;
+use super::url_gate::{UrlGateError, check_navigation_url};
 
 /// Every CDP method this client may send. Anything else fails closed at the
 /// send boundary (a test asserts the set is exactly what `read_page` and
@@ -172,11 +172,7 @@ impl WsSession {
 
     /// Send one command and await its response (events keep flowing to the
     /// event channel in the background). One command in flight per ws.
-    async fn send_command(
-        &mut self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, CdpError> {
+    async fn send_command(&mut self, method: &str, params: Value) -> Result<Value, CdpError> {
         if !ALLOWED_CDP_METHODS.contains(&method) {
             return Err(CdpError::DisallowedMethod(method.to_string()));
         }
@@ -200,7 +196,10 @@ impl WsSession {
         if let Some(err) = resp.get("error") {
             return Err(CdpError::Command {
                 method: method.to_string(),
-                message: err["message"].as_str().unwrap_or("unknown CDP error").to_string(),
+                message: err["message"]
+                    .as_str()
+                    .unwrap_or("unknown CDP error")
+                    .to_string(),
             });
         }
         Ok(resp["result"].clone())
@@ -321,7 +320,10 @@ impl CdpBrowserSession {
         // in through the visible window); ORZ_BROWSER_HEADLESS=1 forces
         // headless for display-less environments.
         let headless = std::env::var_os(super::discovery::ORZ_BROWSER_HEADLESS_ENV).is_some();
-        cmd.args(super::discovery::browser_launch_args(&profile_dir, headless));
+        cmd.args(super::discovery::browser_launch_args(
+            &profile_dir,
+            headless,
+        ));
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -330,8 +332,7 @@ impl CdpBrowserSession {
             .map_err(|e| CdpError::Spawn(format!("{}: {e}", binary.display())))?;
 
         let port_file = profile_dir.join("DevToolsActivePort");
-        let port =
-            poll_devtools_active_port(&port_file, DEFAULT_LOAD_TIMEOUT.as_secs()).await?;
+        let port = poll_devtools_active_port(&port_file, DEFAULT_LOAD_TIMEOUT.as_secs()).await?;
 
         // The probe verifies the endpoint actually answers (not just the
         // port file). The browser ws itself is opened lazily per first call.
@@ -556,7 +557,8 @@ async fn read_in_page(
 ) -> Result<PageReadOutcome, CdpError> {
     page.send_command("Page.enable", json!({})).await?;
     page.send_command("Runtime.enable", json!({})).await?;
-    page.send_command("Page.navigate", json!({ "url": url })).await?;
+    page.send_command("Page.navigate", json!({ "url": url }))
+        .await?;
     wait_for_load(page, load_timeout).await?;
 
     extract_page(page, url).await
@@ -686,7 +688,9 @@ async fn wait_download_or_load(
         {
             if last_sample == Some(size) {
                 // Stable across two samples (~500ms apart) — flushed.
-                let final_url = pending_url.clone().unwrap_or_else(|| request_url.to_string());
+                let final_url = pending_url
+                    .clone()
+                    .unwrap_or_else(|| request_url.to_string());
                 gate_download_final_url(&final_url).await?;
                 return Ok(BrowserDownloadOutcome::Pdf { path, final_url });
             }
@@ -697,25 +701,23 @@ async fn wait_download_or_load(
         // Fragmented wait: the backstop poll runs even when no events arrive
         // (a flood that dropped the terminal event). A fragment timeout is
         // NOT a LoadTimeout — only the total budget is.
-        let ev = match tokio::time::timeout(
-            remaining.min(DOWNLOAD_POLL_INTERVAL),
-            page.events.recv(),
-        )
-        .await
-        {
-            Ok(Some(ev)) => ev,
-            Ok(None) => return Err(CdpError::Io("CDP event channel closed".into())),
-            Err(_elapsed) => {
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(CdpError::LoadTimeout {
-                        timeout: timeout.as_secs(),
-                    });
+        let ev =
+            match tokio::time::timeout(remaining.min(DOWNLOAD_POLL_INTERVAL), page.events.recv())
+                .await
+            {
+                Ok(Some(ev)) => ev,
+                Ok(None) => return Err(CdpError::Io("CDP event channel closed".into())),
+                Err(_elapsed) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(CdpError::LoadTimeout {
+                            timeout: timeout.as_secs(),
+                        });
+                    }
+                    // Fragment elapsed: back to the top of the loop — the poll
+                    // backstop runs before the next wait.
+                    continue;
                 }
-                // Fragment elapsed: back to the top of the loop — the poll
-                // backstop runs before the next wait.
-                continue;
-            }
-        };
+            };
         match ev["method"].as_str() {
             Some("Page.downloadWillBegin") | Some("Browser.downloadWillBegin") => {
                 if let Some(guid) = ev["params"]["guid"].as_str() {
@@ -730,10 +732,10 @@ async fn wait_download_or_load(
                     Some("completed") => {
                         // The file may not be flushed yet — Chrome writes it
                         // asynchronously and may briefly hold a Windows lock.
-                        let path = wait_for_new_file(download_dir, DOWNLOAD_FLUSH_TIMEOUT)
-                            .await?;
-                        let final_url =
-                            pending_url.clone().unwrap_or_else(|| request_url.to_string());
+                        let path = wait_for_new_file(download_dir, DOWNLOAD_FLUSH_TIMEOUT).await?;
+                        let final_url = pending_url
+                            .clone()
+                            .unwrap_or_else(|| request_url.to_string());
                         gate_download_final_url(&final_url).await?;
                         return Ok(BrowserDownloadOutcome::Pdf { path, final_url });
                     }
@@ -858,9 +860,8 @@ pub(crate) async fn http_get_json(port: u16, path: &str) -> Result<Value, CdpErr
         let mut stream = TcpStream::connect(("127.0.0.1", port))
             .await
             .map_err(|e| CdpError::Discovery(format!("connect: {e}")))?;
-        let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-        );
+        let req =
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
         stream
             .write_all(req.as_bytes())
             .await
@@ -930,10 +931,7 @@ pub(crate) async fn http_get_json(port: u16, path: &str) -> Result<Value, CdpErr
             }
         }
         let text = String::from_utf8_lossy(&buf);
-        let body = text
-            .split_once("\r\n\r\n")
-            .map(|(_, b)| b)
-            .unwrap_or(&text);
+        let body = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or(&text);
         serde_json::from_str(body.trim())
             .map_err(|e| CdpError::Discovery(format!("json parse: {e}")))
     })
@@ -1003,7 +1001,10 @@ mod tests {
                 continue;
             }
             let err = ws.send_command(method, json!({})).await;
-            assert!(matches!(err, Err(CdpError::DisallowedMethod(_))), "{method}: {err:?}");
+            assert!(
+                matches!(err, Err(CdpError::DisallowedMethod(_))),
+                "{method}: {err:?}"
+            );
         }
     }
 
@@ -1016,7 +1017,9 @@ mod tests {
             let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
             let (mut write, mut read) = ws.split();
             while let Some(Ok(WsMessage::Text(_))) = read.next().await {
-                let _ = write.send(WsMessage::Text("{\"id\":999,\"result\":{}}".into())).await;
+                let _ = write
+                    .send(WsMessage::Text("{\"id\":999,\"result\":{}}".into()))
+                    .await;
             }
         });
         let ws = WsSession::connect(&format!("ws://{addr}/devtools/browser/test"), "test ws")
@@ -1048,7 +1051,10 @@ mod tests {
             .unwrap();
         let r1 = ws.send_command("Page.enable", json!({})).await.unwrap();
         assert_eq!(r1["method"], "Page.enable");
-        let r2 = ws.send_command("Page.navigate", json!({"url": "x"})).await.unwrap();
+        let r2 = ws
+            .send_command("Page.navigate", json!({"url": "x"}))
+            .await
+            .unwrap();
         assert_eq!(r2["method"], "Page.navigate");
         let _ = port;
         server.abort();
@@ -1072,7 +1078,10 @@ mod tests {
         let start = tokio::time::Instant::now();
         let err = wait_for_load(&mut ws, Duration::from_millis(200)).await;
         assert!(matches!(err, Err(CdpError::LoadTimeout { .. })));
-        assert!(start.elapsed() >= Duration::from_millis(150), "must wait near the limit");
+        assert!(
+            start.elapsed() >= Duration::from_millis(150),
+            "must wait near the limit"
+        );
         server.abort();
     }
 
@@ -1097,7 +1106,10 @@ mod tests {
             .await
             .unwrap();
         let err = wait_for_load(&mut ws, Duration::from_secs(2)).await;
-        assert!(matches!(err, Err(CdpError::UrlGate(UrlGateError::NotHttp { .. }))));
+        assert!(matches!(
+            err,
+            Err(CdpError::UrlGate(UrlGateError::NotHttp { .. }))
+        ));
         server.abort();
     }
 
@@ -1146,7 +1158,12 @@ mod tests {
             stream.write_all(resp.as_bytes()).await.unwrap();
         });
         let v = http_get_json(port, "/json/version").await.unwrap();
-        assert!(v["webSocketDebuggerUrl"].as_str().unwrap().contains("devtools/browser"));
+        assert!(
+            v["webSocketDebuggerUrl"]
+                .as_str()
+                .unwrap()
+                .contains("devtools/browser")
+        );
         server.abort();
     }
 
@@ -1162,8 +1179,13 @@ mod tests {
             child: None,
             config: test_config(),
         };
-        let err = session.read_page("http://169.254.169.254/latest/meta-data/").await;
-        assert!(matches!(err, Err(CdpError::UrlGate(UrlGateError::PrivateAddress { .. }))));
+        let err = session
+            .read_page("http://169.254.169.254/latest/meta-data/")
+            .await;
+        assert!(matches!(
+            err,
+            Err(CdpError::UrlGate(UrlGateError::PrivateAddress { .. }))
+        ));
     }
 
     #[tokio::test]
@@ -1186,12 +1208,16 @@ mod tests {
                 match v["method"].as_str().unwrap() {
                     "Page.enable" | "Runtime.enable" => {
                         let _ = write
-                            .send(WsMessage::Text(json!({"id": id, "result": {}}).to_string().into()))
+                            .send(WsMessage::Text(
+                                json!({"id": id, "result": {}}).to_string().into(),
+                            ))
                             .await;
                     }
                     "Page.navigate" => {
                         let _ = write
-                            .send(WsMessage::Text(json!({"id": id, "result": {}}).to_string().into()))
+                            .send(WsMessage::Text(
+                                json!({"id": id, "result": {}}).to_string().into(),
+                            ))
                             .await;
                         // Load completes without any frameNavigated event
                         // (the redirect was never surfaced on the stream).
@@ -1222,7 +1248,10 @@ mod tests {
             .await
             .unwrap();
         let err = read_in_page(&mut page, "https://example.com/", Duration::from_secs(2)).await;
-        assert!(matches!(err, Err(CdpError::UrlGate(UrlGateError::NotHttp { .. }))), "{err:?}");
+        assert!(
+            matches!(err, Err(CdpError::UrlGate(UrlGateError::NotHttp { .. }))),
+            "{err:?}"
+        );
         assert!(
             !extracted.load(std::sync::atomic::Ordering::SeqCst),
             "title/text must not be evaluated before the final URL gate"
@@ -1356,9 +1385,14 @@ mod tests {
             "https://example.com/paper.pdf".to_string(),
         )
         .await;
-        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let outcome = wait_download_or_load(
+            &mut page,
+            "https://example.com/paper.pdf",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         match outcome {
             BrowserDownloadOutcome::Pdf { path, final_url } => {
                 assert_eq!(path.file_name().unwrap().to_str().unwrap(), "paper.pdf");
@@ -1383,9 +1417,14 @@ mod tests {
             "https://example.com/other.pdf".to_string(),
         )
         .await;
-        let outcome = wait_download_or_load(&mut page, "https://example.com/requested.pdf", &dir, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let outcome = wait_download_or_load(
+            &mut page,
+            "https://example.com/requested.pdf",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         match outcome {
             BrowserDownloadOutcome::Pdf { final_url, .. } => {
                 assert_eq!(final_url, "https://example.com/requested.pdf");
@@ -1409,9 +1448,14 @@ mod tests {
             "https://example.com/paper.pdf".to_string(),
         )
         .await;
-        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let outcome = wait_download_or_load(
+            &mut page,
+            "https://example.com/paper.pdf",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         match outcome {
             BrowserDownloadOutcome::Pdf { final_url, .. } => {
                 assert_eq!(final_url, "https://example.com/paper.pdf");
@@ -1433,9 +1477,14 @@ mod tests {
             "https://example.com/paper.pdf".to_string(),
         )
         .await;
-        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let outcome = wait_download_or_load(
+            &mut page,
+            "https://example.com/paper.pdf",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         match outcome {
             BrowserDownloadOutcome::Pdf { final_url, .. } => {
                 assert_eq!(final_url, "https://example.com/paper.pdf");
@@ -1457,9 +1506,14 @@ mod tests {
             "https://example.com/".to_string(),
         )
         .await;
-        let err = wait_download_or_load(&mut page, "https://example.com/", &dir, Duration::from_secs(5))
-            .await
-            .unwrap_err();
+        let err = wait_download_or_load(
+            &mut page,
+            "https://example.com/",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, CdpError::DownloadCanceled), "{err:?}");
         server.abort();
     }
@@ -1473,9 +1527,14 @@ mod tests {
             "https://example.com/page".to_string(),
         )
         .await;
-        let outcome = wait_download_or_load(&mut page, "https://example.com/requested", &dir, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let outcome = wait_download_or_load(
+            &mut page,
+            "https://example.com/requested",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         match outcome {
             BrowserDownloadOutcome::Page(outcome) => {
                 assert_eq!(outcome.final_url, "https://example.com/page");
@@ -1500,9 +1559,14 @@ mod tests {
             "https://example.com/paper.pdf".to_string(),
         )
         .await;
-        let outcome = wait_download_or_load(&mut page, "https://example.com/paper.pdf", &dir, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let outcome = wait_download_or_load(
+            &mut page,
+            "https://example.com/paper.pdf",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         match outcome {
             BrowserDownloadOutcome::Pdf { path, .. } => {
                 assert_eq!(path.file_name().unwrap().to_str().unwrap(), "paper.pdf");
@@ -1516,9 +1580,14 @@ mod tests {
     async fn download_loop_times_out_when_no_terminal_event() {
         let dir = test_tmp_dir("dl-timeout");
         let (server, mut page) = ws_pair_with_events(vec![], None, "".to_string()).await;
-        let err = wait_download_or_load(&mut page, "https://example.com/", &dir, Duration::from_millis(250))
-            .await
-            .unwrap_err();
+        let err = wait_download_or_load(
+            &mut page,
+            "https://example.com/",
+            &dir,
+            Duration::from_millis(250),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, CdpError::LoadTimeout { .. }), "{err:?}");
         server.abort();
     }
@@ -1528,7 +1597,9 @@ mod tests {
         let dir = test_tmp_dir("dl-new-file");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.pdf"), b"a").unwrap();
-        let path = wait_for_new_file(&dir, Duration::from_secs(1)).await.unwrap();
+        let path = wait_for_new_file(&dir, Duration::from_secs(1))
+            .await
+            .unwrap();
         assert_eq!(path.file_name().unwrap().to_str().unwrap(), "a.pdf");
     }
 }

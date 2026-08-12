@@ -274,9 +274,7 @@ impl Terminal {
 
                 // Replace cursor position if requested.
                 let is_cursor = cursor.row == line_idx + 1 && cursor.col == col_idx + 1;
-                if is_cursor
-                    && let Some(cc) = opts.cursor_char
-                {
+                if is_cursor && let Some(cc) = opts.cursor_char {
                     text.push(cc);
                 } else {
                     text.push(cell.c);

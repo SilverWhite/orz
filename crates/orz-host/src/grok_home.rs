@@ -70,7 +70,10 @@ fn redirect_grok_home_with(cwd: &Path, install_dir: Option<&Path>) -> GrokHomePl
 
 /// The binary's own directory (`current_exe` parent) — the B-class home.
 fn install_dir() -> Option<PathBuf> {
-    std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
 }
 
 /// Create the dir and prove writability with an exclusive probe file
@@ -167,7 +170,8 @@ mod tests {
     }
 
     fn tmpdir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("orz-grok-home-{label}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("orz-grok-home-{label}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create tmp dir");
         dir
     }
@@ -193,7 +197,10 @@ mod tests {
             let placement = redirect_grok_home_with(&tmp, Some(&tmp));
             let expected = tmp.join("grok-home");
             assert_eq!(placement, GrokHomePlacement::InstallDir(expected.clone()));
-            assert_eq!(std::env::var("GROK_HOME").unwrap(), expected.to_str().unwrap());
+            assert_eq!(
+                std::env::var("GROK_HOME").unwrap(),
+                expected.to_str().unwrap()
+            );
             assert!(expected.is_dir());
             // Probe file must not remain behind.
             assert!(!expected.join(".orz-probe").exists());
@@ -211,8 +218,14 @@ mod tests {
             let cwd = tmpdir("fallback-cwd");
             let placement = redirect_grok_home_with(&cwd, Some(&blocker));
             let expected = cwd.join(".gsa").join("grok-home");
-            assert_eq!(placement, GrokHomePlacement::WorkspaceFallback(expected.clone()));
-            assert_eq!(std::env::var("GROK_HOME").unwrap(), expected.to_str().unwrap());
+            assert_eq!(
+                placement,
+                GrokHomePlacement::WorkspaceFallback(expected.clone())
+            );
+            assert_eq!(
+                std::env::var("GROK_HOME").unwrap(),
+                expected.to_str().unwrap()
+            );
         });
     }
 

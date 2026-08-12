@@ -111,7 +111,9 @@ impl LocalBrowserManager {
     /// probe and the manager agree on one layout.
     pub fn profile_dir_for(workspace: &std::path::Path, session_id: &str) -> PathBuf {
         let suffix: String = session_id.chars().take(8).collect();
-        workspace.join(".gsa").join(format!("chrome-profile-{suffix}"))
+        workspace
+            .join(".gsa")
+            .join(format!("chrome-profile-{suffix}"))
     }
 }
 
@@ -254,17 +256,21 @@ pub async fn handle_browser_read(
     // Strict argument parsing: exactly one `url` string, non-empty. Unknown
     // keys are rejected (not silently ignored) — every failure carries a
     // stable `[browser_read_*]` error code (§3.7.2 explicit errors).
-    let obj = args
-        .as_object()
-        .ok_or_else(|| ToolError::ExecutionFailed(
+    let obj = args.as_object().ok_or_else(|| {
+        ToolError::ExecutionFailed(
             "browser_read failed [browser_read_invalid_arguments]: arguments must be a JSON object"
                 .to_string(),
-        ))?;
+        )
+    })?;
     let unknown: Vec<&String> = obj.keys().filter(|k| k.as_str() != "url").collect();
     if !unknown.is_empty() {
         return Err(ToolError::ExecutionFailed(format!(
             "browser_read failed [browser_read_invalid_arguments]: unknown argument(s): {}",
-            unknown.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+            unknown
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
     }
     let url = obj
@@ -317,8 +323,7 @@ pub async fn handle_browser_read(
                 .to_string(),
         )),
         Err(CdpError::LoadTimeout { .. }) => Err(ToolError::ExecutionFailed(
-            "browser_read failed [browser_read_load_timeout]: page load timed out"
-                .to_string(),
+            "browser_read failed [browser_read_load_timeout]: page load timed out".to_string(),
         )),
         Err(CdpError::TotalTimeout { .. }) => Err(ToolError::ExecutionFailed(
             "browser_read failed [browser_read_total_timeout]: total page-read \
@@ -345,8 +350,12 @@ pub async fn probe_launch(
     workspace: &std::path::Path,
     session_id: &str,
 ) -> Result<LocalBrowserManager, String> {
-    let binary = find_browser(std::env::var(discovery::ORZ_BROWSER_PATH_ENV).ok().as_deref())
-        .map_err(|e| format!("browser_not_found: {e}"))?;
+    let binary = find_browser(
+        std::env::var(discovery::ORZ_BROWSER_PATH_ENV)
+            .ok()
+            .as_deref(),
+    )
+    .map_err(|e| format!("browser_not_found: {e}"))?;
     tracing::info!(
         browser = %binary.path.display(),
         origin = ?binary.origin,
@@ -372,7 +381,6 @@ pub(crate) mod tests {
     /// headless browser on the machine — never in CI.
     const LIVE_BROWSER_ENV: &str = "GSA_RUN_LIVE_BROWSER_TESTS";
 
-
     /// local_browser (2026-08-10): end-to-end against a real headless
     /// Chrome/Edge — discovery → launch → DevToolsActivePort → read a public
     /// page → rendered text → teardown (process tree + profile dir). Env-
@@ -383,15 +391,15 @@ pub(crate) mod tests {
         if std::env::var_os(LIVE_BROWSER_ENV).is_none() {
             return; // env-gated; the #[ignore] marker is the primary switch
         }
-        let workspace = std::env::temp_dir().join(format!(
-            "orz-browser-e2e-{:?}",
-            std::thread::current().id()
-        ));
+        let workspace =
+            std::env::temp_dir().join(format!("orz-browser-e2e-{:?}", std::thread::current().id()));
         let _ = std::fs::remove_dir_all(&workspace);
         std::fs::create_dir_all(&workspace).unwrap();
 
         let mut session = CdpBrowserSession::launch(
-            find_browser(None).expect("a Chrome/Edge binary must be discoverable").path,
+            find_browser(None)
+                .expect("a Chrome/Edge binary must be discoverable")
+                .path,
             LocalBrowserManager::profile_dir_for(&workspace, "RUN-E2E-TEST"),
             CdpConfig {
                 load_timeout: std::time::Duration::from_secs(30),
@@ -400,7 +408,10 @@ pub(crate) mod tests {
         )
         .await
         .expect("headless browser must launch");
-        assert!(session.is_alive(), "browser process must be alive after launch");
+        assert!(
+            session.is_alive(),
+            "browser process must be alive after launch"
+        );
         let outcome = session
             .read_page("https://example.com/")
             .await
@@ -428,15 +439,15 @@ pub(crate) mod tests {
         if std::env::var_os(LIVE_BROWSER_ENV).is_none() {
             return;
         }
-        let workspace = std::env::temp_dir().join(format!(
-            "orz-browser-e2e-{:?}",
-            std::thread::current().id()
-        ));
+        let workspace =
+            std::env::temp_dir().join(format!("orz-browser-e2e-{:?}", std::thread::current().id()));
         let _ = std::fs::remove_dir_all(&workspace);
         std::fs::create_dir_all(&workspace).unwrap();
 
         let mut session = CdpBrowserSession::launch(
-            find_browser(None).expect("a Chrome/Edge binary must be discoverable").path,
+            find_browser(None)
+                .expect("a Chrome/Edge binary must be discoverable")
+                .path,
             LocalBrowserManager::profile_dir_for(&workspace, "RUN-E2E-GATE"),
             CdpConfig::default(),
         )
@@ -485,7 +496,9 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&workspace).unwrap();
 
         let mut session = CdpBrowserSession::launch(
-            find_browser(None).expect("a Chrome/Edge binary must be discoverable").path,
+            find_browser(None)
+                .expect("a Chrome/Edge binary must be discoverable")
+                .path,
             LocalBrowserManager::profile_dir_for(&workspace, "RUN-E2E-PDF"),
             CdpConfig::default(),
         )
@@ -510,7 +523,10 @@ pub(crate) mod tests {
                     final_url.contains("dummy.pdf"),
                     "final_url must be the downloaded resource URL, got: {final_url}"
                 );
-                assert_ne!(final_url, "about:blank", "P1-2: source_url must not degrade");
+                assert_ne!(
+                    final_url, "about:blank",
+                    "P1-2: source_url must not degrade"
+                );
             }
             other => panic!("expected a PDF download, got {other:?}"),
         }
@@ -567,7 +583,9 @@ pub(crate) mod tests {
             outcome: Ok(sample_outcome("hello world")),
             download: Ok(BrowserDownloadOutcome::Page(sample_outcome("hello world"))),
         };
-        let result = handle_browser_read(&browser, &json!({"url": "https://example.com/"})).await.unwrap();
+        let result = handle_browser_read(&browser, &json!({"url": "https://example.com/"}))
+            .await
+            .unwrap();
         assert_eq!(result.exit_code, Some(0));
         let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(parsed["title"], "Example");
@@ -582,11 +600,16 @@ pub(crate) mod tests {
             outcome: Ok(sample_outcome(&long)),
             download: Ok(BrowserDownloadOutcome::Page(sample_outcome(&long))),
         };
-        let result = handle_browser_read(&browser, &json!({"url": "https://example.com/"})).await.unwrap();
+        let result = handle_browser_read(&browser, &json!({"url": "https://example.com/"}))
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(parsed["truncated"], true);
         assert!(
-            parsed["content"].as_str().unwrap().contains(TRUNCATED_FOOTER_PREFIX),
+            parsed["content"]
+                .as_str()
+                .unwrap()
+                .contains(TRUNCATED_FOOTER_PREFIX),
             "truncated output must carry the mechanical footer"
         );
         assert!(
@@ -605,13 +628,12 @@ pub(crate) mod tests {
                 host: "10.0.0.1".into(),
             })),
         };
-        let err = handle_browser_read(&browser, &json!({"url": "http://10.0.0.1/"})).await.unwrap_err();
+        let err = handle_browser_read(&browser, &json!({"url": "http://10.0.0.1/"}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("refused"), "{err}");
         // The stable code must be findable in the error text.
-        let code = UrlGateError::PrivateAddress {
-            host: "x".into(),
-        }
-        .tool_error_code();
+        let code = UrlGateError::PrivateAddress { host: "x".into() }.tool_error_code();
         assert!(!code.is_empty());
     }
 
@@ -621,7 +643,9 @@ pub(crate) mod tests {
             outcome: Err(CdpError::EmptyContent),
             download: Err(CdpError::EmptyContent),
         };
-        let err = handle_browser_read(&browser, &json!({"url": "https://example.com/"})).await.unwrap_err();
+        let err = handle_browser_read(&browser, &json!({"url": "https://example.com/"}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no readable text"), "{err}");
     }
 
@@ -634,7 +658,10 @@ pub(crate) mod tests {
         let err = handle_browser_read(&browser, &json!({})).await.unwrap_err();
         assert!(err.to_string().contains("`url`"), "{err}");
         // Every argument failure carries a stable error code.
-        assert!(err.to_string().contains("[browser_read_missing_url]"), "{err}");
+        assert!(
+            err.to_string().contains("[browser_read_missing_url]"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -650,9 +677,15 @@ pub(crate) mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("timeout"), "{err}");
-        assert!(err.to_string().contains("[browser_read_invalid_arguments]"), "{err}");
+        assert!(
+            err.to_string().contains("[browser_read_invalid_arguments]"),
+            "{err}"
+        );
         let err = handle_browser_read(&browser, &json!(42)).await.unwrap_err();
-        assert!(err.to_string().contains("[browser_read_invalid_arguments]"), "{err}");
+        assert!(
+            err.to_string().contains("[browser_read_invalid_arguments]"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -665,16 +698,15 @@ pub(crate) mod tests {
 
     #[test]
     fn profile_dir_layout_is_gsa_scoped() {
-        let dir = LocalBrowserManager::profile_dir_for(
-            std::path::Path::new(r"C:\work"),
-            "RUN12345678",
-        );
+        let dir =
+            LocalBrowserManager::profile_dir_for(std::path::Path::new(r"C:\work"), "RUN12345678");
         assert!(dir.starts_with(r"C:\work\.gsa"));
         // session_id.chars().take(8) — "RUN12345678" → "RUN12345"
-        assert!(dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .contains("chrome-profile-RUN12345"));
+        assert!(
+            dir.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("chrome-profile-RUN12345")
+        );
     }
 }

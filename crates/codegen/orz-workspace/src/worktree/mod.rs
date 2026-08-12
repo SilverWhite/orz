@@ -2424,8 +2424,8 @@ pub fn gc_worktrees_mgmt(
 pub fn worktree_auto_gc_layer_from_settings(
     s: &orz_config_types::WorktreeAutoGcSettings,
 ) -> WorktreeAutoGcLayer {
-    use std::collections::BTreeMap;
     use orz_config_types::WorktreeKindMaxAge;
+    use std::collections::BTreeMap;
 
     let max_age_by_kind = s
         .max_age_by_kind

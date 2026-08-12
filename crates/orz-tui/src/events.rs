@@ -294,7 +294,9 @@ impl TuiEvent {
             TuiEvent::CounterexampleGate { .. } => "counterexample_gate",
             TuiEvent::RetrievalCompletionCheck { .. } => "retrieval_completion_check",
             TuiEvent::DiagnosticCoverageCheckpoint { .. } => "diagnostic_coverage_checkpoint",
-            TuiEvent::InformationSufficiencyAssessment { .. } => "information_sufficiency_assessment",
+            TuiEvent::InformationSufficiencyAssessment { .. } => {
+                "information_sufficiency_assessment"
+            }
             TuiEvent::RetrievalParentDisposition { .. } => "retrieval_parent_disposition",
             TuiEvent::RetrievalCloseRecord { .. } => "retrieval_close_record",
             TuiEvent::RetrievalModeTransition { .. } => "retrieval_mode_transition",

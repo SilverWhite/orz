@@ -118,7 +118,8 @@ pub async fn bootstrap_session(
     // §5 A5) — independent of the compaction design.
     let retention_days = crate::retention::retention_days();
     if retention_days > 0 {
-        let cutoff = crate::retention::retention_cutoff(std::time::SystemTime::now(), retention_days);
+        let cutoff =
+            crate::retention::retention_cutoff(std::time::SystemTime::now(), retention_days);
         let report = crate::retention::prune_old_records(&base, cutoff, Some(run_id));
         if !report.removed_run_dirs.is_empty() {
             tracing::info!(

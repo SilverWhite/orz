@@ -15,11 +15,6 @@
 //! No deadline is imposed by default ([`WorkspaceClient::with_deadline`]
 //! opts in), preserving `WorkspaceOps::rpc_raw` semantics where callers
 //! own their timeouts.
-use serde_json::Value;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use xai_computer_hub_sdk::harness::ToolHarness;
 use orz_workspace_types::rpc::agents_md::{AgentConfigFile, DiscoverAgentsMdReq};
 use orz_workspace_types::rpc::code_nav::{
     CodeFindDefinitionsReq, CodeFindReferencesReq, CodeGotoDefinitionReq, CodeGotoReferencesReq,
@@ -62,6 +57,11 @@ use orz_workspace_types::rpc::worktree::{
     WorktreeGcReq, WorktreeListReq, WorktreeShowReq,
 };
 use orz_workspace_types::rpc::{RpcEnvelope, RpcError, WORKSPACE_RPC_TOOL_ID, WorkspaceRpc};
+use serde_json::Value;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use xai_computer_hub_sdk::harness::ToolHarness;
 use xai_tool_runtime::{ToolCallContext, ToolStreamItem, TypedToolOutput};
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceClientError {
@@ -568,10 +568,10 @@ impl WorkspaceClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orz_workspace_types::rpc::skills::SkillScope;
     use schemars::JsonSchema;
     use serde::Deserialize;
     use xai_computer_hub_sdk::harness::LocalRegistry;
-    use orz_workspace_types::rpc::skills::SkillScope;
     use xai_tool_protocol::{SessionId, ToolId};
     use xai_tool_runtime::{Tool, ToolError};
     use xai_tool_types::ToolDescription;

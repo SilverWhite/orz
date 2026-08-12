@@ -1,8 +1,6 @@
 //! Production subagent definition discovery and tool-policy resolution.
 use crate::config::{SubagentPersona, SubagentRole};
 use crate::types::{EffectiveRuntimeConfig, ResolutionError};
-use std::collections::HashMap;
-use std::path::Path;
 use orz_agent::config::{AgentDefinition, IsolationMode};
 use orz_agent::plugins::PluginRegistry;
 use orz_agent::prompt::context::{PromptAudience, PromptContext};
@@ -13,6 +11,8 @@ use orz_tools::registry::types::ToolConfig;
 use orz_tools::types::compat::CompatConfig;
 use orz_tools::types::template_renderer::TemplateRenderer;
 use orz_tools::types::tool::ToolKind;
+use std::collections::HashMap;
+use std::path::Path;
 use xai_tool_types::{SubagentCapabilityMode, SubagentIsolationMode};
 /// Inputs that affect definition discovery and spawn permission.
 pub struct DefinitionResolutionContext<'a> {
@@ -66,18 +66,14 @@ pub fn discover_agent_definition(
     subagent_type: &str,
     context: &DefinitionResolutionContext<'_>,
 ) -> Option<AgentDefinition> {
-    orz_agent::discovery::by_name_in_cwd_with_plugins(
-        subagent_type,
-        context.cwd,
-        context.plugins,
-    )
-    .or_else(|| {
-        context
-            .cli_agents
-            .iter()
-            .find(|definition| definition.name == subagent_type)
-            .cloned()
-    })
+    orz_agent::discovery::by_name_in_cwd_with_plugins(subagent_type, context.cwd, context.plugins)
+        .or_else(|| {
+            context
+                .cli_agents
+                .iter()
+                .find(|definition| definition.name == subagent_type)
+                .cloned()
+        })
 }
 /// Sorted model-facing names available under the current discovery context.
 pub fn available_agent_names(context: &DefinitionResolutionContext<'_>) -> Vec<String> {

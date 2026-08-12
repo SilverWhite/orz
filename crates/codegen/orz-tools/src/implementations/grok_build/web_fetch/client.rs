@@ -101,8 +101,7 @@ impl WebFetchClient {
 
         // Make request and build output.
         let http = self.http.get_or_rebuild()?;
-        let result = match fetch_url(&http, &url, self.params.allow_local()).await
-        {
+        let result = match fetch_url(&http, &url, self.params.allow_local()).await {
             Ok(result) => result,
             Err(e @ WebFetchError::HttpRequest(_)) => {
                 self.http.invalidate();
@@ -1603,7 +1602,10 @@ mod tests {
         })
         .unwrap();
 
-        let out = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap();
+        let out = client
+            .fetch(&url, Some(tmp.path()), None, None)
+            .await
+            .unwrap();
         let WebFetchOutput::Content(c) = out else {
             panic!("expected Content");
         };
@@ -1640,11 +1642,11 @@ mod tests {
         })
         .unwrap();
 
-        let err = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap_err();
-        assert!(
-            err.to_string().contains("not a valid PDF"),
-            "got: {err}"
-        );
+        let err = client
+            .fetch(&url, Some(tmp.path()), None, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not a valid PDF"), "got: {err}");
     }
 
     #[tokio::test]
@@ -1657,7 +1659,10 @@ mod tests {
         })
         .unwrap();
 
-        let out = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap();
+        let out = client
+            .fetch(&url, Some(tmp.path()), None, None)
+            .await
+            .unwrap();
         let WebFetchOutput::Content(c) = out else {
             panic!("expected Content");
         };
@@ -1669,7 +1674,12 @@ mod tests {
     #[tokio::test]
     async fn web_fetch_pdf_size_cap_applies() {
         // PDFs use the evidence-store cap (50 MB), not the 10 MB inline cap.
-        let (_server, url) = serve_pdf(vec![0u8; crate::implementations::read_file::pdf::MAX_PDF_BYTES + 1]).await;
+        let (_server, url) = serve_pdf(vec![
+            0u8;
+            crate::implementations::read_file::pdf::MAX_PDF_BYTES
+                + 1
+        ])
+        .await;
         let tmp = tempfile::tempdir().unwrap();
         let client = WebFetchClient::new(&WebFetchParams {
             pdf_evidence_root: Some(tmp.path().join("evidence")),
@@ -1678,7 +1688,10 @@ mod tests {
         })
         .unwrap();
 
-        let err = client.fetch(&url, Some(tmp.path()), None, None).await.unwrap_err();
+        let err = client
+            .fetch(&url, Some(tmp.path()), None, None)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, WebFetchError::ResponseTooLarge { .. }),
             "got: {err}"

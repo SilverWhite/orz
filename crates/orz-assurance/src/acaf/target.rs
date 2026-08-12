@@ -30,19 +30,21 @@
 //! A residual divergence surfaces as a ticket `target_mismatch` in shadow
 //! mode (observable, not silent).
 
-use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::path::Component;
+use std::path::{Path, PathBuf};
 
 use crate::journal::sha256_hex;
-use orz_paths::resolve::{sanitize_model_path_arg, tilde_expand_strict, TildeExpandError};
+use orz_paths::resolve::{TildeExpandError, sanitize_model_path_arg, tilde_expand_strict};
 
 /// Why a model-supplied target could not be resolved.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TargetResolveError {
     #[error("target path is empty")]
     Empty,
-    #[error("verbatim/device (\\\\?\\, \\\\?\\UNC\\, \\\\.\\) paths are not supported for action tickets")]
+    #[error(
+        "verbatim/device (\\\\?\\, \\\\?\\UNC\\, \\\\.\\) paths are not supported for action tickets"
+    )]
     VerbatimUnsupported,
     #[error("target path contains a reparse point or symlink component")]
     ReparseComponent,
@@ -284,8 +286,12 @@ mod tests {
         // on both platforms.
         let worktree = Path::new("/data/user/workspace/repo/project");
         assert_eq!(
-            resolve_action_path(worktree, "data/user/workspace/repo/project/src/main.rs", None)
-                .unwrap(),
+            resolve_action_path(
+                worktree,
+                "data/user/workspace/repo/project/src/main.rs",
+                None
+            )
+            .unwrap(),
             PathBuf::from("/data/user/workspace/repo/project/src/main.rs")
         );
         // Exact worktree spelling (no suffix) → the worktree itself.
@@ -459,7 +465,9 @@ mod tests {
         // A plain directory is not.
         assert!(!has_reparse_or_symlink_component(&real.join("file.txt")));
         // A missing final component under a plain dir has no reparse surface.
-        assert!(!has_reparse_or_symlink_component(&real.join("new-file.txt")));
+        assert!(!has_reparse_or_symlink_component(
+            &real.join("new-file.txt")
+        ));
     }
 
     #[test]
@@ -482,7 +490,12 @@ mod tests {
         }
         // `link\..\..\secret.txt` folds to `parent\secret.txt` (the link is
         // hidden) — the checked resolver refuses, the lexical one folds.
-        let escaped = format!("link{}..{}..{}secret.txt", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR);
+        let escaped = format!(
+            "link{}..{}..{}secret.txt",
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR
+        );
         assert_eq!(
             resolve_action_path_checked(tmp.path(), &escaped, None),
             Err(TargetResolveError::ReparseComponent)
@@ -508,7 +521,10 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 64);
-        assert!(a.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+        assert!(
+            a.chars()
+                .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+        );
     }
 
     #[test]
@@ -524,10 +540,7 @@ mod tests {
             "https://example.com:8443/x"
         );
         // The empty input and invalid URLs are unticketable.
-        assert_eq!(
-            resolve_network_url("   "),
-            Err(TargetResolveError::Empty)
-        );
+        assert_eq!(resolve_network_url("   "), Err(TargetResolveError::Empty));
         assert_eq!(
             resolve_network_url("not a url"),
             Err(TargetResolveError::InvalidUrl)
@@ -557,6 +570,9 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 64);
-        assert!(a.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+        assert!(
+            a.chars()
+                .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+        );
     }
 }

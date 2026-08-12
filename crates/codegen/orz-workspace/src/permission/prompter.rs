@@ -7,10 +7,10 @@ use crate::permission::{
     types::{AccessKind, ClientType},
 };
 use agent_client_protocol::{self as acp, Client as _};
-use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
-use xai_file_utils::events::{Event, EventWriter, PermissionDecision};
 use orz_mcp::servers::parse_mcp_qualified_name;
 use orz_tools::implementations::grok_build::web_fetch::domain_from_url;
+use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
+use xai_file_utils::events::{Event, EventWriter, PermissionDecision};
 
 const REJECT_ONCE_LABEL: &str = "No, and tell Grok what to do differently";
 

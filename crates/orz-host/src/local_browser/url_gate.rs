@@ -16,8 +16,8 @@
 
 use std::net::IpAddr;
 
-use orz_tools::implementations::grok_build::web_fetch::ssrf;
 use orz_tools::implementations::grok_build::web_fetch::WebFetchError;
+use orz_tools::implementations::grok_build::web_fetch::ssrf;
 use url::Url;
 
 /// Max accepted URL length (defense in depth — the browser accepts longer).
@@ -82,7 +82,11 @@ pub fn check_navigation_url_sync(url: &Url) -> Result<(), UrlGateError> {
     }
     match url.scheme() {
         "http" | "https" => {}
-        scheme => return Err(UrlGateError::NotHttp { scheme: scheme.to_string() }),
+        scheme => {
+            return Err(UrlGateError::NotHttp {
+                scheme: scheme.to_string(),
+            });
+        }
     }
     // Embedded credentials must never reach the browser profile (they would
     // be visible in navigation history of the shared headless profile).
@@ -142,7 +146,9 @@ pub async fn check_navigation_url(raw: &str) -> Result<(), UrlGateError> {
         // Unreachable for URLs that passed the sync layer (the sync layer
         // rejects the remaining WebFetchError cases first); fail-closed
         // regardless.
-        Err(other) => Err(UrlGateError::DnsFailure { host: other.to_string() }),
+        Err(other) => Err(UrlGateError::DnsFailure {
+            host: other.to_string(),
+        }),
     }
 }
 
@@ -152,7 +158,11 @@ mod tests {
 
     #[test]
     fn allows_public_https_and_http() {
-        for raw in ["https://example.com/", "http://example.com/page?q=1", "https://sub.example.com/a/b"] {
+        for raw in [
+            "https://example.com/",
+            "http://example.com/page?q=1",
+            "https://sub.example.com/a/b",
+        ] {
             let url = Url::parse(raw).unwrap();
             assert!(check_navigation_url_sync(&url).is_ok(), "{raw}");
         }
@@ -189,7 +199,10 @@ mod tests {
 
     #[test]
     fn rejects_embedded_credentials() {
-        for raw in ["https://user@example.com/", "https://user:pass@example.com/"] {
+        for raw in [
+            "https://user@example.com/",
+            "https://user:pass@example.com/",
+        ] {
             let url = Url::parse(raw).unwrap();
             assert!(
                 matches!(
@@ -214,7 +227,10 @@ mod tests {
         ] {
             let url = Url::parse(raw).unwrap();
             assert!(
-                matches!(check_navigation_url_sync(&url), Err(UrlGateError::BlockedHost { .. })),
+                matches!(
+                    check_navigation_url_sync(&url),
+                    Err(UrlGateError::BlockedHost { .. })
+                ),
                 "{raw}"
             );
         }
@@ -279,13 +295,36 @@ mod tests {
     #[test]
     fn tool_error_codes_are_stable() {
         let cases = [
-            (UrlGateError::InvalidUrl(url::ParseError::EmptyHost), "browser_read_invalid_url"),
-            (UrlGateError::TooLong { max: 1 }, "browser_read_url_too_long"),
-            (UrlGateError::NotHttp { scheme: "file".into() }, "browser_read_blocked_scheme"),
-            (UrlGateError::CredentialsInUrl, "browser_read_credentials_in_url"),
-            (UrlGateError::BlockedHost { host: "x".into() }, "browser_read_blocked_host"),
-            (UrlGateError::PrivateAddress { host: "x".into() }, "browser_read_private_address"),
-            (UrlGateError::DnsFailure { host: "x".into() }, "browser_read_dns_failure"),
+            (
+                UrlGateError::InvalidUrl(url::ParseError::EmptyHost),
+                "browser_read_invalid_url",
+            ),
+            (
+                UrlGateError::TooLong { max: 1 },
+                "browser_read_url_too_long",
+            ),
+            (
+                UrlGateError::NotHttp {
+                    scheme: "file".into(),
+                },
+                "browser_read_blocked_scheme",
+            ),
+            (
+                UrlGateError::CredentialsInUrl,
+                "browser_read_credentials_in_url",
+            ),
+            (
+                UrlGateError::BlockedHost { host: "x".into() },
+                "browser_read_blocked_host",
+            ),
+            (
+                UrlGateError::PrivateAddress { host: "x".into() },
+                "browser_read_private_address",
+            ),
+            (
+                UrlGateError::DnsFailure { host: "x".into() },
+                "browser_read_dns_failure",
+            ),
         ];
         for (err, code) in cases {
             assert_eq!(err.tool_error_code(), code);

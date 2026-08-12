@@ -7,14 +7,14 @@ use crate::discovery::{SubagentEntry, SubagentSource};
 use crate::error::AgentBuildError;
 use crate::prompt::context::PromptContext;
 use crate::system_reminder::ReminderPolicy;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 use orz_tools::bridge::ToolBridge;
 use orz_tools::computer::types::{AsyncFileSystem, TerminalBackend};
 use orz_tools::notification::ToolNotificationHandle;
 use orz_tools::registry::types::SessionContext;
 use orz_tools::types::tool::ToolKind;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 /// The Grok [`ToolKind`] a vendor-compat `tools:` allowlist entry resolves to, so
 /// a plugin's upstream allowlist still binds. Backed by the shared vendor-to-Grok
 /// tool registry in `xai-grok-tools` (also used by the hook matcher).
@@ -584,10 +584,7 @@ impl AgentBuilder {
     /// Set the resolved vendor-compat config. Threaded into both startup
     /// discovery (`list_skills_with_plugins` / `read_agents_config_with_paths`)
     /// and the dynamic-discovery seeds (`SkillManager` / `AgentsMdTracker`).
-    pub fn with_compat_config(
-        mut self,
-        compat: orz_tools::types::compat::CompatConfig,
-    ) -> Self {
+    pub fn with_compat_config(mut self, compat: orz_tools::types::compat::CompatConfig) -> Self {
         self.compat = compat;
         self
     }
@@ -750,9 +747,9 @@ impl AgentBuilder {
                 tool_config
                     .tools
                     .push((&orz_tools::implementations::grok_build::ImageToVideoTool).into());
-                tool_config.tools.push(
-                    (&orz_tools::implementations::grok_build::ReferenceToVideoTool).into(),
-                );
+                tool_config
+                    .tools
+                    .push((&orz_tools::implementations::grok_build::ReferenceToVideoTool).into());
             }
             let has_write_tool = tool_config
                 .tools
@@ -1330,9 +1327,7 @@ fn resolve_shell_for_prompt() -> String {
     }
     #[cfg(not(unix))]
     {
-        orz_config::shell::detect_windows_shell()
-            .name()
-            .to_string()
+        orz_config::shell::detect_windows_shell().name().to_string()
     }
 }
 #[cfg(test)]
@@ -2476,8 +2471,7 @@ mod tests {
     async fn hosted_tools_bake_definition_tool_overrides_into_options() {
         let x_search = orz_sampling_types::XSearchOptions {
             date_bound: Some(
-                orz_sampling_types::SearchDateBound::new(None, Some("2024-03-15".into()))
-                    .unwrap(),
+                orz_sampling_types::SearchDateBound::new(None, Some("2024-03-15".into())).unwrap(),
             ),
         };
         let agent = build_with_web_search(

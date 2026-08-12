@@ -161,13 +161,13 @@ pub fn find_git_bash() -> Option<String> {
     } && output.status.success()
     {
         let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let line = line.trim();
-                if line.to_ascii_lowercase().contains("git") {
-                    return Some(line.to_string());
-                }
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.to_ascii_lowercase().contains("git") {
+                return Some(line.to_string());
             }
         }
+    }
     None
 }
 
@@ -191,7 +191,7 @@ fn git_for_windows_install_root() -> Option<std::path::PathBuf> {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
+        HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
     };
 
     const SUBKEY: &str = "SOFTWARE\\GitForWindows";
@@ -207,7 +207,13 @@ fn git_for_windows_install_root() -> Option<std::path::PathBuf> {
 
     let mut key: HKEY = ptr::null_mut();
     let status = unsafe {
-        RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey_wide.as_ptr(), 0, KEY_READ, &mut key)
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            subkey_wide.as_ptr(),
+            0,
+            KEY_READ,
+            &mut key,
+        )
     };
     if status != 0 || key.is_null() {
         return None;

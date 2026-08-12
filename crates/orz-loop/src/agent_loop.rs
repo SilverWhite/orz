@@ -22,8 +22,9 @@ use orz_assurance::{EventType, GateDecision};
 use crate::agents::SubagentRole;
 use crate::blackboard::SharedBlackboard;
 use crate::controller::{
-    AgentLoopController, AgentLoopError, ContextCompactConfig, DenialKey, DenialState, EventWriter,
-    PolicyFeedback, TEXT_DELTA_PACING, compact_messages, format_edit_record, DENIAL_BREAKER_CONSECUTIVE,
+    AgentLoopController, AgentLoopError, ContextCompactConfig, DENIAL_BREAKER_CONSECUTIVE,
+    DenialKey, DenialState, EventWriter, PolicyFeedback, TEXT_DELTA_PACING, compact_messages,
+    format_edit_record,
 };
 use crate::diagnostic_coverage::{DebugEpisodeState, maybe_consume_dc_signal, maybe_fire_dc};
 use crate::gateway::model::{
@@ -393,9 +394,7 @@ pub(crate) async fn run_agent_loop(
             }
             None => false,
         };
-        if compact_now
-            && let Some(measured) = last_prompt_tokens
-        {
+        if compact_now && let Some(measured) = last_prompt_tokens {
             let stats = compact_messages(messages, svc.context_compact.target_tokens);
             if stats.rounds_dropped > 0 {
                 let rounds_since = rounds_since_compact;
@@ -813,7 +812,8 @@ pub(crate) async fn run_agent_loop(
                             tc,
                             profile.role.as_str(),
                             "nested_subagent_dispatch_refused",
-                            svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
+                            svc.policy_revision
+                                .load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
                         round_feedback = Some(f);
@@ -846,7 +846,8 @@ pub(crate) async fn run_agent_loop(
                             tc,
                             profile.role.as_str(),
                             "control_tool_lane_denied",
-                            svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
+                            svc.policy_revision
+                                .load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
                         round_feedback = Some(f);
@@ -869,7 +870,8 @@ pub(crate) async fn run_agent_loop(
                             tc,
                             profile.role.as_str(),
                             reason,
-                            svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
+                            svc.policy_revision
+                                .load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
                         round_feedback = Some(f);
@@ -909,8 +911,7 @@ pub(crate) async fn run_agent_loop(
                         // ONLY production point (§4.6.2; a journal replay
                         // never recounts). Main lane only.
                         if profile.dc_enabled {
-                            maybe_consume_dc_signal(svc.dc_state, writer, tc, &result)
-                                .await?;
+                            maybe_consume_dc_signal(svc.dc_state, writer, tc, &result).await?;
                         }
                         round_feedback = feedback;
                         result
@@ -1056,9 +1057,7 @@ pub(crate) async fn run_agent_loop(
                 .await?;
             messages.push(Message {
                 role: Role::User,
-                content: crate::prompt::tool_round_budget_exhaustion_block(
-                    profile.max_tool_rounds,
-                ),
+                content: crate::prompt::tool_round_budget_exhaustion_block(profile.max_tool_rounds),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,

@@ -3305,10 +3305,7 @@ mod tests {
     /// (d48b724 platform-awareness precedent).
     fn require_git_bash_backend() -> bool {
         let detected = orz_config::shell::detect_windows_shell();
-        if matches!(
-            detected,
-            orz_config::shell::WindowsShell::GitBash(_)
-        ) {
+        if matches!(detected, orz_config::shell::WindowsShell::GitBash(_)) {
             true
         } else {
             eprintln!(

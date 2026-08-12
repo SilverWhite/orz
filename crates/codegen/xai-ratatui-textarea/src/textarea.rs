@@ -5192,12 +5192,7 @@ mod tests {
         // Check wrapping (drop the Ref before rendering)
         {
             let lines = t.wrapped_lines(8);
-            assert_eq!(
-                lines.len(),
-                2,
-                "Should wrap into 2 lines, got {:?}",
-                *lines
-            );
+            assert_eq!(lines.len(), 2, "Should wrap into 2 lines, got {:?}", *lines);
         }
 
         // Render and verify

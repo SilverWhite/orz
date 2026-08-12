@@ -380,11 +380,9 @@ fn collect_config_skills(config_paths: &[String], git_root: Option<&Path>) -> Ve
     // Provenance metadata only (scope still drives precedence): lets inspect
     // and UIs distinguish `[skills].paths` entries from plain user/repo skills.
     for skill in &mut skills {
-        skill.config_source = Some(
-            orz_tools::types::config_source::ConfigSource::ConfigToml {
-                path: PathBuf::from(&skill.path),
-            },
-        );
+        skill.config_source = Some(orz_tools::types::config_source::ConfigSource::ConfigToml {
+            path: PathBuf::from(&skill.path),
+        });
     }
     skills
 }
@@ -648,9 +646,11 @@ pub fn filter_skills(skills: Vec<SkillInfo>, ignore_paths: &[String]) -> Vec<Ski
 /// Format a skill for prompt injection (if body is populated).
 /// Injects plain markdown body — no XML envelope.
 pub(crate) fn format_skill_for_injection(skill: &SkillInfo) -> Option<String> {
-    skill.body.as_ref().filter(|b| !b.is_empty()).map(|body| {
-        orz_tools::implementations::skills::skill::build_skill_message(skill, body)
-    })
+    skill
+        .body
+        .as_ref()
+        .filter(|b| !b.is_empty())
+        .map(|body| orz_tools::implementations::skills::skill::build_skill_message(skill, body))
 }
 
 /// Format multiple skills for prompt injection.
@@ -711,11 +711,11 @@ pub(crate) async fn resolve_preloaded_skills(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use orz_tools::implementations::skills::discovery::{
         MAX_BODY_PEEK_BYTES, MAX_SKILL_WALK_DEPTH, SkillParseError, extract_first_paragraph,
         is_valid_skill_name, normalize_skill_name, parse_skill_frontmatter,
     };
+    use std::fs;
 
     /// Helper: create a minimal valid SKILL.md with the given name.
     fn write_skill_md(dir: &Path, name: &str) {
@@ -957,12 +957,16 @@ mod tests {
 
         let path_strs: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
         let sep = std::path::MAIN_SEPARATOR;
-        assert!(path_strs
-            .iter()
-            .any(|p| p.contains(&format!("parent{sep}SKILL.md"))));
-        assert!(path_strs
-            .iter()
-            .any(|p| p.contains(&format!("child{sep}SKILL.md"))));
+        assert!(
+            path_strs
+                .iter()
+                .any(|p| p.contains(&format!("parent{sep}SKILL.md")))
+        );
+        assert!(
+            path_strs
+                .iter()
+                .any(|p| p.contains(&format!("child{sep}SKILL.md")))
+        );
     }
 
     // ── extract_first_paragraph ──────────────────────────────────────
@@ -1941,11 +1945,9 @@ mod tests {
     fn dedupe_skills_name_collision_does_not_propagate_config_source() {
         let winner = make_skill("same-name", "/some/path/a/SKILL.md");
         let mut loser = make_skill("same-name", "/some/path/b/SKILL.md");
-        loser.config_source = Some(
-            orz_tools::types::config_source::ConfigSource::ConfigToml {
-                path: PathBuf::from("/some/path/b/SKILL.md"),
-            },
-        );
+        loser.config_source = Some(orz_tools::types::config_source::ConfigSource::ConfigToml {
+            path: PathBuf::from("/some/path/b/SKILL.md"),
+        });
 
         let deduped = dedupe_skills(vec![winner, loser]);
 
@@ -2688,7 +2690,8 @@ mod tests {
             .find(|s| s.name == "zz-copyfix-japandi2")
             .unwrap();
         assert_eq!(rekeyed.display_name.as_deref(), Some("zz-copyfix-japandi"));
-        assert!(Path::new(&rekeyed.path)
-            .ends_with(Path::new("zz-copyfix-japandi2").join("SKILL.md")));
+        assert!(
+            Path::new(&rekeyed.path).ends_with(Path::new("zz-copyfix-japandi2").join("SKILL.md"))
+        );
     }
 }

@@ -9,9 +9,14 @@ use rusqlite::{Connection, OpenFlags};
 
 // Local stub for deleted xai_sqlite_journal::JournalMode
 #[derive(Debug, Clone, Copy)]
-enum JournalMode { Wal, Truncate }
+enum JournalMode {
+    Wal,
+    Truncate,
+}
 impl JournalMode {
-    fn for_db_path(_: &Path) -> Self { Self::Wal }
+    fn for_db_path(_: &Path) -> Self {
+        Self::Wal
+    }
 }
 
 #[cfg(unix)]

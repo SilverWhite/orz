@@ -289,18 +289,18 @@ impl ActivityClock {
 
     /// Record an activity instant (called on every event/frame/chunk).
     pub fn stamp(&self) {
-        self.last_elapsed_ms.store(
-            self.elapsed_ms(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.last_elapsed_ms
+            .store(self.elapsed_ms(), std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Duration since the last stamp — the stall watchdog compares this
     /// against its timeout.
     pub fn idle(&self) -> Duration {
         Duration::from_millis(
-            self.elapsed_ms()
-                .saturating_sub(self.last_elapsed_ms.load(std::sync::atomic::Ordering::Relaxed)),
+            self.elapsed_ms().saturating_sub(
+                self.last_elapsed_ms
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
         )
     }
 

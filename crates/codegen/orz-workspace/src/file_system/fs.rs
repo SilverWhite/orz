@@ -1,7 +1,7 @@
+use orz_paths::ToAbsPath;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use orz_paths::ToAbsPath;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FsError {

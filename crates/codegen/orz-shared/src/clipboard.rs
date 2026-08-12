@@ -1193,7 +1193,6 @@ mod platform {
 #[cfg(not(target_os = "macos"))]
 mod platform {
     use super::ImageData;
-    
 
     /// No subprocess-free pasteboard probe exists off-macOS.
     pub(super) fn clipboard_image_snapshot() -> (Option<u64>, bool) {

@@ -88,9 +88,10 @@ fn is_platform_system_dir(cwd: &Path) -> bool {
 #[cfg(target_os = "windows")]
 fn is_platform_system_dir(cwd: &Path) -> bool {
     if let Ok(temp) = std::env::var("TEMP").or_else(|_| std::env::var("TMP"))
-        && cwd.starts_with(&temp) {
-            return true;
-        }
+        && cwd.starts_with(&temp)
+    {
+        return true;
+    }
 
     let path_lower = cwd.to_string_lossy().to_lowercase();
     if path_lower.contains("\\windows\\")

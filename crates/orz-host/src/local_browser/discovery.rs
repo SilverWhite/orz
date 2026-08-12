@@ -179,7 +179,10 @@ mod tests {
 
     #[test]
     fn explicit_path_wins_when_file_exists() {
-        let dir = std::env::temp_dir().join(format!("orz-browser-disc-{:?}", std::thread::current().id()));
+        let dir = std::env::temp_dir().join(format!(
+            "orz-browser-disc-{:?}",
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("chrome.exe");
@@ -193,7 +196,10 @@ mod tests {
 
     #[test]
     fn explicit_path_missing_fails_loudly() {
-        let dir = std::env::temp_dir().join(format!("orz-browser-disc-{:?}", std::thread::current().id()));
+        let dir = std::env::temp_dir().join(format!(
+            "orz-browser-disc-{:?}",
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let missing = dir.join("nope.exe");
@@ -231,14 +237,18 @@ mod tests {
         assert!(headed.iter().any(|a| a == "--remote-debugging-port=0"));
         assert!(headed.iter().any(|a| a == "--remote-allow-origins=*"));
         assert!(headed.iter().any(|a| a == "--disable-extensions"));
-        assert!(headed
-            .iter()
-            .any(|a| a.starts_with("--user-data-dir=") && a.contains("chrome-profile-RUN123456")));
+        assert!(
+            headed.iter().any(
+                |a| a.starts_with("--user-data-dir=") && a.contains("chrome-profile-RUN123456")
+            )
+        );
         // Headless fallback (ORZ_BROWSER_HEADLESS=1).
         let headless = browser_launch_args(&profile, true);
         assert!(headless.iter().any(|a| a == "--headless=new"));
-        assert!(headless
-            .iter()
-            .any(|a| a.starts_with("--user-data-dir=") && a.contains("chrome-profile-RUN123456")));
+        assert!(
+            headless.iter().any(
+                |a| a.starts_with("--user-data-dir=") && a.contains("chrome-profile-RUN123456")
+            )
+        );
     }
 }

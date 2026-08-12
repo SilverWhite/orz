@@ -3816,8 +3816,7 @@ impl McpClient {
         &self,
         mcp_state: Arc<Mutex<McpState>>,
     ) -> Result<Vec<McpToolRegistration>, McpError> {
-        let _ensure_init_timer =
-            orz_telemetry::instrumentation::timer("mcp_ensure_initialized");
+        let _ensure_init_timer = orz_telemetry::instrumentation::timer("mcp_ensure_initialized");
         let mcp_service = self.ensure_initialized().await?;
 
         let mut all_tools = Vec::new();
@@ -4152,14 +4151,12 @@ pub async fn start_mcp_server(
             )
             .map_err(|e| {
                 tracing::error!("Failed to spawn MCP server '{}': {}", name, e);
-                orz_telemetry::session_ctx::log_event(
-                    orz_telemetry::events::McpServerFailed {
-                        server_name: name.clone(),
-                        error_type: orz_telemetry::events::McpErrorType::SpawnFailed,
-                        duration_ms: spawn_start.elapsed().as_millis() as u64,
-                        timeout_sec: startup_timeout,
-                    },
-                );
+                orz_telemetry::session_ctx::log_event(orz_telemetry::events::McpServerFailed {
+                    server_name: name.clone(),
+                    error_type: orz_telemetry::events::McpErrorType::SpawnFailed,
+                    duration_ms: spawn_start.elapsed().as_millis() as u64,
+                    timeout_sec: startup_timeout,
+                });
                 McpError::SpawnFailed {
                     server: name.clone(),
                     source: e,

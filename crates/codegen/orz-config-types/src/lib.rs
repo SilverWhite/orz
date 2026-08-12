@@ -11,8 +11,8 @@ mod memory;
 pub use memory::*;
 // Dead modules cut in fusion cleanup (Slice #13): `mcp`/`permission`/`pool` —
 // zero references workspace-wide; only re-exported here.
-use serde::{Deserialize, Serialize};
 use orz_announcements::RemoteAnnouncement;
+use serde::{Deserialize, Serialize};
 /// A remote `campaigns[]` entry: an `id` gate plus a full-power
 /// flattened config patch (the JSON sibling of a `[[campaigns]]` TOML override).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

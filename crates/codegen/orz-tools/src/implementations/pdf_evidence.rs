@@ -163,15 +163,7 @@ pub async fn ingest_pdf_bytes(
             let document_id = document_id.clone();
             let sha256_hex = sha256_hex.clone();
             let source_url = source_url.to_string();
-            move || {
-                extract_and_persist(
-                    bytes,
-                    &dir,
-                    &document_id,
-                    &sha256_hex,
-                    &source_url,
-                )
-            }
+            move || extract_and_persist(bytes, &dir, &document_id, &sha256_hex, &source_url)
         }),
     )
     .await;
@@ -213,7 +205,7 @@ fn extract_and_persist(
                 return Err(PdfEvidenceError::InvalidPdf(format!(
                     "failed to extract page {}: {e}",
                     idx + 1
-                )))
+                )));
             }
         };
         total_chars += text.chars().count();
@@ -405,7 +397,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(res.document_id.starts_with("sha256:"), "{}", res.document_id);
+        assert!(
+            res.document_id.starts_with("sha256:"),
+            "{}",
+            res.document_id
+        );
         assert_eq!(res.sha256_hex.len(), 64);
         assert_eq!(res.page_count, 2);
         assert!(res.has_text_layer);
@@ -480,7 +476,9 @@ mod tests {
         let root = tmp_root();
         // %PDF magic present but body is garbage — parser rejects.
         let bytes = b"%PDF-1.4\nthis is not a real pdf structure";
-        let err = ingest_pdf_bytes(bytes.to_vec(), root.path(), "u").await.unwrap_err();
+        let err = ingest_pdf_bytes(bytes.to_vec(), root.path(), "u")
+            .await
+            .unwrap_err();
         assert!(matches!(err, PdfEvidenceError::InvalidPdf(_)), "{err:?}");
     }
 
@@ -514,7 +512,10 @@ mod tests {
         let root = tmp_root();
         for bad in ["sha256:abc", "../etc", "x", "", "sha256:"] {
             assert!(
-                matches!(document_dir(root.path(), bad), Err(PdfEvidenceError::InvalidDocumentId(_))),
+                matches!(
+                    document_dir(root.path(), bad),
+                    Err(PdfEvidenceError::InvalidDocumentId(_))
+                ),
                 "should reject: {bad:?}"
             );
         }
@@ -565,7 +566,9 @@ mod tests {
     async fn reingest_same_bytes_is_idempotent() {
         let root = tmp_root();
         let pdf = make_test_pdf(&["Alpha"]);
-        let a = ingest_pdf_bytes(pdf.clone(), root.path(), "u").await.unwrap();
+        let a = ingest_pdf_bytes(pdf.clone(), root.path(), "u")
+            .await
+            .unwrap();
         let b = ingest_pdf_bytes(pdf, root.path(), "u").await.unwrap();
         assert_eq!(a.document_id, b.document_id);
         assert_eq!(a.dir, b.dir);

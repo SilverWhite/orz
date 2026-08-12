@@ -19,8 +19,7 @@ pub mod session;
 pub use journal::{
     ChainValidation, EventTrack, EventType, JournalRecorder, JournalRecorderError, Redaction,
     ReplayResult, RunEvent, TERMINAL_EVENTS, canonical_json, compute_event_hash, replay_journal,
-    seal_event,
-    sha256_hex,
+    seal_event, sha256_hex,
 };
 
 /// Gate decision — modelled on PROTOCOL_DRAFT §9.

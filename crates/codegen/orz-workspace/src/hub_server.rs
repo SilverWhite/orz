@@ -10,19 +10,17 @@ use crate::rpc_envelope::{RpcEnvelope, envelope_err};
 use crate::workspace_ops::WorkspaceOp;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use prometheus::{HistogramVec, IntCounterVec, register_histogram_vec, register_int_counter_vec};
-use serde_json::Value;
-use xai_computer_hub_sdk::ToolServerHandler;
 use orz_tools::computer::types::TaskKind;
 use orz_tools::implementations::grok_build::scheduler::interval::interval_to_human;
-use orz_tools::implementations::grok_build::scheduler::types::{
-    SchedulerCommand, SchedulerHandle,
-};
+use orz_tools::implementations::grok_build::scheduler::types::{SchedulerCommand, SchedulerHandle};
 use orz_tools::registry::types::FinalizedToolset;
 use orz_tools::types::resources::Terminal;
 use orz_workspace_types::rpc::workspace::{
     BackgroundTaskSnapshotWire, ScheduledTaskSnapshotWire, TasksSnapshotResponse,
 };
+use prometheus::{HistogramVec, IntCounterVec, register_histogram_vec, register_int_counter_vec};
+use serde_json::Value;
+use xai_computer_hub_sdk::ToolServerHandler;
 use xai_tool_protocol::{HookEvent, HookFrame, SessionId, ToolId, ToolServerEvictParams};
 use xai_tool_runtime::{
     ToolCallContext, ToolError, ToolErrorKind, ToolStream, TypedToolOutput, terminal_only,
@@ -1194,9 +1192,7 @@ mod tests {
     use crate::handle::tests::{
         background_capable_cfg, make_confining_handle, make_handle, start_background_sleep,
     };
-    use orz_tools::implementations::grok_build::scheduler::types::{
-        ScheduledTask, SchedulerState,
-    };
+    use orz_tools::implementations::grok_build::scheduler::types::{ScheduledTask, SchedulerState};
     use orz_tools::types::resources::State;
     use xai_tool_protocol::turn_hook;
     /// Helper: consume the first item from a ToolStream.

@@ -1180,7 +1180,10 @@ mod tests {
         }
         #[cfg(not(unix))]
         {
-            assert_eq!(gc.expired_removed, 1, "expired worktree reclaimed without PID guard");
+            assert_eq!(
+                gc.expired_removed, 1,
+                "expired worktree reclaimed without PID guard"
+            );
             assert_eq!(gc.skipped_alive, 0, "PID guard disabled on this platform");
         }
     }

@@ -28,7 +28,10 @@ impl LineProcessor {
         let mut lines = Vec::new();
         while let Some(nl_pos) = self.buffer.iter().position(|&b| b == b'\n') {
             let raw = self.buffer.drain(..=nl_pos).collect::<Vec<_>>();
-            let text = crate::util::encoding::decode_text(&raw).0.trim().to_string();
+            let text = crate::util::encoding::decode_text(&raw)
+                .0
+                .trim()
+                .to_string();
             if text.is_empty() {
                 continue;
             }
@@ -43,7 +46,10 @@ impl LineProcessor {
             return None;
         }
         let raw = std::mem::take(&mut self.buffer);
-        let text = crate::util::encoding::decode_text(&raw).0.trim().to_string();
+        let text = crate::util::encoding::decode_text(&raw)
+            .0
+            .trim()
+            .to_string();
         if text.is_empty() {
             return None;
         }

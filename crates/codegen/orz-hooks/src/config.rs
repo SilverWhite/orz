@@ -603,11 +603,7 @@ mod tests {
     fn config_layer(source_name: &str, toml_src: &str) -> orz_config::HookConfigLayer {
         let value: toml::Value = toml::from_str(toml_src).unwrap();
         let hooks = value.get("hooks").cloned().unwrap();
-        orz_config::HookConfigLayer::new(
-            orz_config::HookProvenance::Managed,
-            source_name,
-            hooks,
-        )
+        orz_config::HookConfigLayer::new(orz_config::HookProvenance::Managed, source_name, hooks)
     }
 
     #[test]

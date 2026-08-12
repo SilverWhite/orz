@@ -3404,7 +3404,10 @@ mod tests {
             #[cfg(unix)]
             assert_eq!(report.skipped_alive, 1, "own PID must be detected as alive");
             #[cfg(not(unix))]
-            assert_eq!(report.skipped_alive, 0, "PID guard disabled on this platform");
+            assert_eq!(
+                report.skipped_alive, 0,
+                "PID guard disabled on this platform"
+            );
         }
 
         #[test]

@@ -304,7 +304,10 @@ pub fn issue_ticket(
     now_unix_secs: i64,
 ) -> Result<ControlTicket, AcafError> {
     validate_sha256(&ctx.goal_digest, "goal_digest")?;
-    validate_sha256(&ctx.canonical_arguments_sha256, "canonical_arguments_sha256")?;
+    validate_sha256(
+        &ctx.canonical_arguments_sha256,
+        "canonical_arguments_sha256",
+    )?;
     validate_sha256(&ctx.signer_measurement, "signer_measurement")?;
     if let Some(t) = &ctx.template_sha256 {
         validate_sha256(t, "template_sha256")?;
@@ -376,7 +379,11 @@ pub fn issue_ticket(
         .map_err(|e| AcafError::Signing(e.to_string()))?;
     ticket.hmac = base64url_encode(&signature);
 
-    let result = verify_ticket(signer, &ticket, &verification_context_from(ctx, now_unix_secs));
+    let result = verify_ticket(
+        signer,
+        &ticket,
+        &verification_context_from(ctx, now_unix_secs),
+    );
     if !result.errors.is_empty() {
         return Err(AcafError::SelfVerifyFailed {
             errors: result.errors,
@@ -465,7 +472,10 @@ pub fn verify_ticket(
         }
     };
     if kind.requires_template() {
-        match (ticket.template_sha256.as_deref(), vctx.template_sha256.as_deref()) {
+        match (
+            ticket.template_sha256.as_deref(),
+            vctx.template_sha256.as_deref(),
+        ) {
             (Some(ticket_t), Some(known_t)) if ticket_t == known_t => {}
             _ => fail(
                 &mut errors,
@@ -553,8 +563,7 @@ pub fn verify_ticket(
             &mut errors,
             &mut reject_codes,
             RejectCode::TargetMismatch,
-            "ticket canonical_arguments_sha256 does not match the re-derived arguments"
-                .to_string(),
+            "ticket canonical_arguments_sha256 does not match the re-derived arguments".to_string(),
         );
     }
     // Check 5b (Slice 2 first phase) — the action kinds bind the parsed real
@@ -685,7 +694,12 @@ impl TicketLedger {
     /// Attempt to record a consumption. Returns Ok when the (nonce,
     /// sequence) pair is fresh for the session and the sequence is
     /// strictly greater than the last recorded one; Err(replay) otherwise.
-    pub fn consume(&mut self, session_id: &str, nonce: &str, sequence: u64) -> Result<(), RejectCode> {
+    pub fn consume(
+        &mut self,
+        session_id: &str,
+        nonce: &str,
+        sequence: u64,
+    ) -> Result<(), RejectCode> {
         let nonces = self.consumed.entry(session_id.to_string()).or_default();
         if nonces.contains(nonce) {
             return Err(RejectCode::ReplayDetected);
@@ -906,7 +920,16 @@ mod tests {
     fn issue_and_verify_roundtrip() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
-        let ticket = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         assert_eq!(ticket.ticket_kind, "orientation_v1");
         assert_eq!(ticket.capability_scope, "orientation_injection");
         assert!(ticket.ticket_id.starts_with("TKT-"));
@@ -934,7 +957,16 @@ mod tests {
         .enumerate()
         {
             let ctx = issue_ctx("SESS-0001", *kind);
-            let ticket = issue_ticket(&signer, &ctx, *kind, (i + 1) as u64, &format!("n{i}"), 300, 1_700_000_000).unwrap();
+            let ticket = issue_ticket(
+                &signer,
+                &ctx,
+                *kind,
+                (i + 1) as u64,
+                &format!("n{i}"),
+                300,
+                1_700_000_000,
+            )
+            .unwrap();
             let vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
             let result = verify_ticket(&signer, &ticket, &vctx);
             assert!(result.valid, "kind {kind:?}: {:?}", result.errors);
@@ -952,12 +984,30 @@ mod tests {
         let signer = session_signer();
         let mut ctx = issue_ctx("SESS-0001", TicketKind::FileWriteV1);
         ctx.resolved_target_sha256 = None;
-        let err = issue_ticket(&signer, &ctx, TicketKind::FileWriteV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        let err = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::FileWriteV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, AcafError::MissingTarget), "{err:?}");
         // Control kinds must not carry a target.
         let mut ctl = issue_ctx("SESS-0001", TicketKind::CloseV1);
         ctl.resolved_target_sha256 = Some(ZERO64.to_string());
-        let err = issue_ticket(&signer, &ctl, TicketKind::CloseV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        let err = issue_ticket(
+            &signer,
+            &ctl,
+            TicketKind::CloseV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, AcafError::UnexpectedTarget), "{err:?}");
     }
 
@@ -965,7 +1015,16 @@ mod tests {
     fn action_target_mismatch_rejects() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::FileWriteV1);
-        let ticket = issue_ticket(&signer, &ctx, TicketKind::FileWriteV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::FileWriteV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         // The live target digest differs from the ticket's binding.
         let mut vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
         vctx.resolved_target_sha256 = Some("1".repeat(64));
@@ -992,14 +1051,25 @@ mod tests {
         .enumerate()
         {
             let ctx = issue_ctx("SESS-0001", *kind);
-            let ticket =
-                issue_ticket(&signer, &ctx, *kind, (i + 1) as u64, &format!("n{i}"), 300, 1_700_000_000)
-                    .unwrap();
+            let ticket = issue_ticket(
+                &signer,
+                &ctx,
+                *kind,
+                (i + 1) as u64,
+                &format!("n{i}"),
+                300,
+                1_700_000_000,
+            )
+            .unwrap();
             let mut vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
             vctx.resolved_target_sha256 = Some("1".repeat(64));
             let result = verify_ticket(&signer, &ticket, &vctx);
             assert!(!result.valid, "kind {kind:?}");
-            assert_eq!(result.reject_codes[0], RejectCode::TargetMismatch, "kind {kind:?}");
+            assert_eq!(
+                result.reject_codes[0],
+                RejectCode::TargetMismatch,
+                "kind {kind:?}"
+            );
         }
     }
 
@@ -1007,7 +1077,16 @@ mod tests {
     fn action_kind_without_target_field_rejects() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::CredentialReadV1);
-        let mut ticket = issue_ticket(&signer, &ctx, TicketKind::CredentialReadV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let mut ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::CredentialReadV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         // Re-sign a face-stripped ticket — a signer bug that issued an action
         // ticket without a target. The (None, _) branch of check 5b rejects it
         // (check 1 would reject a plain tamper; re-signing isolates 5b).
@@ -1031,7 +1110,16 @@ mod tests {
     fn control_kind_with_target_field_rejects() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::DispositionV1);
-        let mut ticket = issue_ticket(&signer, &ctx, TicketKind::DispositionV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let mut ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::DispositionV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         // Re-signed control ticket carrying a target — a signer bug that
         // bound a target to a control kind. Check 5b rejects it.
         ticket.resolved_target_sha256 = Some(ZERO64.to_string());
@@ -1047,7 +1135,16 @@ mod tests {
     fn tampered_signature_rejects() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
-        let mut ticket = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let mut ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         ticket.hmac = "A".repeat(43);
         let vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
         let result = verify_ticket(&signer, &ticket, &vctx);
@@ -1059,9 +1156,19 @@ mod tests {
     fn wrong_session_key_rejects_signature() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
-        let ticket = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         // Verify under a DIFFERENT session key (goal changed → new K_session).
-        let other_key = derive_session_key(k_install(), "SESS-0001", &"2".repeat(64), 0, 1).unwrap();
+        let other_key =
+            derive_session_key(k_install(), "SESS-0001", &"2".repeat(64), 0, 1).unwrap();
         let other_signer = HmacSha256Signer::new("KEY-TEST", &other_key);
         let vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
         let result = verify_ticket(&other_signer, &ticket, &vctx);
@@ -1073,7 +1180,16 @@ mod tests {
     fn template_mismatch_rejects_orientation() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
-        let mut ticket = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let mut ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         ticket.template_sha256 = Some("1".repeat(64));
         let vctx = verification_context_from(&ctx, 1_700_000_000 + 100);
         let result = verify_ticket(&signer, &ticket, &vctx);
@@ -1085,7 +1201,16 @@ mod tests {
     fn context_mismatch_rejects() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::DispositionV1);
-        let ticket = issue_ticket(&signer, &ctx, TicketKind::DispositionV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::DispositionV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
 
         // Wrong session.
         let mut wrong = ctx.clone();
@@ -1108,7 +1233,16 @@ mod tests {
     fn target_mismatch_rejects() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::DispositionV1);
-        let ticket = issue_ticket(&signer, &ctx, TicketKind::DispositionV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::DispositionV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         let mut wrong = ctx.clone();
         wrong.canonical_arguments_sha256 = "1".repeat(64);
         let vctx = verification_context_from(&wrong, 1_700_000_000 + 100);
@@ -1121,7 +1255,16 @@ mod tests {
     fn expired_rejects() {
         let signer = session_signer();
         let ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
-        let ticket = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap();
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap();
         // 301s later — past the 300s TTL.
         let vctx = verification_context_from(&ctx, 1_700_000_000 + 301);
         let result = verify_ticket(&signer, &ticket, &vctx);
@@ -1163,7 +1306,10 @@ mod tests {
             RejectCode::ReplayDetected
         );
         ledger.reset("S1");
-        assert!(ledger.consume("S1", "n2", 1).is_ok(), "post-reset sequence 1 is fresh");
+        assert!(
+            ledger.consume("S1", "n2", 1).is_ok(),
+            "post-reset sequence 1 is fresh"
+        );
         // Other sessions are untouched by the reset.
         assert_eq!(
             ledger.consume("S2", "n1", 0).unwrap_err(),
@@ -1178,25 +1324,61 @@ mod tests {
         // Orientation without template.
         let mut ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
         ctx.template_sha256 = None;
-        let err = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        let err = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, AcafError::MissingTemplate));
 
         // Disposition without activation.
         let mut ctx = issue_ctx("SESS-0001", TicketKind::DispositionV1);
         ctx.activation_id = None;
-        let err = issue_ticket(&signer, &ctx, TicketKind::DispositionV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        let err = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::DispositionV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, AcafError::MissingActivation));
 
         // Non-orientation with a template.
         let mut ctx = issue_ctx("SESS-0001", TicketKind::CloseV1);
         ctx.template_sha256 = Some(ZERO64.to_string());
-        let err = issue_ticket(&signer, &ctx, TicketKind::CloseV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        let err = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::CloseV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, AcafError::UnexpectedTemplate));
 
         // Bad digest.
         let mut ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
         ctx.goal_digest = "not-a-digest".to_string();
-        let err = issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 1, "n1", 300, 1_700_000_000).unwrap_err();
+        let err = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, AcafError::InvalidSha256 { .. }));
     }
 
@@ -1207,27 +1389,47 @@ mod tests {
         // lane's activation — action kinds are activation-OPTIONAL (the
         // main lane stays null; the lane binds the real activation_id).
         let mut ctx = issue_ctx("SESS-0001", TicketKind::NetworkV1);
-        ctx.activation_id =
-            Some("retrieval-external_retrieval-sess-abc-00".to_string());
-        let ticket =
-            issue_ticket(&signer, &ctx, TicketKind::NetworkV1, 1, "n1", 300, 1_700_000_000)
-                .expect("network ticket with activation must issue");
+        ctx.activation_id = Some("retrieval-external_retrieval-sess-abc-00".to_string());
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::NetworkV1,
+            1,
+            "n1",
+            300,
+            1_700_000_000,
+        )
+        .expect("network ticket with activation must issue");
         assert_eq!(
             ticket.activation_id.as_deref(),
             Some("retrieval-external_retrieval-sess-abc-00")
         );
         // The main-lane form (no activation) still issues.
         let ctx = issue_ctx("SESS-0001", TicketKind::NetworkV1);
-        let ticket =
-            issue_ticket(&signer, &ctx, TicketKind::NetworkV1, 2, "n2", 300, 1_700_000_000)
-                .expect("network ticket without activation must issue");
+        let ticket = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::NetworkV1,
+            2,
+            "n2",
+            300,
+            1_700_000_000,
+        )
+        .expect("network ticket without activation must issue");
         assert_eq!(ticket.activation_id, None);
         // Orientation remains the only kind that FORBIDS an activation.
         let mut ctx = issue_ctx("SESS-0001", TicketKind::OrientationV1);
         ctx.activation_id = Some("ACT-0001".to_string());
-        let err =
-            issue_ticket(&signer, &ctx, TicketKind::OrientationV1, 3, "n3", 300, 1_700_000_000)
-                .unwrap_err();
+        let err = issue_ticket(
+            &signer,
+            &ctx,
+            TicketKind::OrientationV1,
+            3,
+            "n3",
+            300,
+            1_700_000_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, AcafError::UnexpectedActivation));
     }
 }

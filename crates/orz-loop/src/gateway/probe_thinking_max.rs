@@ -26,7 +26,7 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::gateway::credentials::read_agent_api_key;
 use crate::gateway::transport::DEFAULT_DEEPSEEK_API_BASE;
@@ -50,12 +50,7 @@ fn gate() -> Option<String> {
     }
 }
 
-fn request_body(
-    messages: &[Value],
-    tools: bool,
-    max_tokens: u32,
-    stream: bool,
-) -> Value {
+fn request_body(messages: &[Value], tools: bool, max_tokens: u32, stream: bool) -> Value {
     let mut body = json!({
         "model": MODEL,
         "messages": messages,
@@ -132,10 +127,8 @@ mod tests {
         let Some(key) = gate() else { return };
 
         // ── fixture: three small files with numbers; expected total 37 ─────
-        let dir = std::env::temp_dir().join(format!(
-            "orz-probe-thinking-max-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("orz-probe-thinking-max-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "3\n5\n").unwrap();
@@ -168,11 +161,7 @@ mod tests {
             let round_start = Instant::now();
             let resp = match timeout(
                 ROUND_TIMEOUT,
-                client
-                    .post(&url)
-                    .bearer_auth(&key)
-                    .json(&body)
-                    .send(),
+                client.post(&url).bearer_auth(&key).json(&body).send(),
             )
             .await
             {
@@ -211,7 +200,10 @@ mod tests {
 
             let tool_calls = msg.get("tool_calls").and_then(|t| t.as_array()).cloned();
             let Some(calls) = tool_calls else {
-                println!("FINAL: {}", msg.get("content").and_then(|c| c.as_str()).unwrap_or(""));
+                println!(
+                    "FINAL: {}",
+                    msg.get("content").and_then(|c| c.as_str()).unwrap_or("")
+                );
                 break;
             };
             if calls.is_empty() {
@@ -258,7 +250,8 @@ mod tests {
         }
         let total = t0.elapsed();
         let total_txt = dir.join("total.txt");
-        let written = std::fs::read_to_string(&total_txt).unwrap_or_else(|_| "<not written>".into());
+        let written =
+            std::fs::read_to_string(&total_txt).unwrap_or_else(|_| "<not written>".into());
         println!(
             "TOTAL wall={total:?} rounds={rounds} fixture_total_file={:?}",
             written.trim()
@@ -299,7 +292,11 @@ mod tests {
             }
         };
         if !resp.status().is_success() {
-            println!("HTTP {}: {}", resp.status(), truncate(&resp.text().await.unwrap_or_default(), 400));
+            println!(
+                "HTTP {}: {}",
+                resp.status(),
+                truncate(&resp.text().await.unwrap_or_default(), 400)
+            );
             return;
         }
         let mut stream = resp.bytes_stream();
@@ -355,7 +352,9 @@ mod tests {
         );
         println!(
             "TTFT first_delta={:?} first_content_delta={:?} usage={}",
-            first_delta, first_content_delta, usage.unwrap_or(json!("<none>")),
+            first_delta,
+            first_content_delta,
+            usage.unwrap_or(json!("<none>")),
         );
     }
 

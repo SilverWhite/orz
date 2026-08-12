@@ -1,10 +1,10 @@
 //! Workspace and session configuration types.
 use crate::capability::CapabilityMode;
 use crate::hub::HubConfig;
+use orz_tools::registry::types::{SessionContext, ToolRegistryBuilder, ToolServerConfig};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use orz_tools::registry::types::{SessionContext, ToolRegistryBuilder, ToolServerConfig};
 /// Default capacity for the workspace event broadcast channel.
 pub const DEFAULT_EVENT_BUFFER_CAPACITY: usize = 64;
 /// A session-lifetime terminal backend paired with its explicit shutdown hook.
@@ -222,10 +222,8 @@ impl WorkspaceBindConfig {
                     unserved_tool_ids.push(entry.id.clone());
                     continue;
                 }
-                match orz_tools::registry::proto_convert::tool_config_from_entry(
-                    idx,
-                    entry.clone(),
-                ) {
+                match orz_tools::registry::proto_convert::tool_config_from_entry(idx, entry.clone())
+                {
                     Ok(tc) => served.push(tc),
                     Err(err) => return ResolvedToolset::InvalidToolConfig(err),
                 }

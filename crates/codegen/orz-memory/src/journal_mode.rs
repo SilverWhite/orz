@@ -1,10 +1,14 @@
-use std::path::Path;
 use rusqlite::{Connection, OpenFlags};
+use std::path::Path;
 
-pub enum JournalMode { Wal }
+pub enum JournalMode {
+    Wal,
+}
 
 impl JournalMode {
-    pub fn for_db_path(_path: &Path) -> Self { Self::Wal }
+    pub fn for_db_path(_path: &Path) -> Self {
+        Self::Wal
+    }
     pub fn open(&self, path: &Path) -> rusqlite::Result<Connection> {
         let conn = Connection::open(path)?;
         // busy_timeout + journal pragma live here (see the callers' doc
@@ -16,6 +20,9 @@ impl JournalMode {
         Ok(conn)
     }
     pub fn open_readonly(&self, path: &Path) -> rusqlite::Result<Connection> {
-        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
     }
 }

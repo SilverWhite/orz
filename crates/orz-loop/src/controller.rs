@@ -360,16 +360,9 @@ pub(crate) fn build_evidence_record(
                 .map(|s| s.trim().to_string())
         })
         .flatten()
-        .filter(|s| {
-            s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
-        });
+        .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()));
     let (source_type, visibility, observed_scope, missing_scope) = match tool {
-        "read_file" => (
-            "local_file",
-            "full_text_observed",
-            "file content",
-            "none",
-        ),
+        "read_file" => ("local_file", "full_text_observed", "file content", "none"),
         "web_fetch" => {
             // PDF evidence (2026-08-11): the inline marker
             // "PDF evidence: {N} pages, document_id=sha256:{hex},
@@ -378,21 +371,41 @@ pub(crate) fn build_evidence_record(
             // attribution); truncated previews are partial (§3.7.5).
             if pdf_hex.is_some() {
                 let no_text = output.contains("text_layer=no");
-                let truncated = output.contains("[web_fetch pdf content truncated")
-                    || output.len() > 200_000;
+                let truncated =
+                    output.contains("[web_fetch pdf content truncated") || output.len() > 200_000;
                 if no_text {
-                    ("pdf_document", "metadata_only", "metadata only (no text layer)", "page text")
+                    (
+                        "pdf_document",
+                        "metadata_only",
+                        "metadata only (no text layer)",
+                        "page text",
+                    )
                 } else if truncated {
-                    ("pdf_document", "partial_text_observed", "first portion", "rest of document")
+                    (
+                        "pdf_document",
+                        "partial_text_observed",
+                        "first portion",
+                        "rest of document",
+                    )
                 } else {
-                    ("pdf_document", "full_text_observed", "extracted text layer", "none")
+                    (
+                        "pdf_document",
+                        "full_text_observed",
+                        "extracted text layer",
+                        "none",
+                    )
                 }
             } else if output.contains("PDF downloaded") {
                 // Legacy save-to-downloads path (host without an evidence
                 // root): the output is a download hint, NOT document text.
                 // 2026-08-11 bug fix — this was previously mis-attributed
                 // full_text_observed.
-                ("web_page", "metadata_only", "download metadata only", "page content")
+                (
+                    "web_page",
+                    "metadata_only",
+                    "download metadata only",
+                    "page content",
+                )
             } else {
                 // H2 (review 2026-08-10): the fetch pipeline's truncation
                 // footer is "[web_fetch content truncated: ..." (codegen
@@ -413,7 +426,12 @@ pub(crate) fn build_evidence_record(
                     || output.contains("[truncated")
                     || output.len() > 200_000;
                 if truncated {
-                    ("web_page", "partial_text_observed", "first portion", "rest of page")
+                    (
+                        "web_page",
+                        "partial_text_observed",
+                        "first portion",
+                        "rest of page",
+                    )
                 } else {
                     ("web_page", "full_text_observed", "full document", "none")
                 }
@@ -423,26 +441,46 @@ pub(crate) fn build_evidence_record(
         // from the local evidence store — truncated output is partial, else
         // the requested pages were fully observed.
         "pdf_read" => {
-            let truncated = output.contains("[pdf_read content truncated")
-                || output.len() > 200_000;
+            let truncated =
+                output.contains("[pdf_read content truncated") || output.len() > 200_000;
             if truncated {
-                ("pdf_document", "partial_text_observed", "requested pages", "rest of document")
+                (
+                    "pdf_document",
+                    "partial_text_observed",
+                    "requested pages",
+                    "rest of document",
+                )
             } else {
-                ("pdf_document", "full_text_observed", "requested pages", "none")
+                (
+                    "pdf_document",
+                    "full_text_observed",
+                    "requested pages",
+                    "none",
+                )
             }
         }
         // A search result's snippet is partial text (never full-text
         // attribution for a snippet — §3.7.5).
-        "web_search" => ("web_search_result", "partial_text_observed", "search snippet", "full page"),
+        "web_search" => (
+            "web_search_result",
+            "partial_text_observed",
+            "search snippet",
+            "full page",
+        ),
         // local_browser (2026-08-10): `browser_read` returns rendered page
         // text with a mechanical truncation footer (host-side constant
         // "[browser_read content truncated: ...") — same visibility mapping
         // as web_fetch (§3.7.5): footer or length backstop → partial.
         "browser_read" => {
-            let truncated = output.contains("[browser_read content truncated")
-                || output.len() > 200_000;
+            let truncated =
+                output.contains("[browser_read content truncated") || output.len() > 200_000;
             if truncated {
-                ("web_page", "partial_text_observed", "first portion", "rest of page")
+                (
+                    "web_page",
+                    "partial_text_observed",
+                    "first portion",
+                    "rest of page",
+                )
             } else {
                 ("web_page", "full_text_observed", "full document", "none")
             }
@@ -450,9 +488,19 @@ pub(crate) fn build_evidence_record(
         "project_doc_index" => {
             let include_content = arg("include_content") == Some("true");
             if include_content {
-                ("project_doc", "full_text_observed", "document content", "none")
+                (
+                    "project_doc",
+                    "full_text_observed",
+                    "document content",
+                    "none",
+                )
             } else {
-                ("project_doc", "metadata_only", "metadata only", "document content")
+                (
+                    "project_doc",
+                    "metadata_only",
+                    "metadata only",
+                    "document content",
+                )
             }
         }
         _ => return None,
@@ -646,7 +694,9 @@ pub(crate) fn build_structured_result(
                     .iter()
                     .find(|e| e["source_id"].as_str() == Some(*id))
                     .unwrap();
-                if claim_rank(strength.unwrap()) > visibility_rank(entry["visibility"].as_str().unwrap_or_default()) {
+                if claim_rank(strength.unwrap())
+                    > visibility_rank(entry["visibility"].as_str().unwrap_or_default())
+                {
                     ok = false;
                     break;
                 }
@@ -677,7 +727,9 @@ pub(crate) fn build_structured_result(
                     .iter()
                     .find(|e| e["source_id"].as_str() == Some(*id))
                     .unwrap();
-                if claim_rank(strength.unwrap()) > visibility_rank(entry["visibility"].as_str().unwrap_or_default()) {
+                if claim_rank(strength.unwrap())
+                    > visibility_rank(entry["visibility"].as_str().unwrap_or_default())
+                {
                     ok = false;
                     break;
                 }
@@ -696,8 +748,11 @@ pub(crate) fn build_structured_result(
     // Back-fill `used_in_sections` from the accepted block.
     for entry in &mut source_ledger {
         if let Some(ids) = used_in_sections.get(entry["source_id"].as_str().unwrap_or_default()) {
-            entry["used_in_sections"] =
-                serde_json::Value::Array(ids.iter().map(|s| serde_json::Value::String(s.clone())).collect());
+            entry["used_in_sections"] = serde_json::Value::Array(
+                ids.iter()
+                    .map(|s| serde_json::Value::String(s.clone()))
+                    .collect(),
+            );
         }
     }
 
@@ -730,7 +785,12 @@ pub(crate) fn build_structured_result(
         .collect();
 
     // 6. source_counts — mechanical distribution of the ledger.
-    let mut counts = [("full_text_observed", 0u64), ("partial_text_observed", 0u64), ("metadata_only", 0u64), ("unavailable", 0u64)];
+    let mut counts = [
+        ("full_text_observed", 0u64),
+        ("partial_text_observed", 0u64),
+        ("metadata_only", 0u64),
+        ("unavailable", 0u64),
+    ];
     for entry in &source_ledger {
         let vis = entry["visibility"].as_str().unwrap_or_default();
         if let Some((_, n)) = counts.iter_mut().find(|(k, _)| *k == vis) {
@@ -754,9 +814,8 @@ pub(crate) fn build_structured_result(
         "raw_source_refs": raw_source_refs,
     });
     let result_digest = sha256_hex(&canonical_json(&five_fields).unwrap_or_default());
-    let ledger_digest = sha256_hex(
-        &canonical_json(&five_fields["source_ledger"]).unwrap_or_default(),
-    );
+    let ledger_digest =
+        sha256_hex(&canonical_json(&five_fields["source_ledger"]).unwrap_or_default());
     let result_id = format!(
         "RET-RES-{}-{}",
         &result_digest[..16],
@@ -805,10 +864,7 @@ impl AgentLoopController {
         let journal_dir = writer.journal_dir()?;
         let dir = journal_dir.join("retrieval-results");
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::warn!(
-                "result artifact dir create failed ({}): {e}",
-                dir.display()
-            );
+            tracing::warn!("result artifact dir create failed ({}): {e}", dir.display());
             return None;
         }
         let name = format!(
@@ -820,10 +876,7 @@ impl AgentLoopController {
             Ok(json) => match std::fs::write(&path, json) {
                 Ok(()) => Some(path.to_string_lossy().to_string()),
                 Err(e) => {
-                    tracing::warn!(
-                        "result artifact write failed ({}): {e}",
-                        path.display()
-                    );
+                    tracing::warn!("result artifact write failed ({}): {e}", path.display());
                     None
                 }
             },
@@ -896,9 +949,7 @@ impl ActivationRegistry {
                     conversation: a
                         .conversation
                         .iter()
-                        .filter(|m| {
-                            !(m.role == Role::User && is_injected_block_text(&m.content))
-                        })
+                        .filter(|m| !(m.role == Role::User && is_injected_block_text(&m.content)))
                         .cloned()
                         .collect(),
                 })
@@ -942,13 +993,14 @@ impl ActivationRegistry {
                 );
                 continue;
             }
-            let pending = stored.pending_assessment_id.as_ref().map(|a_id| {
-                PendingDisposition {
+            let pending = stored
+                .pending_assessment_id
+                .as_ref()
+                .map(|a_id| PendingDisposition {
                     assessment_id: a_id.clone(),
                     expected_contract_revision: stored.pending_expected_contract_revision,
                     decided: None,
-                }
-            });
+                });
             // GAP-CONVERSATION-RESTORE (2026-08-10): the conversation rides
             // the sidecar now — a restored activation resumes with its full
             // subagent context (registered boundary closed; the `submitted`
@@ -1629,7 +1681,12 @@ impl AgentLoopController {
             .await
         {
             Ok(()) => match client
-                .sign_ticket(kind, activation_id.clone(), &canonical, resolved_target.clone())
+                .sign_ticket(
+                    kind,
+                    activation_id.clone(),
+                    &canonical,
+                    resolved_target.clone(),
+                )
                 .await
             {
                 Ok(ticket) => {
@@ -1688,7 +1745,8 @@ impl AgentLoopController {
         activation_id: Option<String>,
         args: &serde_json::Value,
     ) -> Result<TicketGate, AgentLoopError> {
-        self.ticket_flow(writer, kind, activation_id, args, None).await
+        self.ticket_flow(writer, kind, activation_id, args, None)
+            .await
     }
 
     /// Rejection for an unticketable action target (D7): no ticket was
@@ -1970,9 +2028,7 @@ impl AgentLoopController {
         let ticket = match signed {
             Ok(t) => t,
             Err(outcome) => {
-                self
-                    .journal_ticket_outcome(writer, &outcome, &now)
-                    .await?;
+                self.journal_ticket_outcome(writer, &outcome, &now).await?;
                 return match crate::acaf::ticket_outcome_reject(&outcome) {
                     None => Ok(TicketGate::Proceed),
                     Some((code, detail)) => Ok(if self.acaf_fail_closed {
@@ -2117,20 +2173,19 @@ impl AgentLoopController {
         // network tool runs with zero ticket events).
         let kind = TicketKind::NetworkV1;
         let now = chrono::Utc::now();
-        let canonical_url =
-            match orz_assurance::acaf::target::resolve_network_url(&url) {
-                Ok(u) => u,
-                Err(e) => {
-                    return self
-                        .shadow_action_rejection(
-                            writer,
-                            kind,
-                            format!("network target resolution failed: {e}"),
-                            &now,
-                        )
-                        .await;
-                }
-            };
+        let canonical_url = match orz_assurance::acaf::target::resolve_network_url(&url) {
+            Ok(u) => u,
+            Err(e) => {
+                return self
+                    .shadow_action_rejection(
+                        writer,
+                        kind,
+                        format!("network target resolution failed: {e}"),
+                        &now,
+                    )
+                    .await;
+            }
+        };
         let canonical_args = crate::acaf::network_canonical_args(tool, &canonical_url);
         let target_digest = orz_assurance::acaf::target::network_target_digest(&canonical_url);
         let tool_owned = tool.to_string();
@@ -2141,9 +2196,8 @@ impl AgentLoopController {
             target_digest,
             activation_id,
             move || {
-                let canonical_url =
-                    orz_assurance::acaf::target::resolve_network_url(&url)
-                        .map_err(|e| e.to_string())?;
+                let canonical_url = orz_assurance::acaf::target::resolve_network_url(&url)
+                    .map_err(|e| e.to_string())?;
                 let canonical = crate::acaf::network_canonical_args(&tool_owned, &canonical_url);
                 let digest = orz_assurance::acaf::target::network_target_digest(&canonical_url);
                 Ok((canonical, digest))
@@ -2219,8 +2273,7 @@ impl AgentLoopController {
                     writer,
                     kind,
                     orz_assurance::acaf::RejectCode::MissingSnapshotStore,
-                    "no snapshot store configured — command cwd cannot be bound"
-                        .to_string(),
+                    "no snapshot store configured — command cwd cannot be bound".to_string(),
                     &now,
                 )
                 .await;
@@ -2228,8 +2281,7 @@ impl AgentLoopController {
         let cwd = store.worktree().to_string_lossy().into_owned();
         let env_sha = crate::acaf::command_env_sha256(&[]);
         let argv = vec![command.clone()];
-        let canonical_args =
-            crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
+        let canonical_args = crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
         let target_digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
         let tool_owned = tool.to_string();
         self.run_action_ticket(
@@ -2275,8 +2327,7 @@ impl AgentLoopController {
                     writer,
                     TicketKind::CommandExecV1,
                     orz_assurance::acaf::RejectCode::MissingSnapshotStore,
-                    "no snapshot store configured — command cwd cannot be bound"
-                        .to_string(),
+                    "no snapshot store configured — command cwd cannot be bound".to_string(),
                     &now,
                 )
                 .await;
@@ -2299,8 +2350,7 @@ impl AgentLoopController {
         let cwd = store.worktree().to_string_lossy().into_owned();
         let argv = runner.command.clone();
         let env_sha = crate::acaf::command_env_sha256(&runner.env);
-        let canonical_args =
-            crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
+        let canonical_args = crate::acaf::command_exec_canonical_args(tool, &argv, &cwd, &env_sha);
         let target_digest = crate::acaf::command_exec_target_digest(&argv, &cwd, &env_sha);
         let tool_owned = tool.to_string();
         self.run_action_ticket(
@@ -2403,9 +2453,7 @@ impl AgentLoopController {
         let ticket = match signed {
             Ok(t) => t,
             Err(outcome) => {
-                self
-                    .journal_ticket_outcome(writer, &outcome, &now)
-                    .await?;
+                self.journal_ticket_outcome(writer, &outcome, &now).await?;
                 return match crate::acaf::ticket_outcome_reject(&outcome) {
                     None => Ok(TicketGate::Proceed),
                     Some((code, detail)) => Ok(if self.acaf_fail_closed {
@@ -2507,10 +2555,7 @@ impl AgentLoopController {
     /// cross-prompt sidecar snapshot. Restored activations are journaled as
     /// `retrieval_activation_restored` at the next run's startup (each
     /// prompt's controller build declares the handover once).
-    pub fn with_activation_snapshot(
-        self,
-        snapshot: Option<&serde_json::Value>,
-    ) -> Self {
+    pub fn with_activation_snapshot(self, snapshot: Option<&serde_json::Value>) -> Self {
         if let Some(value) = snapshot {
             let restored = {
                 let mut reg = self.activations.lock().unwrap();
@@ -2773,7 +2818,10 @@ impl AgentLoopController {
         if bb.plan.goal.is_none() && bb.plan.steps.is_empty() {
             return None;
         }
-        Some(crate::prompt::build_status_line(bb.plan.goal.as_deref(), &bb.plan.steps))
+        Some(crate::prompt::build_status_line(
+            bb.plan.goal.as_deref(),
+            &bb.plan.steps,
+        ))
     }
 
     /// Component injection for tests (independent scripted providers).
@@ -2918,7 +2966,9 @@ impl AgentLoopController {
                     lines.join("\n")
                 }
             }
-            other => format!("unknown blackboard section: {other} (expected plan|edits|tool_actions|exec)"),
+            other => format!(
+                "unknown blackboard section: {other} (expected plan|edits|tool_actions|exec)"
+            ),
         }
     }
 
@@ -3233,7 +3283,10 @@ impl AgentLoopController {
         // enforced at call time: only the FIRST tool batch may write.
         // 2026-08-12 裁决：grill/ReadOnly 的只读保证由 gate 承担（ReadOnly
         // policy 执行层拒非读），声明面不再过滤——grill 守卫移除。
-        if !tool_defs.iter().any(|t| t.name == "compaction_whitelist_add") {
+        if !tool_defs
+            .iter()
+            .any(|t| t.name == "compaction_whitelist_add")
+        {
             tool_defs.push(ToolDef {
                 name: "compaction_whitelist_add".to_string(),
                 description: "Write an entry to the context-compaction \
@@ -3529,7 +3582,11 @@ impl AgentLoopController {
             heartbeat,
         )
         .await?;
-        let LoopOutcome { last_text, tool_rounds, .. } = outcome;
+        let LoopOutcome {
+            last_text,
+            tool_rounds,
+            ..
+        } = outcome;
 
         // 5. runtime_stagnation_guard — mechanical, per-turn
         let stagnation_decision = self.evaluate_stagnation(writer, &messages).await?;
@@ -3617,8 +3674,7 @@ impl AgentLoopController {
                     .into_iter()
                     .enumerate()
                     .filter(|(i, m)| {
-                        *i == 0
-                            || !(m.role == Role::User && is_injected_block_text(&m.content))
+                        *i == 0 || !(m.role == Role::User && is_injected_block_text(&m.content))
                     })
                     .map(|(_, m)| m)
                     .collect();
@@ -3729,10 +3785,10 @@ impl AgentLoopController {
         // injection, no checkpoint record, no commit).
         let gate = self
             .acaf_control_event(
-            writer,
-            TicketKind::OrientationV1,
-            None,
-            &serde_json::json!({ "agent_role": role.as_str() }),
+                writer,
+                TicketKind::OrientationV1,
+                None,
+                &serde_json::json!({ "agent_role": role.as_str() }),
             )
             .await?;
         if let TicketGate::Blocked { .. } = &gate {
@@ -3847,7 +3903,8 @@ impl AgentLoopController {
         if self.retrieval_mode == RetrievalMode::LocalBrowser {
             match &self.retrieval_capability {
                 RetrievalCapability::Available => {}
-                RetrievalCapability::Unsupported(reason) | RetrievalCapability::Degraded(reason) => {
+                RetrievalCapability::Unsupported(reason)
+                | RetrievalCapability::Degraded(reason) => {
                     writer
                         .record(
                             EventType::ToolStarted,
@@ -4031,9 +4088,7 @@ impl AgentLoopController {
         // cannot call.
         let sub_tool_defs: Vec<ToolDef> = tool_defs
             .iter()
-            .filter(|t| {
-                t.name != "compaction_whitelist_add" && t.name != "retrieval_disposition"
-            })
+            .filter(|t| t.name != "compaction_whitelist_add" && t.name != "retrieval_disposition")
             .cloned()
             .collect();
         let subagent = match role {
@@ -4146,8 +4201,7 @@ impl AgentLoopController {
                 // line contract writes the subagent's own blackboard section
                 // (single-writer discipline; the stable interface real
                 // retrieval semantics plug into).
-                let (docs, sources) =
-                    crate::agents::retrieval::parse_retrieval_text(&output);
+                let (docs, sources) = crate::agents::retrieval::parse_retrieval_text(&output);
                 // GAP-RETRIEVAL-TOOLS: the structured result consumes the
                 // parsed lines by reference (ledger merge); `write_section`
                 // takes them by value afterwards.
@@ -4429,8 +4483,7 @@ impl AgentLoopController {
                 .unwrap()
                 .to_string(),
             _ => {
-                let msg =
-                    "retrieval_disposition: `decision` must be close or continue".to_string();
+                let msg = "retrieval_disposition: `decision` must be close or continue".to_string();
                 messages.push(Message {
                     role: Role::Tool,
                     content: msg.clone(),
@@ -4451,7 +4504,11 @@ impl AgentLoopController {
             .and_then(|v| v.as_str())
             .map(str::to_string);
         if decision == "continue"
-            && requirement_delta.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && requirement_delta
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
         {
             let msg = "retrieval_disposition: continue requires a non-empty \
                        requirement_delta"
@@ -4470,8 +4527,7 @@ impl AgentLoopController {
             });
         }
         if decision == "close" && requirement_delta.is_some() {
-            let msg =
-                "retrieval_disposition: close cannot carry requirement_delta".to_string();
+            let msg = "retrieval_disposition: close cannot carry requirement_delta".to_string();
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -4554,13 +4610,11 @@ impl AgentLoopController {
             &sha256_hex(&proposal_canonical)[..16],
             &sha256_hex(tc.call_id.as_bytes())[..8],
         );
-        if let Some((_, original_canonical)) = act
-            .submitted
-            .iter()
-            .find(|(id, _)| id == &disposition_id)
+        if let Some((_, original_canonical)) =
+            act.submitted.iter().find(|(id, _)| id == &disposition_id)
         {
-            let original: serde_json::Value = serde_json::from_slice(original_canonical)
-                .unwrap_or(serde_json::Value::Null);
+            let original: serde_json::Value =
+                serde_json::from_slice(original_canonical).unwrap_or(serde_json::Value::Null);
             writer
                 .record(EventType::RetrievalParentDisposition, original)
                 .await?;
@@ -4702,14 +4756,14 @@ impl AgentLoopController {
         ) {
             Some(
                 self.acaf_control_event(
-                writer,
-                TicketKind::DispositionV1,
-                Some(act.activation_id.clone()),
-                &serde_json::json!({
-                    "role": role.as_str(),
-                    "decision": decision,
-                    "requirement_delta": requirement_delta,
-                }),
+                    writer,
+                    TicketKind::DispositionV1,
+                    Some(act.activation_id.clone()),
+                    &serde_json::json!({
+                        "role": role.as_str(),
+                        "decision": decision,
+                        "requirement_delta": requirement_delta,
+                    }),
                 )
                 .await?,
             )
@@ -4787,8 +4841,7 @@ impl AgentLoopController {
                         )
                         .await?;
                     if let TicketGate::Blocked { code, detail } = close_gate {
-                        close_unauthorized =
-                            Some((code.as_str().to_string(), detail.clone()));
+                        close_unauthorized = Some((code.as_str().to_string(), detail.clone()));
                     } else {
                         act.status = ActivationStatus::Closed;
                         act.pending = None;
@@ -4813,19 +4866,18 @@ impl AgentLoopController {
                     // → new key; Slice 1 audit D5 closed).
                     let goal_gate = self
                         .acaf_control_event(
-                        writer,
-                        TicketKind::GoalRevisionV1,
-                        Some(act.activation_id.clone()),
-                        &serde_json::json!({
-                            "new_goal": requirement_delta.clone().unwrap_or_default(),
-                        }),
+                            writer,
+                            TicketKind::GoalRevisionV1,
+                            Some(act.activation_id.clone()),
+                            &serde_json::json!({
+                                "new_goal": requirement_delta.clone().unwrap_or_default(),
+                            }),
                         )
                         .await?;
                     if let TicketGate::Blocked { code, detail } = &goal_gate {
                         // D-16: consumed-only — the state migration does NOT
                         // run; the rejection was already journaled.
-                        continue_unauthorized =
-                            Some((code.as_str().to_string(), detail.clone()));
+                        continue_unauthorized = Some((code.as_str().to_string(), detail.clone()));
                     } else {
                         // §4.4: revision + 1, activation stays ACTIVE, the
                         // current assessment is marked consumed/superseded
@@ -4975,14 +5027,14 @@ impl AgentLoopController {
         // switch; the rejection is already journaled.
         let gate = self
             .acaf_control_event(
-            writer,
-            TicketKind::CloseV1,
-            Some(activation_id.to_string()),
-            &serde_json::json!({
-                "activation_id": activation_id,
-                "terminal_reason": terminal_reason,
-                "validated_disposition_id": validated_disposition_id,
-            }),
+                writer,
+                TicketKind::CloseV1,
+                Some(activation_id.to_string()),
+                &serde_json::json!({
+                    "activation_id": activation_id,
+                    "terminal_reason": terminal_reason,
+                    "validated_disposition_id": validated_disposition_id,
+                }),
             )
             .await?;
         if let TicketGate::Blocked { .. } = &gate {
@@ -5005,7 +5057,10 @@ impl AgentLoopController {
         // structured-result artifact when one was committed (normal_close /
         // budget_exhausted with a result); terminal closes without a result
         // keep the journal reference.
-        let archive_ref = match (&result_digest, self.retrieval_capability_archive_ref(activation_id)) {
+        let archive_ref = match (
+            &result_digest,
+            self.retrieval_capability_archive_ref(activation_id),
+        ) {
             (Some(_), Some(artifact)) => artifact,
             _ => format!("run-journal:{}", writer.run_id()),
         };
@@ -5116,17 +5171,15 @@ impl AgentLoopController {
     /// Close every pending activation with a terminal authority reason —
     /// used by the run-level cancellation path (a user cancel closes the
     /// activations BEFORE the run_cancelled terminal event; best-effort).
-    async fn close_all_activations(
-        &self,
-        writer: &mut EventWriter<'_>,
-        terminal_reason: &str,
-    ) {
+    async fn close_all_activations(&self, writer: &mut EventWriter<'_>, terminal_reason: &str) {
         let roles: Vec<SubagentRole> = {
             let reg = self.activations.lock().unwrap();
             reg.states.keys().copied().collect()
         };
         for role in roles {
-            let _ = self.close_activation(writer, role, terminal_reason, None, None).await;
+            let _ = self
+                .close_activation(writer, role, terminal_reason, None, None)
+                .await;
         }
     }
 
@@ -5711,7 +5764,9 @@ impl AgentLoopController {
                 used + content.chars().count() <= self.whitelist_cap
             };
             let refused = if !window_ok {
-                Some("compaction whitelist is only writable during the first tool batch (first round)")
+                Some(
+                    "compaction whitelist is only writable during the first tool batch (first round)",
+                )
             } else if content.trim().is_empty() {
                 Some("compaction whitelist entry must not be empty")
             } else if !cap_ok {
@@ -5943,11 +5998,14 @@ impl AgentLoopController {
                 } else {
                     res.output
                 };
-                (ToolResult {
-                    output,
-                    exit_code: res.exit_code,
-                    output_encoding: None,
-                }, true)
+                (
+                    ToolResult {
+                        output,
+                        exit_code: res.exit_code,
+                        output_encoding: None,
+                    },
+                    true,
+                )
             }
             Err(e) => {
                 writer
@@ -6170,7 +6228,9 @@ fn chrono_utc_now() -> String {
 mod tests {
     use super::*;
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
-    use crate::gateway::model::{FinishReason, GatewayError, ModelGateway, ModelRequest, ModelResponse};
+    use crate::gateway::model::{
+        FinishReason, GatewayError, ModelGateway, ModelRequest, ModelResponse,
+    };
     use crate::host::{LoopHost, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
@@ -6277,8 +6337,7 @@ mod tests {
     /// lock-protected snapshot.
     #[tokio::test]
     async fn goal_context_update_increments_version_and_digest() {
-        let controller =
-            AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
         controller.set_goal_digest("goal-1");
         let (d1, v0) = {
             let g = controller.goal_context.lock().unwrap();
@@ -6414,7 +6473,10 @@ mod tests {
             // tool is hidden too — off means no retrieval tools at all.
             "project_doc_index",
         ] {
-            assert!(!available.iter().any(|t| t == tool), "{tool} in {available:?}");
+            assert!(
+                !available.iter().any(|t| t == tool),
+                "{tool} in {available:?}"
+            );
         }
         // The disposition control tool STAYS — disposing an already-pending
         // activation is a legal off-mode action.
@@ -6542,7 +6604,9 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway).with_retrieval_mode(
             RetrievalMode::LocalBrowser,
-            RetrievalCapability::Unsupported("local_browser_automation_not_implemented".to_string()),
+            RetrievalCapability::Unsupported(
+                "local_browser_automation_not_implemented".to_string(),
+            ),
             true,
             None,
             None,
@@ -6670,10 +6734,7 @@ mod tests {
             assessments[0].payload["source_counts"]["full_text_observed"],
             1
         );
-        assert_eq!(
-            assessments[0].payload["result_digest"],
-            p["result_digest"]
-        );
+        assert_eq!(assessments[0].payload["result_digest"], p["result_digest"]);
         // Artifact landed under the journal dir.
         let artifact_dir = dir.join("retrieval-results");
         assert!(artifact_dir.is_dir());
@@ -6768,10 +6829,12 @@ mod tests {
             .find(|e| e.event_type == EventType::RetrievalResultCommitted)
             .unwrap();
         assert_eq!(commit.payload["visibility_degraded"], true);
-        assert!(commit.payload["organized_response"]["sections"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            commit.payload["organized_response"]["sections"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         let assessment = events
             .iter()
             .find(|e| e.event_type == EventType::InformationSufficiencyAssessment)
@@ -6851,17 +6914,14 @@ mod tests {
             seeded.next_seq.get(&SubagentRole::InternalRetrieval),
             Some(&3)
         );
-        let act = seeded
-            .states
-            .get(&SubagentRole::InternalRetrieval)
-            .unwrap();
-        assert_eq!(act.activation_id, "retrieval-internal_retrieval-sess-abc-02");
+        let act = seeded.states.get(&SubagentRole::InternalRetrieval).unwrap();
+        assert_eq!(
+            act.activation_id,
+            "retrieval-internal_retrieval-sess-abc-02"
+        );
         assert_eq!(act.contract_revision, 1);
         assert_eq!(act.status, ActivationStatus::AwaitingDisposition);
-        assert_eq!(
-            act.pending.as_ref().unwrap().assessment_id,
-            "ASSESS-1"
-        );
+        assert_eq!(act.pending.as_ref().unwrap().assessment_id, "ASSESS-1");
         assert_eq!(act.tool_rounds_used, 7);
         assert_eq!(
             act.result_archive_ref.as_deref(),
@@ -6934,7 +6994,10 @@ mod tests {
             .collect();
         assert_eq!(restores.len(), 1, "{types:?}");
         let rp = &restores[0].payload;
-        assert_eq!(rp["activation_id"], "retrieval-internal_retrieval-sess-abc-00");
+        assert_eq!(
+            rp["activation_id"],
+            "retrieval-internal_retrieval-sess-abc-00"
+        );
         assert_eq!(rp["status"], "awaiting_disposition");
         assert_eq!(rp["assessment_id"], "ASSESS-PREV-1");
         assert_eq!(rp["origin_run_id"], "RUN-PREV-0001");
@@ -6955,10 +7018,7 @@ mod tests {
             .find(|e| e.event_type == EventType::RetrievalParentDisposition)
             .unwrap();
         assert_eq!(disposition.payload["outcome"], "accepted");
-        assert_eq!(
-            disposition.payload["assessment_id"],
-            "ASSESS-PREV-1"
-        );
+        assert_eq!(disposition.payload["assessment_id"], "ASSESS-PREV-1");
         let close = events
             .iter()
             .find(|e| e.event_type == EventType::RetrievalCloseRecord)
@@ -6997,9 +7057,21 @@ mod tests {
             output_encoding: None,
         };
         // Failed call → no evidence.
-        assert!(build_evidence_record("read_file", &call("read_file", serde_json::json!({"path": "a.rs"})), &fail).is_none());
+        assert!(
+            build_evidence_record(
+                "read_file",
+                &call("read_file", serde_json::json!({"path": "a.rs"})),
+                &fail
+            )
+            .is_none()
+        );
         // read_file success → full text.
-        let e = build_evidence_record("read_file", &call("read_file", serde_json::json!({"path": "src/a.rs"})), &ok("x")).unwrap();
+        let e = build_evidence_record(
+            "read_file",
+            &call("read_file", serde_json::json!({"path": "src/a.rs"})),
+            &ok("x"),
+        )
+        .unwrap();
         assert_eq!(e.visibility, "full_text_observed");
         assert_eq!(e.source_type, "local_file");
         assert_eq!(e.identity, "src/a.rs");
@@ -7008,7 +7080,12 @@ mod tests {
         // first N of M bytes...]", codegen overflow.rs) — the pre-review
         // detector matched "[truncated", which that footer does not contain,
         // and granted full-level attribution to truncated text (H2).
-        let w = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com"})), &ok("page")).unwrap();
+        let w = build_evidence_record(
+            "web_fetch",
+            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
+            &ok("page"),
+        )
+        .unwrap();
         assert_eq!(w.visibility, "full_text_observed");
         let t = build_evidence_record(
             "web_fetch",
@@ -7018,58 +7095,149 @@ mod tests {
         .unwrap();
         assert_eq!(t.visibility, "partial_text_observed");
         // The bounded-budget fallback marker and a long output also count.
-        let t2 = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com"})), &ok("x\n[truncated]")).unwrap();
+        let t2 = build_evidence_record(
+            "web_fetch",
+            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
+            &ok("x\n[truncated]"),
+        )
+        .unwrap();
         assert_eq!(t2.visibility, "partial_text_observed");
         // web_search → partial (snippet).
-        let s = build_evidence_record("web_search", &call("web_search", serde_json::json!({"query": "q"})), &ok("snippet")).unwrap();
+        let s = build_evidence_record(
+            "web_search",
+            &call("web_search", serde_json::json!({"query": "q"})),
+            &ok("snippet"),
+        )
+        .unwrap();
         assert_eq!(s.visibility, "partial_text_observed");
         assert_eq!(s.source_type, "web_search_result");
         // project_doc_index: metadata vs content mode.
-        let m = build_evidence_record("project_doc_index", &call("project_doc_index", serde_json::json!({"query": "q"})), &ok("meta")).unwrap();
+        let m = build_evidence_record(
+            "project_doc_index",
+            &call("project_doc_index", serde_json::json!({"query": "q"})),
+            &ok("meta"),
+        )
+        .unwrap();
         assert_eq!(m.visibility, "metadata_only");
-        let f = build_evidence_record("project_doc_index", &call("project_doc_index", serde_json::json!({"query": "q", "include_content": "true"})), &ok("content")).unwrap();
+        let f = build_evidence_record(
+            "project_doc_index",
+            &call(
+                "project_doc_index",
+                serde_json::json!({"query": "q", "include_content": "true"}),
+            ),
+            &ok("content"),
+        )
+        .unwrap();
         assert_eq!(f.visibility, "full_text_observed");
         // local_browser (2026-08-10): browser_read full vs truncated — the
         // host's mechanical footer ("[browser_read content truncated: ...")
         // and the length backstop map to partial (§3.7.5); source_type is
         // web_page (the transport difference lives in evidence.tool).
-        let b = build_evidence_record("browser_read", &call("browser_read", serde_json::json!({"url": "https://x.com"})), &ok("page text")).unwrap();
+        let b = build_evidence_record(
+            "browser_read",
+            &call("browser_read", serde_json::json!({"url": "https://x.com"})),
+            &ok("page text"),
+        )
+        .unwrap();
         assert_eq!(b.visibility, "full_text_observed");
         assert_eq!(b.source_type, "web_page");
-        let bt = build_evidence_record("browser_read", &call("browser_read", serde_json::json!({"url": "https://x.com"})), &ok("first portion\n\n[browser_read content truncated: 100000 chars, page text only]")).unwrap();
+        let bt = build_evidence_record(
+            "browser_read",
+            &call("browser_read", serde_json::json!({"url": "https://x.com"})),
+            &ok("first portion\n\n[browser_read content truncated: 100000 chars, page text only]"),
+        )
+        .unwrap();
         assert_eq!(bt.visibility, "partial_text_observed");
-        let bl = build_evidence_record("browser_read", &call("browser_read", serde_json::json!({"url": "https://x.com"})), &ok(&"x".repeat(200_001))).unwrap();
+        let bl = build_evidence_record(
+            "browser_read",
+            &call("browser_read", serde_json::json!({"url": "https://x.com"})),
+            &ok(&"x".repeat(200_001)),
+        )
+        .unwrap();
         assert_eq!(bl.visibility, "partial_text_observed");
         // PDF evidence (2026-08-11): the inline marker
         // "PDF evidence: N pages, document_id=sha256:..., text_layer=..."
         // drives visibility; content_sha256 is the DOCUMENT digest parsed
         // from the marker, not a hash of the preview text.
-        let marker = |text_layer: &str, body: &str| format!(
-            "PDF evidence: 2 pages, document_id=sha256:ab{}, text_layer={text_layer}\n\n{body}",
-            "c".repeat(62)
-        );
-        let p = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/paper.pdf"})), &ok(&marker("yes", "page text"))).unwrap();
+        let marker = |text_layer: &str, body: &str| {
+            format!(
+                "PDF evidence: 2 pages, document_id=sha256:ab{}, text_layer={text_layer}\n\n{body}",
+                "c".repeat(62)
+            )
+        };
+        let p = build_evidence_record(
+            "web_fetch",
+            &call(
+                "web_fetch",
+                serde_json::json!({"url": "https://x.com/paper.pdf"}),
+            ),
+            &ok(&marker("yes", "page text")),
+        )
+        .unwrap();
         assert_eq!(p.visibility, "full_text_observed");
         assert_eq!(p.source_type, "pdf_document");
         assert_eq!(
             p.content_sha256.as_deref(),
             Some("abcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
         );
-        let pt = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/paper.pdf"})), &ok(&marker("yes", "first\n\n[web_fetch pdf content truncated: 50000 chars]"))).unwrap();
+        let pt = build_evidence_record(
+            "web_fetch",
+            &call(
+                "web_fetch",
+                serde_json::json!({"url": "https://x.com/paper.pdf"}),
+            ),
+            &ok(&marker(
+                "yes",
+                "first\n\n[web_fetch pdf content truncated: 50000 chars]",
+            )),
+        )
+        .unwrap();
         assert_eq!(pt.visibility, "partial_text_observed");
-        let pn = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/scan.pdf"})), &ok(&marker("no", ""))).unwrap();
+        let pn = build_evidence_record(
+            "web_fetch",
+            &call(
+                "web_fetch",
+                serde_json::json!({"url": "https://x.com/scan.pdf"}),
+            ),
+            &ok(&marker("no", "")),
+        )
+        .unwrap();
         assert_eq!(pn.visibility, "metadata_only");
         assert_eq!(pn.source_type, "pdf_document");
         // Legacy save-to-downloads hint (no evidence root): download
         // metadata only — never full-text attribution (bug fix).
-        let legacy = build_evidence_record("web_fetch", &call("web_fetch", serde_json::json!({"url": "https://x.com/paper.pdf"})), &ok("PDF downloaded (12345 bytes) and saved to /tmp/x.pdf.")).unwrap();
+        let legacy = build_evidence_record(
+            "web_fetch",
+            &call(
+                "web_fetch",
+                serde_json::json!({"url": "https://x.com/paper.pdf"}),
+            ),
+            &ok("PDF downloaded (12345 bytes) and saved to /tmp/x.pdf."),
+        )
+        .unwrap();
         assert_eq!(legacy.visibility, "metadata_only");
         // pdf_read: full when untruncated, partial with the mechanical footer.
-        let r = build_evidence_record("pdf_read", &call("pdf_read", serde_json::json!({"document_id": "sha256:abcd"})), &ok("--- Page 1 ---\ntext")).unwrap();
+        let r = build_evidence_record(
+            "pdf_read",
+            &call(
+                "pdf_read",
+                serde_json::json!({"document_id": "sha256:abcd"}),
+            ),
+            &ok("--- Page 1 ---\ntext"),
+        )
+        .unwrap();
         assert_eq!(r.visibility, "full_text_observed");
         assert_eq!(r.source_type, "pdf_document");
         assert_eq!(r.identity, "sha256:abcd");
-        let rt = build_evidence_record("pdf_read", &call("pdf_read", serde_json::json!({"document_id": "sha256:abcd"})), &ok("page\n\n[pdf_read content truncated: 100000 chars]")).unwrap();
+        let rt = build_evidence_record(
+            "pdf_read",
+            &call(
+                "pdf_read",
+                serde_json::json!({"document_id": "sha256:abcd"}),
+            ),
+            &ok("page\n\n[pdf_read content truncated: 100000 chars]"),
+        )
+        .unwrap();
         assert_eq!(rt.visibility, "partial_text_observed");
         // Intercepted browser-channel page (review D1-1): a whitelisted
         // web_fetch that renders an HTML page outputs browser_read-shaped
@@ -7094,7 +7262,9 @@ mod tests {
         assert_eq!(fake_marker.source_type, "web_page");
         assert_eq!(fake_marker.visibility, "full_text_observed");
         // Unknown tool → no evidence.
-        assert!(build_evidence_record("bash", &call("bash", serde_json::json!({})), &ok("x")).is_none());
+        assert!(
+            build_evidence_record("bash", &call("bash", serde_json::json!({})), &ok("x")).is_none()
+        );
     }
 
     #[tokio::test]
@@ -7113,7 +7283,16 @@ mod tests {
             Arc::new(FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "列出当前目录", "RUN-SEQ", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "列出当前目录",
+                "RUN-SEQ",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await;
 
         assert!(result.is_ok(), "{result:?}");
@@ -7193,7 +7372,16 @@ mod tests {
             Arc::new(FakeProvider::from_texts(vec!["你好世界", "你好世界"]).with_chunk_size(2));
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "列出当前目录", "RUN-DELTA", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "列出当前目录",
+                "RUN-DELTA",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await;
 
         assert!(result.is_ok(), "{result:?}");
@@ -7380,7 +7568,9 @@ mod tests {
         let round2 = &received[1].messages;
         assert!(
             round2.iter().any(|m| {
-                m.role == Role::User && m.content.contains("[本轮编辑]") && m.content.contains("1.py 2→3行变动")
+                m.role == Role::User
+                    && m.content.contains("[本轮编辑]")
+                    && m.content.contains("1.py 2→3行变动")
             }),
             "incremental push missing: {round2:?}"
         );
@@ -7513,12 +7703,27 @@ mod tests {
             let r = bb.read();
             assert_eq!(r.plan.goal.as_deref(), Some("修复 bug"));
             assert_eq!(r.plan.steps.len(), 2);
-            assert_eq!(r.plan.steps[0].status, crate::blackboard::StepStatus::InProgress);
-            assert_eq!(r.plan.steps[1].status, crate::blackboard::StepStatus::Pending);
+            assert_eq!(
+                r.plan.steps[0].status,
+                crate::blackboard::StepStatus::InProgress
+            );
+            assert_eq!(
+                r.plan.steps[1].status,
+                crate::blackboard::StepStatus::Pending
+            );
         }
 
         controller
-            .run_turn(&host, "请调查", "RUN-PLAN-ST", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "请调查",
+                "RUN-PLAN-ST",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -7777,10 +7982,19 @@ mod tests {
             ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(1_000, 400, 2, 100_000);
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 2, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -7802,7 +8016,9 @@ mod tests {
         assert!(received.len() >= 4, "{received:?}");
         let round3 = &received[2].messages;
         assert!(
-            round3.iter().all(|m| !m.content.starts_with("[前文上下文已压缩")),
+            round3
+                .iter()
+                .all(|m| !m.content.starts_with("[前文上下文已压缩")),
             "no mid-task compaction: {round3:?}"
         );
 
@@ -7811,15 +8027,21 @@ mod tests {
         // marker + newest round, pairing intact.
         let round4 = &received[3].messages;
         assert!(
-            round4.iter().any(|m| m.content.starts_with("[前文上下文已压缩")),
+            round4
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩")),
             "marker present: {round4:?}"
         );
         assert!(
-            round4.iter().any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-a2")),
+            round4
+                .iter()
+                .any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-a2")),
             "newest round's tool reply kept: {round4:?}"
         );
         assert!(
-            !round4.iter().any(|m| m.tool_call_id.as_deref() == Some("call-a1")),
+            !round4
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-a1")),
             "oldest round dropped: {round4:?}"
         );
         // The dropped round's content is gone; the kept round's content is
@@ -7901,7 +8123,16 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         let result = controller
-            .run_turn(&host, "测试工具超时", "RUN-TIMEOUT", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "测试工具超时",
+                "RUN-TIMEOUT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await;
         assert!(result.is_ok(), "{result:?}");
 
@@ -7932,7 +8163,10 @@ mod tests {
             .find(|m| m.tool_call_id.as_deref() == Some("call-t1"));
         assert!(timeout_msg.is_some(), "tool reply present: {round2:?}");
         assert!(
-            timeout_msg.unwrap().content.contains("tool TIMED OUT and was killed"),
+            timeout_msg
+                .unwrap()
+                .content
+                .contains("tool TIMED OUT and was killed"),
             "explicit killed message: {}",
             timeout_msg.unwrap().content
         );
@@ -8034,10 +8268,19 @@ mod tests {
             ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(1_000, 400, 1, 100_000);
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 1, 100_000);
         controller
-            .run_turn(&host, "修复任务", "RUN-WHITELIST", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复任务",
+                "RUN-WHITELIST",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -8056,7 +8299,11 @@ mod tests {
             round2[1].content.contains("关键路径：src/controller.rs"),
             "same-batch append: {round2:?}"
         );
-        assert_eq!(round2[2].role, Role::Assistant, "declaration after: {round2:?}");
+        assert_eq!(
+            round2[2].role,
+            Role::Assistant,
+            "declaration after: {round2:?}"
+        );
         assert!(!round2[2].tool_calls.is_empty());
 
         // Archived to .gsa (plain text JSONL, best-effort) — both entries
@@ -8106,12 +8353,16 @@ mod tests {
             last.messages
         );
         assert!(
-            last.messages.iter().all(|m| !m.content.contains(&"A".repeat(600))),
+            last.messages
+                .iter()
+                .all(|m| !m.content.contains(&"A".repeat(600))),
             "oldest round dropped: {:?}",
             last.messages
         );
         assert!(
-            last.messages.iter().any(|m| m.content.contains(&"B".repeat(600))),
+            last.messages
+                .iter()
+                .any(|m| m.content.contains(&"B".repeat(600))),
             "newest round kept: {:?}",
             last.messages
         );
@@ -8133,11 +8384,13 @@ mod tests {
                 output_encoding: None,
             }),
         };
-        let whitelist_call = |id: &str, content: &str| ScriptedResponse::tool_calls(vec![ToolCall {
-            name: "compaction_whitelist_add".to_string(),
-            arguments: serde_json::json!({"content": content}),
-            call_id: id.to_string(),
-        }]);
+        let whitelist_call = |id: &str, content: &str| {
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": content}),
+                call_id: id.to_string(),
+            }])
+        };
         let fake = Arc::new(FakeProvider::new(vec![
             whitelist_call("call-x1", "首轮条目"),
             whitelist_call("call-x2", "次轮条目"),
@@ -8147,7 +8400,16 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "任务", "RUN-WL-REFUSE", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-WL-REFUSE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -8169,7 +8431,9 @@ mod tests {
             .filter(|m| m.role == Role::Tool)
             .find(|m| m.tool_call_id.as_deref() == Some("call-x2"));
         assert!(
-            refused.is_some_and(|m| m.content.contains("refused") && m.content.contains("first tool batch")),
+            refused.is_some_and(
+                |m| m.content.contains("refused") && m.content.contains("first tool batch")
+            ),
             "second-batch write refused: {round3:?}"
         );
         // Still one entry after the refusal.
@@ -8178,7 +8442,10 @@ mod tests {
             .find(|m| m.content.starts_with("[压缩白名单"))
             .expect("whitelist message present");
         assert!(wl_after.content.contains("首轮条目"));
-        assert!(!wl_after.content.contains("次轮条目"), "no second entry: {wl_after:?}");
+        assert!(
+            !wl_after.content.contains("次轮条目"),
+            "no second entry: {wl_after:?}"
+        );
 
         // Complete event chain: the refusal is journaled as a ToolCompleted
         // error (evidence).
@@ -8188,7 +8455,11 @@ mod tests {
             .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
             .filter(|e| e.payload.get("status").and_then(|s| s.as_str()) == Some("error"))
             .collect();
-        assert_eq!(failed_tool_completed.len(), 1, "one refused write journaled");
+        assert_eq!(
+            failed_tool_completed.len(),
+            1,
+            "one refused write journaled"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -8229,9 +8500,7 @@ mod tests {
         );
         // No whitelist message was created.
         assert!(
-            round2
-                .iter()
-                .all(|m| !m.content.starts_with("[压缩白名单")),
+            round2.iter().all(|m| !m.content.starts_with("[压缩白名单")),
             "no whitelist message on refusal: {round2:?}"
         );
 
@@ -8275,9 +8544,7 @@ mod tests {
             "empty-content refusal: {round2:?}"
         );
         assert!(
-            round2
-                .iter()
-                .all(|m| !m.content.starts_with("[压缩白名单")),
+            round2.iter().all(|m| !m.content.starts_with("[压缩白名单")),
             "no whitelist message on empty refusal: {round2:?}"
         );
         let failed: Vec<_> = events(&dir)
@@ -8327,10 +8594,19 @@ mod tests {
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         // min_rounds=1 — the cooldown never blocks; only the gap gates.
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(1_000, 400, 1, 100_000);
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 1, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-GAP", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-GAP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -8340,7 +8616,11 @@ mod tests {
             .filter(|e| e.event_type == EventType::ContextCompressed)
             .map(|e| e.payload)
             .collect();
-        assert_eq!(compact_events.len(), 1, "one gap compaction: {compact_events:?}");
+        assert_eq!(
+            compact_events.len(),
+            1,
+            "one gap compaction: {compact_events:?}"
+        );
 
         // Tool-round gaps (requests 2 and 3) are untouched; the gate-reply
         // request (4) carries the marker.
@@ -8399,10 +8679,19 @@ mod tests {
             ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(1_000, 400, 5, 100_000); // cooldown longer than the run
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 5, 100_000); // cooldown longer than the run
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-NO", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-NO",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -8411,7 +8700,10 @@ mod tests {
             .filter(|e| e.event_type == EventType::ContextCompressed)
             .map(|e| e.payload)
             .collect();
-        assert!(compact_events.is_empty(), "cooldown suppressed: {compact_events:?}");
+        assert!(
+            compact_events.is_empty(),
+            "cooldown suppressed: {compact_events:?}"
+        );
         // No marker in any request.
         for request in fake.received_requests() {
             assert!(
@@ -8467,7 +8759,16 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(150_000, 400, 20, 100_000);
         controller
-            .run_turn(&host, "压缩测试", "RUN-COMPACT-SAFE", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-SAFE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -8531,7 +8832,16 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-EDIT-FAIL", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "改文件",
+                "RUN-EDIT-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -8624,7 +8934,16 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件再看黑板", "RUN-BB", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "改文件再看黑板",
+                "RUN-BB",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -8647,7 +8966,11 @@ mod tests {
         let received = fake.received_requests();
         let round3 = received
             .iter()
-            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b1")))
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b1"))
+            })
             .expect("round carrying blackboard_read reply");
         assert!(
             round3
@@ -8714,14 +9037,27 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件并回看", "RUN-BBS", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "改文件并回看",
+                "RUN-BBS",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
         let received = fake.received_requests();
         let far_future = received
             .iter()
-            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b2")))
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b2"))
+            })
             .expect("call-b2 round");
         assert!(
             far_future
@@ -8735,7 +9071,11 @@ mod tests {
 
         let far_past = received
             .iter()
-            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b3")))
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b3"))
+            })
             .expect("call-b3 round");
         assert!(
             far_past
@@ -8777,14 +9117,27 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "读错误分区", "RUN-BBE", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "读错误分区",
+                "RUN-BBE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
         let received = fake.received_requests();
         let round = received
             .iter()
-            .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some("call-b4")))
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b4"))
+            })
             .expect("call-b4 round");
         assert!(
             round
@@ -8891,7 +9244,9 @@ mod tests {
     struct FullRegistry;
     impl ToolRegistry for FullRegistry {
         fn get(&self, name: &str) -> Option<ToolDef> {
-            FullRegistry::list_all().into_iter().find(|t| t.name == name)
+            FullRegistry::list_all()
+                .into_iter()
+                .find(|t| t.name == name)
         }
         fn list(&self) -> Vec<ToolDef> {
             FullRegistry::list_all()
@@ -8909,13 +9264,13 @@ mod tests {
                 "web_fetch",
                 "bash",
             ]
-                .iter()
-                .map(|n| ToolDef {
-                    name: n.to_string(),
-                    description: format!("tool {n}"),
-                    parameters: serde_json::json!({}),
-                })
-                .collect()
+            .iter()
+            .map(|n| ToolDef {
+                name: n.to_string(),
+                description: format!("tool {n}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect()
         }
     }
 
@@ -8985,11 +9340,7 @@ mod tests {
         // projection (retrieval mode gate, NOT policy filtering).
         let received = fake.received_requests();
         let first = &received[0];
-        let mut declared: Vec<&str> = first
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let mut declared: Vec<&str> = first.tools.iter().map(|t| t.name.as_str()).collect();
         declared.sort();
         assert_eq!(
             declared,
@@ -9010,8 +9361,7 @@ mod tests {
         // 性声明不固定在 prompt 中——prompt 只保留 budget/status 块)。
         let system = first.system.clone();
         assert!(
-            !system.contains("[TOOL_AVAILABILITY")
-                && !system.contains("AVAILABLE:"),
+            !system.contains("[TOOL_AVAILABILITY") && !system.contains("AVAILABLE:"),
             "no availability block in system prompt: {system}"
         );
 
@@ -9038,11 +9388,7 @@ mod tests {
             .unwrap();
 
         let received = fake.received_requests();
-        let mut declared: Vec<&str> = received[0]
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let mut declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
         declared.sort();
         assert_eq!(
             declared,
@@ -9540,14 +9886,12 @@ mod tests {
 
         let types = event_types(&dir);
         assert!(
-            !types
-                .iter()
-                .any(|t| matches!(
-                    t,
-                    EventType::ControlTicketIssued
-                        | EventType::ControlTicketConsumed
-                        | EventType::ControlTicketRejected
-                )),
+            !types.iter().any(|t| matches!(
+                t,
+                EventType::ControlTicketIssued
+                    | EventType::ControlTicketConsumed
+                    | EventType::ControlTicketRejected
+            )),
             "unconfigured ACAF must journal zero ticket events: {types:?}"
         );
         // The tool still ran through the full gate chain (IP5 + ToolStarted).
@@ -9569,9 +9913,8 @@ mod tests {
     #[tokio::test]
     async fn network_and_command_with_acaf_disabled_zero_ticket_events() {
         let dir = test_dir();
-        let store = Arc::new(
-            SnapshotStore::new(dir.join(".gsa").join("snapshots"), dir.clone()).unwrap(),
-        );
+        let store =
+            Arc::new(SnapshotStore::new(dir.join(".gsa").join("snapshots"), dir.clone()).unwrap());
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
             journal,
@@ -9614,20 +9957,27 @@ mod tests {
             )
             .with_snapshot_store(Some(store));
         controller
-            .run_turn(&host, "读取与命令", "RUN-NOACAF-NETCMD", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "读取与命令",
+                "RUN-NOACAF-NETCMD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
         let types = event_types(&dir);
         assert!(
-            !types
-                .iter()
-                .any(|t| matches!(
-                    t,
-                    EventType::ControlTicketIssued
-                        | EventType::ControlTicketConsumed
-                        | EventType::ControlTicketRejected
-                )),
+            !types.iter().any(|t| matches!(
+                t,
+                EventType::ControlTicketIssued
+                    | EventType::ControlTicketConsumed
+                    | EventType::ControlTicketRejected
+            )),
             "unconfigured ACAF must journal zero ticket events even for an \
              invalid URL: {types:?}"
         );
@@ -9666,7 +10016,7 @@ mod tests {
                 0,
                 None,
                 None,
-            None,
+                None,
             )
             .await;
         assert!(result.is_ok(), "{result:?}");
@@ -9716,7 +10066,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-RET", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-RET",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -9770,7 +10129,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-MR", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-MR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -9807,12 +10175,21 @@ mod tests {
                     && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
             })
             .expect("read_file ToolCompleted");
-        assert_eq!(read_completed.payload.get("exit_code"), Some(&serde_json::json!(0)));
+        assert_eq!(
+            read_completed.payload.get("exit_code"),
+            Some(&serde_json::json!(0))
+        );
         // Result formed into the section.
         let bb = controller.blackboard();
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md"]);
-        assert!(r.internal_ret.response.as_deref().unwrap().contains("检索完成"));
+        assert!(
+            r.internal_ret
+                .response
+                .as_deref()
+                .unwrap()
+                .contains("检索完成")
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -9842,7 +10219,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-WG", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-WG",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -9872,10 +10258,7 @@ mod tests {
         // The model saw the refusal in its tool reply.
         let conversation_denial = events
             .iter()
-            .find(|e| {
-                e.event_type == EventType::ToolCompleted
-                    && e.payload.get("error").is_some()
-            });
+            .find(|e| e.event_type == EventType::ToolCompleted && e.payload.get("error").is_some());
         assert!(conversation_denial.is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -9906,7 +10289,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-NS", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-NS",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -9951,7 +10343,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-R2H", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-R2H",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -10019,8 +10420,7 @@ mod tests {
             call_id: "call-woff".to_string(),
         };
         let mut messages: Vec<Message> = Vec::new();
-        let mut writer =
-            EventWriter::new(None, EventTrack::V02, "RUN-WOFF", "", 0, None, None);
+        let mut writer = EventWriter::new(None, EventTrack::V02, "RUN-WOFF", "", 0, None, None);
         let (result, feedback) = controller
             .run_host_tool(
                 &host,
@@ -10066,8 +10466,13 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_retrieval_mode(RetrievalMode::LocalBrowser, RetrievalCapability::Available, false, None, None);
+        let controller = AgentLoopController::with_gateway(gateway).with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        );
         controller
             .run_turn(&host, "查网页", "RUN-LBW", MANIFEST, 0, None, None, None)
             .await
@@ -10140,8 +10545,7 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
-        let mut orientation =
-            crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-abcdef123456");
         controller
             .run_turn(
                 &host,
@@ -10151,7 +10555,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -10193,11 +10597,17 @@ mod tests {
             .collect();
         assert_eq!(dispositions.len(), 1);
         assert_eq!(
-            dispositions[0].payload.get("outcome").and_then(|v| v.as_str()),
+            dispositions[0]
+                .payload
+                .get("outcome")
+                .and_then(|v| v.as_str()),
             Some("accepted")
         );
         assert_eq!(
-            dispositions[0].payload.get("decision").and_then(|v| v.as_str()),
+            dispositions[0]
+                .payload
+                .get("decision")
+                .and_then(|v| v.as_str()),
             Some("continue")
         );
         assert_eq!(
@@ -10211,7 +10621,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn disposition_call(role: &str, decision: &str, delta: Option<&str>, call_id: &str) -> ToolCall {
+    fn disposition_call(
+        role: &str,
+        decision: &str,
+        delta: Option<&str>,
+        call_id: &str,
+    ) -> ToolCall {
         let mut arguments = serde_json::json!({
             "role": role,
             "decision": decision,
@@ -10258,8 +10673,7 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
-        let mut orientation =
-            crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-abcdef123456");
         controller
             .run_turn(
                 &host,
@@ -10269,7 +10683,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -10339,7 +10753,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-REPLAY", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-REPLAY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -10353,10 +10776,7 @@ mod tests {
         let p1 = &dispositions[1].payload;
         // Byte-identical payloads (the outcome rides the first occurrence).
         assert_eq!(p0, p1, "replayed disposition must be canonical-identical");
-        assert_eq!(
-            p1.get("outcome").and_then(|v| v.as_str()),
-            Some("accepted")
-        );
+        assert_eq!(p1.get("outcome").and_then(|v| v.as_str()), Some("accepted"));
         // ONE close record — the replay never re-commits.
         assert_eq!(
             events
@@ -10402,7 +10822,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-STALE", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-STALE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -10413,11 +10842,17 @@ mod tests {
             .collect();
         assert_eq!(dispositions.len(), 2);
         assert_eq!(
-            dispositions[0].payload.get("outcome").and_then(|v| v.as_str()),
+            dispositions[0]
+                .payload
+                .get("outcome")
+                .and_then(|v| v.as_str()),
             Some("accepted")
         );
         assert_eq!(
-            dispositions[1].payload.get("outcome").and_then(|v| v.as_str()),
+            dispositions[1]
+                .payload
+                .get("outcome")
+                .and_then(|v| v.as_str()),
             Some("rejected_stale")
         );
         // No close record — the stale close never commits.
@@ -10452,7 +10887,16 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         controller
-            .run_turn(&host, "查找项目文档", "RUN-AWAIT", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-AWAIT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -10503,7 +10947,9 @@ mod tests {
             ])
             .with_chunk_delay(std::time::Duration::from_millis(60)),
         );
-        let controller = Arc::new(with_retrieval_enabled(AgentLoopController::with_gateway(gateway)));
+        let controller = Arc::new(with_retrieval_enabled(AgentLoopController::with_gateway(
+            gateway,
+        )));
         let token = tokio_util::sync::CancellationToken::new();
 
         let c = controller.clone();
@@ -10586,10 +11032,19 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller =
-            with_retrieval_enabled(AgentLoopController::with_gateway(gateway)).with_max_tool_rounds(2);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
+            .with_max_tool_rounds(2);
         controller
-            .run_turn(&host, "查找项目文档", "RUN-BUD", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-BUD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -10604,11 +11059,17 @@ mod tests {
             .find(|e| e.event_type == EventType::RetrievalCloseRecord)
             .expect("budget close record");
         assert_eq!(
-            close.payload.get("terminal_reason").and_then(|v| v.as_str()),
+            close
+                .payload
+                .get("terminal_reason")
+                .and_then(|v| v.as_str()),
             Some("budget_exhausted")
         );
         assert!(close.payload.get("assessment_id").is_some());
-        assert_eq!(close.payload.get("validated_disposition_id"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            close.payload.get("validated_disposition_id"),
+            Some(&serde_json::Value::Null)
+        );
         let close_idx = events
             .iter()
             .position(|e| e.event_type == EventType::RetrievalCloseRecord)
@@ -10662,10 +11123,19 @@ mod tests {
             // subagent lanes never fire the gate).
             ScriptedResponse::text("完成"),
         ]));
-        let controller =
-            with_retrieval_enabled(AgentLoopController::with_gateway(gateway)).with_max_tool_rounds(4);
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
+            .with_max_tool_rounds(4);
         controller
-            .run_turn(&host, "查找项目文档", "RUN-BUDACC", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-BUDACC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -10678,8 +11148,7 @@ mod tests {
             .enumerate()
             .filter(|(_, e)| {
                 e.event_type == EventType::GateDecision
-                    && e.payload.get("gate").and_then(|v| v.as_str())
-                        == Some("tool_rounds_limit")
+                    && e.payload.get("gate").and_then(|v| v.as_str()) == Some("tool_rounds_limit")
             })
             .map(|(i, _e)| i)
             .collect();
@@ -10714,7 +11183,10 @@ mod tests {
         assert!(limits[0] < close_idx, "limit gate inside dispatch 2");
         let close = &events[close_idx];
         assert_eq!(
-            close.payload.get("terminal_reason").and_then(|v| v.as_str()),
+            close
+                .payload
+                .get("terminal_reason")
+                .and_then(|v| v.as_str()),
             Some("budget_exhausted")
         );
         assert!(close.payload.get("assessment_id").is_some());
@@ -10772,8 +11244,7 @@ mod tests {
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
             FakeProvider::new(script),
         )));
-        let mut orientation =
-            crate::orientation::OrientationSessionState::new("sess-lane1234567");
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-lane1234567");
         controller
             .run_turn(
                 &host,
@@ -10783,7 +11254,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -10795,11 +11266,28 @@ mod tests {
             .collect();
         assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
         let p = &fires[0].payload;
-        assert_eq!(p.get("agent_role").and_then(|v| v.as_str()), Some("internal_retrieval"));
-        assert_eq!(p.get("trigger").and_then(|v| v.as_str()), Some("completed_turns_interval"));
-        assert_eq!(p.get("completed_turns_since_orientation"), Some(&serde_json::json!(7)));
-        assert_eq!(p.get("injection_position").and_then(|v| v.as_str()), Some("post_tool_batch_gap"));
-        assert!(p.get("message_block").and_then(|v| v.as_str()).unwrap().starts_with("[ORIENTATION"));
+        assert_eq!(
+            p.get("agent_role").and_then(|v| v.as_str()),
+            Some("internal_retrieval")
+        );
+        assert_eq!(
+            p.get("trigger").and_then(|v| v.as_str()),
+            Some("completed_turns_interval")
+        );
+        assert_eq!(
+            p.get("completed_turns_since_orientation"),
+            Some(&serde_json::json!(7))
+        );
+        assert_eq!(
+            p.get("injection_position").and_then(|v| v.as_str()),
+            Some("post_tool_batch_gap")
+        );
+        assert!(
+            p.get("message_block")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .starts_with("[ORIENTATION")
+        );
         // Lanes count independently: the main's 3 rounds never fed the
         // subagent lane and vice versa. The fire COMMIT reset the internal
         // lane (7 → 0); the 8th (result-forming) round re-fed it to 1.
@@ -10895,8 +11383,7 @@ mod tests {
             ScriptedResponse::text("修复完成。"),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
-        let mut orientation =
-            crate::orientation::OrientationSessionState::new("sess-dc12345678");
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-dc12345678");
         controller
             .run_turn(
                 &host,
@@ -10906,7 +11393,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -10926,12 +11413,19 @@ mod tests {
         assert_eq!(p1.get("threshold_stage"), Some(&serde_json::json!(3)));
         assert_eq!(p0.get("trigger_count"), Some(&serde_json::json!(0)));
         assert_eq!(p1.get("trigger_count"), Some(&serde_json::json!(1)));
-        assert_eq!(p0.get("inquiry_family").and_then(|v| v.as_str()), Some("neutral"));
+        assert_eq!(
+            p0.get("inquiry_family").and_then(|v| v.as_str()),
+            Some("neutral")
+        );
         assert_eq!(
             p0.get("inquiry_kind").and_then(|v| v.as_str()),
             Some("diagnostic_coverage_checkpoint")
         );
-        assert!(p0.get("signals").and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty()));
+        assert!(
+            p0.get("signals")
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| !a.is_empty())
+        );
         assert!(
             p0.get("message_block")
                 .and_then(|v| v.as_str())
@@ -10960,9 +11454,7 @@ mod tests {
         let journal = JournalRecorder::new(dir.clone());
         let host = ScriptedTestRunnerHost {
             journal,
-            results: std::sync::Mutex::new(
-                vec![failing_test_run(), failing_test_run()].into(),
-            ),
+            results: std::sync::Mutex::new(vec![failing_test_run(), failing_test_run()].into()),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
@@ -10972,7 +11464,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "修复测试失败", "RUN-DC2", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC2",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -11027,7 +11528,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "修复测试失败", "RUN-DC3", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC3",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -11121,12 +11631,13 @@ mod tests {
 
         let received = fake.received_requests();
         assert!(
+            received[0].tools.iter().any(|t| t.name == "run_tests"),
+            "run_tests declared to the model: {:?}",
             received[0]
                 .tools
                 .iter()
-                .any(|t| t.name == "run_tests"),
-            "run_tests declared to the model: {:?}",
-            received[0].tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+                .map(|t| &t.name)
+                .collect::<Vec<_>>()
         );
         // The round after the tool call answers the run_tests declaration
         // with the test output.
@@ -11137,7 +11648,11 @@ mod tests {
             .expect("run_tests call answered with a tool message");
         // F-09 (2026-08-07 review): the tool message is the gated form —
         // completion reminder + output + full-output pointer, not raw output.
-        assert!(tool_msg.content.starts_with("[test-run complete] exit_code=0"));
+        assert!(
+            tool_msg
+                .content
+                .starts_with("[test-run complete] exit_code=0")
+        );
         assert!(tool_msg.content.contains("1 passed"));
         assert!(tool_msg.content.contains("D:/test-output.txt"));
         assert!(
@@ -11524,7 +12039,10 @@ mod tests {
             .iter()
             .find(|e| e.event_type == EventType::ToolCompleted)
             .expect("ToolCompleted journaled");
-        assert_eq!(tc.payload.get("status").and_then(|v| v.as_str()), Some("error"));
+        assert_eq!(
+            tc.payload.get("status").and_then(|v| v.as_str()),
+            Some("error")
+        );
         assert!(
             tc.payload
                 .get("error")
@@ -11592,7 +12110,10 @@ mod tests {
             !msg.contains("sk-0123456789abcdef0123456789abcdef"),
             "secret shape must be scrubbed: {msg}"
         );
-        assert!(msg.contains("Failed on line 3"), "non-secret text passes through");
+        assert!(
+            msg.contains("Failed on line 3"),
+            "non-secret text passes through"
+        );
     }
 
     #[tokio::test]
@@ -11819,12 +12340,8 @@ mod tests {
 
         // The chain must stay valid — the incomplete record precedes the
         // terminal event.
-        let replay = orz_assurance::replay_journal(
-            &dir.join("events.jsonl"),
-            Some("RUN-PART"),
-            None,
-            true,
-        );
+        let replay =
+            orz_assurance::replay_journal(&dir.join("events.jsonl"), Some("RUN-PART"), None, true);
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
 
@@ -11889,8 +12406,7 @@ mod tests {
             repeated.as_str(),
             repeated.as_str(),
         ]));
-        let mut orientation =
-            crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-abcdef123456");
         let controller = AgentLoopController::with_gateway(gateway);
         controller
             .run_turn(
@@ -11901,7 +12417,7 @@ mod tests {
                 0,
                 None,
                 Some(&mut orientation),
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -11913,8 +12429,7 @@ mod tests {
             .iter()
             .find(|e| {
                 e.event_type == EventType::OrientationCheckpoint
-                    && e.payload.get("trigger").and_then(|t| t.as_str())
-                        == Some("pre_handoff")
+                    && e.payload.get("trigger").and_then(|t| t.as_str()) == Some("pre_handoff")
             })
             .expect("pre-handoff checkpoint journaled");
         assert_eq!(checkpoint.payload["agent_role"], "main");
@@ -11980,7 +12495,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "运行命令", "RUN-DEFER", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "运行命令",
+                "RUN-DEFER",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -12098,7 +12622,7 @@ mod tests {
                 None,
                 Some(&token),
                 None,
-            None,
+                None,
             )
             .await;
 
@@ -12494,7 +13018,13 @@ mod tests {
         ];
         let response = controller
             .run_turn(
-                &host, "第二问", "RUN-CONV", MANIFEST, 0, None, None,
+                &host,
+                "第二问",
+                "RUN-CONV",
+                MANIFEST,
+                0,
+                None,
+                None,
                 Some(&mut conversation),
             )
             .await
@@ -12544,7 +13074,13 @@ mod tests {
         let before = conversation.clone();
         let result = controller
             .run_turn(
-                &host, "第二问", "RUN-CONV-FAIL", MANIFEST, 0, None, None,
+                &host,
+                "第二问",
+                "RUN-CONV-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
                 Some(&mut conversation),
             )
             .await;
@@ -12605,9 +13141,8 @@ mod tests {
                 ]
             }]
         });
-        let controller = AgentLoopController::with_gateway(Arc::new(
-            FakeProvider::from_texts(vec!["x"]),
-        ));
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         let mut registry = controller.activations.lock().unwrap();
         let restored = registry.seed_from_json(&snapshot);
         assert_eq!(restored.len(), 1);
@@ -12634,9 +13169,8 @@ mod tests {
     /// conversation field-for-field.
     #[tokio::test]
     async fn stored_activation_roundtrip_with_conversation() {
-        let controller = AgentLoopController::with_gateway(Arc::new(
-            FakeProvider::from_texts(vec!["x"]),
-        ));
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         let state = ActivationState {
             activation_id: "retrieval-internal_retrieval-sess-abc-00".to_string(),
             parent_session_id: "sess-abcdef123456".to_string(),
@@ -12658,15 +13192,20 @@ mod tests {
             .unwrap()
             .states
             .insert(SubagentRole::InternalRetrieval, state);
-        let json = controller.activations.lock().unwrap().snapshot_json("RUN-1");
-        let c2 = AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec![
-            "x",
-        ])));
+        let json = controller
+            .activations
+            .lock()
+            .unwrap()
+            .snapshot_json("RUN-1");
+        let c2 = AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         let restored = c2.activations.lock().unwrap().seed_from_json(&json);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].conversation.len(), 1);
         assert_eq!(restored[0].conversation[0].content, "历史问");
-        assert_eq!(restored[0].activation_id, "retrieval-internal_retrieval-sess-abc-00");
+        assert_eq!(
+            restored[0].activation_id,
+            "retrieval-internal_retrieval-sess-abc-00"
+        );
     }
 
     /// An OLD sidecar (no `conversation` key) still parses — `serde(default)`
@@ -12686,19 +13225,20 @@ mod tests {
                 "origin_run_id": "RUN-PREV-0001",
             }]
         });
-        let controller = AgentLoopController::with_gateway(Arc::new(
-            FakeProvider::from_texts(vec!["x"]),
-        ));
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         let mut registry = controller.activations.lock().unwrap();
         let restored = registry.seed_from_json(&snapshot);
         assert_eq!(restored.len(), 1);
         assert!(restored[0].conversation.is_empty(), "default empty");
-        assert!(registry
-            .states
-            .get(&SubagentRole::InternalRetrieval)
-            .unwrap()
-            .conversation
-            .is_empty());
+        assert!(
+            registry
+                .states
+                .get(&SubagentRole::InternalRetrieval)
+                .unwrap()
+                .conversation
+                .is_empty()
+        );
         drop(registry);
     }
 
@@ -12775,10 +13315,17 @@ mod tests {
         let reqs = fake.received_requests();
         let subagent_req = reqs
             .iter()
-            .find(|r| r.messages.iter().any(|m| m.content.contains("历史检索目标")))
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.contains("历史检索目标"))
+            })
             .expect("subagent request with restored history");
         assert!(
-            subagent_req.messages.iter().any(|m| m.content.contains("补充检索")),
+            subagent_req
+                .messages
+                .iter()
+                .any(|m| m.content.contains("补充检索")),
             "new goal appended: {:?}",
             subagent_req.messages
         );

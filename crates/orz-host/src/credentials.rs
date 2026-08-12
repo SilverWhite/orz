@@ -48,9 +48,8 @@ pub struct DeepSeekCredentialReader;
 
 impl CredentialReader for DeepSeekCredentialReader {
     fn read(&self) -> Result<String, CredentialError> {
-        orz_loop::gateway::credentials::read_agent_api_key().map_err(|e| CredentialError {
-            message: e.0,
-        })
+        orz_loop::gateway::credentials::read_agent_api_key()
+            .map_err(|e| CredentialError { message: e.0 })
     }
 }
 

@@ -85,10 +85,7 @@ pub enum TildeExpandError {
 ///   on Windows, so mirroring either side forks behaviour; a `~user` target
 ///   is never ticketable (fail-closed);
 /// - `home = None` leaves `~` / `~/` in place (treated as a relative path).
-pub fn tilde_expand_strict(
-    input: &str,
-    home: Option<&Path>,
-) -> Result<String, TildeExpandError> {
+pub fn tilde_expand_strict(input: &str, home: Option<&Path>) -> Result<String, TildeExpandError> {
     if let Some(home) = home {
         if input == "~" {
             return Ok(home.to_string_lossy().into_owned());
@@ -278,7 +275,10 @@ mod tests {
 
     #[test]
     fn resolve_lexical_empty_joins_cwd() {
-        assert_eq!(resolve_lexical(Path::new("/work"), None, ""), PathBuf::from("/work"));
+        assert_eq!(
+            resolve_lexical(Path::new("/work"), None, ""),
+            PathBuf::from("/work")
+        );
     }
 
     #[test]
@@ -325,7 +325,11 @@ mod tests {
         // Same pattern with display_cwd set.
         let display = Path::new("/home/user/project");
         assert_eq!(
-            resolve_lexical(Path::new("/worktree/abc"), Some(display), "home/user/project/src/main.rs"),
+            resolve_lexical(
+                Path::new("/worktree/abc"),
+                Some(display),
+                "home/user/project/src/main.rs"
+            ),
             PathBuf::from("/worktree/abc/src/main.rs")
         );
         // Non-matching relative stays cwd-joined (no recovery).
@@ -340,7 +344,10 @@ mod tests {
         // `:` (bare) and `:/display/...` (colon before display path) are NOT
         // absolute — treated as relative and joined (Kimi colon idiom).
         let cwd = Path::new("/worktree/abc");
-        assert_eq!(resolve_lexical(cwd, None, ":"), PathBuf::from("/worktree/abc/:"));
+        assert_eq!(
+            resolve_lexical(cwd, None, ":"),
+            PathBuf::from("/worktree/abc/:")
+        );
         assert_eq!(
             resolve_lexical(cwd, None, ":/testbed/cache/cache.go"),
             PathBuf::from("/worktree/abc/:/testbed/cache/cache.go")

@@ -104,7 +104,11 @@ fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
     }
     // NAT64 well-known prefix (RFC 6052): `64:ff9b::/96` embeds the IPv4 in
     // bytes 12..16.
-    if octets[..12] == [0x00, 0x64, 0xff, 0x9b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] {
+    if octets[..12]
+        == [
+            0x00, 0x64, 0xff, 0x9b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]
+    {
         let v4 = Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]);
         if is_non_public_ipv4(v4) {
             return true;

@@ -86,9 +86,7 @@ fn main() {
         let mode = match args.get(pos + 1) {
             Some(s) => s.clone(),
             None => {
-                eprintln!(
-                    "error: --retrieval-mode requires off|local_browser|framework_fallback"
-                );
+                eprintln!("error: --retrieval-mode requires off|local_browser|framework_fallback");
                 std::process::exit(2);
             }
         };
@@ -291,7 +289,9 @@ async fn build_acaf_client() -> Result<
     let (Some(manifest), Some(keystore)) = (manifest, keystore) else {
         return Ok(None);
     };
-    let binary = std::env::var("ORZ_ACAF_BINARY").ok().map(std::path::PathBuf::from);
+    let binary = std::env::var("ORZ_ACAF_BINARY")
+        .ok()
+        .map(std::path::PathBuf::from);
     let client = orz_loop::acaf::AcafClient::spawn(&orz_loop::acaf::AcafConfig {
         manifest_path: std::path::PathBuf::from(manifest),
         keystore_root: std::path::PathBuf::from(keystore),
@@ -532,31 +532,31 @@ async fn run_plan_phase(
     let gate_response = gateway
         .generate_stream(
             orz_loop::gateway::model::ModelRequest {
-            system: orz_loop::prompt::BASE_SYSTEM_PROMPT.to_string(),
-            messages: vec![
-                Message {
-                    role: Role::User,
-                    content: render_plan_for_gate(&artifact),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                },
-                Message {
-                    role: Role::User,
-                    content: orz_loop::prompt::COUNTEREXAMPLE_GATE_PLAN_BLOCK.to_string(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                },
-            ],
-            tools: Vec::new(),
-            // F-07 (2026-08-07 review): the gate is a FAST preflight round
-            // (max_tokens=1024) — under the default thinking-max config the
-            // reasoning would eat the whole budget and force the empty-
-            // content retry chain (up to 3 model calls per `-p`). Explicit
-            // override: thinking disabled, all output routed to content.
-            max_tokens: 1024,
-            thinking: Some(orz_loop::gateway::model::ThinkingMode::Disabled),
+                system: orz_loop::prompt::BASE_SYSTEM_PROMPT.to_string(),
+                messages: vec![
+                    Message {
+                        role: Role::User,
+                        content: render_plan_for_gate(&artifact),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    },
+                    Message {
+                        role: Role::User,
+                        content: orz_loop::prompt::COUNTEREXAMPLE_GATE_PLAN_BLOCK.to_string(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    },
+                ],
+                tools: Vec::new(),
+                // F-07 (2026-08-07 review): the gate is a FAST preflight round
+                // (max_tokens=1024) — under the default thinking-max config the
+                // reasoning would eat the whole budget and force the empty-
+                // content retry chain (up to 3 model calls per `-p`). Explicit
+                // override: thinking disabled, all output routed to content.
+                max_tokens: 1024,
+                thinking: Some(orz_loop::gateway::model::ThinkingMode::Disabled),
             },
             None,
             // P1-1 (2026-08-08 stall guards): the gate's own wire frames
@@ -1037,7 +1037,10 @@ async fn run(
         Some(budget) => match tokio::time::timeout(budget, guarded).await {
             Ok(result) => result,
             Err(_) => {
-                tracing::warn!(?budget, "max-wallclock reached — recording run_invalidated terminal");
+                tracing::warn!(
+                    ?budget,
+                    "max-wallclock reached — recording run_invalidated terminal"
+                );
                 let note = record_guard_terminal(&handle, "wallclock").await?;
                 handle.journal.shutdown_async().await?;
                 Ok((note, handle.journal_dir.join("events.jsonl")))
@@ -1078,16 +1081,17 @@ fn build_cli_host(
         let env = std::env::var("ORZ_TEST_RUNNER_ENV")
             .ok()
             .map(|raw| {
-                serde_json::from_str::<std::collections::BTreeMap<String, String>>(&raw).unwrap_or_else(|e| {
-                    // P2 (review 2026-08-11): a typo'd harness env JSON must
-                    // not silently drop PYTHONPATH/venv entries — the
-                    // failure mode ("module not found" in a broken test
-                    // environment) is otherwise invisible. Fail-safe: env
-                    // stays empty (env_clear still applies), but the harness
-                    // sees the parse error in the log.
-                    tracing::warn!(raw, "ORZ_TEST_RUNNER_ENV parse failed: {e}");
-                    std::collections::BTreeMap::new()
-                })
+                serde_json::from_str::<std::collections::BTreeMap<String, String>>(&raw)
+                    .unwrap_or_else(|e| {
+                        // P2 (review 2026-08-11): a typo'd harness env JSON must
+                        // not silently drop PYTHONPATH/venv entries — the
+                        // failure mode ("module not found" in a broken test
+                        // environment) is otherwise invisible. Fail-safe: env
+                        // stays empty (env_clear still applies), but the harness
+                        // sees the parse error in the log.
+                        tracing::warn!(raw, "ORZ_TEST_RUNNER_ENV parse failed: {e}");
+                        std::collections::BTreeMap::new()
+                    })
             })
             .unwrap_or_default()
             .into_iter()
@@ -1256,8 +1260,7 @@ mod tests {
         );
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_invalidated"));
-        let content =
-            std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+        let content = std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
         let last: serde_json::Value =
             serde_json::from_str(content.lines().last().unwrap()).unwrap();
         assert_eq!(last["payload"]["status"], "wallclock");
@@ -1327,8 +1330,7 @@ mod tests {
         );
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_invalidated"));
-        let content =
-            std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
+        let content = std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
         let last: serde_json::Value =
             serde_json::from_str(content.lines().last().unwrap()).unwrap();
         assert_eq!(last["payload"]["status"], "wallclock");
@@ -1380,8 +1382,7 @@ mod tests {
                 Ok(ModelResponse::text_response("never"))
             }
         }
-        let controller =
-            orz_loop::AgentLoopController::with_gateway(Arc::new(SilentGateway));
+        let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(SilentGateway));
         let heartbeat = orz_loop::gateway::model::ActivityClock::new();
         let fut = controller.run_turn_with_guards(
             &host,
@@ -1544,8 +1545,10 @@ mod conformance_capture {
             &self,
             url: &str,
             _download_dir: &std::path::Path,
-        ) -> Result<orz_host::local_browser::BrowserDownloadOutcome, orz_host::local_browser::CdpError>
-        {
+        ) -> Result<
+            orz_host::local_browser::BrowserDownloadOutcome,
+            orz_host::local_browser::CdpError,
+        > {
             // Conformance stub: never a real download — read the page
             // instead (the stub's read_page is the deterministic path).
             let page = self.read_page(url).await?;
@@ -2076,7 +2079,9 @@ mod conformance_capture {
                         }]));
                     }
                 }
-                script.push(ScriptedResponse::text("当前任务定位：处理查询批次；下一步：汇总结果"));
+                script.push(ScriptedResponse::text(
+                    "当前任务定位：处理查询批次；下一步：汇总结果",
+                ));
                 script.push(ScriptedResponse::text("最终汇总完成。"));
                 let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
                     FakeProvider::new(script),
@@ -2096,8 +2101,7 @@ mod conformance_capture {
                 // This scenario is the 7-round-crossing proof — the session
                 // orientation state MUST be threaded in (a one-shot CLI run
                 // would pass None and never fire).
-                let mut orientation =
-                    orz_loop::orientation::OrientationSessionState::new(run_id);
+                let mut orientation = orz_loop::orientation::OrientationSessionState::new(run_id);
                 controller
                     .run_turn(
                         &host,
@@ -2178,8 +2182,7 @@ mod conformance_capture {
                     .lines()
                     .find(|l| l.contains("\"orientation_checkpoint\""))
                     .expect("orientation event present");
-                let payload: serde_json::Value =
-                    serde_json::from_str(orientation_line).unwrap();
+                let payload: serde_json::Value = serde_json::from_str(orientation_line).unwrap();
                 let p = &payload["payload"];
                 assert_eq!(p["inquiry_family"], "neutral");
                 assert_eq!(p["inquiry_kind"], "orientation_checkpoint");
@@ -2187,7 +2190,12 @@ mod conformance_capture {
                 assert_eq!(p["trigger"], "completed_turns_interval");
                 assert_eq!(p["completed_turns_since_orientation"], 7);
                 assert_eq!(p["injection_position"], "post_tool_batch_gap");
-                assert!(p["message_block"].as_str().unwrap().starts_with("[ORIENTATION"));
+                assert!(
+                    p["message_block"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("[ORIENTATION")
+                );
                 // The mechanical assessment snapshots the PER-ITERATION
                 // structured result: each iteration's [DOC] line is one
                 // metadata-grade ledger entry (GAP-RETRIEVAL-TOOLS — the
@@ -2198,12 +2206,14 @@ mod conformance_capture {
                     .filter(|l| l.contains("\"information_sufficiency_assessment\""))
                     .collect();
                 assert_eq!(assessment_lines.len(), 5);
-                let last: serde_json::Value =
-                    serde_json::from_str(assessment_lines[4]).unwrap();
+                let last: serde_json::Value = serde_json::from_str(assessment_lines[4]).unwrap();
                 assert_eq!(last["payload"]["status"], "indeterminate");
                 assert_eq!(last["payload"]["source_counts"]["total"], 1);
                 assert_eq!(last["payload"]["source_counts"]["metadata_only"], 1);
-                assert_eq!(last["payload"]["reason_codes"][0], "no_mechanical_coverage_requirement");
+                assert_eq!(
+                    last["payload"]["reason_codes"][0],
+                    "no_mechanical_coverage_requirement"
+                );
 
                 copy_journal(&handle.journal_dir, "orientation-fire-run");
             })
@@ -2299,8 +2309,8 @@ mod conformance_capture {
                     .await
                     .unwrap();
                 let host = build_cli_host(&handle, run_id, &base).unwrap();
-                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
-                    FakeProvider::new(vec![
+                let controller =
+                    orz_loop::AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
                         ScriptedResponse::tool_calls(vec![ToolCall {
                             name: "web_search".to_string(),
                             arguments: serde_json::json!({"query": "x"}),
@@ -2308,18 +2318,17 @@ mod conformance_capture {
                         }]),
                         ScriptedResponse::text("完成。"),
                         ScriptedResponse::text("完成。"),
-                    ]),
-                ))
-                .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                .with_retrieval_mode(
-                    orz_loop::controller::RetrievalMode::LocalBrowser,
-                    orz_loop::controller::RetrievalCapability::Unsupported(
-                        "local_browser_automation_not_implemented".to_string(),
-                    ),
-                    true,
-                    None,
-                    None,
-                );
+                    ])))
+                    .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                    .with_retrieval_mode(
+                        orz_loop::controller::RetrievalMode::LocalBrowser,
+                        orz_loop::controller::RetrievalCapability::Unsupported(
+                            "local_browser_automation_not_implemented".to_string(),
+                        ),
+                        true,
+                        None,
+                        None,
+                    );
                 controller
                     .run_turn(
                         &host,
@@ -2633,8 +2642,8 @@ mod conformance_capture {
                         "origin_run_id": "RUN-PREV-0001",
                     }]
                 });
-                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
-                    FakeProvider::new(vec![
+                let controller =
+                    orz_loop::AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
                         ScriptedResponse::tool_calls(vec![ToolCall {
                             name: "retrieval_disposition".to_string(),
                             arguments: serde_json::json!({
@@ -2645,17 +2654,16 @@ mod conformance_capture {
                         }]),
                         ScriptedResponse::text("完成。"),
                         ScriptedResponse::text("完成。"),
-                    ]),
-                ))
-                .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                .with_retrieval_mode(
-                    orz_loop::controller::RetrievalMode::FrameworkFallback,
-                    orz_loop::controller::RetrievalCapability::Available,
-                    false,
-                    None,
-                    None,
-                )
-                .with_activation_snapshot(Some(&snapshot));
+                    ])))
+                    .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                    .with_retrieval_mode(
+                        orz_loop::controller::RetrievalMode::FrameworkFallback,
+                        orz_loop::controller::RetrievalCapability::Available,
+                        false,
+                        None,
+                        None,
+                    )
+                    .with_activation_snapshot(Some(&snapshot));
                 controller
                     .run_turn(
                         &host,

@@ -35,6 +35,7 @@ use crate::diag_server::DiagHandle;
 use crate::error::{WorkspaceError, WorkspaceResult};
 use crate::handle::WorkspaceHandle;
 use async_trait::async_trait;
+use orz_tools::registry::types::ToolConfig;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -42,7 +43,6 @@ use url::Url;
 use xai_computer_hub_sdk::{
     AuthProvider, ClientError, HubConnectionPool, ToolServer, ToolServerBuilder, ToolServerHandler,
 };
-use orz_tools::registry::types::ToolConfig;
 use xai_tool_protocol::ToolId;
 use xai_tool_runtime::{
     ToolCallContext, ToolError, ToolErrorKind, ToolStream, ToolStreamItem, TypedToolOutput,
@@ -976,9 +976,9 @@ mod tests {
     }
     use crate::capability::CapabilityMode;
     use crate::session::tool_config::test_support::tc;
-    use std::time::Duration;
     use orz_tools::notification::types::{ToolNotification, ToolNotificationHandle};
     use orz_tools::registry::types::ToolServerConfig;
+    use std::time::Duration;
     fn bg_config() -> ToolServerConfig {
         ToolServerConfig {
             tools: vec![
@@ -1040,9 +1040,7 @@ mod tests {
         }
     }
     fn bg_started_notif(task_id: &str) -> ToolNotification {
-        use orz_tools::notification::types::{
-            BashExecutionBackgrounded, BashNotificationBase,
-        };
+        use orz_tools::notification::types::{BashExecutionBackgrounded, BashNotificationBase};
         ToolNotification::BashExecutionBackgrounded(BashExecutionBackgrounded {
             base: BashNotificationBase {
                 tool_call_id: task_id.to_owned(),

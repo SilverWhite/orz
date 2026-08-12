@@ -266,7 +266,12 @@ mod tests {
         // `$PWD` expands to the shell's view of the dir: the Windows display
         // path on unix, but the MSYS virtual path (/tmp/...) under Git Bash
         // on Windows — assert on the common suffix (dir name + /subdir).
-        let dir_name = dir.path().file_name().unwrap().to_string_lossy().into_owned();
+        let dir_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert!(
             env.get("MY_DIR")
                 .unwrap()
@@ -292,11 +297,13 @@ mod tests {
         // PATH_add prepends `$PWD/bin` — the shell's view of the dir (MSYS
         // /tmp/... under Git Bash on Windows), so assert on the common
         // dir-name suffix.
-        let dir_name = dir.path().file_name().unwrap().to_string_lossy().into_owned();
-        assert!(
-            path.contains(&format!("{dir_name}/bin")),
-            "got: {path}"
-        );
+        let dir_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(path.contains(&format!("{dir_name}/bin")), "got: {path}");
     }
 
     #[test]

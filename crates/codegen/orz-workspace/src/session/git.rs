@@ -2,6 +2,12 @@
 #![allow(dead_code)]
 use anyhow::Result;
 use git2::{DiffOptions, Repository, StatusOptions};
+pub use orz_workspace_types::rpc::git::{
+    ChangeType, CommitData, CommitOutcome, CommitResult, DiscardScope, GitBranchEntry,
+    GitBranchListData, GitCommitReq, GitDiffsData, GitError, GitFileChange, GitInfoData,
+    GitReadFile, GitReadFilesData, GitStatusData, GitSyncBaseOutcome, GitSyncBaseResult,
+    PushStatus, StageData, VcsKind,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -9,12 +15,6 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use url::Url;
-pub use orz_workspace_types::rpc::git::{
-    ChangeType, CommitData, CommitOutcome, CommitResult, DiscardScope, GitBranchEntry,
-    GitBranchListData, GitCommitReq, GitDiffsData, GitError, GitFileChange, GitInfoData,
-    GitReadFile, GitReadFilesData, GitStatusData, GitSyncBaseOutcome, GitSyncBaseResult,
-    PushStatus, StageData, VcsKind,
-};
 pub const ERROR_CODE_DIFF_SIZE_EXCEEDED: &str = "DIFF_SIZE_EXCEEDED";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

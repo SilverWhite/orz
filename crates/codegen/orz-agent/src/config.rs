@@ -2,11 +2,6 @@
 use crate::error::AgentBuildError;
 use crate::prompt::context::TemplateOverride;
 use crate::prompt::user_message::UserMessageTemplate;
-use serde::Deserialize;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use strum::{AsRefStr, Display, EnumIter, EnumString, IntoStaticStr};
 use orz_tools::implementations::codex;
 use orz_tools::implementations::grok_build;
 use orz_tools::implementations::grok_build_concise;
@@ -15,6 +10,11 @@ use orz_tools::implementations::opencode;
 use orz_tools::implementations::search_tool;
 use orz_tools::implementations::use_tool;
 use orz_tools::registry::types::{ToolConfig, ToolServerConfig};
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use strum::{AsRefStr, Display, EnumIter, EnumString, IntoStaticStr};
 /// Process-global registry of externally-provided toolset presets.
 ///
 /// # Visibility
@@ -1419,10 +1419,7 @@ impl AgentDefinition {
     /// Swap the definition's file tools for the equivalents in `file_tools`
     /// (hashline vs standard), slot by slot — never granting a slot the
     /// definition doesn't already have (read-only toolsets stay read-only).
-    pub fn override_file_tools(
-        &mut self,
-        file_tools: Vec<orz_tools::registry::types::ToolConfig>,
-    ) {
+    pub fn override_file_tools(&mut self, file_tools: Vec<orz_tools::registry::types::ToolConfig>) {
         const FILE_TOOL_SLOTS: &[[&str; 2]] = &[
             ["GrokBuild:read_file", "GrokBuildHashline:hashline_read"],
             [

@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use orz_config_types::DisplayRefreshSettings;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

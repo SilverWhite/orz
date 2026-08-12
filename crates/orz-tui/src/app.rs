@@ -1454,12 +1454,18 @@ mod tests {
         // Idle: entering grill is allowed.
         let msgs = app.dispatch_command("/grill");
         assert!(app.grill_active);
-        assert!(msgs.iter().any(|m| m.contains("已进入 grill 模式")), "{msgs:?}");
+        assert!(
+            msgs.iter().any(|m| m.contains("已进入 grill 模式")),
+            "{msgs:?}"
+        );
 
         // Re-entry is a no-op hint.
         let msgs = app.dispatch_command("/grill");
         assert!(app.grill_active);
-        assert!(msgs.iter().any(|m| m.contains("已在 grill 模式")), "{msgs:?}");
+        assert!(
+            msgs.iter().any(|m| m.contains("已在 grill 模式")),
+            "{msgs:?}"
+        );
 
         // /grill-finish marks intent for the runner (async summary turn).
         let msgs = app.dispatch_command("/grill-finish");
@@ -1480,6 +1486,9 @@ mod tests {
         app.running = false;
         let msgs = app.dispatch_command("/grill-finish");
         assert!(!app.pending_grill_finish);
-        assert!(msgs.iter().any(|m| m.contains("未在 grill 模式")), "{msgs:?}");
+        assert!(
+            msgs.iter().any(|m| m.contains("未在 grill 模式")),
+            "{msgs:?}"
+        );
     }
 }

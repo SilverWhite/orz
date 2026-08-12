@@ -205,10 +205,7 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
             .filter(|s| s.status == StepStatus::Completed)
             .count();
         let middle = match current {
-            Some(i) => format!(
-                "当前第 {i} 步「{}」",
-                steps[i - 1].description,
-            ),
+            Some(i) => format!("当前第 {i} 步「{}」", steps[i - 1].description,),
             None => "当前步骤: (无)".to_string(),
         };
         lines.push(format!("目标: {goal}"));
@@ -433,7 +430,9 @@ mod tests {
         // (its v0.2 text carries a version marker — equality would miss it).
         let orientation_block = orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
         assert!(is_injected_block_text(orientation_block));
-        assert!(is_injected_block_text("[ORIENTATION v0.2] 当前任务、位置与下一目标"));
+        assert!(is_injected_block_text(
+            "[ORIENTATION v0.2] 当前任务、位置与下一目标"
+        ));
         // The closing tag must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/ORIENTATION]"));
         // The retired blocks must NOT match — nothing injects them anymore.
@@ -443,13 +442,24 @@ mod tests {
         // blocks use the versioned marker form; the prefix must match it
         // (2026-08-07 review F-04: the constant previously ended in `]` and
         // never matched the `[TOOL_ROUND_BUDGET v0.1]` messages).
-        assert!(is_injected_block_text(&tool_policy_breaker_block("web_search", 3)));
-        assert!(is_injected_block_text(&tool_round_budget_session_block(120)));
-        assert!(is_injected_block_text(&tool_round_budget_remaining_block(38)));
-        assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(120)));
+        assert!(is_injected_block_text(&tool_policy_breaker_block(
+            "web_search",
+            3
+        )));
+        assert!(is_injected_block_text(&tool_round_budget_session_block(
+            120
+        )));
+        assert!(is_injected_block_text(&tool_round_budget_remaining_block(
+            38
+        )));
+        assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(
+            120
+        )));
         // A6 (2026-08-08): the context-compaction marker is mechanical
         // injected text — never stagnation input.
-        assert!(is_injected_block_text(&context_compressed_marker(4, 152_000, None)));
+        assert!(is_injected_block_text(&context_compressed_marker(
+            4, 152_000, None
+        )));
         assert!(context_compressed_marker(4, 152_000, None).contains("152K"));
         assert!(context_compressed_marker(4, 152_000, None).contains("4 轮已压缩"));
         assert!(context_compressed_marker(4, 152_000, None).contains("blackboard_read"));
@@ -468,15 +478,15 @@ mod tests {
         assert!(whitelist.ends_with("[/压缩白名单]"));
         assert!(whitelist.contains("任务背景：修复 orz 的缓存回归"));
         assert!(is_injected_block_text(&whitelist));
-        assert!(is_injected_block_text("  [压缩白名单 v0.1]\n条目\n[/压缩白名单]"));
+        assert!(is_injected_block_text(
+            "  [压缩白名单 v0.1]\n条目\n[/压缩白名单]"
+        ));
         assert!(!is_injected_block_text("[/压缩白名单]"));
         // The base prompt carries the whitelist notice (static — cache-safe).
         assert!(BASE_SYSTEM_PROMPT.contains("compaction_whitelist_add"));
         assert!(BASE_SYSTEM_PROMPT.contains("压缩白名单"));
         // Leading/trailing whitespace tolerated.
-        assert!(is_injected_block_text(&format!(
-            "  {orientation_block}\n"
-        )));
+        assert!(is_injected_block_text(&format!("  {orientation_block}\n")));
         // Ordinary model/user text must never match.
         assert!(!is_injected_block_text("完成"));
         // The prefix match is deliberately conservative: the legacy v0.1

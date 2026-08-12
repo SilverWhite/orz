@@ -604,9 +604,7 @@ impl WorkspaceHandle {
             if servers.is_empty() {
                 None
             } else {
-                use orz_tools::implementations::lsp::{
-                    LspBackend, LspBackendAdapter, LspManager,
-                };
+                use orz_tools::implementations::lsp::{LspBackend, LspBackendAdapter, LspManager};
                 let mgr = Arc::new(tokio::sync::Mutex::new(LspManager::new(
                     servers,
                     config.root_cwd.clone(),
@@ -2353,7 +2351,10 @@ impl WorkspaceHandle {
     pub fn get_or_create_codebase_index(
         &self,
         cwd: std::path::PathBuf,
-    ) -> (Arc<crate::file_system::codebase_graph_stub::IndexManagerHandle>, bool) {
+    ) -> (
+        Arc<crate::file_system::codebase_graph_stub::IndexManagerHandle>,
+        bool,
+    ) {
         self.shared.codebase_indexes.lock().get_or_create(cwd)
     }
     pub fn get_codebase_index(
@@ -2596,9 +2597,9 @@ impl WorkspaceHandle {
             McpClientTransportAdapter, McpStartFailure, McpStartResult, QualifiedMcpToolHandler,
             make_bridge_config, server_name_from_mcp_error,
         };
+        use orz_mcp::servers::MCP_TOOL_NAME_DELIMITER;
         use xai_computer_hub_mcp_adapter::McpBridge;
         use xai_computer_hub_sdk::ToolServerHandler as _;
-        use orz_mcp::servers::MCP_TOOL_NAME_DELIMITER;
         use xai_tool_protocol::SessionId;
         let tool_server = {
             let hub_guard = self.shared.hub_handle.lock().await;
@@ -2625,31 +2626,30 @@ impl WorkspaceHandle {
         let session_id_owned = session_id.to_owned();
         let event_writer = self.shared.session_event_writer(session_id);
         let rt_handle = tokio::runtime::Handle::current();
-        let mcp_results: Vec<
-            Result<orz_mcp::servers::McpClient, orz_mcp::servers::McpError>,
-        > = tokio::task::spawn_blocking(move || {
-            use std::collections::HashMap;
-            use orz_mcp::oauth_config::McpOAuthConfigMap;
-            use orz_mcp::servers::{McpClientTimeoutOverrides, McpMetaConfigMap};
-            let overrides_map: HashMap<String, McpClientTimeoutOverrides> = HashMap::new();
-            let meta_config_map = McpMetaConfigMap::new();
-            let oauth_config_map = McpOAuthConfigMap::new();
-            let ctx = orz_mcp::servers::McpSpawnCtx::for_session(
-                &session_id_owned,
-                &event_writer,
-                orz_mcp::servers::OauthInteractivity::Interactive,
-                None,
-            );
-            rt_handle.block_on(orz_mcp::servers::start_mcp_servers(
-                configs,
-                &overrides_map,
-                &meta_config_map,
-                &oauth_config_map,
-                &ctx,
-            ))
-        })
-        .await
-        .map_err(|e| WorkspaceError::JoinError(e.to_string()))?;
+        let mcp_results: Vec<Result<orz_mcp::servers::McpClient, orz_mcp::servers::McpError>> =
+            tokio::task::spawn_blocking(move || {
+                use orz_mcp::oauth_config::McpOAuthConfigMap;
+                use orz_mcp::servers::{McpClientTimeoutOverrides, McpMetaConfigMap};
+                use std::collections::HashMap;
+                let overrides_map: HashMap<String, McpClientTimeoutOverrides> = HashMap::new();
+                let meta_config_map = McpMetaConfigMap::new();
+                let oauth_config_map = McpOAuthConfigMap::new();
+                let ctx = orz_mcp::servers::McpSpawnCtx::for_session(
+                    &session_id_owned,
+                    &event_writer,
+                    orz_mcp::servers::OauthInteractivity::Interactive,
+                    None,
+                );
+                rt_handle.block_on(orz_mcp::servers::start_mcp_servers(
+                    configs,
+                    &overrides_map,
+                    &meta_config_map,
+                    &oauth_config_map,
+                    &ctx,
+                ))
+            })
+            .await
+            .map_err(|e| WorkspaceError::JoinError(e.to_string()))?;
         let mcp_state = session.mcp_state.clone();
         let mut started = Vec::new();
         let mut failed = Vec::new();
@@ -2750,12 +2750,12 @@ impl WorkspaceHandle {
             "session MCP servers initialized"
         );
         if !started.is_empty() {
-            let _ =
-                self.shared
-                    .events
-                    .send(orz_workspace_types::WorkspaceEvent::ToolsChanged {
-                        session_id: session_id.to_owned(),
-                    });
+            let _ = self
+                .shared
+                .events
+                .send(orz_workspace_types::WorkspaceEvent::ToolsChanged {
+                    session_id: session_id.to_owned(),
+                });
         }
         Ok(McpStartResult { started, failed })
     }
@@ -3668,9 +3668,7 @@ pub(crate) fn apply_background_task_notification(
 /// notifications aren't misattributed across sessions.
 pub(crate) async fn run_activity_feed(
     tracker: Arc<crate::activity::ActivityTracker>,
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<
-        orz_tools::notification::types::ToolNotification,
-    >,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<orz_tools::notification::types::ToolNotification>,
 ) {
     while let Some(notification) = rx.recv().await {
         apply_background_task_notification(&tracker, &notification);
@@ -4575,10 +4573,10 @@ pub(crate) mod tests {
     use crate::session::tool_config::test_support::{
         TestSessionContextFactory, baseline_config, tc,
     };
-    use std::sync::Arc;
     use orz_tools::registry::types::ToolServerConfig;
     use orz_tools::types::tool::ToolKind;
     use orz_workspace_types::WorkspaceEvent;
+    use std::sync::Arc;
     /// Create a test workspace handle with a "main" session pre-created.
     pub(crate) fn make_handle() -> WorkspaceHandle {
         make_handle_with_rewind_all_outcomes(false)
@@ -4683,16 +4681,14 @@ pub(crate) mod tests {
             &self,
             _ctx: xai_tool_runtime::ToolCallContext,
             _input: serde_json::Value,
-        ) -> Result<orz_tools::types::output::ToolOutput, xai_tool_runtime::ToolError>
-        {
+        ) -> Result<orz_tools::types::output::ToolOutput, xai_tool_runtime::ToolError> {
             let output = BASH_CCO_STUB_STDOUT.as_bytes();
             Ok(orz_tools::types::output::ToolOutput::Bash(
                 orz_tools::types::output::BashOutput {
                     output: output.to_vec(),
-                    output_for_prompt:
-                        orz_tools::types::output::BashOutput::make_output_for_prompt(
-                            BASH_CCO_STUB_STDOUT,
-                        ),
+                    output_for_prompt: orz_tools::types::output::BashOutput::make_output_for_prompt(
+                        BASH_CCO_STUB_STDOUT,
+                    ),
                     exit_code: 0,
                     command: format!("echo {BASH_CCO_STUB_STDOUT}"),
                     truncated: false,

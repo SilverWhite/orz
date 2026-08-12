@@ -187,20 +187,15 @@ mod tests {
         // Open without close.
         assert!(parse_retrieval_result_json("[RESULT_JSON]{").is_none());
         // Not an object.
-        assert!(
-            parse_retrieval_result_json("[RESULT_JSON][1,2][/RESULT_JSON]").is_none()
-        );
+        assert!(parse_retrieval_result_json("[RESULT_JSON][1,2][/RESULT_JSON]").is_none());
         // Malformed JSON inside.
-        assert!(
-            parse_retrieval_result_json("[RESULT_JSON]{bad[/RESULT_JSON]").is_none()
-        );
+        assert!(parse_retrieval_result_json("[RESULT_JSON]{bad[/RESULT_JSON]").is_none());
     }
 
     #[test]
     fn parse_retrieval_text_splits_doc_and_source_lines() {
-        let (docs, sources) = parse_retrieval_text(
-            "[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成",
-        );
+        let (docs, sources) =
+            parse_retrieval_text("[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成");
         assert_eq!(docs, vec!["design.md", "gate.rs"]);
         assert_eq!(sources, vec!["docs/index"]);
     }
@@ -219,7 +214,8 @@ mod tests {
     async fn retrieval_subagent_writes_internal_ret_section() {
         let bb = Arc::new(SharedBlackboard::new());
         let subagent = RetrievalSubagent::new(SubagentRole::InternalRetrieval, gateway("x"));
-        let (docs, sources) = parse_retrieval_text("[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成");
+        let (docs, sources) =
+            parse_retrieval_text("[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成");
         let _ = subagent;
         write_section(
             SubagentRole::InternalRetrieval,
@@ -267,10 +263,22 @@ mod tests {
 
     #[test]
     fn subagent_role_names() {
-        assert_eq!(SubagentRole::InternalRetrieval.as_str(), "internal_retrieval");
-        assert_eq!(SubagentRole::ExternalRetrieval.as_str(), "external_retrieval");
-        assert_eq!(SubagentRole::InternalRetrieval.section_name(), "internal_ret");
-        assert_eq!(SubagentRole::ExternalRetrieval.section_name(), "external_ret");
+        assert_eq!(
+            SubagentRole::InternalRetrieval.as_str(),
+            "internal_retrieval"
+        );
+        assert_eq!(
+            SubagentRole::ExternalRetrieval.as_str(),
+            "external_retrieval"
+        );
+        assert_eq!(
+            SubagentRole::InternalRetrieval.section_name(),
+            "internal_ret"
+        );
+        assert_eq!(
+            SubagentRole::ExternalRetrieval.section_name(),
+            "external_ret"
+        );
     }
 
     #[tokio::test]

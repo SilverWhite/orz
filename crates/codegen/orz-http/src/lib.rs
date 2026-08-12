@@ -8,9 +8,6 @@ pub fn shared_client() -> ClientWithMiddleware {
 }
 
 /// Wraps a client with auth retry middleware (no-op in stub).
-pub fn with_auth_retry<T>(
-    client: ClientWithMiddleware,
-    _credentials: T,
-) -> ClientWithMiddleware {
+pub fn with_auth_retry<T>(client: ClientWithMiddleware, _credentials: T) -> ClientWithMiddleware {
     client
 }

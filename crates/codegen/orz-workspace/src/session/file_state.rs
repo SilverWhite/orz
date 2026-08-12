@@ -905,9 +905,7 @@ impl FileStateTracker {
 }
 
 // Canonical in xai-grok-workspace-types; re-exported for existing paths.
-pub use orz_workspace_types::rpc::session::{
-    ConflictType, FileRewindConflict, FileRewindResponse,
-};
+pub use orz_workspace_types::rpc::session::{ConflictType, FileRewindConflict, FileRewindResponse};
 
 /// Rewind files to the state before `target_prompt_index`.
 ///
@@ -1070,8 +1068,8 @@ mod tests {
     use super::ToolContext; // from stub above
     use super::*;
     use crate::file_system::MockFs;
-    use std::sync::Arc;
     use orz_paths::AbsPathBuf;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_rewind_point_creation() {

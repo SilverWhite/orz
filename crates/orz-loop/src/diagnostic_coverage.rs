@@ -215,7 +215,9 @@ pub(crate) async fn maybe_consume_dc_signal(
     // output that reveals a class the episode has not yet seen.
     if let Some(cls) = error_class {
         let evidence = format!("{}:{cls}", tc.call_id);
-        if s.seen.insert(("unabsorbed_new_evidence".to_string(), evidence.clone())) {
+        if s.seen
+            .insert(("unabsorbed_new_evidence".to_string(), evidence.clone()))
+        {
             s.signal_count += 1;
             s.pending_signals.push(DcSignal {
                 signal_type: "unabsorbed_new_evidence",
@@ -244,7 +246,9 @@ pub(crate) async fn maybe_consume_dc_signal(
                 continue;
             }
             let evidence = format!("{}:{}", tc.call_id, &sha256_hex(path.as_bytes())[..8]);
-            if s.seen.insert(("key_surface_unexamined".to_string(), evidence.clone())) {
+            if s.seen
+                .insert(("key_surface_unexamined".to_string(), evidence.clone()))
+            {
                 s.signal_count += 1;
                 s.pending_signals.push(DcSignal {
                     signal_type: "key_surface_unexamined",
@@ -270,7 +274,9 @@ pub(crate) async fn maybe_consume_dc_signal(
             .to_string();
         if !file.is_empty() && s.edited_files.insert(file) {
             let evidence = format!("{}:{}", tc.call_id, &fingerprint[..8]);
-            if s.seen.insert(("large_scope_low_diag".to_string(), evidence.clone())) {
+            if s.seen
+                .insert(("large_scope_low_diag".to_string(), evidence.clone()))
+            {
                 s.signal_count += 1;
                 s.pending_signals.push(DcSignal {
                     signal_type: "large_scope_low_diag",
@@ -295,7 +301,9 @@ pub(crate) async fn maybe_consume_dc_signal(
             let module = module_of(&normalize_path(&file));
             if s.edited_modules.contains(&module) && !s.module_evidence.contains(&module) {
                 let evidence = format!("{}:{}", tc.call_id, &sha256_hex(module.as_bytes())[..8]);
-                if s.seen.insert(("same_module_no_evidence".to_string(), evidence.clone())) {
+                if s.seen
+                    .insert(("same_module_no_evidence".to_string(), evidence.clone()))
+                {
                     s.signal_count += 1;
                     s.pending_signals.push(DcSignal {
                         signal_type: "same_module_no_evidence",
@@ -348,7 +356,10 @@ pub(crate) async fn maybe_fire_dc(
             return Ok(());
         }
         let run_id = writer.run_id().to_string();
-        let episode_id = s.episode_id.clone().unwrap_or_else(|| format!("DC-{run_id}"));
+        let episode_id = s
+            .episode_id
+            .clone()
+            .unwrap_or_else(|| format!("DC-{run_id}"));
         let threshold = s.threshold;
         let signal_count = s.signal_count;
         let trigger_count = s.trigger_count;
@@ -502,12 +513,18 @@ mod tests {
             "repeated_pattern deduped: {types:?}"
         );
         assert_eq!(
-            types.iter().filter(|t| **t == "unabsorbed_new_evidence").count(),
+            types
+                .iter()
+                .filter(|t| **t == "unabsorbed_new_evidence")
+                .count(),
             1,
             "error-class signal deduped: {types:?}"
         );
         assert_eq!(
-            types.iter().filter(|t| **t == "consecutive_same_failure").count(),
+            types
+                .iter()
+                .filter(|t| **t == "consecutive_same_failure")
+                .count(),
             1,
             "{types:?}"
         );

@@ -37,7 +37,7 @@ pub(crate) fn execute_plan(plan: WorktreePlan) -> Result<CreateWorktreeResult> {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::{IgnoredFilesMode, WorkingTreeMode, WorktreeBuilder};
     use tempfile::TempDir;
     use xai_test_utils::git::{git_commit_all, init_git_repo};

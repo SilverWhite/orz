@@ -168,8 +168,8 @@ pub async fn handle_browser_pdf(
     // Fresh unique staging subdir per call (P2-3): "newest file" is exact,
     // and a leftover from a crashed call can never be mistaken for this
     // download. `uuid` is the workspace dep (v7).
-    let dl_dir = download_dir(cwd, session_id)
-        .join(&uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let dl_dir =
+        download_dir(cwd, session_id).join(&uuid::Uuid::new_v4().simple().to_string()[..8]);
     let outcome = browser
         .download_or_read(url, &dl_dir)
         .await
@@ -186,9 +186,7 @@ pub async fn handle_browser_pdf(
                 truncated = true;
             }
             if truncated {
-                text.push_str(
-                    "\n\n[browser_read content truncated: 100000 chars, page text only]",
-                );
+                text.push_str("\n\n[browser_read content truncated: 100000 chars, page text only]");
             }
             let out = serde_json::json!({
                 "url": page.final_url,
@@ -236,20 +234,17 @@ pub async fn handle_browser_pdf(
             // on EVERY path after download (P3-1) — success, size-limit
             // above, and ingest failure alike; crash leftovers are covered
             // by the retention `pdf-downloads-` sweep.
-            let ingest =
-                match orz_tools::implementations::pdf_evidence::ingest_pdf_bytes(
-                    bytes,
-                    &root,
-                    &final_url,
-                )
-                .await
-                {
-                    Ok(ingest) => ingest,
-                    Err(e) => {
-                        let _ = std::fs::remove_dir_all(&dl_dir);
-                        return Err(map_pdf_evidence_error(e));
-                    }
-                };
+            let ingest = match orz_tools::implementations::pdf_evidence::ingest_pdf_bytes(
+                bytes, &root, &final_url,
+            )
+            .await
+            {
+                Ok(ingest) => ingest,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&dl_dir);
+                    return Err(map_pdf_evidence_error(e));
+                }
+            };
             let _ = std::fs::remove_dir_all(&dl_dir);
             Ok(ToolResult {
                 output: ingest.return_text,
@@ -311,10 +306,15 @@ pub async fn handle_pdf_read(cwd: &Path, args: &Value) -> Result<ToolResult, Too
         ));
     }
     let indices = match page_range {
-        Some(spec) => {
-            orz_tools::implementations::pdf_evidence::parse_page_indices(spec, meta.pages)
-                .map_err(|e| tool_err("pdf_read_invalid_page_range", format!("pdf_read failed: {e}")))?
-        }
+        Some(spec) => orz_tools::implementations::pdf_evidence::parse_page_indices(
+            spec, meta.pages,
+        )
+        .map_err(|e| {
+            tool_err(
+                "pdf_read_invalid_page_range",
+                format!("pdf_read failed: {e}"),
+            )
+        })?,
         None => (0..meta.pages).collect(),
     };
 
@@ -349,7 +349,11 @@ fn map_browser_download_error(e: CdpError) -> ToolError {
     match e {
         CdpError::UrlGate(gate_err) => tool_err(
             "web_fetch_pdf_blocked",
-            format!("web_fetch refused [{}]: {}", gate_err.tool_error_code(), gate_err),
+            format!(
+                "web_fetch refused [{}]: {}",
+                gate_err.tool_error_code(),
+                gate_err
+            ),
         ),
         CdpError::DownloadCanceled => tool_err(
             "web_fetch_pdf_download_canceled",
@@ -373,11 +377,10 @@ fn map_browser_download_error(e: CdpError) -> ToolError {
 }
 
 /// Map an evidence-core error for the browser channel (web_fetch namespace).
-fn map_pdf_evidence_error(e: orz_tools::implementations::pdf_evidence::PdfEvidenceError) -> ToolError {
-    tool_err(
-        e.tool_error_code(),
-        format!("web_fetch failed: {e}"),
-    )
+fn map_pdf_evidence_error(
+    e: orz_tools::implementations::pdf_evidence::PdfEvidenceError,
+) -> ToolError {
+    tool_err(e.tool_error_code(), format!("web_fetch failed: {e}"))
 }
 
 /// Map an evidence-core error for the `pdf_read` namespace.
@@ -464,7 +467,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl BrowserSession for ScriptedBrowser {
-        async fn read_page(&self, _url: &str) -> Result<crate::local_browser::PageReadOutcome, CdpError> {
+        async fn read_page(
+            &self,
+            _url: &str,
+        ) -> Result<crate::local_browser::PageReadOutcome, CdpError> {
             unreachable!("pdf tests never read pages")
         }
         async fn download_or_read(
@@ -475,7 +481,8 @@ mod tests {
             match &self.outcome {
                 Ok(BrowserDownloadOutcome::Pdf { path, final_url }) => {
                     let bytes = std::fs::read(path).map_err(|e| CdpError::Io(e.to_string()))?;
-                    std::fs::create_dir_all(download_dir).map_err(|e| CdpError::Io(e.to_string()))?;
+                    std::fs::create_dir_all(download_dir)
+                        .map_err(|e| CdpError::Io(e.to_string()))?;
                     let staged = download_dir.join("paper.pdf");
                     std::fs::write(&staged, &bytes).map_err(|e| CdpError::Io(e.to_string()))?;
                     Ok(BrowserDownloadOutcome::Pdf {
@@ -515,12 +522,25 @@ mod tests {
             }),
         };
 
-        let result = handle_browser_pdf(&cwd, Some("SESS1234"), &browser, "https://kns.cnki.net/paper.pdf")
-            .await
-            .unwrap();
+        let result = handle_browser_pdf(
+            &cwd,
+            Some("SESS1234"),
+            &browser,
+            "https://kns.cnki.net/paper.pdf",
+        )
+        .await
+        .unwrap();
         assert_eq!(result.exit_code, Some(0));
-        assert!(result.output.contains("PDF evidence: 2 pages"), "{}", result.output);
-        assert!(result.output.contains("document_id=sha256:"), "{}", result.output);
+        assert!(
+            result.output.contains("PDF evidence: 2 pages"),
+            "{}",
+            result.output
+        );
+        assert!(
+            result.output.contains("document_id=sha256:"),
+            "{}",
+            result.output
+        );
         assert!(result.output.contains("Alpha"));
         // Evidence stored under {cwd}/.gsa/pdf-evidence/.
         let root = evidence_root(&cwd);
@@ -552,9 +572,14 @@ mod tests {
             }),
         };
 
-        let err = handle_browser_pdf(&cwd, Some("SESS1234"), &browser, "https://kns.cnki.net/paper.pdf")
-            .await
-            .unwrap_err();
+        let err = handle_browser_pdf(
+            &cwd,
+            Some("SESS1234"),
+            &browser,
+            "https://kns.cnki.net/paper.pdf",
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("web_fetch_pdf_invalid"), "{err}");
         let leftover = std::fs::read_dir(&staging_root)
             .map(|rd| rd.flatten().count())
@@ -584,11 +609,13 @@ mod tests {
         std::fs::create_dir_all(&cwd).unwrap();
         let browser = ScriptedBrowser {
             ready_flag: true,
-            outcome: Ok(BrowserDownloadOutcome::Page(crate::local_browser::PageReadOutcome {
-                final_url: "https://kns.cnki.net/kcms/detail".to_string(),
-                title: "CNKI".to_string(),
-                text: "search results".to_string(),
-            })),
+            outcome: Ok(BrowserDownloadOutcome::Page(
+                crate::local_browser::PageReadOutcome {
+                    final_url: "https://kns.cnki.net/kcms/detail".to_string(),
+                    title: "CNKI".to_string(),
+                    text: "search results".to_string(),
+                },
+            )),
         };
         let result = handle_browser_pdf(&cwd, None, &browser, "https://kns.cnki.net/kcms/detail")
             .await
@@ -610,7 +637,10 @@ mod tests {
         let err = handle_browser_pdf(&cwd, None, &browser, "https://kns.cnki.net/paper.pdf")
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("web_fetch_pdf_download_canceled"), "{err}");
+        assert!(
+            err.to_string().contains("web_fetch_pdf_download_canceled"),
+            "{err}"
+        );
         assert!(err.to_string().contains("log in"), "{err}");
     }
 
@@ -663,10 +693,18 @@ mod tests {
 
         // Missing document_id.
         let err = handle_pdf_read(&cwd, &json!({})).await.unwrap_err();
-        assert!(err.to_string().contains("pdf_read_missing_document_id"), "{err}");
+        assert!(
+            err.to_string().contains("pdf_read_missing_document_id"),
+            "{err}"
+        );
         // Invalid document_id.
-        let err = handle_pdf_read(&cwd, &json!({"document_id": "sha256:abc"})).await.unwrap_err();
-        assert!(err.to_string().contains("pdf_read_invalid_document_id"), "{err}");
+        let err = handle_pdf_read(&cwd, &json!({"document_id": "sha256:abc"}))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("pdf_read_invalid_document_id"),
+            "{err}"
+        );
         // Unknown id.
         let err = handle_pdf_read(
             &cwd,
@@ -679,11 +717,17 @@ mod tests {
         let err = handle_pdf_read(&cwd, &json!({"document_id": doc_id, "page_range": "3-1"}))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("pdf_read_invalid_page_range"), "{err}");
+        assert!(
+            err.to_string().contains("pdf_read_invalid_page_range"),
+            "{err}"
+        );
         // Unknown argument.
         let err = handle_pdf_read(&cwd, &json!({"document_id": doc_id, "pages": "1"}))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("pdf_read_invalid_arguments"), "{err}");
+        assert!(
+            err.to_string().contains("pdf_read_invalid_arguments"),
+            "{err}"
+        );
     }
 }

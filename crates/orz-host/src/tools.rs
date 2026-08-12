@@ -63,7 +63,9 @@ pub fn is_web_search_tool(name: &str) -> bool {
 /// (2026-08-11): the cwd-level evidence store is wired so direct fetches of
 /// PDFs are ingested inline (ADR-0010 §3.7.6). Other orz-tools hosts that
 /// don't configure a root keep the legacy save-to-downloads behavior.
-pub fn web_fetch_config_default(cwd: &Path) -> orz_tools::implementations::grok_build::web_fetch::WebFetchConfig {
+pub fn web_fetch_config_default(
+    cwd: &Path,
+) -> orz_tools::implementations::grok_build::web_fetch::WebFetchConfig {
     use orz_tools::implementations::grok_build::web_fetch::{WebFetchConfig, WebFetchParams};
     WebFetchConfig::Enabled {
         params: WebFetchParams {
@@ -153,17 +155,17 @@ pub fn build_toolset(
     // (host-owned synchronous tools) or an explicit CN §5.1 review — never
     // resurrect the async scheduler ecosystem.
     const BANNED_GROK_BUILD_TOOLS: &[&str] = &[
-        "task",                    // subagent/task scheduler (third subagent class)
-        "get_task_output",         // polls task results (dead without task)
-        "wait_tasks",              // waits on tasks (dead without task)
+        "task",                        // subagent/task scheduler (third subagent class)
+        "get_task_output",             // polls task results (dead without task)
+        "wait_tasks",                  // waits on tasks (dead without task)
         "get_terminal_command_output", // async terminal output collector
-        "kill_task",               // kills tasks (dead without task)
-        "kill_terminal_command",   // kills monitor/terminal commands (async ecosystem)
-        "monitor",                 // async terminal watch (task-system based)
-        "scheduler_create",        // recurring task scheduler
-        "scheduler_delete",        // scheduler bookkeeping
-        "scheduler_list",          // scheduler bookkeeping
-        "workflow",                // multi-agent workflow orchestrator
+        "kill_task",                   // kills tasks (dead without task)
+        "kill_terminal_command",       // kills monitor/terminal commands (async ecosystem)
+        "monitor",                     // async terminal watch (task-system based)
+        "scheduler_create",            // recurring task scheduler
+        "scheduler_delete",            // scheduler bookkeeping
+        "scheduler_list",              // scheduler bookkeeping
+        "workflow",                    // multi-agent workflow orchestrator
     ];
     let tools: Vec<_> = builder
         .known_tool_ids()
@@ -319,12 +321,10 @@ pub fn exit_code_from_output(output: &orz_tools::types::output::ToolOutput) -> O
     use orz_tools::types::output::SearchReplaceOutput;
     match output {
         orz_tools::types::output::ToolOutput::Bash(bash) => Some(bash.exit_code),
-        orz_tools::types::output::ToolOutput::SearchReplace(sr) => {
-            Some(match sr {
-                SearchReplaceOutput::EditsApplied(_) => 0,
-                _ => 1,
-            })
-        }
+        orz_tools::types::output::ToolOutput::SearchReplace(sr) => Some(match sr {
+            SearchReplaceOutput::EditsApplied(_) => 0,
+            _ => 1,
+        }),
         _ => Some(0),
     }
 }
@@ -361,7 +361,9 @@ mod tests {
             message: "test: no credential".into(),
         };
         assert!(matches!(
-            web_search_config(&FakeReader { result: Err(err.clone()) }),
+            web_search_config(&FakeReader {
+                result: Err(err.clone())
+            }),
             WebSearchConfig::Disabled
         ));
         assert!(!web_search_config(&FakeReader { result: Err(err) }).is_enabled());

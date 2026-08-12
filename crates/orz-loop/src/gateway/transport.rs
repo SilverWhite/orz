@@ -162,18 +162,16 @@ impl DeepSeekTransport {
         }
         // D-7: single-request wall-clock timeout (10min level) — the fork's
         // create path has no read timeout of its own (P8).
-        let response = tokio::time::timeout(
-            self.config.retry.request_timeout,
-            client.chat().create(req),
-        )
-        .await
-        .map_err(|_| {
-            GatewayError::Timeout(format!(
-                "non-streaming create exceeded {:?}",
-                self.config.retry.request_timeout
-            ))
-        })?
-        .map_err(|e| self.map_error(e))?;
+        let response =
+            tokio::time::timeout(self.config.retry.request_timeout, client.chat().create(req))
+                .await
+                .map_err(|_| {
+                    GatewayError::Timeout(format!(
+                        "non-streaming create exceeded {:?}",
+                        self.config.retry.request_timeout
+                    ))
+                })?
+                .map_err(|e| self.map_error(e))?;
         self.from_response(&response)
     }
 
@@ -366,7 +364,10 @@ impl DeepSeekTransport {
         }
         match e {
             GatewayError::Transport(detail) | GatewayError::Timeout(detail) => {
-                GatewayError::StreamInterrupted { attempts: 0, detail }
+                GatewayError::StreamInterrupted {
+                    attempts: 0,
+                    detail,
+                }
             }
             other => other,
         }
@@ -612,8 +613,8 @@ impl DeepSeekTransport {
             if let Some(h) = heartbeat {
                 h.stamp();
             }
-            let chunk: CreateChatCompletionStreamResponse = item
-                .map_err(|e| self.wrap_zero_chunk(saw_chunk, self.map_error(e)))?;
+            let chunk: CreateChatCompletionStreamResponse =
+                item.map_err(|e| self.wrap_zero_chunk(saw_chunk, self.map_error(e)))?;
             saw_chunk = true;
             // D-6: the final chunk carries the aggregate usage (choices
             // empty, usage populated) when include_usage is honored.
@@ -825,17 +826,19 @@ impl ModelGateway for DeepSeekTransport {
         //      silent blank.
         // Tool rounds (empty content + tool_calls) are legal and skip the
         // chain entirely.
-        let first = self.create_once(&request, self.effective_thinking(&request)).await?;
+        let first = self
+            .create_once(&request, self.effective_thinking(&request))
+            .await?;
         if !Self::empty_content_abnormal(&first) {
             return Ok(first);
         }
-        let second = self.create_once(&request, self.effective_thinking(&request)).await?;
+        let second = self
+            .create_once(&request, self.effective_thinking(&request))
+            .await?;
         if !Self::empty_content_abnormal(&second) {
             return Ok(second);
         }
-        let degraded = self
-            .create_once(&request, ThinkingMode::Disabled)
-            .await?;
+        let degraded = self.create_once(&request, ThinkingMode::Disabled).await?;
         if !Self::empty_content_abnormal(&degraded) {
             return Ok(degraded);
         }
@@ -1036,8 +1039,7 @@ mod tests {
             "config 160K caps the request-level budget: {s}"
         );
         assert_eq!(
-            json["stream_options"]["include_usage"],
-            true,
+            json["stream_options"]["include_usage"], true,
             "include_usage requested for reasoning_tokens observation: {s}"
         );
         assert_eq!(json["model"], "deepseek-v4-flash");
@@ -1411,7 +1413,11 @@ mod tests {
             }
         }
 
-        fn json_delayed(status: u16, body: impl Into<String>, pre_delay: std::time::Duration) -> Self {
+        fn json_delayed(
+            status: u16,
+            body: impl Into<String>,
+            pre_delay: std::time::Duration,
+        ) -> Self {
             Self {
                 pre_delay,
                 ..Self::json(status, body)
@@ -1662,7 +1668,8 @@ mod tests {
             }
         })
         .await;
-        let t = mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
         let r = t.generate(request()).await.unwrap();
         assert_eq!(r.text.as_deref(), Some("降级答案"));
         assert_eq!(
@@ -1676,11 +1683,11 @@ mod tests {
     async fn generate_empty_content_chain_end_errors_explicitly() {
         // D-6: the chain end (all three attempts empty) surfaces an explicit
         // termination reason — never a silent blank response.
-        let base = spawn_mock(|_line, _body| {
-            MockResponse::json(200, empty_finish_length_response())
-        })
-        .await;
-        let t = mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let base =
+            spawn_mock(|_line, _body| MockResponse::json(200, empty_finish_length_response()))
+                .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
         let err = t.generate(request()).await.unwrap_err();
         assert!(
             matches!(&err, GatewayError::Model(m) if m.contains("zero output")),
@@ -1702,7 +1709,8 @@ mod tests {
             )
         })
         .await;
-        let t = mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
         let r = t.generate(request()).await.unwrap();
         assert_eq!(r.tool_calls.len(), 1);
         assert_eq!(r.tool_calls[0].name, "read_file");
@@ -1717,19 +1725,16 @@ mod tests {
     async fn generate_extracts_reasoning_tokens_from_usage() {
         // D-6 usage observation: reasoning_tokens come from
         // usage.completion_tokens_details.reasoning_tokens on every round.
-        let base = spawn_mock(|_line, _body| {
-            MockResponse::json(200, empty_finish_length_response())
-        })
-        .await;
+        let base =
+            spawn_mock(|_line, _body| MockResponse::json(200, empty_finish_length_response()))
+                .await;
         let t = mock_transport(&base);
         let r = t.generate(request()).await.unwrap_err();
         // The chain retried and errored — but we assert the extraction on a
         // direct from_response instead (deterministic).
         let _ = r;
         let parsed = t
-            .from_response(
-                &serde_json::from_str(&empty_finish_length_response()).unwrap(),
-            )
+            .from_response(&serde_json::from_str(&empty_finish_length_response()).unwrap())
             .unwrap();
         assert_eq!(parsed.reasoning_tokens, Some(395));
         assert_eq!(parsed.completion_tokens, Some(400));
@@ -2145,7 +2150,10 @@ mod tests {
         assert!(chunks.is_empty());
         // max_retries=1 → 2 total attempts (1 initial + 1 retry).
         let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(n, 2, "idle retry cap violated: {n} attempts for max_retries=1");
+        assert_eq!(
+            n, 2,
+            "idle retry cap violated: {n} attempts for max_retries=1"
+        );
     }
 
     // ── GAP-STREAM-RETRY (2026-08-12): zero-chunk interruption retry ──────
@@ -2162,7 +2170,10 @@ mod tests {
         };
         format!(
             "{}{}data: [DONE]\n\n",
-            frame(&format!(r#"{{"role":"assistant","content":"{text}"}}"#), None),
+            frame(
+                &format!(r#"{{"role":"assistant","content":"{text}"}}"#),
+                None
+            ),
             frame("{}", Some("stop")),
         )
     }
@@ -2270,7 +2281,10 @@ mod tests {
         );
         assert_eq!(chunks, vec!["half", "-done"]);
         let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(n, 1, "after-chunk interruption must NOT retry: {n} connections");
+        assert_eq!(
+            n, 1,
+            "after-chunk interruption must NOT retry: {n} connections"
+        );
     }
 
     #[tokio::test]
@@ -2375,10 +2389,14 @@ mod tests {
         // must win long before.
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(400),
-            t.generate_stream(request(), Some(&cancel), None, &mut |c| chunks.push(c.to_string())),
+            t.generate_stream(request(), Some(&cancel), None, &mut |c| {
+                chunks.push(c.to_string())
+            }),
         )
         .await;
-        let err = result.expect("cancel during backoff must return promptly").unwrap_err();
+        let err = result
+            .expect("cancel during backoff must return promptly")
+            .unwrap_err();
         assert!(
             matches!(err, GatewayError::Cancelled),
             "cancel during backoff must surface as Cancelled: {err:?}"
@@ -2400,10 +2418,7 @@ mod tests {
             if n == 0 {
                 // Upstream accepts the connection but withholds headers for
                 // 2s — far past the 150ms idle timeout of the test policy.
-                MockResponse::sse_delayed(
-                    vec![&ok],
-                    std::time::Duration::from_secs(2),
-                )
+                MockResponse::sse_delayed(vec![&ok], std::time::Duration::from_secs(2))
             } else {
                 MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
             }
@@ -2435,7 +2450,9 @@ mod tests {
         // fires) — but the total budget (500ms) caps the whole stream first.
         let mut body = String::new();
         for i in 0..10 {
-            body.push_str(&frame(&format!(r#"{{"role":"assistant","content":"f{i}"}}"#)));
+            body.push_str(&frame(&format!(
+                r#"{{"role":"assistant","content":"f{i}"}}"#
+            )));
         }
         body.push_str("data: [DONE]\n\n");
         let base = spawn_mock(move |_line, _body| {
