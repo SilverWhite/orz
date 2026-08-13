@@ -4139,9 +4139,10 @@ impl AgentLoopController {
         // the terminal ToolCompleted(error) alone.
         if self.retrieval_mode == RetrievalMode::Off {
             let msg = format!(
-                "retrieval '{target_name}' — 会话检索模式为 'off'（ADR-0010 \
-                 §3.7.1），检索工具不在当前工具集内；如有已挂起的 activation，\
-                 请提交 retrieval_disposition close。",
+                "retrieval '{target_name}' refused — retrieval mode is 'off' \
+                 for this session (ADR-0010 §3.7.1); no retrieval tools are \
+                 available. Submit retrieval_disposition close for any \
+                 already-pending activation.",
             );
             writer
                 .record(
@@ -4189,9 +4190,10 @@ impl AgentLoopController {
                         )
                         .await?;
                     let msg = format!(
-                        "retrieval '{target_name}' — local_browser 链路不完整 \
-                         （{reason}）；不隐式回退到框架检索工具（ADR-0010 \
-                         §3.7.1）",
+                        "retrieval '{target_name}' refused — local_browser \
+                         capability is not available ({reason}); no silent \
+                         fallback to framework retrieval tools (ADR-0010 \
+                         §3.7.1)",
                     );
                     writer
                         .record(
@@ -5565,8 +5567,8 @@ impl AgentLoopController {
                 || crate::relay::is_web_retrieval_tool(&tc.name))
         {
             let msg = format!(
-                "retrieval '{}' — 会话检索模式为 'off'（ADR-0010 §3.7.1），\
-                 检索工具不在当前工具集内。",
+                "retrieval '{}' refused — retrieval mode is 'off' for this \
+                 session (ADR-0010 §3.7.1); no retrieval tools are available.",
                 tc.name,
             );
             let target = if crate::relay::is_web_retrieval_tool(&tc.name) {
@@ -5612,9 +5614,9 @@ impl AgentLoopController {
             && self.retrieval_mode != RetrievalMode::FrameworkFallback
         {
             let msg = format!(
-                "retrieval '{}' — 会话检索模式为 '{}'；web 工具需在 \
-                 framework_fallback 模式下调用（ADR-0010 §3.7.1），不隐式 \
-                 回退到浏览器车道。",
+                "retrieval '{}' refused — retrieval mode is '{}' for this \
+                 session; web tools require framework_fallback mode \
+                 (ADR-0010 §3.7.1); no silent fallback to the browser lane.",
                 tc.name,
                 self.retrieval_mode.as_str(),
             );
@@ -5653,9 +5655,9 @@ impl AgentLoopController {
         // ToolStarted — same refusal shape as the off gate.
         if tc.name == "browser_read" && self.retrieval_mode != RetrievalMode::LocalBrowser {
             let msg = format!(
-                "retrieval '{}' — 会话检索模式为 '{}'；browser_read 需在 \
-                 local_browser 模式下调用（ADR-0010 §3.7.1），不隐式回退到 \
-                 web 工具。",
+                "retrieval '{}' refused — retrieval mode is '{}' for this \
+                 session; browser_read requires local_browser mode \
+                 (ADR-0010 §3.7.1); no silent fallback to web tools.",
                 tc.name,
                 self.retrieval_mode.as_str(),
             );
@@ -5757,7 +5759,7 @@ impl AgentLoopController {
                 // 声明残留，与逐次判定语义矛盾）。烧轮防护由 §3.5.4 连续
                 // 拒绝熔断承担。
                 output: format!(
-                    "tool '{tool_name}' — 本次调用未获权限门禁放行。",
+                    "tool '{tool_name}' — 本次调用未获权限门禁放行",
                     tool_name = tc.name,
                 ),
                 exit_code: Some(1),
@@ -11097,8 +11099,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, Some(1));
         assert!(
-            result.output.contains("检索模式为 'off'")
-                && result.output.contains("不在当前工具集内"),
+            result.output.contains("refused") && result.output.contains("off"),
             "{}",
             result.output
         );
@@ -13183,7 +13184,11 @@ mod tests {
             !tool_msg.content.contains("available")
                 && !tool_msg.content.contains("unavailable")
                 && !tool_msg.content.contains("可用")
-                && !tool_msg.content.contains("不可用"),
+                && !tool_msg.content.contains("不可用")
+                && !tool_msg.content.contains("成功")
+                && !tool_msg.content.contains("失败")
+                && !tool_msg.content.contains("success")
+                && !tool_msg.content.contains("failure"),
             "deny message must stay neutral: {}",
             tool_msg.content
         );
