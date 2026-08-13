@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -22,6 +22,7 @@
   - **v1.5 补写（2026-08-12，用户裁决）**：工具可用性机制重构——名级策略过滤废止，模型可见工具列表 = registry 能力目录全量（零可用性承诺），可用性判定完全发生在调用时（permission gate 逐次判定）；ReadOnly/Grill 只读保证由执行层 gate 承担；AVAILABLE 块不再注入 prompt；deny 消息只陈述本次调用事实。正文 §3.5 条 1/2 修订，索引见 §14.5。动机：2026-08-11 TB 复盘（声明层与执行层不一致的"假 available"对 DeepSeek 行为不可预测）。
   - **v1.6 补写（2026-08-12，用户裁决）**：检索来源质量三层结构——机械来源梯队（白名单=政府/机关单位 1.1、命中直接采纳；白名单外默认 1.0；劣质源 0.7，初始含 CSDN/知乎/百家号/B 站个人专栏/独立新闻媒体/自媒体新闻号与财经号/小站）+ 选择性原文核验（framework_fallback 用 web_fetch、local_browser 直接 browser_read，**二存一禁止混用**）+ 子代理模型加权标注（v0 标注排序不拦截）；共享判定器进 evidence ledger/visibility。正文 §3.7 条 12，索引见 §14.6。
   - **v1.7 补写（2026-08-13，用户裁决）**：公众号主体级白名单经评估后**撤回**（收益太小）——`mp.weixin.qq.com` 保持劣质源 0.7，不设主体级升档；微博全站（`weibo.com`）入劣质源 0.7；适用范围：三层结构仅用于 `web_search`（framework_fallback），`local_browser` 直接分级加权（第一层+第三层，无第二层）。正文 §3.7 条 12 修订，索引见 §14.7。
+  - **v1.8 补写（2026-08-13，用户裁决）**：工具可见性由 v1.5「registry 全量、零可用性承诺」修订为 v0.2 单一探针面——主 Agent 工作工具统一由每动作机械探针治理：本轮模型可见 = 机械链路完整 ∩ 会话声明集，仅工具名、不标注状态，链路不完整者确定不可提议；全部工作工具不设免检面；调用时机械判定仍为最终兜底；检索车道工具不参与主探针矩阵。正文 §3.5 条 1/2 修订，索引见 §14.8；来源：`docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md` v0.2（2026-08-13 用户裁决，A+C→B 定档）。
 
 ## 1. 背景
 
@@ -231,22 +232,27 @@ active -> failed/cancelled -> closing -> closed_resumable
 
 ### 3.5 Tool availability、permission 与失败反馈
 
-1. session bootstrap 生成一次 **registry 能力目录**（`tool_availability_check` 目录快照事件）；
-   模型可见工具定义列表 = 完整 registry，**零可用性承诺**——可用性判定完全发生在调用时：每次工具
-   调用由 permission gate 逐次判定（AllowOnce/Deny）并返回明确结构化结果。tool registry 相同表示
-   三个 Agent 具有同一能力目录，不表示每个参数组合都被授权。（v1.5 修订 2026-08-12：原“机械探查
-   一次工具状态”语义更新——探查保留为目录快照，不再携带可用性承诺；§3.7.1 检索 mode 门禁对检索
-   工具族的 off 投影不受影响，属显式模式语义而非策略过滤。）
-2. **名级策略过滤废止（2026-08-12 用户裁决）**：模型可见声明不再按 policy 过滤——Interactive /
-   ReadOnly / Benchmark 统一声明完整 registry 目录；可用性/授权在调用时由 permission gate 逐次判定，
-   拒绝返回明确结构化原因（“denied by the permission gate for this call”，只陈述本次调用事实，
-   不承诺策略级不可用）。ReadOnly/Grill 的只读保证由执行层 gate 承担（ReadOnly policy 拒非读），
-   不由可见性承担。**唯一保留的名级排除：MCP 名称（`{server}__{tool}`）**——prefix-spoof 防御
-   （slice #16 D2-1），执行层同款 deny 纵深兜底。动机：声明层与执行层不一致的“假 available”对
-   DeepSeek 行为不可预测（2026-08-11 TB 复盘：path-tracing 对被拒工具重试 4 次 / gpt2 盲改并声称
-   完成）；消除静态声明后模型无法误解不存在的信号。polyglot 烧轮教训（web_search×4，D-3/IP2a 的
-   直接动机）由调用时明确拒绝 + 本条 4 连续拒绝熔断承担。子代理 deny-only 写策略不受影响（lane
-   门禁在执行层，GAP-SUBAGENT-RUNTIME）。
+1. **单一探针面（v1.8 修订 2026-08-13，取代 v1.5「registry 全量 + 零可用性承诺」）**：session
+   bootstrap 生成一次 **registry 能力目录**（会话声明集）；每个模型请求构造前对全部主 Agent 工作
+   工具重算机械链路快照，本轮模型可见 = 机械链路完整 ∩ 会话声明集，**仅工具名、不标注状态**；
+   链路不完整者确定不可提议。探针是“探针时刻”的确定判定，不是调用成功承诺——调用时机械门禁仍是
+   最终兜底：每次工具调用由 permission gate 逐次判定（AllowOnce/Deny）并返回明确结构化结果。
+   `tool_availability_check` 事件只在状态翻转时发出（run-start 空映射 → 当前快照为首翻，先于
+   run_started）。tool registry 相同表示三个 Agent 具有同一能力目录，不表示每个参数组合都被授权。
+   检索车道工具（web_search/web_fetch/browser_read/pdf_read/project_doc_index）由子代理确定性
+   留痕与既有声明门治理，不参与主探针矩阵；§3.7.1 检索 mode 门禁 off 投影不受影响。
+2. **单一探针面取代名级过滤与三面分类（v1.8 修订 2026-08-13）**：v1.5“统一声明完整 registry
+   目录”与 v0.1 三面分类（恒声明/探针过滤/固定列表）废止——全部主 Agent 工作工具统一先探后列：
+   本轮模型可见 = 机械链路完整 ∩ 会话声明集，仅工具名、无状态标注；不完整即移除（确定不可提议）。
+   Interactive/ReadOnly/Benchmark 由探针快照驱动各自可见集（ReadOnly 下写探针不完整即移除）；
+   ReadOnly/Grill 只读保证由执行层 gate 承担（ReadOnly policy 拒非读），不由可见性承担；写探针为
+   metadata-grade，不构成写权限承诺。拒绝消息只陈述本次调用事实，主车道兜底消息与探针 reason 使用
+   中性陈述（不使用 available/unavailable 等判定词；事件 error 码、机器 reason 与明确事实性内容
+   不受此限）。MCP 名称（`{server}__{tool}`）prefix-spoof 防御保留（slice #16 D2-1），执行层同款
+   deny 纵深兜底；`use_tool` 机械链路 = MCP/能力注册存在且会话作用域内。动机（v1.5 保留）：声明层
+   与执行层不一致的“假 available”对 DeepSeek 行为不可预测（2026-08-11 TB 复盘）；polyglot 烧轮
+   教训由调用时明确拒绝 + 本条 4 连续拒绝熔断承担。子代理 deny-only 写策略不受影响（lane 门禁在
+   执行层，GAP-SUBAGENT-RUNTIME）；检索车道与主车道非工作工具保持各自既有声明规则。
 3. 所有 tool path 必须返回非空 success/error/deny/timeout/cancel 结果；不得让模型从空字符串猜测状态。
 4. 保留**同类拒绝连续三轮**的机械熔断，删除“每 run 累计拒绝 10 次”的总量机制。计数单位是已完成的
    tool-call round，不是同一 assistant response 中并列的每个 tool call；只有连续三轮都没有成功工具，
@@ -941,6 +947,10 @@ Schema 与机械证据：
    简化为 host 携带 runner / deny 措辞）、`agent_loop.rs`+`prompt.rs`（AVAILABLE 块删除）；测试锁定
    （orz-loop 174/0/3、orz-bin 6+13 capture 全绿）。
 
+> 复核注（2026-08-13）：本条「registry 全量 + 零可用性承诺」的可见性语义已由 §14.8 条 1 修订
+> （v0.2 单一探针面：本轮模型可见 = 机械链路完整 ∩ 会话声明集）；调用时 permission gate 兜底
+> 语义保留。阅读时以 v1.8 正文 §3.5 条 1/2 为准。
+
 ### 14.6 v1.6 补写裁决索引（2026-08-12）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写不改变本 ADR 任何既有条款的语义。
@@ -971,3 +981,20 @@ Schema 与机械证据：
 2. **模式范围（2026-08-13，用户裁决，§3.7 条 12 修订）**：三层结构仅用于
    `web_search`（framework_fallback）；`local_browser` 直接分级加权（机械来源梯队 +
    模型加权标注），不使用第二层选择性原文核验（`browser_read` 读取即原文）。
+
+### 14.8 v1.8 补写裁决索引（2026-08-13）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写不改变本 ADR 任何既有条款的语义。
+
+1. **工具可见性：v0.2 单一探针面（2026-08-13，用户裁决，§3.5 条 1/2 修订，取代 v1.5 语义）**：
+   主 Agent 工作工具统一由每动作机械探针治理——本轮模型可见 = 机械链路完整 ∩ 会话声明集，仅工具名、
+   不标注状态；链路不完整者确定不可提议。全部工作工具均按机械链路判定，不设免检面：原面 A 恒声明
+   控制工具（`blackboard_read` / `todo_write` / `update_goal` / `enter_plan_mode` /
+   `exit_plan_mode` / `compaction_whitelist_add` / `retrieval_disposition`）与原面 C 固定列表
+   工具（`run_terminal_cmd` / `lsp` / `memory_get` / `memory_search` / `image_gen` /
+   `image_edit` / `image_to_video` / `reference_to_video` / `use_tool`）各自补机械链路探针，
+   面 A/C 撤销。调用时机械门禁仍为最终兜底；`tool_availability_check` 事件只在状态翻转时发出
+   （run-start 首翻先于 run_started）；探针快照即用即清，最小上一轮映射仅存 `tool → 完整/不完整`。
+   检索车道工具由子代理确定性留痕，不参与主探针矩阵；主车道兜底消息与探针 reason 使用中性陈述。
+   来源：`docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md` §9（2026-08-13，用户裁决，
+   A+C→B 定档）。
