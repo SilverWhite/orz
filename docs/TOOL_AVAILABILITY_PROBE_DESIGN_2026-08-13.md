@@ -1,8 +1,8 @@
 # 主 Agent 工作工具机械可用性探针 设计（2026-08-13，v0.1 定稿）
 
 > 状态：`approved`（2026-08-13 用户裁决放行实施；实施进度统一登记于
-> [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md) P0-A，步骤 1-4 已闭合，
-> 步骤 5-7 待续；ADR-0010 §3.5 修订按批次末第 7 步登记）。
+> [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md) P0-A，步骤 1-5 已闭合，
+> 步骤 6-7 待续；ADR-0010 §3.5 修订按批次末第 7 步登记）。
 > 范围：设计定稿；实施按 P0-A 批次执行。
 > 关联：ADR-0010 §3.5（2026-08-12 裁决"目录不承诺"）；`tool_availability_check`
 > 事件（run-event v0.2，本设计对其做直接升级）；检索侧机械控制（web_fetch 计数、
@@ -87,6 +87,9 @@
 - 机械面：完整/不完整 + reason 进探针状态与事件。
 - 审计面：真实调用失败照常走 ToolStarted/ToolCompleted(error) + 连续拒绝熔断；
   失败结果回写最小状态映射（调用即探针）。
+- 回写车道边界（2026-08-13 审查裁定已落地）：调用即探针只属于拥有探针映射的
+  主/grill 车道；检索车道不重算探针、不写主探针映射——车道内 Face B 读工具
+  失败只走 ToolCompleted(error) 审计，不得污染主车道翻转事件流。
 - 面 C 工具：只有调用状态审计，不探不标。
 
 ## 6. run_tests 迁移
@@ -125,7 +128,9 @@
 ## 8. 探针状态与留痕
 
 - 探针快照即用即清，不持久化、不落盘、不跨 run。
-- 事件只在状态翻转时发；详情与 reason 不缓存。
+- 事件只在状态翻转时发；详情与 reason 不缓存。run-start 的首次事件视为
+  "空映射 → 当前快照" 的首翻，必须先于 run_started 发出（Python 符合性），
+  并作为本轮最小映射的播种值；之后无变化不发。
 - 已有中间事件（tool_availability_check 翻转、ToolCompleted error、gate_decision）
   承担留痕，探针本身不留痕。
 
