@@ -3425,15 +3425,15 @@ impl AgentLoopController {
         // reasons only; Face A/C and the retrieval lane never appear.
         // gate_decision stays an internal mechanical field ("pass" at
         // snapshot time); the call-time permission gate remains the final
-        // backstop (design invariant 2). P0-A step 3 applies the probe to
-        // the `run_tests` declaration only; the general list projection for
-        // the remaining Face B tools is batch step 4.
+        // backstop (design invariant 2). P0-A steps 3-4: `run_tests` rides
+        // the probe (host-owned declaration), and the list projection below
+        // filters the whole Face B surface (complete ∩ declared) while
+        // keeping Face A/C and leaving non-work tools untouched.
         let mut tool_defs: Vec<ToolDef> = host.tools_registry().list().into_iter().collect();
-        // P0-A step 3 (design §6): `run_tests` is a Face B tool — its
-        // declaration is decided by the probe snapshot below (runner
-        // existence), not by a direct host call here. The probe-driven
-        // projection runs after `probe_face_b`; no conditional declaration
-        // remains in this block.
+        // P0-A steps 3-4: `run_tests` is a Face B tool whose declaration is
+        // decided by the probe snapshot below (runner existence), not by a
+        // direct host call here; the full list projection runs after
+        // `probe_face_b`. No conditional declaration remains in this block.
         // 2026-08-08 blackboard partition (A3): `blackboard_read` is the
         // model's ON-DEMAND window into the blackboard — declared whenever
         // the loop runs (the blackboard is always live). The model pulls a
@@ -3616,33 +3616,40 @@ impl AgentLoopController {
             interactive_user: host.interactive_user(),
         };
         let probe_snapshot = crate::tool_probe::probe_face_b(&probe_context);
-        // P0-A step 3 (design §6): the `run_tests` conditional declaration
-        // is migrated to the Face B probe — the snapshot is the single
-        // decision source (runner existence; zero-cost, no test process
-        // started). Complete → declared (at most once); incomplete →
-        // removed from the model-visible declarations, with the neutral
-        // call-time fallback reason `缺少测试运行器`. The permission gate
-        // stays the final backstop (invariant 2); external behavior is
-        // unchanged.
-        let run_tests_probe_ok = probe_snapshot
+        // P0-A step 4 (design §4/§9 + 2026-08-13 review ruling): model-visible
+        // list projection = 面A + (面B完整集 ∩ 会话声明集) + 面C — names only,
+        // no status annotations. `run_tests` is host-owned: declared into the
+        // session catalog when its probe is complete (step 3 semantics, at
+        // most once), then kept by the projection. An incomplete Face B tool
+        // is removed even when the registry declared it, and tools absent
+        // from the session are never invented (probe must not declare
+        // session-nonexistent tools). Tools outside the A/B/C matrix
+        // (retrieval lane, bash, host-owned extras) keep their existing
+        // declaration rules unchanged. The permission gate stays the final
+        // backstop (invariant 2).
+        if probe_snapshot
             .complete
             .iter()
-            .any(|t| t == "run_tests");
-        if run_tests_probe_ok {
-            if !tool_defs.iter().any(|t| t.name == "run_tests") {
-                tool_defs.push(ToolDef {
-                    name: "run_tests".to_string(),
-                    description: "Run the task's hidden test suite and return \
-                         stdout/stderr/exit code. Use this to verify your \
-                         implementation — the test files are NOT visible to you, \
-                         only the run result. No arguments."
-                        .to_string(),
-                    parameters: serde_json::json!({"type": "object", "properties": {}}),
-                });
-            }
-        } else {
-            tool_defs.retain(|t| t.name != "run_tests");
+            .any(|t| t == "run_tests")
+            && !tool_defs.iter().any(|t| t.name == "run_tests")
+        {
+            tool_defs.push(ToolDef {
+                name: "run_tests".to_string(),
+                description: "Run the task's hidden test suite and return \
+                     stdout/stderr/exit code. Use this to verify your \
+                     implementation — the test files are NOT visible to you, \
+                     only the run result. No arguments."
+                    .to_string(),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+            });
         }
+        tool_defs.retain(|t| {
+            crate::tool_probe::is_face_a_tool(&t.name)
+                || (crate::tool_probe::is_face_b_tool(&t.name)
+                    && probe_snapshot.complete.iter().any(|c| c == &t.name))
+                || crate::tool_probe::is_face_c_tool(&t.name)
+                || !crate::tool_probe::is_main_agent_work_tool(&t.name)
+        });
         let incomplete: Vec<serde_json::Value> = probe_snapshot
             .incomplete
             .iter()
@@ -9821,13 +9828,14 @@ mod tests {
 
     #[tokio::test]
     async fn benchmark_policy_declares_full_registry_catalog() {
-        // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：模型可见工具列表 = registry
-        // 能力目录全量（零可用性承诺），可用性判定完全发生在调用时——
-        // Benchmark 下 shell/网络工具同样被声明（可见），调用时由
-        // permission gate 逐次判定。D-3/IP2a 名级过滤废止（动机：声明层
-        // 与执行层不一致的"假 available"对 DeepSeek 行为不可预测，
-        // TB 2026-08-11 复盘）；polyglot 烧轮防护由调用时明确拒绝 +
-        // §3.5.4 连续拒绝熔断承担。
+        // P0-A step 4（设计 §4/§9；ADR-0010 §3.5 修订按批次末第 7 步登记）：
+        // 模型可见列表 = 面A + (面B完整集 ∩ 会话声明集) + 面C + 非工作工具。
+        // Benchmark + 可读可写 workspace：read_file/list_dir/grep/
+        // search_replace 机械链路完整而保留；run_tests/ask_user_question
+        // 因无 runner/无交互会话而不在声明集（探针不发明会话不存在的
+        // 工具）；run_terminal_cmd（面 C）与 bash（非工作工具）保留；
+        // 面 A 三件套由 controller 声明。声明面不构成可用性承诺——调用时
+        // permission gate + §3.5.4 连续拒绝熔断仍是最终兜底。
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = PolicyHost {
@@ -9843,10 +9851,9 @@ mod tests {
             .await
             .unwrap();
 
-        // The first request's tool declarations = the registry catalog
-        // (FullRegistry 8 tools + blackboard_read/compaction_whitelist_add/
-        // retrieval_disposition trio) — shell tools INCLUDED; no policy
-        // filtering. web_search/web_fetch absent via the §3.7.1 mode=off
+        // The first request's tool declarations = the step-4 projection of
+        // the catalog (FullRegistry 8 tools + controller trio) — shell tools
+        // INCLUDED; web_search/web_fetch absent via the §3.7.1 mode=off
         // projection (retrieval mode gate, NOT policy filtering).
         let received = fake.received_requests();
         let first = &received[0];
@@ -9879,10 +9886,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn readonly_policy_declares_full_registry_catalog() {
-        // 2026-08-12 裁决：ReadOnly/Grill 的"只读声明"语义一并移除——
-        // 模型可见工具列表 = registry 目录全量（含写/执行工具）；只读
-        // 保证由执行层 permission gate 承担（ReadOnly policy 拒非读）。
+    async fn readonly_policy_projection_filters_write_tools() {
+        // P0-A step 4（设计 §2/§3）：ReadOnly 下 `search_replace` 的写探针
+        // 判定为机械链路不完整（`写权限策略未放行`）→ 从模型可见列表移除；
+        // 读工具（read_file/list_dir/grep）完整保留；run_terminal_cmd
+        // （面 C）与 bash（非工作工具）不探不标、保持声明，只读保证对
+        // 它们仍由调用时 permission gate 承担（设计不变量 2）。
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = PolicyHost {
@@ -9911,10 +9920,8 @@ mod tests {
                 "read_file",
                 "retrieval_disposition",
                 "run_terminal_cmd",
-                "search_replace",
             ],
-            "registry catalog declared in full under ReadOnly (只读保证由 \
-             gate 承担): {declared:?}"
+            "ReadOnly projection removes incomplete write tools: {declared:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -12238,6 +12245,131 @@ mod tests {
             declared.iter().filter(|t| **t == "run_tests").count(),
             1,
             "run_tests declared exactly once: {declared:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A registry mixing Face A/B/C and a non-work tool — exercises the
+    /// step-4 list projection (P0-A #4): 面A + (面B完整集 ∩ 会话声明集) +
+    /// 面C + 非工作工具，仅名称。
+    struct MixedProjectionRegistry;
+    impl ToolRegistry for MixedProjectionRegistry {
+        fn get(&self, name: &str) -> Option<ToolDef> {
+            Self::all().into_iter().find(|t| t.name == name)
+        }
+        fn list(&self) -> Vec<ToolDef> {
+            Self::all()
+        }
+    }
+    impl MixedProjectionRegistry {
+        fn all() -> Vec<ToolDef> {
+            [
+                "read_file",
+                "ask_user_question",
+                "run_tests",
+                "run_terminal_cmd",
+                "bash",
+                "todo_write",
+                "blackboard_read",
+            ]
+            .iter()
+            .map(|n| ToolDef {
+                name: n.to_string(),
+                description: format!("tool {n}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect()
+        }
+    }
+
+    /// A host over `MixedProjectionRegistry` with a configurable interactive
+    /// signal; no test runner (Benchmark policy).
+    struct MixedProjectionHost {
+        journal: JournalRecorder,
+        interactive: bool,
+    }
+    #[async_trait]
+    impl LoopHost for MixedProjectionHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &MixedProjectionRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            crate::host::ToolPolicy::Benchmark
+        }
+        fn interactive_user(&self) -> bool {
+            self.interactive
+        }
+    }
+
+    /// P0-A step 4: the model-visible list is the projection 面A + (面B完整
+    /// 集 ∩ 声明集) + 面C + 非工作工具 — incomplete Face B tools
+    /// (run_tests/ask_user_question) are removed, Face A/C and non-work
+    /// tools stay, and registry-absent tools are never invented.
+    #[tokio::test]
+    async fn list_projection_applies_face_partition() {
+        let dir = test_dir();
+        let host = MixedProjectionHost {
+            journal: JournalRecorder::new(dir.clone()),
+            interactive: false,
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-PROJ", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let mut declared: Vec<&str> = received[0]
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        declared.sort();
+        assert_eq!(
+            declared,
+            vec![
+                "bash",                     // non-work tool — untouched
+                "blackboard_read",          // Face A (registry + controller)
+                "compaction_whitelist_add", // Face A (controller-added)
+                "read_file",                // Face B complete ∩ declared
+                "retrieval_disposition",    // Face A (controller-added)
+                "run_terminal_cmd",         // Face C
+                "todo_write",               // Face A (registry-declared)
+            ],
+            "step-4 list projection: {declared:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A step 4: with an interactive session, a registry-declared
+    /// `ask_user_question` survives the projection (probe complete).
+    #[tokio::test]
+    async fn list_projection_keeps_ask_user_question_when_interactive() {
+        let dir = test_dir();
+        let host = MixedProjectionHost {
+            journal: JournalRecorder::new(dir.clone()),
+            interactive: true,
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-PROJ-INT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let declared: Vec<&str> = received[0]
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(
+            declared.iter().any(|t| *t == "ask_user_question"),
+            "ask_user_question kept with an interactive session: {declared:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

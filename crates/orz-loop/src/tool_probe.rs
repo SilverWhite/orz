@@ -18,10 +18,12 @@
 //! - Missing probe implementation → `Incomplete("未完成链路检查")`
 //!   (fail-closed; never assume complete).
 //!
-//! Step-1 scope (BACKLOG P0-A #1): the per-tool probe implementations and
-//! their unit tests only. Per-action refresh, minimal previous-round
-//! mapping, list projection, `tool_availability_check` event upgrade and
-//! the run_tests migration are later batch steps.
+//! Batch progress (BACKLOG P0-A): per-tool probe implementations + unit
+//! tests (step 1), `tool_availability_check` v0.2 event upgrade (step 2),
+//! the run_tests declaration migration (step 3) and the A/B/C list
+//! projection constants consumed by the controller (step 4). Per-action
+//! refresh, minimal previous-round mapping and neutral fallback messages
+//! are later batch steps (5/6).
 
 use std::path::{Path, PathBuf};
 
@@ -37,6 +39,34 @@ pub const FACE_B_TOOLS: [&str; 7] = [
     "search_replace",
     "run_tests",
     "ask_user_question",
+];
+
+/// Face A — tools with no external mechanical chain; always declared when
+/// the session carries them (design §2, list projection step 4). Only
+/// names ride the model-visible list; nothing is status-annotated.
+pub const FACE_A_TOOLS: [&str; 7] = [
+    "blackboard_read",
+    "todo_write",
+    "update_goal",
+    "enter_plan_mode",
+    "exit_plan_mode",
+    "compaction_whitelist_add",
+    "retrieval_disposition",
+];
+
+/// Face C — local-process / heavy / network tools fixed-listed without
+/// probes (design §2). Backend absence is audited at call time, never
+/// probed and never removed by the projection.
+pub const FACE_C_TOOLS: [&str; 9] = [
+    "run_terminal_cmd",
+    "lsp",
+    "memory_get",
+    "memory_search",
+    "image_gen",
+    "image_edit",
+    "image_to_video",
+    "reference_to_video",
+    "use_tool",
 ];
 
 /// Neutral, stable reasons — machine-readable audit keys, never
@@ -113,6 +143,25 @@ pub struct ProbeContext {
 /// Whether `name` belongs to Face B (the only probed surface).
 pub fn is_face_b_tool(name: &str) -> bool {
     FACE_B_TOOLS.contains(&name)
+}
+
+/// Whether `name` belongs to Face A (always declared when carried by the
+/// session).
+pub fn is_face_a_tool(name: &str) -> bool {
+    FACE_A_TOOLS.contains(&name)
+}
+
+/// Whether `name` belongs to Face C (fixed list, never probed).
+pub fn is_face_c_tool(name: &str) -> bool {
+    FACE_C_TOOLS.contains(&name)
+}
+
+/// Whether `name` is a main-agent work tool (any of the three surfaces).
+/// Tools outside the matrix (retrieval lane, bash, host-owned extras) are
+/// not part of the list projection and keep their existing declaration
+/// rules.
+pub fn is_main_agent_work_tool(name: &str) -> bool {
+    is_face_a_tool(name) || is_face_b_tool(name) || is_face_c_tool(name)
 }
 
 /// Policy half of the write probe: `ReadOnly` never passes; `Interactive`
@@ -277,6 +326,64 @@ mod tests {
             "retrieval_disposition",
         ] {
             assert!(!is_face_b_tool(tool), "{tool} must not be Face B");
+        }
+    }
+
+    #[test]
+    fn face_a_membership_is_exact() {
+        for tool in FACE_A_TOOLS {
+            assert!(is_face_a_tool(tool), "{tool} must be Face A");
+        }
+        for tool in [
+            "read_file",
+            "run_terminal_cmd",
+            "web_search",
+            "bash",
+            "no_such_tool",
+        ] {
+            assert!(!is_face_a_tool(tool), "{tool} must not be Face A");
+        }
+    }
+
+    #[test]
+    fn face_c_membership_is_exact() {
+        for tool in FACE_C_TOOLS {
+            assert!(is_face_c_tool(tool), "{tool} must be Face C");
+        }
+        for tool in [
+            "read_file",
+            "blackboard_read",
+            "web_fetch",
+            "bash",
+            "no_such_tool",
+        ] {
+            assert!(!is_face_c_tool(tool), "{tool} must not be Face C");
+        }
+    }
+
+    #[test]
+    fn main_agent_work_tool_union_is_exact() {
+        for tool in FACE_A_TOOLS
+            .iter()
+            .chain(FACE_B_TOOLS.iter())
+            .chain(FACE_C_TOOLS.iter())
+        {
+            assert!(is_main_agent_work_tool(tool), "{tool} must be work tool");
+        }
+        for tool in [
+            "web_search",
+            "web_fetch",
+            "browser_read",
+            "pdf_read",
+            "project_doc_index",
+            "retrieve_project_docs",
+            "bash",
+            "no_such_tool",
+        ] {
+            assert!(
+                !is_main_agent_work_tool(tool),
+                "{tool} must not be a work tool"
+            );
         }
     }
 
