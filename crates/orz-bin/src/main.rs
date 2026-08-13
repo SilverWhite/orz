@@ -2147,6 +2147,10 @@ mod conformance_capture {
                     if i == 3 {
                         expected.push("orientation_checkpoint");
                     }
+                    // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：评估落地后
+                    // has_live_activation 置真（未决 pending assessment），
+                    // retrieval_disposition 探针翻转 → tool_availability_check。
+                    expected.push("tool_availability_check");
                     // The disposition event (and the close record for an
                     // accepted close) are the control call's products — they
                     // land between the tool's start and completion.
@@ -2159,6 +2163,9 @@ mod conformance_capture {
                         expected.push("retrieval_close_record");
                     }
                     expected.push("tool_completed");
+                    // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：disposition
+                    // 消费后 pending assessment 清除，探针翻转 → 事件。
+                    expected.push("tool_availability_check");
                 }
                 expected.extend([
                     "model_output",
@@ -2467,6 +2474,11 @@ mod conformance_capture {
                         "tool_completed",
                         "retrieval_result_committed",
                         "information_sufficiency_assessment",
+                        // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：
+                        // has_live_activation 收紧为"未决 pending assessment"——
+                        // 评估落地后 retrieval_disposition 探针翻转，触发
+                        // tool_availability_check。
+                        "tool_availability_check",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2586,6 +2598,9 @@ mod conformance_capture {
                         "tool_completed",
                         "retrieval_result_committed",
                         "information_sufficiency_assessment",
+                        // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：
+                        // 评估落地后 retrieval_disposition 探针翻转事件。
+                        "tool_availability_check",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2692,6 +2707,10 @@ mod conformance_capture {
                         "retrieval_parent_disposition",
                         "retrieval_close_record",
                         "tool_completed",
+                        // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：
+                        // disposition 消费后 pending assessment 清除，
+                        // retrieval_disposition 探针翻转事件。
+                        "tool_availability_check",
                         "model_output",
                         "counterexample_gate",
                         "model_output",

@@ -44,7 +44,7 @@ use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole};
 use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
-use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolResult};
+use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolResult, ToolRegistry};
 use crate::orientation::{AgentRole, OrientationSessionState};
 use crate::prompt::is_injected_block_text;
 use crate::relay::DispatchTarget;
@@ -2039,7 +2039,36 @@ impl AgentLoopController {
             !crate::tool_probe::is_main_agent_work_tool(&t.name)
                 || snapshot.complete.iter().any(|c| c == &t.name)
         });
+        // FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
+        // 主 Agent 不执行检索任务，local_browser 的 `browser_read` 从主车道
+        // 模型可见投影移除；检索子代理投影在 `subagent_tool_projection` 中
+        // 从 host registry 恢复（见 run_retrieval_subagent）。
+        tool_defs.retain(|t| t.name != "browser_read");
         tool_defs
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
+    /// 子代理工具投影 = 父侧 registry 投影去掉主车道专属控制工具
+    /// （`compaction_whitelist_add` / `retrieval_disposition`），并恢复主车道
+    /// 已不广告但检索车道仍须可用的 host 路由检索工具（`browser_read`——
+    /// local_browser 模式由子代理执行；host registry 未声明时不得发明）。
+    pub(crate) fn subagent_tool_projection(
+        parent_tools: &[ToolDef],
+        registry: &dyn ToolRegistry,
+    ) -> Vec<ToolDef> {
+        let mut defs: Vec<ToolDef> = parent_tools
+            .iter()
+            .filter(|t| t.name != "compaction_whitelist_add" && t.name != "retrieval_disposition")
+            .cloned()
+            .collect();
+        for name in ["browser_read"] {
+            if !defs.iter().any(|t| t.name == name) {
+                if let Some(def) = registry.get(name) {
+                    defs.push(def);
+                }
+            }
+        }
+        defs
     }
 
     /// FUS-TOOL-PROBE P0-A-2: whether the run carries a goal context
@@ -4593,14 +4622,10 @@ impl AgentLoopController {
         // The subagent's tool projection = the parent's registry minus the
         // main-only control/whitelist tools (the retrieval lane never sees
         // compaction_whitelist_add — a main-run session concept — nor the
-        // parent-disposition control tool). The availability block is
-        // filtered the same way — it must not advertise tools the lane
-        // cannot call.
-        let sub_tool_defs: Vec<ToolDef> = tool_defs
-            .iter()
-            .filter(|t| t.name != "compaction_whitelist_add" && t.name != "retrieval_disposition")
-            .cloned()
-            .collect();
+        // parent-disposition control tool), plus the host-routed retrieval
+        // tools the main lane no longer advertises (2026-08-14 ruling:
+        // browser_read is restored from the host registry here).
+        let sub_tool_defs = Self::subagent_tool_projection(tool_defs, host.tools_registry());
         let subagent = match role {
             SubagentRole::InternalRetrieval => &self.internal_retrieval,
             SubagentRole::ExternalRetrieval => &self.external_retrieval,
@@ -13853,6 +13878,113 @@ mod tests {
             "single-face list projection: {declared:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
+    /// 主 Agent 不执行检索任务——`browser_read` 即使由 host registry 声明
+    /// 也从主车道模型可见投影移除（非工作工具同样移除），其余投影语义不变。
+    #[test]
+    fn main_lane_projection_removes_browser_read() {
+        let base = ["read_file", "browser_read", "bash"]
+            .iter()
+            .map(|n| ToolDef {
+                name: n.to_string(),
+                description: format!("tool {n}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect::<Vec<_>>();
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec!["read_file".to_string()],
+            incomplete: vec![],
+        };
+        let projected = AgentLoopController::project_main_agent_tool_defs(&base, &snapshot);
+        let mut names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["bash", "read_file"],
+            "browser_read removed from the main-lane projection: {names:?}"
+        );
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
+    /// 检索子代理投影从 host registry 恢复主车道已移除的 `browser_read`
+    /// （local_browser 模式由子代理执行；registry 未声明时不得发明），
+    /// 并继续剔除主车道专属控制工具。
+    #[test]
+    fn subagent_projection_restores_browser_read() {
+        let parent = [
+            "read_file",
+            "web_search",
+            "compaction_whitelist_add",
+            "retrieval_disposition",
+        ]
+        .iter()
+        .map(|n| ToolDef {
+            name: n.to_string(),
+            description: format!("tool {n}"),
+            parameters: serde_json::json!({}),
+        })
+        .collect::<Vec<_>>();
+
+        let projected =
+            AgentLoopController::subagent_tool_projection(&parent, &BrowserDeclaringRegistry);
+        let mut names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["browser_read", "read_file", "web_search"],
+            "subagent projection restores browser_read: {names:?}"
+        );
+
+        let absent = AgentLoopController::subagent_tool_projection(&parent, &EmptyRegistry);
+        let mut absent_names: Vec<&str> = absent.iter().map(|t| t.name.as_str()).collect();
+        absent_names.sort();
+        assert_eq!(
+            absent_names,
+            vec!["read_file", "web_search"],
+            "no invention when the host registry lacks browser_read: {absent_names:?}"
+        );
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
+    /// 父侧投影已含 `browser_read` 时恢复逻辑不重复追加。
+    #[test]
+    fn subagent_projection_keeps_browser_read_singleton() {
+        let parent = ["read_file", "browser_read"]
+            .iter()
+            .map(|n| ToolDef {
+                name: n.to_string(),
+                description: format!("tool {n}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect::<Vec<_>>();
+        let projected =
+            AgentLoopController::subagent_tool_projection(&parent, &BrowserDeclaringRegistry);
+        assert_eq!(
+            projected.iter().filter(|t| t.name == "browser_read").count(),
+            1,
+            "browser_read must appear exactly once: {projected:?}"
+        );
+    }
+
+    /// A host registry that declares `browser_read` (local_browser capable).
+    struct BrowserDeclaringRegistry;
+    impl ToolRegistry for BrowserDeclaringRegistry {
+        fn get(&self, name: &str) -> Option<ToolDef> {
+            (name == "browser_read").then(|| ToolDef {
+                name: "browser_read".to_string(),
+                description: "tool browser_read".to_string(),
+                parameters: serde_json::json!({}),
+            })
+        }
+        fn list(&self) -> Vec<ToolDef> {
+            vec![ToolDef {
+                name: "browser_read".to_string(),
+                description: "tool browser_read".to_string(),
+                parameters: serde_json::json!({}),
+            }]
+        }
     }
 
     /// P0-A step 4: with an interactive session, a registry-declared
