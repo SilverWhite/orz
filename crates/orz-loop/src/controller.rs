@@ -3,8 +3,10 @@
 //! Replaces Grok Sampler's ~10k lines with a clean while loop.
 //!
 //! Flow (event sequence aligned with Python `orientation_runtime_journal.py`):
-//!   1. tool_availability_check (mechanical probe over the host registry —
-//!      must precede run_started per Python conformance)
+//!   1. tool_availability_check (Face B two-state probe partition —
+//!      complete/incomplete with neutral reasons; Face A/C and the
+//!      retrieval lane never appear — must precede run_started per Python
+//!      conformance)
 //!   2. run_started / prompt_submitted
 //!   3. orientation_checkpoint (per-turn, fixed_step_interval — Python parity,
 //!      no cooldown; see orz-assurance::orientation)
@@ -5700,40 +5702,72 @@ impl AgentLoopController {
         // D-9 (FIX_PLAN 2026-08-06) + RT-001 (2026-08-11): `run_tests`
         // executes the host's FIXED command — the model supplies no argv
         // (the command itself is host-owned and hidden; the tool is only
-        // declared when the host carries a test runner), but it IS controlled
-        // code execution (ADR-0010 §3.8.2: the test process can write files,
-        // hit the network, spawn children), so it passes the SAME permission
-        // gate as any LocalMutation tool above: Interactive prompts the user,
-        // Benchmark (harness — ORZ_ALLOW_WRITE) auto-allows via the host
-        // bridge (permission.rs), the retrieval lane never reaches this point
-        // (its write-domain gate refuses run_tests with
+        // declared when the Face B probe finds a test runner), but it IS
+        // controlled code execution (ADR-0010 §3.8.2: the test process can
+        // write files, hit the network, spawn children), so it passes the
+        // SAME permission gate as any LocalMutation tool above: Interactive
+        // prompts the user, Benchmark (harness — ORZ_ALLOW_WRITE) auto-allows
+        // via the host bridge (permission.rs), the retrieval lane never
+        // reaches this point (its write-domain gate refuses run_tests with
         // `retrieval_role_execution_denied` first). The execution leaves a
         // full audit trail: PermissionRequested/PermissionDecision (denials
         // are no-ToolStarted, same shape as every other tool) then
         // ToolStarted/ToolCompleted (D-5; 2026-08-07 review F-02: this path
         // previously recorded zero journal events).
         if tc.name == "run_tests" {
-            let runner = host.test_runner();
+            // P0-A review cleanup (design §4/§6): without a host runner the
+            // Face B probe keeps `run_tests` out of the model-visible list;
+            // a race call is refused HERE with the neutral statement and NO
+            // ToolStarted (same no-ToolStarted shape as the mode/ACAF
+            // refusals) instead of executing the default NotFound error
+            // after a ToolStarted.
+            let Some(runner) = host.test_runner() else {
+                let msg = "tool 'run_tests' — 缺少测试运行器".to_string();
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "status": "error",
+                            "error": "missing_test_runner",
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output: msg,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                    },
+                    None,
+                ));
+            };
             // ACAF Slice 2 (2026-08-12): command_exec_v1 for the host-owned
             // fixed command — issued/verified BEFORE ToolStarted (same
             // ordering discipline as every other action ticket). Shadow
             // mode: rejections are journaled and the run proceeds;
             // fail-closed (2026-08-13): a Blocked gate refuses the run
             // (no ToolStarted).
-            if let Some(runner) = &runner {
-                let gate = self
-                    .acaf_command_exec_event(
-                        writer,
-                        &tc.name,
-                        runner,
-                        activation_id.map(str::to_string),
-                    )
-                    .await?;
-                if let TicketGate::Blocked { .. } = &gate {
-                    return Self::refuse_ticketed_tool(writer, messages, tc, &gate).await;
-                }
+            let gate = self
+                .acaf_command_exec_event(
+                    writer,
+                    &tc.name,
+                    &runner,
+                    activation_id.map(str::to_string),
+                )
+                .await?;
+            if let TicketGate::Blocked { .. } = &gate {
+                return Self::refuse_ticketed_tool(writer, messages, tc, &gate).await;
             }
-            let fixed_command: Option<String> = runner.map(|r| r.command.join(" "));
+            let fixed_command: Option<String> = Some(runner.command.join(" "));
             writer
                 .record(
                     EventType::ToolStarted,
@@ -12166,6 +12200,17 @@ mod tests {
                 env: Vec::new(),
             })
         }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            // The race-call test needs the call to reach the run_tests
+            // dispatch branch (permission already approved); the text-only
+            // projection tests never invoke this.
+            Ok(PermitDecision::AllowOnce)
+        }
     }
 
     /// P0-A step 3: without a host test runner the Face B probe marks
@@ -12268,6 +12313,7 @@ mod tests {
                 "ask_user_question",
                 "run_tests",
                 "run_terminal_cmd",
+                "image_gen",
                 "bash",
                 "todo_write",
                 "blackboard_read",
@@ -12283,10 +12329,11 @@ mod tests {
     }
 
     /// A host over `MixedProjectionRegistry` with a configurable interactive
-    /// signal; no test runner (Benchmark policy).
+    /// signal and session cwd; no test runner (Benchmark policy).
     struct MixedProjectionHost {
         journal: JournalRecorder,
         interactive: bool,
+        cwd: std::path::PathBuf,
     }
     #[async_trait]
     impl LoopHost for MixedProjectionHost {
@@ -12298,6 +12345,9 @@ mod tests {
         }
         fn tool_policy(&self) -> crate::host::ToolPolicy {
             crate::host::ToolPolicy::Benchmark
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.cwd.clone()
         }
         fn interactive_user(&self) -> bool {
             self.interactive
@@ -12314,6 +12364,7 @@ mod tests {
         let host = MixedProjectionHost {
             journal: JournalRecorder::new(dir.clone()),
             interactive: false,
+            cwd: dir.clone(),
         };
         let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -12335,6 +12386,7 @@ mod tests {
                 "bash",                     // non-work tool — untouched
                 "blackboard_read",          // Face A (registry + controller)
                 "compaction_whitelist_add", // Face A (controller-added)
+                "image_gen",                // Face C — no backend probe, kept
                 "read_file",                // Face B complete ∩ declared
                 "retrieval_disposition",    // Face A (controller-added)
                 "run_terminal_cmd",         // Face C
@@ -12353,6 +12405,7 @@ mod tests {
         let host = MixedProjectionHost {
             journal: JournalRecorder::new(dir.clone()),
             interactive: true,
+            cwd: dir.clone(),
         };
         let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -12370,6 +12423,122 @@ mod tests {
         assert!(
             declared.iter().any(|t| *t == "ask_user_question"),
             "ask_user_question kept with an interactive session: {declared:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A review cleanup (design §4/§6): a race call to `run_tests`
+    /// without a host runner is refused BEFORE ToolStarted with the neutral
+    /// statement (`tool 'run_tests' — 缺少测试运行器`) and a machine-readable
+    /// error code — no default NotFound execution after ToolStarted.
+    #[tokio::test]
+    async fn run_tests_race_call_without_runner_refused_before_tool_started() {
+        let dir = test_dir();
+        let host = RunTestsRegistryHost {
+            journal: JournalRecorder::new(dir.clone()),
+            runner: false,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-race")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "验证", "RUN-RT-RACE", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let all = events(&dir);
+        let types = event_types(&dir);
+        assert!(
+            !all.iter().any(|e| e.event_type == EventType::ToolStarted
+                && e.payload.get("tool").and_then(|v| v.as_str()) == Some("run_tests")),
+            "no ToolStarted for the refused race call: {types:?}"
+        );
+        let completed: Vec<&RunEvent> = all
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("run_tests")
+            })
+            .collect();
+        assert_eq!(completed.len(), 1, "{types:?}");
+        assert_eq!(completed[0].payload["error"], "missing_test_runner");
+        let round2 = &fake.received_requests()[1].messages;
+        let tool_msg = round2
+            .iter()
+            .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-race"))
+            .expect("race call answered with a tool message");
+        assert!(
+            tool_msg.content.contains("tool 'run_tests' — 缺少测试运行器"),
+            "neutral fallback message: {}",
+            tool_msg.content
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A review cleanup: with an unreadable session cwd the Face B read
+    /// tools are incomplete and removed from the declarations, while Face
+    /// A/C and non-work tools stay (the probe never invents tools and never
+    /// keeps a broken mechanical chain visible).
+    #[tokio::test]
+    async fn list_projection_removes_unreadable_read_tools() {
+        let dir = test_dir();
+        let missing = std::env::temp_dir().join(format!(
+            "orz-proj-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&missing);
+        let host = MixedProjectionHost {
+            journal: JournalRecorder::new(dir.clone()),
+            interactive: false,
+            cwd: missing.clone(),
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-PROJ-RO", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let mut declared: Vec<&str> = received[0]
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        declared.sort();
+        assert_eq!(
+            declared,
+            vec![
+                "bash",                     // non-work tool — untouched
+                "blackboard_read",          // Face A
+                "compaction_whitelist_add", // Face A (controller-added)
+                "image_gen",                // Face C
+                "retrieval_disposition",    // Face A (controller-added)
+                "run_terminal_cmd",         // Face C
+                "todo_write",               // Face A (registry-declared)
+            ],
+            "unreadable workspace removes Face B read tools: {declared:?}"
+        );
+        let all_events = events(&dir);
+        let availability = all_events
+            .iter()
+            .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .unwrap();
+        assert!(
+            availability.payload["incomplete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["tool"] == "read_file" && v["reason"] == "工作区路径不可读"),
+            "probe reasons: {:?}",
+            availability.payload["incomplete"]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -12551,8 +12720,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// RT-001（2026-08-12 语义更新）：`run_tests` 的声明条件 = host 携带
-    /// test runner（目录语义——能力目录全量，零政策过滤）；ReadOnly 下
+    /// P0-A steps 3-4（RT-001 语义更新）：`run_tests` 的声明由面 B 探针
+    /// 决定（runner 存在性，不受 policy 影响）；ReadOnly 下探针仍完整故
     /// 同样被声明，只读保证由执行层 permission gate 承担（ReadOnly
     /// policy 拒非读）。
     #[tokio::test]

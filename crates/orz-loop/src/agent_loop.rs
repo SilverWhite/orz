@@ -278,12 +278,13 @@ pub(crate) struct LoopOutcome {
 /// (role-gated) → batch injections (denial breaker / edit push /
 /// orientation post-tool-batch gap) → budget re-declaration.
 ///
-/// `tool_defs` come from the caller's ONE registry-catalog snapshot — the
-/// subagent loop does not re-probe (no second `tool_availability_check`
-/// event; §3.5.1 per-session catalog — 2026-08-12 语义：目录快照，零可用
-/// 性承诺，判定在调用时)。`messages` is in/out: the conversation continues
-/// across rounds; the caller owns the seed and the post-loop use (stagnation
-/// / grill history writeback).
+/// `tool_defs` come from the caller's ONE probe-projected snapshot per turn
+/// (P0-A steps 3-4: 面A + (面B完整集 ∩ 会话声明集) + 面C + 非工作工具 —
+/// per-round refresh and flip events are batch step 5). The subagent loop
+/// does not re-probe (no second `tool_availability_check` event); the
+/// call-time permission gate remains the final backstop. `messages` is
+/// in/out: the conversation continues across rounds; the caller owns the
+/// seed and the post-loop use (stagnation / grill history writeback).
 #[allow(clippy::too_many_arguments)] // the shared loop's full contract
 pub(crate) async fn run_agent_loop(
     svc: &SharedLoopServices<'_>,
