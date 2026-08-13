@@ -974,11 +974,28 @@ async fn network_ticket_full_chain() {
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "example guide" }),
+            call_id: "call-1".to_string(),
+        }]),
+        // Subagent: the local_browser second segment — the REAL host
+        // browser_read (P0-B step 4: candidate-counted, lane-bound).
+        ScriptedResponse::tool_calls(vec![ToolCall {
             name: "browser_read".to_string(),
             arguments: serde_json::json!({
                 "url": "HTTP://Example.COM:80/docs/guide?q=1#frag",
             }),
-            call_id: "call-1".to_string(),
+            call_id: "call-s1".to_string(),
+        }]),
+        ScriptedResponse::text("[SOURCE] HTTP://Example.COM:80/docs/guide?q=1#frag\n内容"),
+        // Main: close the external activation.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "external_retrieval",
+                "decision": "close",
+            }),
+            call_id: "call-d1".to_string(),
         }]),
         ScriptedResponse::text("完成"),
         ScriptedResponse::text("完成"),
@@ -1013,6 +1030,10 @@ async fn network_ticket_full_chain() {
         .iter()
         .filter(|e| e.event_type.to_string() == "control_ticket_issued")
         .collect();
+    let network_issued: Vec<_> = issued
+        .iter()
+        .filter(|e| e.payload["ticket_kind"] == "network_v1")
+        .collect();
     let consumed: Vec<_> = events
         .iter()
         .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
@@ -1022,19 +1043,25 @@ async fn network_ticket_full_chain() {
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
 
-    assert_eq!(issued.len(), 1, "one network ticket: {types:?}");
-    assert_eq!(consumed.len(), 1, "ticket consumed: {types:?}");
+    assert_eq!(
+        network_issued.len(),
+        1,
+        "one lane network ticket: {types:?}"
+    );
     assert!(
         rejected.is_empty(),
         "no rejections on the happy path: {types:?}"
     );
 
-    let issue = &issued[0].payload;
+    let issue = &network_issued[0].payload;
     assert_eq!(issue["ticket_kind"], "network_v1");
     assert_eq!(issue["capability_scope"], "network");
+    let activation = issue["activation_id"]
+        .as_str()
+        .expect("D-13: network ticket must bind the lane activation");
     assert!(
-        issue["activation_id"].is_null(),
-        "main lane — no activation (D2)"
+        activation.starts_with("retrieval-external_retrieval-") && activation.ends_with("-00"),
+        "unexpected activation binding: {activation}"
     );
     assert_eq!(
         issue["resolved_target_sha256"].as_str().unwrap().len(),
@@ -1049,16 +1076,29 @@ async fn network_ticket_full_chain() {
         network_target_digest("http://example.com/docs/guide?q=1"),
         "the canonical URL digest is bound, not the raw input"
     );
-    assert_eq!(consumed[0].payload["ticket_id"], issue["ticket_id"]);
-    assert_eq!(consumed[0].payload["ticket_kind"], "network_v1");
-    assert_eq!(consumed[0].payload["outcome"], "accepted");
-    let started = types.iter().position(|t| t == "tool_started").unwrap();
-    let issued_idx = types
+    assert!(
+        consumed.iter().any(|e| {
+            e.payload["ticket_id"] == issue["ticket_id"]
+                && e.payload["ticket_kind"] == "network_v1"
+                && e.payload["outcome"] == "accepted"
+        }),
+        "network ticket must be consumed: {types:?}"
+    );
+    let browser_started = events
         .iter()
-        .position(|t| t == "control_ticket_issued")
+        .position(|e| {
+            e.event_type.to_string() == "tool_started" && e.payload["tool"] == "browser_read"
+        })
+        .unwrap();
+    let issued_idx = events
+        .iter()
+        .position(|e| {
+            e.event_type.to_string() == "control_ticket_issued"
+                && e.payload["ticket_kind"] == "network_v1"
+        })
         .unwrap();
     assert!(
-        issued_idx < started,
+        issued_idx < browser_started,
         "ticket precedes ToolStarted: {types:?}"
     );
 }
@@ -1324,12 +1364,19 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "example" }),
+            call_id: "call-1".to_string(),
+        }]),
+        // Subagent: the lane's browser_read carries an unticketable URL.
+        ScriptedResponse::tool_calls(vec![ToolCall {
             name: "browser_read".to_string(),
             arguments: serde_json::json!({
                 "url": "not a url",
             }),
-            call_id: "call-1".to_string(),
+            call_id: "call-s1".to_string(),
         }]),
+        ScriptedResponse::text("[SOURCE] not a url\n内容"),
         ScriptedResponse::text("完成"),
         ScriptedResponse::text("完成"),
     ]));
@@ -1463,13 +1510,15 @@ async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() 
     );
 }
 
-// ── test 13: missing URL key with configured ACAF → silent skip (locked) ──
+// ── test 13: browser_read missing URL key → candidate gate refuses ───────
 
 #[tokio::test]
-async fn missing_network_arg_silently_skips_with_configured_acaf() {
-    // Review P2-1 (2026-08-12): the missing-argument silent skip is a
-    // REGISTERED shadow-mode behaviour (fail-closed flip checklist ③/④) —
-    // locked here so the flip decision cannot forget it.
+async fn missing_browser_read_url_refuses_before_acaf_with_count_gate() {
+    // P0-B step 4 (2026-08-14): the candidate count gate needs a URL as
+    // the count identity, so a missing `url` fails closed BEFORE the ACAF
+    // layer — `browser_read_candidate_url_missing`, no ticket events, no
+    // ToolStarted (supersedes the old shadow-mode silent skip; stronger
+    // guarantee: no unticketed channel and no count-identity gap).
     let fixture = SignerFixture::new();
     let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
 
@@ -1495,10 +1544,17 @@ async fn missing_network_arg_silently_skips_with_configured_acaf() {
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![ToolCall {
-            name: "browser_read".to_string(),
-            arguments: serde_json::json!({ "foo": "bar" }),
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "example" }),
             call_id: "call-1".to_string(),
         }]),
+        // Subagent: browser_read without a URL — the count gate refuses.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "foo": "bar" }),
+            call_id: "call-s1".to_string(),
+        }]),
+        ScriptedResponse::text("检索完成"),
         ScriptedResponse::text("完成"),
         ScriptedResponse::text("完成"),
     ]));
@@ -1539,13 +1595,25 @@ async fn missing_network_arg_silently_skips_with_configured_acaf() {
         .collect();
     assert!(
         ticket_events.is_empty(),
-        "missing URL key must silently skip in shadow mode: {types:?}"
+        "missing URL must refuse before any ticket layer: {types:?}"
     );
-    // The tool still runs (the host-side tool fails on its own or succeeds
-    // per the host's own argument contract).
+    // The ToolCompleted carries the stable gate code and the tool never
+    // started.
+    let refused: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e.event_type.to_string() == "tool_completed"
+                && e.payload["tool"] == "browser_read"
+                && e.payload["error"] == "browser_read_candidate_url_missing"
+        })
+        .collect();
+    assert_eq!(refused.len(), 1, "one gate refusal: {types:?}");
     assert!(
-        types.iter().any(|t| t == "tool_started") && types.iter().any(|t| t == "tool_completed"),
-        "tool path unchanged: {types:?}"
+        !events.iter().any(|e| {
+            e.event_type.to_string() == "tool_started"
+                && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-s1")
+        }),
+        "refused browser_read must not start: {types:?}"
     );
 }
 
@@ -1626,10 +1694,17 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![ToolCall {
-            name: "browser_read".to_string(),
-            arguments: serde_json::json!({ "url": "https://example.com/doc" }),
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "example doc" }),
             call_id: "call-1".to_string(),
         }]),
+        // Subagent: the lane's browser_read ticket verify fails.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com/doc" }),
+            call_id: "call-s1".to_string(),
+        }]),
+        ScriptedResponse::text("检索完成"),
         ScriptedResponse::text("完成"),
         ScriptedResponse::text("完成"),
     ]));
@@ -1678,12 +1753,17 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
         rejected[0].payload
     );
     assert!(
-        !types.iter().any(|t| t == "tool_started"),
-        "fail-closed must not start the tool: {types:?}"
+        !events.iter().any(|e| {
+            e.event_type.to_string() == "tool_started"
+                && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-s1")
+        }),
+        "fail-closed must not start browser_read: {types:?}"
     );
     let completed: Vec<_> = events
         .iter()
-        .filter(|e| e.event_type.to_string() == "tool_completed")
+        .filter(|e| {
+            e.event_type.to_string() == "tool_completed" && e.payload["tool"] == "browser_read"
+        })
         .collect();
     assert_eq!(
         completed[0].payload["error"],
@@ -1845,10 +1925,18 @@ async fn fail_closed_missing_url_blocks_network_tool() {
 
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![ToolCall {
-            name: "browser_read".to_string(),
-            arguments: serde_json::json!({ "foo": "bar" }),
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "example" }),
             call_id: "call-1".to_string(),
         }]),
+        // Subagent: browser_read without a URL — the candidate gate
+        // refuses before ACAF (P0-B step 4: count identity missing).
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "foo": "bar" }),
+            call_id: "call-s1".to_string(),
+        }]),
+        ScriptedResponse::text("检索完成"),
         ScriptedResponse::text("完成"),
         ScriptedResponse::text("完成"),
     ]));
@@ -1883,27 +1971,28 @@ async fn fail_closed_missing_url_blocks_network_tool() {
         .iter()
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
-    assert_eq!(rejected.len(), 1, "one hard refusal: {types:?}");
-    let rejection = &rejected[0].payload;
-    assert_eq!(rejection["ticket_kind"], "network_v1");
-    assert_eq!(rejection["reject_code"], "missing_target_argument");
     assert!(
-        rejection["ticket_id"].is_null(),
-        "pre-signing refusal: {rejection:?}"
+        rejected.is_empty(),
+        "count gate refuses before any ticket layer: {types:?}"
     );
-    // No ToolStarted → the tool never executed.
+    // No browser_read ToolStarted → the tool never executed.
     assert!(
-        !types.iter().any(|t| t == "tool_started"),
-        "fail-closed must not start the tool: {types:?}"
+        !events.iter().any(|e| {
+            e.event_type.to_string() == "tool_started"
+                && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-s1")
+        }),
+        "fail-closed must not start browser_read: {types:?}"
     );
-    // The ToolCompleted error surfaces the refusal to the model.
+    // The ToolCompleted error surfaces the count-gate refusal to the model.
     let completed: Vec<_> = events
         .iter()
-        .filter(|e| e.event_type.to_string() == "tool_completed")
+        .filter(|e| {
+            e.event_type.to_string() == "tool_completed" && e.payload["tool"] == "browser_read"
+        })
         .collect();
     assert_eq!(
         completed[0].payload["error"],
-        "control_ticket_rejected:missing_target_argument"
+        "browser_read_candidate_url_missing"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

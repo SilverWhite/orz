@@ -176,12 +176,12 @@ pub(crate) struct LoopProfile {
     /// browser_read). The main lane is `None` (main-lane actions stay
     /// activation-less).
     pub activation_id: Option<String>,
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the current dispatch's
-    /// web_fetch candidate counter (per-activation shared domain — the
-    /// subagent loop mutates it on every web_fetch gate; the caller writes
-    /// it back into the activation on every path). The main/grill lanes
-    /// pass `None` — web_fetch never executes there (it routes to the
-    /// external retrieval lane), and a `None` domain fails the gate closed.
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the current
+    /// dispatch's candidate counter (per-activation shared domain — the
+    /// subagent loop mutates it on every candidate gate: web_fetch family +
+    /// browser_read; the caller writes it back into the activation on every
+    /// path). The main/grill lanes pass `None` — candidate-counted tools
+    /// never execute there, and a `None` domain fails the gate closed.
     pub fetch_candidates: Option<Arc<Mutex<Vec<String>>>>,
 }
 

@@ -20,8 +20,9 @@
 //!   cleanup; fail-closed with [`UnavailableBrowserSession`] when nothing
 //!   was launched.
 //! - `browser_read` — the single host-owned tool (project_doc_index
-//!   pattern): `{ "url": "https://…" }` → read-only page text. One tab per
-//!   call, never handed to the model (§3.7.6).
+//!   pattern): `{ "url": "https://…", "mode": "full|preview|keywords" }` →
+//!   read-only page text (P0-B step 4: full / preview / keyword excerpts).
+//!   One tab per call, never handed to the model (§3.7.6).
 
 mod cdp;
 mod discovery;
@@ -41,11 +42,32 @@ pub use discovery::{
 };
 pub use url_gate::{UrlGateError, check_navigation_url, check_navigation_url_sync};
 
-/// Max characters of page text returned to the model (tool contract —
-/// §3.7.7 download-size limits; aligned with the Python LBR precedent of
-/// 100k chars). Truncation appends a mechanical footer so the evidence
-/// layer maps it to `partial_text_observed`.
+/// `browser_read` read-scope values (P0-B step 4, 2026-08-14).
+pub const MODE_FULL: &str = "full";
+pub const MODE_PREVIEW: &str = "preview";
+pub const MODE_KEYWORDS: &str = "keywords";
+
+/// Max characters of page text returned to the model in full mode (tool
+/// contract — §3.7.7 download-size limits; aligned with the Python LBR
+/// precedent of 100k chars). Truncation appends a mechanical footer so the
+/// evidence layer maps it to `partial_text_observed`.
 pub const MAX_READ_CHARS: usize = 100_000;
+
+/// Max characters returned in preview mode — the first portion of the
+/// rendered page text (P0-B step 4). A page short enough to fit is returned
+/// complete (evidence stays `full_text_observed`); otherwise a mechanical
+/// footer marks the preview as partial.
+pub const PREVIEW_READ_CHARS: usize = 4_000;
+
+/// Keyword-extraction bounds (P0-B step 4): at most this many terms, each
+/// at most this many chars, excerpts of ±this many chars around a match, at
+/// most this many merged excerpts per term, and this many total excerpt
+/// chars returned to the model.
+pub const MAX_KEYWORDS: usize = 16;
+pub const MAX_KEYWORD_CHARS: usize = 64;
+pub const KEYWORD_EXCERPT_RADIUS: usize = 160;
+pub const KEYWORD_EXCERPTS_PER_TERM: usize = 3;
+pub const KEYWORD_TOTAL_CHARS: usize = 12_000;
 
 /// Footer prefix when the page text is truncated (evidence layer matches
 /// this prefix to downgrade visibility — same shape as web_fetch's
@@ -233,6 +255,9 @@ pub fn browser_read_tool_def() -> ToolDef {
              to the URL (http/https public pages only — file://, localhost, \
              private IPs and cloud metadata are blocked by policy), waits for \
              load, and returns the rendered page text + title + final URL. \
+             mode=full (default) returns up to 100000 chars of page text; \
+             mode=preview returns the first 4000 chars; mode=keywords returns \
+             bounded excerpts around the given keywords. \
              One tab per call, closed after reading; page content is evidence \
              only. PDFs, forms and JavaScript evaluation are not supported."
             .to_string(),
@@ -240,6 +265,21 @@ pub fn browser_read_tool_def() -> ToolDef {
             "type": "object",
             "properties": {
                 "url": { "type": "string", "description": "Public http(s) URL to read" },
+                "mode": {
+                    "type": "string",
+                    "enum": ["full", "preview", "keywords"],
+                    "description": "Read scope (default full): full returns up to \
+                        100000 chars of page text; preview returns the first 4000 \
+                        chars; keywords returns bounded excerpts around the given \
+                        keywords.",
+                },
+                "keywords": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "maxItems": 16,
+                    "description": "Required when mode=keywords: 1..16 non-empty \
+                        terms (each up to 64 chars) to extract excerpts for.",
+                },
             },
             "required": ["url"],
         }),
@@ -262,7 +302,10 @@ pub async fn handle_browser_read(
                 .to_string(),
         )
     })?;
-    let unknown: Vec<&String> = obj.keys().filter(|k| k.as_str() != "url").collect();
+    let unknown: Vec<&String> = obj
+        .keys()
+        .filter(|k| !matches!(k.as_str(), "url" | "mode" | "keywords"))
+        .collect();
     if !unknown.is_empty() {
         return Err(ToolError::ExecutionFailed(format!(
             "browser_read failed [browser_read_invalid_arguments]: unknown argument(s): {}",
@@ -283,26 +326,145 @@ pub async fn handle_browser_read(
                     .to_string(),
             )
         })?;
+    let mode = match obj.get("mode") {
+        None => MODE_FULL,
+        Some(v) => match v.as_str() {
+            Some(m @ (MODE_FULL | MODE_PREVIEW | MODE_KEYWORDS)) => m,
+            _ => {
+                return Err(ToolError::ExecutionFailed(
+                    "browser_read failed [browser_read_invalid_arguments]: `mode` must be \
+                     one of \"full\", \"preview\" or \"keywords\""
+                        .to_string(),
+                ));
+            }
+        },
+    };
+    let keywords = match obj.get("keywords") {
+        Some(_) if mode != MODE_KEYWORDS => {
+            return Err(ToolError::ExecutionFailed(
+                "browser_read failed [browser_read_invalid_arguments]: `keywords` is only \
+                 allowed in keywords mode"
+                    .to_string(),
+            ));
+        }
+        None if mode == MODE_KEYWORDS => {
+            return Err(ToolError::ExecutionFailed(
+                "browser_read failed [browser_read_invalid_arguments]: keywords mode requires \
+                 a non-empty `keywords` array"
+                    .to_string(),
+            ));
+        }
+        None => Vec::new(),
+        Some(v) => {
+            let arr = v.as_array().ok_or_else(|| {
+                ToolError::ExecutionFailed(
+                    "browser_read failed [browser_read_invalid_arguments]: `keywords` must \
+                     be an array of non-empty strings"
+                        .to_string(),
+                )
+            })?;
+            if arr.is_empty() || arr.len() > MAX_KEYWORDS {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "browser_read failed [browser_read_invalid_arguments]: `keywords` must \
+                     contain 1..{MAX_KEYWORDS} terms"
+                )));
+            }
+            let mut kws = Vec::with_capacity(arr.len());
+            for item in arr {
+                let term = item
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        ToolError::ExecutionFailed(
+                            "browser_read failed [browser_read_invalid_arguments]: \
+                             `keywords` entries must be non-empty strings"
+                                .to_string(),
+                        )
+                    })?;
+                if term.chars().count() > MAX_KEYWORD_CHARS {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "browser_read failed [browser_read_invalid_arguments]: keyword \
+                         exceeds {MAX_KEYWORD_CHARS} chars"
+                    )));
+                }
+                if kws.iter().any(|k| k == term) {
+                    return Err(ToolError::ExecutionFailed(
+                        "browser_read failed [browser_read_invalid_arguments]: \
+                         `keywords` must be unique"
+                            .to_string(),
+                    ));
+                }
+                kws.push(term.to_string());
+            }
+            kws
+        }
+    };
 
     match browser.read_page(url).await {
         Ok(outcome) => {
             let mut text = outcome.text;
             let mut truncated = false;
-            if text.chars().count() > MAX_READ_CHARS {
-                text = text.chars().take(MAX_READ_CHARS).collect();
-                truncated = true;
-            }
-            let mut output = text;
-            if truncated {
-                output.push_str(TRUNCATED_FOOTER_PREFIX);
-                output.push_str(&format!(" {} chars, page text only]", MAX_READ_CHARS));
-            }
+            let content = match mode {
+                MODE_FULL => {
+                    if text.chars().count() > MAX_READ_CHARS {
+                        text = text.chars().take(MAX_READ_CHARS).collect();
+                        truncated = true;
+                    }
+                    let mut output = text;
+                    if truncated {
+                        output.push_str(TRUNCATED_FOOTER_PREFIX);
+                        output.push_str(&format!(" {} chars, page text only]", MAX_READ_CHARS));
+                    }
+                    output
+                }
+                MODE_PREVIEW => {
+                    if text.chars().count() > PREVIEW_READ_CHARS {
+                        text = text.chars().take(PREVIEW_READ_CHARS).collect();
+                        truncated = true;
+                        text.push_str(TRUNCATED_FOOTER_PREFIX);
+                        text.push_str(&format!(
+                            " preview, first {} chars, page text only]",
+                            PREVIEW_READ_CHARS
+                        ));
+                    }
+                    text
+                }
+                MODE_KEYWORDS => {
+                    let (excerpts, matched_terms, excerpt_count) =
+                        keyword_excerpts(&text, &keywords);
+                    let mut output = if excerpts.is_empty() {
+                        format!(
+                            "[browser_read keywords: no matching excerpts for {} term(s)]",
+                            keywords.len()
+                        )
+                    } else {
+                        excerpts
+                    };
+                    output.push_str(TRUNCATED_FOOTER_PREFIX);
+                    output.push_str(&format!(
+                        " keyword excerpts ({} terms, {} excerpts), page text only]",
+                        matched_terms, excerpt_count
+                    ));
+                    truncated = true;
+                    output
+                }
+                _ => unreachable!("mode validated above"),
+            };
             let out = json!({
                 "url": outcome.final_url,
                 "title": outcome.title,
-                "content": output,
+                "mode": mode,
+                "content": content,
                 "truncated": truncated,
             });
+            let mut out = out;
+            if mode == MODE_KEYWORDS {
+                out["keywords"] = json!(keywords);
+            }
+            if mode == MODE_PREVIEW {
+                out["preview_chars"] = json!(PREVIEW_READ_CHARS);
+            }
             Ok(ToolResult {
                 output: serde_json::to_string(&out).map_err(|e| {
                     ToolError::ExecutionFailed(format!("browser_read serialize: {e}"))
@@ -335,6 +497,125 @@ pub async fn handle_browser_read(
             "browser_read failed [browser_read_failed]: {e}"
         ))),
     }
+}
+
+/// Nearest char boundary at or before `idx` (never splits a UTF-8 char).
+fn floor_char_boundary(text: &str, mut idx: usize) -> usize {
+    if idx >= text.len() {
+        return text.len();
+    }
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+/// Nearest char boundary at or after `idx` (never splits a UTF-8 char).
+fn ceil_char_boundary(text: &str, mut idx: usize) -> usize {
+    let len = text.len();
+    if idx >= len {
+        return len;
+    }
+    while idx < len && !text.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
+/// Mechanical keyword-excerpt extraction (P0-B step 4): case-insensitive
+/// substring matching for pure-ASCII text+terms, exact substring matching
+/// otherwise; overlapping/adjacent matches merge into one excerpt; each term
+/// contributes at most [`KEYWORD_EXCERPTS_PER_TERM`] merged spans and the
+/// total output is bounded by [`KEYWORD_TOTAL_CHARS`]. Returns the joined
+/// excerpts, the number of terms with ≥1 match, and the excerpt count.
+fn keyword_excerpts(text: &str, keywords: &[String]) -> (String, usize, usize) {
+    let mut matched_terms = 0usize;
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for kw in keywords {
+        let matches: Vec<(usize, usize)> = if text.is_ascii() && kw.is_ascii() {
+            let lower_text = text.to_ascii_lowercase();
+            let lower_kw = kw.to_ascii_lowercase();
+            lower_text
+                .match_indices(&lower_kw)
+                .map(|(i, m)| (i, i + m.len()))
+                .collect()
+        } else {
+            text.match_indices(kw.as_str())
+                .map(|(i, m)| (i, i + m.len()))
+                .collect()
+        };
+        if !matches.is_empty() {
+            matched_terms += 1;
+        }
+        // Merge overlapping/adjacent matches within one term.
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (s, e) in matches {
+            if let Some(last) = merged.last_mut() {
+                if s <= last.1 {
+                    last.1 = last.1.max(e);
+                } else {
+                    merged.push((s, e));
+                }
+            } else {
+                merged.push((s, e));
+            }
+        }
+        spans.extend(merged.into_iter().take(KEYWORD_EXCERPTS_PER_TERM));
+    }
+    // Global merge across terms (overlapping excerpts collapse).
+    spans.sort_unstable();
+    let mut merged_spans: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in spans {
+        if let Some(last) = merged_spans.last_mut() {
+            if s <= last.1 {
+                last.1 = last.1.max(e);
+            } else {
+                merged_spans.push((s, e));
+            }
+        } else {
+            merged_spans.push((s, e));
+        }
+    }
+
+    let mut out = String::new();
+    let mut total_chars = 0usize;
+    let mut excerpt_count = 0usize;
+    for (s, e) in merged_spans {
+        if total_chars >= KEYWORD_TOTAL_CHARS {
+            break;
+        }
+        let start = floor_char_boundary(text, s.saturating_sub(KEYWORD_EXCERPT_RADIUS));
+        let end = ceil_char_boundary(text, (e + KEYWORD_EXCERPT_RADIUS).min(text.len()));
+        let excerpt: String = text[start..end].chars().collect();
+        let excerpt_chars = excerpt.chars().count();
+        if !out.is_empty() {
+            out.push_str("\n---\n");
+            total_chars += 5;
+        }
+        if total_chars + excerpt_chars > KEYWORD_TOTAL_CHARS {
+            let remaining = KEYWORD_TOTAL_CHARS.saturating_sub(total_chars);
+            let clipped: String = excerpt.chars().take(remaining).collect();
+            if start > 0 {
+                out.push('…');
+            }
+            out.push_str(&clipped);
+            if end < text.len() {
+                out.push('…');
+            }
+            total_chars = KEYWORD_TOTAL_CHARS;
+        } else {
+            if start > 0 {
+                out.push('…');
+            }
+            out.push_str(&excerpt);
+            if end < text.len() {
+                out.push('…');
+            }
+            total_chars += excerpt_chars;
+        }
+        excerpt_count += 1;
+    }
+    (out, matched_terms, excerpt_count)
 }
 
 /// Whether `browser_read` should be declared/run (same source of truth as
@@ -617,6 +898,169 @@ pub(crate) mod tests {
             parsed["content"].as_str().unwrap().chars().count() < MAX_READ_CHARS + 200,
             "output must stay near the cap"
         );
+    }
+
+    /// P0-B step 4 (2026-08-14): preview mode returns the first
+    /// `PREVIEW_READ_CHARS` chars with a mechanical footer + `truncated:
+    /// true` when the page is longer than the preview budget; a short page
+    /// returns complete (no footer, `truncated: false`).
+    #[tokio::test]
+    async fn preview_mode_truncates_long_pages_and_keeps_short_pages() {
+        let long = "x".repeat(PREVIEW_READ_CHARS + 500);
+        let browser = StubBrowser {
+            outcome: Ok(sample_outcome(&long)),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome(&long))),
+        };
+        let result = handle_browser_read(
+            &browser,
+            &json!({"url": "https://example.com/", "mode": "preview"}),
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["mode"], "preview");
+        assert_eq!(parsed["truncated"], true);
+        assert_eq!(parsed["preview_chars"], PREVIEW_READ_CHARS);
+        assert!(
+            parsed["content"]
+                .as_str()
+                .unwrap()
+                .contains(TRUNCATED_FOOTER_PREFIX),
+            "long preview must carry the mechanical footer"
+        );
+
+        let short = "short page text";
+        let browser = StubBrowser {
+            outcome: Ok(sample_outcome(short)),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome(short))),
+        };
+        let result = handle_browser_read(
+            &browser,
+            &json!({"url": "https://example.com/", "mode": "preview"}),
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["truncated"], false);
+        assert_eq!(parsed["content"], short);
+        assert!(
+            !parsed["content"]
+                .as_str()
+                .unwrap()
+                .contains(TRUNCATED_FOOTER_PREFIX),
+            "short preview must stay footer-free (complete content)"
+        );
+    }
+
+    /// P0-B step 4 (2026-08-14): keywords mode returns bounded excerpts
+    /// around matches (case-insensitive for ASCII), always `truncated: true`
+    /// with the mechanical footer, and echoes the requested keywords.
+    #[tokio::test]
+    async fn keywords_mode_extracts_bounded_excerpts() {
+        let page = "The quick brown fox jumps over the lazy dog. \
+                    The QUICK fox is fast.";
+        let browser = StubBrowser {
+            outcome: Ok(sample_outcome(page)),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome(page))),
+        };
+        let result = handle_browser_read(
+            &browser,
+            &json!({"url": "https://example.com/", "mode": "keywords", "keywords": ["quick"]}),
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["mode"], "keywords");
+        assert_eq!(parsed["truncated"], true);
+        assert_eq!(parsed["keywords"][0], "quick");
+        let content = parsed["content"].as_str().unwrap();
+        assert!(content.contains("quick brown fox"), "{content}");
+        assert!(content.contains("QUICK fox"), "{content}");
+        assert!(
+            content.contains(TRUNCATED_FOOTER_PREFIX),
+            "keywords output must carry the mechanical footer"
+        );
+        assert!(content.contains("keyword excerpts"), "{content}");
+    }
+
+    /// P0-B step 4 (2026-08-14): keywords mode without any match returns a
+    /// neutral no-match note (still a successful read, still partial).
+    #[tokio::test]
+    async fn keywords_mode_no_match_returns_neutral_note() {
+        let browser = StubBrowser {
+            outcome: Ok(sample_outcome("page without the term")),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome(
+                "page without the term",
+            ))),
+        };
+        let result = handle_browser_read(
+            &browser,
+            &json!({"url": "https://example.com/", "mode": "keywords", "keywords": ["absent"]}),
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["truncated"], true);
+        assert!(
+            parsed["content"]
+                .as_str()
+                .unwrap()
+                .contains("no matching excerpts"),
+            "{parsed}"
+        );
+    }
+
+    /// P0-B step 4 (2026-08-14): strict argument validation for the new
+    /// mode/keywords surface — invalid mode, keywords outside keywords mode,
+    /// empty/duplicate/oversized terms and non-array keywords all carry the
+    /// stable `[browser_read_invalid_arguments]` code.
+    #[tokio::test]
+    async fn mode_and_keywords_arguments_are_strictly_validated() {
+        let browser = StubBrowser {
+            outcome: Ok(sample_outcome("x")),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome("x"))),
+        };
+        let cases = [
+            json!({"url": "https://example.com/", "mode": "summary"}),
+            json!({"url": "https://example.com/", "keywords": ["a"]}),
+            json!({"url": "https://example.com/", "mode": "keywords"}),
+            json!({"url": "https://example.com/", "mode": "keywords", "keywords": []}),
+            json!({"url": "https://example.com/", "mode": "keywords", "keywords": ["a", ""]}),
+            json!({"url": "https://example.com/", "mode": "keywords", "keywords": ["a", "a"]}),
+            json!({"url": "https://example.com/", "mode": "keywords", "keywords": "a"}),
+            json!({
+                "url": "https://example.com/",
+                "mode": "keywords",
+                "keywords": ["x".repeat(MAX_KEYWORD_CHARS + 1)],
+            }),
+            json!({
+                "url": "https://example.com/",
+                "mode": "keywords",
+                "keywords": (0..=MAX_KEYWORDS).map(|i| format!("k{i}")).collect::<Vec<_>>(),
+            }),
+        ];
+        for args in cases {
+            let err = handle_browser_read(&browser, &args).await.unwrap_err();
+            assert!(
+                err.to_string().contains("[browser_read_invalid_arguments]"),
+                "args {args}: {err}"
+            );
+        }
+    }
+
+    /// P0-B step 4 (2026-08-14): the tool definition declares the mode
+    /// enum and the keywords array so the model can select read scope.
+    #[test]
+    fn tool_def_declares_scope_modes() {
+        let def = browser_read_tool_def();
+        assert_eq!(def.parameters["properties"]["mode"]["enum"][0], "full");
+        assert_eq!(def.parameters["properties"]["mode"]["enum"][1], "preview");
+        assert_eq!(def.parameters["properties"]["mode"]["enum"][2], "keywords");
+        assert_eq!(
+            def.parameters["properties"]["keywords"]["maxItems"],
+            MAX_KEYWORDS
+        );
+        assert_eq!(def.parameters["required"][0], "url");
     }
 
     #[tokio::test]

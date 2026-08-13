@@ -40,6 +40,16 @@ pub(crate) fn is_web_fetch_tool(name: &str) -> bool {
     name == "web_fetch" || name.starts_with("web_fetch_")
 }
 
+/// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): the candidate-counted tool
+/// family — web_fetch consumes a candidate in framework_fallback, and
+/// `browser_read` (local_browser second segment) consumes a candidate from
+/// the SAME per-activation count domain (design §1.1/§1.3 — one budget for
+/// candidate verification regardless of the channel). `pdf_read` is the PDF
+/// evidence store, not candidate verification, and stays outside.
+pub(crate) fn is_candidate_counted_tool(name: &str) -> bool {
+    is_web_fetch_tool(name) || name == "browser_read"
+}
+
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval dispatch family —
 /// internal (`retrieve_project_*`) and external (`web_search*`/`web_fetch*`)
 /// tool names. The mode projection uses it to remove the family from the
@@ -125,6 +135,27 @@ mod tests {
             "read_file",
         ] {
             assert!(!is_web_fetch_tool(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn candidate_counted_family_covers_web_fetch_and_browser_read() {
+        for name in [
+            "web_fetch",
+            "web_fetch_page",
+            "web_fetch_pdf",
+            "browser_read",
+        ] {
+            assert!(is_candidate_counted_tool(name), "{name}");
+        }
+        for name in [
+            "web_search",
+            "web_search_arxiv_paper",
+            "pdf_read",
+            "project_doc_index",
+            "read_file",
+        ] {
+            assert!(!is_candidate_counted_tool(name), "{name}");
         }
     }
 

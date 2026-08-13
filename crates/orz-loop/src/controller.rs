@@ -81,7 +81,8 @@ pub fn max_tool_rounds_override() -> Option<u32> {
 /// candidate cap — the mechanical hard gate replacing the prompt's soft
 /// "候选 ≤5" rule (design §1.1). User adjudication 2026-08-14: default 8.
 /// The count domain is per activation (deduplicated by exact URL string);
-/// the same cap applies to every activation.
+/// the same cap applies to every activation and is shared by web_fetch
+/// and browser_read (P0-B step 4).
 pub const DEFAULT_WEB_FETCH_CANDIDATE_CAP: u32 = 8;
 
 /// Env override for the candidate cap (`ORZ_WEB_FETCH_CANDIDATE_CAP`).
@@ -186,13 +187,26 @@ pub(crate) enum TicketGate {
     },
 }
 
-/// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the web_fetch candidate
-/// gate's decision — allowed (with the post-call count/cap for the
-/// model-visible feedback) or refused (event + tool message already
-/// journaled by the gate).
-pub(crate) enum WebFetchGateDecision {
+/// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the candidate gate's
+/// decision — allowed (with the post-call count/cap for the model-visible
+/// feedback) or refused (event + tool message already journaled by the
+/// gate). Covers the web_fetch family and `browser_read` (same
+/// per-activation count domain, design §1.1/§1.3).
+pub(crate) enum CandidateGateDecision {
     Allowed { count: usize, cap: usize },
     Refused(ToolResult, Option<PolicyFeedback>),
+}
+
+/// Stable reason-code prefix for a candidate-counted tool: `web_fetch`
+/// family keeps its step-2 codes, `browser_read` gets its own
+/// `browser_read_candidate_*` family (P0-B step 4 — same count domain,
+/// distinct audit codes).
+fn candidate_tool_prefix(tool: &str) -> &'static str {
+    if crate::relay::is_web_fetch_tool(tool) {
+        "web_fetch"
+    } else {
+        "browser_read"
+    }
 }
 
 /// The main agent loop controller.
@@ -219,10 +233,11 @@ pub struct AgentLoopController {
     external_retrieval: RetrievalSubagent,
     blackboard: Arc<SharedBlackboard>,
     max_tool_rounds: u32,
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): per-activation
-    /// web_fetch candidate cap (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8 —
-    /// user adjudication 2026-08-14). Settable for tests.
-    web_fetch_candidate_cap: u32,
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): per-activation
+    /// candidate cap (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8 — user
+    /// adjudication 2026-08-14). Shared by web_fetch and browser_read.
+    /// Settable for tests.
+    candidate_cap: u32,
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
     snapshot_store: Option<Arc<SnapshotStore>>,
@@ -576,22 +591,36 @@ pub(crate) fn build_evidence_record(
             "search snippet",
             "full page",
         ),
-        // local_browser (2026-08-10): `browser_read` returns rendered page
-        // text with a mechanical truncation footer (host-side constant
-        // "[browser_read content truncated: ...") — same visibility mapping
-        // as web_fetch (§3.7.5): footer or length backstop → partial.
+        // local_browser (2026-08-10 / P0-B step 4): `browser_read` returns
+        // rendered page text; `mode` controls the read scope. keywords mode
+        // is excerpts by contract → always partial (§3.7.5); preview mode
+        // is partial only when the mechanical footer says the page exceeded
+        // the preview budget (a short page was returned complete); full
+        // mode maps footer or length backstop → partial.
         "browser_read" => {
+            let mode = arg("mode").unwrap_or("full");
             let truncated =
                 output.contains("[browser_read content truncated") || output.len() > 200_000;
-            if truncated {
-                (
+            match mode {
+                "keywords" => (
+                    "web_page",
+                    "partial_text_observed",
+                    "keyword excerpts",
+                    "rest of page",
+                ),
+                "preview" if truncated => (
+                    "web_page",
+                    "partial_text_observed",
+                    "first portion (preview)",
+                    "rest of page",
+                ),
+                _ if truncated => (
                     "web_page",
                     "partial_text_observed",
                     "first portion",
                     "rest of page",
-                )
-            } else {
-                ("web_page", "full_text_observed", "full document", "none")
+                ),
+                _ => ("web_page", "full_text_observed", "full document", "none"),
             }
         }
         "project_doc_index" => {
@@ -1433,8 +1462,11 @@ pub(crate) struct ActivationState {
     /// the SAME retrieval session, so the count accumulates across
     /// dispatches and resets only when the activation closes; it rides the
     /// sidecar like `tool_rounds_used` (cross-run restore keeps the cap
-    /// meaningful). Moved into the dispatch's shared counter while the
-    /// subagent loop runs and written back on every path.
+    /// meaningful). P0-B step 4 (2026-08-14): the SAME domain also counts
+    /// `browser_read` (local_browser second segment, design §1.3) — one
+    /// shared candidate budget per activation. Moved into the dispatch's
+    /// shared counter while the subagent loop runs and written back on
+    /// every path.
     pub web_fetch_candidates: Vec<String>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): the committed structured result's
     /// artifact path (ADR-0010 §3.3.5 archive_ref — the close record cites
@@ -1494,8 +1526,9 @@ pub(crate) struct StoredActivation {
     /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the activation's
     /// deduplicated web_fetch candidate URLs — rides the sidecar so a
     /// cross-run `continue` resumes with the same candidate budget
-    /// (matches `tool_rounds_used` lifecycle). `#[serde(default)]` keeps
-    /// old sidecars parseable.
+    /// (matches `tool_rounds_used` lifecycle; shared with browser_read
+    /// since P0-B step 4). `#[serde(default)]` keeps old sidecars
+    /// parseable.
     #[serde(default)]
     pub web_fetch_candidates: Vec<String>,
     #[serde(default)]
@@ -1867,7 +1900,7 @@ impl AgentLoopController {
             ),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
-            web_fetch_candidate_cap: web_fetch_candidate_cap_override()
+            candidate_cap: web_fetch_candidate_cap_override()
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
@@ -3192,11 +3225,11 @@ impl AgentLoopController {
         self
     }
 
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): pin the web_fetch
-    /// candidate cap (test seam; production reads ORZ_WEB_FETCH_CANDIDATE_CAP
-    /// at construction).
-    pub fn with_web_fetch_candidate_cap(mut self, cap: u32) -> Self {
-        self.web_fetch_candidate_cap = cap.max(1);
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): pin the candidate
+    /// cap (test seam; production reads ORZ_WEB_FETCH_CANDIDATE_CAP at
+    /// construction — shared by web_fetch and browser_read).
+    pub fn with_candidate_cap(mut self, cap: u32) -> Self {
+        self.candidate_cap = cap.max(1);
         self
     }
 
@@ -3391,7 +3424,7 @@ impl AgentLoopController {
             external_retrieval,
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
-            web_fetch_candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
+            candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
@@ -4664,13 +4697,13 @@ impl AgentLoopController {
         };
         let goal = task_goal;
 
-        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the activation's
-        // web_fetch candidate counter rides the dispatch as a shared
-        // mutex — the subagent loop's web_fetch gate mutates it; it is
-        // written back into the activation on EVERY path below, so a
-        // `continue` re-entry resumes the same count and a new activation
-        // starts empty (design §1.1: per-activation accumulation, reset
-        // only on close).
+        // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the activation's
+        // candidate counter rides the dispatch as a shared mutex — the
+        // subagent loop's candidate gate (web_fetch + browser_read)
+        // mutates it; it is written back into the activation on EVERY
+        // path below, so a `continue` re-entry resumes the same count and
+        // a new activation starts empty (design §1.1: per-activation
+        // accumulation, reset only on close).
         let fetch_candidates = Arc::new(Mutex::new(std::mem::take(&mut act.web_fetch_candidates)));
 
         // The subagent's tool projection = the parent's registry minus the
@@ -4702,9 +4735,10 @@ impl AgentLoopController {
             self.max_tool_rounds,
             act.tool_rounds_used,
             &act.activation_id,
-            // Only the external lane executes web_fetch (lane
-            // self-execution); the internal lane passes `None` — its
-            // (never reachable) web_fetch gate would fail closed.
+            // Only the external lane executes candidate-counted tools
+            // (web_fetch lane self-execution / browser_read host route);
+            // the internal lane passes `None` — its (never reachable)
+            // candidate gate would fail closed.
             match role {
                 SubagentRole::ExternalRetrieval => Some(fetch_candidates.clone()),
                 SubagentRole::InternalRetrieval => None,
@@ -5885,10 +5919,11 @@ impl AgentLoopController {
         // activation (retrieval lanes bind web_fetch etc.; the main lane is
         // None). Threaded from the loop profile.
         activation_id: Option<&str>,
-        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the current
-        // dispatch's web_fetch candidate counter (per-activation shared
-        // domain, threaded from the loop profile). None on main/grill —
-        // the web_fetch gate fails closed without a count domain.
+        // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the current
+        // dispatch's candidate counter (per-activation shared domain,
+        // threaded from the loop profile — web_fetch family + browser_read).
+        // None on main/grill — the candidate gate fails closed without a
+        // count domain.
         fetch_candidates: Option<&Mutex<Vec<String>>>,
         // C2-1 (2026-08-11): whether the per-call permission bridge is
         // consulted. The main lane passes `true`; retrieval-lane
@@ -6050,27 +6085,29 @@ impl AgentLoopController {
                 None,
             ));
         }
-        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): web_fetch candidate
+        // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): candidate
         // mechanical count gate (design §1) — the prompt's soft "候选 ≤5"
         // becomes a hard per-activation cap (ORZ_WEB_FETCH_CANDIDATE_CAP,
-        // default 8, user adjudication 2026-08-14). Counts BEFORE any
-        // fetch action: per-activation accumulation, exact-string URL
-        // dedup (same page re-read consumes no new candidate; canonical /
-        // host-level dedup is step 3), no reset on continue re-entry (only
-        // activation close). Refusals are no-ToolStarted (same shape as
-        // the mode gates) and feed the consecutive-denial breaker (no
-        // retry space, ADR-0010 §3.5.4).
-        let mut web_fetch_candidate_counts: Option<(usize, usize)> = None;
-        if crate::relay::is_web_fetch_tool(&tc.name) {
+        // default 8, user adjudication 2026-08-14), shared by web_fetch
+        // (framework_fallback) and browser_read (local_browser second
+        // segment, design §1.3). Counts BEFORE any fetch/read action:
+        // per-activation accumulation, exact-string URL dedup (same page
+        // re-read consumes no new candidate; canonical / host-level dedup
+        // is step 3), no reset on continue re-entry (only activation
+        // close). Refusals are no-ToolStarted (same shape as the mode
+        // gates) and feed the consecutive-denial breaker (no retry space,
+        // ADR-0010 §3.5.4).
+        let mut candidate_counts: Option<(usize, usize)> = None;
+        if crate::relay::is_candidate_counted_tool(&tc.name) {
             match self
-                .web_fetch_candidate_gate(writer, messages, tc, fetch_candidates)
+                .candidate_gate(writer, messages, tc, fetch_candidates)
                 .await?
             {
-                WebFetchGateDecision::Refused(result, feedback) => {
+                CandidateGateDecision::Refused(result, feedback) => {
                     return Ok((result, feedback));
                 }
-                WebFetchGateDecision::Allowed { count, cap } => {
-                    web_fetch_candidate_counts = Some((count, cap));
+                CandidateGateDecision::Allowed { count, cap } => {
+                    candidate_counts = Some((count, cap));
                 }
             }
         }
@@ -6632,11 +6669,11 @@ impl AgentLoopController {
         if let Some(h) = heartbeat {
             h.stamp();
         }
-        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14, review fix): the
+        // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14, review fix): the
         // mechanical count feedback is computed ONCE so the conversation
         // message and the blackboard exec mirror stay consistent (a failed
-        // fetch still consumed its candidate).
-        let count_note = web_fetch_candidate_counts.map(|(count, cap)| {
+        // fetch/read still consumed its candidate).
+        let count_note = candidate_counts.map(|(count, cap)| {
             format!("\n候选 {count}/{cap}，剩余 {}", cap.saturating_sub(count))
         });
         // The bool tracks execution success vs timeout/tool error: only a
@@ -6698,10 +6735,11 @@ impl AgentLoopController {
                 if !edits_payload.is_empty() {
                     completed_payload["edits"] = serde_json::Value::Array(edits_payload);
                 }
-                // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): journal the
-                // mechanical candidate count/cap on web_fetch completions
-                // (Schema-first; the verifier cross-checks the shape).
-                if let Some((count, cap)) = &web_fetch_candidate_counts {
+                // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): journal
+                // the mechanical candidate count/cap on candidate-counted
+                // completions (Schema-first; the verifier cross-checks
+                // the shape).
+                if let Some((count, cap)) = &candidate_counts {
                     completed_payload["candidate_count"] = serde_json::json!(count);
                     completed_payload["candidate_cap"] = serde_json::json!(cap);
                 }
@@ -6762,10 +6800,10 @@ impl AgentLoopController {
                             "status": "error",
                             "error": e.to_string(),
                         });
-                        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14):
-                        // a web_fetch host error still consumed its
-                        // candidate — carry the count/cap for audit.
-                        if let Some((count, cap)) = &web_fetch_candidate_counts {
+                        // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14):
+                        // a candidate-counted host error still consumed
+                        // its candidate — carry the count/cap for audit.
+                        if let Some((count, cap)) = &candidate_counts {
                             payload["candidate_count"] = serde_json::json!(count);
                             payload["candidate_cap"] = serde_json::json!(cap);
                         }
@@ -6845,36 +6883,39 @@ impl AgentLoopController {
         Ok((result, feedback))
     }
 
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): web_fetch candidate
-    /// count gate — count domain lookup, exact-string URL dedup and cap
-    /// check (design §1). Runs BEFORE any fetch action and BEFORE
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): candidate count gate
+    /// — count domain lookup, exact-string URL dedup and cap check (design
+    /// §1), shared by the web_fetch family and `browser_read` (local_browser
+    /// second segment). Runs BEFORE any fetch/read action and BEFORE
     /// ToolStarted / ACAF ticketing (a refused call needs no ticket).
     /// Returns the post-call count/cap for the model-visible feedback.
     ///
-    /// Fail-closed arms:
-    /// - no count domain (main/grill lane — web_fetch never executes
-    ///   there; belt-and-braces): `web_fetch_candidate_count_unbound`;
+    /// Fail-closed arms (per tool family, stable `{family}_candidate_*`
+    /// codes):
+    /// - no count domain (main/grill lane — retrieval tools never execute
+    ///   there; belt-and-braces): `{family}_candidate_count_unbound`;
     /// - missing `url` argument (no count identity):
-    ///   `web_fetch_candidate_url_missing`;
-    /// - new URL at/over the cap: `web_fetch_candidate_cap_exceeded` —
+    ///   `{family}_candidate_url_missing`;
+    /// - new URL at/over the cap: `{family}_candidate_cap_exceeded` —
     ///   no ToolStarted, neutral statement, Denied feedback (the
     ///   consecutive-denial breaker gives no retry space, ADR-0010
     ///   §3.5.4).
-    async fn web_fetch_candidate_gate(
+    async fn candidate_gate(
         &self,
         writer: &mut EventWriter<'_>,
         messages: &mut Vec<Message>,
         tc: &ToolCall,
         fetch_candidates: Option<&Mutex<Vec<String>>>,
-    ) -> Result<WebFetchGateDecision, AgentLoopError> {
+    ) -> Result<CandidateGateDecision, AgentLoopError> {
+        let prefix = candidate_tool_prefix(&tc.name);
         let Some(counter) = fetch_candidates else {
             return self
-                .refuse_web_fetch(
+                .refuse_candidate(
                     writer,
                     messages,
                     tc,
-                    "web_fetch_candidate_count_unbound",
-                    "web_fetch 已拒绝 — 候选核验计数域不可用",
+                    &format!("{prefix}_candidate_count_unbound"),
+                    &format!("{prefix} 已拒绝 — 候选核验计数域不可用"),
                     None,
                 )
                 .await;
@@ -6886,17 +6927,17 @@ impl AgentLoopController {
             .map(str::to_string)
         else {
             return self
-                .refuse_web_fetch(
+                .refuse_candidate(
                     writer,
                     messages,
                     tc,
-                    "web_fetch_candidate_url_missing",
-                    "web_fetch 已拒绝 — 缺少 url 参数，候选核验无法计数",
+                    &format!("{prefix}_candidate_url_missing"),
+                    &format!("{prefix} 已拒绝 — 缺少 url 参数，候选核验无法计数"),
                     None,
                 )
                 .await;
         };
-        let cap = self.web_fetch_candidate_cap as usize;
+        let cap = self.candidate_cap as usize;
         // The count/update happen in a short synchronous scope — the std
         // MutexGuard must not cross the async refusal below (Send).
         let outcome = {
@@ -6913,14 +6954,14 @@ impl AgentLoopController {
             }
         };
         match outcome {
-            Ok((count, cap)) => Ok(WebFetchGateDecision::Allowed { count, cap }),
+            Ok((count, cap)) => Ok(CandidateGateDecision::Allowed { count, cap }),
             Err((count, cap)) => {
-                self.refuse_web_fetch(
+                self.refuse_candidate(
                     writer,
                     messages,
                     tc,
-                    "web_fetch_candidate_cap_exceeded",
-                    &format!("web_fetch 已拒绝 — 候选核验数量已达上限 {cap}（当前 {count}/{cap}）"),
+                    &format!("{prefix}_candidate_cap_exceeded"),
+                    &format!("{prefix} 已拒绝 — 候选核验数量已达上限 {cap}（当前 {count}/{cap}）"),
                     Some((count, cap)),
                 )
                 .await
@@ -6928,10 +6969,10 @@ impl AgentLoopController {
         }
     }
 
-    /// Shared no-ToolStarted refusal for the web_fetch candidate gate —
-    /// event + neutral tool message + Denied feedback (the breaker
-    /// aggregates at round granularity and blocks repeated refusals).
-    async fn refuse_web_fetch(
+    /// Shared no-ToolStarted refusal for the candidate gate — event +
+    /// neutral tool message + Denied feedback (the breaker aggregates at
+    /// round granularity and blocks repeated refusals).
+    async fn refuse_candidate(
         &self,
         writer: &mut EventWriter<'_>,
         messages: &mut Vec<Message>,
@@ -6939,7 +6980,7 @@ impl AgentLoopController {
         code: &str,
         msg: &str,
         counts: Option<(usize, usize)>,
-    ) -> Result<WebFetchGateDecision, AgentLoopError> {
+    ) -> Result<CandidateGateDecision, AgentLoopError> {
         let mut payload = serde_json::json!({
             "tool": tc.name,
             "call_id": tc.call_id,
@@ -6959,7 +7000,7 @@ impl AgentLoopController {
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
-        Ok(WebFetchGateDecision::Refused(
+        Ok(CandidateGateDecision::Refused(
             ToolResult {
                 output: msg.to_string(),
                 exit_code: Some(1),
@@ -7214,12 +7255,35 @@ mod tests {
         }
     }
 
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): a browser_read call
+    /// with a real URL argument (the shared candidate count identity).
+    fn browser_read_call(call_id: &str, url: &str) -> ToolCall {
+        ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": url }),
+            call_id: call_id.to_string(),
+        }
+    }
+
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval tests run under an
     /// explicit `framework_fallback` mode with an available capability —
     /// the bare `with_gateway` default is mode=off (ADR-0010 §3.7.1).
     fn with_retrieval_enabled(controller: AgentLoopController) -> AgentLoopController {
         controller.with_retrieval_mode(
             RetrievalMode::FrameworkFallback,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): the browser_read
+    /// tests run under an explicit `local_browser` mode with an available
+    /// capability (browser_read's mode gate requires it).
+    fn with_local_browser_enabled(controller: AgentLoopController) -> AgentLoopController {
+        controller.with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
             RetrievalCapability::Available,
             false,
             None,
@@ -8482,6 +8546,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bl.visibility, "partial_text_observed");
+        // P0-B step 4 (2026-08-14): mode-aware evidence — preview of a
+        // short page (no footer) stays full; truncated preview maps to
+        // partial; keywords excerpts are partial by contract.
+        let bp_short = build_evidence_record(
+            "browser_read",
+            &call(
+                "browser_read",
+                serde_json::json!({"url": "https://x.com", "mode": "preview"}),
+            ),
+            &ok("page text"),
+        )
+        .unwrap();
+        assert_eq!(bp_short.visibility, "full_text_observed");
+        assert_eq!(bp_short.observed_scope, "full document");
+        let bp_trunc = build_evidence_record(
+            "browser_read",
+            &call(
+                "browser_read",
+                serde_json::json!({"url": "https://x.com", "mode": "preview"}),
+            ),
+            &ok("first portion\n\n[browser_read content truncated: preview, first 4000 chars, page text only]"),
+        )
+        .unwrap();
+        assert_eq!(bp_trunc.visibility, "partial_text_observed");
+        assert_eq!(bp_trunc.observed_scope, "first portion (preview)");
+        let bk = build_evidence_record(
+            "browser_read",
+            &call(
+                "browser_read",
+                serde_json::json!({
+                    "url": "https://x.com",
+                    "mode": "keywords",
+                    "keywords": ["term"],
+                }),
+            ),
+            &ok("excerpt…\n\n[browser_read content truncated: keyword excerpts (1 terms, 1 excerpts), page text only]"),
+        )
+        .unwrap();
+        assert_eq!(bk.visibility, "partial_text_observed");
+        assert_eq!(bk.observed_scope, "keyword excerpts");
         // PDF evidence (2026-08-11): the inline marker
         // "PDF evidence: N pages, document_id=sha256:..., text_layer=..."
         // drives visibility; content_sha256 is the DOCUMENT digest parsed
@@ -12379,7 +12483,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the builder/override
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the builder/override
     /// seam — a shorter cap refuses earlier (production reads
     /// ORZ_WEB_FETCH_CANDIDATE_CAP at construction).
     #[tokio::test]
@@ -12399,7 +12503,7 @@ mod tests {
             AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
                 ScriptedResponse::text("x"),
             ])))
-            .with_web_fetch_candidate_cap(2),
+            .with_candidate_cap(2),
         );
         let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let mut messages: Vec<Message> = Vec::new();
@@ -12477,6 +12581,389 @@ mod tests {
         assert_eq!(parse_web_fetch_candidate_cap("-1"), None);
         assert_eq!(parse_web_fetch_candidate_cap("abc"), None);
         assert_eq!(parse_web_fetch_candidate_cap(""), None);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): browser_read joins the
+    /// SAME candidate count domain — per-activation accumulation,
+    /// exact-string URL dedup (a duplicate consumes no new candidate),
+    /// mechanical count feedback on every allowed read, and a no-ToolStarted
+    /// cap refusal (`browser_read_candidate_cap_exceeded`) that feeds the
+    /// denial breaker.
+    #[tokio::test]
+    async fn browser_read_candidate_gate_counts_dedups_and_rejects_at_cap() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "page content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-BRC",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": format!("https://example.com/{i}") }),
+            call_id: format!("call-{i}"),
+        };
+        // 8 distinct URLs are allowed, each carrying the count feedback.
+        for i in 0..8 {
+            let (result, feedback) = controller
+                .run_host_tool(
+                    &host,
+                    &mut writer,
+                    &call(i),
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    &mut messages,
+                    0,
+                    None,
+                    Some("act-1"),
+                    Some(&counter),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.exit_code, Some(0), "call {i}");
+            assert!(
+                result
+                    .output
+                    .contains(&format!("候选 {}/8，剩余 {}", i + 1, 7 - i)),
+                "call {i}: {}",
+                result.output
+            );
+            assert!(matches!(feedback, Some(PolicyFeedback::Succeeded)));
+        }
+        // A duplicate URL consumes no new candidate (still allowed at 8/8).
+        let (result, _) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(0),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            result.output.contains("候选 8/8，剩余 0"),
+            "{}",
+            result.output
+        );
+        assert_eq!(counter.lock().unwrap().len(), 8);
+        // A NEW URL at the cap is refused — no ToolStarted, Denied key.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(8),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("上限 8"), "{}", result.output);
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Journal: the cap refusal carries count/cap; the refused call has
+        // no ToolStarted.
+        let events = events(&dir);
+        let refused = events
+            .iter()
+            .find(|e| {
+                e.payload["error"] == serde_json::json!("browser_read_candidate_cap_exceeded")
+            })
+            .expect("cap refusal journaled");
+        assert_eq!(refused.payload["candidate_count"], serde_json::json!(8));
+        assert_eq!(refused.payload["candidate_cap"], serde_json::json!(8));
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-8")
+            }),
+            "refused browser_read must not start"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): browser_read's count
+    /// gate fails closed on a missing `url` argument (no count identity)
+    /// and a missing count domain (no per-activation counter) — both
+    /// no-ToolStarted refusals with `browser_read_candidate_*` codes.
+    #[tokio::test]
+    async fn browser_read_candidate_gate_fails_closed_on_missing_url_and_domain() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&host.journal),
+            EventTrack::V02,
+            "RUN-BRCF",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |args: serde_json::Value, call_id: &str| ToolCall {
+            name: "browser_read".to_string(),
+            arguments: args,
+            call_id: call_id.to_string(),
+        };
+        // Missing url argument.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(serde_json::json!({}), "call-u1"),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("缺少 url 参数"), "{}", result.output);
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Missing count domain (main-lane style direct call).
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(
+                    serde_json::json!({"url": "https://example.com/0"}),
+                    "call-u2",
+                ),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("候选核验计数域不可用"),
+            "{}",
+            result.output
+        );
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Neither refusal started the tool; both carried stable codes.
+        let events = events(&dir);
+        for (call_id, code) in [
+            ("call-u1", "browser_read_candidate_url_missing"),
+            ("call-u2", "browser_read_candidate_count_unbound"),
+        ] {
+            assert!(
+                events.iter().any(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(call_id)
+                        && e.payload["error"] == serde_json::json!(code)
+                }),
+                "{call_id} must journal {code}"
+            );
+            assert!(
+                !events.iter().any(|e| {
+                    e.event_type == EventType::ToolStarted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(call_id)
+                }),
+                "{call_id} must not start"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): the per-activation
+    /// count domain flows through the external retrieval lane for
+    /// browser_read — the counter writes back into the activation, and the
+    /// journal carries the count/cap on each lane completion.
+    #[tokio::test]
+    async fn browser_read_candidate_count_accumulates_in_external_lane() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b2", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b3", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-BRL", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // The external activation's counter holds the lane's read URLs
+        // (exact-string dedup, first-seen order) — written back after the
+        // loop; the main-lane dispatch (call-1) never counted.
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.web_fetch_candidates,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+
+        // Journal: three lane browser_read completions with counts 1, 1, 2
+        // (the duplicate consumed no new candidate).
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("browser_read")
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 3, "{completed:?}");
+        let counts: Vec<i64> = completed
+            .iter()
+            .map(|e| e.payload["candidate_count"].as_i64().unwrap())
+            .collect();
+        assert_eq!(counts, vec![1, 1, 2]);
+        assert_eq!(completed[0].payload["candidate_cap"], serde_json::json!(8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): a `continue` re-entry
+    /// is the SAME activation — the browser_read candidate count accumulates
+    /// across dispatches (design §1.1: no reset on continue; only activation
+    /// close starts fresh).
+    #[tokio::test]
+    async fn browser_read_candidate_count_accumulates_across_continue_dispatches() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let continue_call = ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "external_retrieval",
+                "decision": "continue",
+                "requirement_delta": "补充 b.example 页面",
+            }),
+            call_id: "call-d1".to_string(),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b2", "https://a.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::tool_calls(vec![continue_call]),
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b3", "https://b.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b4", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-BRLC", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // Same activation (continue bumped the contract revision once) with
+        // the accumulated candidate list — dispatch 2 continued at 1/8.
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.contract_revision, 1,
+            "continue re-entered the same activation"
+        );
+        assert_eq!(
+            act.web_fetch_candidates,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+
+        // Journal: four lane browser_read completions with counts
+        // 1, 1, 2, 2 (dispatch wrappers carry no count).
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("browser_read")
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 4, "{completed:?}");
+        let counts: Vec<i64> = completed
+            .iter()
+            .map(|e| e.payload["candidate_count"].as_i64().unwrap())
+            .collect();
+        assert_eq!(counts, vec![1, 1, 2, 2]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the per-activation
