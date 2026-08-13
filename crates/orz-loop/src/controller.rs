@@ -291,6 +291,12 @@ pub struct AgentLoopController {
     /// production increment source is Slice 3's ModeChangeTicket
     /// (ADR-0011 决策 9) — the mechanism is wired and test-covered today.
     pub(crate) policy_revision: std::sync::atomic::AtomicU64,
+    /// FUS-TOOL-PROBE P0-A step 5 (2026-08-13): the minimal previous-round
+    /// map — Face B `tool → complete/incomplete`, no reasons cached
+    /// (design §8) — the flip comparator for `tool_availability_check`
+    /// events. Seeded by the pre-run_started probe and reset per run;
+    /// never persisted across runs.
+    probe_state: Mutex<crate::tool_probe::MinimalProbeMap>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -1684,6 +1690,7 @@ impl AgentLoopController {
             acaf_fail_closed: false,
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
+            probe_state: Mutex::new(crate::tool_probe::MinimalProbeMap::default()),
         }
     }
 
@@ -1750,6 +1757,112 @@ impl AgentLoopController {
     pub(crate) fn policy_revision(&self) -> u64 {
         self.policy_revision
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    // ── FUS-TOOL-PROBE (P0-A steps 2/5) ────────────────────────────────
+
+    /// The `tool_availability_check` payload for a Face B snapshot —
+    /// neutral reasons only. `gate_decision` stays the internal mechanical
+    /// "pass" (the probe never blocks — design invariant 2; the §7 draft
+    /// example keeps pass even with incomplete tools); non-pass mapping
+    /// remains reserved for future gate semantics.
+    pub(crate) fn tool_availability_payload(
+        snapshot: &crate::tool_probe::ToolProbeSnapshot,
+    ) -> serde_json::Value {
+        let incomplete: Vec<serde_json::Value> = snapshot
+            .incomplete
+            .iter()
+            .map(|f| serde_json::json!({ "tool": f.tool, "reason": f.reason }))
+            .collect();
+        serde_json::json!({
+            "probe_scope": "main_agent_work_tools",
+            "probe_timestamp": chrono_utc_now(),
+            "complete": snapshot.complete,
+            "incomplete": incomplete,
+            "gate_decision": "pass",
+        })
+    }
+
+    /// P0-A step 5: seed the minimal previous-round map from the
+    /// pre-run_started snapshot — the loop's first per-round probe then
+    /// emits only on an actual flip.
+    pub(crate) fn probe_state_seed(&self, snapshot: &crate::tool_probe::ToolProbeSnapshot) {
+        *self.probe_state.lock().unwrap() =
+            crate::tool_probe::MinimalProbeMap::from_snapshot(snapshot);
+    }
+
+    /// P0-A step 5: compare a fresh snapshot against the minimal
+    /// previous-round map; on a flip, replace the map and return `true`
+    /// (the caller journals the event with the fresh snapshot).
+    pub(crate) fn probe_flip(&self, snapshot: &crate::tool_probe::ToolProbeSnapshot) -> bool {
+        let mut map = self.probe_state.lock().unwrap();
+        if map.differs_from(snapshot) {
+            *map = crate::tool_probe::MinimalProbeMap::from_snapshot(snapshot);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// P0-A step 5 (design §5): 调用即探针 — a real Face B call failure
+    /// (ToolCompleted status=error) writes back into the minimal map as
+    /// incomplete so the next probe compares against the corrected state.
+    /// Non-Face B tools are ignored.
+    pub(crate) fn note_probe_call_failure(&self, tool: &str) {
+        self.probe_state.lock().unwrap().mark_incomplete(tool);
+    }
+
+    /// P0-A step 5 review fix (2026-08-13): 调用即探针, lane-gated — only
+    /// lanes that own the Face B probe map (main/grill, `probe_writeback`
+    /// = `profile.probe_face_b`) write call failures back. Retrieval lanes
+    /// never re-probe and must not pollute the main map with lane-local
+    /// failures (would surface as spurious recovery-flip events in the main
+    /// audit stream).
+    fn maybe_note_probe_call_failure(&self, probe_writeback: bool, tool: &str) {
+        if probe_writeback {
+            self.note_probe_call_failure(tool);
+        }
+    }
+
+    /// The host-owned `run_tests` ToolDef — declared by the Face B
+    /// projection when the probe finds a test runner (P0-A step 3/5).
+    fn run_tests_tool_def() -> ToolDef {
+        ToolDef {
+            name: "run_tests".to_string(),
+            description: "Run the task's hidden test suite and return \
+                 stdout/stderr/exit code. Use this to verify your \
+                 implementation — the test files are NOT visible to you, \
+                 only the run result. No arguments."
+                .to_string(),
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    /// P0-A step 5 (design §4): rebuild the model-visible list projection
+    /// from the base registry list + the CURRENT Face B snapshot:
+    /// 面A + (面B完整集 ∩ 会话声明集) + 面C + 非工作工具 — names only, no
+    /// status annotations. `run_tests` is host-owned: declared when its
+    /// probe is complete (at most once); incomplete Face B tools are
+    /// removed even when declared; registry-absent tools are never
+    /// invented.
+    pub(crate) fn project_main_agent_tool_defs(
+        base: &[ToolDef],
+        snapshot: &crate::tool_probe::ToolProbeSnapshot,
+    ) -> Vec<ToolDef> {
+        let mut tool_defs = base.to_vec();
+        if snapshot.complete.iter().any(|t| t == "run_tests")
+            && !tool_defs.iter().any(|t| t.name == "run_tests")
+        {
+            tool_defs.push(Self::run_tests_tool_def());
+        }
+        tool_defs.retain(|t| {
+            crate::tool_probe::is_face_a_tool(&t.name)
+                || (crate::tool_probe::is_face_b_tool(&t.name)
+                    && snapshot.complete.iter().any(|c| c == &t.name))
+                || crate::tool_probe::is_face_c_tool(&t.name)
+                || !crate::tool_probe::is_main_agent_work_tool(&t.name)
+        });
+        tool_defs
     }
 
     /// Journal the terminal outcome of a ticket lifecycle (consumed /
@@ -3035,6 +3148,7 @@ impl AgentLoopController {
             acaf_fail_closed: false,
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
+            probe_state: Mutex::new(crate::tool_probe::MinimalProbeMap::default()),
         }
     }
 
@@ -3413,6 +3527,11 @@ impl AgentLoopController {
         // per-run — a fresh run starts at 0 (same window as the breaker).
         self.policy_revision
             .store(0, std::sync::atomic::Ordering::SeqCst);
+        // FUS-TOOL-PROBE P0-A step 5: the minimal previous-round map is
+        // per-run too — a fresh run starts with no previous state (the
+        // pre-run_started probe below seeds it; never persisted across
+        // runs, design §8).
+        *self.probe_state.lock().unwrap() = crate::tool_probe::MinimalProbeMap::default();
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
@@ -3421,21 +3540,23 @@ impl AgentLoopController {
         // BEFORE run_started (Python conformance: the probe must precede
         // run_started).
         //
-        // FUS-TOOL-PROBE (2026-08-13, design §3/§7): the event no longer
-        // mirrors the registry catalog. It reports the Face B mechanical
-        // probe partition — complete / incomplete(reason) — with neutral
-        // reasons only; Face A/C and the retrieval lane never appear.
-        // gate_decision stays an internal mechanical field ("pass" at
-        // snapshot time); the call-time permission gate remains the final
-        // backstop (design invariant 2). P0-A steps 3-4: `run_tests` rides
-        // the probe (host-owned declaration), and the list projection below
-        // filters the whole Face B surface (complete ∩ declared) while
-        // keeping Face A/C and leaving non-work tools untouched.
+        // FUS-TOOL-PROBE (2026-08-13, design §3/§7): the event reports the
+        // Face B mechanical probe partition — complete / incomplete(reason)
+        // — with neutral reasons only; Face A/C and the retrieval lane
+        // never appear. P0-A step 5: this run-start event is the initial
+        // journal; the loop re-probes before EVERY model request and emits
+        // `tool_availability_check` again ONLY on a flip (minimal
+        // previous-round map). The snapshot seeds that map; the list
+        // projection (design §4) runs per-round inside the loop
+        // (`project_main_agent_tool_defs`) — the `tool_defs` built below is
+        // the BASE list (registry + main-only additions + mode projection),
+        // not yet Face-B-filtered. The call-time permission gate remains
+        // the final backstop (design invariant 2).
         let mut tool_defs: Vec<ToolDef> = host.tools_registry().list().into_iter().collect();
-        // P0-A steps 3-4: `run_tests` is a Face B tool whose declaration is
-        // decided by the probe snapshot below (runner existence), not by a
-        // direct host call here; the full list projection runs after
-        // `probe_face_b`. No conditional declaration remains in this block.
+        // P0-A steps 3-5: `run_tests` is a Face B tool whose declaration is
+        // decided by the per-round probe snapshot (runner existence), not
+        // by a direct host call here; the per-round list projection runs
+        // inside the loop. No conditional declaration remains in this block.
         // 2026-08-08 blackboard partition (A3): `blackboard_read` is the
         // model's ON-DEMAND window into the blackboard — declared whenever
         // the loop runs (the blackboard is always live). The model pulls a
@@ -3618,56 +3739,18 @@ impl AgentLoopController {
             interactive_user: host.interactive_user(),
         };
         let probe_snapshot = crate::tool_probe::probe_face_b(&probe_context);
-        // P0-A step 4 (design §4/§9 + 2026-08-13 review ruling): model-visible
-        // list projection = 面A + (面B完整集 ∩ 会话声明集) + 面C — names only,
-        // no status annotations. `run_tests` is host-owned: declared into the
-        // session catalog when its probe is complete (step 3 semantics, at
-        // most once), then kept by the projection. An incomplete Face B tool
-        // is removed even when the registry declared it, and tools absent
-        // from the session are never invented (probe must not declare
-        // session-nonexistent tools). Tools outside the A/B/C matrix
-        // (retrieval lane, bash, host-owned extras) keep their existing
-        // declaration rules unchanged. The permission gate stays the final
-        // backstop (invariant 2).
-        if probe_snapshot.complete.iter().any(|t| t == "run_tests")
-            && !tool_defs.iter().any(|t| t.name == "run_tests")
-        {
-            tool_defs.push(ToolDef {
-                name: "run_tests".to_string(),
-                description: "Run the task's hidden test suite and return \
-                     stdout/stderr/exit code. Use this to verify your \
-                     implementation — the test files are NOT visible to you, \
-                     only the run result. No arguments."
-                    .to_string(),
-                parameters: serde_json::json!({"type": "object", "properties": {}}),
-            });
-        }
-        tool_defs.retain(|t| {
-            crate::tool_probe::is_face_a_tool(&t.name)
-                || (crate::tool_probe::is_face_b_tool(&t.name)
-                    && probe_snapshot.complete.iter().any(|c| c == &t.name))
-                || crate::tool_probe::is_face_c_tool(&t.name)
-                || !crate::tool_probe::is_main_agent_work_tool(&t.name)
-        });
-        let incomplete: Vec<serde_json::Value> = probe_snapshot
-            .incomplete
-            .iter()
-            .map(|f| serde_json::json!({ "tool": f.tool, "reason": f.reason }))
-            .collect();
+        // P0-A step 5 (design §4/§8): the initial snapshot journals the
+        // pre-run_started event and seeds the minimal previous-round map.
+        // The per-round list projection (面A + 面B完整集 ∩ 会话声明集 + 面C +
+        // 非工作工具) now runs inside the loop before every model request —
+        // `tool_defs` passed below is the unfiltered BASE list.
         writer
             .record(
                 EventType::ToolAvailabilityCheck,
-                serde_json::json!({
-                    "probe_scope": "main_agent_work_tools",
-                    "probe_timestamp": chrono_utc_now(),
-                    "complete": probe_snapshot.complete,
-                    "incomplete": incomplete,
-                    // 预留内部机械字段：当前恒 pass（快照不构成拦截）；
-                    // 后续步骤若产生翻转/连续拒绝语义再映射非 pass 值。
-                    "gate_decision": "pass",
-                }),
+                Self::tool_availability_payload(&probe_snapshot),
             )
             .await?;
+        self.probe_state_seed(&probe_snapshot);
 
         // 2. run_started + prompt_submitted
         writer
@@ -5381,10 +5464,12 @@ impl AgentLoopController {
     /// refusals) — the `control_ticket_rejected` security event is already
     /// in the journal; the tool itself never starts.
     async fn refuse_ticketed_tool(
+        &self,
         writer: &mut EventWriter<'_>,
         messages: &mut Vec<Message>,
         tc: &ToolCall,
         gate: &TicketGate,
+        probe_writeback: bool,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         let TicketGate::Blocked { code, detail } = gate else {
             unreachable!("refuse_ticketed_tool called with Proceed");
@@ -5406,6 +5491,12 @@ impl AgentLoopController {
                 }),
             )
             .await?;
+        // P0-A step 5 (design §5): 调用即探针 — the refused Face B call
+        // writes back into the minimal previous-round map (search_replace /
+        // run_tests carry action tickets under fail-closed). Main lane only
+        // — retrieval lanes never write the main probe map (review fix
+        // 2026-08-13).
+        self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
         messages.push(Message {
             role: Role::Tool,
             content: msg.clone(),
@@ -5447,6 +5538,13 @@ impl AgentLoopController {
         // `false` — the explicit retrieval-mode gate (§3.7.1) is its
         // authorization chain (2026-08-11 user adjudication).
         permission_gated: bool,
+        // P0-A step 5 review fix (2026-08-13): whether this lane owns the
+        // Face B probe map. Main/grill lanes pass `true` — a real call
+        // failure writes back (调用即探针). Retrieval lanes pass `false`:
+        // they never re-probe and must NOT pollute the main probe map with
+        // lane-local failures (review: cross-lane write-back would surface
+        // as spurious recovery-flip events in the main audit stream).
+        probe_writeback: bool,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         // The second tuple element is a pending policy feedback (a denial
         // key) that the caller aggregates at the END of the whole tool round
@@ -5738,6 +5836,9 @@ impl AgentLoopController {
                     tool_calls: Vec::new(),
                     reasoning_content: None,
                 });
+                // P0-A step 5 (design §5): 调用即探针 — the refused Face B
+                // call writes back into the minimal previous-round map.
+                self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
                 return Ok((
                     ToolResult {
                         output: msg,
@@ -5762,7 +5863,9 @@ impl AgentLoopController {
                 )
                 .await?;
             if let TicketGate::Blocked { .. } = &gate {
-                return Self::refuse_ticketed_tool(writer, messages, tc, &gate).await;
+                return self
+                    .refuse_ticketed_tool(writer, messages, tc, &gate, probe_writeback)
+                    .await;
             }
             let fixed_command: Option<String> = Some(runner.command.join(" "));
             writer
@@ -5827,6 +5930,9 @@ impl AgentLoopController {
                             tool_calls: Vec::new(),
                             reasoning_content: None,
                         });
+                        // P0-A step 5 (design §5): 调用即探针 — the failed
+                        // Face B call writes back into the minimal map.
+                        self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
                         // None = neutral for the denial streak (only actual
                         // success resets — ADR-0010 §3.5.4).
                         return Ok((
@@ -5910,7 +6016,9 @@ impl AgentLoopController {
                 )
                 .await?;
             if let TicketGate::Blocked { .. } = &gate {
-                return Self::refuse_ticketed_tool(writer, messages, tc, &gate).await;
+                return self
+                    .refuse_ticketed_tool(writer, messages, tc, &gate, probe_writeback)
+                    .await;
             }
         }
 
@@ -6244,6 +6352,10 @@ impl AgentLoopController {
                         }),
                     )
                     .await?;
+                // P0-A step 5 (design §5): 调用即探针 — a real Face B call
+                // failure (ToolCompleted status=error) corrects the minimal
+                // previous-round map; the next probe compares against it.
+                self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
                 // 2026-08-08 blackboard partition: a failed execution still
                 // HAPPENED — fold it into the tool-action section (the
                 // "实际变动" rule applies to edit records, not to the action
@@ -6460,7 +6572,7 @@ mod tests {
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     /// Minimal LoopHost for testing the controller.
     struct TestHost {
@@ -10981,6 +11093,7 @@ mod tests {
                 None,
                 None,
                 true,
+                true, // main-lane semantics: probe write-back enabled
             )
             .await
             .unwrap();
@@ -12520,6 +12633,391 @@ mod tests {
             availability.payload["incomplete"]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── P0-A step 5: minimal previous-round map + flip-only events ──────
+
+    /// A host whose runner presence can flip mid-run — the per-round probe
+    /// must observe the change and emit a second `tool_availability_check`.
+    struct FlipRunnerHost {
+        journal: JournalRecorder,
+        runner: std::sync::Arc<AtomicBool>,
+    }
+    #[async_trait]
+    impl LoopHost for FlipRunnerHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &RunTestsDeclaringRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            crate::host::ToolPolicy::Benchmark
+        }
+        fn test_runner(&self) -> Option<crate::host::TestRunner> {
+            self.runner
+                .load(Ordering::SeqCst)
+                .then(|| crate::host::TestRunner {
+                    command: vec!["pytest-stub".to_string()],
+                    timeout: None,
+                    env: Vec::new(),
+                })
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            unreachable!("text-only flip test never calls tools");
+        }
+    }
+
+    /// Flips the host runner flag during the FIRST model round — the next
+    /// loop-top probe sees the new state.
+    struct FlipRunnerAfterFirstRound {
+        inner: Arc<FakeProvider>,
+        runner: std::sync::Arc<AtomicBool>,
+        flipped: std::sync::Arc<AtomicBool>,
+    }
+    #[async_trait]
+    impl ModelGateway for FlipRunnerAfterFirstRound {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
+            if self
+                .flipped
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                self.runner.store(false, Ordering::SeqCst);
+            }
+            self.inner.generate(request).await
+        }
+    }
+
+    /// P0-A step 5: a mid-run probe flip (run_tests complete → incomplete)
+    /// emits a SECOND `tool_availability_check` event and re-projects the
+    /// next model request — no event fires while the partition is stable.
+    #[tokio::test]
+    async fn probe_flip_emits_second_availability_event_and_reprojects() {
+        let dir = test_dir();
+        let runner = std::sync::Arc::new(AtomicBool::new(true));
+        let host = FlipRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            runner: runner.clone(),
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FlipRunnerAfterFirstRound {
+            inner: fake.clone(),
+            runner,
+            flipped: std::sync::Arc::new(AtomicBool::new(false)),
+        });
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-FLIP", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let all = events(&dir);
+        let checks: Vec<&RunEvent> = all
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .collect();
+        assert_eq!(checks.len(), 2, "one initial + one flip event");
+        let first_idx = all
+            .iter()
+            .position(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .unwrap();
+        let run_started_idx = all
+            .iter()
+            .position(|e| e.event_type == EventType::RunStarted)
+            .unwrap();
+        assert!(
+            first_idx < run_started_idx,
+            "initial event must precede run_started"
+        );
+        // Initial snapshot: runner present → run_tests complete.
+        assert!(
+            checks[0].payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("run_tests")),
+            "initial payload: {:?}",
+            checks[0].payload
+        );
+        // Flip snapshot: run_tests incomplete with the neutral reason.
+        let p = &checks[1].payload;
+        assert!(
+            !p["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("run_tests")),
+            "flip payload complete: {:?}",
+            p["complete"]
+        );
+        assert!(
+            p["incomplete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
+            "flip payload incomplete: {:?}",
+            p["incomplete"]
+        );
+        assert_eq!(p["gate_decision"], "pass", "probe never blocks");
+        // The first request sees run_tests; the second (post-flip) does not.
+        let received = fake.received_requests();
+        assert!(
+            received[0].tools.iter().any(|t| t.name == "run_tests"),
+            "first request must declare run_tests: {:?}",
+            received[0]
+                .tools
+                .iter()
+                .map(|t| &t.name)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !received[1].tools.iter().any(|t| t.name == "run_tests"),
+            "second request must drop run_tests: {:?}",
+            received[1]
+                .tools
+                .iter()
+                .map(|t| &t.name)
+                .collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host whose `read_file` mechanically fails at call time while the
+    /// probe (readable workspace) still says complete — 调用即探针 must
+    /// correct the minimal map so the next probe reports a recovery flip.
+    struct FailingReadHost {
+        journal: JournalRecorder,
+    }
+    #[async_trait]
+    impl LoopHost for FailingReadHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &MixedProjectionRegistry
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            if name == "read_file" {
+                return Err(ToolError::ExecutionFailed("stub read failure".into()));
+            }
+            unreachable!("only read_file is called");
+        }
+    }
+
+    /// P0-A step 5 (design §5): a real Face B call failure writes back into
+    /// the minimal map (调用即探针) — the next per-round probe sees the
+    /// corrected state and emits a recovery-flip event.
+    #[tokio::test]
+    async fn probe_call_failure_writes_back_and_emits_recovery_flip() {
+        let dir = test_dir();
+        let host = FailingReadHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "读", "RUN-WB", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let all = events(&dir);
+        let checks: Vec<&RunEvent> = all
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .collect();
+        assert_eq!(checks.len(), 2, "initial + recovery flip");
+        // The failure itself is audited as ToolCompleted(error).
+        let failed_idx = all
+            .iter()
+            .position(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("read_file ToolCompleted(error) must be journaled");
+        // The recovery flip event follows the failed call.
+        let flip_idx = all
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.event_type == EventType::ToolAvailabilityCheck)
+            .map(|(i, _)| i)
+            .nth(1)
+            .expect("second availability event");
+        assert!(
+            flip_idx > failed_idx,
+            "recovery flip must follow the failed call"
+        );
+        // The flip snapshot reports the probe truth: read_file complete again.
+        assert!(
+            checks[1].payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("read_file")),
+            "recovery flip payload: {:?}",
+            checks[1].payload
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A step 5 review fix (2026-08-13): the retrieval lane never
+    /// writes back into the main probe map — a failed Face B read call
+    /// inside the lane must NOT produce a main-lane recovery-flip event
+    /// (exactly one `tool_availability_check` in the whole journal).
+    #[tokio::test]
+    async fn retrieval_lane_failure_does_not_pollute_main_probe_map() {
+        let dir = test_dir();
+        let host = FailingReadHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        // Main declares retrieval → subagent round 1 calls read_file
+        // (Face B host tool, allowed in the lane) and FAILS → subagent
+        // round 2 forms the result → main concludes (gate + final).
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-LANE-WB",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        let availability_count = types
+            .iter()
+            .filter(|t| **t == EventType::ToolAvailabilityCheck)
+            .count();
+        assert_eq!(
+            availability_count, 1,
+            "lane-local failure must not add main availability events: {types:?}"
+        );
+        // The lane failure itself is still audited via ToolCompleted(error).
+        assert!(
+            types.contains(&EventType::ToolCompleted),
+            "lane failure must stay in the audit chain: {types:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A step 5: the minimal previous-round map is per-run — a second
+    /// run on the same controller starts fresh. Run 1 has a runner
+    /// (run_tests complete); run 2 loses it. If run 1's map leaked, run 2's
+    /// first loop-top probe would differ and emit a SECOND availability
+    /// event — asserting exactly one per run locks the reset.
+    #[tokio::test]
+    async fn probe_state_resets_across_runs() {
+        let dir1 = test_dir();
+        let dir2 = test_dir();
+        let runner = std::sync::Arc::new(AtomicBool::new(true));
+        let host1 = FlipRunnerHost {
+            journal: JournalRecorder::new(dir1.clone()),
+            runner: runner.clone(),
+        };
+        // Four texts: two per run (counterexample gate + final answer).
+        let fake = Arc::new(FakeProvider::from_texts(vec![
+            "完成", "完成", "完成", "完成",
+        ]));
+        let controller = AgentLoopController::with_gateway(fake);
+        controller
+            .run_turn(&host1, "hi", "RUN-R1", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let run1 = events(&dir1);
+        let r1_count = run1
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .count();
+        assert_eq!(r1_count, 1, "run 1 must emit exactly one event");
+        assert!(
+            run1.iter()
+                .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+                .unwrap()
+                .payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("run_tests")),
+            "run 1: run_tests complete"
+        );
+
+        runner.store(false, Ordering::SeqCst);
+        let host2 = FlipRunnerHost {
+            journal: JournalRecorder::new(dir2.clone()),
+            runner,
+        };
+        controller
+            .run_turn(&host2, "hi", "RUN-R2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let run2 = events(&dir2);
+        let r2_count = run2
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .count();
+        assert_eq!(
+            r2_count,
+            1,
+            "run 2 must not inherit run 1's map: {:?}",
+            event_types(&dir2)
+        );
+        assert!(
+            run2.iter()
+                .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+                .unwrap()
+                .payload["incomplete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
+            "run 2: run_tests incomplete"
+        );
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 
     #[tokio::test]

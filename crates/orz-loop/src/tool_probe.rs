@@ -21,9 +21,10 @@
 //! Batch progress (BACKLOG P0-A): per-tool probe implementations + unit
 //! tests (step 1), `tool_availability_check` v0.2 event upgrade (step 2),
 //! the run_tests declaration migration (step 3) and the A/B/C list
-//! projection constants consumed by the controller (step 4). Per-action
-//! refresh, minimal previous-round mapping and neutral fallback messages
-//! are later batch steps (5/6).
+//! projection constants consumed by the controller (step 4). Per-round
+//! refresh, minimal previous-round mapping and flip-only events are batch
+//! step 5 — the loop (agent_loop.rs) drives them with [`MinimalProbeMap`];
+//! neutral fallback messages are batch step 6.
 
 use std::path::{Path, PathBuf};
 
@@ -121,6 +122,50 @@ pub struct ProbeFailure {
 pub struct ToolProbeSnapshot {
     pub complete: Vec<String>,
     pub incomplete: Vec<ProbeFailure>,
+}
+
+/// P0-A step 5 (design §4/§8): the minimal previous-round mapping —
+/// `tool → complete/incomplete` for Face B only. Reasons are never cached
+/// (design §8: 详情与 reason 不缓存); the map exists solely for the
+/// round-to-round flip comparison inside one run. Snapshots themselves are
+/// used then discarded — nothing here is persisted or crosses runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MinimalProbeMap {
+    status: std::collections::BTreeMap<String, bool>,
+}
+
+impl MinimalProbeMap {
+    /// Canonical map for a probe snapshot — every Face B tool carries
+    /// exactly one status.
+    pub fn from_snapshot(snapshot: &ToolProbeSnapshot) -> Self {
+        let mut status = std::collections::BTreeMap::new();
+        for tool in &snapshot.complete {
+            status.insert(tool.clone(), true);
+        }
+        for failure in &snapshot.incomplete {
+            status.insert(failure.tool.clone(), false);
+        }
+        Self { status }
+    }
+
+    /// Whether the fresh snapshot differs from this map — i.e. at least
+    /// one Face B tool flipped (complete↔incomplete).
+    pub fn differs_from(&self, snapshot: &ToolProbeSnapshot) -> bool {
+        Self::from_snapshot(snapshot) != *self
+    }
+
+    /// 调用即探针 (design §5): write a real call failure back as
+    /// `incomplete`. Returns whether the map actually changed.
+    pub fn mark_incomplete(&mut self, tool: &str) -> bool {
+        if !is_face_b_tool(tool) {
+            return false;
+        }
+        if self.status.get(tool) == Some(&false) {
+            return false;
+        }
+        self.status.insert(tool.to_string(), false);
+        true
+    }
 }
 
 /// Mechanical chain inputs a probe can see at probe time.
@@ -525,6 +570,55 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn minimal_map_covers_face_b_and_detects_flips() {
+        let dir = TestDir::new("minimal-map");
+        let full = probe_face_b(&full_ctx(dir.path()));
+        assert_eq!(
+            MinimalProbeMap::from_snapshot(&full).status.len(),
+            FACE_B_TOOLS.len(),
+            "minimal map must cover every Face B tool exactly once"
+        );
+        let map = MinimalProbeMap::from_snapshot(&full);
+        assert!(!map.differs_from(&full), "same partition is not a flip");
+
+        // One tool flips complete → incomplete: the map must differ.
+        let mut changed = full.clone();
+        changed.complete.retain(|t| t != "run_tests");
+        changed.incomplete.push(ProbeFailure {
+            tool: "run_tests".to_string(),
+            reason: REASON_MISSING_TEST_RUNNER,
+        });
+        assert!(map.differs_from(&changed), "flip must be detected");
+
+        // Order of the incomplete list is irrelevant — only the partition.
+        let mut reordered = changed.clone();
+        reordered.incomplete.reverse();
+        let changed_map = MinimalProbeMap::from_snapshot(&changed);
+        assert!(
+            !changed_map.differs_from(&reordered),
+            "same partition in another order is not a flip"
+        );
+    }
+
+    #[test]
+    fn minimal_map_mark_incomplete_writes_back_face_b_only() {
+        let dir = TestDir::new("minimal-writeback");
+        let full = probe_face_b(&full_ctx(dir.path()));
+        let mut map = MinimalProbeMap::from_snapshot(&full);
+
+        assert!(
+            map.mark_incomplete("run_tests"),
+            "complete → incomplete must change the map"
+        );
+        assert!(
+            !map.mark_incomplete("run_tests"),
+            "already incomplete must not change the map"
+        );
+        assert!(!map.mark_incomplete("bash"), "non-Face-B tools are ignored");
+        assert!(map.differs_from(&full));
     }
 
     #[test]
