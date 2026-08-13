@@ -9172,7 +9172,7 @@ mod tests {
     /// FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): the mechanical
     /// prefilter shapes the committed candidate pool — canonical/host
     /// dedup, known failure forms removed with stable reasons, tier/weight
-    /// + relevance sorting, and the full metadata mirrored in
+    /// and relevance sorting, and the full metadata mirrored in
     /// raw_source_refs (the schema/verifier contract).
     #[test]
     fn mechanical_prefilter_shapes_candidate_pool_and_log() {
@@ -9260,6 +9260,58 @@ mod tests {
         assert_eq!(refs[0]["candidate_pool"], entry["candidate_pool"]);
         // Candidates are not observed sources — counts unchanged.
         assert_eq!(committed.payload["source_counts"]["total"], 1);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 3 review fix (2026-08-14): a fully
+    /// purified pool is legitimate — all candidates removed by the
+    /// prefilter yields an empty retained pool + empty candidate_pool with
+    /// every removal recorded in prefilter_log (the verifier must accept
+    /// this state; schema already allows empty arrays).
+    #[test]
+    fn mechanical_prefilter_can_purify_entire_pool() {
+        let call = ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "rust" }),
+            call_id: "c-step3-empty".to_string(),
+        };
+        let result = ToolResult {
+            output: "snippet".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: Some(serde_json::json!({
+                "citations": [
+                    "javascript:alert(1)",
+                    "https://example.com/login",
+                    "https://example.com/?redirect_url=https://other.example"
+                ]
+            })),
+        };
+        let ev = build_evidence_record("web_search", &call, &result).unwrap();
+        let committed = build_structured_result(
+            &[ev],
+            &SourceWeightConfig::default(),
+            &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
+            &[],
+            &[],
+            "web_page",
+            "[RESULT_JSON]{\"sections\":[],\"claims\":[]}[/RESULT_JSON]",
+            "sub-session",
+            "act-1",
+            "contract-1",
+            0,
+            "call-1",
+            "goal",
+        );
+        let ledger = committed.payload["source_ledger"].as_array().unwrap();
+        assert_eq!(ledger[0]["candidate_urls"], serde_json::json!([]));
+        assert_eq!(ledger[0]["candidate_pool"], serde_json::json!([]));
+        let log = committed.payload["prefilter_log"].as_array().unwrap();
+        assert_eq!(log.len(), 3);
+        let reasons: Vec<&str> = log.iter().map(|e| e["reason"].as_str().unwrap()).collect();
+        assert_eq!(reasons, vec!["bad_url", "login_wall", "redirect_chain"]);
+        let refs = committed.payload["raw_source_refs"].as_array().unwrap();
+        assert_eq!(refs[0]["candidate_urls"], serde_json::json!([]));
+        assert_eq!(refs[0]["candidate_pool"], serde_json::json!([]));
     }
 
     /// A6 (2026-08-08): the pure compaction function — drops only the

@@ -221,9 +221,7 @@ pub fn canonicalize(raw: &str, config: &CandidatePrefilterConfig) -> Option<Cano
     if raw.is_empty() {
         return None;
     }
-    let parsed = Url::parse(raw)
-        .or_else(|_| Url::parse(&format!("https://{raw}")))
-        .ok()?;
+    let parsed = parse_http_url(raw)?;
     let scheme = parsed.scheme().to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
         return None;
@@ -329,6 +327,23 @@ fn lowercase_percent_hex(input: &str) -> String {
     out
 }
 
+/// Parse a candidate reference as an http(s) URL, tolerating the two
+/// scheme-less citation shapes: `host/path` (no scheme — retry with
+/// `https://`) and `host:port/path` (the url crate mis-reads the hostname
+/// as a scheme when it contains dots — retry the whole raw string).
+fn parse_http_url(raw: &str) -> Option<Url> {
+    let direct = Url::parse(raw).ok();
+    let direct = match direct {
+        Some(url)
+            if url.scheme() != "http" && url.scheme() != "https" && url.scheme().contains('.') =>
+        {
+            Url::parse(&format!("https://{raw}")).ok()
+        }
+        other => other,
+    };
+    direct.or_else(|| Url::parse(&format!("https://{raw}")).ok())
+}
+
 /// Detect a mechanically-clear failure form from the URL alone. Returns
 /// the first (most specific) reason; `None` = no known failure form
 /// (unknown stays retained — design §2.3).
@@ -345,17 +360,17 @@ pub fn detect_failure(raw: &str, config: &CandidatePrefilterConfig) -> Option<Re
     {
         return Some(RemovalReason::LoginWall);
     }
-    if config
-        .redirect_url_patterns
-        .iter()
-        .any(|pattern| lowered.contains(pattern))
-    {
-        return Some(RemovalReason::RedirectChain);
-    }
-    let parsed = Url::parse(raw)
-        .or_else(|_| Url::parse(&format!("https://{raw}")))
-        .ok();
-    if let Some(url) = parsed {
+    if let Some(url) = parse_http_url(raw) {
+        // Host-aware redirector matching — a pattern like `t.co/` must not
+        // match `not-t.co/`: exact host (or subdomain) plus path/query
+        // prefix only.
+        if config
+            .redirect_url_patterns
+            .iter()
+            .any(|pattern| matches_redirect_pattern(&url, pattern))
+        {
+            return Some(RemovalReason::RedirectChain);
+        }
         for (key, _) in url.query_pairs() {
             if config
                 .redirect_query_keys
@@ -367,6 +382,26 @@ pub fn detect_failure(raw: &str, config: &CandidatePrefilterConfig) -> Option<Re
         }
     }
     None
+}
+
+/// Host-boundary-aware redirector/shortener pattern match. A pattern is
+/// `host[/rest]`: the host must match exactly or as a subdomain, and the
+/// path+query must start with the (lowercased) rest.
+fn matches_redirect_pattern(url: &Url, pattern: &str) -> bool {
+    let (pattern_host, pattern_rest) = match pattern.split_once('/') {
+        Some((host, rest)) => (host, format!("/{rest}")),
+        None => (pattern, String::new()),
+    };
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    if host != pattern_host && !host.ends_with(&format!(".{pattern_host}")) {
+        return false;
+    }
+    if pattern_rest.is_empty() {
+        return true;
+    }
+    let query = url.query().map(|q| format!("?{q}")).unwrap_or_default();
+    let path_and_query = format!("{}{}", url.path().to_ascii_lowercase(), query);
+    path_and_query.starts_with(&pattern_rest)
 }
 
 /// The mechanical prefilter: purify + sort, never intercept. Preserves
@@ -559,6 +594,21 @@ mod tests {
     }
 
     #[test]
+    fn scheme_less_refs_with_port_are_accepted() {
+        let cfg = default_cfg();
+        // `example.com:8080/path` parses as a dotted "scheme" — the parse
+        // fallback must retry the whole string as https.
+        let canonical = canonicalize("example.com:8080/path", &cfg).unwrap();
+        assert_eq!(canonical.canonical_url, "https://example.com:8080/path");
+        assert!(
+            canonical
+                .form_reasons
+                .contains(&"non_default_port_kept".to_string())
+        );
+        assert_eq!(detect_failure("example.com:8080/path", &cfg), None);
+    }
+
+    #[test]
     fn canonicalize_rejects_bad_urls() {
         let cfg = default_cfg();
         for bad in [
@@ -614,7 +664,7 @@ mod tests {
                 "https://example.com/article".to_string(),
                 "https://example.com/login?next=/article".to_string(),
                 "https://www.google.com/url?q=https://example.com".to_string(),
-                "https://example.com/redirect?url=https://other.example".to_string(),
+                "https://example.com/?redirect_url=https://other.example".to_string(),
             ],
             "example article",
             &weight_cfg(),
@@ -626,6 +676,23 @@ mod tests {
         assert_eq!(report.removed[2].reason, RemovalReason::RedirectChain);
         assert_eq!(report.retained.len(), 1);
         assert_eq!(report.retained[0].url, "https://example.com/article");
+    }
+
+    #[test]
+    fn redirect_pattern_matching_is_host_aware() {
+        let cfg = default_cfg();
+        // Host-boundary: `t.co/` must not match `not-t.co/`.
+        assert_eq!(detect_failure("https://not-t.co/abc", &cfg), None);
+        assert_eq!(
+            detect_failure("https://t.co/abc", &cfg),
+            Some(RemovalReason::RedirectChain)
+        );
+        assert_eq!(
+            detect_failure("https://www.bing.com/ck/a?x=1", &cfg),
+            Some(RemovalReason::RedirectChain)
+        );
+        // Same host, unrelated path — retained.
+        assert_eq!(detect_failure("https://www.bing.com/docs", &cfg), None);
     }
 
     #[test]
@@ -702,6 +769,10 @@ mod tests {
         // Unseeded defaults are gone.
         assert_eq!(detect_failure("https://example.com/login", &cfg), None);
         assert_eq!(detect_failure("https://example.com/?next=/x", &cfg), None);
+        assert_eq!(
+            detect_failure("https://example.com/?jump=/x", &cfg),
+            Some(RemovalReason::RedirectChain)
+        );
     }
 
     #[test]
@@ -763,7 +834,8 @@ mod tests {
                 .contains(&"utm_source".to_string())
         );
         assert!(cfg.login_wall_url_markers.contains(&"/login".to_string()));
-        assert!(cfg.redirect_query_keys.contains(&"next".to_string()));
+        assert!(cfg.redirect_query_keys.contains(&"redirect".to_string()));
+        assert!(!cfg.redirect_query_keys.contains(&"next".to_string()));
         assert!(
             cfg.redirect_url_patterns
                 .contains(&"google.com/url?".to_string())
