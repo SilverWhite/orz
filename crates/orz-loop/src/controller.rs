@@ -3629,10 +3629,7 @@ impl AgentLoopController {
         // (retrieval lane, bash, host-owned extras) keep their existing
         // declaration rules unchanged. The permission gate stays the final
         // backstop (invariant 2).
-        if probe_snapshot
-            .complete
-            .iter()
-            .any(|t| t == "run_tests")
+        if probe_snapshot.complete.iter().any(|t| t == "run_tests")
             && !tool_defs.iter().any(|t| t.name == "run_tests")
         {
             tool_defs.push(ToolDef {
@@ -12235,11 +12232,7 @@ mod tests {
             .await
             .unwrap();
         let received = fake.received_requests();
-        let declared: Vec<&str> = received[0]
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
             !declared.iter().any(|t| *t == "run_tests"),
             "run_tests must not be declared without a runner: {declared:?}"
@@ -12281,11 +12274,7 @@ mod tests {
             .await
             .unwrap();
         let received = fake.received_requests();
-        let declared: Vec<&str> = received[0]
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(
             declared.iter().filter(|t| **t == "run_tests").count(),
             1,
@@ -12374,11 +12363,7 @@ mod tests {
             .await
             .unwrap();
         let received = fake.received_requests();
-        let mut declared: Vec<&str> = received[0]
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let mut declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
         declared.sort();
         assert_eq!(
             declared,
@@ -12415,11 +12400,7 @@ mod tests {
             .await
             .unwrap();
         let received = fake.received_requests();
-        let declared: Vec<&str> = received[0]
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
             declared.iter().any(|t| *t == "ask_user_question"),
             "ask_user_question kept with an interactive session: {declared:?}"
@@ -12471,7 +12452,9 @@ mod tests {
             .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-race"))
             .expect("race call answered with a tool message");
         assert!(
-            tool_msg.content.contains("tool 'run_tests' — 缺少测试运行器"),
+            tool_msg
+                .content
+                .contains("tool 'run_tests' — 缺少测试运行器"),
             "neutral fallback message: {}",
             tool_msg.content
         );
@@ -12507,11 +12490,7 @@ mod tests {
             .await
             .unwrap();
         let received = fake.received_requests();
-        let mut declared: Vec<&str> = received[0]
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let mut declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
         declared.sort();
         assert_eq!(
             declared,
