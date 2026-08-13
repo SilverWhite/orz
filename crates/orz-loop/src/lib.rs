@@ -12,6 +12,7 @@ pub mod acaf;
 mod agent_loop;
 pub mod agents;
 pub mod blackboard;
+pub(crate) mod citation_validation;
 pub mod controller;
 mod diagnostic_coverage;
 pub mod gateway;

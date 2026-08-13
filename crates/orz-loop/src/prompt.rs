@@ -57,6 +57,25 @@ pub const COUNTEREXAMPLE_GATE_PLAN_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 3. 结论强度是否超出证据支持？\n\
 [/COUNTEREXAMPLE_GATE]";
 
+/// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): prefix of the mechanical
+/// degradation block the final-answer citation verifier returns when a
+/// `[来源: ...]` marker fails binding/claim validation (ADR-0010 §3.7.9).
+/// Registered with `is_injected_block_text` — mechanical injected text,
+/// never stagnation input.
+pub const CITATION_VALIDATION_FAILED_PREFIX: &str = "[CITATION_VALIDATION_FAILED";
+
+/// Build the explicit degradation block — the delivered final answer when
+/// citation validation fails (never a silent downgrade).
+pub fn citation_validation_failed_block(reason_codes: &[String]) -> String {
+    format!(
+        "{CITATION_VALIDATION_FAILED_PREFIX} v0.1]\n\
+         最终回答的引用标记未通过机械校验，已阻止交付。\n\
+         reason_codes: {}\n\
+         [/CITATION_VALIDATION_FAILED]",
+        reason_codes.join(", ")
+    )
+}
+
 /// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
 /// (ADR-0010 §4.2 — session-level 7-round neutral inquiry). Registered with
 /// `is_injected_block_text` so the injected block never enters stagnation
@@ -103,6 +122,10 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // checkpoint block (ADR-0010 §4.6.4) is mechanical injected text —
         // never stagnation input.
         || content.starts_with(crate::diagnostic_coverage::DIAGNOSTIC_COVERAGE_PREFIX)
+        // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the citation
+        // validation degradation block is mechanical injected text — never
+        // stagnation input.
+        || content.starts_with(CITATION_VALIDATION_FAILED_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push

@@ -139,6 +139,11 @@ pub(crate) struct LoopProfile {
     /// (a retrieval result is not a run's formal answer). Grill turns fold
     /// this to `false` too (a grill question is not a run-semantic).
     pub counterexample_gate: bool,
+    /// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer
+    /// output-level citation verifier (ADR-0010 §3.7.9) — main runs only,
+    /// same delivery boundary as the counterexample gate. Grill answers and
+    /// retrieval subagent texts are not run final answers and skip it.
+    pub citation_validation: bool,
     /// The orientation lane this loop's completed model rounds count
     /// toward (ADR-0010 §4.2; `None` counts nothing — grill / M3).
     pub orientation_role: Option<AgentRole>,
@@ -185,6 +190,7 @@ impl LoopProfile {
         Self {
             role: AgentRole::Main,
             counterexample_gate: true,
+            citation_validation: true,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
@@ -204,6 +210,7 @@ impl LoopProfile {
         Self {
             role: AgentRole::Main,
             counterexample_gate: false,
+            citation_validation: false,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
@@ -239,6 +246,7 @@ impl LoopProfile {
         Self {
             role: agent_role,
             counterexample_gate: false,
+            citation_validation: false,
             orientation_role: Some(agent_role),
             system_kind: SystemPromptKind::Retrieval {
                 role,
@@ -760,6 +768,54 @@ pub(crate) async fn run_agent_loop(
                 });
                 counterexample_fired = true;
                 continue;
+            }
+            // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level
+            // citation verifier (ADR-0010 §3.7.9 / RETRIEVAL_MECHANICAL
+            // _CONTROLS_DESIGN §3.2) — the final answer is formed; validate
+            // it at the same delivery boundary as the counterexample gate,
+            // BEFORE it is committed to the conversation. A failure replaces
+            // the delivered text with a mechanical degradation block (with
+            // reason codes), journals `citation_validation`, and never
+            // commits the model text as the final answer.
+            if profile.citation_validation {
+                let report = controller
+                    .validate_final_answer_citations(response.text.as_deref().unwrap_or_default());
+                if !report.passed {
+                    let block =
+                        crate::prompt::citation_validation_failed_block(&report.reason_codes);
+                    writer
+                        .record(
+                            EventType::CitationValidation,
+                            serde_json::json!({
+                                "schema_version": "0.2.0-draft",
+                                "position": "final_answer",
+                                "decision": "block",
+                                "marker_count": report.markers.len(),
+                                "reason_codes": report.reason_codes,
+                                "degraded": true,
+                                "message_block": block,
+                                "markers": report.markers.iter().map(|m| {
+                                    serde_json::json!({
+                                        "index": m.index,
+                                        "raw": m.raw,
+                                        "target": m.target,
+                                        "binding": m.binding.as_str(),
+                                        "status": if m.status
+                                            == crate::citation_validation::MarkerStatus::Passed
+                                        {
+                                            "passed"
+                                        } else {
+                                            "failed"
+                                        },
+                                        "reason_codes": m.reason_codes,
+                                    })
+                                }).collect::<Vec<_>>(),
+                            }),
+                        )
+                        .await?;
+                    last_text = Some(block);
+                    break;
+                }
             }
             // Include the final assistant message in the conversation so
             // stagnation sees the model's actual output and the rebuilt

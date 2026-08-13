@@ -239,6 +239,13 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             activation_id: get_str(p, "activation_id"),
             status: get_str(p, "status"),
         },
+        // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
+        // verifier (ADR-0010 §3.7.9) — decision + reason codes only; the
+        // marker-level details live in the journal payload.
+        EventType::CitationValidation => TuiEvent::CitationValidation {
+            decision: get_str(p, "decision"),
+            reason_codes: get_str_list(p, "reason_codes"),
+        },
         // ACAF Slice 1 (ADR-0011 §4.6): control-ticket lifecycle projections
         // (mechanism events — the HMAC never reaches the TUI; binding fields
         // and reject codes only).
@@ -450,6 +457,13 @@ mod tests {
             ),
             (EventType::PlanRejected, json!({"plan_id": "PLAN-1"})),
             (EventType::ActionApproved, json!({"action_id": "A"})),
+            (
+                EventType::CitationValidation,
+                json!({
+                    "decision": "block",
+                    "reason_codes": ["unknown_source_id"],
+                }),
+            ),
         ];
         for (ty, payload) in cases {
             let tui = run_event_to_tui(&make_event(ty, payload));

@@ -367,6 +367,21 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("激活恢复: {status}")]
         }
+        // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
+        // verifier block (ADR-0010 §3.7.9) — a mechanical degradation event.
+        TuiEvent::CitationValidation {
+            decision,
+            reason_codes,
+        } => {
+            app.content.add_system_message(
+                &format!("[引用校验] {decision}: {}", reason_codes.join(", ")),
+                true,
+            );
+            vec![format!(
+                "引用校验: {decision}（{}）",
+                reason_codes.join(", ")
+            )]
+        }
         // ACAF Slice 1 (ADR-0011 §4.6): control-ticket projections — the
         // ticket lifecycle is a mechanism event; the TUI shows kind + reject
         // code (never the HMAC or binding digests).

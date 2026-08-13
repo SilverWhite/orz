@@ -179,6 +179,13 @@ pub enum TuiEvent {
         activation_id: String,
         status: String,
     },
+    // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
+    // verifier block (ADR-0010 §3.7.9) — the TUI shows decision + reason
+    // codes only; the full marker details stay in the journal payload.
+    CitationValidation {
+        decision: String,
+        reason_codes: Vec<String>,
+    },
     // ACAF Slice 1 (ADR-0011 §4.6): control-ticket lifecycle projections.
     ControlTicketIssued {
         ticket_id: String,
@@ -300,6 +307,7 @@ impl TuiEvent {
             TuiEvent::RetrievalModeTransition { .. } => "retrieval_mode_transition",
             TuiEvent::RetrievalResultCommitted { .. } => "retrieval_result_committed",
             TuiEvent::RetrievalActivationRestored { .. } => "retrieval_activation_restored",
+            TuiEvent::CitationValidation { .. } => "citation_validation",
             TuiEvent::ControlTicketIssued { .. } => "control_ticket_issued",
             TuiEvent::ControlTicketConsumed { .. } => "control_ticket_consumed",
             TuiEvent::ControlTicketRejected { .. } => "control_ticket_rejected",

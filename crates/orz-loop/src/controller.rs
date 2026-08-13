@@ -44,7 +44,7 @@ use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole};
 use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
-use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolResult, ToolRegistry};
+use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolRegistry, ToolResult};
 use crate::orientation::{AgentRole, OrientationSessionState};
 use crate::prompt::is_injected_block_text;
 use crate::relay::DispatchTarget;
@@ -289,6 +289,24 @@ pub struct AgentLoopController {
     /// structured result's ledger (ADR-0010 §3.7.4). Cleared at each
     /// dispatch start; consumed at result formation.
     pub(crate) evidence: Mutex<Vec<EvidenceRecord>>,
+    /// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the MAIN lane's own
+    /// tool-call evidence (read_file / project_doc_index etc.) — the
+    /// observation-time source for final-answer `[来源: 路径:行号]` markers
+    /// (ADR-0010 §3.7.9). Per-run: cleared at run_turn_inner start; never
+    /// cleared by a retrieval dispatch (separate from `evidence`).
+    pub(crate) main_evidence: Mutex<Vec<EvidenceRecord>>,
+    /// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the `source_ledger`
+    /// arrays committed by retrieval subagents in THIS run — the binding
+    /// authority for final-answer `[来源: source_id]` / URL / document
+    /// identity markers. Per-run: cleared at run_turn_inner start.
+    run_source_ledgers: Mutex<Vec<serde_json::Value>>,
+    /// FUS-RETRIEVAL-MECH P0-B step 5 review fix (2026-08-14): run-unique
+    /// source_id allocation — the final-answer verifier binds `SRC-###` to
+    /// THIS run's committed ledgers, and per-ledger renumbering would make
+    /// `SRC-001` ambiguous across multiple committed results in one run.
+    /// The counter is cleared at run start and consumed by
+    /// `build_structured_result` at each commit.
+    next_source_seq: Mutex<u32>,
     /// GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 —
     /// mechanical source tier judge config (embedded seed lists by default;
     /// `ORZ_SOURCE_WEIGHTING_CONFIG` overrides at runtime). Quality layer
@@ -657,6 +675,7 @@ pub(crate) fn build_structured_result(
     evidence: &[EvidenceRecord],
     weight_config: &SourceWeightConfig,
     prefilter_config: &orz_assurance::candidate_prefilter::CandidatePrefilterConfig,
+    source_seq: &mut u32,
     docs: &[String],
     sources: &[String],
     fallback_source_type: &str,
@@ -680,8 +699,9 @@ pub(crate) fn build_structured_result(
     // (empty when nothing was removed) so the committed payload is
     // self-describing.
     let mut prefilter_log: Vec<serde_json::Value> = Vec::new();
-    for (i, ev) in evidence.iter().enumerate() {
-        let source_id = format!("SRC-{:03}", i + 1);
+    for ev in evidence.iter() {
+        let source_id = format!("SRC-{:03}", *source_seq + 1);
+        *source_seq += 1;
         let highest_allowed_claim = match ev.visibility.as_str() {
             "full_text_observed" => "observed",
             "partial_text_observed" => "derived",
@@ -775,8 +795,10 @@ pub(crate) fn build_structured_result(
     // [DOC]/[SOURCE] declaration lines — metadata-grade (never full-text
     // attribution for a declaration; §3.7.5).
     for doc in docs {
+        let source_id = format!("SRC-{:03}", *source_seq + 1);
+        *source_seq += 1;
         source_ledger.push(serde_json::json!({
-            "source_id": format!("SRC-{:03}", source_ledger.len() + 1),
+            "source_id": source_id,
             "source_title": doc,
             "source_url_or_ref": doc,
             "source_type": "project_doc",
@@ -790,8 +812,10 @@ pub(crate) fn build_structured_result(
         }));
     }
     for src in sources {
+        let source_id = format!("SRC-{:03}", *source_seq + 1);
+        *source_seq += 1;
         let mut entry = serde_json::json!({
-            "source_id": format!("SRC-{:03}", source_ledger.len() + 1),
+            "source_id": source_id,
             "source_title": src,
             "source_url_or_ref": src,
             "source_type": fallback_source_type,
@@ -1861,6 +1885,9 @@ impl AgentLoopController {
             bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
             session_id: None,
             evidence: Mutex::new(Vec::new()),
+            main_evidence: Mutex::new(Vec::new()),
+            run_source_ledgers: Mutex::new(Vec::new()),
+            next_source_seq: Mutex::new(0),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
             candidate_prefilter:
@@ -3381,6 +3408,9 @@ impl AgentLoopController {
             bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
             session_id: None,
             evidence: Mutex::new(Vec::new()),
+            main_evidence: Mutex::new(Vec::new()),
+            run_source_ledgers: Mutex::new(Vec::new()),
+            next_source_seq: Mutex::new(0),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
             candidate_prefilter:
@@ -3774,6 +3804,12 @@ impl AgentLoopController {
         // pre-run_started probe below seeds it; never persisted across
         // runs, design §8).
         *self.probe_state.lock().unwrap() = crate::tool_probe::MinimalProbeMap::default();
+        // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer
+        // citation verifier's evidence is per-run — the main lane's read
+        // evidence and the committed retrieval ledgers start empty.
+        *self.main_evidence.lock().unwrap() = Vec::new();
+        *self.run_source_ledgers.lock().unwrap() = Vec::new();
+        *self.next_source_seq.lock().unwrap() = 0;
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
@@ -4089,8 +4125,10 @@ impl AgentLoopController {
                 pacing_rounds: &self.pacing_rounds,
                 context_compact: &self.context_compact,
                 dc_state: &self.dc_state,
-                // Main lane: no retrieval evidence collection.
-                evidence: None,
+                // Main lane: collect the lane's own read evidence — the
+                // observation-time source for final-answer path:line
+                // citation binding (P0-B step 5, ADR-0010 §3.7.9).
+                evidence: Some(&self.main_evidence),
                 policy_revision: &self.policy_revision,
             },
             self,
@@ -4206,6 +4244,22 @@ impl AgentLoopController {
         }
 
         Ok(last_text.unwrap_or_default())
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): validate the main
+    /// agent's final answer against THIS run's mechanical evidence —
+    /// committed retrieval ledgers (`source_id` / URL / document identity)
+    /// plus the main lane's own read evidence (`path:line`) — ADR-0010
+    /// §3.7.9 output-level citation verifier (RETRIEVAL_MECHANICAL_CONTROLS
+    /// _DESIGN §3.2). Pure verdict; the loop journals the block event and
+    /// degrades the delivered answer on failure.
+    pub(crate) fn validate_final_answer_citations(
+        &self,
+        text: &str,
+    ) -> crate::citation_validation::CitationValidationReport {
+        let ledgers = self.run_source_ledgers.lock().unwrap();
+        let evidence = self.main_evidence.lock().unwrap();
+        crate::citation_validation::validate_final_answer(text, &ledgers, &evidence)
     }
 
     /// Runtime stagnation guard — mechanical, per-turn (§4.5 FUS-STAGNATION;
@@ -4755,10 +4809,15 @@ impl AgentLoopController {
                 // takes them by value afterwards.
                 let (activation_id, contract_id, contract_revision) = activation_identity;
                 let evidence = self.evidence.lock().unwrap().clone();
+                // Run-unique source_id allocation (P0-B step 5 review fix):
+                // take the counter, consume it synchronously, write it back —
+                // the lock never spans the awaits below.
+                let mut source_seq = *self.next_source_seq.lock().unwrap();
                 let committed = build_structured_result(
                     &evidence,
                     &self.source_weighting,
                     &self.candidate_prefilter,
+                    &mut source_seq,
                     &docs,
                     &sources,
                     match role {
@@ -4773,6 +4832,7 @@ impl AgentLoopController {
                     &tc.call_id,
                     &goal,
                 );
+                *self.next_source_seq.lock().unwrap() = source_seq;
                 crate::agents::retrieval::write_section(
                     role,
                     &self.blackboard,
@@ -4817,6 +4877,13 @@ impl AgentLoopController {
                         committed.payload.clone(),
                     )
                     .await?;
+                // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): keep this
+                // run's committed ledgers — the final-answer citation
+                // verifier binds `[来源: ...]` markers to them (ADR-0010
+                // §3.7.9; per-run cleared at run start).
+                if let Some(ledger) = committed.payload.get("source_ledger") {
+                    self.run_source_ledgers.lock().unwrap().push(ledger.clone());
+                }
                 // GAP-RETRIEVAL-TOOLS (2026-08-10): the committed result's
                 // source identities count as examined surfaces for the DC
                 // signals (key_surface_unexamined; main lane — the
@@ -9154,10 +9221,12 @@ mod tests {
         // Committed ledger: candidate_urls on the search entry + mirror in
         // raw_source_refs; source counts unchanged (candidates are not
         // observed sources).
+        let mut source_seq = 0;
         let committed = build_structured_result(
             &[ev],
             &SourceWeightConfig::default(),
             &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
+            &mut source_seq,
             &[],
             &[],
             "web_page",
@@ -9226,10 +9295,12 @@ mod tests {
         assert_eq!(ev.candidate_urls.len(), 7);
         assert_eq!(ev.search_query.as_deref(), Some("rust policy"));
 
+        let mut source_seq = 0;
         let committed = build_structured_result(
             &[ev],
             &SourceWeightConfig::default(),
             &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
+            &mut source_seq,
             &[],
             &[],
             "web_page",
@@ -9312,10 +9383,12 @@ mod tests {
             })),
         };
         let ev = build_evidence_record("web_search", &call, &result).unwrap();
+        let mut source_seq = 0;
         let committed = build_structured_result(
             &[ev],
             &SourceWeightConfig::default(),
             &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
+            &mut source_seq,
             &[],
             &[],
             "web_page",
@@ -13962,7 +14035,10 @@ mod tests {
         let projected =
             AgentLoopController::subagent_tool_projection(&parent, &BrowserDeclaringRegistry);
         assert_eq!(
-            projected.iter().filter(|t| t.name == "browser_read").count(),
+            projected
+                .iter()
+                .filter(|t| t.name == "browser_read")
+                .count(),
             1,
             "browser_read must appear exactly once: {projected:?}"
         );
@@ -15530,6 +15606,105 @@ mod tests {
             requests[1].messages
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── FUS-RETRIEVAL-MECH P0-B step 5: final-answer citation verifier ────
+
+    #[tokio::test]
+    async fn citation_validation_blocks_unknown_source_id_final_answer() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        // First text-only round is the final-answer candidate (gate fires),
+        // the post-gate answer cites a source that does not exist in this
+        // run's evidence.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答 [来源: SRC-999]"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let (response, _, _) = controller
+            .run_turn(&host, "hello", "RUN-CITE", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // The delivered answer is the mechanical degradation block — the
+        // model text is never committed as the final answer.
+        assert!(
+            response.starts_with("[CITATION_VALIDATION_FAILED"),
+            "expected the degradation block, got: {response}"
+        );
+        let events = events(&dir);
+        let citation = events
+            .iter()
+            .find(|e| e.event_type == EventType::CitationValidation)
+            .expect("citation_validation event must be journaled");
+        assert_eq!(citation.payload["decision"], serde_json::json!("block"));
+        assert_eq!(citation.payload["degraded"], serde_json::json!(true));
+        assert_eq!(citation.payload["marker_count"], serde_json::json!(1));
+        let reasons = citation.payload["reason_codes"].as_array().unwrap();
+        assert!(
+            reasons.iter().any(|r| r == "unknown_source_id"),
+            "{reasons:?}"
+        );
+        let markers = citation.payload["markers"].as_array().unwrap();
+        assert_eq!(markers[0]["binding"], serde_json::json!("ledger_source_id"));
+        assert_eq!(markers[0]["status"], serde_json::json!("failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn citation_validation_passes_path_line_from_main_read_evidence() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "first line\n".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let read = ToolCall {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({ "path": "src/lib.rs" }),
+            call_id: "call-1".to_string(),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![read]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("结论 [来源: src/lib.rs:1]"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "读文件",
+                "RUN-CITE-OK",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // The path:line marker binds to the main lane's own read evidence —
+        // the final answer passes and no citation event is journaled.
+        assert_eq!(response, "结论 [来源: src/lib.rs:1]");
+        let events = events(&dir);
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.event_type == EventType::CitationValidation),
+            "a passing final answer must journal nothing"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
