@@ -3425,29 +3425,15 @@ impl AgentLoopController {
         // reasons only; Face A/C and the retrieval lane never appear.
         // gate_decision stays an internal mechanical field ("pass" at
         // snapshot time); the call-time permission gate remains the final
-        // backstop (design invariant 2). List projection (batch step 4)
-        // will consume this same probe; the model-visible declarations are
-        // not filtered yet.
+        // backstop (design invariant 2). P0-A step 3 applies the probe to
+        // the `run_tests` declaration only; the general list projection for
+        // the remaining Face B tools is batch step 4.
         let mut tool_defs: Vec<ToolDef> = host.tools_registry().list().into_iter().collect();
-        // D-9 (FIX_PLAN 2026-08-06): when the host carries a fixed test
-        // runner, the `run_tests` tool is in the catalog — the Aider-model
-        // feedback loop inside a single run (stdout/stderr/exit code only;
-        // the test files stay hidden). 2026-08-12: declaration condition
-        // reduced to "host carries a runner" — availability is judged at
-        // call time by the permission gate (RT-001 语义保持：run_tests 走
-        // 通用 permission gate；grill/ReadOnly 的只读保证由 gate 承担，
-        // 不再由声明面承担——2026-08-12 用户裁决"ReadOnly/Grill 一并移除"）。
-        if host.test_runner().is_some() && !tool_defs.iter().any(|t| t.name == "run_tests") {
-            tool_defs.push(ToolDef {
-                name: "run_tests".to_string(),
-                description: "Run the task's hidden test suite and return \
-                     stdout/stderr/exit code. Use this to verify your \
-                     implementation — the test files are NOT visible to you, \
-                     only the run result. No arguments."
-                    .to_string(),
-                parameters: serde_json::json!({"type": "object", "properties": {}}),
-            });
-        }
+        // P0-A step 3 (design §6): `run_tests` is a Face B tool — its
+        // declaration is decided by the probe snapshot below (runner
+        // existence), not by a direct host call here. The probe-driven
+        // projection runs after `probe_face_b`; no conditional declaration
+        // remains in this block.
         // 2026-08-08 blackboard partition (A3): `blackboard_read` is the
         // model's ON-DEMAND window into the blackboard — declared whenever
         // the loop runs (the blackboard is always live). The model pulls a
@@ -3630,6 +3616,33 @@ impl AgentLoopController {
             interactive_user: host.interactive_user(),
         };
         let probe_snapshot = crate::tool_probe::probe_face_b(&probe_context);
+        // P0-A step 3 (design §6): the `run_tests` conditional declaration
+        // is migrated to the Face B probe — the snapshot is the single
+        // decision source (runner existence; zero-cost, no test process
+        // started). Complete → declared (at most once); incomplete →
+        // removed from the model-visible declarations, with the neutral
+        // call-time fallback reason `缺少测试运行器`. The permission gate
+        // stays the final backstop (invariant 2); external behavior is
+        // unchanged.
+        let run_tests_probe_ok = probe_snapshot
+            .complete
+            .iter()
+            .any(|t| t == "run_tests");
+        if run_tests_probe_ok {
+            if !tool_defs.iter().any(|t| t.name == "run_tests") {
+                tool_defs.push(ToolDef {
+                    name: "run_tests".to_string(),
+                    description: "Run the task's hidden test suite and return \
+                         stdout/stderr/exit code. Use this to verify your \
+                         implementation — the test files are NOT visible to you, \
+                         only the run result. No arguments."
+                        .to_string(),
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                });
+            }
+        } else {
+            tool_defs.retain(|t| t.name != "run_tests");
+        }
         let incomplete: Vec<serde_json::Value> = probe_snapshot
             .incomplete
             .iter()
@@ -12103,6 +12116,130 @@ mod tests {
         ) -> Result<ToolResult, ToolError> {
             unreachable!("denied tools never execute");
         }
+    }
+
+    /// A registry declaring `run_tests` unconditionally — proves the Face B
+    /// probe, not the registry, is the declaration source (P0-A step 3).
+    struct RunTestsDeclaringRegistry;
+    impl ToolRegistry for RunTestsDeclaringRegistry {
+        fn get(&self, name: &str) -> Option<ToolDef> {
+            (name == "run_tests").then(registry_run_tests_def)
+        }
+        fn list(&self) -> Vec<ToolDef> {
+            vec![registry_run_tests_def()]
+        }
+    }
+
+    fn registry_run_tests_def() -> ToolDef {
+        ToolDef {
+            name: "run_tests".to_string(),
+            description: "registry run_tests".to_string(),
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    /// A host whose registry declares `run_tests`; runner presence is
+    /// configurable to exercise both probe branches (P0-A step 3).
+    struct RunTestsRegistryHost {
+        journal: JournalRecorder,
+        runner: bool,
+    }
+    #[async_trait]
+    impl LoopHost for RunTestsRegistryHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &RunTestsDeclaringRegistry
+        }
+        fn test_runner(&self) -> Option<crate::host::TestRunner> {
+            self.runner.then(|| crate::host::TestRunner {
+                command: vec!["pytest-stub".to_string()],
+                timeout: None,
+                env: Vec::new(),
+            })
+        }
+    }
+
+    /// P0-A step 3: without a host test runner the Face B probe marks
+    /// `run_tests` incomplete (`缺少测试运行器`) and the tool is NOT
+    /// declared even when the registry lists it — the probe, not the
+    /// registry, is the declaration source.
+    #[tokio::test]
+    async fn run_tests_removed_when_runner_absent_despite_registry_declaration() {
+        let dir = test_dir();
+        let host = RunTestsRegistryHost {
+            journal: JournalRecorder::new(dir.clone()),
+            runner: false,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("直接回答"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-RT-ABSENT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let declared: Vec<&str> = received[0]
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(
+            !declared.iter().any(|t| *t == "run_tests"),
+            "run_tests must not be declared without a runner: {declared:?}"
+        );
+        let all_events = events(&dir);
+        let availability = all_events
+            .iter()
+            .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .unwrap();
+        assert!(
+            availability.payload["incomplete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
+            "probe incomplete reasons: {:?}",
+            availability.payload["incomplete"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A step 3: with a runner the probe is complete and `run_tests` is
+    /// declared exactly once even when the registry already lists it.
+    #[tokio::test]
+    async fn run_tests_declared_once_when_runner_present_and_registry_lists_it() {
+        let dir = test_dir();
+        let host = RunTestsRegistryHost {
+            journal: JournalRecorder::new(dir.clone()),
+            runner: true,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("直接回答"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-RT-PRESENT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let declared: Vec<&str> = received[0]
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(
+            declared.iter().filter(|t| **t == "run_tests").count(),
+            1,
+            "run_tests declared exactly once: {declared:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
