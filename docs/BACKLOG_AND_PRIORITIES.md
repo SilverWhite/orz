@@ -10,7 +10,7 @@
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-RETRIEVAL-MECH、CLASSICAL-EXEC-ASSISTANT（POC 已通） |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
 
@@ -139,6 +139,22 @@
 - 开放内容：transport/retry/thinking 按主/子代理同构约束复核；DeepSeek live 通道与 Windows 实机晋级证据（ADR-0010 §11.7）。
 - 入口：[DEEPSEEK_ADAPTER_CONTRACT](../architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md)；[ADR-0007](../adr/ADR-0007-transport-retry-policy.md)；[ADR-0006](../adr/ADR-0006-credential-target-registry.md)。
 
+### 6b. ORZ-CACHE-CONTEXT-COST（`approved`；P1，2026-08-14 登记）
+
+- 定位：缓存与上下文成本收敛——保持 v1.8 探针可见性机制不动（工具集变化=真实状态
+  变化，接受前缀 miss，第二轮自动恢复）；否决 per-window 探测 / 预热轮 / 工具层后置
+  渲染 / 工具层 1K 压缩；短期仅 DeepSeek OpenAI 兼容面。
+- 三项待实施：
+  1. 请求 header 变化留痕——模型请求 header（system+tools 摘要 + config + 原因
+     initial/change）变化时 journal 留痕；翻转可审计、miss 可归属。
+  2. 探针准确性与稳定性——误判审计（假完整/假不完整）、翻转与 header 留痕事后核对、
+     可选后端接线同步补翻转测试。
+  3. 单轮工具结果注入预算 + 策略化读取——`ORZ_MAX_INJECT_TOKENS_PER_ROUND` 默认
+     50K、按模型轮累计、超限拒批并提示 offset 续读；提示词 grep/结构优先、证据关键
+     文件才全文。
+- 入口：[ADR-0010 §14.9](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
+  [探针设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；[TODO](../TODO.md)。
+
 ## P2 — 生产化决策门
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
@@ -178,6 +194,10 @@
 
 ## 变更记录
 
+- 2026-08-14：ORZ-CACHE-CONTEXT-COST 登记（P1）——缓存与上下文成本收敛三项
+  （请求 header 留痕、探针准确性、单轮注入预算 + 策略化读取），ADR-0010 v1.9、
+  探针设计 §11 同步；否决方向一并登记（per-window 探测、预热轮、工具层后置渲染、
+  工具层 1K 压缩）。
 - 2026-08-14：P0-B 步骤 3 审查修复——verifier 允许“全净化空池”（空保留池
   须有 prefilter_log 移除记录）、`redirect_query_keys` 默认收窄（移除
   url/next/goto/target/continue）、redirect pattern 改 host 边界匹配、
