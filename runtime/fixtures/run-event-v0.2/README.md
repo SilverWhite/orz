@@ -22,6 +22,9 @@ Scope:
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
   (each carries `ticket_id: null` — no ticket exists when the refusal
   happens, D-14/D-15).
+- GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
+  negative payload fixture for the fixed tier/weight table (authoritative
+  MUST pair with 1.1; the good fixture carries the full weighting fields).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
   event in the v0.2 enum (42 events). The eleven v0.2-payload events carry
   their v0.2 payload; the other 31 events reuse the v0.1 payload shape

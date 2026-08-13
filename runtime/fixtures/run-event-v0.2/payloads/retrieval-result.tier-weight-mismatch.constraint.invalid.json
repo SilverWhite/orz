@@ -34,12 +34,9 @@
       ],
       "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "highest_allowed_claim": "observed",
-      "tier": "default",
+      "tier": "authoritative",
       "mechanical_weight": 1.0,
-      "weight_reason": "default",
-      "model_weight": 1.0,
-      "model_weight_reason": "official docs",
-      "annotation_status": "adopted"
+      "weight_reason": "default"
     },
     {
       "source_id": "SRC-0002",
@@ -77,15 +74,7 @@
         "claim_strength": "observed"
       }
     ],
-    "claims": [],
-    "source_annotations": [
-      {
-        "source_id": "SRC-0001",
-        "weight": 1.0,
-        "reason": "official docs",
-        "status": "adopted"
-      }
-    ]
+    "claims": []
   },
   "raw_source_refs": [
     {

@@ -2026,6 +2026,13 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()
     }
+    # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative fixture for the
+    # fixed tier/weight table (authoritative must pair with 1.1; the good
+    # fixture carries the full weighting fields).
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "retrieval-result.tier-weight-mismatch.constraint.invalid.json"
+    ] = ROOT / "runtime/retrieval-result-event-payload-v0.2.schema.json"
     for instance_path, schema_path in run_event_v02_payload_positive_contracts.items():
         errors.extend(
             _validate_instance(

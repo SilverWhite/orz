@@ -1,0 +1,81 @@
+{
+  "schema_version": "0.1.0",
+  "description": "机械来源梯队种子名单（ADR-0010 §3.7 条 12 / FUS-SOURCE-WEIGHTING）。档位：authoritative 1.1（政府/机关单位，直接采纳）/ default 1.0（白名单外默认）/ low_quality 0.7（劣质源）。本文件是默认配置来源，可经 ORZ_SOURCE_WEIGHTING_CONFIG 指向外部 JSON 覆盖增删，不硬编码。",
+  "whitelist": {
+    "suffixes": [
+      "gov.cn",
+      "gov.hk",
+      "gov.mo",
+      "gov.tw",
+      "gov",
+      "edu.cn",
+      "ac.cn",
+      "mil.cn",
+      "mil"
+    ],
+    "domains": [
+      "un.org",
+      "who.int",
+      "imf.org",
+      "worldbank.org",
+      "oecd.org",
+      "wto.org",
+      "nato.int",
+      "europa.eu",
+      "cas.cn",
+      "cass.cn",
+      "cae.cn"
+    ]
+  },
+  "low_quality": {
+    "platform_domains": [
+      "csdn.net",
+      "zhihu.com",
+      "mp.weixin.qq.com",
+      "toutiao.com",
+      "weibo.com",
+      "jianshu.com",
+      "dy.163.com",
+      "mp.sohu.com",
+      "om.qq.com",
+      "mp.dayu.com",
+      "github.io",
+      "b23.tv"
+    ],
+    "media_domains": [
+      "36kr.com",
+      "huxiu.com",
+      "tmtpost.com",
+      "ifanr.com",
+      "pingwest.com",
+      "ithome.com",
+      "cnbeta.com",
+      "donews.com",
+      "leiphone.com",
+      "jiqizhixin.com",
+      "qbitai.com",
+      "eastmoney.com",
+      "xueqiu.com",
+      "10jqka.com.cn",
+      "stockstar.com",
+      "hexun.com",
+      "caixin.com",
+      "news.sina.com.cn",
+      "finance.sina.com.cn",
+      "news.163.com",
+      "money.163.com",
+      "news.qq.com",
+      "finance.qq.com",
+      "news.sohu.com"
+    ],
+    "url_patterns": [
+      "baijiahao.baidu.com/s?id=",
+      "bilibili.com/read/cv",
+      "bilibili.com/opus/"
+    ],
+    "personal_path_markers": [
+      "/~",
+      "/%7e"
+    ]
+  }
+}

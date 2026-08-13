@@ -1,6 +1,8 @@
 # 检索来源加权与原文核验设计（2026-08-12）
 
-> 状态：`current-design`（2026-08-12 用户裁决；实现待办，已登记 GAP-SOURCE-WEIGHTING-IMPL）。
+> 状态：`current-design`（2026-08-12 用户裁决；**实现已闭合 2026-08-13**，
+> GAP-SOURCE-WEIGHTING-IMPL `implemented`，实施审计见
+> [`GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md`](audits/GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md)）。
 > 权威：ADR-0010 §3.7 条 12（v1.6 补写，2026-08-12）。
 > 边界：本机制属**检索结果质量层**，管"信什么、怎么标注"；不属授权层，不改变 ACAF
 > 票据边界（ADR-0011 D-12：web_search 无票据映射；D-13：子代理动作票绑定 activation）。
@@ -66,6 +68,11 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 - 每条来源输出：weight + 理由 + 采纳/标注状态；
 - v0 语义：**标注 + 排序，不硬拦截**——结论优先采信高权重来源，低权重来源可用但必须
   显式标注；台账积累后再决定是否增加拦截阈值。
+- 状态语义（producer 与 Python verifier 同一机械规则，2026-08-13 审查修复登记）：
+  `annotated`（低质量显式标注）必须 weight=0.7；`adopted`（结论采纳）必须 weight≥1.0；
+  机械 `low_quality` 来源不得标 `adopted`；同一 source_id 的重复标注丢弃并记
+  filtering_log；被引用的 `low_quality` 来源缺少合法 `annotated` 标注时，整个结构化
+  结果按验证失败显式降级（不静默丢弃）。
 
 ## 4. 共享判定器
 
@@ -83,29 +90,38 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 
 ## 6. 待定项（实现前确定）
 
-1. 白名单/劣质源初始域名清单与配置入口（已定范围：白名单=政府与机关单位；劣质源含
-   CSDN、知乎、百家号、哔哩哔哩个人专栏、独立新闻媒体、自媒体新闻号/财经号、
-   小型个人站点；初始种子名单见
-   [`SOURCE_QUALITY_SEED_LISTS_2026-08-12.md`](SOURCE_QUALITY_SEED_LISTS_2026-08-12.md)，
-   具体域名列表与配置文件/env 注入在实现时落地，不硬编码；官方媒体 1.0、
-   公众号与个人主页/博客入劣质源三项确认见种子文档 §3）；
-2. 单次检索候选核验数量上限（建议 ≤3-5，按工具轮预算校准）；
-3. 结构化结果 schema 是否新增 weight/tier 字段（若加，遵循"先 Schema/fixture 扩展、
-   再改 producer"纪律）。
+1. 白名单/劣质源初始域名清单与配置入口——**已定**：机器可读名单落地为
+   [`runtime/source-quality-seed-lists-v0.1.json`](../runtime/source-quality-seed-lists-v0.1.json)
+   （二进制 include 为默认，`ORZ_SOURCE_WEIGHTING_CONFIG` env 覆盖替换；
+   官方媒体 1.0、公众号与个人主页/博客入劣质源见种子文档 §3）；
+2. 单次检索候选核验数量上限——**已定**：≤5 写进检索提示词合同（软约束，
+   120 轮工具预算是硬背板）；
+3. 结构化结果 schema weight/tier 字段——**已加**：source_entry 新增
+   tier/mechanical_weight/weight_reason/model_weight/model_weight_reason/
+   annotation_status，organized_response 新增 source_annotations，
+   filter reason 新增 annotation_invalid（先 Schema/fixture/verifier 再 producer）。
 
-## 7. 实施待办（已登记 GAP-SOURCE-WEIGHTING-IMPL，`pending`；2026-08-13）
+## 7. 实施状态（GAP-SOURCE-WEIGHTING-IMPL，`implemented`；2026-08-13 闭合）
 
-1. 机械来源梯队判定器：白名单/劣质源域名与 URL 形态规则 + 配置加载（种子见
-   [`SOURCE_QUALITY_SEED_LISTS_2026-08-12.md`](SOURCE_QUALITY_SEED_LISTS_2026-08-12.md)），
-   输出 weight/tier 进 evidence ledger；
-2. web_search（framework_fallback）第二层：机械预筛 + 模型初选 + `web_fetch` 候选
-   原文核验，候选上限 ≤3-5（按工具轮预算校准）；
-3. 第三层：子代理模型加权标注（账号级规则），结构化结果输出 weight + 理由 +
-   采纳/标注状态；
-4. local_browser：直接分级加权（第一层+第三层），不套第二层；
-5. 结构化结果 schema 决策：是否新增 weight/tier 字段（先 Schema/fixture 扩展再改
-   producer）；
-6. 测试：判定器单测（三档/名单/URL 形态）、二存一模式门控、web_search 核验路径
-   与 local_browser 加权 e2e；
-7. 实施后：按项目惯例三面审查 + 实施审计文档登记，索引状态由 `pending` 转
-   `implemented`。
+1. **机械来源梯队判定器**——`orz-assurance/src/source_weighting.rs`：
+   三档 + 白名单后缀/显式域 + 劣质平台/媒体域 + URL 形态 + edu.cn 个人主页标记；
+   输出 tier/weight/reason 进 source_ledger；
+   边界：当前加权面为 web_fetch/[SOURCE]/URL 形态 PDF 证据；web_search 引用 URL
+   未透传 loop（审计 B-1）、browser_read 主车道无 ledger（审计 B-2），候选上限为
+   软约束（审计 B-3）。
+2. **web_search 第二层**——检索提示词合同：机械预筛 + 模型初选 + `web_fetch`
+   候选原文核验，候选 ≤5、禁 `browser_read`（候选上限为软约束，见边界 B-3）；
+3. **第三层模型加权标注**——`[RESULT_JSON].source_annotations` 校验后合并进
+   ledger（model_weight/reason/annotation_status）并回写
+   `organized_response.source_annotations`；非法标注（未知 source_id、weight 越界、
+   缺 reason、status 非法、annotated≠0.7、adopted<1.0、low_quality adopted、重复
+   source_id）丢弃并记 filtering_log；被引用 low_quality 无合法标注时整块显式降级；
+4. **local_browser 直接分级加权**——共享同一判定器；`browser_read` 证据进入
+   检索车道 ledger 时即加权（主车道无 ledger 的边界见审计 B-2）；
+5. **结构化结果 schema**——weight/tier 字段已加（见 §6.3）；
+6. **测试**——判定器单测 11 个（三档/名单/URL 形态）、web_page 加权 e2e、
+   source_annotations 合并/丢弃/一致性/重复/降级 e2e、提示词二存一合同、
+   Python verifier 9 条新规则测试、真实 journal 重捕；
+7. **收尾**——三面审查 + 实施审计
+   [`GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md`](audits/GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md)，
+   索引状态 `pending` → `implemented`。

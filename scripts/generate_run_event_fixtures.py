@@ -624,6 +624,12 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
                 "used_in_sections": ["Rust channels"],
                 "content_sha256": ZERO_HASH,
                 "highest_allowed_claim": "observed",
+                "tier": "default",
+                "mechanical_weight": 1.0,
+                "weight_reason": "default",
+                "model_weight": 1.0,
+                "model_weight_reason": "official docs",
+                "annotation_status": "adopted",
             },
             {
                 "source_id": "SRC-0002",
@@ -637,6 +643,9 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
                 "relevance": "partial",
                 "used_in_sections": [],
                 "highest_allowed_claim": "derived",
+                "tier": "default",
+                "mechanical_weight": 1.0,
+                "weight_reason": "default",
             },
         ],
         "filtering_log": [
@@ -657,6 +666,14 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
                 }
             ],
             "claims": [],
+            "source_annotations": [
+                {
+                    "source_id": "SRC-0001",
+                    "weight": 1.0,
+                    "reason": "official docs",
+                    "status": "adopted",
+                }
+            ],
         },
         "raw_source_refs": [
             {
@@ -963,6 +980,27 @@ EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
     },
 }
 
+# GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative payload fixture —
+# the fixed tier/weight pair is violated (authoritative MUST be 1.1; the
+# good fixture's SRC-0001 keeps mechanical_weight 1.0). The model annotation
+# fields are stripped so exactly ONE constraint is violated.
+EXTRA_V02_PAYLOAD_BADS: dict[str, dict] = {}
+_weighting_bad = json.loads(json.dumps(PAYLOAD_GOOD_V02["retrieval_result_committed"]))
+_weighting_bad["source_ledger"] = json.loads(
+    json.dumps(PAYLOAD_GOOD_V02["retrieval_result_committed"]["source_ledger"])
+)
+_weighting_bad["source_ledger"][0]["tier"] = "authoritative"
+_weighting_bad["source_ledger"][0].pop("model_weight", None)
+_weighting_bad["source_ledger"][0].pop("model_weight_reason", None)
+_weighting_bad["source_ledger"][0].pop("annotation_status", None)
+_weighting_bad["organized_response"] = json.loads(
+    json.dumps(PAYLOAD_GOOD_V02["retrieval_result_committed"]["organized_response"])
+)
+_weighting_bad["organized_response"].pop("source_annotations", None)
+EXTRA_V02_PAYLOAD_BADS[
+    "retrieval-result.tier-weight-mismatch.constraint.invalid"
+] = _weighting_bad
+
 
 # canonical_cli payload shapes (its own `canonical-cli-*` track). Shapes taken
 # from canonical_cli.py event_specs (fake path L900-1009, real path L1322-1360).
@@ -1198,6 +1236,9 @@ Scope:
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
   (each carries `ticket_id: null` — no ticket exists when the refusal
   happens, D-14/D-15).
+- GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
+  negative payload fixture for the fixed tier/weight table (authoritative
+  MUST pair with 1.1; the good fixture carries the full weighting fields).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
   event in the v0.2 enum (42 events). The eleven v0.2-payload events carry
   their v0.2 payload; the other 31 events reuse the v0.1 payload shape
@@ -1347,6 +1388,8 @@ def main() -> None:
         )
     for name, payload in EXTRA_V02_PAYLOAD_POSITIVES.items():
         write_json(v02_payloads_dir / f"{name}.json", payload)
+    for name, payload in EXTRA_V02_PAYLOAD_BADS.items():
+        write_json(v02_payloads_dir / f"{name}.json", payload)
     for event_type in V02_EVENT_TYPES:
         slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
         payload = PAYLOAD_GOOD_V02.get(event_type) or PAYLOAD_GOOD[event_type]
@@ -1367,7 +1410,8 @@ def main() -> None:
         f"payloads: {len(PAYLOAD_GOOD) * 2} files, "
         f"envelope: {len(EVENT_TYPES) + 1 + len(ENVELOPE_BAD)} files, "
         f"canonical_cli: {len(CANONICAL_CLI_GOOD)} files, "
-        f"v0.2 payloads: {len(PAYLOAD_GOOD_V02) * 2 + len(EXTRA_V02_PAYLOAD_POSITIVES)} files, "
+        f"v0.2 payloads: "
+        f"{len(PAYLOAD_GOOD_V02) * 2 + len(EXTRA_V02_PAYLOAD_POSITIVES) + len(EXTRA_V02_PAYLOAD_BADS)} files, "
         f"v0.2 envelope: {len(V02_EVENT_TYPES) + 1 + len(V02_ENVELOPE_BAD)} files"
     )
 

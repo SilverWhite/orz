@@ -496,6 +496,16 @@ _VISIBILITY_RANK = {
     "metadata_only": 1,
     "unavailable": 0,
 }
+
+# GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 fixed
+# tier/weight table — the mechanical judge and the model annotation share
+# the same three multipliers (relative ranking, not 0-1 confidence).
+_WEIGHT_BY_TIER = {
+    "authoritative": 1.1,
+    "default": 1.0,
+    "low_quality": 0.7,
+}
+_ALLOWED_WEIGHTS = frozenset((0.7, 1.0, 1.1))
 _CLAIM_MIN_VISIBILITY = {
     "observed": 3,
     "derived": 2,
@@ -637,6 +647,127 @@ def _verify_v02_result_consistency(events: list[dict[str, Any]]) -> list[str]:
                     f"event {a_index}: assessment {a_id} source_counts "
                     f"{a_payload.get('source_counts')} != committed result "
                     f"{p['result_id']} (event {index})"
+                )
+    return errors
+
+
+def _verify_v02_source_weighting(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §3.7 条 12 / FUS-SOURCE-WEIGHTING (GAP-SOURCE-WEIGHTING-IMPL):
+    mechanical tier/weight facts on committed retrieval results:
+
+    - web_page ledger entries MUST carry tier + mechanical_weight +
+      weight_reason; the tier/weight pair is fixed (authoritative 1.1 /
+      default 1.0 / low_quality 0.7);
+    - model annotation fields are all-or-none and status/weight consistent
+      (annotated -> 0.7; adopted -> >= 1.0; a mechanically low-quality
+      source cannot be adopted);
+    - a low-quality source used in sections/claims MUST carry status
+      "annotated" (v0 annotate-and-rank, no hard interception);
+    - every organized_response.source_annotation matches the merged ledger
+      fields, and every merged ledger field has a matching annotation.
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "retrieval_result_committed":
+            continue
+        p = event["payload"]
+        ledger = p["source_ledger"]
+        ledger_by_id = {entry["source_id"]: entry for entry in ledger}
+
+        used_ids: set[str] = set()
+        for section in p["organized_response"]["sections"]:
+            used_ids.update(section.get("source_ids", []))
+        for claim in p["organized_response"]["claims"]:
+            used_ids.update(claim.get("source_ids", []))
+
+        for entry in ledger:
+            sid = entry["source_id"]
+            tier = entry.get("tier")
+            mechanical_weight = entry.get("mechanical_weight")
+            weight_reason = entry.get("weight_reason")
+            has_any_mechanical = (
+                tier is not None or mechanical_weight is not None or weight_reason is not None
+            )
+            if entry.get("source_type") == "web_page" and tier is None:
+                errors.append(
+                    f"event {index}: source {sid} is web_page but carries no mechanical tier"
+                )
+            elif has_any_mechanical:
+                if tier is None or mechanical_weight is None or weight_reason is None:
+                    errors.append(
+                        f"event {index}: source {sid} has partial mechanical weighting fields"
+                    )
+                elif _WEIGHT_BY_TIER.get(tier) != mechanical_weight:
+                    errors.append(
+                        f"event {index}: source {sid} tier {tier!r} weight "
+                        f"{mechanical_weight} violates the fixed tier/weight table"
+                    )
+
+            model_weight = entry.get("model_weight")
+            model_reason = entry.get("model_weight_reason")
+            annotation_status = entry.get("annotation_status")
+            model_fields = [model_weight, model_reason, annotation_status]
+            present = [field for field in model_fields if field is not None]
+            if present and len(present) != 3:
+                errors.append(
+                    f"event {index}: source {sid} has partial model annotation fields"
+                )
+            elif present:
+                if model_weight not in _ALLOWED_WEIGHTS:
+                    errors.append(
+                        f"event {index}: source {sid} model_weight {model_weight} "
+                        "outside {0.7, 1.0, 1.1}"
+                    )
+                if annotation_status == "annotated" and model_weight != 0.7:
+                    errors.append(
+                        f"event {index}: source {sid} annotated requires model_weight 0.7"
+                    )
+                if annotation_status == "adopted" and model_weight < 1.0:
+                    errors.append(
+                        f"event {index}: source {sid} adopted requires model_weight >= 1.0"
+                    )
+                if tier == "low_quality" and annotation_status == "adopted":
+                    errors.append(
+                        f"event {index}: source {sid} low_quality cannot be adopted"
+                    )
+
+            if tier == "low_quality" and (
+                sid in used_ids or entry.get("used_in_sections")
+            ) and annotation_status != "annotated":
+                errors.append(
+                    f"event {index}: source {sid} low_quality used without "
+                    "annotated status"
+                )
+
+        annotations = p["organized_response"].get("source_annotations", [])
+        annotation_by_id: dict[str, dict[str, Any]] = {}
+        seen_annotation_ids: set[str] = set()
+        for annotation in annotations:
+            sid = annotation["source_id"]
+            if sid in seen_annotation_ids:
+                errors.append(f"event {index}: duplicate source_annotation for {sid}")
+                continue
+            seen_annotation_ids.add(sid)
+            annotation_by_id[sid] = annotation
+            entry = ledger_by_id.get(sid)
+            if entry is None:
+                errors.append(
+                    f"event {index}: source_annotation references unknown source {sid}"
+                )
+            elif (
+                entry.get("model_weight") != annotation["weight"]
+                or entry.get("model_weight_reason") != annotation["reason"]
+                or entry.get("annotation_status") != annotation["status"]
+            ):
+                errors.append(
+                    f"event {index}: source_annotation for {sid} does not match "
+                    "merged ledger fields"
+                )
+        for entry in ledger:
+            if "model_weight" in entry and entry["source_id"] not in annotation_by_id:
+                errors.append(
+                    f"event {index}: source {entry['source_id']} has model fields "
+                    "without a source_annotation"
                 )
     return errors
 
@@ -1187,6 +1318,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))
+        errors.extend(_verify_v02_source_weighting(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))
     return errors

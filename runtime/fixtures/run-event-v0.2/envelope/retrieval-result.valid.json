@@ -43,7 +43,13 @@
           "Rust channels"
         ],
         "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-        "highest_allowed_claim": "observed"
+        "highest_allowed_claim": "observed",
+        "tier": "default",
+        "mechanical_weight": 1.0,
+        "weight_reason": "default",
+        "model_weight": 1.0,
+        "model_weight_reason": "official docs",
+        "annotation_status": "adopted"
       },
       {
         "source_id": "SRC-0002",
@@ -56,7 +62,10 @@
         "missing_scope": "rest of page",
         "relevance": "partial",
         "used_in_sections": [],
-        "highest_allowed_claim": "derived"
+        "highest_allowed_claim": "derived",
+        "tier": "default",
+        "mechanical_weight": 1.0,
+        "weight_reason": "default"
       }
     ],
     "filtering_log": [
@@ -78,7 +87,15 @@
           "claim_strength": "observed"
         }
       ],
-      "claims": []
+      "claims": [],
+      "source_annotations": [
+        {
+          "source_id": "SRC-0001",
+          "weight": 1.0,
+          "reason": "official docs",
+          "status": "adopted"
+        }
+      ]
     },
     "raw_source_refs": [
       {

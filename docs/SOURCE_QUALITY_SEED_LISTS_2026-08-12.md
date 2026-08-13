@@ -45,7 +45,7 @@
 | CSDN | `csdn.net`（含 `blog.csdn.net`） |
 | 知乎 | `zhihu.com`（含 `zhuanlan.zhihu.com` 专栏） |
 | 百家号 | `baijiahao.baidu.com/s?id=...` |
-| B 站个人专栏 | `bilibili.com/read/cv*`、`bilibili.com/opus/*`；`b23.tv` 短链展开后判定 |
+| B 站个人专栏 | `bilibili.com/read/cv*`、`bilibili.com/opus/*`；`b23.tv`（v0 机械层零额外请求约束，整域直接 0.7，不展开，见确认 6） |
 | 微信公众号 | `mp.weixin.qq.com`（URL 层默认 0.7；不设主体级升档） |
 | 头条/头条号 | `toutiao.com`（文章页） |
 | 微博 | `weibo.com`（全站，含个人账号与官方号，v0 不特判） |
@@ -90,6 +90,8 @@
    维持 1.0 不变。
 5. **微博全站入劣质源（2026-08-13）**：`weibo.com` 机械归 0.7（含个人账号与官方号，
    v0 不特判），不再走账号级模型判断。
+6. **b23.tv 短链不展开（2026-08-13 审查修复登记）**：机械层受"零额外请求"约束，
+   v0 对 `b23.tv` 整域直接降权 0.7（保守方向，不展开判定）；展开后判定留待后续切片。
 
 ## 4. 落地说明
 

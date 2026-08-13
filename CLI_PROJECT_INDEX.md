@@ -1,6 +1,6 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.0；状态：`current`；最近整理：2026-08-13（OPS-PROTOCOL 登记；新增编码门控待办）。
+> 索引版本：v2.0；状态：`current`；最近整理：2026-08-13（OPS-PROTOCOL 登记；编码门控与来源加权实现登记）。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >
@@ -114,7 +114,7 @@
 - **GAP-ACAF-SLICE2-FAILCLOSED** (`implemented`; 2026-08-13)：ACAF Slice 2 fail-closed 机制已闭合——D-13 检索 lane 动作票 activation 绑定（动作票 activation 可选、Orientation 唯一禁止；sign_network_v1 可选参数）、D-14 缺参硬拒绝（missing_target_argument）、D-15 缺依赖/未配置硬拒绝（missing_snapshot_store / missing_goal_context / 启动 fail-fast）、D-16 rejected GoalRevisionV1 不迁移；reject_code Schema +3 先扩展再 producer；TicketGate 统一 gate（控制事件 + 动作票，无 ToolStarted 拒绝）；ORZ_ACAF_FAIL_CLOSED=1 显式翻转，默认影子，生产启用待用户裁决。关键词：fail-closed、D-12~D-16、missing_target_argument、activation 绑定、TicketGate。入口：[`GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT`](docs/audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md) / [`acaf.rs`](orz/crates/orz-loop/src/acaf.rs) / [`controller.rs`](orz/crates/orz-loop/src/controller.rs) / [`orz-signer.rs`](orz/crates/orz-bin/src/bin/orz-signer.rs)。
 - **GAP-WINDOWS-EVIDENCE** (`partial`; 2026-08-09)：三个案例候选（ORZ-WIN-PROC-001/002/003，晋级自 child-tree 探针三场景）已登记并引用探针 digest，均标 `candidate` 未宣称闭环；事故路由保留 WIN-LIM-001（raw TCP）与 WIN-INC-001（observer leak）。关键词：Windows incident、case selection、compatibility evidence、WIN-LIM、ORZ-WIN-PROC。入口：[`docs/incidents/windows/`](docs/incidents/windows/) / [`docs/cases/windows/`](docs/cases/windows/)。
 
-- **GAP-SOURCE-WEIGHTING-IMPL** (`pending`; 2026-08-13)：来源加权机制设计已定稿（FUS-SOURCE-WEIGHTING，ADR-0010 §3.7 条 12/v1.7），实现待办——机械来源梯队判定器（白名单=政府/机关单位 1.1 / 白名单外默认 1.0 / 劣质源 0.7）+ 域名/URL 名单配置加载 + web_search 第二层选择性原文核验（web_fetch，候选 ≤3-5）+ 子代理模型加权标注 + local_browser 直接分级加权（无第二层）+ 结构化结果 weight/tier 字段 schema 决策；二存一模式门控；实施审计待补。关键词：来源加权、分级加权、三层结构、FUS-SOURCE-WEIGHTING。入口：[`RETRIEVAL_SOURCE_WEIGHTING_DESIGN`](docs/RETRIEVAL_SOURCE_WEIGHTING_DESIGN_2026-08-12.md) / [`SOURCE_QUALITY_SEED_LISTS`](docs/SOURCE_QUALITY_SEED_LISTS_2026-08-12.md) / [`ADR-0010 §3.7 条 12`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
+- **GAP-SOURCE-WEIGHTING-IMPL** (`implemented`; 2026-08-13)：来源加权机制实现已闭合——机械三档判定器（白名单 1.1 / 默认 1.0 / 劣质源 0.7）+ 机器可读种子名单（`ORZ_SOURCE_WEIGHTING_CONFIG` 覆盖）+ web_search 第二层提示词合同（web_fetch ≤5、禁 browser_read）+ 第三层 `source_annotations` 校验合并（非法丢弃记 filtering_log）+ 结构化结果 weight/tier 字段（Schema 先行）；local_browser 共享判定器。边界：web_search 引用 URL 未透传 loop（摘要条目不加权）、browser_read 主车道无 ledger、候选上限软约束。关键词：来源加权、分级加权、三层结构、tier、mechanical_weight、source_annotations。入口：[`RETRIEVAL_SOURCE_WEIGHTING_DESIGN`](docs/RETRIEVAL_SOURCE_WEIGHTING_DESIGN_2026-08-12.md) / [`SOURCE_QUALITY_SEED_LISTS`](docs/SOURCE_QUALITY_SEED_LISTS_2026-08-12.md) / [`source_weighting.rs`](orz/crates/orz-assurance/src/source_weighting.rs) / [`GAP-SOURCE-WEIGHTING-IMPL 实施审计`](docs/audits/GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md)。
 - **GAP-ENCODING-GATE** (`implemented`; 2026-08-13)：orz 机械编码门控已闭合——encoding 适配模块（解码链：BOM 剥离→UTF-8 严格→GB18030→lossy，记录命中编码；写入统一 UTF-8 无 BOM）+ `run_terminal_cmd`/`read_file`/插件 hooks/run_tests 接线 + `tool_completed.output_encoding` 可选字段（Schema 先行扩展再接线 producer；模型零感知，编码仅进 journal）。边界：PDF/图片/PPTX 等无解码链路径 None；hooks 仅 tracing 不扩展事件面；复查后其余进程文本面（grep/glob 渲染解析、后台快照、状态捕获、编辑/补丁读目标、web_fetch 文本体）已同链处理。关键词：编码契约、UTF-8、GB18030、output_encoding、解码门控。入口：[`OPS-PROTOCOL §8`](protocol/structured-operation-protocol-v0.1.md) / [`encoding.rs`](orz/crates/codegen/orz-tools/src/util/encoding.rs) / [`GAP-ENCODING-GATE 实施审计`](docs/audits/GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13.md)。
 
 ## 4. 保障、合约与安全路由
@@ -177,9 +177,9 @@
 本节只列 canonical ID，不重复定义：
 
 - `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC、FUS-SOURCE-WEIGHTING。
-- `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、IMPL-RUN-EVENT-SCHEMA、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-RETRIEVAL-TOOLS、GAP-LOCAL-BROWSER、GAP-WEB-SEARCH-SEMAPHORE、GAP-CONVERSATION-RESTORE、GAP-PROJECT-DOC-INDEX-CACHE、GAP-PDF-EVIDENCE、GAP-RUN-TESTS、GAP-STREAM-RETRY、GAP-ACAF-SLICE1、GAP-ACAF-SLICE2A、GAP-ACAF-SLICE2B、GAP-DENIAL-POLICY-REVISION、GAP-ACAF-SLICE2-FAILCLOSED、GAP-ENCODING-GATE。
+- `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、IMPL-RUN-EVENT-SCHEMA、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-RETRIEVAL-TOOLS、GAP-LOCAL-BROWSER、GAP-WEB-SEARCH-SEMAPHORE、GAP-CONVERSATION-RESTORE、GAP-PROJECT-DOC-INDEX-CACHE、GAP-PDF-EVIDENCE、GAP-RUN-TESTS、GAP-STREAM-RETRY、GAP-ACAF-SLICE1、GAP-ACAF-SLICE2A、GAP-ACAF-SLICE2B、GAP-DENIAL-POLICY-REVISION、GAP-ACAF-SLICE2-FAILCLOSED、GAP-ENCODING-GATE、GAP-SOURCE-WEIGHTING-IMPL。
 - `partial`：IMPL-RUST-RUNTIME、IMPL-DEEPSEEK-TRANSPORT、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER、IMPL-CONTROL-FABRIC。
-- `pending`：GAP-SOURCE-WEIGHTING-IMPL、OPS-PROTOCOL。
+- `pending`：OPS-PROTOCOL。
 - `reference`：AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 

@@ -1918,6 +1918,9 @@ def _committed_result() -> dict:
                 "used_in_sections": ["Rust channels"],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "observed",
+                "tier": "default",
+                "mechanical_weight": 1.0,
+                "weight_reason": "default",
             },
             {
                 "source_id": "SRC-2",
@@ -1931,6 +1934,9 @@ def _committed_result() -> dict:
                 "relevance": "partial",
                 "used_in_sections": [],
                 "highest_allowed_claim": "derived",
+                "tier": "default",
+                "mechanical_weight": 1.0,
+                "weight_reason": "default",
             },
         ],
         "filtering_log": [],
@@ -2073,6 +2079,146 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("highest_allowed_claim", errors[0])
         self.assertIn("SRC-1", errors[0])
+
+    # ── GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 ──
+
+    def test_web_page_requires_mechanical_tier(self) -> None:
+        result = _committed_result()
+        del result["source_ledger"][0]["tier"]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("tier", " | ".join(errors))
+
+    def test_tier_weight_pair_is_fixed(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][0]["tier"] = "authoritative"
+        result["source_ledger"][0]["mechanical_weight"] = 1.0
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any(
+                "1.0" in error or "mechanical_weight" in error or "expected" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_partial_model_annotation_fields_rejected(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][0]["model_weight"] = 1.0
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("model_weight_reason", " | ".join(errors))
+
+    def test_annotated_status_requires_low_weight(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][0]["model_weight"] = 1.0
+        result["source_ledger"][0]["model_weight_reason"] = "forum"
+        result["source_ledger"][0]["annotation_status"] = "annotated"
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("annotated requires model_weight 0.7", " | ".join(errors))
+
+    def test_low_quality_used_without_annotation_rejected(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][1]["tier"] = "low_quality"
+        result["source_ledger"][1]["mechanical_weight"] = 0.7
+        result["source_ledger"][1]["weight_reason"] = "low_quality_platform:csdn.net"
+        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-2"]
+        result["organized_response"]["sections"][0]["claim_strength"] = "derived"
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("without annotated status", " | ".join(errors))
+
+    def test_low_quality_annotated_validates(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][1]["tier"] = "low_quality"
+        result["source_ledger"][1]["mechanical_weight"] = 0.7
+        result["source_ledger"][1]["weight_reason"] = "low_quality_platform:csdn.net"
+        result["source_ledger"][1]["model_weight"] = 0.7
+        result["source_ledger"][1]["model_weight_reason"] = "platform blog"
+        result["source_ledger"][1]["annotation_status"] = "annotated"
+        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-2"]
+        result["organized_response"]["sections"][0]["claim_strength"] = "derived"
+        result["organized_response"]["source_annotations"] = [
+            {
+                "source_id": "SRC-2",
+                "weight": 0.7,
+                "reason": "platform blog",
+                "status": "annotated",
+            }
+        ]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_annotation_must_match_merged_ledger(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][0]["model_weight"] = 1.1
+        result["source_ledger"][0]["model_weight_reason"] = "official"
+        result["source_ledger"][0]["annotation_status"] = "adopted"
+        result["organized_response"]["source_annotations"] = [
+            {
+                "source_id": "SRC-1",
+                "weight": 1.0,
+                "reason": "official",
+                "status": "adopted",
+            }
+        ]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("does not match merged ledger fields", " | ".join(errors))
+
+    def test_merged_model_fields_require_annotation(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][0]["model_weight"] = 1.0
+        result["source_ledger"][0]["model_weight_reason"] = "official"
+        result["source_ledger"][0]["annotation_status"] = "adopted"
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("without a source_annotation", " | ".join(errors))
+
+    def test_duplicate_source_annotation_rejected(self) -> None:
+        result = _committed_result()
+        result["source_ledger"][0]["model_weight"] = 1.0
+        result["source_ledger"][0]["model_weight_reason"] = "official docs"
+        result["source_ledger"][0]["annotation_status"] = "adopted"
+        annotation = {
+            "source_id": "SRC-1",
+            "weight": 1.0,
+            "reason": "official docs",
+            "status": "adopted",
+        }
+        duplicate = {
+            "source_id": "SRC-1",
+            "weight": 0.7,
+            "reason": "second annotation for the same source",
+            "status": "annotated",
+        }
+        result["organized_response"]["source_annotations"] = [
+            dict(annotation),
+            duplicate,
+        ]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("duplicate source_annotation", " | ".join(errors))
 
 
 def _restore(
