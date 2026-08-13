@@ -1,8 +1,8 @@
 # 主 Agent 工作工具机械可用性探针 设计（2026-08-13，v0.1 定稿）
 
 > 状态：`approved`（2026-08-13 用户裁决放行实施；实施进度统一登记于
-> [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md) P0-A，步骤 1-5 已闭合，
-> 步骤 6-7 待续；ADR-0010 §3.5 修订按批次末第 7 步登记）。
+> [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md) P0-A，步骤 1-6 已闭合，
+> 步骤 7 待续；ADR-0010 §3.5 修订按批次末第 7 步登记）。
 > 范围：设计定稿；实施按 P0-A 批次执行。
 > 关联：ADR-0010 §3.5（2026-08-12 裁决"目录不承诺"）；`tool_availability_check`
 > 事件（run-event v0.2，本设计对其做直接升级）；检索侧机械控制（web_fetch 计数、
