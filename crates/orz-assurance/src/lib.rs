@@ -14,6 +14,7 @@ pub mod permit;
 pub mod plan;
 pub mod sandbox;
 pub mod session;
+pub mod source_weighting;
 
 // Re-export commonly used types from journal
 pub use journal::{

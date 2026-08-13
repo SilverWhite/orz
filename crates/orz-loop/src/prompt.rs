@@ -301,9 +301,42 @@ pub fn tool_round_budget_exhaustion_block(budget: u32) -> String {
 /// implicit write contract. `blocks` carries the shared availability +
 /// budget declarations (the subagent budget is its own — independent
 /// per-session accounting).
-pub fn build_retrieval_system_prompt(section_name: &str, goal: &str, blocks: &str) -> String {
+pub fn build_retrieval_system_prompt(
+    section_name: &str,
+    goal: &str,
+    retrieval_mode: &str,
+    blocks: &str,
+) -> String {
+    // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 — the
+    // two-channel contract rides the subagent prompt. The mechanical tier
+    // judge already labels every web source in the ledger; this text tells
+    // the subagent HOW to use the labels (rank + annotate, never hard-block)
+    // and WHICH channel may verify what (二存一 — never mix lanes).
+    let weighting_contract = match retrieval_mode {
+        "framework_fallback" => {
+            "Retrieval channel: web_search (server-side search) is the entry; \
+             verify ONLY high-value / conclusion-dependent candidate URLs \
+             with web_fetch — at most 5 candidates, never the full reference \
+             list. browser_read is FORBIDDEN in this mode (one channel per \
+             task)."
+        }
+        "local_browser" => {
+            "Retrieval channel: browser_read reads pages directly — the \
+             read IS the original text (no separate verification layer, no \
+             web_fetch/web_search in this mode)."
+        }
+        _ => "Retrieval channel: off — no web retrieval tools.",
+    };
     format!(
         "Retrieval subagent ({section_name}). Goal: {goal}\n\
+         Source weighting (ADR-0010 §3.7 条 12): every web source carries a \
+         mechanical tier in the ledger — authoritative 1.1 (government/agency, \
+         direct adoption), default 1.0, low_quality 0.7 (platforms, personal \
+         blogs, unverified media/accounts). Prefer higher-weight sources for \
+         conclusions; a low-quality source MAY be used but MUST be explicitly \
+         annotated in `source_annotations` with status \"annotated\" (v0: \
+         annotate + rank, no hard interception).\n\
+         {weighting_contract}\n\
          Citation rule (D-1, FIX_PLAN 2026-08-06; ADR-0010 §3.7.9): \
          any claim based on external evidence, a reference \
          implementation, or internal docs must carry an inline \
@@ -323,7 +356,10 @@ pub fn build_retrieval_system_prompt(section_name: &str, goal: &str, blocks: &st
          `[RESULT_JSON]{{...}}[/RESULT_JSON]` block carrying your \
          organized response: `{{\"sections\": [{{\"section_title\": ..., \
          \"content\": ..., \"source_ids\": [\"SRC-...\"], \"claim_strength\": \
-         \"observed|derived|synthesized\"}}], \"claims\": [...]}}` — every \
+         \"observed|derived|synthesized\"}}], \"claims\": [...], \
+         \"source_annotations\": [{{\"source_id\": \"SRC-...\", \"weight\": \
+         0.7|1.0|1.1, \"reason\": \"...\", \"status\": \"adopted|annotated\"}}]}}` \
+         — every \
          source_id must reference an actual tool result you received; \
          claim_strength must not exceed what the source's visibility \
          supports (observed = you read the full text, derived = partial, \
@@ -552,5 +588,26 @@ mod tests {
         assert!(line.contains("已完成 1"));
         assert!(line.contains("当前第 2 步「实施」"));
         assert!(line.contains("待办 2 步"));
+    }
+
+    #[test]
+    fn retrieval_prompt_carries_mode_specific_weighting_contract() {
+        // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 —
+        // the two-channel contract (二存一) and the layer-3 annotation
+        // shape ride the retrieval system prompt.
+        let framework =
+            build_retrieval_system_prompt("external_ret", "goal", "framework_fallback", "");
+        assert!(framework.contains("Source weighting"));
+        assert!(framework.contains("source_annotations"));
+        assert!(framework.contains("browser_read is FORBIDDEN in this mode"));
+        assert!(framework.contains("at most 5 candidates"));
+        assert!(framework.contains("\"annotated\""));
+
+        let local = build_retrieval_system_prompt("external_ret", "goal", "local_browser", "");
+        assert!(local.contains("no web_fetch/web_search in this mode"));
+        assert!(local.contains("browser_read"));
+
+        let off = build_retrieval_system_prompt("external_ret", "goal", "off", "");
+        assert!(off.contains("no web retrieval tools"));
     }
 }

@@ -70,7 +70,15 @@ pub(crate) enum SystemPromptKind {
     Main,
     /// A retrieval task contract (ADR-0010 §3.2) — citation rules + the
     /// `[DOC]`/`[SOURCE]` delivery contract, NOT `BASE_SYSTEM_PROMPT`.
-    Retrieval { role: SubagentRole, goal: String },
+    Retrieval {
+        role: SubagentRole,
+        goal: String,
+        /// GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): the explicit retrieval
+        /// mode rides the prompt so the subagent's weighting/verification
+        /// instructions match the active channel (framework_fallback = layer
+        /// 2 web_fetch verification; local_browser = direct page reads).
+        mode: crate::controller::RetrievalMode,
+    },
 }
 
 /// Retrieval-lane tool filtering (ADR-0010 §3.2 — deny-only write domain:
@@ -201,6 +209,7 @@ impl LoopProfile {
     pub(crate) fn retrieval(
         role: SubagentRole,
         goal: &str,
+        mode: crate::controller::RetrievalMode,
         max_tool_rounds: u32,
         initial_tool_rounds: u32,
         activation_id: &str,
@@ -216,6 +225,7 @@ impl LoopProfile {
             system_kind: SystemPromptKind::Retrieval {
                 role,
                 goal: goal.to_string(),
+                mode,
             },
             tool_filter: ToolFilter::Retrieval,
             dc_enabled: false,
@@ -493,13 +503,14 @@ pub(crate) async fn run_agent_loop(
                     .prompt_builder
                     .build_system_prompt(Some(&system_blocks))
             }
-            SystemPromptKind::Retrieval { role, goal } => {
+            SystemPromptKind::Retrieval { role, goal, mode } => {
                 // ADR-0010 §3.2 task contract — the subagent's own system
                 // (citation rules + [DOC]/[SOURCE] delivery contract), with
                 // the shared budget declaration.
                 crate::prompt::build_retrieval_system_prompt(
                     role.section_name(),
                     goal,
+                    mode.as_str(),
                     &budget_block,
                 )
             }

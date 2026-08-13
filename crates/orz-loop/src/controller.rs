@@ -32,6 +32,7 @@ use orz_assurance::gates::tool_availability::{
 use orz_assurance::orientation::stagnation::{
     StagnationDecision, StagnationInput, evaluate_runtime_stagnation_guard,
 };
+use orz_assurance::source_weighting::SourceWeightConfig;
 use orz_assurance::{
     EventTrack, EventType, JournalRecorder, JournalRecorderError, Redaction, RunEvent,
     canonical_json, seal_event, sha256_hex,
@@ -255,6 +256,11 @@ pub struct AgentLoopController {
     /// structured result's ledger (ADR-0010 §3.7.4). Cleared at each
     /// dispatch start; consumed at result formation.
     pub(crate) evidence: Mutex<Vec<EvidenceRecord>>,
+    /// GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 —
+    /// mechanical source tier judge config (embedded seed lists by default;
+    /// `ORZ_SOURCE_WEIGHTING_CONFIG` overrides at runtime). Quality layer
+    /// only — never an authorization gate.
+    pub(crate) source_weighting: orz_assurance::source_weighting::SourceWeightConfig,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): activations restored from the
     /// sidecar at build time — journaled as `retrieval_activation_restored`
     /// once at the next run's startup (per activation per prompt).
@@ -562,6 +568,7 @@ fn visibility_rank(visibility: &str) -> u8 {
 #[allow(clippy::too_many_arguments)] // the full result-formation contract
 pub(crate) fn build_structured_result(
     evidence: &[EvidenceRecord],
+    weight_config: &SourceWeightConfig,
     docs: &[String],
     sources: &[String],
     fallback_source_type: &str,
@@ -611,6 +618,21 @@ pub(crate) fn build_structured_result(
         if !limitation.is_empty() {
             entry["limitation"] = serde_json::Value::String(limitation);
         }
+        // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 —
+        // mechanical tier/weight for page evidence: web_fetch/browser_read
+        // pages and URL-shaped PDF documents. Project docs, local files and
+        // web_search summary entries carry no tier — the search's citation
+        // URL list is not plumbed to the loop today (registered boundary;
+        // the fetched/declared pages carry the weight instead).
+        let web_evidence = ev.source_type == "web_page"
+            || (ev.source_type == "pdf_document"
+                && (ev.identity.starts_with("http://") || ev.identity.starts_with("https://")));
+        if web_evidence {
+            let weighted = weight_config.classify(&ev.identity);
+            entry["tier"] = weighted.tier.as_str().into();
+            entry["mechanical_weight"] = serde_json::json!(weighted.weight);
+            entry["weight_reason"] = weighted.reason.into();
+        }
         source_ledger.push(entry);
     }
     // [DOC]/[SOURCE] declaration lines — metadata-grade (never full-text
@@ -631,7 +653,7 @@ pub(crate) fn build_structured_result(
         }));
     }
     for src in sources {
-        source_ledger.push(serde_json::json!({
+        let mut entry = serde_json::json!({
             "source_id": format!("SRC-{:03}", source_ledger.len() + 1),
             "source_title": src,
             "source_url_or_ref": src,
@@ -643,7 +665,17 @@ pub(crate) fn build_structured_result(
             "relevance": "direct",
             "used_in_sections": [],
             "highest_allowed_claim": "synthesized",
-        }));
+        });
+        // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): external [SOURCE]
+        // declaration lines are metadata-grade web sources — the same
+        // mechanical judge applies (internal [DOC] lines stay unweighted).
+        if fallback_source_type == "web_page" {
+            let weighted = weight_config.classify(src);
+            entry["tier"] = weighted.tier.as_str().into();
+            entry["mechanical_weight"] = serde_json::json!(weighted.weight);
+            entry["weight_reason"] = weighted.reason.into();
+        }
+        source_ledger.push(entry);
     }
 
     // 2. Model organized block — validated against the ledger.
@@ -653,6 +685,7 @@ pub(crate) fn build_structured_result(
     let mut sections: Vec<serde_json::Value> = Vec::new();
     let mut claims: Vec<serde_json::Value> = Vec::new();
     let mut used_in_sections: HashMap<String, Vec<String>> = HashMap::new();
+    let mut block_accepted = false;
     if let Some(block) = &model_block {
         let ledger_ids: std::collections::HashSet<String> = source_ledger
             .iter()
@@ -738,6 +771,7 @@ pub(crate) fn build_structured_result(
         if ok {
             sections = section_list;
             claims = claim_list;
+            block_accepted = true;
         } else {
             degraded = true;
             validation_note = Some("structured_result_validation_failed".to_string());
@@ -756,6 +790,133 @@ pub(crate) fn build_structured_result(
         }
     }
 
+    // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 layer 3 —
+    // the sub-agent's model weighting annotation. v0 semantics: annotate +
+    // rank, never intercept. Valid annotations merge into the ledger
+    // (model_weight / model_weight_reason / annotation_status) AND are
+    // echoed into organized_response.source_annotations; invalid entries
+    // are DROPPED and recorded in the filtering_log — explicit, never a
+    // silent ignore. The merge rules mirror the Python verifier
+    // (assurance/run_event_journal_validation.py `_verify_v02_source_weighting`):
+    // annotated MUST carry 0.7, adopted MUST carry >= 1.0, a mechanically
+    // low_quality source MUST NOT be adopted, and one source_id may be
+    // annotated at most once.
+    let mut filtering_log: Vec<serde_json::Value> = Vec::new();
+    let mut merged_annotations: Vec<serde_json::Value> = Vec::new();
+    if block_accepted && let Some(block) = &model_block {
+        if let Some(annotations) = block.get("source_annotations").and_then(|v| v.as_array()) {
+            let ledger_ids: std::collections::HashSet<String> = source_ledger
+                .iter()
+                .filter_map(|e| e["source_id"].as_str().map(str::to_string))
+                .collect();
+            let mut seen_annotation_ids: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for annotation in annotations {
+                let sid = annotation
+                    .get("source_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let weight = annotation.get("weight").and_then(|v| v.as_f64());
+                let reason = annotation
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let status = annotation
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let valid_weight = weight.is_some_and(|w| {
+                    (w - 0.7).abs() < 1e-9 || (w - 1.0).abs() < 1e-9 || (w - 1.1).abs() < 1e-9
+                });
+                let valid_status = matches!(status, "adopted" | "annotated");
+                let status_weight_consistent = weight.is_some_and(|w| match status {
+                    "annotated" => (w - 0.7).abs() < 1e-9,
+                    "adopted" => w >= 1.0 - 1e-9,
+                    _ => false,
+                });
+                let low_quality = source_ledger.iter().any(|e| {
+                    e["source_id"].as_str() == Some(sid)
+                        && e.get("tier").and_then(|t| t.as_str()) == Some("low_quality")
+                });
+                let low_quality_not_adopted = !(low_quality && status == "adopted");
+                // Duplicate detection counts only annotations that will
+                // merge: an invalid first annotation must not poison the
+                // source_id for a later valid one.
+                let duplicate = seen_annotation_ids.contains(sid);
+                let known_source = ledger_ids.contains(sid);
+                if known_source
+                    && valid_weight
+                    && valid_status
+                    && status_weight_consistent
+                    && low_quality_not_adopted
+                    && !duplicate
+                    && !reason.is_empty()
+                {
+                    if let Some(entry) = source_ledger
+                        .iter_mut()
+                        .find(|e| e["source_id"].as_str() == Some(sid))
+                    {
+                        seen_annotation_ids.insert(sid.to_string());
+                        entry["model_weight"] = serde_json::json!(weight.unwrap());
+                        entry["model_weight_reason"] =
+                            serde_json::Value::String(reason.to_string());
+                        entry["annotation_status"] = serde_json::Value::String(status.to_string());
+                        merged_annotations.push(annotation.clone());
+                    }
+                } else {
+                    filtering_log.push(serde_json::json!({
+                        "source_id": if sid.is_empty() {
+                            "SRC-UNKNOWN".to_string()
+                        } else {
+                            sid.to_string()
+                        },
+                        "reason": "annotation_invalid",
+                        "action": "excluded",
+                        "filtered_at": chrono::Utc::now().to_rfc3339(),
+                    }));
+                }
+            }
+        }
+
+        // Verifier-aligned rule: a low_quality source that is USED in the
+        // organized response MUST carry an "annotated" annotation. If the
+        // model did not provide one (or it was dropped above), the whole
+        // block is invalid and degrades explicitly — the same treatment as
+        // any other structured-result validation failure — so the committed
+        // journal always satisfies the Python verifier.
+        let used_source_ids: std::collections::HashSet<String> = sections
+            .iter()
+            .chain(claims.iter())
+            .flat_map(|item| {
+                item.get("source_ids")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+            })
+            .collect();
+        let missing_low_quality_annotation = source_ledger.iter().any(|e| {
+            e.get("tier").and_then(|t| t.as_str()) == Some("low_quality")
+                && used_source_ids.contains(e["source_id"].as_str().unwrap_or_default())
+                && e.get("annotation_status").and_then(|v| v.as_str()) != Some("annotated")
+        });
+        if missing_low_quality_annotation {
+            degraded = true;
+            validation_note = Some("low_quality_source_without_annotation".to_string());
+            sections.clear();
+            claims.clear();
+            merged_annotations.clear();
+            for entry in &mut source_ledger {
+                entry["used_in_sections"] = serde_json::json!([]);
+                if let Some(obj) = entry.as_object_mut() {
+                    obj.remove("model_weight");
+                    obj.remove("model_weight_reason");
+                    obj.remove("annotation_status");
+                }
+            }
+        }
+    }
+
     // 3. query_summary — one mechanical entry for the dispatch.
     let query_summary = vec![serde_json::json!({
         "query_id": format!("QRY-{}", &sha256_hex(call_id.as_bytes())[..8]),
@@ -766,9 +927,9 @@ pub(crate) fn build_structured_result(
         "tool_used": evidence.first().map(|e| e.tool.as_str()).unwrap_or("retrieval_dispatch"),
     })];
 
-    // 4. filtering_log — this slice has no mechanical filter events (the
-    //    real tools' policy refusals land with the web client wiring, S5).
-    let filtering_log: Vec<serde_json::Value> = Vec::new();
+    // 4. filtering_log — mechanical filter events; today only invalid
+    //    source-annotation drops land here (the real tools' policy
+    //    refusals land with the web client wiring).
 
     // 5. raw_source_refs — mechanical projection of the ledger.
     let raw_source_refs: Vec<serde_json::Value> = source_ledger
@@ -805,7 +966,10 @@ pub(crate) fn build_structured_result(
         "unavailable": counts[3].1,
     });
 
-    let organized_response = serde_json::json!({ "sections": sections, "claims": claims });
+    let mut organized_response = serde_json::json!({ "sections": sections, "claims": claims });
+    if !merged_annotations.is_empty() {
+        organized_response["source_annotations"] = serde_json::Value::Array(merged_annotations);
+    }
     let five_fields = serde_json::json!({
         "query_summary": query_summary,
         "source_ledger": source_ledger,
@@ -1514,6 +1678,8 @@ impl AgentLoopController {
             bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
             session_id: None,
             evidence: Mutex::new(Vec::new()),
+            source_weighting:
+                orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
             acaf_fail_closed: false,
@@ -2542,6 +2708,17 @@ impl AgentLoopController {
         self
     }
 
+    /// GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): override the mechanical
+    /// source tier judge config (ADR-0010 §3.7 条 12). Defaults to the
+    /// embedded seed lists (runtime override: `ORZ_SOURCE_WEIGHTING_CONFIG`).
+    pub fn with_source_weighting_config(
+        mut self,
+        config: orz_assurance::source_weighting::SourceWeightConfig,
+    ) -> Self {
+        self.source_weighting = config;
+        self
+    }
+
     /// GAP-RETRIEVAL-TOOLS: whether the bootstrap mode transition was
     /// journaled (the pending flag cleared) — the acp_server uses it to
     /// clear the sidecar flag after a successful run.
@@ -2852,6 +3029,8 @@ impl AgentLoopController {
             bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
             session_id: None,
             evidence: Mutex::new(Vec::new()),
+            source_weighting:
+                orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
             acaf_fail_closed: false,
@@ -4109,6 +4288,7 @@ impl AgentLoopController {
         let profile = LoopProfile::retrieval(
             role,
             &goal,
+            self.retrieval_mode,
             self.max_tool_rounds,
             act.tool_rounds_used,
             &act.activation_id,
@@ -4209,6 +4389,7 @@ impl AgentLoopController {
                 let evidence = self.evidence.lock().unwrap().clone();
                 let committed = build_structured_result(
                     &evidence,
+                    &self.source_weighting,
                     &docs,
                     &sources,
                     match role {
@@ -6846,6 +7027,310 @@ mod tests {
                 .iter()
                 .any(|r| r == "structured_result_validation_failed")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 ──
+
+    /// A fetched web page's evidence carries the MECHANICAL tier/weight in
+    /// the committed ledger (authoritative 1.1 / default 1.0 / low_quality
+    /// 0.7); external `[SOURCE]` declarations go through the same judge.
+    #[tokio::test]
+    async fn web_page_evidence_carries_mechanical_tier_and_weight() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "page content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            // Main round: dispatch the external retrieval lane.
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            // Subagent round: fetch a whitelist page and a low-quality page.
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "web_fetch".to_string(),
+                    arguments: serde_json::json!({"url": "https://www.gov.cn/policy/1"}),
+                    call_id: "call-f1".to_string(),
+                },
+                ToolCall {
+                    name: "web_fetch".to_string(),
+                    arguments: serde_json::json!({"url": "https://blog.csdn.net/foo"}),
+                    call_id: "call-f2".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("[SOURCE] https://zhihu.com/p/1\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查政策", "RUN-WT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let gov = ledger
+            .iter()
+            .find(|e| e["source_url_or_ref"] == "https://www.gov.cn/policy/1")
+            .unwrap();
+        assert_eq!(gov["source_type"], "web_page");
+        assert_eq!(gov["tier"], "authoritative");
+        assert_eq!(gov["mechanical_weight"], 1.1);
+        assert_eq!(gov["weight_reason"], "whitelist_suffix:gov.cn");
+        let csdn = ledger
+            .iter()
+            .find(|e| e["source_url_or_ref"] == "https://blog.csdn.net/foo")
+            .unwrap();
+        assert_eq!(csdn["tier"], "low_quality");
+        assert_eq!(csdn["mechanical_weight"], 0.7);
+        assert_eq!(csdn["weight_reason"], "low_quality_platform:csdn.net");
+        let zhihu = ledger
+            .iter()
+            .find(|e| e["source_url_or_ref"] == "https://zhihu.com/p/1")
+            .unwrap();
+        assert_eq!(zhihu["source_type"], "web_page");
+        assert_eq!(zhihu["tier"], "low_quality");
+        assert_eq!(zhihu["mechanical_weight"], 0.7);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Valid model `source_annotations` merge into the ledger
+    /// (model_weight/reason/annotation_status); invalid entries (unknown
+    /// source_id) are dropped EXPLICITLY into the filtering_log with
+    /// reason `annotation_invalid` — never a silent ignore, never a block.
+    #[tokio::test]
+    async fn source_annotations_merge_and_invalid_entries_drop_to_filter_log() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "policy content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://www.gov.cn/policy/1"}),
+                call_id: "call-f1".to_string(),
+            }]),
+            ScriptedResponse::text(concat!(
+                "检索完成\n",
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"官方","content":"政策内容","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[],"source_annotations":[{"source_id":"SRC-001","weight":1.1,"reason":"官方站点","status":"adopted"},{"source_id":"SRC-999","weight":0.7,"reason":"不存在","status":"annotated"}]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查政策", "RUN-AN", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        assert_eq!(commit.payload["visibility_degraded"], false);
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let gov = ledger.iter().find(|e| e["source_id"] == "SRC-001").unwrap();
+        assert_eq!(gov["tier"], "authoritative");
+        assert_eq!(gov["model_weight"], 1.1);
+        assert_eq!(gov["model_weight_reason"], "官方站点");
+        assert_eq!(gov["annotation_status"], "adopted");
+        // Merged annotations are echoed into organized_response so the
+        // committed journal satisfies the Python verifier's
+        // annotation <-> ledger matching rule.
+        let annotations = commit.payload["organized_response"]["source_annotations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0]["source_id"], "SRC-001");
+        assert_eq!(annotations[0]["weight"], 1.1);
+        assert_eq!(annotations[0]["reason"], "官方站点");
+        assert_eq!(annotations[0]["status"], "adopted");
+        let filtering = commit.payload["filtering_log"].as_array().unwrap();
+        assert_eq!(filtering.len(), 1);
+        assert_eq!(filtering[0]["source_id"], "SRC-999");
+        assert_eq!(filtering[0]["reason"], "annotation_invalid");
+        assert_eq!(filtering[0]["action"], "excluded");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The producer enforces the same status/weight/tier invariants as the
+    /// Python verifier (review fix 2026-08-13): annotated MUST be 0.7,
+    /// adopted MUST be >= 1.0, a mechanically low_quality source MUST NOT
+    /// be adopted, and duplicate annotations for one source are dropped —
+    /// invalid entries land in filtering_log, the first valid entry still
+    /// merges and is echoed into organized_response.source_annotations.
+    #[tokio::test]
+    async fn source_annotations_consistent_status_and_duplicates_enforced() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "platform blog content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://blog.csdn.net/foo"}),
+                call_id: "call-f1".to_string(),
+            }]),
+            ScriptedResponse::text(concat!(
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"平台博文","content":"内容","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[],"source_annotations":[{"source_id":"SRC-001","weight":1.0,"reason":"adopted on low quality","status":"adopted"},{"source_id":"SRC-001","weight":1.0,"reason":"annotated wrong weight","status":"annotated"},{"source_id":"SRC-001","weight":0.7,"reason":"platform blog","status":"annotated"},{"source_id":"SRC-001","weight":0.7,"reason":"duplicate","status":"annotated"}]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查平台内容",
+                "RUN-ANN",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let entry = ledger.iter().find(|e| e["source_id"] == "SRC-001").unwrap();
+        assert_eq!(entry["tier"], "low_quality");
+        assert_eq!(entry["mechanical_weight"], 0.7);
+        assert_eq!(entry["model_weight"], 0.7);
+        assert_eq!(entry["model_weight_reason"], "platform blog");
+        assert_eq!(entry["annotation_status"], "annotated");
+        let annotations = commit.payload["organized_response"]["source_annotations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0]["source_id"], "SRC-001");
+        assert_eq!(annotations[0]["status"], "annotated");
+        let filtering = commit.payload["filtering_log"].as_array().unwrap();
+        assert_eq!(filtering.len(), 3);
+        for item in filtering {
+            assert_eq!(item["source_id"], "SRC-001");
+            assert_eq!(item["reason"], "annotation_invalid");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A low_quality source used in the organized response WITHOUT an
+    /// "annotated" annotation degrades the whole block explicitly
+    /// (visibility_degraded=true, empty sections, no merged model fields) —
+    /// the committed journal stays valid for the Python verifier.
+    #[tokio::test]
+    async fn used_low_quality_without_annotation_degrades() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "platform blog content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://blog.csdn.net/foo"}),
+                call_id: "call-f1".to_string(),
+            }]),
+            ScriptedResponse::text(concat!(
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"平台博文","content":"内容","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查平台内容",
+                "RUN-LQA",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        assert_eq!(commit.payload["visibility_degraded"], true);
+        let sections = commit.payload["organized_response"]["sections"]
+            .as_array()
+            .unwrap();
+        assert!(sections.is_empty());
+        assert!(
+            commit.payload["organized_response"]
+                .get("source_annotations")
+                .is_none()
+        );
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let entry = ledger.iter().find(|e| e["source_id"] == "SRC-001").unwrap();
+        assert_eq!(entry["tier"], "low_quality");
+        assert!(entry.get("model_weight").is_none());
+        assert!(entry.get("annotation_status").is_none());
+        assert_eq!(entry["used_in_sections"].as_array().unwrap().len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
