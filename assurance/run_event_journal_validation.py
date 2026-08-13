@@ -792,6 +792,10 @@ def _verify_v02_search_candidate_pool(events: list[dict[str, Any]]) -> list[str]
     - candidate_urls is the POST-PREFILTER retained pool and always travels
       with candidate_pool (per-candidate metadata: canonical_url/tier/
       mechanical_weight/weight_reason/relevance/form_reasons);
+    - an EMPTY retained pool is legitimate ONLY as the result of mechanical
+      purification — the source must carry at least one prefilter_log
+      removal; empty with no removal is a contract violation (the producer
+      never writes the fields for an empty raw pool);
     - candidate_pool mirrors candidate_urls in order and URL identity
       (pool[i]["url"] == candidate_urls[i]);
     - mechanical_weight must match its tier (authoritative 1.1 /
@@ -826,16 +830,26 @@ def _verify_v02_search_candidate_pool(events: list[dict[str, Any]]) -> list[str]
                     f"source_type is {entry.get('source_type')!r} (only "
                     "web_search_result may carry a candidate pool)"
                 )
-            if (
-                not isinstance(candidates, list)
-                or not candidates
-                or any(not isinstance(url, str) or not url for url in candidates)
+            if not isinstance(candidates, list) or any(
+                not isinstance(url, str) or not url for url in candidates
             ):
                 errors.append(
                     f"event {index}: source {sid} candidate_urls must be a "
-                    "non-empty list of non-empty strings"
+                    "list of non-empty strings"
                 )
                 continue
+            if not candidates:
+                removals_for_source = [
+                    item
+                    for item in p.get("prefilter_log", [])
+                    if item.get("source_id") == sid
+                ]
+                if not removals_for_source:
+                    errors.append(
+                        f"event {index}: source {sid} candidate_urls is empty "
+                        "with no prefilter_log removal — an empty retained "
+                        "pool must be the result of mechanical purification"
+                    )
             if len(set(candidates)) != len(candidates):
                 errors.append(
                     f"event {index}: source {sid} candidate_urls contains duplicates"

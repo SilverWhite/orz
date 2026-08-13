@@ -104,19 +104,20 @@
 
 ## 4. 验证
 
-- `cargo test -p orz-assurance`：**149 passed / 0 failed**（+10 预筛模块
+- `cargo test -p orz-assurance`：**151 passed / 0 failed**（+12 预筛模块
   单测：canonical 化、去重、失败形态、相关性、排序、配置覆盖/环境覆盖、
-  内嵌种子一致性）
-- `cargo test -p orz-loop`：**246 passed / 0 failed / 3 ignored**（+1
-  `mechanical_prefilter_shapes_candidate_pool_and_log`；既有 B-1 测试扩展
-  断言 candidate_pool/prefilter_log 镜像）
+  host 边界匹配、scheme-less 带端口、内嵌种子一致性）
+- `cargo test -p orz-loop`：**247 passed / 0 failed / 3 ignored**（+2
+  `mechanical_prefilter_shapes_candidate_pool_and_log` +
+  `mechanical_prefilter_can_purify_entire_pool`；既有 B-1 测试扩展断言
+  candidate_pool/prefilter_log 镜像）
 - `cargo test -p orz-host`：**200 passed / 0 failed / 4 ignored**（未改动）
 - `cargo test -p orz-tui`：**178 passed / 0 failed**；`cargo test -p orz-bin`
   全绿（含 orz-signer 12）
 - Python `runtime/tests/test_run_event_journal_validation.py`：
-  **137 passed / 0 failed**（+8 预筛契约测试）
-- Python `assurance/tests` + `runtime/tests` 全量：**1838 passed /
-  14 skipped**（步骤 2 基线 1828 + 10）
+  **139 passed / 0 failed**（+10 预筛契约测试：8 项初始 + 2 项空池修复）
+- Python `assurance/tests` + `runtime/tests` 全量：**1840 passed /
+  14 skipped**（journal 校验文件 129 → 139，+10 项契约测试）
 - `scripts/generate_run_event_fixtures.py`：重生成无 diff（可选字段不影响
   既有 fixture 形状）
 - `scripts/check_repository.py`：**valid / error_count 0**（schemas 241）
@@ -133,6 +134,31 @@
 - **P3（url crate 默认端口归一）**：`Url::port()` 对显式默认端口返回 None
   （解析期归一），`default_port_stripped` 原因码不可观察；删除该原因码并
   登记（canonical 输出不受影响）。
+
+## 5b. 审查修复（2026-08-14 全面复核，提交前）
+
+- **P1（verifier 空池误拒）**：预筛全部移除后保留池合法为空（Schema 允许
+  空数组），但 `_verify_v02_search_candidate_pool` 仍持 B-1 时代“非空列表”
+  规则，导致全净化 journal 校验失败。修复：空保留池仅当该 source 在
+  `prefilter_log` 中至少有一条移除记录时合法；空池无移除记录按契约违例
+  拒绝。补 Python 正例（全净化+移除日志）、负例（空池无日志）与 Rust
+  控制器测试 `mechanical_prefilter_can_purify_entire_pool`。
+- **P2（redirect_query_keys 默认收窄）**：初版含 `url`/`next`/`goto`/
+  `target`/`continue` 等通用键，会误伤分页/参数页（`?next=1` 等），与
+  “只移除明确差的”原则有张力。默认种子收窄为 `redirect`/`redirect_url`/
+  `redirect_uri`/`return_url`/`returnurl`/`destination`；自定义配置仍可
+  扩展。
+- **P3（redirect pattern host 边界）**：`t.co/`、`bit.ly/` 等纯子串匹配会
+  命中 `not-t.co/` 类 host。改为解析 URL 后 host 精确/子域匹配 +
+  path/query 前缀匹配（`matches_redirect_pattern`），补 `not-t.co` 负例与
+  `bing.com/ck/a` 正例。
+- **P3（scheme-less 带端口引用）**：`example.com:8080/path` 被 url crate
+  解析为“host 形 scheme”（含点）而误判 bad_url。新增 `parse_http_url`
+  回退：直接解析得到含点非 http(s) scheme 时，整体按 `https://` 重试；
+  补 `example.com:8080/path` 正例。
+- **P3（文档 lint 与计数口径）**：控制器测试 doc 注释中 `+ relevance` 触发
+  rustdoc 列表 lint，改写避免行首列表标记；审计验证数字按文件口径表述
+  （journal 校验 129 → 139），不再推算全量增量。
 
 ## 6. 仓库边界与提交顺序
 

@@ -31,16 +31,11 @@
     "signin.php"
   ],
   "redirect_query_keys": [
-    "url",
     "redirect",
     "redirect_url",
     "redirect_uri",
-    "next",
-    "goto",
-    "target",
     "return_url",
     "returnurl",
-    "continue",
     "destination"
   ],
   "redirect_url_patterns": [

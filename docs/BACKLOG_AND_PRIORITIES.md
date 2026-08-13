@@ -178,6 +178,11 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 3 审查修复——verifier 允许“全净化空池”（空保留池
+  须有 prefilter_log 移除记录）、`redirect_query_keys` 默认收窄（移除
+  url/next/goto/target/continue）、redirect pattern 改 host 边界匹配、
+  scheme-less 带端口引用解析回退、clippy 文档 lint 与审计计数口径修正；
+  orz-assurance 151 / orz-loop 247 / Python 全量 1840 通过，门禁 valid。
 - 2026-08-14：P0-B 步骤 3 闭合登记——机械预筛模块实施完成（canonical/host
   级去重、bad_url/login_wall/redirect_chain 移除、tier/weight + 词法相关性
   排序；`candidate_urls` 升级为预筛后保留池，`candidate_pool` +
