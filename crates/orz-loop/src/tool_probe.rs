@@ -195,8 +195,9 @@ pub struct ProbeContext {
     /// Whether the run carries a goal/todo context (`todo_write` /
     /// `update_goal` chain).
     pub goal_context_present: bool,
-    /// Whether a retrieval activation is live and awaiting/able to receive
-    /// a parent disposition (`retrieval_disposition` chain).
+    /// Whether a retrieval activation carries an undisposed pending
+    /// assessment — the only state in which `retrieval_disposition` can be
+    /// submitted (`retrieval_disposition` chain; 审查复核 2026-08-13).
     pub pending_retrieval_activation: bool,
     /// Host terminal backend presence (`run_terminal_cmd` chain).
     pub terminal_available: bool,

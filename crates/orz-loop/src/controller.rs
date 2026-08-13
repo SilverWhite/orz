@@ -1076,12 +1076,18 @@ impl ActivationRegistry {
         self.states.get(&role)
     }
 
-    /// FUS-TOOL-PROBE P0-A-2 (design §2.0): whether any live activation
-    /// exists (`retrieval_disposition` probe chain). Closed states are
-    /// removed/replaced, so a non-empty registry means a disposition can
-    /// legally be submitted.
+    /// FUS-TOOL-PROBE P0-A-2 (design §2.0; 审查复核 2026-08-13):
+    /// `retrieval_disposition` probe chain — complete only while an
+    /// activation carries an UNDISPOSED pending assessment. Active
+    /// mid-task, Closed and restored-without-assessment activations have
+    /// nothing to dispose, so they fail closed; after an accepted continue
+    /// the pending stays as the consumed (decided) record, also incomplete.
+    /// The call-time gate remains the final backstop for any disposition
+    /// the probe still over-approximates (design invariant 2).
     pub(crate) fn has_live(&self) -> bool {
-        !self.states.is_empty()
+        self.states
+            .values()
+            .any(|a| a.pending.as_ref().is_some_and(|p| p.decided.is_none()))
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): serialize the live registry to the
@@ -1877,9 +1883,9 @@ impl AgentLoopController {
         self.goal_context.lock().unwrap().digest.is_some()
     }
 
-    /// FUS-TOOL-PROBE P0-A-2: whether a retrieval activation is live
-    /// (`retrieval_disposition` probe chain — an activation that can
-    /// receive a structured parent disposition).
+    /// FUS-TOOL-PROBE P0-A-2 (审查复核 2026-08-13): whether an activation
+    /// carries an undisposed pending assessment — the only state in which
+    /// `retrieval_disposition` can be submitted.
     pub(crate) fn has_live_activation(&self) -> bool {
         self.activations.lock().unwrap().has_live()
     }
@@ -7627,6 +7633,74 @@ mod tests {
         assert!(!seeded.states.contains_key(&SubagentRole::ExternalRetrieval));
     }
 
+    #[test]
+    fn has_live_requires_undisposed_pending_assessment() {
+        // P0-A-2 审查复核 (2026-08-13): `retrieval_disposition` 探针只
+        // 在激活携带未决 pending assessment 时完整 — Active 无 pending、
+        // accepted continue 后 pending 已决、Closed 均无待处置内容。
+        let mut registry = ActivationRegistry::default();
+        let state =
+            |status: ActivationStatus, pending: Option<PendingDisposition>| ActivationState {
+                activation_id: "retrieval-internal_retrieval-sess-abc-00".to_string(),
+                parent_session_id: "sess-p".to_string(),
+                subagent_session_id: "SUB-internal_retrieval-sess-abc".to_string(),
+                contract_id: "retrieval-contract-internal_retrieval".to_string(),
+                contract_revision: 0,
+                status,
+                conversation: Vec::new(),
+                pending,
+                next_goal: None,
+                result_digest: None,
+                submitted: Vec::new(),
+                tool_rounds_used: 0,
+                result_archive_ref: None,
+            };
+        let undisposed = Some(PendingDisposition {
+            assessment_id: "ASSESS-1".to_string(),
+            expected_contract_revision: 0,
+            decided: None,
+        });
+        let decided = Some(PendingDisposition {
+            assessment_id: "ASSESS-1".to_string(),
+            expected_contract_revision: 0,
+            decided: Some("continue".to_string()),
+        });
+
+        assert!(!registry.has_live(), "empty registry");
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::Active, None),
+        );
+        assert!(
+            !registry.has_live(),
+            "Active mid-task activation has nothing to dispose"
+        );
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::AwaitingDisposition, undisposed),
+        );
+        assert!(
+            registry.has_live(),
+            "AwaitingDisposition with an undisposed assessment is complete"
+        );
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::Active, decided),
+        );
+        assert!(
+            !registry.has_live(),
+            "accepted continue leaves no undisposed assessment"
+        );
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::Closed, None),
+        );
+        assert!(
+            !registry.has_live(),
+            "closed activation has nothing to dispose"
+        );
+    }
+
     /// A seeded AwaitingDisposition activation is journaled at the run
     /// startup (`retrieval_activation_restored`), and the parent's
     /// disposition can then CLOSE it across runs — the verifier resolves
@@ -13257,7 +13331,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P0-A steps 3-4（RT-001 语义更新）：`run_tests` 的声明由面 B 探针
+    /// P0-A steps 3-4（RT-001 语义更新）：`run_tests` 的声明由工作工具探针
     /// 决定（runner 存在性，不受 policy 影响）；ReadOnly 下探针仍完整故
     /// 同样被声明，只读保证由执行层 permission gate 承担（ReadOnly
     /// policy 拒非读）。
