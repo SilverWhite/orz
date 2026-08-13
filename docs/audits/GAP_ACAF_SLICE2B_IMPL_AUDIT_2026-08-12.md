@@ -152,6 +152,8 @@ network 分支无关 store 门禁删除（P1-1）、network/command live 重派�
 
 ## 7. 下一步
 
+> 后续进展（2026-08-13）：fail-closed 机制已实施，本节的 fail-closed 翻转与核查清单由 `GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md` 承接（优先级 P2）；统一待办路由见 [`BACKLOG_AND_PRIORITIES.md`](../BACKLOG_AND_PRIORITIES.md)。以下保留为可选工程项与 Slice 3/4 计划。
+
 - **Slice 2 完整闭合只剩 fail-closed 切换**：用户裁决（探针矩阵 + 影子台账
   零误阻断 + §6 核查清单 ①-⑪ + D10 术语映射确认）；
 - 可选：检索车道 web_fetch activation 绑定接线；conformance capture 新增

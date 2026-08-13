@@ -124,7 +124,9 @@
 
 ## 5. 下一步
 
-- **用户裁决生产启用 fail-closed**（观察影子台账零误阻断 + 探针矩阵）；
+> 优先级：P2（生产化决策门）。待办统一路由：[`BACKLOG_AND_PRIORITIES.md`](../BACKLOG_AND_PRIORITIES.md)（P2/ACAF 生产化）；本节保留审计时点的下一步计划。
+
+- **用户裁决生产启用 fail-closed**（观察影子台账零误阻断 + 探针矩阵 + 核查清单 ①-⑪；⑦⑨⑩⑪ 仍登记：web_search 票化形态、host 侧执行参数绑定面、执行面与票据绑定面错位、network 重定向不重新票据）；
 - Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 +
   policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）；
 - Slice 4：Windows Sandbox backend（D-11）。

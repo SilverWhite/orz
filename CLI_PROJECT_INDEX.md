@@ -1,6 +1,6 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.0；状态：`current`；最近整理：2026-08-13（OPS-PROTOCOL 登记；编码门控与来源加权实现登记）。
+> 索引版本：v2.0；状态：`current`；最近整理：2026-08-13（OPS-PROTOCOL 登记；编码门控与来源加权实现登记；工具可用性探针设计登记；统一待办清单登记）。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >
@@ -63,6 +63,7 @@
 - **AUTH-FREEZE-AUDIT** (`reference`; 2026-08-09)：记录冻结范围、首批 17 份历史材料及冻结时实现差距。关键词：freeze audit、archive audit、FUS-IMPL。入口：[`ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 - **AUTH-ARCHIVE** (`historical`; 2026-08-09)：集中保存退出当前基线的架构、设计输入、实施记录和索引快照。关键词：存档、旧设计、provenance、historical evidence。入口：[`存档/README.md`](存档/README.md)。
 - **AUTH-INDEX-SNAPSHOT** (`historical`; 2026-08-09)：保留索引 v2.0 整理前的完整主题、状态和实施时间线。关键词：旧索引、full index、progress history。入口：[`存档/index/README.md`](存档/index/README.md)。
+- **AUTH-BACKLOG** (`reference`; 2026-08-13)：全部未闭合项的统一待办与优先级路由（P0-P3）；设计/审计文档的待办小节只保留指针或历史，明细统一在本文件维护。关键词：backlog、统一待办、优先级、开放项、todo。入口：[`BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## 2. 融合架构主题路由
 
@@ -82,6 +83,8 @@
 - **FUS-COMPONENT-REGISTER** (`partial`; 2026-08-09)：register 文件框架已建（65 组件全 `audit_required`，不得从 crate 名/编译推断采用档位），逐 crate 审计未开始。关键词：component matrix、crate ownership、mature adoption、audit_required。入口：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`fusion-component-register-v0.1.yaml`](upstream/fusion-component-register-v0.1.yaml) / [`AUTH-V1.1-REVIEW`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)。
 - **FUS-CONTROL-FABRIC** (`current-design`; 2026-08-09)：跨信任边界控制事件与外部效果动作必须持一次性 HMAC 票据（ACAF）；签发器独立进程窄 IPC；三运行模式（正常审批/无运行自动/临时沙盒运行），不做完全授权。关键词：ACAF、ControlTicket、SandboxLease、PromotionPermit、签发器、三模式。入口：[`ADR-0011`](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
 - **FUS-SOURCE-WEIGHTING** (`current-design`; 2026-08-12)：检索来源质量——web_search（framework_fallback）三层结构：机械来源梯队（白名单=政府/机关单位 1.1、命中直接采纳；白名单外默认 1.0；劣质源 0.7，初始含 CSDN/知乎/百家号/B 站个人专栏/微博/独立新闻媒体/自媒体新闻与财经号/小站）+ 选择性原文核验（仅 web_search，web_fetch 抓候选原文）+ 子代理模型加权标注（v0 标注排序不拦截）；local_browser 直接分级加权（第一层+第三层，无第二层）；二存一禁止混用；共享判定器进 evidence ledger/visibility。关键词：来源加权、白名单、劣质源、原文核验、二存一、framework_fallback、local_browser。入口：[`ADR-0010 §3.7 条 12`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`RETRIEVAL_SOURCE_WEIGHTING_DESIGN`](docs/RETRIEVAL_SOURCE_WEIGHTING_DESIGN_2026-08-12.md) / [`SOURCE_QUALITY_SEED_LISTS`](docs/SOURCE_QUALITY_SEED_LISTS_2026-08-12.md)。
+- **FUS-TOOL-PROBE** (`pending`; 2026-08-13)：主 Agent 工作工具机械可用性探针设计已定稿——三类工具面（恒可用/探针过滤/固定列表）+ 两态中性判定（机械链路完整/不完整，全线避免可用性判定词）+ 每动作刷新即用即清 + `tool_availability_check` 事件直接升级；实施与 ADR-0010 §3.5 修订待裁决。关键词：tool probe、机械链路、探针过滤、工具可用性、tool_availability_check。入口：[`TOOL_AVAILABILITY_PROBE_DESIGN`](docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)。
+- **FUS-RETRIEVAL-MECH** (`pending`; 2026-08-13)：检索侧机械控制设计已定稿——web_fetch 候选机械计数与计数反馈（`ORZ_WEB_FETCH_CANDIDATE_CAP`，去重按 activation 累计）+ 机械预筛（B-1 闭合为前提下，保守净化候选池、档位作排序信号不拦截）+ 引用纪律机械化（输出级 `[来源]` 标记校验，交付前机械降级）；实施待裁决。关键词：web_fetch 计数、计数反馈、机械预筛、引用校验、B-1。入口：[`RETRIEVAL_MECHANICAL_CONTROLS_DESIGN`](docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md)。
 
 ## 3. 当前实现与符合性路由
 
@@ -179,8 +182,8 @@
 - `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC、FUS-SOURCE-WEIGHTING。
 - `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、IMPL-RUN-EVENT-SCHEMA、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-RETRIEVAL-TOOLS、GAP-LOCAL-BROWSER、GAP-WEB-SEARCH-SEMAPHORE、GAP-CONVERSATION-RESTORE、GAP-PROJECT-DOC-INDEX-CACHE、GAP-PDF-EVIDENCE、GAP-RUN-TESTS、GAP-STREAM-RETRY、GAP-ACAF-SLICE1、GAP-ACAF-SLICE2A、GAP-ACAF-SLICE2B、GAP-DENIAL-POLICY-REVISION、GAP-ACAF-SLICE2-FAILCLOSED、GAP-ENCODING-GATE、GAP-SOURCE-WEIGHTING-IMPL。
 - `partial`：IMPL-RUST-RUNTIME、IMPL-DEEPSEEK-TRANSPORT、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER、IMPL-CONTROL-FABRIC。
-- `pending`：OPS-PROTOCOL。
-- `reference`：AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
+- `pending`：FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH、OPS-PROTOCOL。
+- `reference`：AUTH-BACKLOG、AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 
 ## 9. 使用红线
