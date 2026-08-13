@@ -690,10 +690,10 @@ impl LoopHost for OrzHost {
             // harmless to drop; the TaskKill path covers the timeout case.
         }
         let stdout = child.stdout.take().ok_or_else(|| {
-            ToolError::ExecutionFailed("test runner stdout pipe unavailable".into())
+            ToolError::ExecutionFailed("test runner stdout pipe unreadable".into())
         })?;
         let stderr = child.stderr.take().ok_or_else(|| {
-            ToolError::ExecutionFailed("test runner stderr pipe unavailable".into())
+            ToolError::ExecutionFailed("test runner stderr pipe unreadable".into())
         })?;
         let mut out_buf = Vec::<u8>::new();
         let mut err_buf = Vec::<u8>::new();

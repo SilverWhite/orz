@@ -34,7 +34,7 @@ pub const DIAGNOSTIC_COVERAGE_PREFIX: &str = "[DIAGNOSTIC_COVERAGE";
 /// §4.6.4 — one fixed minimal diagnostic action (mechanical; the checkpoint
 /// lists covered/missing surfaces + this single suggestion).
 pub const MINIMAL_NEXT_DIAGNOSTIC_ACTION: &str =
-    "运行一次最小复现并读取完整失败输出（或按新 error class 检查首个复现点）";
+    "运行一次最小复现并读取完整错误输出（或按新 error class 检查首个复现点）";
 
 /// The v0.2 payload `signal_type` enum (schema authority — never free text).
 pub const SIGNAL_TYPES: [&str; 6] = [

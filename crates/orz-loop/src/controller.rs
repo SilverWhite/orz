@@ -4139,10 +4139,9 @@ impl AgentLoopController {
         // the terminal ToolCompleted(error) alone.
         if self.retrieval_mode == RetrievalMode::Off {
             let msg = format!(
-                "retrieval '{target_name}' refused — retrieval mode is 'off' \
-                 for this session (ADR-0010 §3.7.1); no retrieval tools are \
-                 available. Submit retrieval_disposition close for any \
-                 already-pending activation.",
+                "retrieval '{target_name}' — 会话检索模式为 'off'（ADR-0010 \
+                 §3.7.1），检索工具不在当前工具集内；如有已挂起的 activation，\
+                 请提交 retrieval_disposition close。",
             );
             writer
                 .record(
@@ -4190,10 +4189,9 @@ impl AgentLoopController {
                         )
                         .await?;
                     let msg = format!(
-                        "retrieval '{target_name}' refused — local_browser \
-                         capability is not available ({reason}); no silent \
-                         fallback to framework retrieval tools (ADR-0010 \
-                         §3.7.1)",
+                        "retrieval '{target_name}' — local_browser 链路不完整 \
+                         （{reason}）；不隐式回退到框架检索工具（ADR-0010 \
+                         §3.7.1）",
                     );
                     writer
                         .record(
@@ -5567,8 +5565,8 @@ impl AgentLoopController {
                 || crate::relay::is_web_retrieval_tool(&tc.name))
         {
             let msg = format!(
-                "retrieval '{}' refused — retrieval mode is 'off' for this \
-                 session (ADR-0010 §3.7.1); no retrieval tools are available.",
+                "retrieval '{}' — 会话检索模式为 'off'（ADR-0010 §3.7.1），\
+                 检索工具不在当前工具集内。",
                 tc.name,
             );
             let target = if crate::relay::is_web_retrieval_tool(&tc.name) {
@@ -5614,9 +5612,9 @@ impl AgentLoopController {
             && self.retrieval_mode != RetrievalMode::FrameworkFallback
         {
             let msg = format!(
-                "retrieval '{}' refused — retrieval mode is '{}' for this \
-                 session; web tools require framework_fallback mode \
-                 (ADR-0010 §3.7.1); no silent fallback to the browser lane.",
+                "retrieval '{}' — 会话检索模式为 '{}'；web 工具需在 \
+                 framework_fallback 模式下调用（ADR-0010 §3.7.1），不隐式 \
+                 回退到浏览器车道。",
                 tc.name,
                 self.retrieval_mode.as_str(),
             );
@@ -5655,9 +5653,9 @@ impl AgentLoopController {
         // ToolStarted — same refusal shape as the off gate.
         if tc.name == "browser_read" && self.retrieval_mode != RetrievalMode::LocalBrowser {
             let msg = format!(
-                "retrieval '{}' refused — retrieval mode is '{}' for this \
-                 session; browser_read requires local_browser mode \
-                 (ADR-0010 §3.7.1); no silent fallback to web tools.",
+                "retrieval '{}' — 会话检索模式为 '{}'；browser_read 需在 \
+                 local_browser 模式下调用（ADR-0010 §3.7.1），不隐式回退到 \
+                 web 工具。",
                 tc.name,
                 self.retrieval_mode.as_str(),
             );
@@ -5752,13 +5750,14 @@ impl AgentLoopController {
                 _ => unreachable!("decision narrowed to Deny|Defer above"),
             };
             let result = ToolResult {
-                // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：可用性判定完全发生
-                // 在调用时，逐次独立——deny 消息陈述本次调用的事实，不
-                // 承诺策略级不可用（旧措辞 "NOT available in the current
-                // policy" 是静态声明残留，与逐次判定语义矛盾）。烧轮防护
-                // 由 §3.5.4 连续拒绝熔断承担，不依赖消息措辞。
+                // P0-A 步骤 6（2026-08-13）：兜底消息中性化——只陈述本次
+                // 调用事实（未获放行），不使用 可用/不可用/成功/失败/
+                // available/unavailable 等判定词，也不承诺策略级不可用
+                // （旧措辞 "NOT available in the current policy" 是静态
+                // 声明残留，与逐次判定语义矛盾）。烧轮防护由 §3.5.4 连续
+                // 拒绝熔断承担。
                 output: format!(
-                    "tool '{tool_name}' denied by the permission gate for this call.",
+                    "tool '{tool_name}' — 本次调用未获权限门禁放行。",
                     tool_name = tc.name,
                 ),
                 exit_code: Some(1),
@@ -9881,16 +9880,15 @@ mod tests {
             .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-9"))
             .expect("denied call answered with a tool message");
         assert!(
-            tool_msg.content.contains("denied"),
+            tool_msg.content.contains("未获权限门禁放行"),
             "denial surfaced to the model: {:?}",
             tool_msg.content
         );
-        // 2026-08-12：deny 消息只陈述本次调用事实（"denied by the
-        // permission gate for this call"），不再承诺策略级不可用
-        // （"do not retry" 措辞随静态声明一同移除——判定逐次发生，
-        // 烧轮防护由 §3.5.4 熔断承担）。
+        // P0-A 步骤 6：deny 消息只陈述本次调用事实（"tool 'X' — 本次调用
+        // 未获权限门禁放行"），不使用判定词，也不承诺策略级不可用；
+        // 判定逐次发生，烧轮防护由 §3.5.4 熔断承担。
         assert!(
-            tool_msg.content.contains("permission gate"),
+            tool_msg.content.contains("— 本次调用未获权限门禁放行"),
             "denial names the gate: {:?}",
             tool_msg.content
         );
@@ -10111,7 +10109,7 @@ mod tests {
             "breaker block injected after 3 consecutive denials: {received:?}"
         );
         assert!(
-            injected[0].contains("Switch strategy"),
+            injected[0].contains("切换策略"),
             "breaker tells the model to switch strategy: {}",
             injected[0]
         );
@@ -11099,7 +11097,8 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, Some(1));
         assert!(
-            result.output.contains("refused") && result.output.contains("off"),
+            result.output.contains("检索模式为 'off'")
+                && result.output.contains("不在当前工具集内"),
             "{}",
             result.output
         );
@@ -13176,8 +13175,16 @@ mod tests {
             .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-t"))
             .expect("denied call answered with a tool message");
         assert!(
-            tool_msg.content.contains("denied by the permission gate"),
+            tool_msg.content.contains("本次调用未获权限门禁放行"),
             "deny message: {}",
+            tool_msg.content
+        );
+        assert!(
+            !tool_msg.content.contains("available")
+                && !tool_msg.content.contains("unavailable")
+                && !tool_msg.content.contains("可用")
+                && !tool_msg.content.contains("不可用"),
+            "deny message must stay neutral: {}",
             tool_msg.content
         );
         // P3-6: the blackboard gate log records the refusal (same shape as
@@ -13244,7 +13251,7 @@ mod tests {
             .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-rt1"))
             .expect("denied call answered with a tool message");
         assert!(
-            deny_msg.content.contains("denied by the permission gate"),
+            deny_msg.content.contains("本次调用未获权限门禁放行"),
             "deny message: {}",
             deny_msg.content
         );

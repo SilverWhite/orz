@@ -25,7 +25,7 @@
 /// verification claim — a verifier must check source identity / visibility
 /// / claim limits, not grep the text.
 pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent workbench。\
-遵循注入的 assurance 上下文块执行任务；工具可用性由运行时声明，不得自行推断。\
+遵循注入的 assurance 上下文块执行任务；工具列表由运行时按轮声明，不得自行推断。\
 \n引用纪律：凡基于外部依据、参考实现或内部文档的引用，必须在引用处附带内联标记 \
 `[来源: source_id]`（已有 ledger 记录时）或 `[来源: 路径:行号]`（本地代码 observation-time \
 定位）；外部来源引用 URL/document identity + observed scope（如 `[来源: <url> metadata_only]`，\
@@ -233,9 +233,10 @@ pub const TOOL_ROUND_BUDGET_PREFIX: &str = "[TOOL_ROUND_BUDGET";
 /// IP2a denial-circuit-breaker message (D-3, FIX_PLAN 2026-08-06; ADR-0010
 /// §3.5.4 / V11-IMPL-012): injected after 3 CONSECUTIVE TOOL ROUNDS whose
 /// denials share one normalized key (tool, reason_code, policy_revision) —
-/// the model has been retrying a refused tool (polyglot probe P3:
-/// `web_search`×4 burned a third of the round budget). It tells the model to
-/// switch strategy, names the refused tool, and is counted as injected text
+/// the model has been retrying a tool the permission policy did not let
+/// through (polyglot probe P3: `web_search`×4 burned a third of the round
+/// budget). It tells the model to switch strategy, names that tool, and is
+/// counted as injected text
 /// (never stagnation input). The old total-denial ceiling (10/run) is
 /// deleted: anti-runaway is the round budget, not a second denial counter.
 pub const TOOL_POLICY_BREAKER_PREFIX: &str = "[TOOL_POLICY_BREAKER]";
@@ -243,11 +244,9 @@ pub const TOOL_POLICY_BREAKER_PREFIX: &str = "[TOOL_POLICY_BREAKER]";
 pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
     format!(
         "{TOOL_POLICY_BREAKER_PREFIX} v0.1\n\
-        Consecutive tool rounds have been refused by the session permission policy \
-        ({consecutive} rounds in a row, last: '{tool_name}'). The refused tool is NOT \
-        available under the current policy — do not retry it. Switch strategy: \
-        use only the tools declared as available, or state that the task cannot \
-        be completed under the current policy.\n\
+        连续 {consecutive} 轮工具调用未获权限门禁放行（最后：'{tool_name}'）。\
+        请勿继续调用该工具；请切换策略，改用本轮声明列表中的其他工具，\
+        或在当前策略下说明任务无法完成。\n\
         [/TOOL_POLICY_BREAKER]"
     )
 }
@@ -430,6 +429,48 @@ mod tests {
             BASE_SYSTEM_PROMPT.contains("文档ID §节/锚点"),
             "internal docs cite by section, not line number"
         );
+    }
+
+    #[test]
+    fn base_system_prompt_avoids_availability_wording() {
+        // P0-A 步骤 6：系统提示词只声明"工具列表由运行时按轮声明"，
+        // 不承载可用性判定词。
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("工具列表由运行时按轮声明"),
+            "system prompt declares the round-scoped tool list: {BASE_SYSTEM_PROMPT}"
+        );
+        assert!(
+            !BASE_SYSTEM_PROMPT.contains("可用性"),
+            "system prompt avoids availability wording: {BASE_SYSTEM_PROMPT}"
+        );
+    }
+
+    #[test]
+    fn tool_policy_breaker_block_is_neutral() {
+        // P0-A 步骤 6：熔断块使用 `tool 'X'` 中性与事实陈述，不含
+        // 可用/不可用/成功/失败/available/unavailable/success/failure
+        // 等判定词，并明确给出"切换策略"指引。
+        let block = tool_policy_breaker_block("search_replace", 3);
+        for banned in [
+            "可用",
+            "不可用",
+            "成功",
+            "失败",
+            "available",
+            "unavailable",
+            "success",
+            "failure",
+        ] {
+            assert!(
+                !block.to_lowercase().contains(banned),
+                "breaker carries a banned judgment word '{banned}': {block}"
+            );
+        }
+        assert!(block.contains("[TOOL_POLICY_BREAKER]"));
+        assert!(block.contains("切换策略"));
+        assert!(block.contains("未获权限门禁放行"));
+        assert!(block.contains("search_replace"));
+        assert!(block.contains('3'));
     }
 
     #[test]
