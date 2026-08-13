@@ -1,0 +1,7 @@
+language: zh
+# 模板：槽位表由 console 按工作区索引动态注入（workspace.index）
+intents:
+  ReadFile:
+    data:
+      - sentences:
+          - "读取文件 {file}"

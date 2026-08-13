@@ -1,6 +1,6 @@
 # 结构化操作协议 v0.1（Structured Operation Protocol）
 
-- 状态：Draft（参考实现已就位，生产接线待裁决）
+- 状态：Draft（参考实现已就位；2026-08-13 审查判定：不按原样生产接线，裁剪方向见 §15）
 - 日期：2026-08-13
 - 配套 Schema：[`structured-operation-protocol-v0.1.schema.json`](structured-operation-protocol-v0.1.schema.json) / [`structured-operation-audit-v0.1.schema.json`](structured-operation-audit-v0.1.schema.json)
 - 参考实现：[`../assurance/ops_executor.py`](../assurance/ops_executor.py)（Python 跨平台） / [`../scripts/ops_executor.ps1`](../scripts/ops_executor.ps1)（Windows PowerShell）
@@ -230,3 +230,15 @@
 - 未知字段 / 越界路径 / 非缓存超限 / 未授权 `process.run` 分别被拒绝。
 - 小文件非缓存删除进入回收站。
 - 每次执行（含无效 JSON）产生一条完整且符合审计 Schema 的 JSONL。
+
+## 15. 审查判定（2026-08-13）
+
+- 用户无异议（2026-08-13）：本协议的平行执行层过重，不按原样推进生产接线。
+- 收敛方向：
+  1. **保留**“删除安全”——回收站、缓存机械分类、容量 fail-closed——收敛为
+     host-owned 工具，走既有权限门 / ACAF 票据 / run-event journal；
+  2. **内部化**跨环境桥接（WSL/Docker/SSH 只传 JSON）——保留为内部执行能力，
+     不向模型暴露 op 信封；
+  3. **单一化**执行器——双语言参考实现收敛为单一参考，生产实现走 Rust 工具面；
+  4. v0.1 正文保留为裁剪设计的参考输入，不再作为生产协议基线。
+- 裁剪设计待产出后登记（BACKLOG P2）；本文件正文在裁剪设计定稿前不改写。
