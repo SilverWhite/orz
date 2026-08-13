@@ -62,7 +62,7 @@ mod tests {
         assert!(rendered.contains("文件 事件 标记 编辑 模型 来源 运行 验证 帮助"));
         assert!(rendered.contains("后退 前进 刷新 停止 打开 验证 属性"));
         assert!(rendered.contains("命令..."));
-        assert!(rendered.contains("守护 | 网络关闭 | 沙箱严格 | 来源 0/0 | 模型 | 运行中"));
+        assert!(rendered.contains("守护 | 网络关闭 | 沙箱严格 | 工具 0/0 | 模型 | 运行中"));
         assert!(rendered.contains("┌ [用户]"));
         assert!(rendered.contains("[模型]"));
     }

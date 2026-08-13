@@ -224,15 +224,15 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("停滞守卫: {decision}")]
         }
         TuiEvent::ToolAvailabilityCheck {
-            available,
-            unavailable,
+            complete,
+            incomplete,
             ..
         } => {
-            let total = available + unavailable;
-            app.status.set_sources(available, total);
+            let total = complete + incomplete;
+            app.status.set_tool_probe(complete, total);
             app.content
-                .add_system_message(&format!("工具检查: {available} 可用"), false);
-            vec![format!("工具可用性: {available}/{total}")]
+                .add_system_message(&format!("工具探针: {complete} 链路完整"), false);
+            vec![format!("工具探针: {complete}/{total}")]
         }
         TuiEvent::ToolBeliefStagnation { tool } => {
             app.content
@@ -891,13 +891,11 @@ mod tests {
     fn tool_availability_updates_sources_segment() {
         let mut a = app();
         a.accept_event(TuiEvent::ToolAvailabilityCheck {
-            available: 3,
-            unavailable: 1,
-            degraded: 0,
-            unprobed: 0,
-            gate_decision: "allow".into(),
+            complete: 3,
+            incomplete: 1,
+            gate_decision: "pass".into(),
         });
-        assert_eq!(a.status.items[3].label, "来源 3/4");
+        assert_eq!(a.status.items[3].label, "工具 3/4");
     }
 
     /// Per-mapping-row coverage (review P2-4): every event type not already

@@ -5,6 +5,7 @@
 //!
 //! See: INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2 §3.4
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -280,6 +281,20 @@ pub trait LoopHost: Send + Sync {
     /// them). `None` (default) omits the tool entirely.
     fn test_runner(&self) -> Option<TestRunner> {
         None
+    }
+
+    /// Session working directory — the workspace scope the Face B tool
+    /// probes check (read chain / write chain). Defaults to the process
+    /// cwd; hosts must override with the session cwd (which may differ).
+    fn session_cwd(&self) -> PathBuf {
+        std::env::current_dir().unwrap_or_default()
+    }
+
+    /// Whether the session is attached to an interactive user who can
+    /// answer `ask_user_question` (Face B probe source). Defaults to
+    /// `false` (fail-closed); hosts with a live client override.
+    fn interactive_user(&self) -> bool {
+        false
     }
 
     /// D-9: execute the host's fixed test command. Only called when

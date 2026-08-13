@@ -109,10 +109,8 @@ pub enum TuiEvent {
         reason_codes: Vec<String>,
     },
     ToolAvailabilityCheck {
-        available: u64,
-        unavailable: u64,
-        degraded: u64,
-        unprobed: u64,
+        complete: u64,
+        incomplete: u64,
         gate_decision: String,
     },
     ToolBeliefStagnation {
@@ -351,11 +349,9 @@ mod tests {
                 status: "completed".into(),
             },
             TuiEvent::ToolAvailabilityCheck {
-                available: 0,
-                unavailable: 0,
-                degraded: 0,
-                unprobed: 0,
-                gate_decision: "allow".into(),
+                complete: 0,
+                incomplete: 0,
+                gate_decision: "pass".into(),
             },
             TuiEvent::SnapshotCreated {
                 tool: "edit_file".into(),

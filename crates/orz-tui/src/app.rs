@@ -681,7 +681,7 @@ impl TuiApp {
             "/status" => {
                 let state = if self.running { "运行中" } else { "空闲" };
                 messages.push(format!(
-                    "状态: {state} | 来源 {} | 消息 {} 条",
+                    "状态: {state} | 工具 {} | 消息 {} 条",
                     self.status.items[3].label,
                     self.content.items.len()
                 ));

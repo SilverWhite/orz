@@ -20,6 +20,7 @@ pub mod orientation;
 pub mod prompt;
 pub mod relay;
 pub mod tool;
+pub mod tool_probe;
 
 // Re-export core types
 pub use controller::AgentLoopController;

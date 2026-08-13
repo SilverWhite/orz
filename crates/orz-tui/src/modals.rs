@@ -137,7 +137,7 @@ impl HelpOverlay {
                     Tab {
                         name: "来源".into(),
                         fields: vec![
-                            ("可见性等级".into(), "来源 n/m（工具检查）".into()),
+                            ("可见性等级".into(), "工具 n/m（探针链路）".into()),
                             ("证据等级".into(), "门控决定决定等级".into()),
                             ("Gate 检查".into(), "IPG / 工具可用性 / 停滞守卫".into()),
                             ("检索命令".into(), "（v1 未接线）".into()),

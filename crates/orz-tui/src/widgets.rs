@@ -1070,11 +1070,9 @@ mod tests {
             finish_reason: "stop".into(),
         });
         a.accept_event(TuiEvent::ToolAvailabilityCheck {
-            available: 3,
-            unavailable: 1,
-            degraded: 0,
-            unprobed: 0,
-            gate_decision: "allow".into(),
+            complete: 3,
+            incomplete: 1,
+            gate_decision: "pass".into(),
         });
         let lines = compose_screen(&a, 100, 30);
         assert_eq!(lines.len(), 30);
@@ -1092,7 +1090,7 @@ mod tests {
         assert!(lines[2].contains("┬"));
         // Status bar frozen pattern.
         let last = lines.last().unwrap();
-        assert!(last.starts_with("守护 | 网络关闭 | 沙箱严格 | 来源 3/4 | 模型 | 运行中"));
+        assert!(last.starts_with("守护 | 网络关闭 | 沙箱严格 | 工具 3/4 | 模型 | 运行中"));
     }
 
     #[test]
@@ -1536,7 +1534,7 @@ mod tests {
         assert!(lines[28].starts_with("> 测试输入"));
         assert_eq!(
             lines[29].trim_end(),
-            "守护 | 网络关闭 | 沙箱严格 | 来源 0/0 | 模型 | 空闲"
+            "守护 | 网络关闭 | 沙箱严格 | 工具 0/0 | 模型 | 空闲"
         );
     }
 }

@@ -162,10 +162,14 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             reason_codes: get_str_list(p, "reason_codes"),
         },
         EventType::ToolAvailabilityCheck => TuiEvent::ToolAvailabilityCheck {
-            available: get_u64(p, "available"),
-            unavailable: get_u64(p, "unavailable"),
-            degraded: get_u64(p, "degraded"),
-            unprobed: get_u64(p, "unprobed"),
+            complete: get_str_list(p, "complete").len() as u64,
+            // `incomplete` is an OBJECT array ({tool, reason}) — count the
+            // array length directly; get_str_list would drop objects.
+            incomplete: p
+                .get("incomplete")
+                .and_then(Value::as_array)
+                .map(|a| a.len() as u64)
+                .unwrap_or(0),
             gate_decision: get_str(p, "gate_decision"),
         },
         EventType::ToolBeliefStagnation => TuiEvent::ToolBeliefStagnation {
@@ -396,7 +400,12 @@ mod tests {
             ),
             (
                 EventType::ToolAvailabilityCheck,
-                json!({"available": 3, "unavailable": 0, "degraded": 0, "unprobed": 1, "gate_decision": "allow"}),
+                json!({
+                    "probe_scope": "main_agent_work_tools",
+                    "complete": ["read_file", "grep"],
+                    "incomplete": [{"tool": "ask_user_question", "reason": "无交互式用户会话"}],
+                    "gate_decision": "pass"
+                }),
             ),
             (EventType::ToolBeliefStagnation, json!({"tool": "bash"})),
             (
@@ -448,6 +457,33 @@ mod tests {
             let kind = tui.kind();
             assert_ne!(kind, "unknown", "event_type must not degrade: {kind}");
         }
+    }
+
+    #[test]
+    fn tool_availability_counts_object_arrays() {
+        let ev = make_event(
+            EventType::ToolAvailabilityCheck,
+            json!({
+                "probe_scope": "main_agent_work_tools",
+                "complete": ["read_file", "list_dir", "grep"],
+                "incomplete": [
+                    {"tool": "run_tests", "reason": "缺少测试运行器"},
+                    {"tool": "ask_user_question", "reason": "无交互式用户会话"},
+                ],
+                "gate_decision": "pass",
+            }),
+        );
+        let TuiEvent::ToolAvailabilityCheck {
+            complete,
+            incomplete,
+            gate_decision,
+        } = run_event_to_tui(&ev)
+        else {
+            panic!("expected ToolAvailabilityCheck");
+        };
+        assert_eq!(complete, 3);
+        assert_eq!(incomplete, 2, "object-array incomplete must be counted");
+        assert_eq!(gate_decision, "pass");
     }
 
     #[test]

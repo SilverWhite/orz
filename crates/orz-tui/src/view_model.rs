@@ -308,7 +308,7 @@ pub struct StatusItem {
 
 /// Bottom status bar (frozen pattern from
 /// SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1):
-/// `守护 | 网络关闭 | 沙箱严格 | 来源 n/m | 模型 | 空闲`.
+/// `守护 | 网络关闭 | 沙箱严格 | 工具 n/m | 模型 | 空闲`.
 #[derive(Debug, Clone)]
 pub struct StatusBar {
     pub items: Vec<StatusItem>,
@@ -337,7 +337,7 @@ impl StatusBar {
                     ok: true,
                 },
                 StatusItem {
-                    label: "来源 0/0".into(),
+                    label: "工具 0/0".into(),
                     ok: true,
                 },
                 StatusItem {
@@ -361,12 +361,12 @@ impl StatusBar {
         }
     }
 
-    /// Set the source-visibility count segment (`来源 n/m`).
-    pub fn set_sources(&mut self, available: u64, total: u64) {
+    /// Set the tool-probe count segment (`工具 n/m`).
+    pub fn set_tool_probe(&mut self, complete: u64, total: u64) {
         for item in &mut self.items {
-            if item.label.starts_with("来源") {
-                item.label = format!("来源 {available}/{total}");
-                item.ok = available == total;
+            if item.label.starts_with("工具") {
+                item.label = format!("工具 {complete}/{total}");
+                item.ok = complete == total;
             }
         }
     }
@@ -675,12 +675,12 @@ mod tests {
         let labels: Vec<&str> = bar.items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
             labels,
-            ["守护", "网络关闭", "沙箱严格", "来源 0/0", "模型", "空闲"]
+            ["守护", "网络关闭", "沙箱严格", "工具 0/0", "模型", "空闲"]
         );
 
         let mut bar = StatusBar::new();
-        bar.set_sources(3, 4);
-        assert_eq!(bar.items[3].label, "来源 3/4");
+        bar.set_tool_probe(3, 4);
+        assert_eq!(bar.items[3].label, "工具 3/4");
         assert!(!bar.items[3].ok);
         bar.set_run_state("运行中", true);
         assert_eq!(bar.items[5].label, "运行中");

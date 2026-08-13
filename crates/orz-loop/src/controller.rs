@@ -26,9 +26,6 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use orz_assurance::acaf::TicketKind;
-use orz_assurance::gates::tool_availability::{
-    Capability, ToolSpec, gate_decision, probe_tool_availability,
-};
 use orz_assurance::orientation::stagnation::{
     StagnationDecision, StagnationInput, evaluate_runtime_stagnation_guard,
 };
@@ -3418,16 +3415,19 @@ impl AgentLoopController {
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
 
-        // 1. tool_availability_check — registry CATALOG snapshot BEFORE
-        // run_started (Python conformance: the probe must precede run_started).
+        // 1. tool_availability_check — Face B two-state probe snapshot
+        // BEFORE run_started (Python conformance: the probe must precede
+        // run_started).
         //
-        // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：模型可见工具列表 = registry
-        // 能力目录全量，零可用性承诺——可用性判定完全发生在调用时，每次
-        // 调用由 permission gate 逐次判定并返回明确结构化结果。名级过滤
-        // 废止（D-3/IP2a 被替换）：静态"available 声明"与调用时拒绝相互
-        // 矛盾时，DeepSeek 行为不可预测（TB 2026-08-11 复盘：path-tracing
-        // 重试 4 次 / gpt2 盲改并声称完成）。目录不承诺，模型无法误解
-        // 不存在的信号。唯一名级过滤 = MCP `__` 防御（`policy_refuses`）。
+        // FUS-TOOL-PROBE (2026-08-13, design §3/§7): the event no longer
+        // mirrors the registry catalog. It reports the Face B mechanical
+        // probe partition — complete / incomplete(reason) — with neutral
+        // reasons only; Face A/C and the retrieval lane never appear.
+        // gate_decision stays an internal mechanical field ("pass" at
+        // snapshot time); the call-time permission gate remains the final
+        // backstop (design invariant 2). List projection (batch step 4)
+        // will consume this same probe; the model-visible declarations are
+        // not filtered yet.
         let mut tool_defs: Vec<ToolDef> = host.tools_registry().list().into_iter().collect();
         // D-9 (FIX_PLAN 2026-08-06): when the host carries a fixed test
         // runner, the `run_tests` tool is in the catalog — the Aider-model
@@ -3623,36 +3623,29 @@ impl AgentLoopController {
         // parent disposition may close/continue across runs). After the mode
         // transition, before the availability gate.
         self.journal_activation_restores(writer).await?;
-        let specs: Vec<ToolSpec> = tool_defs
+        let probe_context = crate::tool_probe::ProbeContext {
+            cwd: host.session_cwd(),
+            policy: host.tool_policy(),
+            test_runner_present: host.test_runner().is_some(),
+            interactive_user: host.interactive_user(),
+        };
+        let probe_snapshot = crate::tool_probe::probe_face_b(&probe_context);
+        let incomplete: Vec<serde_json::Value> = probe_snapshot
+            .incomplete
             .iter()
-            .map(|t| {
-                ToolSpec::new(
-                    t.name.clone(),
-                    t.name.clone(),
-                    Capability::ToolRegistry,
-                    "acp_tool_registry",
-                )
-            })
+            .map(|f| serde_json::json!({ "tool": f.tool, "reason": f.reason }))
             .collect();
-        let mut probe_registry: HashMap<String, Option<bool>> = HashMap::new();
-        for t in &tool_defs {
-            // 2026-08-12：目录快照语义——registry 全量工具均记为 available
-            // （能力目录存在）；可用性判定在调用时由 permission gate 逐次
-            // 做出，probe 不承诺任何调用结果。事件仅作审计面（registry
-            // 目录快照），gate_decision 恒 Pass。
-            probe_registry.insert(t.name.clone(), Some(true));
-        }
-        let report = probe_tool_availability(&specs, &probe_registry);
-        let availability_gate = gate_decision(&report);
         writer
             .record(
                 EventType::ToolAvailabilityCheck,
                 serde_json::json!({
-                    "available": report.available,
-                    "unavailable": report.unavailable,
-                    "degraded": report.degraded,
-                    "unprobed": report.unprobed,
-                    "gate_decision": availability_gate.decision_str(),
+                    "probe_scope": "main_agent_work_tools",
+                    "probe_timestamp": chrono_utc_now(),
+                    "complete": probe_snapshot.complete,
+                    "incomplete": incomplete,
+                    // 预留内部机械字段：当前恒 pass（快照不构成拦截）；
+                    // 后续步骤若产生翻转/连续拒绝语义再映射非 pass 值。
+                    "gate_decision": "pass",
                 }),
             )
             .await?;
@@ -6614,7 +6607,8 @@ mod tests {
     }
 
     /// The mode=off projection removes the retrieval family from the
-    /// tool_availability_check report (the model never sees the tools).
+    /// model-visible declarations (the model never sees the tools), and
+    /// the tool_availability_check probe partition stays Face B only.
     #[tokio::test]
     async fn mode_off_removes_retrieval_tools_from_declarations() {
         let dir = test_dir();
@@ -6623,10 +6617,11 @@ mod tests {
             journal,
             tool_result: None,
         };
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::text("直接回答"),
             ScriptedResponse::text("完成"),
         ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
             .run_turn(&host, "hi", "RUN-RET", MANIFEST, 0, None, None, None)
@@ -6637,14 +6632,31 @@ mod tests {
             .iter()
             .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
             .unwrap();
-        let available = availability.payload["available"]
+        let p = &availability.payload;
+        assert_eq!(p["probe_scope"], "main_agent_work_tools");
+        assert_eq!(p["gate_decision"], "pass");
+        let complete: Vec<&str> = p["complete"]
             .as_array()
-            .map(|a| {
-                a.iter()
-                    .map(|v| v.as_str().unwrap_or_default().to_string())
-                    .collect::<Vec<_>>()
-            })
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
+        let incomplete: Vec<&str> = p["incomplete"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v["tool"].as_str()).collect())
+            .unwrap_or_default();
+        // The probe partition covers Face B only — retrieval tools and the
+        // disposition control tool never appear in it.
+        for tool in complete.iter().chain(incomplete.iter()) {
+            assert!(
+                !crate::relay::is_retrieval_dispatch_name(tool)
+                    && !crate::relay::is_retrieval_mode_gated_host_tool(tool)
+                    && *tool != "retrieval_disposition",
+                "{tool} in probe partition"
+            );
+        }
+        // Declarations: the first model request hides the retrieval family
+        // under mode=off.
+        let received = fake.received_requests();
+        let declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
         for tool in [
             "retrieve_project_docs",
             "retrieve_project_source_ledger",
@@ -6655,15 +6667,15 @@ mod tests {
             "project_doc_index",
         ] {
             assert!(
-                !available.iter().any(|t| t == tool),
-                "{tool} in {available:?}"
+                !declared.iter().any(|t| *t == tool),
+                "{tool} in {declared:?}"
             );
         }
         // The disposition control tool STAYS — disposing an already-pending
         // activation is a legal off-mode action.
         assert!(
-            available.iter().any(|t| t == "retrieval_disposition"),
-            "{available:?}"
+            declared.iter().any(|t| *t == "retrieval_disposition"),
+            "{declared:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

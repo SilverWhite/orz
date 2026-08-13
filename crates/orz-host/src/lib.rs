@@ -607,6 +607,18 @@ impl LoopHost for OrzHost {
         self.test_runner.clone()
     }
 
+    fn session_cwd(&self) -> std::path::PathBuf {
+        self.cwd.clone()
+    }
+
+    /// The ACP outbound gateway is the only live interactive-user channel
+    /// (`ask_user_question` delivers through it); headless sessions
+    /// (`gateway == None`, including the codex hub-only approval surface)
+    /// fail closed.
+    fn interactive_user(&self) -> bool {
+        self.gateway.is_some()
+    }
+
     /// D-9: run the FIXED test command in the session cwd. The model never
     /// supplies argv — the command is host-owned; stdout/stderr/exit code
     /// feed back to the model (Aider-model loop).
