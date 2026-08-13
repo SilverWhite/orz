@@ -779,6 +779,69 @@ def _verify_v02_source_weighting(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+def _verify_v02_search_candidate_pool(events: list[dict[str, Any]]) -> list[str]:
+    """FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation passthrough
+    on committed retrieval results:
+
+    - candidate_urls may only appear on web_search_result ledger entries;
+    - candidate_urls is a non-empty list of unique non-empty strings;
+    - raw_source_refs is a mechanical projection of the ledger: each ref
+      entry mirrors its ledger entry's candidate_urls exactly, and every
+      ledger entry carrying candidate_urls appears in raw_source_refs.
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "retrieval_result_committed":
+            continue
+        p = event["payload"]
+        ledger = p["source_ledger"]
+        refs = p["raw_source_refs"]
+        ledger_by_id = {entry["source_id"]: entry for entry in ledger}
+        ref_by_id = {ref["source_id"]: ref for ref in refs}
+
+        for entry in ledger:
+            sid = entry["source_id"]
+            candidates = entry.get("candidate_urls")
+            if candidates is None:
+                continue
+            if entry.get("source_type") != "web_search_result":
+                errors.append(
+                    f"event {index}: source {sid} carries candidate_urls but "
+                    f"source_type is {entry.get('source_type')!r} (only "
+                    "web_search_result may carry a candidate pool)"
+                )
+            if (
+                not isinstance(candidates, list)
+                or not candidates
+                or any(not isinstance(url, str) or not url for url in candidates)
+            ):
+                errors.append(
+                    f"event {index}: source {sid} candidate_urls must be a "
+                    "non-empty list of non-empty strings"
+                )
+                continue
+            if len(set(candidates)) != len(candidates):
+                errors.append(
+                    f"event {index}: source {sid} candidate_urls contains duplicates"
+                )
+            ref = ref_by_id.get(sid)
+            if ref is None or ref.get("candidate_urls") != candidates:
+                errors.append(
+                    f"event {index}: source {sid} candidate_urls not mirrored "
+                    "in raw_source_refs"
+                )
+
+        for ref in refs:
+            if "candidate_urls" in ref:
+                entry = ledger_by_id.get(ref["source_id"])
+                if entry is None or entry.get("candidate_urls") != ref["candidate_urls"]:
+                    errors.append(
+                        f"event {index}: raw_source_refs {ref['source_id']} "
+                        "candidate_urls does not match the ledger"
+                    )
+    return errors
+
+
 def _verify_v02_activation_restore(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §3.3/§4.4 restore facts on the v0.2 track: the same activation
     is restored at most once per journal (each prompt's controller build may
@@ -1411,6 +1474,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))
         errors.extend(_verify_v02_source_weighting(events))
+        errors.extend(_verify_v02_search_candidate_pool(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))
         errors.extend(_verify_v02_tool_availability_probe(events))

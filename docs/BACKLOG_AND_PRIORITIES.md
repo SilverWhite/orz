@@ -64,6 +64,14 @@
 
 - 入口：[设计](RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)。
 - 决策门：2026-08-13 用户已裁决放行实施。
+- 进度（2026-08-13）：**步骤 1（B-1 闭合）已完成**——`ToolResult` 新增
+  `structured` 接缝（host 仅 web_search 填充 citations），controller 机械提取
+  为证据 `candidate_urls` 并写入 `source_ledger`/`raw_source_refs`（Schema
+  与 Python verifier 先行，`_verify_v02_search_candidate_pool` 校验镜像）；
+  orz-host 200 / orz-loop 238 / orz-assurance 139 / orz-tui 178 通过，Python
+  全量 1821 通过，仓库门禁 valid。边界：候选池暂不进模型提示词（预筛步骤负责
+  展示），web_search 摘要条目仍不写 tier。审计：
+  [GAP-RETRIEVAL-MECH B-1 实施审计](audits/GAP_RETRIEVAL_MECH_B1_CITATIONS_IMPL_AUDIT_2026-08-13.md)。
 - 依赖顺序：1（B-1 闭合）→ 2/3 → 5 → 4/6。
   1. B-1 闭合：web_search citations 结构化透传 loop；
   2. web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
@@ -150,6 +158,13 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 1 审查闭环处理——旧来源加权审计 B-1/D-2/D-4 边界补
+  闭合/取代注记、设计文档范围措辞更新、B-1 审计补进程内接缝与精确去重边界、
+  verifier 补 ref 反向镜像负例测试 2 条（Python 全量 1821 通过）。
+- 2026-08-13：P0-B 步骤 1（B-1 闭合）完成登记——web_search citations 结构化
+  透传进 loop（ToolResult.structured 接缝 + 证据 candidate_urls + Schema/
+  verifier 先行）；orz-loop/host/assurance/tui 测试全绿、Python 全量 1821 通过、
+  仓库门禁 valid；批次下一步为步骤 2（web_fetch 计数门禁）。
 - 2026-08-13：P0-A-2 闭合登记——v0.2 单一探针面扩展实施完成（23 个工作工具统一机械探针、面 A/C 撤销、投影切换为探针完整集∩声明集、`tool_availability_check` 事件/verifier/fixtures 同步、`LoopHost` 六项能力访问器接线）；orz-loop 236 / orz-host 199 / orz-tui 178 通过，Python verifier 与相关测试 395 通过，仓库门禁 valid；边界=orz-host 可选后端（lsp/memory/图像/视频/MCP）未接线，接线时翻转能力访问器。
 - 2026-08-13：P0-A 步骤 7 完成登记——ADR-0010 v1.8 §3.5 修订登记（v0.2 单一探针面取代 v1.5「registry 全量 + 零可用性承诺」；A+C→B 定档合并登记，ADR §14.5 补复核注）；批次步骤 1-7 全部闭合；登记实现差距——代码仍为 v0.1 三面语义，v0.2 单一探针面扩展实施（P0-A-2）待续。
 - 2026-08-13：CLASSICAL-EXEC-ASSISTANT v0.5 两点获用户确认——注册板块常驻但内容按需读取（防上下文膨胀）；单轮一单先行（防并发写单竞态，反馈闭环驱动）。

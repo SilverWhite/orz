@@ -75,9 +75,9 @@
 | ID | 决策 | 依据 |
 |---|---|---|
 | D-1 | weight/tier 字段进 source_entry + source_annotations 进 organized_response（先 Schema/fixture/verifier 再 producer） | 设计 §6.3 纪律；§3.7 条 12 结构化结果输出 |
-| D-2 | `web_page` 必带机械字段；`web_search_result` 摘要条目不硬造权重 | web_search 引用 URL 当前不流入 loop（见边界 B-1）；output_text 只作线索不作证据 |
+| D-2 | `web_page` 必带机械字段；`web_search_result` 摘要条目不硬造权重 | web_search 引用 URL 当前不流入 loop（见边界 B-1）；output_text 只作线索不作证据（2026-08-13 注：B-1 已闭合，结论保留，见 §3 注） |
 | D-3 | 种子名单落地为 `runtime/source-quality-seed-lists-v0.1.json`，二进制 include 为默认；env 覆盖=替换语义 | 设计 §6.1 “不硬编码”+“可增删”；机器合约与源码分离 |
-| D-4 | 第二层候选上限 ≤5 为提示词合同，不做工具级硬门 | 设计 §6.2 “按工具轮预算校准”；120 轮预算即机械背板 |
+| D-4 | 第二层候选上限 ≤5 为提示词合同，不做工具级硬门 | 设计 §6.2 “按工具轮预算校准”；120 轮预算即机械背板（2026-08-13 注：已被 P0-B 取代，见 §3 注） |
 | D-5 | 非法 source_annotation 丢弃并记 filtering_log，不降级 organized_response | v0 标注不拦截；失败必显式（非静默忽略） |
 | D-6 | 模型标注字段 all-or-none；status 仅 adopted/annotated（无 “none” 第三态） | 语义最小化；absence=未标注 |
 | D-7 | 二存一模式门控沿用既有 mode authority（§3.7 条 1），本切片补提示词合同与测试 | 设计 §2；不重复造门禁 |
@@ -86,16 +86,27 @@
 
 ## 3. 边界（明确未做，登记给后续切片）
 
+> 后续闭合注（2026-08-13，GAP-RETRIEVAL-MECH B-1 实施审计）：B-1 已闭合——
+> `web_search` citations 经 `ToolResult.structured` 接缝透传进 loop，证据账本
+> 写入 `source_ledger[].candidate_urls` + `raw_source_refs` 镜像（Schema/verifier
+> 先行）；"引用 URL 不流入 loop" 不再成立。D-2 结论（`web_search_result`
+> 摘要条目不硬造权重）保留，依据更新为候选池是 metadata-grade 线索而非证据，
+> tier/weight 由机械预筛（P0-B 步骤 3）附加。D-4/B-3 的"候选上限 ≤5 为提示词
+> 软约束"已被 P0-B 设计 §1 取代——步骤 2 升级为机械硬门
+> （`ORZ_WEB_FETCH_CANDIDATE_CAP`，按 activation 累计、去重后 URL 计数，
+> 超限显式拒绝）。
+
 - **B-1 web_search 引用 URL 不流入 loop**：`WebSearchOutput.citations` 存在于
   orz-tools，但 ToolResult 只携带渲染文本（query + content），controller 拿不到
   引用 URL 列表；`web_search_result` 条目因此不带 tier。后续切片把 citations
-  结构化透传到 evidence（或按引用 URL 展开 ledger 条目）后补齐。
+  结构化透传到 evidence（或按引用 URL 展开 ledger 条目）后补齐。（已闭合，
+  见上方注。）
 - **B-2 local_browser 主车道读取无 ledger**：`browser_read` 目前是 Host 路由的
   主车道工具，不经过检索子代理证据收集；本切片覆盖“证据进入结构化结果”的路径
   （web_fetch/声明行），browser_read 在子代理 lane 内收集时才加权。提示词已带
   local_browser 通道合同。
 - **B-3 候选核验上限为软约束**：≤5 只写进提示词，不设机械拒绝；120 轮工具预算
-  是硬背板。
+  是硬背板。（已被 P0-B 取代，见上方注。）
 - **B-4 配置替换语义**：env 指向的文件整体替换 embedded 名单（不是并集）；后续
   如需增量合并另设 merge 语义。
 - **B-5 raw_source_refs 不新增 weight 投影**：保持既有五字段形状，weight 只在

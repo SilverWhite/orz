@@ -1,7 +1,7 @@
 # 检索侧机械控制设计（2026-08-13，v0.1 定稿）
 
-> 状态：`pending`（设计已冻结；实施待裁决）。
-> 范围：本轮只做设计，不做具体实施。
+> 状态：`approved`（设计已冻结；用户已裁决放行实施；B-1 已闭合，批次实施中）。
+> 范围：设计定稿；B-1 已实施闭合，批次剩余步骤按 BACKLOG P0-B 执行。
 > 关联：ADR-0010 §3.7 条 12（来源加权）/ §3.7.9（引用纪律）/ §3.7.1（mode
 > 门禁）；[`TOOL_AVAILABILITY_PROBE_DESIGN`](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)。
 > 决策记录：2026-08-13 用户逐条裁决（web_fetch 计数反馈、机械预筛以 B-1 闭合为
@@ -36,8 +36,15 @@
 - local_browser：页面已打开，门禁计完数后模型可决定全文读取或关键词提取；
   需要 `browser_read` 支持范围/模式参数（全文/预览/关键词提取）——属后续工具
   能力扩展，不在本轮；
-- framework_fallback：无第二段（引用 URL 未透传 loop，B-1 未闭合）；
-  web_fetch 的计数门禁仍适用，但只有"抓或不抓"。
+- framework_fallback：无第二段（local_browser 专属）；web_fetch 的计数门禁
+  仍适用，但只有"抓或不抓"。
+
+> B-1 闭合（2026-08-13）：`web_search` 的引用 URL 已结构化透传进 loop——
+> host 经 `ToolResult.structured` 转发 citations，controller 机械提取后写入
+> 证据账本 `source_ledger[].candidate_urls` 与 `raw_source_refs` 投影
+> （Schema `retrieval-result-event-payload-v0.2` 先行扩展，Python verifier
+> 同步校验镜像一致性）。候选池为 metadata-grade，机械预筛（§2）将在其上
+> 附加 tier/weight 与形态原因。
 
 ## 2. 机械预筛（候选池净化）
 
@@ -46,8 +53,9 @@
 
 ### 2.1 前提
 
-B-1 闭合：`web_search` 的引用 URL（citations）必须结构化透传进 loop，机械预筛
-才有候选池可操作。B-1 未闭合前，预筛只存在于提示词合同，不对候选池实际生效。
+**B-1 已闭合（2026-08-13）**：`web_search` 的引用 URL（citations）已结构化
+透传进 loop（`source_ledger[].candidate_urls` / `raw_source_refs`），机械预筛
+现在有候选池可操作。B-1 闭合前，预筛只存在于提示词合同，不对候选池实际生效。
 
 ### 2.2 预筛规则（保守，只去掉明确差的）
 
@@ -95,6 +103,6 @@ B-1 闭合：`web_search` 的引用 URL（citations）必须结构化透传进 l
 - 检索工具不参与主探针矩阵（子代理确定性留痕），本设计是检索 lane 内部机械面；
 - OPS-PROTOCOL（pending）覆盖更广的结构化操作审计，本设计不与其冲突。
 
-## 5. 实施待办（登记，本轮不实施）
+## 5. 实施待办（登记）
 
 > 优先级：P0（当前工作集）。实施待办已统一迁至 [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md)（P0/检索机械控制批次，含 6 项实施序列、依赖顺序与 DC 信号并入建议）；本文件不再单独维护待办明细，设计内容仍以本文为准。
