@@ -1,7 +1,9 @@
 # 主 Agent 工作工具机械可用性探针 设计（2026-08-13，v0.1 定稿）
 
-> 状态：`pending`（设计已冻结；实施与 ADR-0010 §3.5 修订待用户裁决）。
-> 范围：本轮只做设计，不做具体实施。
+> 状态：`approved`（2026-08-13 用户裁决放行实施；实施进度统一登记于
+> [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md) P0-A，步骤 1-4 已闭合，
+> 步骤 5-7 待续；ADR-0010 §3.5 修订按批次末第 7 步登记）。
+> 范围：设计定稿；实施按 P0-A 批次执行。
 > 关联：ADR-0010 §3.5（2026-08-12 裁决"目录不承诺"）；`tool_availability_check`
 > 事件（run-event v0.2，本设计对其做直接升级）；检索侧机械控制（web_fetch 计数、
 > 机械预筛、引用校验）见 [`RETRIEVAL_MECHANICAL_CONTROLS_DESIGN`](RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md)。
@@ -30,7 +32,7 @@
 | 工具 | 判定来源 | 不完整 reason 示例（中性陈述） |
 |---|---|---|
 | read_file / list_dir / grep | 路径在 cwd 内存在且可读 | `工作区路径不可读` |
-| search_replace / image_edit | 目标路径可写 + 当前 permission profile 允许写 | `写权限策略未放行` |
+| search_replace | 目标路径可写 + 当前 permission profile 允许写 | `写权限策略未放行` |
 | search_tool | 与 grep 同源（索引/目录可读） | `工作区路径不可读` |
 | run_tests | `host.test_runner()` 存在 | `缺少测试运行器` |
 | ask_user_question | 会话附着交互式用户 | `无交互式用户会话` |
@@ -71,6 +73,10 @@
   无任何状态标注。registry 交集的必要性：部分会话变体可移除
   `ask_user_question`/`search_tool`（builder allowlist），探针不得把会话
   不存在的工具声明给模型（2026-08-13 审查裁定）。
+- 面 A/C 同源约束（2026-08-13 审查清理，与面 B 交集语义一致）：面 A 与面 C
+  同样只列出会话实际声明的工具（controller 追加或 registry/builder 声明），
+  不凭空发明；面 A/B/C 之外的工具（检索车道、bash、宿主持有工具）不参与
+  投影，保持各自既有声明规则。
 - 确定不可提议：面 B 不完整 → 不进入本轮列表，模型无法提议；因竞态仍收到调用时，
   兜底返回中性机械陈述（如"tool 'run_tests' — 缺少测试运行器"）。
 
@@ -89,6 +95,10 @@
 - 迁移：删除条件声明逻辑，run_tests 进入面 B；探针 = runner 存在性（零成本、
   不启动测试进程）；链路完整才列出；兜底 reason `缺少测试运行器`。
 - 对外行为不变，语义统一为探针过滤。
+- 竞态兜底（2026-08-13 审查清理已落地）：无 runner 时若仍收到调用，在
+  dispatch 前以无 ToolStarted 的显式拒绝返回中性陈述
+  `tool 'run_tests' — 缺少测试运行器`（错误码 `missing_test_runner`），
+  不再走默认 NotFound 执行路径。
 
 ## 7. tool_availability_check 事件直接升级
 
