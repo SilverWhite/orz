@@ -37,10 +37,13 @@
 - local_browser：页面已打开，门禁计完数后模型可决定全文读取或关键词提取；
   需要 `browser_read` 支持范围/模式参数（全文/预览/关键词提取）——属后续工具
   能力扩展，不在本轮；
-  > 注（2026-08-14 审查）：`browser_read` 是主车道工具（route=Host、无
-  > activation），与 web_fetch 的 per-activation 计数域不直接同构；步骤 4
-  > 实施前须先裁决第二段计数域的挂载面（主车道会话级计数域 vs
-  > local_browser 独立 activation 域），本步不裁决、不影响 web_fetch 门禁。
+  > 注（2026-08-14 用户裁决）：`browser_read` 是 host 路由工具（route=Host、
+  > 不进 external dispatch 车道），但主 Agent 不执行检索任务——主车道模型
+  > 可见投影移除 `browser_read`，local_browser 读取只由检索子代理执行；第二段
+  > 计数域直接复用 web_fetch 的 per-activation 语义（activation 累计、去重
+  > URL 计数、continue 重入不重置、activation 关闭清零），随子代理循环传参并
+  > 回写激活侧车。步骤 4 按此实施（browser_read 范围/模式参数扩展），本裁决
+  > 不影响 web_fetch 门禁。
 - framework_fallback：无第二段（local_browser 专属）；web_fetch 的计数门禁
   仍适用，但只有"抓或不抓"。
 

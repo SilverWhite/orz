@@ -194,6 +194,12 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 4 前置裁决登记——用户裁决：browser_read 第二段计数域
+  挂载在检索子代理 activation（复用 web_fetch per-activation 语义：activation
+  累计、去重 URL 计数、continue 重入不重置、关闭清零）；主 Agent 不执行检索
+  任务——主车道模型可见投影移除 browser_read，子代理投影从 host registry
+  恢复（实现 + 单测，设计 §1.3 注更新）；步骤 4（browser_read 范围/模式参数
+  扩展）按此实施。
 - 2026-08-14：ORZ-CACHE-CONTEXT-COST 登记（P1）——缓存与上下文成本收敛三项
   （请求 header 留痕、探针准确性、单轮注入预算 + 策略化读取），ADR-0010 v1.9、
   探针设计 §11 同步；否决方向一并登记（per-window 探测、预热轮、工具层后置渲染、
