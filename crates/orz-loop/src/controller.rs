@@ -294,6 +294,12 @@ pub struct AgentLoopController {
     /// `ORZ_SOURCE_WEIGHTING_CONFIG` overrides at runtime). Quality layer
     /// only — never an authorization gate.
     pub(crate) source_weighting: orz_assurance::source_weighting::SourceWeightConfig,
+    /// FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): mechanical candidate
+    /// prefilter config (embedded seed lists by default;
+    /// `ORZ_CANDIDATE_PREFILTER_CONFIG` overrides at runtime). Purifies and
+    /// sorts the web_search citation pool — quality layer, never an
+    /// authorization gate and never an interception of the model's choice.
+    pub(crate) candidate_prefilter: orz_assurance::candidate_prefilter::CandidatePrefilterConfig,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): activations restored from the
     /// sidecar at build time — journaled as `retrieval_activation_restored`
     /// once at the next run's startup (per activation per prompt).
@@ -355,6 +361,10 @@ pub(crate) struct EvidenceRecord {
     /// the host's structured seam — the candidate pool for the mechanical
     /// prefilter. Empty for every other tool; never parsed from text.
     pub candidate_urls: Vec<String>,
+    /// FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): the web_search query
+    /// that produced this candidate pool — the lexical relevance input for
+    /// the mechanical prefilter. `None` for every other tool.
+    pub search_query: Option<String>,
     /// RFC 3339 access timestamp (journal format).
     pub accessed_at: String,
 }
@@ -411,6 +421,12 @@ pub(crate) fn build_evidence_record(
     } else {
         Vec::new()
     };
+    // FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): the query rides the
+    // evidence record so the prefilter can score lexical relevance at
+    // ledger formation time (mechanical keyword overlap, never semantic).
+    let search_query = (tool == "web_search")
+        .then(|| arg("query").map(str::to_string))
+        .flatten();
     let title = match tool {
         "read_file" | "project_doc_index" => identity
             .rsplit(['/', '\\'])
@@ -590,6 +606,7 @@ pub(crate) fn build_evidence_record(
         observed_scope: observed_scope.to_string(),
         missing_scope: missing_scope.to_string(),
         candidate_urls,
+        search_query,
         accessed_at: chrono::Utc::now().to_rfc3339(),
     })
 }
@@ -639,6 +656,7 @@ fn visibility_rank(visibility: &str) -> u8 {
 pub(crate) fn build_structured_result(
     evidence: &[EvidenceRecord],
     weight_config: &SourceWeightConfig,
+    prefilter_config: &orz_assurance::candidate_prefilter::CandidatePrefilterConfig,
     docs: &[String],
     sources: &[String],
     fallback_source_type: &str,
@@ -656,6 +674,12 @@ pub(crate) fn build_structured_result(
     //    metadata-grade entries (a no-tool-call response is legal; the line
     //    contract stays a stable metadata interface).
     let mut source_ledger: Vec<serde_json::Value> = Vec::new();
+    // FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): mechanical prefilter
+    // removal log — every removal with a stable reason, bound to the
+    // web_search_result ledger entry that owned the pool. Always emitted
+    // (empty when nothing was removed) so the committed payload is
+    // self-describing.
+    let mut prefilter_log: Vec<serde_json::Value> = Vec::new();
     for (i, ev) in evidence.iter().enumerate() {
         let source_id = format!("SRC-{:03}", i + 1);
         let highest_allowed_claim = match ev.visibility.as_str() {
@@ -703,16 +727,48 @@ pub(crate) fn build_structured_result(
             entry["mechanical_weight"] = serde_json::json!(weighted.weight);
             entry["weight_reason"] = weighted.reason.into();
         }
-        // FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs ride
-        // the ledger entry as the structured candidate pool (mechanical
-        // passthrough — metadata-grade; the prefilter assigns tier/weight).
+        // FUS-RETRIEVAL-MECH B-1 + step 3 (2026-08-13/14): web_search
+        // citation URLs ride the ledger entry as the PRE-FILTERED candidate
+        // pool — canonical/host dedup, known failure forms removed,
+        // sorted by tier/weight + lexical relevance. The raw pool is never
+        // written; the retained pool mirrors `candidate_pool` metadata and
+        // removals land in `prefilter_log` (auditable, never silent).
         if !ev.candidate_urls.is_empty() {
+            let report = orz_assurance::candidate_prefilter::prefilter(
+                &ev.candidate_urls,
+                ev.search_query.as_deref().unwrap_or_default(),
+                weight_config,
+                prefilter_config,
+            );
             entry["candidate_urls"] = serde_json::Value::Array(
-                ev.candidate_urls
+                report
+                    .retained
                     .iter()
-                    .map(|url| serde_json::Value::String(url.clone()))
+                    .map(|candidate| serde_json::Value::String(candidate.url.clone()))
                     .collect(),
             );
+            entry["candidate_pool"] = serde_json::Value::Array(
+                report
+                    .retained
+                    .iter()
+                    .map(|candidate| {
+                        serde_json::to_value(candidate).expect("prefiltered candidate serializes")
+                    })
+                    .collect(),
+            );
+            for removed in report.removed {
+                let mut log_entry = serde_json::json!({
+                    "source_id": source_id,
+                    "url": removed.url,
+                    "reason": removed.reason.as_str(),
+                    "action": "removed",
+                    "filtered_at": chrono::Utc::now().to_rfc3339(),
+                });
+                if let Some(canonical_url) = &removed.canonical_url {
+                    log_entry["canonical_url"] = serde_json::Value::String(canonical_url.clone());
+                }
+                prefilter_log.push(log_entry);
+            }
         }
         source_ledger.push(entry);
     }
@@ -1023,10 +1079,15 @@ pub(crate) fn build_structured_result(
                 "visibility": e["visibility"],
                 "content_sha256": e.get("content_sha256").cloned().unwrap_or(serde_json::Value::Null),
             });
-            // FUS-RETRIEVAL-MECH B-1 (2026-08-13): the raw projection
-            // mirrors the ledger's candidate pool for web_search entries.
+            // FUS-RETRIEVAL-MECH B-1 + step 3 (2026-08-13/14): the raw
+            // projection mirrors the ledger's prefiltered candidate pool
+            // for web_search entries — both the retained URL list and the
+            // per-candidate metadata.
             if let Some(candidates) = e.get("candidate_urls") {
                 ref_entry["candidate_urls"] = candidates.clone();
+            }
+            if let Some(pool) = e.get("candidate_pool") {
+                ref_entry["candidate_pool"] = pool.clone();
             }
             ref_entry
         })
@@ -1087,6 +1148,7 @@ pub(crate) fn build_structured_result(
         "filtering_log": five_fields["filtering_log"],
         "organized_response": five_fields["organized_response"],
         "raw_source_refs": five_fields["raw_source_refs"],
+        "prefilter_log": prefilter_log,
         "source_counts": source_counts,
         "visibility_degraded": degraded,
     });
@@ -1801,6 +1863,8 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
+            candidate_prefilter:
+                orz_assurance::candidate_prefilter::CandidatePrefilterConfig::from_env_or_default(),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
             acaf_fail_closed: false,
@@ -2958,6 +3022,17 @@ impl AgentLoopController {
         self
     }
 
+    /// FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): override the mechanical
+    /// candidate prefilter config (defaults to the embedded seed lists;
+    /// runtime override: `ORZ_CANDIDATE_PREFILTER_CONFIG`).
+    pub fn with_candidate_prefilter_config(
+        mut self,
+        config: orz_assurance::candidate_prefilter::CandidatePrefilterConfig,
+    ) -> Self {
+        self.candidate_prefilter = config;
+        self
+    }
+
     /// GAP-RETRIEVAL-TOOLS: whether the bootstrap mode transition was
     /// journaled (the pending flag cleared) — the acp_server uses it to
     /// clear the sidecar flag after a successful run.
@@ -3279,6 +3354,8 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
+            candidate_prefilter:
+                orz_assurance::candidate_prefilter::CandidatePrefilterConfig::from_env_or_default(),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
             acaf_fail_closed: false,
@@ -4656,6 +4733,7 @@ impl AgentLoopController {
                 let committed = build_structured_result(
                     &evidence,
                     &self.source_weighting,
+                    &self.candidate_prefilter,
                     &docs,
                     &sources,
                     match role {
@@ -9054,6 +9132,7 @@ mod tests {
         let committed = build_structured_result(
             &[ev],
             &SourceWeightConfig::default(),
+            &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
             &[],
             &[],
             "web_page",
@@ -9071,12 +9150,115 @@ mod tests {
             ledger[0]["candidate_urls"],
             serde_json::json!(["https://a.example", "https://b.example"])
         );
+        assert_eq!(
+            ledger[0]["candidate_pool"][0]["url"],
+            serde_json::json!("https://a.example")
+        );
+        assert_eq!(
+            ledger[0]["candidate_pool"][1]["url"],
+            serde_json::json!("https://b.example")
+        );
+        assert_eq!(committed.payload["prefilter_log"], serde_json::json!([]));
         let refs = committed.payload["raw_source_refs"].as_array().unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(
             refs[0]["candidate_urls"],
             serde_json::json!(["https://a.example", "https://b.example"])
         );
+        assert_eq!(refs[0]["candidate_pool"], ledger[0]["candidate_pool"]);
+        assert_eq!(committed.payload["source_counts"]["total"], 1);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): the mechanical
+    /// prefilter shapes the committed candidate pool — canonical/host
+    /// dedup, known failure forms removed with stable reasons, tier/weight
+    /// + relevance sorting, and the full metadata mirrored in
+    /// raw_source_refs (the schema/verifier contract).
+    #[test]
+    fn mechanical_prefilter_shapes_candidate_pool_and_log() {
+        let call = ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "rust policy" }),
+            call_id: "c-step3".to_string(),
+        };
+        let result = ToolResult {
+            output: "snippet".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: Some(serde_json::json!({
+                "citations": [
+                    "https://www.gov.cn/policy/rust",
+                    "https://example.com/login?next=/x",
+                    "https://example.com/article?utm_source=x",
+                    "https://example.com/article?utm_medium=y",
+                    "https://www.example.com/",
+                    "https://example.com/?ref=z",
+                    "https://example.com/unrelated"
+                ]
+            })),
+        };
+        let ev = build_evidence_record("web_search", &call, &result).unwrap();
+        assert_eq!(ev.candidate_urls.len(), 7);
+        assert_eq!(ev.search_query.as_deref(), Some("rust policy"));
+
+        let committed = build_structured_result(
+            &[ev],
+            &SourceWeightConfig::default(),
+            &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
+            &[],
+            &[],
+            "web_page",
+            "[RESULT_JSON]{\"sections\":[],\"claims\":[]}[/RESULT_JSON]",
+            "sub-session",
+            "act-1",
+            "contract-1",
+            0,
+            "call-1",
+            "goal",
+        );
+        let ledger = committed.payload["source_ledger"].as_array().unwrap();
+        let entry = &ledger[0];
+        assert_eq!(entry["source_type"], serde_json::json!("web_search_result"));
+        assert_eq!(
+            entry["candidate_urls"],
+            serde_json::json!([
+                "https://www.gov.cn/policy/rust",
+                "https://example.com/article?utm_source=x",
+                "https://www.example.com/",
+                "https://example.com/unrelated"
+            ])
+        );
+        // Per-candidate metadata: tier/weight/relevance/canonical form.
+        let pool = entry["candidate_pool"].as_array().unwrap();
+        assert_eq!(pool.len(), 4);
+        assert_eq!(pool[0]["tier"], serde_json::json!("authoritative"));
+        assert_eq!(pool[0]["mechanical_weight"], serde_json::json!(1.1));
+        assert_eq!(pool[0]["relevance"], serde_json::json!("direct"));
+        assert_eq!(
+            pool[1]["canonical_url"],
+            serde_json::json!("https://example.com/article")
+        );
+        assert_eq!(pool[3]["relevance"], serde_json::json!("tangential"));
+        // Removal log: login wall, canonical duplicate, host duplicate.
+        let log = committed.payload["prefilter_log"].as_array().unwrap();
+        let reasons: Vec<&str> = log.iter().map(|e| e["reason"].as_str().unwrap()).collect();
+        assert_eq!(
+            reasons,
+            vec!["login_wall", "duplicate_canonical", "duplicate_host"]
+        );
+        assert!(
+            log.iter()
+                .all(|e| e["source_id"] == serde_json::json!("SRC-001"))
+        );
+        assert!(
+            log.iter()
+                .all(|e| e["action"] == serde_json::json!("removed"))
+        );
+        // raw_source_refs mirrors the prefiltered pool exactly.
+        let refs = committed.payload["raw_source_refs"].as_array().unwrap();
+        assert_eq!(refs[0]["candidate_urls"], entry["candidate_urls"]);
+        assert_eq!(refs[0]["candidate_pool"], entry["candidate_pool"]);
+        // Candidates are not observed sources — counts unchanged.
         assert_eq!(committed.payload["source_counts"]["total"], 1);
     }
 

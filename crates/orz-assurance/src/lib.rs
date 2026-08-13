@@ -6,6 +6,7 @@
 // acaf (ACAF Slice 1 — ADR-0011 control tickets).
 
 pub mod acaf;
+pub mod candidate_prefilter;
 pub mod credential;
 pub mod gates;
 pub mod journal;
