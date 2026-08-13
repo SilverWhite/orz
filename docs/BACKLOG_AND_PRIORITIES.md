@@ -73,6 +73,16 @@
   全量 1821 通过，仓库门禁 valid。边界：候选池暂不进模型提示词（预筛步骤负责
   展示），web_search 摘要条目仍不写 tier。审计：
   [GAP-RETRIEVAL-MECH B-1 实施审计](audits/GAP_RETRIEVAL_MECH_B1_CITATIONS_IMPL_AUDIT_2026-08-13.md)。
+- 进度（2026-08-14）：**步骤 2 已完成**——web_fetch 候选机械计数门禁与计数
+  反馈（`ORZ_WEB_FETCH_CANDIDATE_CAP` 用户裁决定档 8；per-activation 计数域
+  随 activation 侧车持久化，经 LoopProfile 穿过子代理循环；精确字符串去重；
+  未超限结果携带“候选 N/M，剩余 K”反馈 + `tool_completed` 审计字段
+  candidate_count/candidate_cap（Schema 先行）；超限无 ToolStarted 拒绝 +
+  连续拒绝熔断同面；缺 url/无计数域 fail-closed）；orz-loop 244 / orz-host 200 /
+  orz-assurance 139 / orz-tui 178 / orz-bin 全绿，Python 全量 1828 通过，
+  仓库门禁 valid（含审查修复：verifier 派发包装误报、黑板计数反馈一致、
+  continue 跨派发累计测试）。审计：
+  [GAP-RETRIEVAL-MECH 步骤 2 实施审计](audits/GAP_RETRIEVAL_MECH_STEP2_WEB_FETCH_CANDIDATE_COUNT_IMPL_AUDIT_2026-08-14.md)。
 - 依赖顺序：1（B-1 闭合）→ 2/3 → 5 → 4/6。
   1. B-1 闭合：web_search citations 结构化透传 loop；
   2. web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
@@ -159,6 +169,13 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 2 闭合登记——web_fetch 候选机械计数门禁与计数反馈
+  实施完成（`ORZ_WEB_FETCH_CANDIDATE_CAP` 定档 8、per-activation 计数域 +
+  侧车持久化、无 ToolStarted 拒绝 + 熔断同面、`tool_completed` 计数字段
+  Schema 先行、verifier 规则 + 9 测试、Rust +6 测试（含 continue 跨派发累计）
+  与快照扩展）；审查修复——verifier 排除派发包装误报、黑板 exec 镜像与
+  对话消息一致、cap-exceeded 缺字段加固、browser_read 计数域挂载面注记；
+  批次下一步为步骤 3（机械预筛）。
 - 2026-08-14：新增 AUTH-TODO 路由——建立根目录 [`TODO.md`](../TODO.md) 实施勾选清单（派生自本文件未闭合项），本文件仍为优先级/决策门权威。
 - 2026-08-14：文档审查复核——FUS-TOOL-PROBE 小节头部由“实施中”改为已闭合（与索引 `implemented` 对齐）；CLASSICAL-EXEC-ASSISTANT 设计文档状态头、投影入口与 README 冻结版本表述联动修正。
 - 2026-08-14：P0-B 步骤 1 审查闭环处理——旧来源加权审计 B-1/D-2/D-4 边界补

@@ -18,7 +18,8 @@
 - 计数时机：工具执行前由机械门禁先计数，先于任何抓取动作；
 - 计数域：web_fetch 候选核验（framework_fallback）；local_browser 第二段读取
   （页面已打开时）复用同一计数域；
-- 阈值：外置为 `ORZ_WEB_FETCH_CANDIDATE_CAP`（默认 5–8，最终值待定档），
+- 阈值：外置为 `ORZ_WEB_FETCH_CANDIDATE_CAP`（**2026-08-14 用户裁决定档
+  8**；实施审计见 `docs/audits/GAP_RETRIEVAL_MECH_STEP2_WEB_FETCH_CANDIDATE_COUNT_IMPL_AUDIT_2026-08-14.md`），
   不再写死在提示词；
 - 与预算一致：continue 重入不重置计数，仅 activation 关闭后新起（与工具轮
   预算的 session 累计语义一致）。
@@ -36,6 +37,10 @@
 - local_browser：页面已打开，门禁计完数后模型可决定全文读取或关键词提取；
   需要 `browser_read` 支持范围/模式参数（全文/预览/关键词提取）——属后续工具
   能力扩展，不在本轮；
+  > 注（2026-08-14 审查）：`browser_read` 是主车道工具（route=Host、无
+  > activation），与 web_fetch 的 per-activation 计数域不直接同构；步骤 4
+  > 实施前须先裁决第二段计数域的挂载面（主车道会话级计数域 vs
+  > local_browser 独立 activation 域），本步不裁决、不影响 web_fetch 门禁。
 - framework_fallback：无第二段（local_browser 专属）；web_fetch 的计数门禁
   仍适用，但只有"抓或不抓"。
 

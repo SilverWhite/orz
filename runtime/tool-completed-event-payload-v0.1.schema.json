@@ -19,6 +19,16 @@
     },
     "status": { "const": "error" },
     "error": { "type": "string" },
+    "candidate_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the per-activation deduplicated web_fetch candidate count after this call (or at refusal). Present only on web_fetch-family tool_completed events; pairing/range/error-shape rules are enforced by the Python cross-layer verifier (_verify_v02_web_fetch_candidate_count), keeping the schema shape minimal."
+    },
+    "candidate_cap": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the web_fetch candidate cap in effect (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8). Present together with candidate_count."
+    },
     "section": { "type": "string" },
     "full_output_path": { "type": "string" },
     "workspace_delta": {

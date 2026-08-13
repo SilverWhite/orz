@@ -2392,6 +2392,141 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
         self.assertIn("does not match the ledger", " | ".join(errors))
 
 
+class WebFetchCandidateCountTests(unittest.TestCase):
+    """FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): web_fetch candidate
+    count fields on tool_completed events — pairing, range, family and
+    cap-boundary shape (cross-layer verifier)."""
+
+    def _event(self, payload: dict) -> dict:
+        return _mk_v02_event("tool_completed", payload, 0, None)
+
+    def test_valid_success_carries_count_and_cap(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-1",
+                "exit_code": 0,
+                "candidate_count": 3,
+                "candidate_cap": 8,
+            }
+        )
+        self.assertEqual(validate_journal_text(_v02_journal([event])), [])
+
+    def test_valid_cap_exceeded_refusal_at_boundary(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-9",
+                "target": "external_retrieval",
+                "status": "error",
+                "error": "web_fetch_candidate_cap_exceeded",
+                "candidate_count": 8,
+                "candidate_cap": 8,
+            }
+        )
+        self.assertEqual(validate_journal_text(_v02_journal([event])), [])
+
+    def test_count_without_cap_rejected(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-1",
+                "exit_code": 0,
+                "candidate_count": 1,
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("travel together", " | ".join(errors))
+
+    def test_fields_only_on_web_fetch_family(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_search",
+                "call_id": "call-1",
+                "exit_code": 0,
+                "candidate_count": 1,
+                "candidate_cap": 8,
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("web_fetch family only", " | ".join(errors))
+
+    def test_count_over_cap_rejected(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-1",
+                "exit_code": 0,
+                "candidate_count": 9,
+                "candidate_cap": 8,
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("out of range", " | ".join(errors))
+
+    def test_non_error_web_fetch_must_carry_fields(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-1",
+                "exit_code": 0,
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("must carry candidate_count/candidate_cap", " | ".join(errors))
+
+    def test_dispatch_wrapper_without_count_fields_valid(self) -> None:
+        # 2026-08-14 review P1: the subagent DISPATCH wrapper completion
+        # (target=external_retrieval, exit_code, no count fields) is the
+        # parent call being answered — not a fetch. It must NOT be flagged.
+        wrapper = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-1",
+                "target": "external_retrieval",
+                "exit_code": 0,
+            }
+        )
+        lane = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-2",
+                "exit_code": 0,
+                "candidate_count": 1,
+                "candidate_cap": 8,
+            }
+        )
+        self.assertEqual(validate_journal_text(_v02_journal([wrapper, lane])), [])
+
+    def test_cap_exceeded_without_count_fields_rejected(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-9",
+                "target": "external_retrieval",
+                "status": "error",
+                "error": "web_fetch_candidate_cap_exceeded",
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("cap-exceeded refusal must carry", " | ".join(errors))
+
+    def test_cap_exceeded_refusal_count_must_equal_cap(self) -> None:
+        event = self._event(
+            {
+                "tool": "web_fetch",
+                "call_id": "call-9",
+                "target": "external_retrieval",
+                "status": "error",
+                "error": "web_fetch_candidate_cap_exceeded",
+                "candidate_count": 7,
+                "candidate_cap": 8,
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("must equal candidate_cap", " | ".join(errors))
+
+
 def _restore(
     restore_id: str,
     assessment_id: str | None,
