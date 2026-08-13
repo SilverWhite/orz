@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/citation-validation-event-payload-v0.2.schema.json",
+  "title": "Final-answer citation validation runtime event payload v0.2",
+  "description": "FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the mechanical output-level citation verifier (RETRIEVAL_MECHANICAL_CONTROLS_DESIGN §3.2 / ADR-0010 §3.7.9 / V11-IMPL-004). The controller scans the main agent's final answer for `[来源: ...]` markers, parses them structurally (never grep), binds each to this run's evidence — ledger source_id, observed path:line, URL/document identity + observed scope — and enforces the §3.7.5 claim × visibility cap. The v0.2 producer writes this event ONLY when verification fails and the final answer is degraded/blocked with an explicit mechanical reason code (never a silent downgrade); a passing final answer writes nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "position",
+    "decision",
+    "marker_count",
+    "reason_codes",
+    "degraded"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.2.0-draft" },
+    "position": { "const": "final_answer" },
+    "decision": { "enum": ["pass", "block"] },
+    "marker_count": { "type": "integer", "minimum": 0 },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9_]+$" }
+    },
+    "degraded": { "type": "boolean" },
+    "message_block": { "type": "string", "minLength": 1 },
+    "markers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/marker_entry" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "decision": { "const": "block" } },
+        "required": ["decision"]
+      },
+      "then": {
+        "required": ["message_block", "markers"],
+        "properties": {
+          "reason_codes": { "minItems": 1 },
+          "degraded": { "const": true }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "decision": { "const": "pass" } },
+        "required": ["decision"]
+      },
+      "then": {
+        "properties": {
+          "reason_codes": { "maxItems": 0 },
+          "degraded": { "const": false }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "marker_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "raw", "target", "binding", "status", "reason_codes"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "raw": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "binding": {
+          "enum": [
+            "ledger_source_id",
+            "path_line",
+            "url_identity",
+            "document_identity",
+            "unresolved"
+          ]
+        },
+        "status": { "enum": ["passed", "failed"] },
+        "reason_codes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9_]+$" }
+        }
+      }
+    }
+  }
+}

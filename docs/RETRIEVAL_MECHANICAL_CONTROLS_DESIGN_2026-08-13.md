@@ -104,6 +104,21 @@
   不依赖文本措辞（ADR-0010 §3.7.9）；
 - 校验器通过后，prompt 中的引用纪律文本可缩减为"标记格式 + 由 verifier 校验"。
 
+> 步骤 5 已闭合（2026-08-14）：输出级引用校验器与交付边界接线实施完成——
+> 主 Agent 最终回答在 counterexample gate 同一交付边界机械校验 `[来源: ...]`
+> 标记（结构化解析、ledger source_id / 主车道 path:line / URL+observed scope /
+> 文档身份绑定、§3.7.5 claim 上限），失败时以 `[CITATION_VALIDATION_FAILED]`
+> 机械降级块替代交付并 journal `citation_validation`（reason codes + marker
+> 明细，Schema/verifier/fixtures 先行，v0.2 事件枚举 42→43），通过时零事件。
+> 边界：裸 `SRC-###` 仅绑定不强检、裸外部 URL 必须带 observed scope、预算耗尽
+> 部分输出与跨 run restore 证据不参与本校验。实施审计见
+> `docs/audits/GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT_2026-08-14.md`。
+> 复核修复（2026-08-14）：`SRC-###` 为 run 级唯一分配（跨同 run 多次 commit
+> 不重号，消除 first-match 绑定歧义）；`[来源：...]` 全角冒号变体同样解析，
+> 围栏/行内代码块中的字面标记跳过；URL 归一化复用共享 canonical 化并接受
+> 主车道自身 web 证据；文档 `§` 锚点为定位符不参与 claim 上限；行界校验
+> 读取交付时文件状态（TOCTOU 显式登记，身份仍为 observation-time）。
+
 ## 4. 与既有机制的关系
 
 - mode 门禁（§3.7.1）已机械禁止检索通道混用，本设计不重复造门禁；

@@ -123,6 +123,14 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "retrieval-activation-restored",
         RUNTIME / "retrieval-activation-restored-event-payload-v0.2.schema.json",
     ),
+    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the output-level citation
+    # verifier event — written ONLY on a block/degradation (passing final
+    # answers journal nothing), ADR-0010 §3.7.9 / RETRIEVAL_MECHANICAL_CONTROLS
+    # _DESIGN §3.2.
+    "citation_validation": (
+        "citation-validation",
+        RUNTIME / "citation-validation-event-payload-v0.2.schema.json",
+    ),
     # ACAF Slice 1 (设计文档 §4.2/§4.6): control-ticket lifecycle events —
     # issued → consumed|rejected pairing enforced by _verify_v02_control_tickets.
     "control_ticket_issued": (
@@ -1150,6 +1158,80 @@ def _verify_v02_web_fetch_candidate_count(events: list[dict[str, Any]]) -> list[
     return errors
 
 
+def _verify_v02_citation_validation(events: list[dict[str, Any]]) -> list[str]:
+    """FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): ADR-0010 §3.7.9 output-level
+    citation verifier events on the v0.2 track (RETRIEVAL_MECHANICAL_CONTROLS
+    _DESIGN §3.2):
+
+    - a block decision must degrade the answer (degraded=true), carry at least
+      one reason code, the mechanical degradation message block and at least
+      one failed marker;
+    - a pass decision must not degrade and must carry no reason codes (the v0.2
+      producer currently writes only block events — a passing final answer
+      journals nothing);
+    - marker_count must equal the markers array length;
+    - every failed marker must carry at least one reason code and every passed
+      marker none.
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "citation_validation":
+            continue
+        payload = event["payload"]
+        decision = payload["decision"]
+        degraded = payload["degraded"]
+        reason_codes = payload["reason_codes"]
+        marker_count = payload["marker_count"]
+        markers = payload.get("markers", [])
+        if decision == "block":
+            if not degraded:
+                errors.append(
+                    f"event {index}: citation_validation block must degrade the answer"
+                )
+            if not reason_codes:
+                errors.append(
+                    f"event {index}: citation_validation block needs reason codes"
+                )
+            if not markers:
+                errors.append(
+                    f"event {index}: citation_validation block needs marker details"
+                )
+            if not payload.get("message_block", "").startswith(
+                "[CITATION_VALIDATION_FAILED"
+            ):
+                errors.append(
+                    f"event {index}: citation_validation block carries a "
+                    "non-mechanical message block"
+                )
+        elif decision == "pass":
+            if degraded:
+                errors.append(
+                    f"event {index}: citation_validation pass must not degrade"
+                )
+            if reason_codes:
+                errors.append(
+                    f"event {index}: citation_validation pass must carry no reason codes"
+                )
+        if marker_count != len(markers):
+            errors.append(
+                f"event {index}: citation_validation marker_count {marker_count} "
+                f"!= {len(markers)} marker details"
+            )
+        for marker in markers:
+            marker_reasons = marker.get("reason_codes", [])
+            if marker.get("status") == "failed" and not marker_reasons:
+                errors.append(
+                    f"event {index}: failed citation marker {marker.get('raw')!r} "
+                    "lacks reason codes"
+                )
+            if marker.get("status") == "passed" and marker_reasons:
+                errors.append(
+                    f"event {index}: passed citation marker {marker.get('raw')!r} "
+                    "carries reason codes"
+                )
+    return errors
+
+
 def _verify_v02_activation_restore(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §3.3/§4.4 restore facts on the v0.2 track: the same activation
     is restored at most once per journal (each prompt's controller build may
@@ -1785,6 +1867,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_search_candidate_pool(events))
         errors.extend(_verify_v02_candidate_prefilter(events))
         errors.extend(_verify_v02_web_fetch_candidate_count(events))
+        errors.extend(_verify_v02_citation_validation(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))
         errors.extend(_verify_v02_tool_availability_probe(events))

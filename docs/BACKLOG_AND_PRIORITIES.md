@@ -92,12 +92,23 @@
   接线）；边界：超大页/robots 无法离线判定保留 unknown、计数域精确去重
   语义不变、模型面展示留待步骤 6。审计：
   [GAP-RETRIEVAL-MECH 步骤 3 实施审计](audits/GAP_RETRIEVAL_MECH_STEP3_CANDIDATE_PREFILTER_IMPL_AUDIT_2026-08-14.md)。
+- 进度（2026-08-14）：**步骤 5 已完成**——输出级引用校验器与交付边界接线
+  （主 Agent 最终回答在 counterexample gate 同一交付边界机械校验 `[来源: ...]`
+  标记：结构化解析、ledger source_id / 主车道 path:line / URL+observed scope /
+  文档身份绑定、§3.7.5 claim 上限；失败以 `[CITATION_VALIDATION_FAILED]` 机械
+  降级块替代交付并 journal `citation_validation` 事件，reason codes + marker
+  明细；Schema/verifier/fixtures 先行，v0.2 事件枚举 42→43；主车道补
+  main_evidence 读取证据 + run_source_ledgers，TUI 投影同步；conformance 新增
+  第 14 个场景并捕获 journal）；验证：orz-loop 268 / orz-assurance 151 /
+  orz-tui 178 / orz-bin 42 通过，Python runtime 239 / assurance 1621 通过，
+  仓库门禁 valid；既有 13 份 journals 重捕无漂移。审计：
+  [GAP-RETRIEVAL-MECH 步骤 5 实施审计](audits/GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT_2026-08-14.md)。
 - 依赖顺序：1（B-1 闭合）→ 2/3 → 5 → 4/6。
   1. （已完成）B-1 闭合：web_search citations 结构化透传 loop；
   2. （已完成）web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
   3. （已完成）机械预筛模块（候选池净化 + 排序标签）与结构化结果扩展；
   4. browser_read 范围/模式参数（全文/预览/关键词提取）工具能力扩展；
-  5. 输出级引用校验器与交付边界接线；
+  5. （已完成）输出级引用校验器与交付边界接线；
   6. 提示词相应缩短（计数/预筛/引用规则）与测试更新。
 - 建议并入：DC 剩余两信号（`same_module_no_evidence` / `key_surface_unexamined`）接线。
 
@@ -194,6 +205,22 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 5 复核修复批次——审查发现的全部可处理问题已处理：
+  `SRC-###` 改 run 级唯一分配（orientation-fire-run 重捕，5 commit →
+  `SRC-001..005`）、URL 归一化复用共享 canonical 化、主车道 web 证据接入
+  URL 绑定、全角冒号变体解析 + 围栏/行内代码块字面标记跳过、文档 `§`
+  锚点不再参与 claim 上限、fixture message_block 对齐 producer、审计
+  数字修正（orz-bin 42/14 ignored）、行界 TOCTOU 显式登记；验证重跑全绿
+  （orz-loop 275 / orz-assurance 152 / orz-tui 178 / orz-bin 42、Python
+  runtime 239 / assurance 1607+14 skipped、仓库门禁 valid）。详见
+  [GAP-RETRIEVAL-MECH 步骤 5 实施审计](audits/GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT_2026-08-14.md) §7。
+- 2026-08-14：P0-B 步骤 5 闭合登记——输出级引用校验器与交付边界接线实施
+  完成（`[来源: ...]` 结构化解析 + ledger/path:line/URL/文档绑定 + §3.7.5
+  上限 + 机械降级块 + `citation_validation` 事件 Schema/verifier/fixtures
+  先行、TUI 投影、conformance 第 14 场景；主车道补 main_evidence 与
+  run_source_ledgers）；orz-loop 268 / orz-assurance 151 / orz-tui 178 /
+  orz-bin 42、Python runtime 239 / assurance 1621 通过，仓库门禁 valid；
+  批次下一步为步骤 4（browser_read 范围/模式参数扩展，前置裁决已登记）。
 - 2026-08-14：P0-B 步骤 4 前置裁决登记——用户裁决：browser_read 第二段计数域
   挂载在检索子代理 activation（复用 web_fetch per-activation 语义：activation
   累计、去重 URL 计数、continue 重入不重置、关闭清零）；主 Agent 不执行检索

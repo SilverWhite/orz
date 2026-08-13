@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.2.0-draft",
+  "position": "final_answer",
+  "decision": "block",
+  "marker_count": 1,
+  "reason_codes": [],
+  "degraded": false,
+  "markers": [
+    {
+      "index": 0,
+      "raw": "[来源: SRC-999]",
+      "target": "SRC-999",
+      "binding": "ledger_source_id",
+      "status": "failed",
+      "reason_codes": ["unknown_source_id"]
+    }
+  ]
+}

@@ -266,7 +266,9 @@ class RunEventV02ContractTests(unittest.TestCase):
         GAP-RETRIEVAL-TOOLS (2026-08-10): 36 → 39 (+retrieval_mode_transition,
         +retrieval_result_committed, +retrieval_activation_restored).
         ACAF Slice 1 (2026-08-12): 39 → 42 (+control_ticket_issued,
-        +control_ticket_consumed, +control_ticket_rejected)."""
+        +control_ticket_consumed, +control_ticket_rejected).
+        FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): 42 → 43
+        (+citation_validation)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -275,7 +277,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 42)
+        self.assertEqual(len(enum_events), 43)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
 

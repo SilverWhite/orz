@@ -1376,7 +1376,7 @@ extension 2026-08-10):
 
 ## Real journals (`journals/`)
 
-The 13 journals below are captured by the orz conformance capture tests
+The 14 journals below are captured by the orz conformance capture tests
 (`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`,
 staged under `target/conformance-journals/` and dev-copied here — see the
 GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review

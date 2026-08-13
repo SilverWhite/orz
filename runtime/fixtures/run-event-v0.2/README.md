@@ -92,13 +92,14 @@ extension 2026-08-10):
 
 ## Real journals (`journals/`)
 
-The 13 journals below are captured by the orz conformance capture tests
+The 14 journals below are captured by the orz conformance capture tests
 (`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`,
 staged under `target/conformance-journals/` and dev-copied here — see the
 GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
 fixes (H1 off projection now hides `project_doc_index` too); the 13th
 (`local-browser-read`) is the local_browser slice (2026-08-10) available-
-capability scenario:
+capability scenario; the 14th (`citation-validation-block`, 2026-08-14) is
+the P0-B step 5 output-level citation verifier block scenario:
 
 | journal | scenario |
 |---|---|
@@ -115,3 +116,4 @@ capability scenario:
 | `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
 | `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
 | `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |
+| `citation-validation-block.jsonl` | P0-B step 5: final answer `[来源: SRC-999]` (unknown source) → `citation_validation{decision: block}` + mechanical degradation block, run finishes normally (ADR §3.7.9) |
