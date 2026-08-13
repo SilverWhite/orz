@@ -283,17 +283,61 @@ pub trait LoopHost: Send + Sync {
         None
     }
 
-    /// Session working directory — the workspace scope the Face B tool
-    /// probes check (read chain / write chain). Defaults to the process
-    /// cwd; hosts must override with the session cwd (which may differ).
+    /// Session working directory — the workspace scope the work-tool
+    /// probes check (read chain / write chain / storage chain). Defaults
+    /// to the process cwd; hosts must override with the session cwd (which
+    /// may differ).
     fn session_cwd(&self) -> PathBuf {
         std::env::current_dir().unwrap_or_default()
     }
 
     /// Whether the session is attached to an interactive user who can
-    /// answer `ask_user_question` (Face B probe source). Defaults to
-    /// `false` (fail-closed); hosts with a live client override.
+    /// answer `ask_user_question` and approve plan mode (work-tool probe
+    /// source). Defaults to `false` (fail-closed); hosts with a live
+    /// client override.
     fn interactive_user(&self) -> bool {
+        false
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2 (v0.2 single probe face, ADR-0010 §3.5 v1.8):
+    /// whether the host carries a usable terminal backend
+    /// (`run_terminal_cmd` probe source). Fail-closed default; hosts wire
+    /// their real backend.
+    fn terminal_available(&self) -> bool {
+        false
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: whether a workspace language-service backend
+    /// is configured (`lsp` probe source). Fail-closed default.
+    fn lsp_configured(&self) -> bool {
+        false
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: whether memory is explicitly opted in and a
+    /// backend is present (`memory_get` / `memory_search` probe source).
+    /// Fail-closed default.
+    fn memory_enabled(&self) -> bool {
+        false
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: whether an image-generation backend is
+    /// configured (`image_gen` / `image_edit` probe source). Fail-closed
+    /// default.
+    fn image_backend_configured(&self) -> bool {
+        false
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: whether a video-generation backend is
+    /// configured (`image_to_video` / `reference_to_video` probe source).
+    /// Fail-closed default.
+    fn video_backend_configured(&self) -> bool {
+        false
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: whether an MCP / capability registry is
+    /// present in session scope (`use_tool` probe source). Fail-closed
+    /// default.
+    fn mcp_registry_available(&self) -> bool {
         false
     }
 

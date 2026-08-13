@@ -619,6 +619,42 @@ impl LoopHost for OrzHost {
         self.gateway.is_some()
     }
 
+    /// FUS-TOOL-PROBE P0-A-2 (v0.2 single probe face): the ORZ host always
+    /// wires a local terminal backend (`tools::build_toolset` constructs
+    /// `LocalTerminalBackend`), so `run_terminal_cmd`'s mechanical chain is
+    /// complete at the host level (policy still gates exec per session).
+    fn terminal_available(&self) -> bool {
+        true
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: the ORZ host currently builds its toolset
+    /// with every optional backend disabled (`build_toolset`:
+    /// `memory_backend: None`, `lsp: None`, image/video configs
+    /// `Default::default()` = Disabled, no MCP registration). The probes
+    /// therefore fail closed — these tools are declared in the GrokBuild
+    /// registry but cannot complete a call, so the single probe face
+    /// removes them from the model-visible list. When a backend is wired
+    /// in `tools::build_toolset`, flip the matching accessor here.
+    fn lsp_configured(&self) -> bool {
+        false
+    }
+
+    fn memory_enabled(&self) -> bool {
+        false
+    }
+
+    fn image_backend_configured(&self) -> bool {
+        false
+    }
+
+    fn video_backend_configured(&self) -> bool {
+        false
+    }
+
+    fn mcp_registry_available(&self) -> bool {
+        false
+    }
+
     /// D-9: run the FIXED test command in the session cwd. The model never
     /// supplies argv — the command is host-owned; stdout/stderr/exit code
     /// feed back to the model (Aider-model loop).

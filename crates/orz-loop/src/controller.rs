@@ -3,8 +3,8 @@
 //! Replaces Grok Sampler's ~10k lines with a clean while loop.
 //!
 //! Flow (event sequence aligned with Python `orientation_runtime_journal.py`):
-//!   1. tool_availability_check (Face B two-state probe partition —
-//!      complete/incomplete with neutral reasons; Face A/C and the
+//!   1. tool_availability_check (work-tool two-state probe partition —
+//!      complete/incomplete with neutral reasons; the retrieval lane and
 //!      retrieval lane never appear — must precede run_started per Python
 //!      conformance)
 //!   2. run_started / prompt_submitted
@@ -291,8 +291,8 @@ pub struct AgentLoopController {
     /// production increment source is Slice 3's ModeChangeTicket
     /// (ADR-0011 决策 9) — the mechanism is wired and test-covered today.
     pub(crate) policy_revision: std::sync::atomic::AtomicU64,
-    /// FUS-TOOL-PROBE P0-A step 5 (2026-08-13): the minimal previous-round
-    /// map — Face B `tool → complete/incomplete`, no reasons cached
+    /// FUS-TOOL-PROBE P0-A/P0-A-2 (2026-08-13): the minimal previous-round
+    /// map — work tool `tool → complete/incomplete`, no reasons cached
     /// (design §8) — the flip comparator for `tool_availability_check`
     /// events. Seeded by the pre-run_started probe and reset per run;
     /// never persisted across runs.
@@ -1076,6 +1076,14 @@ impl ActivationRegistry {
         self.states.get(&role)
     }
 
+    /// FUS-TOOL-PROBE P0-A-2 (design §2.0): whether any live activation
+    /// exists (`retrieval_disposition` probe chain). Closed states are
+    /// removed/replaced, so a non-empty registry means a disposition can
+    /// legally be submitted.
+    pub(crate) fn has_live(&self) -> bool {
+        !self.states.is_empty()
+    }
+
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): serialize the live registry to the
     /// sidecar snapshot JSON (Closed activations excluded — the next
     /// creation starts a new seq). `origin_run_id` records where each
@@ -1759,9 +1767,9 @@ impl AgentLoopController {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    // ── FUS-TOOL-PROBE (P0-A steps 2/5) ────────────────────────────────
+    // ── FUS-TOOL-PROBE (P0-A steps 2/5 + P0-A-2 single probe face) ─────
 
-    /// The `tool_availability_check` payload for a Face B snapshot —
+    /// The `tool_availability_check` payload for a work-tool snapshot —
     /// neutral reasons only. `gate_decision` stays the internal mechanical
     /// "pass" (the probe never blocks — design invariant 2; the §7 draft
     /// example keeps pass even with incomplete tools); non-pass mapping
@@ -1804,17 +1812,17 @@ impl AgentLoopController {
         }
     }
 
-    /// P0-A step 5 (design §5): 调用即探针 — a real Face B call failure
+    /// P0-A step 5 (design §5): 调用即探针 — a real work-tool call failure
     /// (ToolCompleted status=error) writes back into the minimal map as
     /// incomplete so the next probe compares against the corrected state.
-    /// Non-Face B tools are ignored.
+    /// Non-work tools are ignored (their declaration rules are unchanged).
     pub(crate) fn note_probe_call_failure(&self, tool: &str) {
         self.probe_state.lock().unwrap().mark_incomplete(tool);
     }
 
     /// P0-A step 5 review fix (2026-08-13): 调用即探针, lane-gated — only
-    /// lanes that own the Face B probe map (main/grill, `probe_writeback`
-    /// = `profile.probe_face_b`) write call failures back. Retrieval lanes
+    /// lanes that own the probe map (main/grill, `probe_writeback`
+    /// = `profile.probe_work_tools`) write call failures back. Retrieval lanes
     /// never re-probe and must not pollute the main map with lane-local
     /// failures (would surface as spurious recovery-flip events in the main
     /// audit stream).
@@ -1824,7 +1832,7 @@ impl AgentLoopController {
         }
     }
 
-    /// The host-owned `run_tests` ToolDef — declared by the Face B
+    /// The host-owned `run_tests` ToolDef — declared by the work-tool
     /// projection when the probe finds a test runner (P0-A step 3/5).
     fn run_tests_tool_def() -> ToolDef {
         ToolDef {
@@ -1838,13 +1846,13 @@ impl AgentLoopController {
         }
     }
 
-    /// P0-A step 5 (design §4): rebuild the model-visible list projection
-    /// from the base registry list + the CURRENT Face B snapshot:
-    /// 面A + (面B完整集 ∩ 会话声明集) + 面C + 非工作工具 — names only, no
-    /// status annotations. `run_tests` is host-owned: declared when its
-    /// probe is complete (at most once); incomplete Face B tools are
-    /// removed even when declared; registry-absent tools are never
-    /// invented.
+    /// P0-A-2 (design §4 v0.2): rebuild the model-visible list projection
+    /// from the base registry list + the CURRENT probe snapshot:
+    /// 探针完整集 ∩ 会话声明集 + 非工作工具 — names only, no status
+    /// annotations. Faces A/C are revoked: every work tool is removed
+    /// unless its probe is complete, even when the registry declares it.
+    /// `run_tests` is host-owned: declared when its probe is complete (at
+    /// most once); registry-absent tools are never invented.
     pub(crate) fn project_main_agent_tool_defs(
         base: &[ToolDef],
         snapshot: &crate::tool_probe::ToolProbeSnapshot,
@@ -1856,13 +1864,24 @@ impl AgentLoopController {
             tool_defs.push(Self::run_tests_tool_def());
         }
         tool_defs.retain(|t| {
-            crate::tool_probe::is_face_a_tool(&t.name)
-                || (crate::tool_probe::is_face_b_tool(&t.name)
-                    && snapshot.complete.iter().any(|c| c == &t.name))
-                || crate::tool_probe::is_face_c_tool(&t.name)
-                || !crate::tool_probe::is_main_agent_work_tool(&t.name)
+            !crate::tool_probe::is_main_agent_work_tool(&t.name)
+                || snapshot.complete.iter().any(|c| c == &t.name)
         });
         tool_defs
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: whether the run carries a goal context
+    /// (`todo_write` / `update_goal` probe chain). Pinned at run start by
+    /// `set_goal_digest`.
+    pub(crate) fn goal_context_present(&self) -> bool {
+        self.goal_context.lock().unwrap().digest.is_some()
+    }
+
+    /// FUS-TOOL-PROBE P0-A-2: whether a retrieval activation is live
+    /// (`retrieval_disposition` probe chain — an activation that can
+    /// receive a structured parent disposition).
+    pub(crate) fn has_live_activation(&self) -> bool {
+        self.activations.lock().unwrap().has_live()
     }
 
     /// Journal the terminal outcome of a ticket lifecycle (consumed /
@@ -3536,24 +3555,24 @@ impl AgentLoopController {
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
 
-        // 1. tool_availability_check — Face B two-state probe snapshot
+        // 1. tool_availability_check — the v0.2 single probe face snapshot
         // BEFORE run_started (Python conformance: the probe must precede
         // run_started).
         //
-        // FUS-TOOL-PROBE (2026-08-13, design §3/§7): the event reports the
-        // Face B mechanical probe partition — complete / incomplete(reason)
-        // — with neutral reasons only; Face A/C and the retrieval lane
-        // never appear. P0-A step 5: this run-start event is the initial
-        // journal; the loop re-probes before EVERY model request and emits
-        // `tool_availability_check` again ONLY on a flip (minimal
-        // previous-round map). The snapshot seeds that map; the list
-        // projection (design §4) runs per-round inside the loop
+        // FUS-TOOL-PROBE P0-A-2 (2026-08-13, design §3/§7 v0.2): the event
+        // reports the ALL-work-tool mechanical probe partition —
+        // complete / incomplete(reason) — with neutral reasons only; the
+        // retrieval lane never appears. P0-A step 5: this run-start event
+        // is the initial journal; the loop re-probes before EVERY model
+        // request and emits `tool_availability_check` again ONLY on a flip
+        // (minimal previous-round map). The snapshot seeds that map; the
+        // list projection (design §4) runs per-round inside the loop
         // (`project_main_agent_tool_defs`) — the `tool_defs` built below is
         // the BASE list (registry + main-only additions + mode projection),
-        // not yet Face-B-filtered. The call-time permission gate remains
+        // not yet probe-filtered. The call-time permission gate remains
         // the final backstop (design invariant 2).
         let mut tool_defs: Vec<ToolDef> = host.tools_registry().list().into_iter().collect();
-        // P0-A steps 3-5: `run_tests` is a Face B tool whose declaration is
+        // P0-A steps 3-5 / P0-A-2: `run_tests` is a work tool whose declaration is
         // decided by the per-round probe snapshot (runner existence), not
         // by a direct host call here; the per-round list projection runs
         // inside the loop. No conditional declaration remains in this block.
@@ -3737,13 +3756,21 @@ impl AgentLoopController {
             policy: host.tool_policy(),
             test_runner_present: host.test_runner().is_some(),
             interactive_user: host.interactive_user(),
+            goal_context_present: self.goal_context_present(),
+            pending_retrieval_activation: self.has_live_activation(),
+            terminal_available: host.terminal_available(),
+            lsp_configured: host.lsp_configured(),
+            memory_enabled: host.memory_enabled(),
+            image_backend_configured: host.image_backend_configured(),
+            video_backend_configured: host.video_backend_configured(),
+            mcp_registry_available: host.mcp_registry_available(),
         };
-        let probe_snapshot = crate::tool_probe::probe_face_b(&probe_context);
-        // P0-A step 5 (design §4/§8): the initial snapshot journals the
+        let probe_snapshot = crate::tool_probe::probe_work_tools(&probe_context);
+        // P0-A-2 (design §4/§8 v0.2): the initial snapshot journals the
         // pre-run_started event and seeds the minimal previous-round map.
-        // The per-round list projection (面A + 面B完整集 ∩ 会话声明集 + 面C +
-        // 非工作工具) now runs inside the loop before every model request —
-        // `tool_defs` passed below is the unfiltered BASE list.
+        // The per-round list projection (探针完整集 ∩ 会话声明集 + 非工作工具)
+        // runs inside the loop before every model request — `tool_defs`
+        // passed below is the unfiltered BASE list.
         writer
             .record(
                 EventType::ToolAvailabilityCheck,
@@ -5491,7 +5518,7 @@ impl AgentLoopController {
                 }),
             )
             .await?;
-        // P0-A step 5 (design §5): 调用即探针 — the refused Face B call
+        // P0-A step 5 (design §5): 调用即探针 — the refused work-tool call
         // writes back into the minimal previous-round map (search_replace /
         // run_tests carry action tickets under fail-closed). Main lane only
         // — retrieval lanes never write the main probe map (review fix
@@ -5539,7 +5566,7 @@ impl AgentLoopController {
         // authorization chain (2026-08-11 user adjudication).
         permission_gated: bool,
         // P0-A step 5 review fix (2026-08-13): whether this lane owns the
-        // Face B probe map. Main/grill lanes pass `true` — a real call
+        // work-tool probe map. Main/grill lanes pass `true` — a real call
         // failure writes back (调用即探针). Retrieval lanes pass `false`:
         // they never re-probe and must NOT pollute the main probe map with
         // lane-local failures (review: cross-lane write-back would surface
@@ -5798,7 +5825,7 @@ impl AgentLoopController {
         // D-9 (FIX_PLAN 2026-08-06) + RT-001 (2026-08-11): `run_tests`
         // executes the host's FIXED command — the model supplies no argv
         // (the command itself is host-owned and hidden; the tool is only
-        // declared when the Face B probe finds a test runner), but it IS
+        // declared when the work-tool probe finds a test runner), but it IS
         // controlled code execution (ADR-0010 §3.8.2: the test process can
         // write files, hit the network, spawn children), so it passes the
         // SAME permission gate as any LocalMutation tool above: Interactive
@@ -5812,7 +5839,7 @@ impl AgentLoopController {
         // previously recorded zero journal events).
         if tc.name == "run_tests" {
             // P0-A review cleanup (design §4/§6): without a host runner the
-            // Face B probe keeps `run_tests` out of the model-visible list;
+            // work-tool probe keeps `run_tests` out of the model-visible list;
             // a race call is refused HERE with the neutral statement and NO
             // ToolStarted (same no-ToolStarted shape as the mode/ACAF
             // refusals) instead of executing the default NotFound error
@@ -5837,7 +5864,7 @@ impl AgentLoopController {
                     tool_calls: Vec::new(),
                     reasoning_content: None,
                 });
-                // P0-A step 5 (design §5): 调用即探针 — the refused Face B
+                // P0-A step 5 (design §5): 调用即探针 — the refused work-tool
                 // call writes back into the minimal previous-round map.
                 self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
                 return Ok((
@@ -5932,7 +5959,7 @@ impl AgentLoopController {
                             reasoning_content: None,
                         });
                         // P0-A step 5 (design §5): 调用即探针 — the failed
-                        // Face B call writes back into the minimal map.
+                        // work-tool call writes back into the minimal map.
                         self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
                         // None = neutral for the denial streak (only actual
                         // success resets — ADR-0010 §3.5.4).
@@ -6353,7 +6380,7 @@ impl AgentLoopController {
                         }),
                     )
                     .await?;
-                // P0-A step 5 (design §5): 调用即探针 — a real Face B call
+                // P0-A step 5 (design §5): 调用即探针 — a real work-tool call
                 // failure (ToolCompleted status=error) corrects the minimal
                 // previous-round map; the next probe compares against it.
                 self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
@@ -6772,7 +6799,7 @@ mod tests {
 
     /// The mode=off projection removes the retrieval family from the
     /// model-visible declarations (the model never sees the tools), and
-    /// the tool_availability_check probe partition stays Face B only.
+    /// the tool_availability_check probe partition covers work tools only.
     #[tokio::test]
     async fn mode_off_removes_retrieval_tools_from_declarations() {
         let dir = test_dir();
@@ -6807,13 +6834,13 @@ mod tests {
             .as_array()
             .map(|a| a.iter().filter_map(|v| v["tool"].as_str()).collect())
             .unwrap_or_default();
-        // The probe partition covers Face B only — retrieval tools and the
-        // disposition control tool never appear in it.
+        // The probe partition covers work tools only — the retrieval
+        // dispatch family never appears in it (retrieval_disposition IS a
+        // work tool and rides the partition with its own probe).
         for tool in complete.iter().chain(incomplete.iter()) {
             assert!(
                 !crate::relay::is_retrieval_dispatch_name(tool)
-                    && !crate::relay::is_retrieval_mode_gated_host_tool(tool)
-                    && *tool != "retrieval_disposition",
+                    && !crate::relay::is_retrieval_mode_gated_host_tool(tool),
                 "{tool} in probe partition"
             );
         }
@@ -6835,10 +6862,12 @@ mod tests {
                 "{tool} in {declared:?}"
             );
         }
-        // The disposition control tool STAYS — disposing an already-pending
-        // activation is a legal off-mode action.
+        // P0-A-2: the disposition control tool is a work tool like any
+        // other — it stays only while a live activation exists (probe
+        // `检索会话未激活` otherwise removes it). This test has no
+        // activation, so it is NOT declared.
         assert!(
-            declared.iter().any(|t| *t == "retrieval_disposition"),
+            !declared.iter().any(|t| *t == "retrieval_disposition"),
             "{declared:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -9971,13 +10000,13 @@ mod tests {
 
     #[tokio::test]
     async fn benchmark_policy_declares_full_registry_catalog() {
-        // P0-A step 4（设计 §4/§9；ADR-0010 §3.5 修订按批次末第 7 步登记）：
-        // 模型可见列表 = 面A + (面B完整集 ∩ 会话声明集) + 面C + 非工作工具。
+        // P0-A-2（设计 §4/§9 v0.2；ADR-0010 §3.5 v1.8 已登记）：
+        // 模型可见列表 = 探针完整集 ∩ 会话声明集 + 非工作工具。
         // Benchmark + 可读可写 workspace：read_file/list_dir/grep/
-        // search_replace 机械链路完整而保留；run_tests/ask_user_question
-        // 因无 runner/无交互会话而不在声明集（探针不发明会话不存在的
-        // 工具）；run_terminal_cmd（面 C）与 bash（非工作工具）保留；
-        // 面 A 三件套由 controller 声明。声明面不构成可用性承诺——调用时
+        // search_replace 机械链路完整而保留；run_terminal_cmd 因 Benchmark
+        // 策略不放行执行、retrieval_disposition 因无激活检索会话而移除；
+        // blackboard_read/compaction_whitelist_add 存储链完整而保留；
+        // bash（非工作工具）保留。声明面不构成可用性承诺——调用时
         // permission gate + §3.5.4 连续拒绝熔断仍是最终兜底。
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
@@ -10011,11 +10040,9 @@ mod tests {
                 "grep",
                 "list_dir",
                 "read_file",
-                "retrieval_disposition",
-                "run_terminal_cmd",
                 "search_replace",
             ],
-            "registry catalog declared under Benchmark (mode=off 移除检索族): {declared:?}"
+            "single-face projection under Benchmark (mode=off 移除检索族): {declared:?}"
         );
         // The system prompt carries NO availability block (2026-08-12: 可用
         // 性声明不固定在 prompt 中——prompt 只保留 budget/status 块)。
@@ -10030,11 +10057,13 @@ mod tests {
 
     #[tokio::test]
     async fn readonly_policy_projection_filters_write_tools() {
-        // P0-A step 4（设计 §2/§3）：ReadOnly 下 `search_replace` 的写探针
-        // 判定为机械链路不完整（`写权限策略未放行`）→ 从模型可见列表移除；
-        // 读工具（read_file/list_dir/grep）完整保留；run_terminal_cmd
-        // （面 C）与 bash（非工作工具）不探不标、保持声明，只读保证对
-        // 它们仍由调用时 permission gate 承担（设计不变量 2）。
+        // P0-A-2（设计 §2.0/§3 v0.2）：ReadOnly 下 `search_replace` 与
+        // `run_terminal_cmd` 的写/执行链判定为机械链路不完整
+        // （`写权限策略未放行` / `终端链路不完整`）→ 从模型可见列表移除；
+        // 读工具（read_file/list_dir/grep）与存储链工具
+        // （blackboard_read/compaction_whitelist_add）完整保留；
+        // bash（非工作工具）不探不标、保持声明，只读保证对它们仍由
+        // 调用时 permission gate 承担（设计不变量 2）。
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = PolicyHost {
@@ -10061,10 +10090,8 @@ mod tests {
                 "grep",
                 "list_dir",
                 "read_file",
-                "retrieval_disposition",
-                "run_terminal_cmd",
             ],
-            "ReadOnly projection removes incomplete write tools: {declared:?}"
+            "ReadOnly single-face projection removes incomplete write/exec tools: {declared:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -12269,8 +12296,9 @@ mod tests {
         }
     }
 
-    /// A registry declaring `run_tests` unconditionally — proves the Face B
-    /// probe, not the registry, is the declaration source (P0-A step 3).
+    /// A registry declaring `run_tests` unconditionally — proves the
+    /// work-tool probe, not the registry, is the declaration source
+    /// (P0-A step 3).
     struct RunTestsDeclaringRegistry;
     impl ToolRegistry for RunTestsDeclaringRegistry {
         fn get(&self, name: &str) -> Option<ToolDef> {
@@ -12323,7 +12351,7 @@ mod tests {
         }
     }
 
-    /// P0-A step 3: without a host test runner the Face B probe marks
+    /// P0-A step 3: without a host test runner the work-tool probe marks
     /// `run_tests` incomplete (`缺少测试运行器`) and the tool is NOT
     /// declared even when the registry lists it — the probe, not the
     /// registry, is the declaration source.
@@ -12396,9 +12424,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A registry mixing Face A/B/C and a non-work tool — exercises the
-    /// step-4 list projection (P0-A #4): 面A + (面B完整集 ∩ 会话声明集) +
-    /// 面C + 非工作工具，仅名称。
+    /// A registry mixing work tools (former faces A/B/C) and a non-work
+    /// tool — exercises the v0.2 single probe face list projection
+    /// (P0-A-2): 探针完整集 ∩ 会话声明集 + 非工作工具，仅名称。
     struct MixedProjectionRegistry;
     impl ToolRegistry for MixedProjectionRegistry {
         fn get(&self, name: &str) -> Option<ToolDef> {
@@ -12456,10 +12484,12 @@ mod tests {
         }
     }
 
-    /// P0-A step 4: the model-visible list is the projection 面A + (面B完整
-    /// 集 ∩ 声明集) + 面C + 非工作工具 — incomplete Face B tools
-    /// (run_tests/ask_user_question) are removed, Face A/C and non-work
-    /// tools stay, and registry-absent tools are never invented.
+    /// P0-A-2 (v0.2 single probe face): the model-visible list is
+    /// 探针完整集 ∩ 会话声明集 + 非工作工具 — every work tool with an
+    /// incomplete mechanical chain is removed even when the registry
+    /// declares it (headless ask_user_question, Benchmark run_terminal_cmd,
+    /// unconfigured image_gen, no-activation retrieval_disposition), and
+    /// registry-absent tools are never invented.
     #[tokio::test]
     async fn list_projection_applies_face_partition() {
         let dir = test_dir();
@@ -12482,15 +12512,12 @@ mod tests {
             declared,
             vec![
                 "bash",                     // non-work tool — untouched
-                "blackboard_read",          // Face A (registry + controller)
-                "compaction_whitelist_add", // Face A (controller-added)
-                "image_gen",                // Face C — no backend probe, kept
-                "read_file",                // Face B complete ∩ declared
-                "retrieval_disposition",    // Face A (controller-added)
-                "run_terminal_cmd",         // Face C
-                "todo_write",               // Face A (registry-declared)
+                "blackboard_read",          // storage chain complete
+                "compaction_whitelist_add", // storage chain complete
+                "read_file",                // read chain complete
+                "todo_write",               // write chain + goal context complete
             ],
-            "step-4 list projection: {declared:?}"
+            "single-face list projection: {declared:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -12574,10 +12601,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P0-A review cleanup: with an unreadable session cwd the Face B read
-    /// tools are incomplete and removed from the declarations, while Face
-    /// A/C and non-work tools stay (the probe never invents tools and never
-    /// keeps a broken mechanical chain visible).
+    /// P0-A-2 review cleanup: with an unreadable session cwd every work
+    /// tool's chain is incomplete (read/storage/write/goal chains all hang
+    /// off the workspace) and only the non-work tool stays — the probe
+    /// never invents tools and never keeps a broken mechanical chain
+    /// visible.
     #[tokio::test]
     async fn list_projection_removes_unreadable_read_tools() {
         let dir = test_dir();
@@ -12607,16 +12635,8 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec![
-                "bash",                     // non-work tool — untouched
-                "blackboard_read",          // Face A
-                "compaction_whitelist_add", // Face A (controller-added)
-                "image_gen",                // Face C
-                "retrieval_disposition",    // Face A (controller-added)
-                "run_terminal_cmd",         // Face C
-                "todo_write",               // Face A (registry-declared)
-            ],
-            "unreadable workspace removes Face B read tools: {declared:?}"
+            vec!["bash"],
+            "unreadable workspace removes every work tool: {declared:?}"
         );
         let all_events = events(&dir);
         let availability = all_events
@@ -12832,7 +12852,7 @@ mod tests {
         }
     }
 
-    /// P0-A step 5 (design §5): a real Face B call failure writes back into
+    /// P0-A step 5 (design §5): a real work-tool call failure writes back into
     /// the minimal map (调用即探针) — the next per-round probe sees the
     /// corrected state and emits a recovery-flip event.
     #[tokio::test]
@@ -12893,9 +12913,13 @@ mod tests {
     }
 
     /// P0-A step 5 review fix (2026-08-13): the retrieval lane never
-    /// writes back into the main probe map — a failed Face B read call
-    /// inside the lane must NOT produce a main-lane recovery-flip event
-    /// (exactly one `tool_availability_check` in the whole journal).
+    /// writes back into the main probe map — a failed work-tool read call
+    /// inside the lane must NOT flip `read_file` in the main map. P0-A-2:
+    /// the activation lifecycle legitimately flips `retrieval_disposition`
+    /// (incomplete → complete once the subagent result awaits disposition),
+    /// so the journal carries exactly TWO availability events — the
+    /// initial one and the activation flip — and never one caused by the
+    /// lane-local failure.
     #[tokio::test]
     async fn retrieval_lane_failure_does_not_pollute_main_probe_map() {
         let dir = test_dir();
@@ -12903,7 +12927,7 @@ mod tests {
             journal: JournalRecorder::new(dir.clone()),
         };
         // Main declares retrieval → subagent round 1 calls read_file
-        // (Face B host tool, allowed in the lane) and FAILS → subagent
+        // (work-tool host tool, allowed in the lane) and FAILS → subagent
         // round 2 forms the result → main concludes (gate + final).
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
@@ -12933,8 +12957,32 @@ mod tests {
             .filter(|t| **t == EventType::ToolAvailabilityCheck)
             .count();
         assert_eq!(
-            availability_count, 1,
-            "lane-local failure must not add main availability events: {types:?}"
+            availability_count, 2,
+            "initial + activation flip only; lane-local failure must not add main availability events: {types:?}"
+        );
+        let events = events(&dir);
+        let availability_events: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .collect();
+        let flip = availability_events[1];
+        assert!(
+            flip.payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("read_file")),
+            "lane-local read failure must NOT flip read_file in the main map: {:?}",
+            flip.payload
+        );
+        assert!(
+            flip.payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("retrieval_disposition")),
+            "activation lifecycle flips retrieval_disposition to complete: {:?}",
+            flip.payload
         );
         // The lane failure itself is still audited via ToolCompleted(error).
         assert!(

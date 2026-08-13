@@ -1,8 +1,11 @@
-//! Face B per-tool mechanical probes (P0-A batch, step 1).
+//! Per-tool mechanical probes — the single probe face (v0.2; ADR-0010
+//! §3.5 v1.8, 2026-08-13).
 //!
-//! Design: TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md §2/§3 — the main
-//! agent's working tools split into three surfaces; Face B tools are probed
-//! with a two-state neutral verdict:
+//! Design: TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md §2.0/§3 — every
+//! main-agent work tool is governed by the same rule: this round's visible
+//! set = mechanically complete ∩ session-declared, names only, no status.
+//! The v0.1 faces (A 恒声明 / B 探针过滤 / C 固定列表) are revoked; the
+//! former Face B mechanism is upgraded to the full work-tool surface.
 //!
 //! - `Complete` — the tool's whole mechanical chain is present;
 //! - `Incomplete(reason)` — any chain component is missing, with a stable
@@ -18,21 +21,23 @@
 //! - Missing probe implementation → `Incomplete("未完成链路检查")`
 //!   (fail-closed; never assume complete).
 //!
-//! Batch progress (BACKLOG P0-A): per-tool probe implementations + unit
-//! tests (step 1), `tool_availability_check` v0.2 event upgrade (step 2),
-//! the run_tests declaration migration (step 3) and the A/B/C list
-//! projection constants consumed by the controller (step 4). Per-round
-//! refresh, minimal previous-round mapping and flip-only events are batch
-//! step 5 — the loop (agent_loop.rs) drives them with [`MinimalProbeMap`];
-//! neutral fallback messages are batch step 6.
+//! P0-A-2 (2026-08-13): single probe face expansion — the Face A/C
+//! constants and fixed-list semantics are gone; `probe_work_tools`
+//! partitions ALL 23 work tools. Host capability facts
+//! (terminal/lsp/memory/image/video/MCP) come from `LoopHost` fail-closed
+//! defaults; session facts (goal context, pending retrieval activation)
+//! come from the controller.
 
 use std::path::{Path, PathBuf};
 
 use crate::host::ToolPolicy;
 
-/// Face B — locally deterministic tools probed before every action.
-/// Order is the canonical projection order (stable across snapshots).
-pub const FACE_B_TOOLS: [&str; 7] = [
+/// Every main-agent work tool in canonical (stable) projection order.
+/// Single source of truth for membership, the probe snapshot partition and
+/// the Python verifier's work-tool set (mirrored in
+/// `assurance/run_event_journal_validation.py`).
+pub const WORK_TOOLS: [&str; 23] = [
+    // Locally deterministic tools (former Face B).
     "read_file",
     "list_dir",
     "grep",
@@ -40,12 +45,7 @@ pub const FACE_B_TOOLS: [&str; 7] = [
     "search_replace",
     "run_tests",
     "ask_user_question",
-];
-
-/// Face A — tools with no external mechanical chain; always declared when
-/// the session carries them (design §2, list projection step 4). Only
-/// names ride the model-visible list; nothing is status-annotated.
-pub const FACE_A_TOOLS: [&str; 7] = [
+    // Former Face A — control tools with real mechanical chains.
     "blackboard_read",
     "todo_write",
     "update_goal",
@@ -53,12 +53,8 @@ pub const FACE_A_TOOLS: [&str; 7] = [
     "exit_plan_mode",
     "compaction_whitelist_add",
     "retrieval_disposition",
-];
-
-/// Face C — local-process / heavy / network tools fixed-listed without
-/// probes (design §2). Backend absence is audited at call time, never
-/// probed and never removed by the projection.
-pub const FACE_C_TOOLS: [&str; 9] = [
+    // Former Face C — local-process / heavy / network tools; backend
+    // presence is now probed, never assumed.
     "run_terminal_cmd",
     "lsp",
     "memory_get",
@@ -77,6 +73,16 @@ pub const REASON_WORKSPACE_UNWRITABLE: &str = "工作区路径不可写";
 pub const REASON_WRITE_POLICY_NOT_ALLOWED: &str = "写权限策略未放行";
 pub const REASON_MISSING_TEST_RUNNER: &str = "缺少测试运行器";
 pub const REASON_NO_INTERACTIVE_USER: &str = "无交互式用户会话";
+pub const REASON_SESSION_STORAGE_UNREADABLE: &str = "会话存储不可读";
+pub const REASON_NO_GOAL_CONTEXT: &str = "任务目标上下文不存在";
+pub const REASON_PLAN_MODE_UNSUPPORTED: &str = "会话不支持计划模式";
+pub const REASON_RETRIEVAL_NOT_ACTIVE: &str = "检索会话未激活";
+pub const REASON_TERMINAL_CHAIN_INCOMPLETE: &str = "终端链路不完整";
+pub const REASON_LSP_NOT_CONFIGURED: &str = "语言服务未配置";
+pub const REASON_MEMORY_NOT_ENABLED: &str = "记忆存储未启用";
+pub const REASON_IMAGE_BACKEND_NOT_CONFIGURED: &str = "图像后端未配置";
+pub const REASON_VIDEO_BACKEND_NOT_CONFIGURED: &str = "视频后端未配置";
+pub const REASON_MCP_NOT_CONFIGURED: &str = "能力注册未配置";
 pub const REASON_UNFINISHED_CHAIN_CHECK: &str = "未完成链路检查";
 
 /// Two-state neutral probe verdict (design §3).
@@ -109,14 +115,14 @@ pub struct ToolProbeResult {
     pub verdict: ProbeVerdict,
 }
 
-/// One incomplete Face B tool with its neutral reason.
+/// One incomplete work tool with its neutral reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeFailure {
     pub tool: String,
     pub reason: &'static str,
 }
 
-/// Per-action Face B snapshot (design §4: used for the round, then
+/// Per-round probe snapshot (design §4: used for the round, then
 /// discarded — never persisted, never across runs).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolProbeSnapshot {
@@ -124,18 +130,18 @@ pub struct ToolProbeSnapshot {
     pub incomplete: Vec<ProbeFailure>,
 }
 
-/// P0-A step 5 (design §4/§8): the minimal previous-round mapping —
-/// `tool → complete/incomplete` for Face B only. Reasons are never cached
-/// (design §8: 详情与 reason 不缓存); the map exists solely for the
-/// round-to-round flip comparison inside one run. Snapshots themselves are
-/// used then discarded — nothing here is persisted or crosses runs.
+/// The minimal previous-round mapping — `tool → complete/incomplete` for
+/// every work tool. Reasons are never cached (design §8: 详情与 reason 不
+/// 缓存); the map exists solely for the round-to-round flip comparison
+/// inside one run. Snapshots themselves are used then discarded — nothing
+/// here is persisted or crosses runs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MinimalProbeMap {
     status: std::collections::BTreeMap<String, bool>,
 }
 
 impl MinimalProbeMap {
-    /// Canonical map for a probe snapshot — every Face B tool carries
+    /// Canonical map for a probe snapshot — every work tool carries
     /// exactly one status.
     pub fn from_snapshot(snapshot: &ToolProbeSnapshot) -> Self {
         let mut status = std::collections::BTreeMap::new();
@@ -149,7 +155,7 @@ impl MinimalProbeMap {
     }
 
     /// Whether the fresh snapshot differs from this map — i.e. at least
-    /// one Face B tool flipped (complete↔incomplete).
+    /// one work tool flipped (complete↔incomplete).
     pub fn differs_from(&self, snapshot: &ToolProbeSnapshot) -> bool {
         Self::from_snapshot(snapshot) != *self
     }
@@ -157,7 +163,7 @@ impl MinimalProbeMap {
     /// 调用即探针 (design §5): write a real call failure back as
     /// `incomplete`. Returns whether the map actually changed.
     pub fn mark_incomplete(&mut self, tool: &str) -> bool {
-        if !is_face_b_tool(tool) {
+        if !is_main_agent_work_tool(tool) {
             return false;
         }
         if self.status.get(tool) == Some(&false) {
@@ -172,41 +178,49 @@ impl MinimalProbeMap {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeContext {
     /// Session working directory — the workspace scope probed for the
-    /// read/write chain.
+    /// read/write/storage chains.
     pub cwd: PathBuf,
-    /// Session permission policy — the write-policy half of the
-    /// `search_replace` probe (`ReadOnly` refuses writes by policy).
+    /// Session permission policy — the write/exec policy half of the
+    /// `search_replace` / `todo_write` / `update_goal` /
+    /// `run_terminal_cmd` probes (`ReadOnly` refuses writes; shell-escape
+    /// is Interactive-only).
     pub policy: ToolPolicy,
     /// Whether the host carries a fixed test runner
     /// (`host.test_runner().is_some()`) — the `run_tests` probe source.
     pub test_runner_present: bool,
     /// Whether the session is attached to an interactive user who can
-    /// answer `ask_user_question` (headless sessions fail closed).
+    /// answer `ask_user_question` and approve plan mode (headless sessions
+    /// fail closed).
     pub interactive_user: bool,
+    /// Whether the run carries a goal/todo context (`todo_write` /
+    /// `update_goal` chain).
+    pub goal_context_present: bool,
+    /// Whether a retrieval activation is live and awaiting/able to receive
+    /// a parent disposition (`retrieval_disposition` chain).
+    pub pending_retrieval_activation: bool,
+    /// Host terminal backend presence (`run_terminal_cmd` chain).
+    pub terminal_available: bool,
+    /// Workspace language-service configuration presence (`lsp` chain).
+    pub lsp_configured: bool,
+    /// Explicit memory opt-in + backend presence (`memory_get` /
+    /// `memory_search` chain).
+    pub memory_enabled: bool,
+    /// Image backend credentials/configuration (`image_gen` / `image_edit`
+    /// chain).
+    pub image_backend_configured: bool,
+    /// Video backend credentials/configuration (`image_to_video` /
+    /// `reference_to_video` chain).
+    pub video_backend_configured: bool,
+    /// MCP / capability registration present in session scope (`use_tool`
+    /// chain).
+    pub mcp_registry_available: bool,
 }
 
-/// Whether `name` belongs to Face B (the only probed surface).
-pub fn is_face_b_tool(name: &str) -> bool {
-    FACE_B_TOOLS.contains(&name)
-}
-
-/// Whether `name` belongs to Face A (always declared when carried by the
-/// session).
-pub fn is_face_a_tool(name: &str) -> bool {
-    FACE_A_TOOLS.contains(&name)
-}
-
-/// Whether `name` belongs to Face C (fixed list, never probed).
-pub fn is_face_c_tool(name: &str) -> bool {
-    FACE_C_TOOLS.contains(&name)
-}
-
-/// Whether `name` is a main-agent work tool (any of the three surfaces).
-/// Tools outside the matrix (retrieval lane, bash, host-owned extras) are
-/// not part of the list projection and keep their existing declaration
-/// rules.
+/// Whether `name` is a main-agent work tool. Tools outside the matrix
+/// (retrieval lane, bash, host-owned extras) are not part of the list
+/// projection and keep their existing declaration rules.
 pub fn is_main_agent_work_tool(name: &str) -> bool {
-    is_face_a_tool(name) || is_face_b_tool(name) || is_face_c_tool(name)
+    WORK_TOOLS.contains(&name)
 }
 
 /// Policy half of the write probe: `ReadOnly` never passes; `Interactive`
@@ -214,6 +228,13 @@ pub fn is_main_agent_work_tool(name: &str) -> bool {
 /// still makes the final decision per arguments).
 pub fn policy_allows_write(policy: ToolPolicy) -> bool {
     policy != ToolPolicy::ReadOnly
+}
+
+/// Policy half of the exec probe: only Interactive sessions pass at policy
+/// level — ReadOnly refuses non-reads and Benchmark excludes shell-escape
+/// by policy (the call-time permission gate remains the final backstop).
+pub fn policy_allows_exec(policy: ToolPolicy) -> bool {
+    policy == ToolPolicy::Interactive
 }
 
 /// Workspace read chain: the session cwd exists, is a directory and yields
@@ -254,19 +275,85 @@ fn probe_write(ctx: &ProbeContext) -> ProbeVerdict {
     }
 }
 
-fn probe_test_runner(ctx: &ProbeContext) -> ProbeVerdict {
-    if ctx.test_runner_present {
+fn probe_storage(ctx: &ProbeContext) -> ProbeVerdict {
+    // blackboard / compaction-whitelist persistence lives under the
+    // session workspace (`.gsa/`); the session-state chain is unreadable
+    // when the workspace itself is.
+    if workspace_readable(&ctx.cwd) {
         ProbeVerdict::Complete
     } else {
-        ProbeVerdict::Incomplete(REASON_MISSING_TEST_RUNNER)
+        ProbeVerdict::Incomplete(REASON_SESSION_STORAGE_UNREADABLE)
     }
 }
 
-fn probe_interactive_user(ctx: &ProbeContext) -> ProbeVerdict {
+fn probe_goal_write(ctx: &ProbeContext) -> ProbeVerdict {
+    if !ctx.goal_context_present {
+        return ProbeVerdict::Incomplete(REASON_NO_GOAL_CONTEXT);
+    }
+    probe_write(ctx)
+}
+
+fn probe_plan_mode(ctx: &ProbeContext) -> ProbeVerdict {
     if ctx.interactive_user {
         ProbeVerdict::Complete
     } else {
-        ProbeVerdict::Incomplete(REASON_NO_INTERACTIVE_USER)
+        ProbeVerdict::Incomplete(REASON_PLAN_MODE_UNSUPPORTED)
+    }
+}
+
+fn probe_retrieval_disposition(ctx: &ProbeContext) -> ProbeVerdict {
+    if ctx.pending_retrieval_activation {
+        ProbeVerdict::Complete
+    } else {
+        ProbeVerdict::Incomplete(REASON_RETRIEVAL_NOT_ACTIVE)
+    }
+}
+
+fn probe_terminal(ctx: &ProbeContext) -> ProbeVerdict {
+    if policy_allows_exec(ctx.policy) && ctx.terminal_available {
+        ProbeVerdict::Complete
+    } else {
+        ProbeVerdict::Incomplete(REASON_TERMINAL_CHAIN_INCOMPLETE)
+    }
+}
+
+fn probe_lsp(ctx: &ProbeContext) -> ProbeVerdict {
+    if ctx.lsp_configured {
+        ProbeVerdict::Complete
+    } else {
+        ProbeVerdict::Incomplete(REASON_LSP_NOT_CONFIGURED)
+    }
+}
+
+fn probe_memory(ctx: &ProbeContext) -> ProbeVerdict {
+    if ctx.memory_enabled {
+        ProbeVerdict::Complete
+    } else {
+        ProbeVerdict::Incomplete(REASON_MEMORY_NOT_ENABLED)
+    }
+}
+
+fn probe_image(ctx: &ProbeContext) -> ProbeVerdict {
+    if ctx.image_backend_configured {
+        ProbeVerdict::Complete
+    } else {
+        ProbeVerdict::Incomplete(REASON_IMAGE_BACKEND_NOT_CONFIGURED)
+    }
+}
+
+fn probe_video(ctx: &ProbeContext) -> ProbeVerdict {
+    if ctx.video_backend_configured {
+        ProbeVerdict::Complete
+    } else {
+        ProbeVerdict::Incomplete(REASON_VIDEO_BACKEND_NOT_CONFIGURED)
+    }
+}
+
+fn probe_mcp(ctx: &ProbeContext) -> ProbeVerdict {
+    if ctx.mcp_registry_available {
+        ProbeVerdict::Complete
+    } else {
+        ProbeVerdict::Incomplete(REASON_MCP_NOT_CONFIGURED)
     }
 }
 
@@ -276,8 +363,30 @@ pub fn probe_tool(name: &str, ctx: &ProbeContext) -> ToolProbeResult {
     let verdict = match name {
         "read_file" | "list_dir" | "grep" | "search_tool" => probe_read(ctx),
         "search_replace" => probe_write(ctx),
-        "run_tests" => probe_test_runner(ctx),
-        "ask_user_question" => probe_interactive_user(ctx),
+        "run_tests" => {
+            if ctx.test_runner_present {
+                ProbeVerdict::Complete
+            } else {
+                ProbeVerdict::Incomplete(REASON_MISSING_TEST_RUNNER)
+            }
+        }
+        "ask_user_question" => {
+            if ctx.interactive_user {
+                ProbeVerdict::Complete
+            } else {
+                ProbeVerdict::Incomplete(REASON_NO_INTERACTIVE_USER)
+            }
+        }
+        "blackboard_read" | "compaction_whitelist_add" => probe_storage(ctx),
+        "todo_write" | "update_goal" => probe_goal_write(ctx),
+        "enter_plan_mode" | "exit_plan_mode" => probe_plan_mode(ctx),
+        "retrieval_disposition" => probe_retrieval_disposition(ctx),
+        "run_terminal_cmd" => probe_terminal(ctx),
+        "lsp" => probe_lsp(ctx),
+        "memory_get" | "memory_search" => probe_memory(ctx),
+        "image_gen" | "image_edit" => probe_image(ctx),
+        "image_to_video" | "reference_to_video" => probe_video(ctx),
+        "use_tool" => probe_mcp(ctx),
         _ => ProbeVerdict::Incomplete(REASON_UNFINISHED_CHAIN_CHECK),
     };
     ToolProbeResult {
@@ -286,10 +395,10 @@ pub fn probe_tool(name: &str, ctx: &ProbeContext) -> ToolProbeResult {
     }
 }
 
-/// Probe every Face B tool in canonical order into one snapshot.
-pub fn probe_face_b(ctx: &ProbeContext) -> ToolProbeSnapshot {
+/// Probe every work tool in canonical order into one snapshot.
+pub fn probe_work_tools(ctx: &ProbeContext) -> ToolProbeSnapshot {
     let mut snapshot = ToolProbeSnapshot::default();
-    for tool in FACE_B_TOOLS {
+    for tool in WORK_TOOLS {
         match probe_tool(tool, ctx).verdict {
             ProbeVerdict::Complete => snapshot.complete.push(tool.to_string()),
             ProbeVerdict::Incomplete(reason) => snapshot.incomplete.push(ProbeFailure {
@@ -340,80 +449,29 @@ mod tests {
             policy: ToolPolicy::Interactive,
             test_runner_present: true,
             interactive_user: true,
+            goal_context_present: true,
+            pending_retrieval_activation: true,
+            terminal_available: true,
+            lsp_configured: true,
+            memory_enabled: true,
+            image_backend_configured: true,
+            video_backend_configured: true,
+            mcp_registry_available: true,
         }
     }
 
     fn missing_ctx() -> ProbeContext {
         ProbeContext {
             cwd: std::env::temp_dir().join("orz-tool-probe-missing-dir"),
-            policy: ToolPolicy::Interactive,
-            test_runner_present: true,
-            interactive_user: true,
+            ..full_ctx(Path::new(env!("CARGO_MANIFEST_DIR")))
         }
     }
 
     #[test]
-    fn face_b_membership_is_exact() {
-        for tool in FACE_B_TOOLS {
-            assert!(is_face_b_tool(tool), "{tool} must be Face B");
-        }
-        for tool in [
-            "blackboard_read",
-            "run_terminal_cmd",
-            "web_search",
-            "web_fetch",
-            "browser_read",
-            "pdf_read",
-            "project_doc_index",
-            "image_gen",
-            "use_tool",
-            "compaction_whitelist_add",
-            "retrieval_disposition",
-        ] {
-            assert!(!is_face_b_tool(tool), "{tool} must not be Face B");
-        }
-    }
-
-    #[test]
-    fn face_a_membership_is_exact() {
-        for tool in FACE_A_TOOLS {
-            assert!(is_face_a_tool(tool), "{tool} must be Face A");
-        }
-        for tool in [
-            "read_file",
-            "run_terminal_cmd",
-            "web_search",
-            "bash",
-            "no_such_tool",
-        ] {
-            assert!(!is_face_a_tool(tool), "{tool} must not be Face A");
-        }
-    }
-
-    #[test]
-    fn face_c_membership_is_exact() {
-        for tool in FACE_C_TOOLS {
-            assert!(is_face_c_tool(tool), "{tool} must be Face C");
-        }
-        for tool in [
-            "read_file",
-            "blackboard_read",
-            "web_fetch",
-            "bash",
-            "no_such_tool",
-        ] {
-            assert!(!is_face_c_tool(tool), "{tool} must not be Face C");
-        }
-    }
-
-    #[test]
-    fn main_agent_work_tool_union_is_exact() {
-        for tool in FACE_A_TOOLS
-            .iter()
-            .chain(FACE_B_TOOLS.iter())
-            .chain(FACE_C_TOOLS.iter())
-        {
-            assert!(is_main_agent_work_tool(tool), "{tool} must be work tool");
+    fn work_tool_membership_is_exact() {
+        assert_eq!(WORK_TOOLS.len(), 23, "single probe face = 23 tools");
+        for tool in WORK_TOOLS {
+            assert!(is_main_agent_work_tool(tool), "{tool} must be a work tool");
         }
         for tool in [
             "web_search",
@@ -433,15 +491,12 @@ mod tests {
     }
 
     #[test]
-    fn full_chain_marks_all_face_b_complete() {
+    fn full_chain_marks_all_work_tools_complete() {
         let dir = TestDir::new("full");
-        let snapshot = probe_face_b(&full_ctx(dir.path()));
+        let snapshot = probe_work_tools(&full_ctx(dir.path()));
         assert_eq!(
             snapshot.complete,
-            FACE_B_TOOLS
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
+            WORK_TOOLS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
         );
         assert!(snapshot.incomplete.is_empty(), "{:?}", snapshot.incomplete);
     }
@@ -468,23 +523,85 @@ mod tests {
     }
 
     #[test]
-    fn readonly_policy_breaks_write_tool_even_with_readable_workspace() {
+    fn missing_workspace_breaks_storage_tools() {
+        let ctx = missing_ctx();
+        for tool in ["blackboard_read", "compaction_whitelist_add"] {
+            assert_eq!(
+                probe_tool(tool, &ctx).verdict,
+                ProbeVerdict::Incomplete(REASON_SESSION_STORAGE_UNREADABLE),
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn readonly_policy_breaks_write_tools_even_with_readable_workspace() {
         let dir = TestDir::new("policy");
         let ctx = ProbeContext {
             policy: ToolPolicy::ReadOnly,
             ..full_ctx(dir.path())
         };
-        assert_eq!(
-            probe_tool("search_replace", &ctx).verdict,
-            ProbeVerdict::Incomplete(REASON_WRITE_POLICY_NOT_ALLOWED)
-        );
+        for tool in ["search_replace", "todo_write", "update_goal"] {
+            assert_eq!(
+                probe_tool(tool, &ctx).verdict,
+                ProbeVerdict::Incomplete(REASON_WRITE_POLICY_NOT_ALLOWED),
+                "{tool}"
+            );
+        }
     }
 
     #[test]
-    fn policy_allows_write_mapping() {
-        assert!(policy_allows_write(ToolPolicy::Interactive));
-        assert!(policy_allows_write(ToolPolicy::Benchmark));
-        assert!(!policy_allows_write(ToolPolicy::ReadOnly));
+    fn goal_write_requires_goal_context() {
+        let dir = TestDir::new("goal");
+        let ctx = ProbeContext {
+            goal_context_present: false,
+            ..full_ctx(dir.path())
+        };
+        for tool in ["todo_write", "update_goal"] {
+            assert_eq!(
+                probe_tool(tool, &ctx).verdict,
+                ProbeVerdict::Incomplete(REASON_NO_GOAL_CONTEXT),
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_mode_requires_interactive_user() {
+        let dir = TestDir::new("plan");
+        let without = ProbeContext {
+            interactive_user: false,
+            ..full_ctx(dir.path())
+        };
+        for tool in ["enter_plan_mode", "exit_plan_mode"] {
+            assert_eq!(
+                probe_tool(tool, &without).verdict,
+                ProbeVerdict::Incomplete(REASON_PLAN_MODE_UNSUPPORTED),
+                "{tool}"
+            );
+            assert_eq!(
+                probe_tool(tool, &full_ctx(dir.path())).verdict,
+                ProbeVerdict::Complete,
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn retrieval_disposition_requires_live_activation() {
+        let dir = TestDir::new("activation");
+        let without = ProbeContext {
+            pending_retrieval_activation: false,
+            ..full_ctx(dir.path())
+        };
+        assert_eq!(
+            probe_tool("retrieval_disposition", &without).verdict,
+            ProbeVerdict::Incomplete(REASON_RETRIEVAL_NOT_ACTIVE)
+        );
+        assert_eq!(
+            probe_tool("retrieval_disposition", &full_ctx(dir.path())).verdict,
+            ProbeVerdict::Complete
+        );
     }
 
     #[test]
@@ -522,10 +639,105 @@ mod tests {
     }
 
     #[test]
+    fn terminal_requires_interactive_policy_and_host_terminal() {
+        let dir = TestDir::new("terminal");
+        let ctx = full_ctx(dir.path());
+        assert_eq!(
+            probe_tool("run_terminal_cmd", &ctx).verdict,
+            ProbeVerdict::Complete
+        );
+        let no_backend = ProbeContext {
+            terminal_available: false,
+            ..ctx.clone()
+        };
+        assert_eq!(
+            probe_tool("run_terminal_cmd", &no_backend).verdict,
+            ProbeVerdict::Incomplete(REASON_TERMINAL_CHAIN_INCOMPLETE)
+        );
+        for policy in [ToolPolicy::ReadOnly, ToolPolicy::Benchmark] {
+            let blocked = ProbeContext {
+                policy,
+                ..ctx.clone()
+            };
+            assert_eq!(
+                probe_tool("run_terminal_cmd", &blocked).verdict,
+                ProbeVerdict::Incomplete(REASON_TERMINAL_CHAIN_INCOMPLETE),
+                "{policy:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn backend_tools_require_host_configuration() {
+        let dir = TestDir::new("backend");
+        let ctx = full_ctx(dir.path());
+        let cases: &[(&str, bool, &str)] = &[
+            ("lsp", false, REASON_LSP_NOT_CONFIGURED),
+            ("memory_get", false, REASON_MEMORY_NOT_ENABLED),
+            ("memory_search", false, REASON_MEMORY_NOT_ENABLED),
+            ("image_gen", false, REASON_IMAGE_BACKEND_NOT_CONFIGURED),
+            ("image_edit", false, REASON_IMAGE_BACKEND_NOT_CONFIGURED),
+            ("image_to_video", false, REASON_VIDEO_BACKEND_NOT_CONFIGURED),
+            (
+                "reference_to_video",
+                false,
+                REASON_VIDEO_BACKEND_NOT_CONFIGURED,
+            ),
+            ("use_tool", false, REASON_MCP_NOT_CONFIGURED),
+        ];
+        for (tool, configured, reason) in cases {
+            assert_eq!(
+                probe_tool(tool, &ctx).verdict,
+                ProbeVerdict::Complete,
+                "{tool}"
+            );
+            let flag = |name: &str, value: bool| -> ProbeContext {
+                let mut c = ctx.clone();
+                match name {
+                    "lsp" => c.lsp_configured = value,
+                    "memory" => c.memory_enabled = value,
+                    "image" => c.image_backend_configured = value,
+                    "video" => c.video_backend_configured = value,
+                    "mcp" => c.mcp_registry_available = value,
+                    _ => unreachable!(),
+                }
+                c
+            };
+            let group = match *tool {
+                "lsp" => "lsp",
+                "memory_get" | "memory_search" => "memory",
+                "image_gen" | "image_edit" => "image",
+                "image_to_video" | "reference_to_video" => "video",
+                "use_tool" => "mcp",
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                probe_tool(tool, &flag(group, *configured)).verdict,
+                ProbeVerdict::Incomplete(reason),
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_allows_write_mapping() {
+        assert!(policy_allows_write(ToolPolicy::Interactive));
+        assert!(policy_allows_write(ToolPolicy::Benchmark));
+        assert!(!policy_allows_write(ToolPolicy::ReadOnly));
+    }
+
+    #[test]
+    fn policy_allows_exec_mapping() {
+        assert!(policy_allows_exec(ToolPolicy::Interactive));
+        assert!(!policy_allows_exec(ToolPolicy::ReadOnly));
+        assert!(!policy_allows_exec(ToolPolicy::Benchmark));
+    }
+
+    #[test]
     fn unknown_tool_fails_closed() {
         let dir = TestDir::new("unknown");
         let ctx = full_ctx(dir.path());
-        for tool in ["image_edit", "image_gen", "use_tool", "lsp", "no_such_tool"] {
+        for tool in ["no_such_tool", "web_search", "bash"] {
             assert_eq!(
                 probe_tool(tool, &ctx).verdict,
                 ProbeVerdict::Incomplete(REASON_UNFINISHED_CHAIN_CHECK),
@@ -541,9 +753,16 @@ mod tests {
             policy: ToolPolicy::ReadOnly,
             test_runner_present: false,
             interactive_user: false,
+            pending_retrieval_activation: false,
+            terminal_available: false,
+            lsp_configured: false,
+            memory_enabled: false,
+            image_backend_configured: false,
+            video_backend_configured: false,
+            mcp_registry_available: false,
             ..full_ctx(dir.path())
         };
-        let snapshot = probe_face_b(&ctx);
+        let snapshot = probe_work_tools(&ctx);
         assert_eq!(
             snapshot.complete,
             vec![
@@ -551,35 +770,47 @@ mod tests {
                 "list_dir".to_string(),
                 "grep".to_string(),
                 "search_tool".to_string(),
+                "blackboard_read".to_string(),
+                "compaction_whitelist_add".to_string(),
             ]
         );
-        assert_eq!(
-            snapshot.incomplete,
-            vec![
-                ProbeFailure {
-                    tool: "search_replace".to_string(),
-                    reason: REASON_WRITE_POLICY_NOT_ALLOWED,
-                },
-                ProbeFailure {
-                    tool: "run_tests".to_string(),
-                    reason: REASON_MISSING_TEST_RUNNER,
-                },
-                ProbeFailure {
-                    tool: "ask_user_question".to_string(),
-                    reason: REASON_NO_INTERACTIVE_USER,
-                },
-            ]
-        );
+        assert_eq!(snapshot.incomplete.len(), 17, "{:?}", snapshot.incomplete);
+        let tools: Vec<&str> = snapshot
+            .incomplete
+            .iter()
+            .map(|f| f.tool.as_str())
+            .collect();
+        for tool in [
+            "search_replace",
+            "run_tests",
+            "ask_user_question",
+            "todo_write",
+            "update_goal",
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "retrieval_disposition",
+            "run_terminal_cmd",
+            "lsp",
+            "memory_get",
+            "memory_search",
+            "image_gen",
+            "image_edit",
+            "image_to_video",
+            "reference_to_video",
+            "use_tool",
+        ] {
+            assert!(tools.contains(&tool), "missing incomplete {tool}");
+        }
     }
 
     #[test]
-    fn minimal_map_covers_face_b_and_detects_flips() {
+    fn minimal_map_covers_all_work_tools_and_detects_flips() {
         let dir = TestDir::new("minimal-map");
-        let full = probe_face_b(&full_ctx(dir.path()));
+        let full = probe_work_tools(&full_ctx(dir.path()));
         assert_eq!(
             MinimalProbeMap::from_snapshot(&full).status.len(),
-            FACE_B_TOOLS.len(),
-            "minimal map must cover every Face B tool exactly once"
+            WORK_TOOLS.len(),
+            "minimal map must cover every work tool exactly once"
         );
         let map = MinimalProbeMap::from_snapshot(&full);
         assert!(!map.differs_from(&full), "same partition is not a flip");
@@ -604,9 +835,9 @@ mod tests {
     }
 
     #[test]
-    fn minimal_map_mark_incomplete_writes_back_face_b_only() {
+    fn minimal_map_mark_incomplete_writes_back_work_tools_only() {
         let dir = TestDir::new("minimal-writeback");
-        let full = probe_face_b(&full_ctx(dir.path()));
+        let full = probe_work_tools(&full_ctx(dir.path()));
         let mut map = MinimalProbeMap::from_snapshot(&full);
 
         assert!(
@@ -617,7 +848,7 @@ mod tests {
             !map.mark_incomplete("run_tests"),
             "already incomplete must not change the map"
         );
-        assert!(!map.mark_incomplete("bash"), "non-Face-B tools are ignored");
+        assert!(!map.mark_incomplete("bash"), "non-work tools are ignored");
         assert!(map.differs_from(&full));
     }
 

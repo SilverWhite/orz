@@ -160,12 +160,12 @@ pub(crate) struct LoopProfile {
     /// creation starts at 0). The main agent keeps the inherited per-run
     /// semantic (`main`/`grill` = 0).
     pub initial_tool_rounds: u32,
-    /// FUS-TOOL-PROBE P0-A step 5: whether this loop re-probes Face B and
-    /// re-projects the tool list before every model request. Main/grill
-    /// turns yes; retrieval lanes never re-probe (their list is the
-    /// caller's final projection and no second `tool_availability_check`
-    /// event may fire inside a lane).
-    pub probe_face_b: bool,
+    /// FUS-TOOL-PROBE P0-A/P0-A-2: whether this loop re-probes the work
+    /// tools and re-projects the tool list before every model request.
+    /// Main/grill turns yes; retrieval lanes never re-probe (their list is
+    /// the caller's final projection and no second
+    /// `tool_availability_check` event may fire inside a lane).
+    pub probe_work_tools: bool,
     /// ACAF Slice 2 fail-closed D-13 (2026-08-13): the retrieval lane's
     /// real activation_id — bound on the lane's action tickets (web_fetch /
     /// browser_read). The main lane is `None` (main-lane actions stay
@@ -184,7 +184,7 @@ impl LoopProfile {
             dc_enabled: true,
             max_tool_rounds,
             initial_tool_rounds: 0,
-            probe_face_b: true,
+            probe_work_tools: true,
             activation_id: None,
         }
     }
@@ -202,7 +202,7 @@ impl LoopProfile {
             dc_enabled: false,
             max_tool_rounds,
             initial_tool_rounds: 0,
-            probe_face_b: true,
+            probe_work_tools: true,
             activation_id: None,
         }
     }
@@ -239,7 +239,7 @@ impl LoopProfile {
             dc_enabled: false,
             max_tool_rounds,
             initial_tool_rounds,
-            probe_face_b: false,
+            probe_work_tools: false,
             activation_id: Some(activation_id.to_string()),
         }
     }
@@ -288,10 +288,10 @@ pub(crate) struct LoopOutcome {
 /// orientation post-tool-batch gap) → budget re-declaration.
 ///
 /// `tool_defs` is the BASE list for main/grill turns (registry + main-only
-/// additions + mode projection) — the loop re-probes Face B before EVERY
-/// model request and re-projects it (面A + (面B完整集 ∩ 会话声明集) + 面C +
-/// 非工作工具), emitting `tool_availability_check` only on flips against
-/// the minimal previous-round map (P0-A step 5). Retrieval lanes pass
+/// additions + mode projection) — the loop re-probes the work tools before
+/// EVERY model request and re-projects it (探针完整集 ∩ 会话声明集 + 非工作
+/// 工具), emitting `tool_availability_check` only on flips against
+/// the minimal previous-round map (P0-A step 5 / P0-A-2). Retrieval lanes pass
 /// their FINAL list and never re-probe (no second
 /// `tool_availability_check` event inside a lane). The call-time permission
 /// gate remains the final backstop. `messages` is in/out: the conversation
@@ -484,24 +484,32 @@ pub(crate) async fn run_agent_loop(
             maybe_fire_dc(svc.dc_state, writer, messages).await?;
         }
 
-        // FUS-TOOL-PROBE P0-A step 5 (design §4/§5): per-round Face B
+        // FUS-TOOL-PROBE P0-A-2 (design §4/§5 v0.2): per-round work-tool
         // refresh before EVERY model request. The minimal previous-round
         // map (seeded by the pre-run_started event in `run_turn_inner`)
         // decides flip-only events: an unchanged partition emits nothing;
         // a flip journals the fresh snapshot and re-projects the visible
-        // list (面A + 面B完整集 ∩ 会话声明集 + 面C + 非工作工具, names only).
-        // Retrieval lanes never re-probe — their list is the caller's final
+        // list (探针完整集 ∩ 会话声明集 + 非工作工具, names only). Retrieval
+        // lanes never re-probe — their list is the caller's final
         // projection (no second `tool_availability_check` inside a lane).
         // The call-time permission gate remains the final backstop (design
         // invariant 2).
-        let current_tool_defs: Vec<ToolDef> = if profile.probe_face_b {
+        let current_tool_defs: Vec<ToolDef> = if profile.probe_work_tools {
             let probe_context = crate::tool_probe::ProbeContext {
                 cwd: host.session_cwd(),
                 policy: host.tool_policy(),
                 test_runner_present: host.test_runner().is_some(),
                 interactive_user: host.interactive_user(),
+                goal_context_present: controller.goal_context_present(),
+                pending_retrieval_activation: controller.has_live_activation(),
+                terminal_available: host.terminal_available(),
+                lsp_configured: host.lsp_configured(),
+                memory_enabled: host.memory_enabled(),
+                image_backend_configured: host.image_backend_configured(),
+                video_backend_configured: host.video_backend_configured(),
+                mcp_registry_available: host.mcp_registry_available(),
             };
-            let snapshot = crate::tool_probe::probe_face_b(&probe_context);
+            let snapshot = crate::tool_probe::probe_work_tools(&probe_context);
             if controller.probe_flip(&snapshot) {
                 writer
                     .record(
@@ -951,9 +959,9 @@ pub(crate) async fn run_agent_loop(
                                 // lane_self_execute comment above).
                                 !lane_self_execute,
                                 // P0-A step 5 review fix: only lanes that
-                                // probe Face B (main/grill) write call
+                                // probe work tools (main/grill) write call
                                 // failures back into the probe map.
-                                profile.probe_face_b,
+                                profile.probe_work_tools,
                             )
                             .await?;
                         // GAP-RETRIEVAL-TOOLS (2026-08-10): evidence
