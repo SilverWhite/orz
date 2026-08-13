@@ -2,7 +2,7 @@
 
 ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构：尽量复用 Grok Build 等成熟组件，同时由 ORZ 自己拥有 Agent control plane、循环编排、保障事件、权限边界和可验证状态链。
 
-> 当前设计：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) v1.1，`accepted / frozen`。
+> 当前设计：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（冻结基线 v1.1；2026-08-10 至 2026-08-13 追加 v1.2–v1.8 补写），`accepted / frozen`。
 >
 > 当前实现：`partial`。现有 Rust workspace 尚未完全符合冻结设计，已知差距集中登记在 [`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md) 和冻结审计中。
 >
@@ -23,7 +23,7 @@ ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构
 | 自然语言设计 | `accepted / frozen` | ADR-0010 是唯一当前自然语言设计权威 |
 | Rust production workspace | `partial` | `orz/` 已有可运行实现，但仍存在已登记符合性差距 |
 | Python assurance | `reference` | conformance、Schema authority、fixture、审计和窄兼容路径 |
-| Component adoption register | `pending` | 逐 crate/component 所有权需按当前代码重新审计 |
+| Component adoption register | `partial` | 逐 crate/component 所有权需按当前代码重新审计 |
 | Windows incident/case evidence | `pending` | 目录已建立，首批结构化证据尚未闭环 |
 | Source quality weighting | `implemented` | 机械三档判定器 + 机器可读种子名单 + 模型加权标注已接线（Schema 先行），见索引 GAP-SOURCE-WEIGHTING-IMPL 与[实施审计](docs/audits/GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md) |
 | Encoding gate | `implemented` | 机械编码门控已闭合（固定解码链 + `tool_completed.output_encoding`，[实施审计](docs/audits/GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13.md)），见索引 GAP-ENCODING-GATE |
@@ -99,6 +99,7 @@ python gsa.py doctor --quick
 
 | 路径 | 内容 |
 |---|---|
+| [`TODO.md`](TODO.md) | 实施待办勾选清单（派生自 BACKLOG，随优先级变化同步） |
 | [`orz/`](orz/) | Rust production workspace |
 | [`assurance/`](assurance/) | Python reference/conformance 实现 |
 | [`runtime/`](runtime/) | run-event、manifest、fixture 和 runtime Schema |

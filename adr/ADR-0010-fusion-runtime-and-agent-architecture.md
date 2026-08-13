@@ -872,6 +872,18 @@ Schema 与机械证据：
 - `docs/GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md`
 - `docs/DEEPSEEK_CREDENTIAL_HARDENING_2026-07-23.md`
 
+当前派生设计输入与实施证据（v1.2–v1.8 补写引用；只作来源路由，不新增裁决语义）：
+
+- `docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md`（§3.5 v1.8 单一探针面来源）
+- `docs/RETRIEVAL_SOURCE_WEIGHTING_DESIGN_2026-08-12.md` 与 `docs/SOURCE_QUALITY_SEED_LISTS_2026-08-12.md`（§3.7 条 12 v1.6/v1.7 来源）
+- `docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md`（§3.7 条 12 第二层与引用纪律的 P0-B 派生设计）
+- `runtime/run-event-v0.2.schema.json`
+- `runtime/retrieval-result-event-payload-v0.2.schema.json`
+- `runtime/tool-availability-check-event-payload-v0.2.schema.json`
+- `runtime/source-quality-seed-lists-v0.1.json`
+- `orz/crates/orz-loop/src/tool_probe.rs`
+- `orz/crates/orz-assurance/src/source_weighting.rs`
+
 ## 14. v1.1 六项补写裁决索引
 
 本节只提供补写结果索引，规范正文以所指章节为准：
@@ -997,4 +1009,4 @@ Schema 与机械证据：
    （run-start 首翻先于 run_started）；探针快照即用即清，最小上一轮映射仅存 `tool → 完整/不完整`。
    检索车道工具由子代理确定性留痕，不参与主探针矩阵；主车道兜底消息与探针 reason 使用中性陈述。
    来源：`docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md` §9（2026-08-13，用户裁决，
-   A+C→B 定档）。
+   A+C→B 定档）；实施审计：`docs/audits/GAP_TOOL_PROBE_V02_SINGLE_FACE_IMPL_AUDIT_2026-08-13.md`。
