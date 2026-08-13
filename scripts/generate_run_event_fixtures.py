@@ -741,9 +741,9 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "reject_code": "replay_detected",
         "detail": "nonce already consumed",
     },
-    # FUS-TOOL-PROBE (2026-08-13, design §7): Face B two-state probe
-    # snapshot — complete/incomplete cover Face B only; reasons are stable
-    # neutral statements.
+    # FUS-TOOL-PROBE (2026-08-13, design §7 v0.2; P0-A-2): single probe
+    # face snapshot — complete/incomplete cover ALL work tools; reasons
+    # are stable neutral statements.
     "tool_availability_check": {
         "probe_scope": "main_agent_work_tools",
         "probe_timestamp": TIMESTAMP,
@@ -753,10 +753,26 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
             "grep",
             "search_tool",
             "search_replace",
-            "run_tests",
+            "blackboard_read",
+            "todo_write",
+            "update_goal",
+            "compaction_whitelist_add",
         ],
         "incomplete": [
+            {"tool": "run_tests", "reason": "缺少测试运行器"},
             {"tool": "ask_user_question", "reason": "无交互式用户会话"},
+            {"tool": "enter_plan_mode", "reason": "会话不支持计划模式"},
+            {"tool": "exit_plan_mode", "reason": "会话不支持计划模式"},
+            {"tool": "retrieval_disposition", "reason": "检索会话未激活"},
+            {"tool": "run_terminal_cmd", "reason": "终端链路不完整"},
+            {"tool": "lsp", "reason": "语言服务未配置"},
+            {"tool": "memory_get", "reason": "记忆存储未启用"},
+            {"tool": "memory_search", "reason": "记忆存储未启用"},
+            {"tool": "image_gen", "reason": "图像后端未配置"},
+            {"tool": "image_edit", "reason": "图像后端未配置"},
+            {"tool": "image_to_video", "reason": "视频后端未配置"},
+            {"tool": "reference_to_video", "reason": "视频后端未配置"},
+            {"tool": "use_tool", "reason": "能力注册未配置"},
         ],
         "gate_decision": "pass",
     },
@@ -979,10 +995,26 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
             "grep",
             "search_tool",
             "search_replace",
-            "run_tests",
+            "blackboard_read",
+            "todo_write",
+            "update_goal",
+            "compaction_whitelist_add",
         ],
         "incomplete": [
+            {"tool": "run_tests", "reason": "缺少测试运行器"},
             {"tool": "ask_user_question", "reason": "无交互式用户会话"},
+            {"tool": "enter_plan_mode", "reason": "会话不支持计划模式"},
+            {"tool": "exit_plan_mode", "reason": "会话不支持计划模式"},
+            {"tool": "retrieval_disposition", "reason": "检索会话未激活"},
+            {"tool": "run_terminal_cmd", "reason": "终端链路不完整"},
+            {"tool": "lsp", "reason": "语言服务未配置"},
+            {"tool": "memory_get", "reason": "记忆存储未启用"},
+            {"tool": "memory_search", "reason": "记忆存储未启用"},
+            {"tool": "image_gen", "reason": "图像后端未配置"},
+            {"tool": "image_edit", "reason": "图像后端未配置"},
+            {"tool": "image_to_video", "reason": "视频后端未配置"},
+            {"tool": "reference_to_video", "reason": "视频后端未配置"},
+            {"tool": "use_tool", "reason": "能力注册未配置"},
         ],
         "gate_decision": "stop",
     },
@@ -1268,8 +1300,8 @@ Scope:
   `control_ticket_issued`, `control_ticket_consumed`,
   `control_ticket_rejected` (ticket lifecycle binding fields — never the
   HMAC tag, which stays inside the issuing process), plus
-  `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13: two-state Face B
-  probe snapshot — complete/incomplete cover Face B only).
+  `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
+  single probe face snapshot — complete/incomplete cover ALL work tools).
 - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`

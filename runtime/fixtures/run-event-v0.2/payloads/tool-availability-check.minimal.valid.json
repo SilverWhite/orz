@@ -7,12 +7,67 @@
     "grep",
     "search_tool",
     "search_replace",
-    "run_tests"
+    "blackboard_read",
+    "todo_write",
+    "update_goal",
+    "compaction_whitelist_add"
   ],
   "incomplete": [
     {
+      "tool": "run_tests",
+      "reason": "缺少测试运行器"
+    },
+    {
       "tool": "ask_user_question",
       "reason": "无交互式用户会话"
+    },
+    {
+      "tool": "enter_plan_mode",
+      "reason": "会话不支持计划模式"
+    },
+    {
+      "tool": "exit_plan_mode",
+      "reason": "会话不支持计划模式"
+    },
+    {
+      "tool": "retrieval_disposition",
+      "reason": "检索会话未激活"
+    },
+    {
+      "tool": "run_terminal_cmd",
+      "reason": "终端链路不完整"
+    },
+    {
+      "tool": "lsp",
+      "reason": "语言服务未配置"
+    },
+    {
+      "tool": "memory_get",
+      "reason": "记忆存储未启用"
+    },
+    {
+      "tool": "memory_search",
+      "reason": "记忆存储未启用"
+    },
+    {
+      "tool": "image_gen",
+      "reason": "图像后端未配置"
+    },
+    {
+      "tool": "image_edit",
+      "reason": "图像后端未配置"
+    },
+    {
+      "tool": "image_to_video",
+      "reason": "视频后端未配置"
+    },
+    {
+      "tool": "reference_to_video",
+      "reason": "视频后端未配置"
+    },
+    {
+      "tool": "use_tool",
+      "reason": "能力注册未配置"
     }
   ],
   "gate_decision": "pass"

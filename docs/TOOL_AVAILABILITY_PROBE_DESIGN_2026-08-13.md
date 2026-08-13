@@ -1,9 +1,9 @@
 # 主 Agent 工作工具机械可用性探针 设计（2026-08-13，v0.2 修订）
 
 > 状态：`approved`（2026-08-13 用户裁决放行实施；实施进度统一登记于
-> [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md) P0-A，步骤 1-7 已闭合；
-> ADR-0010 §3.5 修订已登记为 v1.8，见 ADR §14.8；v0.2 单一探针面扩展实施
-> （A/C 工具探针）登记为后续批次 P0-A-2）。
+> [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md) P0-A，步骤 1-7 与
+> P0-A-2（v0.2 单一探针面扩展）均已闭合；ADR-0010 §3.5 修订已登记为 v1.8，
+> 见 ADR §14.8；实施审计见 `docs/audits/GAP_TOOL_PROBE_V02_SINGLE_FACE_IMPL_AUDIT_2026-08-13.md`）。
 > v0.2 修订（2026-08-13 用户裁决，定档）：**A 面与 C 面全部并入探针面（B）**——
 > 单一规则：本轮模型可见 = 机械链路完整 ∩ 会话声明集；面 A/C 撤销，B 面升级为
 > 全工作工具探针面。v0.1 的三面矩阵保留为历史语义，见 §2.1；当前设计以 §2.0 为准。
@@ -197,3 +197,9 @@
 ## 10. 实施边界与待办（登记，本轮不实施）
 
 > 优先级：P0（当前工作集）。实施待办已统一迁至 [`BACKLOG_AND_PRIORITIES.md`](BACKLOG_AND_PRIORITIES.md)（P0/工具探针批次，含 7 项实施序列与决策门）；本文件不再单独维护待办明细，设计内容仍以本文为准。
+>
+> P0-A-2 闭合边界（2026-08-13）：单一探针面的全部 23 个判定已实现；host 可选
+> 后端能力（lsp/memory/图像/视频/MCP）由 `LoopHost` fail-closed 默认值承载，
+> orz-host 当前除终端外均未接线（`build_toolset` 固定禁用可选后端）——探针按
+> 设计移除这些工具的可见性；未来接线任一后端时须同步翻转 orz-host 对应能力
+> 访问器，并登记探针翻转测试。

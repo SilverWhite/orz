@@ -17,8 +17,8 @@ Scope:
   `control_ticket_issued`, `control_ticket_consumed`,
   `control_ticket_rejected` (ticket lifecycle binding fields — never the
   HMAC tag, which stays inside the issuing process), plus
-  `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13: two-state Face B
-  probe snapshot — complete/incomplete cover Face B only).
+  `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
+  single probe face snapshot — complete/incomplete cover ALL work tools).
 - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`

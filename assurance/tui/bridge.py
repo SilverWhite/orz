@@ -455,7 +455,7 @@ def _make_ipg_event(payload: dict[str, Any], timestamp: str) -> InstructionProve
 
 
 def _make_tool_avail_event(payload: dict[str, Any], timestamp: str) -> ToolAvailabilityEvent:
-    # FUS-TOOL-PROBE (2026-08-13): the Rust v0.2 event carries the Face B
+    # FUS-TOOL-PROBE (2026-08-13; P0-A-2): the Rust v0.2 event carries the
     # two-state probe snapshot (complete/incomplete). Legacy count keys
     # (`available_count`/...) are still tolerated for older journals.
     complete = payload.get("complete", [])

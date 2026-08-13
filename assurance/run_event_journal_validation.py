@@ -137,8 +137,8 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "control-ticket-rejected",
         RUNTIME / "control-ticket-rejected-event-payload-v0.2.schema.json",
     ),
-    # FUS-TOOL-PROBE (2026-08-13): tool_availability_check moves to the
-    # two-state Face B probe shape on the v0.2 track (old
+    # FUS-TOOL-PROBE (2026-08-13; P0-A-2 2026-08-13): tool_availability_check
+    # moves to the two-state work-tool probe shape on the v0.2 track (old
     # available/unavailable/degraded/unprobed shape stays v0.1 replay-only).
     "tool_availability_check": (
         "tool-availability-check",
@@ -864,8 +864,9 @@ def _verify_v02_control_tickets(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
-_FACE_B_TOOLS = frozenset(
+_WORK_TOOLS = frozenset(
     {
+        # Locally deterministic tools (former Face B).
         "read_file",
         "list_dir",
         "grep",
@@ -873,6 +874,24 @@ _FACE_B_TOOLS = frozenset(
         "search_replace",
         "run_tests",
         "ask_user_question",
+        # Former Face A — control tools with real mechanical chains.
+        "blackboard_read",
+        "todo_write",
+        "update_goal",
+        "enter_plan_mode",
+        "exit_plan_mode",
+        "compaction_whitelist_add",
+        "retrieval_disposition",
+        # Former Face C — backend-gated tools.
+        "run_terminal_cmd",
+        "lsp",
+        "memory_get",
+        "memory_search",
+        "image_gen",
+        "image_edit",
+        "image_to_video",
+        "reference_to_video",
+        "use_tool",
     }
 )
 
@@ -891,9 +910,9 @@ _JUDGMENT_WORD_TOKENS = (
 def _verify_v02_tool_availability_probe(events: list[dict[str, Any]]) -> list[str]:
     """FUS-TOOL-PROBE (2026-08-13, design §3/§7) v0.2 cross-checks:
 
-    - `complete`/`incomplete` cover exactly the Face B tools, each exactly
+    - `complete`/`incomplete` cover exactly the work tools, each exactly
       once (two-state partition — no tool may appear on both sides, no
-      Face B tool may be absent);
+      work tool may be absent);
     - incomplete reasons are stable neutral statements — never availability
       judgment words (可用/不可用/成功/失败/available/...).
     """
@@ -914,11 +933,11 @@ def _verify_v02_tool_availability_probe(events: list[dict[str, Any]]) -> list[st
                 f"{sorted(overlap)}"
             )
         union = complete | set(incomplete)
-        if union != _FACE_B_TOOLS:
+        if union != _WORK_TOOLS:
             errors.append(
-                f"event {index}: probe partition must cover exactly Face B; "
-                f"missing={sorted(_FACE_B_TOOLS - union)}, "
-                f"extra={sorted(union - _FACE_B_TOOLS)}"
+                f"event {index}: probe partition must cover exactly the work tools; "
+                f"missing={sorted(_WORK_TOOLS - union)}, "
+                f"extra={sorted(union - _WORK_TOOLS)}"
             )
         for tool, reason in sorted(incomplete.items()):
             lowered = reason.lower()

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/tool-availability-check-event-payload-v0.2.schema.json",
   "title": "Tool availability check runtime event payload (Rust track, v0.2 probe shape)",
-  "description": "FUS-TOOL-PROBE (2026-08-13): Face B per-tool mechanical probe snapshot. The old available/unavailable/degraded/unprobed catalog shape is removed on the v0.2 track (v0.1 keeps it for replay-only). complete/incomplete cover Face B tools only; reasons are stable neutral statements, never availability judgment words. gate_decision is an internal mechanical field — producers currently emit pass (reserved for future mapping).",
+  "description": "FUS-TOOL-PROBE (2026-08-13; P0-A-2): single probe face snapshot — complete/incomplete cover ALL 23 main-agent work tools. The old available/unavailable/degraded/unprobed catalog shape is removed on the v0.2 track (v0.1 keeps it for replay-only); reasons are stable neutral statements, never availability judgment words. gate_decision is an internal mechanical field — producers currently emit pass (reserved for future mapping).",
   "type": "object",
   "additionalProperties": false,
   "required": [

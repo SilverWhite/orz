@@ -8,7 +8,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH、CLASSICAL-EXEC-ASSISTANT（POC 已通） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-RETRIEVAL-MECH、CLASSICAL-EXEC-ASSISTANT（POC 已通） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -27,7 +27,7 @@
 
 - 入口：[设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)。
 - 决策门：2026-08-13 用户已裁决放行实施；ADR-0010 §3.5 修订采纳按批次末第 7 步登记。
-- 进度（2026-08-13）：步骤 1 已完成——面 B 探针模块（orz-loop `tool_probe.rs`：两态中性判定 + 失败兜底 + 面矩阵成员与判定单测 15 项）；步骤 2 已完成——v0.2 事件升级（新 payload Schema + verifier 交叉校验 + fixture 重生成 + producer 接线 + TUI 消费面适配），13 个真实 journals 重捕并验证；步骤 3 已完成——`run_tests` 条件声明迁移（controller 删除直接 `test_runner()` 条件声明，声明改由面 B 探针快照驱动：完整才列出、不完整即移除，中性 reason `缺少测试运行器`；新增 registry 已声明但 runner 缺失/存在两条迁移语义测试）；步骤 4 已完成——列表投影接线（tool_probe 补面 A/面 C 常量与 `is_main_agent_work_tool` 判定；controller 模型可见列表 = 面A + (面B完整集 ∩ 会话声明集) + 面C + 非工作工具，仅名称；ReadOnly 下 `search_replace` 写探针不完整即移除，面 C/非工作工具不探不标；新增投影分区、交互会话、面 A/C 成员判定测试，Benchmark/ReadOnly 全量声明测试同步新语义）；步骤 3/4 全面审查清理已完成——run_tests 无 runner 竞态调用改为 dispatch 前无 ToolStarted 中性拒绝（`missing_test_runner`），补 workspace 不可读投影移除与竞态兜底测试；步骤 5 已完成——最小上一轮映射与翻转事件（`MinimalProbeMap` 仅存 `tool → 完整/不完整`、不缓存 reason、不跨 run；每个模型请求构造前重算面 B 快照并重算列表投影，翻转才发 `tool_availability_check` 事件、无变化不发；调用即探针：面 B 工具 ToolCompleted(error) 回写最小映射——run_tests 竞态拒绝/spawn 失败/ACAF fail-closed 拒绝/宿主调用错误，回写仅主/grill 车道、检索车道不写主映射（审查修复）；主/grill 车道探、检索车道不探不发；新增翻转重投影、调用失败回写恢复翻转、检索车道零污染、跨 run 重置四项集成测试）；步骤 6 已完成——兜底消息中性化改造（权限门禁拒绝消息改 `tool 'X' — 本次调用未获权限门禁放行`；连续拒绝熔断块改中文中性陈述，移除 available/refused 旧措辞；系统提示词改"工具列表由运行时按轮声明"；检索车道按复核裁决保持原设计，拒绝/宿主执行消息不脱敏；run_tests 管道错误改 unreadable；DC 最小动作改"完整错误输出"；补中性词契约测试）；步骤 7 已完成——ADR-0010 §3.5 修订登记为 v1.8（单一探针面取代 v1.5「registry 全量 + 零可用性承诺」语义，A+C→B 定档合并登记，ADR §14.8；§14.5 补复核注）；orz-loop/host/tui 测试全绿、仓库门禁 valid。批次步骤 1-7 全部闭合。**登记实现差距：当前代码仍为 v0.1 三面语义（面 B 探针 + 面 A/C 固定声明），v0.2 单一探针面的 A/C 工具机械链路探针与投影切换待实施（P0-A-2，见下）。** 下一步：P0-A-2 扩展实施。
+- 进度（2026-08-13）：步骤 1 已完成——面 B 探针模块（orz-loop `tool_probe.rs`：两态中性判定 + 失败兜底 + 面矩阵成员与判定单测 15 项）；步骤 2 已完成——v0.2 事件升级（新 payload Schema + verifier 交叉校验 + fixture 重生成 + producer 接线 + TUI 消费面适配），13 个真实 journals 重捕并验证；步骤 3 已完成——`run_tests` 条件声明迁移（controller 删除直接 `test_runner()` 条件声明，声明改由面 B 探针快照驱动：完整才列出、不完整即移除，中性 reason `缺少测试运行器`；新增 registry 已声明但 runner 缺失/存在两条迁移语义测试）；步骤 4 已完成——列表投影接线（tool_probe 补面 A/面 C 常量与 `is_main_agent_work_tool` 判定；controller 模型可见列表 = 面A + (面B完整集 ∩ 会话声明集) + 面C + 非工作工具，仅名称；ReadOnly 下 `search_replace` 写探针不完整即移除，面 C/非工作工具不探不标；新增投影分区、交互会话、面 A/C 成员判定测试，Benchmark/ReadOnly 全量声明测试同步新语义）；步骤 3/4 全面审查清理已完成——run_tests 无 runner 竞态调用改为 dispatch 前无 ToolStarted 中性拒绝（`missing_test_runner`），补 workspace 不可读投影移除与竞态兜底测试；步骤 5 已完成——最小上一轮映射与翻转事件（`MinimalProbeMap` 仅存 `tool → 完整/不完整`、不缓存 reason、不跨 run；每个模型请求构造前重算面 B 快照并重算列表投影，翻转才发 `tool_availability_check` 事件、无变化不发；调用即探针：面 B 工具 ToolCompleted(error) 回写最小映射——run_tests 竞态拒绝/spawn 失败/ACAF fail-closed 拒绝/宿主调用错误，回写仅主/grill 车道、检索车道不写主映射（审查修复）；主/grill 车道探、检索车道不探不发；新增翻转重投影、调用失败回写恢复翻转、检索车道零污染、跨 run 重置四项集成测试）；步骤 6 已完成——兜底消息中性化改造（权限门禁拒绝消息改 `tool 'X' — 本次调用未获权限门禁放行`；连续拒绝熔断块改中文中性陈述，移除 available/refused 旧措辞；系统提示词改"工具列表由运行时按轮声明"；检索车道按复核裁决保持原设计，拒绝/宿主执行消息不脱敏；run_tests 管道错误改 unreadable；DC 最小动作改"完整错误输出"；补中性词契约测试）；步骤 7 已完成——ADR-0010 §3.5 修订登记为 v1.8（单一探针面取代 v1.5「registry 全量 + 零可用性承诺」语义，A+C→B 定档合并登记，ADR §14.8；§14.5 补复核注）；P0-A-2 已闭合——单一探针面覆盖全部 23 个工作工具（见下）。orz-loop/host/tui 测试全绿、仓库门禁 valid。
 - 方向裁决（2026-08-13，定档）：**A 面与 C 面全部并入探针面（B）**——单一规则：本轮模型可见 = 机械链路完整 ∩ 会话声明集（非工作工具与检索车道走各自既有门）。A 面 7 个控制工具（`blackboard_read` / `todo_write` / `update_goal` / `enter_plan_mode` / `exit_plan_mode` / `compaction_whitelist_add` / `retrieval_disposition`）与 C 面 9 个工具（`run_terminal_cmd` / `lsp` / `memory_get` / `memory_search` / `image_gen` / `image_edit` / `image_to_video` / `reference_to_video` / `use_tool`）各自补机械链路探针（journal/工作区/goal context/会话类型/权限策略/后端配置/MCP 能力注册等），面 A/C 撤销，B 面升级为全工作工具探针面。该定档与步骤 7 ADR-0010 §3.5 修订合并登记。
 - 审查裁定（2026-08-13，子代理三路审查）：步骤 4 列表投影语义定为 `面A + (面B完整集 ∩ registry 声明集) + 面C`（部分会话变体可移除 ask_user_question/search_tool，探针不得声明会话不存在的工具）；探针粒度=工作区根级机械检查、写探针 metadata-grade、交互用户信号=ACP live gateway，均已登记进设计文档。（该投影语义已被 v0.2 单一探针面取代，见上一条方向裁决。）
 - 实施序列：
@@ -39,16 +39,22 @@
   6. 兜底消息中性化改造；
   7. ADR-0010 §3.5 修订裁决与登记。
 
-### 1b. FUS-TOOL-PROBE v0.2 单一探针面扩展（P0-A-2，登记待实施）
+### 1b. FUS-TOOL-PROBE v0.2 单一探针面扩展（P0-A-2，已闭合）
 
-- 背景：P0-A 步骤 1-7 已闭合（ADR-0010 v1.8 §3.5 已登记 v0.2 单一探针面）；当前代码仍为 v0.1
-  三面语义——面 A 7 个控制工具与面 C 9 个工具固定声明、无机械探针，列表投影为
-  面A + (面B完整集 ∩ 声明集) + 面C + 非工作工具。
-- 开放内容：A/C 工具各自补机械链路探针（journal/工作区/goal context/会话类型/权限策略/后端配置/
-  MCP 能力注册等，判定来源与 reason 以设计文档 §2.0 表为准）；列表投影切换为
-  探针完整集 ∩ 会话声明集；`tool_availability_check` 事件 complete/incomplete 覆盖全部工作工具；
-  调用即探针回写覆盖新面；测试与真实 journals 更新；批次末复核并登记。
-- 依赖：无（独立于 P0-B）。
+- 完成内容（2026-08-13）：面 A/C 撤销——`tool_probe.rs` 以单一 `WORK_TOOLS`（23 个工具）取代
+  三面常量，全部工具按设计 §2.0 表各自补机械链路判定（读/写/存储/goal 上下文/plan 模式/
+  检索激活/终端/lsp/memory/图像/视频/MCP 注册，全部为廉价确定性检查）；`LoopHost` 新增
+  terminal/lsp/memory/image/video/MCP 六项 fail-closed 能力访问器（orz-host 覆盖终端=true，
+  其余按当前 build_toolset 未接线=false）；controller 新增 goal_context_present /
+  has_live_activation 探针信号；列表投影切换为 探针完整集 ∩ 会话声明集 + 非工作工具；
+  `tool_availability_check` 事件 complete/incomplete 覆盖全部工作工具（Schema 描述、Python
+  verifier `_WORK_TOOLS`、fixture 生成器与 12 个 v0.2 journal fixtures 同步并重算哈希链）；
+  调用即探针回写覆盖全部工作工具（仍限主/grill 车道）；投影/翻转/车道隔离测试更新。
+- 验证：orz-loop 236 通过 / 0 失败、orz-host 199 通过 / 0 失败、orz-tui 178 通过 / 0 失败；
+  Python verifier 与相关 assurance 测试 395 通过；仓库门禁 valid、0 错误。
+- 边界：orz-host 可选后端（lsp/memory/图像/视频/MCP）当前全部未接线——探针按 fail-closed
+  移除这些工具；未来接线须翻转 orz-host 对应能力访问器并补翻转测试。真实 journals 为已提交
+  fixtures 重建（12 个含探针事件），非新捕获运行。
 
 ### 2. FUS-RETRIEVAL-MECH（`approved`；P0-B）
 
@@ -140,6 +146,7 @@
 
 ## 变更记录
 
+- 2026-08-13：P0-A-2 闭合登记——v0.2 单一探针面扩展实施完成（23 个工作工具统一机械探针、面 A/C 撤销、投影切换为探针完整集∩声明集、`tool_availability_check` 事件/verifier/fixtures 同步、`LoopHost` 六项能力访问器接线）；orz-loop 236 / orz-host 199 / orz-tui 178 通过，Python verifier 与相关测试 395 通过，仓库门禁 valid；边界=orz-host 可选后端（lsp/memory/图像/视频/MCP）未接线，接线时翻转能力访问器。
 - 2026-08-13：P0-A 步骤 7 完成登记——ADR-0010 v1.8 §3.5 修订登记（v0.2 单一探针面取代 v1.5「registry 全量 + 零可用性承诺」；A+C→B 定档合并登记，ADR §14.5 补复核注）；批次步骤 1-7 全部闭合；登记实现差距——代码仍为 v0.1 三面语义，v0.2 单一探针面扩展实施（P0-A-2）待续。
 - 2026-08-13：CLASSICAL-EXEC-ASSISTANT v0.5 两点获用户确认——注册板块常驻但内容按需读取（防上下文膨胀）；单轮一单先行（防并发写单竞态，反馈闭环驱动）。
 - 2026-08-13：CLASSICAL-EXEC-ASSISTANT v0.5 登记——黑板动作栏定为生产协作形态（注册板块/动作栏/结果栏；模型面=读板块+写订单，发放=机械单一出口；写订单无副作用，执行幻觉只能污染订单）；发放语义与配合规则登记。
