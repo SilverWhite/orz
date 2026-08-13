@@ -1971,6 +1971,26 @@ def _committed_result() -> dict:
     }
 
 
+def _pool_entry(
+    url: str,
+    canonical_url: str | None = None,
+    tier: str = "default",
+    weight: float = 1.0,
+    relevance: str = "partial",
+    form_reasons: list[str] | None = None,
+) -> dict:
+    """A valid candidate_pool entry mirroring one retained candidate URL."""
+    return {
+        "url": url,
+        "canonical_url": canonical_url or url,
+        "tier": tier,
+        "mechanical_weight": weight,
+        "weight_reason": "default",
+        "relevance": relevance,
+        "form_reasons": form_reasons or [],
+    }
+
+
 class RetrievalResultConsistencyTests(unittest.TestCase):
     """ADR-0010 §3.3.3/§3.7.5 mechanical consistency of committed results:
     source_counts equal the ledger's visibility distribution; claim_strength
@@ -2220,10 +2240,11 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
         errors = validate_journal_text(journal)
         self.assertIn("duplicate source_annotation", " | ".join(errors))
 
-    # ── FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search candidate pool ──
+    # ── FUS-RETRIEVAL-MECH B-1 + step 3: web_search candidate pool ──
 
     def test_search_candidate_pool_validates_when_mirrored(self) -> None:
         result = _committed_result()
+        candidates = ["https://a.example", "https://b.example"]
         result["source_ledger"].append(
             {
                 "source_id": "SRC-3",
@@ -2238,9 +2259,11 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
-                "candidate_urls": ["https://a.example", "https://b.example"],
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
             }
         )
+        result["prefilter_log"] = []
         result["source_counts"] = {
             "total": 3,
             "full_text_observed": 1,
@@ -2255,7 +2278,8 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "source_url_or_ref": "q",
                 "visibility": "partial_text_observed",
                 "content_sha256": _ZERO,
-                "candidate_urls": ["https://a.example", "https://b.example"],
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
             }
         )
         journal = _v02_journal(
@@ -2265,6 +2289,7 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
 
     def test_search_candidate_pool_requires_raw_ref_mirror(self) -> None:
         result = _committed_result()
+        candidates = ["https://a.example"]
         result["source_ledger"].append(
             {
                 "source_id": "SRC-3",
@@ -2279,9 +2304,11 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
-                "candidate_urls": ["https://a.example"],
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
             }
         )
+        result["prefilter_log"] = []
         result["source_counts"]["total"] = 3
         result["source_counts"]["partial_text_observed"] = 2
         journal = _v02_journal(
@@ -2302,6 +2329,7 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
 
     def test_candidate_pool_duplicates_rejected(self) -> None:
         result = _committed_result()
+        candidates = ["https://a.example", "https://a.example"]
         result["source_ledger"].append(
             {
                 "source_id": "SRC-3",
@@ -2316,9 +2344,20 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
-                "candidate_urls": ["https://a.example", "https://a.example"],
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
             }
         )
+        result["prefilter_log"] = [
+            {
+                "source_id": "SRC-3",
+                "url": "https://a.example",
+                "canonical_url": "https://a.example",
+                "reason": "duplicate_canonical",
+                "action": "removed",
+                "filtered_at": "2026-08-09T00:00:00Z",
+            }
+        ]
         result["source_counts"]["total"] = 3
         result["source_counts"]["partial_text_observed"] = 2
         result["raw_source_refs"].append(
@@ -2328,7 +2367,8 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "source_url_or_ref": "q",
                 "visibility": "partial_text_observed",
                 "content_sha256": _ZERO,
-                "candidate_urls": ["https://a.example", "https://a.example"],
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
             }
         )
         journal = _v02_journal(
@@ -2390,6 +2430,352 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
         )
         errors = validate_journal_text(journal)
         self.assertIn("does not match the ledger", " | ".join(errors))
+
+    # ── FUS-RETRIEVAL-MECH step 3 (2026-08-14): prefiltered pool ──
+
+    def test_candidate_urls_requires_candidate_pool(self) -> None:
+        result = _committed_result()
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_urls": ["https://a.example"],
+            }
+        )
+        result["prefilter_log"] = []
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "visibility": "partial_text_observed",
+                "content_sha256": _ZERO,
+                "candidate_urls": ["https://a.example"],
+            }
+        )
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("without candidate_pool", " | ".join(errors))
+
+    def test_candidate_pool_requires_candidate_urls(self) -> None:
+        result = _committed_result()
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_pool": [_pool_entry("https://a.example")],
+            }
+        )
+        result["prefilter_log"] = []
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("without candidate_urls", " | ".join(errors))
+
+    def test_candidate_pool_url_mismatch_rejected(self) -> None:
+        result = _committed_result()
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_urls": ["https://a.example"],
+                "candidate_pool": [_pool_entry("https://b.example")],
+            }
+        )
+        result["prefilter_log"] = []
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "visibility": "partial_text_observed",
+                "content_sha256": _ZERO,
+                "candidate_urls": ["https://a.example"],
+                "candidate_pool": [_pool_entry("https://b.example")],
+            }
+        )
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("does not match candidate_urls", " | ".join(errors))
+
+    def test_candidate_pool_requires_prefilter_log(self) -> None:
+        result = _committed_result()
+        candidates = ["https://a.example"]
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "visibility": "partial_text_observed",
+                "content_sha256": _ZERO,
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("prefilter_log missing", " | ".join(errors))
+
+    def test_prefilter_log_removed_url_still_retained_rejected(self) -> None:
+        result = _committed_result()
+        candidates = ["https://a.example"]
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        result["prefilter_log"] = [
+            {
+                "source_id": "SRC-3",
+                "url": "https://a.example",
+                "canonical_url": "https://a.example",
+                "reason": "bad_url",
+                "action": "removed",
+                "filtered_at": "2026-08-09T00:00:00Z",
+            }
+        ]
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "visibility": "partial_text_observed",
+                "content_sha256": _ZERO,
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("still retained", " | ".join(errors))
+
+    def test_prefilter_log_duplicate_removal_rejected(self) -> None:
+        result = _committed_result()
+        candidates = ["https://a.example"]
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        removal = {
+            "source_id": "SRC-3",
+            "url": "https://bad.example",
+            "reason": "bad_url",
+            "action": "removed",
+            "filtered_at": "2026-08-09T00:00:00Z",
+        }
+        result["prefilter_log"] = [dict(removal), dict(removal)]
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "visibility": "partial_text_observed",
+                "content_sha256": _ZERO,
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("duplicate prefilter_log", " | ".join(errors))
+
+    def test_prefilter_log_requires_search_entry_source(self) -> None:
+        result = _committed_result()
+        candidates = ["https://a.example"]
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        result["prefilter_log"] = [
+            {
+                "source_id": "SRC-1",
+                "url": "https://bad.example",
+                "reason": "bad_url",
+                "action": "removed",
+                "filtered_at": "2026-08-09T00:00:00Z",
+            }
+        ]
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "visibility": "partial_text_observed",
+                "content_sha256": _ZERO,
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("does not reference a web_search_result", " | ".join(errors))
+
+    def test_prefilter_log_duplicate_reason_may_reference_retained_url(
+        self,
+    ) -> None:
+        result = _committed_result()
+        candidates = ["https://a.example"]
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "used_in_sections": [],
+                "content_sha256": _ZERO,
+                "highest_allowed_claim": "derived",
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        result["prefilter_log"] = [
+            {
+                "source_id": "SRC-3",
+                "url": "https://a.example",
+                "canonical_url": "https://a.example",
+                "reason": "duplicate_canonical",
+                "action": "removed",
+                "filtered_at": "2026-08-09T00:00:00Z",
+            }
+        ]
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "search snippet",
+                "source_url_or_ref": "q",
+                "visibility": "partial_text_observed",
+                "content_sha256": _ZERO,
+                "candidate_urls": candidates,
+                "candidate_pool": [_pool_entry(url) for url in candidates],
+            }
+        )
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
 
 
 class WebFetchCandidateCountTests(unittest.TestCase):

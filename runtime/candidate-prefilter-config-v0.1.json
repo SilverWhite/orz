@@ -1,0 +1,56 @@
+{
+  "schema_version": "0.1.0",
+  "description": "机械预筛种子名单（FUS-RETRIEVAL-MECH 步骤 3 / ADR-0010 §3.7 条 12 第二层）。预筛只净化与排序、不拦截：canonical/host 级去重、明确失败形态剔除、tier/weight + 词法相关性排序。本文件是默认配置来源，可经 ORZ_CANDIDATE_PREFILTER_CONFIG 指向外部 JSON 覆盖增删，不硬编码。",
+  "tracking_query_params": [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "fbclid",
+    "gclid",
+    "gclsrc",
+    "dclid",
+    "msclkid",
+    "yclid"
+  ],
+  "login_wall_url_markers": [
+    "/login",
+    "/signin",
+    "/sign-in",
+    "?login",
+    "?signin",
+    "?action=login",
+    "/account/login",
+    "/accounts/login",
+    "/user/login",
+    "/users/login",
+    "/auth/login",
+    "/sso/login",
+    "login.php",
+    "signin.php"
+  ],
+  "redirect_query_keys": [
+    "url",
+    "redirect",
+    "redirect_url",
+    "redirect_uri",
+    "next",
+    "goto",
+    "target",
+    "return_url",
+    "returnurl",
+    "continue",
+    "destination"
+  ],
+  "redirect_url_patterns": [
+    "google.com/url?",
+    "bing.com/ck/a",
+    "l.facebook.com/l.php",
+    "t.co/",
+    "tinyurl.com/",
+    "bit.ly/",
+    "goo.gl/",
+    "r.jina.ai/http"
+  ]
+}

@@ -780,14 +780,23 @@ def _verify_v02_source_weighting(events: list[dict[str, Any]]) -> list[str]:
 
 
 def _verify_v02_search_candidate_pool(events: list[dict[str, Any]]) -> list[str]:
-    """FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation passthrough
-    on committed retrieval results:
+    """FUS-RETRIEVAL-MECH B-1 (2026-08-13) + step 3 (2026-08-14): the
+    web_search citation candidate pool on committed retrieval results.
 
+    B-1:
     - candidate_urls may only appear on web_search_result ledger entries;
     - candidate_urls is a non-empty list of unique non-empty strings;
-    - raw_source_refs is a mechanical projection of the ledger: each ref
-      entry mirrors its ledger entry's candidate_urls exactly, and every
-      ledger entry carrying candidate_urls appears in raw_source_refs.
+    - raw_source_refs mirrors the ledger entry's candidate_urls exactly.
+
+    Step 3 (mechanical prefilter):
+    - candidate_urls is the POST-PREFILTER retained pool and always travels
+      with candidate_pool (per-candidate metadata: canonical_url/tier/
+      mechanical_weight/weight_reason/relevance/form_reasons);
+    - candidate_pool mirrors candidate_urls in order and URL identity
+      (pool[i]["url"] == candidate_urls[i]);
+    - mechanical_weight must match its tier (authoritative 1.1 /
+      default 1.0 / low_quality 0.7) — shape-consistent with the schema;
+    - raw_source_refs mirrors both candidate_urls and candidate_pool.
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -802,6 +811,13 @@ def _verify_v02_search_candidate_pool(events: list[dict[str, Any]]) -> list[str]
         for entry in ledger:
             sid = entry["source_id"]
             candidates = entry.get("candidate_urls")
+            pool = entry.get("candidate_pool")
+            if candidates is None and pool is not None:
+                errors.append(
+                    f"event {index}: source {sid} carries candidate_pool "
+                    "without candidate_urls (the fields travel together)"
+                )
+                continue
             if candidates is None:
                 continue
             if entry.get("source_type") != "web_search_result":
@@ -824,21 +840,211 @@ def _verify_v02_search_candidate_pool(events: list[dict[str, Any]]) -> list[str]
                 errors.append(
                     f"event {index}: source {sid} candidate_urls contains duplicates"
                 )
-            ref = ref_by_id.get(sid)
-            if ref is None or ref.get("candidate_urls") != candidates:
+            if pool is None:
                 errors.append(
-                    f"event {index}: source {sid} candidate_urls not mirrored "
-                    "in raw_source_refs"
+                    f"event {index}: source {sid} candidate_urls without "
+                    "candidate_pool (the prefiltered pool must carry "
+                    "per-candidate metadata)"
+                )
+                continue
+            if not isinstance(pool, list) or len(pool) != len(candidates):
+                errors.append(
+                    f"event {index}: source {sid} candidate_pool must mirror "
+                    "candidate_urls exactly (same length, same order)"
+                )
+                continue
+            tier_weight = {
+                "authoritative": 1.1,
+                "default": 1.0,
+                "low_quality": 0.7,
+            }
+            for i, item in enumerate(pool):
+                if not isinstance(item, dict):
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] is "
+                        "not an object"
+                    )
+                    continue
+                url = item.get("url")
+                if url != candidates[i]:
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] url "
+                        f"{url!r} does not match candidate_urls[{i}] "
+                        f"{candidates[i]!r}"
+                    )
+                canonical = item.get("canonical_url")
+                tier = item.get("tier")
+                weight = item.get("mechanical_weight")
+                weight_reason = item.get("weight_reason")
+                relevance = item.get("relevance")
+                form_reasons = item.get("form_reasons")
+                if not isinstance(canonical, str) or not canonical:
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] "
+                        "canonical_url must be a non-empty string"
+                    )
+                if tier not in tier_weight:
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] "
+                        f"invalid tier {tier!r}"
+                    )
+                elif weight != tier_weight[tier]:
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] "
+                        f"mechanical_weight {weight!r} does not match tier "
+                        f"{tier!r}"
+                    )
+                if not isinstance(weight_reason, str) or not weight_reason:
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] "
+                        "weight_reason must be a non-empty string"
+                    )
+                if relevance not in ("direct", "partial", "tangential"):
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] "
+                        f"invalid relevance {relevance!r}"
+                    )
+                if (
+                    not isinstance(form_reasons, list)
+                    or any(
+                        not isinstance(r, str) or not r for r in form_reasons
+                    )
+                ):
+                    errors.append(
+                        f"event {index}: source {sid} candidate_pool[{i}] "
+                        "form_reasons must be a list of non-empty strings"
+                    )
+            ref = ref_by_id.get(sid)
+            if (
+                ref is None
+                or ref.get("candidate_urls") != candidates
+                or ref.get("candidate_pool") != pool
+            ):
+                errors.append(
+                    f"event {index}: source {sid} candidate_urls/candidate_pool "
+                    "not mirrored in raw_source_refs"
                 )
 
         for ref in refs:
-            if "candidate_urls" in ref:
-                entry = ledger_by_id.get(ref["source_id"])
-                if entry is None or entry.get("candidate_urls") != ref["candidate_urls"]:
-                    errors.append(
-                        f"event {index}: raw_source_refs {ref['source_id']} "
-                        "candidate_urls does not match the ledger"
-                    )
+            entry = ledger_by_id.get(ref["source_id"])
+            for field in ("candidate_urls", "candidate_pool"):
+                if field in ref:
+                    if entry is None or entry.get(field) != ref[field]:
+                        errors.append(
+                            f"event {index}: raw_source_refs {ref['source_id']} "
+                            f"{field} does not match the ledger"
+                        )
+    return errors
+
+
+_PREFILTER_REMOVAL_REASONS = {
+    "bad_url",
+    "login_wall",
+    "redirect_chain",
+    "duplicate_canonical",
+    "duplicate_host",
+}
+_PREFILTER_DUPLICATE_REASONS = {"duplicate_canonical", "duplicate_host"}
+
+
+def _verify_v02_candidate_prefilter(events: list[dict[str, Any]]) -> list[str]:
+    """FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): mechanical prefilter
+    removal log on committed retrieval results:
+
+    - prefilter_log is required whenever a web_search_result entry carries
+      a candidate pool (may be empty when nothing was removed);
+    - every entry references a web_search_result ledger entry that carries
+      candidate_urls; (source_id, url, reason) is recorded at most once;
+    - a URL removed for a non-duplicate reason (bad_url/login_wall/
+      redirect_chain) must NOT appear in that source's retained pool;
+      duplicate removals may reference a URL still retained (the first-seen
+      copy stays).
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "retrieval_result_committed":
+            continue
+        p = event["payload"]
+        ledger = p["source_ledger"]
+        ledger_by_id = {entry["source_id"]: entry for entry in ledger}
+        has_pool = any(
+            entry.get("candidate_urls") is not None for entry in ledger
+        )
+        log = p.get("prefilter_log")
+        if log is None:
+            if has_pool:
+                errors.append(
+                    f"event {index}: prefilter_log missing while a candidate "
+                    "pool is present"
+                )
+            continue
+        if not isinstance(log, list):
+            errors.append(
+                f"event {index}: prefilter_log must be an array"
+            )
+            continue
+        seen: set[tuple[str, str, str]] = set()
+        retained_by_source: dict[str, list[str]] = {}
+        for entry in ledger:
+            candidates = entry.get("candidate_urls")
+            if isinstance(candidates, list):
+                retained_by_source[entry["source_id"]] = candidates
+        for item in log:
+            sid = item.get("source_id")
+            url = item.get("url")
+            reason = item.get("reason")
+            canonical = item.get("canonical_url")
+            action = item.get("action")
+            if not isinstance(sid, str) or not isinstance(url, str) or not url:
+                errors.append(
+                    f"event {index}: prefilter_log entry needs source_id and "
+                    "a non-empty url"
+                )
+                continue
+            if reason not in _PREFILTER_REMOVAL_REASONS:
+                errors.append(
+                    f"event {index}: prefilter_log {sid} invalid removal "
+                    f"reason {reason!r}"
+                )
+                continue
+            if action != "removed":
+                errors.append(
+                    f"event {index}: prefilter_log {sid} action must be "
+                    f"'removed', got {action!r}"
+                )
+            if canonical is not None and (
+                not isinstance(canonical, str) or not canonical
+            ):
+                errors.append(
+                    f"event {index}: prefilter_log {sid} canonical_url must "
+                    "be a non-empty string when present"
+                )
+            key = (sid, url, reason)
+            if key in seen:
+                errors.append(
+                    f"event {index}: duplicate prefilter_log removal "
+                    f"{sid} {url} {reason}"
+                )
+            seen.add(key)
+            entry = ledger_by_id.get(sid)
+            if (
+                entry is None
+                or entry.get("source_type") != "web_search_result"
+                or entry.get("candidate_urls") is None
+            ):
+                errors.append(
+                    f"event {index}: prefilter_log {sid} does not reference a "
+                    "web_search_result entry carrying a candidate pool"
+                )
+                continue
+            if (
+                reason not in _PREFILTER_DUPLICATE_REASONS
+                and url in retained_by_source.get(sid, [])
+            ):
+                errors.append(
+                    f"event {index}: prefilter_log {sid} removed {url} "
+                    f"({reason}) but the URL is still retained"
+                )
     return errors
 
 
@@ -1563,6 +1769,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_result_consistency(events))
         errors.extend(_verify_v02_source_weighting(events))
         errors.extend(_verify_v02_search_candidate_pool(events))
+        errors.extend(_verify_v02_candidate_prefilter(events))
         errors.extend(_verify_v02_web_fetch_candidate_count(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))

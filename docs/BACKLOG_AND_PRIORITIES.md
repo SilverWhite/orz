@@ -83,10 +83,19 @@
   仓库门禁 valid（含审查修复：verifier 派发包装误报、黑板计数反馈一致、
   continue 跨派发累计测试）。审计：
   [GAP-RETRIEVAL-MECH 步骤 2 实施审计](audits/GAP_RETRIEVAL_MECH_STEP2_WEB_FETCH_CANDIDATE_COUNT_IMPL_AUDIT_2026-08-14.md)。
+- 进度（2026-08-14）：**步骤 3 已完成**——机械预筛模块（候选池净化 + 排序：
+  canonical/host 级去重、已知失败形态 bad_url/login_wall/redirect_chain 移除、
+  tier/weight + 词法相关性排序；`candidate_urls` 升级为预筛后保留池，新增
+  `candidate_pool` 每候选元数据与 `prefilter_log` 移除日志，Schema/verifier
+  先行；配置种子 `runtime/candidate-prefilter-config-v0.1.json` +
+  `ORZ_CANDIDATE_PREFILTER_CONFIG` 覆盖；orz-assurance 新模块 + orz-loop
+  接线）；边界：超大页/robots 无法离线判定保留 unknown、计数域精确去重
+  语义不变、模型面展示留待步骤 6。审计：
+  [GAP-RETRIEVAL-MECH 步骤 3 实施审计](audits/GAP_RETRIEVAL_MECH_STEP3_CANDIDATE_PREFILTER_IMPL_AUDIT_2026-08-14.md)。
 - 依赖顺序：1（B-1 闭合）→ 2/3 → 5 → 4/6。
-  1. B-1 闭合：web_search citations 结构化透传 loop；
-  2. web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
-  3. 机械预筛模块（候选池净化 + 排序标签）与结构化结果扩展；
+  1. （已完成）B-1 闭合：web_search citations 结构化透传 loop；
+  2. （已完成）web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
+  3. （已完成）机械预筛模块（候选池净化 + 排序标签）与结构化结果扩展；
   4. browser_read 范围/模式参数（全文/预览/关键词提取）工具能力扩展；
   5. 输出级引用校验器与交付边界接线；
   6. 提示词相应缩短（计数/预筛/引用规则）与测试更新。
@@ -169,6 +178,12 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 3 闭合登记——机械预筛模块实施完成（canonical/host
+  级去重、bad_url/login_wall/redirect_chain 移除、tier/weight + 词法相关性
+  排序；`candidate_urls` 升级为预筛后保留池，`candidate_pool` +
+  `prefilter_log` Schema/verifier 先行；配置种子 JSON + env 覆盖）；orz-assurance
+  149 / orz-loop 246 / orz-host 200 / orz-tui 178 / orz-bin 全绿，Python 全量
+  1838 通过，仓库门禁 valid；批次下一步为步骤 5（输出级引用校验器）。
 - 2026-08-14：P0-B 步骤 2 闭合登记——web_fetch 候选机械计数门禁与计数反馈
   实施完成（`ORZ_WEB_FETCH_CANDIDATE_CAP` 定档 8、per-activation 计数域 +
   侧车持久化、无 ToolStarted 拒绝 + 熔断同面、`tool_completed` 计数字段
