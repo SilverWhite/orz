@@ -25,7 +25,7 @@
 | A. 恒可用 | `blackboard_read`、`todo_write`、`update_goal`、`enter_plan_mode`、`exit_plan_mode`、`compaction_whitelist_add`、`retrieval_disposition` | 无（无外部流程） | 固定列出，仅名称 |
 | B. 探针过滤 | `read_file`、`list_dir`、`grep`、`search_tool`、`search_replace`、`run_tests`、`ask_user_question` | 每动作机械刷新 | 链路完整才列出，仅名称；不完整=确定不可提议 |
 | C. 固定列表 | `run_terminal_cmd`、`lsp`、`memory_get`、`memory_search`、`image_gen`、`image_edit`、`image_to_video`、`reference_to_video`、`use_tool` | 无 | 固定列出，不做其他内容；调用时返回明确状态审计 |
-| 检索车道（例外） | `web_search`、`web_fetch`、`browser_read`、`pdf_read`、`project_doc_index` | 无（子代理确定性留痕） | 保持现状：web_search 凭据构建期门、browser_read 能力探针声明门 |
+| 检索车道（例外） | `web_search`、`web_fetch`、`browser_read`、`pdf_read`、`project_doc_index` | 无（子代理确定性留痕） | 保持现状：web_search 凭据构建期门、browser_read 能力探针声明门（含拒绝/宿主执行消息措辞，不适用本设计中性化规则） |
 
 面 B 探针判定来源：
 
@@ -56,8 +56,13 @@
 - 归并规则：原 `degraded`、`unprobed` 一律按"不完整"处理；探针实现缺失 =
   不完整 + "未完成链路检查"，fail-closed，不假设可用。
 - 禁用词：`可用/不可用/成功/失败/available/unavailable/success/failure` 等
-  判定词不进入模型面、兜底消息与事件 reason；机械框架内部枚举/日志可保留
-  （如 GateDecision），对外序列化前映射为中性陈述。
+  判定词不进入**主车道**模型面兜底消息与探针 reason；机器 error 码/枚举、
+  明确事实性错误与工具 schema 描述不受此限（2026-08-13 复核裁决）。
+- 适用范围裁决（2026-08-13 复核）：中性化只用于防止"声明/列表与实际调用
+  能力冲突"的主车道兜底面；检索车道保持原设计（消息措辞不脱敏，子代理正常
+  留痕）；事件 error 码、机器 reason 与明确事实性错误可原样进模型面（有
+  error 码即具体明确错误，不构成可用性冲突）；面 C 工具 schema 描述保留
+  原样；denied/refused 等事实性门禁陈述不脱敏。
 - reason 为稳定、机器可读的中性陈述（如"缺少测试运行器"），同时作为审计键。
 
 ## 4. 每动作刷新与列表投影
@@ -83,7 +88,8 @@
 ## 5. 调用时兜底与语义分离
 
 - 模型面：只有工具名（原有描述/参数保留）。
-- 兜底消息：`tool 'X' — <中性陈述>`，不使用判定词。
+- 兜底消息（主车道面 B/C）：`tool 'X' — <中性陈述>`，不使用判定词；检索
+  车道拒绝/宿主执行消息保持原设计（见 §3 适用范围裁决）。
 - 机械面：完整/不完整 + reason 进探针状态与事件。
 - 审计面：真实调用失败照常走 ToolStarted/ToolCompleted(error) + 连续拒绝熔断；
   失败结果回写最小状态映射（调用即探针）。
