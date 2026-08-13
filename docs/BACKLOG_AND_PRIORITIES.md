@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-RETRIEVAL-MECH、CLASSICAL-EXEC-ASSISTANT（POC 已通） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-RETRIEVAL-MECH、CLASSICAL-EXEC-ASSISTANT（POC 已通）、ORZ-COMPACTION-REDESIGN（实施待放行） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -133,6 +133,21 @@
   4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
+### 3b. ORZ-COMPACTION-REDESIGN（`approved`；P0，设计已冻结，实施待放行）
+
+- 入口：[设计](CONTEXT_COMPACTION_DESIGN_2026-08-14.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；
+  权威：ADR-0010 §3.6 / §14.10（v1.10）。
+- 决策门：2026-08-14 用户裁决定稿——有效窗口 384K、160K 普通触发 / 200K 兜底、工具调用记录每轮
+  机械坍缩（零模型调用）、五段模板摘要（≤17K 字符、derived_unverified、冷却 3 步、摘要链只进
+  审计、滚动回查 marker）；推翻 2026-08-08 零模型摘要与仅最终答案间隙裁决；实施放行待用户明确。
+- 实施切片：
+  1. S1：D2-2 恢复超窗预估算截断 + D3-1 marker/白名单恢复保留（含测试）；
+  2. S2：工具调用记录机械坍缩（动作台账行 + 配对纪律 + 指针完整性 + 测试）；
+  3. S3：五段模板摘要接线（orz-compaction 复用、DeepSeek V4 模型覆盖、17K 校验、重做/终止态、
+     `context_compressed` 事件 Schema 扩展 + verifier/fixtures）；
+  4. S4：实施审计、ADR/索引状态同步、README 表述更新。
+- 进度：设计文档与 ADR-0010 v1.10 已登记（2026-08-14）；代码实施未开始。
+
 ## P1 — 可并行审计 / 证据
 
 ### 4. FUS-COMPONENT-REGISTER（`partial`）
@@ -205,6 +220,10 @@
 
 ## 变更记录
 
+- 2026-08-14：压缩机制重设计定稿登记——ADR-0010 v1.10（§3.6 修订 + §14.10 裁决索引）、
+  设计文档 `CONTEXT_COMPACTION_DESIGN_2026-08-14.md`、索引 FUS-COMPACTION-REDESIGN pending；
+  参数=384K 有效窗口 / 160K 触发 / 200K 兜底 / 五段模板 17K / 冷却 3 步；推翻零模型摘要与
+  仅最终答案间隙裁决；D2-2/D3-1 定为实施前置（S1）；实施待用户放行。
 - 2026-08-14：P0-B 步骤 5 复核修复批次——审查发现的全部可处理问题已处理：
   `SRC-###` 改 run 级唯一分配（orientation-fire-run 重捕，5 commit →
   `SRC-001..005`）、URL 归一化复用共享 canonical 化、主车道 web 证据接入

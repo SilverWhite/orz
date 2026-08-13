@@ -1,5 +1,9 @@
 # GAP-CONVERSATION-RESTORE 实施审计（2026-08-10）
 
+> **2026-08-14 状态注记**：D2-2（恢复超窗卡死）与 D3-1（marker/白名单被恢复过滤）已由压缩机制
+> 重设计裁决为实施前置（ADR-0010 v1.10 / `docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md`），
+> 实施切片 S1 登记于 TODO/BACKLOG；本边界条目在对应切片闭合前保持开放。
+
 > **三面审查闭环（2026-08-11 更新）**：设计合理性/实现合理性/符合性三独立代理审查——**无 D1/P0/P1/C1/C2**；修复批 8 项（见 §3 更新 + §7），登记项见 §4/§8。
 
 - 范围：conversation 跨 prompt 恢复——轨道 A 剩余切片之一（GAP-RETRIEVAL-TOOLS 审计 §4 登记缺口"conversation 跨 prompt 恢复（侧车只存状态机字段；跨 run continue 子代理上下文从头开始）"）
