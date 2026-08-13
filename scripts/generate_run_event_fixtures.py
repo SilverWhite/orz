@@ -164,7 +164,8 @@ V02_PAYLOAD_EVENTS = [
     "control_ticket_issued",
     "control_ticket_consumed",
     "control_ticket_rejected",
-    # FUS-TOOL-PROBE (2026-08-13): two-state Face B probe snapshot.
+    # FUS-TOOL-PROBE (2026-08-13; P0-A-2): two-state single probe face
+    # snapshot (work tools).
     "tool_availability_check",
 ]
 

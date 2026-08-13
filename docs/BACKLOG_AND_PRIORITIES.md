@@ -46,7 +46,8 @@
   检索激活/终端/lsp/memory/图像/视频/MCP 注册，全部为廉价确定性检查）；`LoopHost` 新增
   terminal/lsp/memory/image/video/MCP 六项 fail-closed 能力访问器（orz-host 覆盖终端=true，
   其余按当前 build_toolset 未接线=false）；controller 新增 goal_context_present /
-  has_live_activation 探针信号；列表投影切换为 探针完整集 ∩ 会话声明集 + 非工作工具；
+  has_live_activation（待处置激活，2026-08-13 审查复核收紧为未决 pending assessment）
+  探针信号；列表投影切换为 探针完整集 ∩ 会话声明集 + 非工作工具；
   `tool_availability_check` 事件 complete/incomplete 覆盖全部工作工具（Schema 描述、Python
   verifier `_WORK_TOOLS`、fixture 生成器与 12 个 v0.2 journal fixtures 同步并重算哈希链）；
   调用即探针回写覆盖全部工作工具（仍限主/grill 车道）；投影/翻转/车道隔离测试更新。
@@ -55,6 +56,9 @@
 - 边界：orz-host 可选后端（lsp/memory/图像/视频/MCP）当前全部未接线——探针按 fail-closed
   移除这些工具；未来接线须翻转 orz-host 对应能力访问器并补翻转测试。真实 journals 为已提交
   fixtures 重建（12 个含探针事件），非新捕获运行。
+- 边界（2026-08-13 审查复核）：`retrieval_disposition` 探针收紧为"未决 pending
+  assessment"（Active 无 pending / continue 已决均不完整）；plan 模式探针以交互用户
+  信号代理，未来 headless 计划模式会话需独立能力信号。
 
 ### 2. FUS-RETRIEVAL-MECH（`approved`；P0-B）
 

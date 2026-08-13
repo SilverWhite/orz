@@ -31,7 +31,8 @@
   图像/视频/MCP 当前均 false（`build_toolset` 固定禁用可选后端）——探针据此移除这些
   工具的可见性（符合设计：调用时本就无法完成）。
 - controller 新增 `goal_context_present()`（goal 绑定存在）与 `has_live_activation()`
-  （激活注册表非空）探针信号；`ProbeContext` 在 run-start 与每模型轮前构造时携带全部信号。
+  （存在携带未决 pending assessment 的激活；2026-08-13 审查复核收紧）探针信号；
+  `ProbeContext` 在 run-start 与每模型轮前构造时携带全部信号。
 
 ### 1.3 投影与事件
 
@@ -74,6 +75,9 @@
   23 工具分区。
 - 检索车道激活生命周期会在主车道产生合法的 `retrieval_disposition` 翻转事件
   （incomplete→complete）——已登记并锁定测试语义，非污染。
+- 2026-08-13 审查复核：`retrieval_disposition` 探针以未决 pending assessment 为完整
+  条件（Active 无 pending / continue 已决后均不完整）；plan 模式探针以交互用户代理，
+  未来 headless 计划模式需独立能力信号。
 
 ## 5. 入口
 

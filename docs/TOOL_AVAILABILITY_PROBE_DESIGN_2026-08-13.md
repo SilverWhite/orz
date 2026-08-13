@@ -42,7 +42,7 @@
 | `todo_write` / `update_goal` | 工作区可写 + goal/todo 上下文存在 | `工作区路径不可写` |
 | `enter_plan_mode` / `exit_plan_mode` | 会话支持 plan 模式 | `会话不支持计划模式` |
 | `compaction_whitelist_add` | 会话状态链可用 | `会话存储不可读` |
-| `retrieval_disposition` | 检索子代理激活上下文存在 | `检索会话未激活` |
+| `retrieval_disposition` | 检索子代理激活存在且有待处置（未决）assessment | `检索会话未激活` |
 | `run_terminal_cmd` | 权限策略放行执行 + 宿主终端可用 | `终端链路不完整` |
 | `lsp` | 工作区语言服务配置存在 | `语言服务未配置` |
 | `memory_get` / `memory_search` | memory 显式 opt-in 且存储可用 | `记忆存储未启用` |
@@ -203,3 +203,8 @@
 > orz-host 当前除终端外均未接线（`build_toolset` 固定禁用可选后端）——探针按
 > 设计移除这些工具的可见性；未来接线任一后端时须同步翻转 orz-host 对应能力
 > 访问器，并登记探针翻转测试。
+>
+> 2026-08-13 审查复核边界：`retrieval_disposition` 探针以"激活存在且携带未决
+> pending assessment"为完整条件（Active 无 pending、continue 已决后均按不完整
+> 处理；调用门禁仍为最终兜底）；plan 模式探针当前以交互用户信号代理，未来
+> headless 但支持 plan 模式的会话需换独立能力信号。
