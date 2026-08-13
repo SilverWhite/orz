@@ -315,6 +315,7 @@ impl ProjectDocIndex {
             output: json,
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         })
     }
 

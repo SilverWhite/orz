@@ -297,6 +297,7 @@ async fn controller_control_events_carry_tickets() {
             output: "ok".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -431,6 +432,7 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
             output: "ok".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -589,6 +591,7 @@ async fn file_write_ticket_full_chain() {
             output: "patched".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -709,6 +712,7 @@ async fn file_write_shadow_on_signer_unreachable() {
             output: "patched".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -788,6 +792,7 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
             output: "ok".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -962,6 +967,7 @@ async fn network_ticket_full_chain() {
             output: "page text".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1079,6 +1085,7 @@ async fn run_terminal_cmd_command_ticket_full_chain() {
             output: "done".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1190,6 +1197,7 @@ async fn run_tests_command_ticket_full_chain() {
             output: "tests ok".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: Some(TestRunner {
             command: vec!["python".to_string(), "-m".to_string(), "pytest".to_string()],
@@ -1309,6 +1317,7 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
             output: "page text".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1395,6 +1404,7 @@ async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() 
             output: "done".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1478,6 +1488,7 @@ async fn missing_network_arg_silently_skips_with_configured_acaf() {
             output: "page text".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1608,6 +1619,7 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
             output: "page text".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1709,6 +1721,7 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
             output: "ok".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1825,6 +1838,7 @@ async fn fail_closed_missing_url_blocks_network_tool() {
             output: "page text".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1916,6 +1930,7 @@ async fn fail_closed_missing_command_blocks_run_terminal_cmd() {
             output: "done".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -1995,6 +2010,7 @@ async fn fail_closed_signer_unreachable_blocks_file_write() {
             output: "patched".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -2077,6 +2093,7 @@ async fn fail_closed_retrieval_lane_web_fetch_binds_activation_d13() {
             output: "page text".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };
@@ -2199,6 +2216,7 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
             output: "ok".to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         }),
         test_runner: None,
     };

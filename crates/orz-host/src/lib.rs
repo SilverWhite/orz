@@ -1024,6 +1024,10 @@ impl LoopHost for OrzHost {
             // tool implementation (run_terminal_cmd / read_file) to the
             // journal's `tool_completed.output_encoding`.
             output_encoding: result.output_encoding,
+            // FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs
+            // ride the structured seam into the loop (candidate pool for
+            // the mechanical prefilter); every other tool is `None`.
+            structured: crate::tools::structured_from_output(&result.output),
         })
     }
 

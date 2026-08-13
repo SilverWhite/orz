@@ -32,6 +32,14 @@ pub(crate) fn is_web_retrieval_tool(name: &str) -> bool {
         || (name == "web_fetch" || name.starts_with("web_fetch_"))
 }
 
+/// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the web_fetch family —
+/// bare `web_fetch` and every `web_fetch_*` variant. The candidate count
+/// gate keys on this family (web_search produces candidates; web_fetch
+/// consumes them).
+pub(crate) fn is_web_fetch_tool(name: &str) -> bool {
+    name == "web_fetch" || name.starts_with("web_fetch_")
+}
+
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval dispatch family —
 /// internal (`retrieve_project_*`) and external (`web_search*`/`web_fetch*`)
 /// tool names. The mode projection uses it to remove the family from the
@@ -91,10 +99,33 @@ mod tests {
     fn external_retrieval_routes() {
         assert_eq!(route("web_search"), DispatchTarget::ExternalRetrieval);
         assert_eq!(route("web_fetch"), DispatchTarget::ExternalRetrieval);
+        assert_eq!(route("web_fetch_page"), DispatchTarget::ExternalRetrieval);
         assert_eq!(
             route("web_search_arxiv_paper"),
             DispatchTarget::ExternalRetrieval
         );
+    }
+
+    #[test]
+    fn web_fetch_family_boundary() {
+        for name in [
+            "web_fetch",
+            "web_fetch_page",
+            "web_fetch_pdf",
+            "web_fetch_anything",
+        ] {
+            assert!(is_web_fetch_tool(name), "{name}");
+        }
+        // Prefix boundary: bare "web_fetch" without underscore is the only
+        // exact match; web_search and unrelated names never count.
+        for name in [
+            "web_search",
+            "web_search_arxiv_paper",
+            "web_fetching",
+            "read_file",
+        ] {
+            assert!(!is_web_fetch_tool(name), "{name}");
+        }
     }
 
     #[test]

@@ -309,6 +309,7 @@ pub async fn handle_browser_read(
                 })?,
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             })
         }
         Err(CdpError::UrlGate(gate_err)) => Err(ToolError::ExecutionFailed(format!(

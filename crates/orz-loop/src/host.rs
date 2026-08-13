@@ -52,6 +52,13 @@ pub struct ToolResult {
     /// mechanical decode stage. The controller journals it as
     /// `tool_completed.output_encoding`.
     pub output_encoding: Option<String>,
+    /// FUS-RETRIEVAL-MECH B-1 (2026-08-13): optional structured tool
+    /// metadata forwarded by the host across the loop seam. Today only
+    /// `web_search` fills it — `{"citations": ["https://…", …]}` — the
+    /// citation URL candidate pool the mechanical prefilter will consume.
+    /// All other tools leave it `None`; it is never derived from the
+    /// model-visible output text.
+    pub structured: Option<serde_json::Value>,
 }
 
 /// Lightweight error from tool execution.

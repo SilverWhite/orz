@@ -329,6 +329,22 @@ pub fn exit_code_from_output(output: &orz_tools::types::output::ToolOutput) -> O
     }
 }
 
+/// FUS-RETRIEVAL-MECH B-1 (2026-08-13): structured tool metadata for the
+/// orz-loop `ToolResult` seam. Only `web_search` carries a payload today —
+/// its citation URLs (the candidate pool for the mechanical prefilter).
+/// Everything else stays `None`, so no structured data leaves the
+/// model-visible text contract except the designed web_search channel.
+pub fn structured_from_output(
+    output: &orz_tools::types::output::ToolOutput,
+) -> Option<serde_json::Value> {
+    match output {
+        orz_tools::types::output::ToolOutput::WebSearch(ws) if !ws.citations.is_empty() => {
+            Some(serde_json::json!({ "citations": ws.citations }))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,5 +461,40 @@ mod tests {
         // Prefix boundary: the underscore separates the family.
         assert!(!is_web_search_tool("web_searchX"));
         assert!(!is_web_search_tool("web_searchx"));
+    }
+
+    /// FUS-RETRIEVAL-MECH B-1 (2026-08-13): only `web_search` fills the
+    /// structured seam — its citation URLs ride as `{"citations": [...]}`;
+    /// empty citations and every other tool stay `None` (no empty pool, no
+    /// accidental structured data outside the designed channel).
+    #[test]
+    fn structured_from_output_carries_web_search_citations_only() {
+        use orz_tools::types::output::{TextOutput, ToolOutput, WebSearchOutput};
+
+        let ws = ToolOutput::WebSearch(WebSearchOutput {
+            query: "q".into(),
+            content: "snippet".into(),
+            citations: vec!["https://a.example".into(), "https://b.example".into()],
+            allowed_domains: None,
+            pre_formatted: None,
+        });
+        let structured = structured_from_output(&ws).expect("citations payload");
+        assert_eq!(structured["citations"][0], "https://a.example");
+        assert_eq!(structured["citations"][1], "https://b.example");
+
+        let empty = ToolOutput::WebSearch(WebSearchOutput {
+            query: "q".into(),
+            content: "no results".into(),
+            citations: vec![],
+            allowed_domains: None,
+            pre_formatted: None,
+        });
+        assert!(structured_from_output(&empty).is_none());
+
+        let other = ToolOutput::Text(TextOutput {
+            text: "x".into(),
+            consumed_completion_task_id: None,
+        });
+        assert!(structured_from_output(&other).is_none());
     }
 }

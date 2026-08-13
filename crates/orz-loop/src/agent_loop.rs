@@ -171,6 +171,13 @@ pub(crate) struct LoopProfile {
     /// browser_read). The main lane is `None` (main-lane actions stay
     /// activation-less).
     pub activation_id: Option<String>,
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the current dispatch's
+    /// web_fetch candidate counter (per-activation shared domain — the
+    /// subagent loop mutates it on every web_fetch gate; the caller writes
+    /// it back into the activation on every path). The main/grill lanes
+    /// pass `None` — web_fetch never executes there (it routes to the
+    /// external retrieval lane), and a `None` domain fails the gate closed.
+    pub fetch_candidates: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl LoopProfile {
@@ -186,6 +193,7 @@ impl LoopProfile {
             initial_tool_rounds: 0,
             probe_work_tools: true,
             activation_id: None,
+            fetch_candidates: None,
         }
     }
 
@@ -204,6 +212,7 @@ impl LoopProfile {
             initial_tool_rounds: 0,
             probe_work_tools: true,
             activation_id: None,
+            fetch_candidates: None,
         }
     }
 
@@ -221,6 +230,7 @@ impl LoopProfile {
         max_tool_rounds: u32,
         initial_tool_rounds: u32,
         activation_id: &str,
+        fetch_candidates: Option<Arc<Mutex<Vec<String>>>>,
     ) -> Self {
         let agent_role = match role {
             SubagentRole::InternalRetrieval => AgentRole::InternalRetrieval,
@@ -241,6 +251,7 @@ impl LoopProfile {
             initial_tool_rounds,
             probe_work_tools: false,
             activation_id: Some(activation_id.to_string()),
+            fetch_candidates,
         }
     }
 }
@@ -953,6 +964,10 @@ pub(crate) async fn run_agent_loop(
                                 // ACAF Slice 2 D-13 (2026-08-13): the lane's
                                 // real activation — bound on web_fetch etc.
                                 profile.activation_id.as_deref(),
+                                // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14):
+                                // the dispatch's web_fetch candidate counter
+                                // (None on main/grill — fails the gate closed).
+                                profile.fetch_candidates.as_deref(),
                                 // C2-1 (2026-08-11): lane self-execution skips
                                 // the per-call permission bridge — the mode
                                 // gate is the authorization chain (see the
@@ -1233,6 +1248,7 @@ async fn role_gate_denied(
             output,
             exit_code: Some(1),
             output_encoding: None,
+            structured: None,
         },
         PolicyFeedback::Denied(DenialKey {
             tool_name: tc.name.clone(),

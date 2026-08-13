@@ -4689,6 +4689,7 @@ pub(crate) mod tests {
                     output_for_prompt: orz_tools::types::output::BashOutput::make_output_for_prompt(
                         BASH_CCO_STUB_STDOUT,
                     ),
+                    output_encoding: None,
                     exit_code: 0,
                     command: format!("echo {BASH_CCO_STUB_STDOUT}"),
                     truncated: false,

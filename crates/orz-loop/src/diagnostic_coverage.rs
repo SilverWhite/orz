@@ -470,6 +470,7 @@ mod tests {
             output: output.to_string(),
             exit_code,
             output_encoding: None,
+            structured: None,
         }
     }
 

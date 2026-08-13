@@ -77,6 +77,27 @@ pub fn max_tool_rounds_override() -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
+/// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): per-activation web_fetch
+/// candidate cap — the mechanical hard gate replacing the prompt's soft
+/// "候选 ≤5" rule (design §1.1). User adjudication 2026-08-14: default 8.
+/// The count domain is per activation (deduplicated by exact URL string);
+/// the same cap applies to every activation.
+pub const DEFAULT_WEB_FETCH_CANDIDATE_CAP: u32 = 8;
+
+/// Env override for the candidate cap (`ORZ_WEB_FETCH_CANDIDATE_CAP`).
+/// Parsed at controller construction; absent/invalid/zero = the default.
+pub fn web_fetch_candidate_cap_override() -> Option<u32> {
+    std::env::var("ORZ_WEB_FETCH_CANDIDATE_CAP")
+        .ok()
+        .and_then(|s| parse_web_fetch_candidate_cap(&s))
+}
+
+/// Pure parse rule for the candidate cap env value (tested without env
+/// mutation): trimmed, positive integer; absent/invalid/zero → None.
+fn parse_web_fetch_candidate_cap(s: &str) -> Option<u32> {
+    s.trim().parse().ok().filter(|v| *v > 0)
+}
+
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
 /// first text delta arrives (deltas travel in-memory at arrival rate). The
@@ -165,6 +186,15 @@ pub(crate) enum TicketGate {
     },
 }
 
+/// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the web_fetch candidate
+/// gate's decision — allowed (with the post-call count/cap for the
+/// model-visible feedback) or refused (event + tool message already
+/// journaled by the gate).
+pub(crate) enum WebFetchGateDecision {
+    Allowed { count: usize, cap: usize },
+    Refused(ToolResult, Option<PolicyFeedback>),
+}
+
 /// The main agent loop controller.
 ///
 /// Owns the prompt processing lifecycle. Stateless between turns —
@@ -189,6 +219,10 @@ pub struct AgentLoopController {
     external_retrieval: RetrievalSubagent,
     blackboard: Arc<SharedBlackboard>,
     max_tool_rounds: u32,
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): per-activation
+    /// web_fetch candidate cap (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8 —
+    /// user adjudication 2026-08-14). Settable for tests.
+    web_fetch_candidate_cap: u32,
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
     snapshot_store: Option<Arc<SnapshotStore>>,
@@ -317,8 +351,31 @@ pub(crate) struct EvidenceRecord {
     pub content_sha256: Option<String>,
     pub observed_scope: String,
     pub missing_scope: String,
+    /// FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs from
+    /// the host's structured seam — the candidate pool for the mechanical
+    /// prefilter. Empty for every other tool; never parsed from text.
+    pub candidate_urls: Vec<String>,
     /// RFC 3339 access timestamp (journal format).
     pub accessed_at: String,
+}
+
+/// FUS-RETRIEVAL-MECH B-1 (2026-08-13): mechanically extract the web_search
+/// citation URLs from the host's structured payload. Shape-checked (a
+/// `citations` array of strings), deduplicated preserving first-seen order,
+/// and never derived from model-visible output text.
+pub(crate) fn structured_candidate_urls(result: &ToolResult) -> Vec<String> {
+    let Some(value) = result.structured.as_ref() else {
+        return Vec::new();
+    };
+    let Some(citations) = value.get("citations").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    citations
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .filter(|url| !url.is_empty() && seen.insert(url.clone()))
+        .collect()
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): mechanically derive the evidence record
@@ -347,6 +404,13 @@ pub(crate) fn build_evidence_record(
         .or_else(|| arg("document_id"))
         .unwrap_or(tool)
         .to_string();
+    // FUS-RETRIEVAL-MECH B-1 (2026-08-13): only web_search carries citation
+    // URLs across the structured seam; everything else has an empty pool.
+    let candidate_urls = if tool == "web_search" {
+        structured_candidate_urls(result)
+    } else {
+        Vec::new()
+    };
     let title = match tool {
         "read_file" | "project_doc_index" => identity
             .rsplit(['/', '\\'])
@@ -525,6 +589,7 @@ pub(crate) fn build_evidence_record(
         content_sha256: pdf_hex.or_else(|| Some(sha256_hex(output.as_bytes()))),
         observed_scope: observed_scope.to_string(),
         missing_scope: missing_scope.to_string(),
+        candidate_urls,
         accessed_at: chrono::Utc::now().to_rfc3339(),
     })
 }
@@ -627,8 +692,8 @@ pub(crate) fn build_structured_result(
         // mechanical tier/weight for page evidence: web_fetch/browser_read
         // pages and URL-shaped PDF documents. Project docs, local files and
         // web_search summary entries carry no tier — the search's citation
-        // URL list is not plumbed to the loop today (registered boundary;
-        // the fetched/declared pages carry the weight instead).
+        // entries carry the candidate pool instead (FUS-RETRIEVAL-MECH B-1);
+        // the fetched/declared pages carry the weight.
         let web_evidence = ev.source_type == "web_page"
             || (ev.source_type == "pdf_document"
                 && (ev.identity.starts_with("http://") || ev.identity.starts_with("https://")));
@@ -637,6 +702,17 @@ pub(crate) fn build_structured_result(
             entry["tier"] = weighted.tier.as_str().into();
             entry["mechanical_weight"] = serde_json::json!(weighted.weight);
             entry["weight_reason"] = weighted.reason.into();
+        }
+        // FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs ride
+        // the ledger entry as the structured candidate pool (mechanical
+        // passthrough — metadata-grade; the prefilter assigns tier/weight).
+        if !ev.candidate_urls.is_empty() {
+            entry["candidate_urls"] = serde_json::Value::Array(
+                ev.candidate_urls
+                    .iter()
+                    .map(|url| serde_json::Value::String(url.clone()))
+                    .collect(),
+            );
         }
         source_ledger.push(entry);
     }
@@ -940,13 +1016,19 @@ pub(crate) fn build_structured_result(
     let raw_source_refs: Vec<serde_json::Value> = source_ledger
         .iter()
         .map(|e| {
-            serde_json::json!({
+            let mut ref_entry = serde_json::json!({
                 "source_id": e["source_id"],
                 "source_title": e["source_title"],
                 "source_url_or_ref": e["source_url_or_ref"],
                 "visibility": e["visibility"],
                 "content_sha256": e.get("content_sha256").cloned().unwrap_or(serde_json::Value::Null),
-            })
+            });
+            // FUS-RETRIEVAL-MECH B-1 (2026-08-13): the raw projection
+            // mirrors the ledger's candidate pool for web_search entries.
+            if let Some(candidates) = e.get("candidate_urls") {
+                ref_entry["candidate_urls"] = candidates.clone();
+            }
+            ref_entry
         })
         .collect();
 
@@ -1113,6 +1195,7 @@ impl ActivationRegistry {
                     contract_revision: a.contract_revision,
                     status: a.status,
                     tool_rounds_used: a.tool_rounds_used,
+                    web_fetch_candidates: a.web_fetch_candidates.clone(),
                     result_digest: a.result_digest.clone(),
                     result_archive_ref: a.result_archive_ref.clone(),
                     next_goal: a.next_goal.clone(),
@@ -1204,6 +1287,7 @@ impl ActivationRegistry {
                     result_digest: stored.result_digest.clone(),
                     submitted: Vec::new(),
                     tool_rounds_used: stored.tool_rounds_used,
+                    web_fetch_candidates: stored.web_fetch_candidates.clone(),
                     result_archive_ref: stored.result_archive_ref.clone(),
                 },
             );
@@ -1257,6 +1341,15 @@ pub(crate) struct ActivationState {
     /// activation starts at 0). Read as `initial_tool_rounds` by the
     /// shared loop and written back from `LoopOutcome.tool_rounds`.
     pub tool_rounds_used: u32,
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the activation's
+    /// web_fetch candidate URLs — exact-string dedup, first-seen order,
+    /// per-activation accumulation (design §1.1). A `continue` re-entry is
+    /// the SAME retrieval session, so the count accumulates across
+    /// dispatches and resets only when the activation closes; it rides the
+    /// sidecar like `tool_rounds_used` (cross-run restore keeps the cap
+    /// meaningful). Moved into the dispatch's shared counter while the
+    /// subagent loop runs and written back on every path.
+    pub web_fetch_candidates: Vec<String>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): the committed structured result's
     /// artifact path (ADR-0010 §3.3.5 archive_ref — the close record cites
     /// the real artifact instead of the `run-journal:{run_id}` placeholder).
@@ -1312,6 +1405,13 @@ pub(crate) struct StoredActivation {
     pub contract_revision: u32,
     pub status: ActivationStatus,
     pub tool_rounds_used: u32,
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the activation's
+    /// deduplicated web_fetch candidate URLs — rides the sidecar so a
+    /// cross-run `continue` resumes with the same candidate budget
+    /// (matches `tool_rounds_used` lifecycle). `#[serde(default)]` keeps
+    /// old sidecars parseable.
+    #[serde(default)]
+    pub web_fetch_candidates: Vec<String>,
     #[serde(default)]
     pub result_digest: Option<String>,
     #[serde(default)]
@@ -1681,6 +1781,8 @@ impl AgentLoopController {
             ),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
+            web_fetch_candidate_cap: web_fetch_candidate_cap_override()
+                .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
@@ -2959,6 +3061,14 @@ impl AgentLoopController {
         self
     }
 
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): pin the web_fetch
+    /// candidate cap (test seam; production reads ORZ_WEB_FETCH_CANDIDATE_CAP
+    /// at construction).
+    pub fn with_web_fetch_candidate_cap(mut self, cap: u32) -> Self {
+        self.web_fetch_candidate_cap = cap.max(1);
+        self
+    }
+
     /// 2026-08-08 blackboard partition (A4): ingest an approved plan —
     /// goal + step descriptions — into the blackboard plan section (the
     /// plan-mode state-machine mapping; §4.1: goal、步骤 + 状态). The first
@@ -3150,6 +3260,7 @@ impl AgentLoopController {
             external_retrieval,
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
+            web_fetch_candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             snapshot_store: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
@@ -4200,6 +4311,7 @@ impl AgentLoopController {
                 output: msg,
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             });
         }
         // mode=local_browser with an unavailable capability fails EXPLICITLY
@@ -4251,6 +4363,7 @@ impl AgentLoopController {
                         output: msg,
                         exit_code: Some(1),
                         output_encoding: None,
+                        structured: None,
                     });
                 }
             }
@@ -4328,6 +4441,7 @@ impl AgentLoopController {
                 output: msg,
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             });
         }
         let (mut act, task_goal) = {
@@ -4376,8 +4490,11 @@ impl AgentLoopController {
                             // A fresh activation starts a fresh budget
                             // (F5, user adjudication 2026-08-10 — the
                             // budget accumulates only within one
-                            // activation's lifetime).
+                            // activation's lifetime) and a fresh web_fetch
+                            // candidate count (P0-B step 2, 2026-08-14 —
+                            // design §1.1: reset only on activation close).
                             tool_rounds_used: 0,
+                            web_fetch_candidates: Vec::new(),
                             result_archive_ref: None,
                         },
                         goal.clone(),
@@ -4386,6 +4503,15 @@ impl AgentLoopController {
             }
         };
         let goal = task_goal;
+
+        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the activation's
+        // web_fetch candidate counter rides the dispatch as a shared
+        // mutex — the subagent loop's web_fetch gate mutates it; it is
+        // written back into the activation on EVERY path below, so a
+        // `continue` re-entry resumes the same count and a new activation
+        // starts empty (design §1.1: per-activation accumulation, reset
+        // only on close).
+        let fetch_candidates = Arc::new(Mutex::new(std::mem::take(&mut act.web_fetch_candidates)));
 
         // The subagent's tool projection = the parent's registry minus the
         // main-only control/whitelist tools (the retrieval lane never sees
@@ -4420,6 +4546,13 @@ impl AgentLoopController {
             self.max_tool_rounds,
             act.tool_rounds_used,
             &act.activation_id,
+            // Only the external lane executes web_fetch (lane
+            // self-execution); the internal lane passes `None` — its
+            // (never reachable) web_fetch gate would fail closed.
+            match role {
+                SubagentRole::ExternalRetrieval => Some(fetch_candidates.clone()),
+                SubagentRole::InternalRetrieval => None,
+            },
         );
         // Box::pin: the subagent loop is a recursive call through the
         // dispatch edge (main loop → subagent loop; depth is capped at one
@@ -4484,6 +4617,11 @@ impl AgentLoopController {
             }
             Err(_) => loop_outcome,
         };
+
+        // Write the candidate counter back into the activation (every
+        // path — success, error and cancel keep the count; the close
+        // record still observes the consumed candidates).
+        act.web_fetch_candidates = std::mem::take(&mut *fetch_candidates.lock().unwrap());
 
         // Re-insert the activation — the conversation is preserved on every
         // path (§4.4: journal, docs, ledger, receipts never deleted).
@@ -4688,6 +4826,7 @@ impl AgentLoopController {
                     output,
                     exit_code: Some(0),
                     output_encoding: None,
+                    structured: None,
                 }
             }
             Err(e) => {
@@ -4716,6 +4855,7 @@ impl AgentLoopController {
                     output: format!("retrieval error: {e}"),
                     exit_code: Some(1),
                     output_encoding: None,
+                    structured: None,
                 }
             }
         };
@@ -4781,6 +4921,7 @@ impl AgentLoopController {
                     output: msg,
                     exit_code: Some(1),
                     output_encoding: None,
+                    structured: None,
                 });
             }
         };
@@ -4804,6 +4945,7 @@ impl AgentLoopController {
                     output: msg,
                     exit_code: Some(1),
                     output_encoding: None,
+                    structured: None,
                 });
             }
         };
@@ -4833,6 +4975,7 @@ impl AgentLoopController {
                 output: msg,
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             });
         }
         if decision == "close" && requirement_delta.is_some() {
@@ -4848,6 +4991,7 @@ impl AgentLoopController {
                 output: msg,
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             });
         }
 
@@ -4897,6 +5041,7 @@ impl AgentLoopController {
                     output: msg,
                     exit_code: Some(1),
                     output_encoding: None,
+                    structured: None,
                 });
             }
         };
@@ -4950,6 +5095,7 @@ impl AgentLoopController {
                 output,
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             });
         }
 
@@ -4984,6 +5130,7 @@ impl AgentLoopController {
                 output: msg,
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             });
         }
         let pending = act.pending.as_ref().unwrap().clone();
@@ -5110,6 +5257,7 @@ impl AgentLoopController {
                 output: msg,
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             });
         }
         // D-16 (2026-08-13): a rejected GoalRevisionV1 under fail-closed
@@ -5305,6 +5453,7 @@ impl AgentLoopController {
             output,
             exit_code: Some(exit_code),
             output_encoding: None,
+            structured: None,
         })
     }
 
@@ -5542,6 +5691,7 @@ impl AgentLoopController {
                 output: msg,
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             },
             None,
         ))
@@ -5565,6 +5715,11 @@ impl AgentLoopController {
         // activation (retrieval lanes bind web_fetch etc.; the main lane is
         // None). Threaded from the loop profile.
         activation_id: Option<&str>,
+        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the current
+        // dispatch's web_fetch candidate counter (per-activation shared
+        // domain, threaded from the loop profile). None on main/grill —
+        // the web_fetch gate fails closed without a count domain.
+        fetch_candidates: Option<&Mutex<Vec<String>>>,
         // C2-1 (2026-08-11): whether the per-call permission bridge is
         // consulted. The main lane passes `true`; retrieval-lane
         // self-execution (web tools inside a retrieval lane) passes
@@ -5633,6 +5788,7 @@ impl AgentLoopController {
                     output: msg,
                     exit_code: Some(1),
                     output_encoding: None,
+                    structured: None,
                 },
                 None,
             ));
@@ -5677,6 +5833,7 @@ impl AgentLoopController {
                     output: msg,
                     exit_code: Some(1),
                     output_encoding: None,
+                    structured: None,
                 },
                 None,
             ));
@@ -5718,9 +5875,34 @@ impl AgentLoopController {
                     output: msg,
                     exit_code: Some(1),
                     output_encoding: None,
+                    structured: None,
                 },
                 None,
             ));
+        }
+        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): web_fetch candidate
+        // mechanical count gate (design §1) — the prompt's soft "候选 ≤5"
+        // becomes a hard per-activation cap (ORZ_WEB_FETCH_CANDIDATE_CAP,
+        // default 8, user adjudication 2026-08-14). Counts BEFORE any
+        // fetch action: per-activation accumulation, exact-string URL
+        // dedup (same page re-read consumes no new candidate; canonical /
+        // host-level dedup is step 3), no reset on continue re-entry (only
+        // activation close). Refusals are no-ToolStarted (same shape as
+        // the mode gates) and feed the consecutive-denial breaker (no
+        // retry space, ADR-0010 §3.5.4).
+        let mut web_fetch_candidate_counts: Option<(usize, usize)> = None;
+        if crate::relay::is_web_fetch_tool(&tc.name) {
+            match self
+                .web_fetch_candidate_gate(writer, messages, tc, fetch_candidates)
+                .await?
+            {
+                WebFetchGateDecision::Refused(result, feedback) => {
+                    return Ok((result, feedback));
+                }
+                WebFetchGateDecision::Allowed { count, cap } => {
+                    web_fetch_candidate_counts = Some((count, cap));
+                }
+            }
         }
         // Permission gate. C2-1 (2026-08-11): lane self-execution skips
         // the bridge entirely (no PermissionRequested/PermissionDecision
@@ -5797,6 +5979,7 @@ impl AgentLoopController {
                 ),
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             };
             // Replay the denial as a tool message — the provider protocol
             // requires a tool message answering each declared call, even a
@@ -5878,6 +6061,7 @@ impl AgentLoopController {
                         output: msg,
                         exit_code: Some(1),
                         output_encoding: None,
+                        structured: None,
                     },
                     None,
                 ));
@@ -5974,6 +6158,7 @@ impl AgentLoopController {
                                 output: msg,
                                 exit_code: None,
                                 output_encoding: None,
+                                structured: None,
                             },
                             None,
                         ));
@@ -6020,6 +6205,7 @@ impl AgentLoopController {
                 output: compose_test_output_message(&result),
                 exit_code: result.exit_code,
                 output_encoding: None,
+                structured: None,
             };
             messages.push(Message {
                 role: Role::Tool,
@@ -6166,6 +6352,7 @@ impl AgentLoopController {
                         output,
                         exit_code: Some(1),
                         output_encoding: None,
+                        structured: None,
                     },
                     None,
                 ));
@@ -6218,6 +6405,7 @@ impl AgentLoopController {
                     output,
                     exit_code: Some(0),
                     output_encoding: None,
+                    structured: None,
                 },
                 None,
             ));
@@ -6256,6 +6444,7 @@ impl AgentLoopController {
                 output: content,
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             };
             messages.push(Message {
                 role: Role::Tool,
@@ -6273,10 +6462,17 @@ impl AgentLoopController {
         if let Some(h) = heartbeat {
             h.stamp();
         }
+        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14, review fix): the
+        // mechanical count feedback is computed ONCE so the conversation
+        // message and the blackboard exec mirror stay consistent (a failed
+        // fetch still consumed its candidate).
+        let count_note = web_fetch_candidate_counts.map(|(count, cap)| {
+            format!("\n候选 {count}/{cap}，剩余 {}", cap.saturating_sub(count))
+        });
         // The bool tracks execution success vs timeout/tool error: only a
         // successful call resets the denial streak (ADR-0010 §3.5.4);
         // timeout/error are neutral (分开记账 — neither reset nor count).
-        let (result, succeeded) = match host
+        let (mut result, succeeded) = match host
             .call_tool(&tc.name, tc.arguments.clone(), &tc.call_id)
             .await
         {
@@ -6332,6 +6528,13 @@ impl AgentLoopController {
                 if !edits_payload.is_empty() {
                     completed_payload["edits"] = serde_json::Value::Array(edits_payload);
                 }
+                // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): journal the
+                // mechanical candidate count/cap on web_fetch completions
+                // (Schema-first; the verifier cross-checks the shape).
+                if let Some((count, cap)) = &web_fetch_candidate_counts {
+                    completed_payload["candidate_count"] = serde_json::json!(count);
+                    completed_payload["candidate_cap"] = serde_json::json!(cap);
+                }
                 // GAP-ENCODING-GATE (OPS-PROTOCOL §8): record the decode
                 // stage that produced the tool output (run_terminal_cmd /
                 // read_file / run_tests) when the host observed one.
@@ -6350,7 +6553,12 @@ impl AgentLoopController {
                 });
                 {
                     let mut w = self.blackboard.write();
-                    w.exec.results.push(format!("[{}] {}", tc.name, res.output));
+                    w.exec.results.push(format!(
+                        "[{}] {}{}",
+                        tc.name,
+                        res.output,
+                        count_note.as_deref().unwrap_or("")
+                    ));
                 }
                 // IP2a (D-3): 失败必显式 — a tool result must NEVER be blank
                 // in the conversation (blank tool messages give the model
@@ -6370,21 +6578,29 @@ impl AgentLoopController {
                         output,
                         exit_code: res.exit_code,
                         output_encoding: None,
+                        structured: None,
                     },
                     true,
                 )
             }
             Err(e) => {
                 writer
-                    .record(
-                        EventType::ToolCompleted,
-                        serde_json::json!({
+                    .record(EventType::ToolCompleted, {
+                        let mut payload = serde_json::json!({
                             "tool": tc.name,
                             "call_id": tc.call_id,
                             "status": "error",
                             "error": e.to_string(),
-                        }),
-                    )
+                        });
+                        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14):
+                        // a web_fetch host error still consumed its
+                        // candidate — carry the count/cap for audit.
+                        if let Some((count, cap)) = &web_fetch_candidate_counts {
+                            payload["candidate_count"] = serde_json::json!(count);
+                            payload["candidate_cap"] = serde_json::json!(cap);
+                        }
+                        payload
+                    })
                     .await?;
                 // P0-A step 5 (design §5): 调用即探针 — a real work-tool call
                 // failure (ToolCompleted status=error) corrects the minimal
@@ -6401,7 +6617,11 @@ impl AgentLoopController {
                 });
                 {
                     let mut w = self.blackboard.write();
-                    w.exec.errors.push(format!("[{}] {e}", tc.name));
+                    w.exec.errors.push(format!(
+                        "[{}] {e}{}",
+                        tc.name,
+                        count_note.as_deref().unwrap_or("")
+                    ));
                 }
                 // P0-1 (2026-08-08 stall guards): a host-level timeout means
                 // the tool was KILLED — the model must not read it as a
@@ -6418,11 +6638,21 @@ impl AgentLoopController {
                         },
                         exit_code: Some(1),
                         output_encoding: None,
+                        structured: None,
                     },
                     false,
                 )
             }
         };
+
+        // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): mechanical count
+        // feedback rides the web_fetch tool result (design §1.2) — the
+        // model decides full vs keyword fetch under a known budget. It is
+        // appended to success AND host-error outputs (a failed fetch still
+        // consumed its candidate).
+        if let Some(note) = &count_note {
+            result.output.push_str(note);
+        }
 
         // Replay the tool result into the conversation — the provider
         // protocol requires a tool message answering each declared call
@@ -6443,6 +6673,135 @@ impl AgentLoopController {
             None // timeout / tool error — neutral for the denial streak
         };
         Ok((result, feedback))
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): web_fetch candidate
+    /// count gate — count domain lookup, exact-string URL dedup and cap
+    /// check (design §1). Runs BEFORE any fetch action and BEFORE
+    /// ToolStarted / ACAF ticketing (a refused call needs no ticket).
+    /// Returns the post-call count/cap for the model-visible feedback.
+    ///
+    /// Fail-closed arms:
+    /// - no count domain (main/grill lane — web_fetch never executes
+    ///   there; belt-and-braces): `web_fetch_candidate_count_unbound`;
+    /// - missing `url` argument (no count identity):
+    ///   `web_fetch_candidate_url_missing`;
+    /// - new URL at/over the cap: `web_fetch_candidate_cap_exceeded` —
+    ///   no ToolStarted, neutral statement, Denied feedback (the
+    ///   consecutive-denial breaker gives no retry space, ADR-0010
+    ///   §3.5.4).
+    async fn web_fetch_candidate_gate(
+        &self,
+        writer: &mut EventWriter<'_>,
+        messages: &mut Vec<Message>,
+        tc: &ToolCall,
+        fetch_candidates: Option<&Mutex<Vec<String>>>,
+    ) -> Result<WebFetchGateDecision, AgentLoopError> {
+        let Some(counter) = fetch_candidates else {
+            return self
+                .refuse_web_fetch(
+                    writer,
+                    messages,
+                    tc,
+                    "web_fetch_candidate_count_unbound",
+                    "web_fetch 已拒绝 — 候选核验计数域不可用",
+                    None,
+                )
+                .await;
+        };
+        let Some(url) = tc
+            .arguments
+            .get("url")
+            .and_then(|u| u.as_str())
+            .map(str::to_string)
+        else {
+            return self
+                .refuse_web_fetch(
+                    writer,
+                    messages,
+                    tc,
+                    "web_fetch_candidate_url_missing",
+                    "web_fetch 已拒绝 — 缺少 url 参数，候选核验无法计数",
+                    None,
+                )
+                .await;
+        };
+        let cap = self.web_fetch_candidate_cap as usize;
+        // The count/update happen in a short synchronous scope — the std
+        // MutexGuard must not cross the async refusal below (Send).
+        let outcome = {
+            let mut seen = counter.lock().unwrap();
+            let count = seen.len();
+            let is_new = !seen.iter().any(|u| u == &url);
+            if is_new && count >= cap {
+                Err((count, cap))
+            } else {
+                if is_new {
+                    seen.push(url);
+                }
+                Ok((if is_new { count + 1 } else { count }, cap))
+            }
+        };
+        match outcome {
+            Ok((count, cap)) => Ok(WebFetchGateDecision::Allowed { count, cap }),
+            Err((count, cap)) => {
+                self.refuse_web_fetch(
+                    writer,
+                    messages,
+                    tc,
+                    "web_fetch_candidate_cap_exceeded",
+                    &format!("web_fetch 已拒绝 — 候选核验数量已达上限 {cap}（当前 {count}/{cap}）"),
+                    Some((count, cap)),
+                )
+                .await
+            }
+        }
+    }
+
+    /// Shared no-ToolStarted refusal for the web_fetch candidate gate —
+    /// event + neutral tool message + Denied feedback (the breaker
+    /// aggregates at round granularity and blocks repeated refusals).
+    async fn refuse_web_fetch(
+        &self,
+        writer: &mut EventWriter<'_>,
+        messages: &mut Vec<Message>,
+        tc: &ToolCall,
+        code: &str,
+        msg: &str,
+        counts: Option<(usize, usize)>,
+    ) -> Result<WebFetchGateDecision, AgentLoopError> {
+        let mut payload = serde_json::json!({
+            "tool": tc.name,
+            "call_id": tc.call_id,
+            "target": "external_retrieval",
+            "status": "error",
+            "error": code,
+        });
+        if let Some((count, cap)) = counts {
+            payload["candidate_count"] = serde_json::json!(count);
+            payload["candidate_cap"] = serde_json::json!(cap);
+        }
+        writer.record(EventType::ToolCompleted, payload).await?;
+        messages.push(Message {
+            role: Role::Tool,
+            content: msg.to_string(),
+            tool_call_id: Some(tc.call_id.clone()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        Ok(WebFetchGateDecision::Refused(
+            ToolResult {
+                output: msg.to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: None,
+            },
+            Some(PolicyFeedback::Denied(DenialKey {
+                tool_name: tc.name.clone(),
+                reason_code: code.to_string(),
+                policy_revision: self.policy_revision(),
+            })),
+        ))
     }
 }
 
@@ -6671,6 +7030,16 @@ mod tests {
         ToolCall {
             name: name.to_string(),
             arguments: serde_json::json!({"query": "test"}),
+            call_id: call_id.to_string(),
+        }
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): a web_fetch call with
+    /// a real URL argument (the count gate's identity).
+    fn web_fetch_call(call_id: &str, url: &str) -> ToolCall {
+        ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: serde_json::json!({ "url": url }),
             call_id: call_id.to_string(),
         }
     }
@@ -7074,6 +7443,7 @@ mod tests {
                 output: "fn main() {}  // file content".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -7146,6 +7516,7 @@ mod tests {
                 output: "fn main() {}".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -7256,6 +7627,7 @@ mod tests {
                 output: "page content".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -7333,6 +7705,7 @@ mod tests {
                 output: "policy content".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -7408,6 +7781,7 @@ mod tests {
                 output: "platform blog content".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -7485,6 +7859,7 @@ mod tests {
                 output: "platform blog content".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -7579,6 +7954,10 @@ mod tests {
                 result_digest: Some("a".repeat(64)),
                 submitted: vec![("DISP-1".to_string(), vec![1, 2, 3])],
                 tool_rounds_used: 7,
+                web_fetch_candidates: vec![
+                    "https://a.example".to_string(),
+                    "https://b.example".to_string(),
+                ],
                 result_archive_ref: Some(".gsa/runs/RUN-X/retrieval-results/a.json".to_string()),
             },
         );
@@ -7598,6 +7977,7 @@ mod tests {
                 result_digest: None,
                 submitted: Vec::new(),
                 tool_rounds_used: 0,
+                web_fetch_candidates: Vec::new(),
                 result_archive_ref: None,
             },
         );
@@ -7622,6 +8002,16 @@ mod tests {
         assert_eq!(
             act.result_archive_ref.as_deref(),
             Some(".gsa/runs/RUN-X/retrieval-results/a.json")
+        );
+        // P0-B step 2 (2026-08-14): the web_fetch candidate count rides
+        // the sidecar — a restored activation resumes the same count
+        // (cross-run `continue` keeps the cap meaningful).
+        assert_eq!(
+            act.web_fetch_candidates,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
         );
         // GAP-CONVERSATION-RESTORE (2026-08-10): the conversation now rides
         // the sidecar (D-6 update — it round-trips intact); the replay
@@ -7653,6 +8043,7 @@ mod tests {
                 result_digest: None,
                 submitted: Vec::new(),
                 tool_rounds_used: 0,
+                web_fetch_candidates: Vec::new(),
                 result_archive_ref: None,
             };
         let undisposed = Some(PendingDisposition {
@@ -7814,11 +8205,13 @@ mod tests {
             output: output.to_string(),
             exit_code: Some(0),
             output_encoding: None,
+            structured: None,
         };
         let fail = ToolResult {
             output: "boom".to_string(),
             exit_code: Some(1),
             output_encoding: None,
+            structured: None,
         };
         // Failed call → no evidence.
         assert!(
@@ -8189,6 +8582,7 @@ mod tests {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -8272,6 +8666,7 @@ mod tests {
                 output: "edited ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8355,6 +8750,7 @@ mod tests {
                 output: "中文".to_string(),
                 exit_code: Some(0),
                 output_encoding: Some("gb18030".to_string()),
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8448,6 +8844,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8548,6 +8945,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8575,6 +8973,111 @@ mod tests {
         );
         assert!(received[0].system.contains("[任务状态 v0.1]"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs ride
+    /// the host's structured seam into the evidence record and the
+    /// committed ledger — shape-checked, deduplicated, and mirrored in
+    /// raw_source_refs (the candidate pool for the mechanical prefilter).
+    #[test]
+    fn web_search_citations_flow_into_candidate_pool() {
+        let call = |name: &str, args: serde_json::Value| ToolCall {
+            name: name.to_string(),
+            arguments: args,
+            call_id: "c1".to_string(),
+        };
+        let result = |citations: serde_json::Value| ToolResult {
+            output: "snippet".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: Some(serde_json::json!({ "citations": citations })),
+        };
+
+        // Extraction: shape-checked + dedup, first-seen order preserved.
+        let urls = structured_candidate_urls(&ToolResult {
+            output: "snippet".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: Some(serde_json::json!({
+                "citations": ["https://a.example", "https://b.example", "https://a.example", "", 7]
+            })),
+        });
+        assert_eq!(
+            urls,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+        assert!(
+            structured_candidate_urls(&ToolResult {
+                output: "x".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            })
+            .is_empty()
+        );
+        assert!(
+            structured_candidate_urls(&ToolResult {
+                output: "x".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: Some(serde_json::json!({"other": []})),
+            })
+            .is_empty()
+        );
+
+        // Evidence record: only web_search picks the pool up.
+        let ev = build_evidence_record(
+            "web_search",
+            &call("web_search", serde_json::json!({"query": "q"})),
+            &result(serde_json::json!([
+                "https://a.example",
+                "https://b.example"
+            ])),
+        )
+        .unwrap();
+        assert_eq!(ev.source_type, "web_search_result");
+        assert_eq!(ev.candidate_urls.len(), 2);
+        let non_search = build_evidence_record(
+            "web_fetch",
+            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
+            &result(serde_json::json!(["https://a.example"])),
+        )
+        .unwrap();
+        assert!(non_search.candidate_urls.is_empty());
+
+        // Committed ledger: candidate_urls on the search entry + mirror in
+        // raw_source_refs; source counts unchanged (candidates are not
+        // observed sources).
+        let committed = build_structured_result(
+            &[ev],
+            &SourceWeightConfig::default(),
+            &[],
+            &[],
+            "web_page",
+            "[RESULT_JSON]{\"sections\":[],\"claims\":[]}[/RESULT_JSON]",
+            "sub-session",
+            "act-1",
+            "contract-1",
+            0,
+            "call-1",
+            "goal",
+        );
+        let ledger = committed.payload["source_ledger"].as_array().unwrap();
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(
+            ledger[0]["candidate_urls"],
+            serde_json::json!(["https://a.example", "https://b.example"])
+        );
+        let refs = committed.payload["raw_source_refs"].as_array().unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(
+            refs[0]["candidate_urls"],
+            serde_json::json!(["https://a.example", "https://b.example"])
+        );
+        assert_eq!(committed.payload["source_counts"]["total"], 1);
     }
 
     /// A6 (2026-08-08): the pure compaction function — drops only the
@@ -8705,6 +9208,7 @@ mod tests {
                     output: self.outputs[n % self.outputs.len()].clone(),
                     exit_code: Some(0),
                     output_encoding: None,
+                    structured: None,
                 })
             }
             async fn request_permission(
@@ -8861,6 +9365,7 @@ mod tests {
                         output: "retry ok".to_string(),
                         exit_code: Some(0),
                         output_encoding: None,
+                        structured: None,
                     })
                 }
             }
@@ -8981,6 +9486,7 @@ mod tests {
                     output: self.outputs[n % self.outputs.len()].clone(),
                     exit_code: Some(0),
                     output_encoding: None,
+                    structured: None,
                 })
             }
             async fn request_permission(
@@ -9146,6 +9652,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let whitelist_call = |id: &str, content: &str| {
@@ -9337,6 +9844,7 @@ mod tests {
                 output: "x".repeat(600),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -9423,6 +9931,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -9497,6 +10006,7 @@ mod tests {
                 output: "x".repeat(600), // fat rounds — droppable content
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -9578,6 +10088,7 @@ mod tests {
                 output: "no match".to_string(),
                 exit_code: Some(1),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -9634,6 +10145,7 @@ mod tests {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -9675,6 +10187,7 @@ mod tests {
                 output: "edited ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -9765,6 +10278,7 @@ mod tests {
                 output: "edited ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -9867,6 +10381,7 @@ mod tests {
                 output: "irrelevant".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -10409,6 +10924,7 @@ mod tests {
                     output: "ok".to_string(),
                     exit_code: Some(0),
                     output_encoding: None,
+                    structured: None,
                 })
             }
         }
@@ -10467,6 +10983,7 @@ mod tests {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -10527,6 +11044,7 @@ mod tests {
                 output: "patched".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -10621,6 +11139,7 @@ mod tests {
                 output: "patched".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -10683,6 +11202,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -10760,6 +11280,7 @@ mod tests {
                 output: "should not run".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -10875,6 +11396,7 @@ mod tests {
                 output: "file contents".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -10968,6 +11490,7 @@ mod tests {
                 output: "edited".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -11193,6 +11716,7 @@ mod tests {
                 0,
                 None,
                 None,
+                None, // main-lane direct call: no web_fetch count domain
                 true,
                 true, // main-lane semantics: probe write-back enabled
             )
@@ -11276,6 +11800,504 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the web_fetch
+    /// candidate count gate — per-activation accumulation, exact-string
+    /// URL dedup (a duplicate consumes no new candidate), mechanical
+    /// count feedback on every allowed fetch, and a no-ToolStarted cap
+    /// refusal that feeds the denial breaker (no retry space).
+    #[tokio::test]
+    async fn web_fetch_candidate_gate_counts_dedups_and_rejects_at_cap() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "page content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-WFC",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: serde_json::json!({ "url": format!("https://example.com/{i}") }),
+            call_id: format!("call-{i}"),
+        };
+        // 8 distinct URLs are allowed, each carrying the count feedback.
+        for i in 0..8 {
+            let (result, feedback) = controller
+                .run_host_tool(
+                    &host,
+                    &mut writer,
+                    &call(i),
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    &mut messages,
+                    0,
+                    None,
+                    Some("act-1"),
+                    Some(&counter),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.exit_code, Some(0), "call {i}");
+            assert!(
+                result
+                    .output
+                    .contains(&format!("候选 {}/8，剩余 {}", i + 1, 7 - i)),
+                "call {i}: {}",
+                result.output
+            );
+            assert!(matches!(feedback, Some(PolicyFeedback::Succeeded)));
+        }
+        // A duplicate URL consumes no new candidate (still allowed at 8/8).
+        let (result, _) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(0),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            result.output.contains("候选 8/8，剩余 0"),
+            "{}",
+            result.output
+        );
+        assert_eq!(counter.lock().unwrap().len(), 8);
+        // A NEW URL at the cap is refused — no ToolStarted, Denied key.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(8),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("候选核验数量已达上限 8"),
+            "{}",
+            result.output
+        );
+        assert!(
+            matches!(feedback, Some(PolicyFeedback::Denied(_))),
+            "cap refusal must feed the denial breaker"
+        );
+        assert_eq!(counter.lock().unwrap().len(), 8, "refused URL not counted");
+
+        // Journal facts: allowed completions carry count/cap; the refusal
+        // has no ToolStarted and the cap-exceeded error at the boundary.
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_fetch")
+            })
+            .collect();
+        assert_eq!(completed.len(), 10, "8 allowed + duplicate + refusal");
+        for (i, e) in completed.iter().enumerate().take(8) {
+            assert_eq!(e.payload["candidate_count"], serde_json::json!(i + 1));
+            assert_eq!(e.payload["candidate_cap"], serde_json::json!(8));
+        }
+        let refused_ev = completed
+            .iter()
+            .find(|e| e.payload["error"] == serde_json::json!("web_fetch_candidate_cap_exceeded"))
+            .expect("cap refusal journaled");
+        assert_eq!(refused_ev.payload["candidate_count"], serde_json::json!(8));
+        assert_eq!(refused_ev.payload["candidate_cap"], serde_json::json!(8));
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-8")
+            }),
+            "refused web_fetch must not start"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): fail-closed arms of
+    /// the web_fetch count gate — a missing `url` argument (no count
+    /// identity) and a missing count domain (no per-activation counter)
+    /// both refuse without ToolStarted.
+    #[tokio::test]
+    async fn web_fetch_candidate_gate_fails_closed_on_missing_url_and_domain() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: None,
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-WFU",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |url: Option<&str>, call_id: &str| ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: match url {
+                Some(u) => serde_json::json!({ "url": u }),
+                None => serde_json::json!({ "query": "no url" }),
+            },
+            call_id: call_id.to_string(),
+        };
+        // Missing url argument.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(None, "call-u1"),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("缺少 url 参数"), "{}", result.output);
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Missing count domain (main-lane style direct call).
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(Some("https://example.com/0"), "call-u2"),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("候选核验计数域不可用"),
+            "{}",
+            result.output
+        );
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Neither refusal started the tool.
+        let events = events(&dir);
+        for refused_id in ["call-u1", "call-u2"] {
+            assert!(
+                !events.iter().any(|e| {
+                    e.event_type == EventType::ToolStarted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(refused_id)
+                }),
+                "{refused_id} must not start"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the builder/override
+    /// seam — a shorter cap refuses earlier (production reads
+    /// ORZ_WEB_FETCH_CANDIDATE_CAP at construction).
+    #[tokio::test]
+    async fn web_fetch_candidate_cap_override_shortens_budget() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "page".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let controller = with_retrieval_enabled(
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+                ScriptedResponse::text("x"),
+            ])))
+            .with_web_fetch_candidate_cap(2),
+        );
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-WFO",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: serde_json::json!({ "url": format!("https://example.com/{i}") }),
+            call_id: format!("call-o{i}"),
+        };
+        for i in 0..2 {
+            let (result, _) = controller
+                .run_host_tool(
+                    &host,
+                    &mut writer,
+                    &call(i),
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    &mut messages,
+                    0,
+                    None,
+                    Some("act-1"),
+                    Some(&counter),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.exit_code, Some(0));
+            assert!(
+                result
+                    .output
+                    .contains(&format!("候选 {}/2，剩余 {}", i + 1, 1 - i)),
+                "{}",
+                result.output
+            );
+        }
+        let (result, _) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(2),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("上限 2"), "{}", result.output);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the env parse rule —
+    /// trimmed positive integer; zero/invalid/absent fall back to the
+    /// default (pure function, no env mutation in tests).
+    #[test]
+    fn web_fetch_candidate_cap_parse_rules() {
+        assert_eq!(parse_web_fetch_candidate_cap("8"), Some(8));
+        assert_eq!(parse_web_fetch_candidate_cap(" 4 "), Some(4));
+        assert_eq!(parse_web_fetch_candidate_cap("0"), None);
+        assert_eq!(parse_web_fetch_candidate_cap("-1"), None);
+        assert_eq!(parse_web_fetch_candidate_cap("abc"), None);
+        assert_eq!(parse_web_fetch_candidate_cap(""), None);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the per-activation
+    /// count domain flows through the external retrieval lane — only the
+    /// lane's SELF-EXECUTED web_fetch calls count (the main-lane dispatch
+    /// wrapper is not a fetch), the counter writes back into the activation,
+    /// and the journal carries the count/cap on each completion.
+    #[tokio::test]
+    async fn web_fetch_candidate_count_accumulates_in_external_lane() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-2", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-3", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-WF2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // The external activation's counter holds the lane's fetched URLs
+        // (exact-string dedup, first-seen order) — written back after the
+        // loop; the main-lane dispatch (call-1) never counted.
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.web_fetch_candidates,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+
+        // Journal: two lane web_fetch completions with counts 1 and 2.
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_fetch")
+                    // The main-lane dispatch wrapper's completion (call-1)
+                    // carries no count — it is not a fetch; only the
+                    // lane's self-executed fetches annotate candidate_count.
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 2, "{completed:?}");
+        assert_eq!(
+            completed[0].payload["candidate_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            completed[1].payload["candidate_count"],
+            serde_json::json!(2)
+        );
+        assert_eq!(completed[1].payload["candidate_cap"], serde_json::json!(8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14, review fix): a
+    /// `continue` re-entry is the SAME activation — the web_fetch candidate
+    /// count accumulates across dispatches (design §1.1: no reset on
+    /// continue; only activation close starts fresh). The counter written
+    /// back after dispatch 1 rides into dispatch 2 via the sidecar state.
+    #[tokio::test]
+    async fn web_fetch_candidate_count_accumulates_across_continue_dispatches() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let continue_call = ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "external_retrieval",
+                "decision": "continue",
+                "requirement_delta": "补充 b.example 页面",
+            }),
+            call_id: "call-d1".to_string(),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-2", "https://a.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::tool_calls(vec![continue_call]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-3", "https://b.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-4", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-WFC2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // Same activation (continue bumped the contract revision once) with
+        // the accumulated candidate list — dispatch 2 continued at 1/8.
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.contract_revision, 1,
+            "continue re-entered the same activation"
+        );
+        assert_eq!(
+            act.web_fetch_candidates,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+
+        // Journal: the two lane fetches carry counts 1 and 2 (dispatch
+        // wrappers call-1/call-3 carry no count).
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_fetch")
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 2, "{completed:?}");
+        assert_eq!(
+            completed[0].payload["candidate_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            completed[1].payload["candidate_count"],
+            serde_json::json!(2)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// a `continue` disposition keeps the activation (revision +1, the
     /// requirement delta becomes the next task goal), and the next retrieval
     /// re-enters the same activation.
@@ -11781,6 +12803,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -11861,6 +12884,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -11985,6 +13009,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
 
@@ -13675,6 +14700,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -13751,6 +14777,7 @@ mod tests {
                 output: "ok".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             }),
         };
         // Two tool rounds then text — but the cap is 1, so the run must end
@@ -14024,6 +15051,7 @@ mod tests {
                 output: "must not run".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
+                structured: None,
             })
         }
     }
@@ -14305,6 +15333,7 @@ mod tests {
                     output: "ok".to_string(),
                     exit_code: None,
                     output_encoding: None,
+                    structured: None,
                 })
             }
         }
@@ -14730,6 +15759,7 @@ mod tests {
             result_digest: None,
             submitted: Vec::new(),
             tool_rounds_used: 1,
+            web_fetch_candidates: Vec::new(),
             result_archive_ref: None,
         };
         controller
