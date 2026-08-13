@@ -164,6 +164,8 @@ V02_PAYLOAD_EVENTS = [
     "control_ticket_issued",
     "control_ticket_consumed",
     "control_ticket_rejected",
+    # FUS-TOOL-PROBE (2026-08-13): two-state Face B probe snapshot.
+    "tool_availability_check",
 ]
 
 SLUGS = {
@@ -739,6 +741,25 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "reject_code": "replay_detected",
         "detail": "nonce already consumed",
     },
+    # FUS-TOOL-PROBE (2026-08-13, design §7): Face B two-state probe
+    # snapshot — complete/incomplete cover Face B only; reasons are stable
+    # neutral statements.
+    "tool_availability_check": {
+        "probe_scope": "main_agent_work_tools",
+        "probe_timestamp": TIMESTAMP,
+        "complete": [
+            "read_file",
+            "list_dir",
+            "grep",
+            "search_tool",
+            "search_replace",
+            "run_tests",
+        ],
+        "incomplete": [
+            {"tool": "ask_user_question", "reason": "无交互式用户会话"},
+        ],
+        "gate_decision": "pass",
+    },
 }
 
 # One constraint violation per v0.2 event (never a bare missing-required when
@@ -948,6 +969,22 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "rejected_at": TIMESTAMP,
         "reject_code": "forged",
         "detail": "unknown reject code",
+    },
+    "tool_availability_check": {
+        "probe_scope": "main_agent_work_tools",
+        "probe_timestamp": TIMESTAMP,
+        "complete": [
+            "read_file",
+            "list_dir",
+            "grep",
+            "search_tool",
+            "search_replace",
+            "run_tests",
+        ],
+        "incomplete": [
+            {"tool": "ask_user_question", "reason": "无交互式用户会话"},
+        ],
+        "gate_decision": "stop",
     },
 }
 
@@ -1221,7 +1258,7 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-  legal / one-constraint-violation payloads for the **eleven** v0.2 mechanism
+  legal / one-constraint-violation payloads for the **twelve** v0.2 mechanism
   events with their own v0.2 payload schema: `orientation_checkpoint`
   (v0.2 shape), `diagnostic_coverage_checkpoint`,
   `information_sufficiency_assessment`, `retrieval_parent_disposition`,
@@ -1230,7 +1267,9 @@ Scope:
   `retrieval_activation_restored`, plus the ACAF trio (Slice 1, 2026-08-12)
   `control_ticket_issued`, `control_ticket_consumed`,
   `control_ticket_rejected` (ticket lifecycle binding fields — never the
-  HMAC tag, which stays inside the issuing process).
+  HMAC tag, which stays inside the issuing process), plus
+  `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13: two-state Face B
+  probe snapshot — complete/incomplete cover Face B only).
 - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
@@ -1240,8 +1279,8 @@ Scope:
   negative payload fixture for the fixed tier/weight table (authoritative
   MUST pair with 1.1; the good fixture carries the full weighting fields).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (42 events). The eleven v0.2-payload events carry
-  their v0.2 payload; the other 31 events reuse the v0.1 payload shape
+  event in the v0.2 enum (42 events). The twelve v0.2-payload events carry
+  their v0.2 payload; the other 30 events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for
   unchanged payloads). `chained-run-finished.valid.json` covers the
@@ -1259,7 +1298,7 @@ extension 2026-08-10):
   v0.2 enum — they exist only on the v0.1 track for historical journal
   replay (ADR-0010 §11.2).
 - The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
-  The cross-validator resolves the eleven v0.2-payload events to their v0.2
+  The cross-validator resolves the twelve v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
 - **ACAF ticket kinds are payload-level** (Slice 1, 2026-08-12; Slice 2
   2026-08-12): the control-ticket trio's event types are stable; the

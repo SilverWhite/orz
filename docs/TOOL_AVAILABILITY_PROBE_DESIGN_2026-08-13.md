@@ -38,6 +38,15 @@
 面 C 未配置后端（image/video/memory/lsp）固定留在列表；调用时返回明确中性陈述
 （如"未配置 image_gen 后端"），走调用状态审计，不做探针、不从列表移除。
 
+实施边界（2026-08-13 审查裁定，步骤 1-2 落地语义）：
+
+- 探针粒度为**会话工作区根级机械检查**（快照时刻无目标路径参数，探测
+  session cwd 本身），不是逐路径检查；调用时机械门禁仍是最终兜底（不变量 2）。
+- 写探针为 **metadata-grade**（目录可读 + readonly 属性），不做真实写测试；
+  不构成写权限承诺。
+- `ask_user_question` 的交互用户信号 = **ACP live gateway 存在**（headless
+  与 hub-only 会话按不完整处理，fail-closed）。
+
 ## 3. 探针语义：两态中性判定
 
 - 输出仅两态：**机械链路完整**（工具流程的全部机械组件齐备）→ 进列表；
@@ -58,7 +67,10 @@
 - 即用即清：快照只在当轮请求构造时存在，用后即弃，不持久化、不跨轮保留。
 - 最小上一轮映射：仅保留 `tool → 完整/不完整` 的上一轮最小映射，用于状态翻转对比；
   翻转才发 `tool_availability_check` 事件，无变化不发事件。
-- 列表投影：`工具_defs = 面A + 面B完整集 + 面C`；仅工具名，无任何状态标注。
+- 列表投影：`工具_defs = 面A + (面B完整集 ∩ registry 声明集) + 面C`；仅工具名，
+  无任何状态标注。registry 交集的必要性：部分会话变体可移除
+  `ask_user_question`/`search_tool`（builder allowlist），探针不得把会话
+  不存在的工具声明给模型（2026-08-13 审查裁定）。
 - 确定不可提议：面 B 不完整 → 不进入本轮列表，模型无法提议；因竞态仍收到调用时，
   兜底返回中性机械陈述（如"tool 'run_tests' — 缺少测试运行器"）。
 
@@ -87,7 +99,7 @@
 {
   "probe_scope": "main_agent_work_tools",
   "probe_timestamp": "<RFC3339>",
-  "complete": ["read_file", "list_dir", "grep", "search_replace", "run_tests"],
+  "complete": ["read_file", "list_dir", "grep", "search_tool", "search_replace", "run_tests"],
   "incomplete": [
     { "tool": "ask_user_question", "reason": "无交互式用户会话" }
   ],

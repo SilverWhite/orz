@@ -1,0 +1,19 @@
+{
+  "probe_scope": "main_agent_work_tools",
+  "probe_timestamp": "2026-08-06T00:00:00Z",
+  "complete": [
+    "read_file",
+    "list_dir",
+    "grep",
+    "search_tool",
+    "search_replace",
+    "run_tests"
+  ],
+  "incomplete": [
+    {
+      "tool": "ask_user_question",
+      "reason": "无交互式用户会话"
+    }
+  ],
+  "gate_decision": "pass"
+}

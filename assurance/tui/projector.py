@@ -216,18 +216,21 @@ def _on_ipg(app: Any, event: TuiEvent) -> list[str]:
 @_register(TuiEventKind.TOOL_AVAILABILITY_CHECK)
 def _on_tool_availability(app: Any, event: TuiEvent) -> list[str]:
     """Handle tool_availability_check events — now with typed fields."""
-    avail = getattr(event, "available", 0)
-    unavail = getattr(event, "unavailable", 0)
+    complete = getattr(event, "available", 0)
+    incomplete = getattr(event, "unavailable", 0)
     unprobed = getattr(event, "unprobed", 0)
     degraded = getattr(event, "degraded", 0)
-    parts = [f"{avail} avail"]
-    if unavail:
-        parts.append(f"{unavail} unavail")
+    # FUS-TOOL-PROBE (2026-08-13): neutral wording consistent with the Rust
+    # TUI — 机械链路完整/不完整, never availability judgment words.
+    total = complete + incomplete
+    parts = [f"工具探针: {complete}/{total} 链路完整"]
+    if incomplete:
+        parts.append(f"{incomplete} 不完整")
     if unprobed:
-        parts.append(f"{unprobed} unprobed")
+        parts.append(f"{unprobed} 未完成链路检查")
     if degraded:
-        parts.append(f"{degraded} degraded")
-    text = f"Tools: {', '.join(parts)}"
+        parts.append(f"{degraded} 链路检查不完整")
+    text = "；".join(parts)
     app.explorer_pane.add_event_entry("Decisions", text)
     return [text]
 

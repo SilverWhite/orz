@@ -475,7 +475,7 @@ class SyntheticBadJournalTests(unittest.TestCase):
     def test_payload_schema_violation(self) -> None:
         for event in self.events:
             if event["event_type"] == "tool_availability_check":
-                event["payload"]["available"] = "not-an-array"
+                event["payload"]["complete"] = "not-an-array"
         self.assert_has_error(dump_journal(self.events), "payload schema violation at event 1")
 
     def test_envelope_violation(self) -> None:

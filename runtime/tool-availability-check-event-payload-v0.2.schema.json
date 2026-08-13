@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-availability-check-event-payload-v0.2.schema.json",
+  "title": "Tool availability check runtime event payload (Rust track, v0.2 probe shape)",
+  "description": "FUS-TOOL-PROBE (2026-08-13): Face B per-tool mechanical probe snapshot. The old available/unavailable/degraded/unprobed catalog shape is removed on the v0.2 track (v0.1 keeps it for replay-only). complete/incomplete cover Face B tools only; reasons are stable neutral statements, never availability judgment words. gate_decision is an internal mechanical field — producers currently emit pass (reserved for future mapping).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "probe_scope",
+    "probe_timestamp",
+    "complete",
+    "incomplete",
+    "gate_decision"
+  ],
+  "properties": {
+    "probe_scope": {
+      "const": "main_agent_work_tools"
+    },
+    "probe_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "complete": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "incomplete": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tool", "reason"],
+        "properties": {
+          "tool": { "type": "string" },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      },
+      "uniqueItems": true
+    },
+    "gate_decision": {
+      "type": "string",
+      "enum": ["pass", "warn", "block", "defer", "not_applicable"]
+    }
+  }
+}

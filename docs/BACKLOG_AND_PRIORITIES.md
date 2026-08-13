@@ -15,14 +15,18 @@
 
 ## P0 — 当前工作集
 
+> 2026-08-13：P0 决策登记——FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH 经用户裁决放行实施；执行顺序 P0-A（工具探针）优先，P0-B（检索机械控制）紧随。
+
 ### 0. 前置收尾（提交前需用户确认）
 
-- 提交当前未提交登记：CLI_PROJECT_INDEX 索引更新、两份设计文档（含优先级标记）、本文件与各指针更新。
+- 已完成（995a384）：提交当前未提交登记——CLI_PROJECT_INDEX 索引更新、两份设计文档（含优先级标记）、本文件与各指针更新。
 
-### 1. FUS-TOOL-PROBE（`pending`）
+### 1. FUS-TOOL-PROBE（`approved`；P0-A，实施中）
 
 - 入口：[设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)。
-- 决策门：用户裁决是否进入实施、ADR-0010 §3.5 修订草案是否采纳。
+- 决策门：2026-08-13 用户已裁决放行实施；ADR-0010 §3.5 修订采纳按批次末第 7 步登记。
+- 进度（2026-08-13）：步骤 1 已完成——面 B 探针模块（orz-loop `tool_probe.rs`：两态中性判定 + 失败兜底 + 12 项单测）；步骤 2 已完成——v0.2 事件升级（新 payload Schema + verifier 交叉校验 + fixture 重生成 + producer 接线 + TUI 消费面适配），13 个真实 journals 重捕并验证；orz-loop/host/tui 测试全绿、仓库门禁 valid。下一步：步骤 3（run_tests 条件声明迁移）。
+- 审查裁定（2026-08-13，子代理三路审查）：步骤 4 列表投影语义定为 `面A + (面B完整集 ∩ registry 声明集) + 面C`（部分会话变体可移除 ask_user_question/search_tool，探针不得声明会话不存在的工具）；探针粒度=工作区根级机械检查、写探针 metadata-grade、交互用户信号=ACP live gateway，均已登记进设计文档。
 - 实施序列：
   1. 面 B 每工具探针实现（路径/权限/策略/runner/交互用户判定）；
   2. `tool_availability_check` Schema/fixture/verifier 升级与 producer 接线；
@@ -32,10 +36,10 @@
   6. 兜底消息中性化改造；
   7. ADR-0010 §3.5 修订裁决与登记。
 
-### 2. FUS-RETRIEVAL-MECH（`pending`）
+### 2. FUS-RETRIEVAL-MECH（`approved`；P0-B）
 
 - 入口：[设计](RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)。
-- 决策门：用户裁决是否进入实施。
+- 决策门：2026-08-13 用户已裁决放行实施。
 - 依赖顺序：1（B-1 闭合）→ 2/3 → 5 → 4/6。
   1. B-1 闭合：web_search citations 结构化透传 loop；
   2. web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
@@ -95,8 +99,12 @@
 - DC 硬信号 4/6：`same_module_no_evidence` / `key_surface_unexamined` 接线（建议并入 P0/检索机械控制批次）。
 - V11-IMPL-003：Global Review receipt 与真正审查结论严格分离——复核并登记闭合或转 gap。
 - V11-IMPL-007：Toolbar/run-history 数据源统一到 ORZ session ownership、旧路径残留检查——复核并登记闭合或转 gap。
+- orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`，顺序/负载相关、与本批无关）——复核并登记闭合或转 gap。
 - 工作区收尾：见 P0 前置收尾。
 
 ## 变更记录
 
+- 2026-08-13：P0 决策登记——FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH 经用户裁决放行实施（ADR-0010 §3.5 修订按 P0-A 批次末第 7 步登记）；执行顺序裁定：P0-A 工具探针 → P0-B 检索机械控制 → P1 并行审计 → P2 核查收口/裁决/Slice 3/OPS 接线/Slice 4 → P3 收尾。
+- 2026-08-13：P0-A 步骤 1-2 完成登记——面 B 探针模块与 `tool_availability_check` v0.2 事件升级（Schema/verifier/fixture/producer/TUI），真实 journals 重捕；批次下一步为步骤 3。
+- 2026-08-13：审查处理登记——修复 Rust TUI incomplete 计数缺陷、README/设计示例一致性、TUI 状态段语义与判定词中性化、gate_decision 预留注释；登记步骤 4 交集语义与 orz-host 既有 flaky。
 - 2026-08-13：建立统一待办；P0-P3 优先级按全量回查结果登记；设计/审计文档待办小节改为指针。

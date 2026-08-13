@@ -137,6 +137,13 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "control-ticket-rejected",
         RUNTIME / "control-ticket-rejected-event-payload-v0.2.schema.json",
     ),
+    # FUS-TOOL-PROBE (2026-08-13): tool_availability_check moves to the
+    # two-state Face B probe shape on the v0.2 track (old
+    # available/unavailable/degraded/unprobed shape stays v0.1 replay-only).
+    "tool_availability_check": (
+        "tool-availability-check",
+        RUNTIME / "tool-availability-check-event-payload-v0.2.schema.json",
+    ),
 }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -857,6 +864,72 @@ def _verify_v02_control_tickets(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+_FACE_B_TOOLS = frozenset(
+    {
+        "read_file",
+        "list_dir",
+        "grep",
+        "search_tool",
+        "search_replace",
+        "run_tests",
+        "ask_user_question",
+    }
+)
+
+_JUDGMENT_WORD_TOKENS = (
+    "可用",
+    "不可用",
+    "成功",
+    "失败",
+    "available",
+    "unavailable",
+    "success",
+    "failure",
+)
+
+
+def _verify_v02_tool_availability_probe(events: list[dict[str, Any]]) -> list[str]:
+    """FUS-TOOL-PROBE (2026-08-13, design §3/§7) v0.2 cross-checks:
+
+    - `complete`/`incomplete` cover exactly the Face B tools, each exactly
+      once (two-state partition — no tool may appear on both sides, no
+      Face B tool may be absent);
+    - incomplete reasons are stable neutral statements — never availability
+      judgment words (可用/不可用/成功/失败/available/...).
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "tool_availability_check":
+            continue
+        payload = event["payload"]
+        complete = set(payload.get("complete", []))
+        incomplete = {
+            item["tool"]: item.get("reason", "")
+            for item in payload.get("incomplete", [])
+        }
+        overlap = complete & set(incomplete)
+        if overlap:
+            errors.append(
+                f"event {index}: tool(s) in both complete and incomplete: "
+                f"{sorted(overlap)}"
+            )
+        union = complete | set(incomplete)
+        if union != _FACE_B_TOOLS:
+            errors.append(
+                f"event {index}: probe partition must cover exactly Face B; "
+                f"missing={sorted(_FACE_B_TOOLS - union)}, "
+                f"extra={sorted(union - _FACE_B_TOOLS)}"
+            )
+        for tool, reason in sorted(incomplete.items()):
+            lowered = reason.lower()
+            if any(token in lowered for token in _JUDGMENT_WORD_TOKENS):
+                errors.append(
+                    f"event {index}: incomplete reason for {tool!r} uses an "
+                    f"availability judgment word: {reason!r}"
+                )
+    return errors
+
+
 def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §4.4 mechanical lifecycle facts on the v0.2 track:
 
@@ -1321,6 +1394,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_source_weighting(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))
+        errors.extend(_verify_v02_tool_availability_probe(events))
     return errors
 
 

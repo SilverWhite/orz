@@ -9,13 +9,22 @@
   "previous_event_sha256": null,
   "payload_schema": "run-event-v0.2.schema.json",
   "payload": {
-    "available": [
+    "probe_scope": "main_agent_work_tools",
+    "probe_timestamp": "2026-08-06T00:00:00Z",
+    "complete": [
       "read_file",
-      "grep"
+      "list_dir",
+      "grep",
+      "search_tool",
+      "search_replace",
+      "run_tests"
     ],
-    "unavailable": [],
-    "degraded": [],
-    "unprobed": [],
+    "incomplete": [
+      {
+        "tool": "ask_user_question",
+        "reason": "无交互式用户会话"
+      }
+    ],
     "gate_decision": "pass"
   },
   "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",

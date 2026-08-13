@@ -2172,6 +2172,27 @@ class BridgeEventFactoryTests(unittest.TestCase):
         self.assertEqual(evt.unprobed, 2)
         self.assertEqual(evt.degraded, 0)
 
+    def test_build_tool_availability_event_v02_probe_shape(self) -> None:
+        from assurance.tui.bridge import build_event_from_jsonl_line
+        from assurance.tui.events import ToolAvailabilityEvent
+        line = {
+            "event_type": "tool_availability_check",
+            "payload": {
+                "probe_scope": "main_agent_work_tools",
+                "complete": ["read_file", "grep"],
+                "incomplete": [
+                    {"tool": "ask_user_question", "reason": "无交互式用户会话"}
+                ],
+                "gate_decision": "pass",
+            },
+            "timestamp": "2026-08-13T00:00:00Z",
+        }
+        evt = build_event_from_jsonl_line(line)
+        self.assertIsInstance(evt, ToolAvailabilityEvent)
+        self.assertEqual(evt.available, 2)
+        self.assertEqual(evt.unavailable, 1)
+        self.assertEqual(evt.decision, "pass")
+
     def test_build_orientation_event(self) -> None:
         from assurance.tui.bridge import build_event_from_jsonl_line
         from assurance.tui.events import OrientationCheckpointEvent
@@ -2395,8 +2416,8 @@ class ProjectorTypedGateHandlerTests(unittest.TestCase):
         evt = ToolAvailabilityEvent(available=3, unavailable=1)
         msgs = apply_event(self.app, evt)
         self.assertGreater(len(msgs), 0)
-        self.assertIn("3 avail", msgs[0])
-        self.assertIn("1 unavail", msgs[0])
+        self.assertIn("工具探针: 3/4 链路完整", msgs[0])
+        self.assertIn("1 不完整", msgs[0])
 
     def test_orientation_handler_uses_checkpoint_id(self) -> None:
         from assurance.tui.projector import apply_event
