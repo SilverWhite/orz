@@ -103,11 +103,11 @@
   orz-tui 178 / orz-bin 42 通过，Python runtime 239 / assurance 1621 通过，
   仓库门禁 valid；既有 13 份 journals 重捕无漂移。审计：
   [GAP-RETRIEVAL-MECH 步骤 5 实施审计](audits/GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT_2026-08-14.md)。
-- 依赖顺序：1（B-1 闭合）→ 2/3 → 5 → 4/6。
+- 依赖顺序：1（B-1 闭合）→ 2/3/5 → 4（闭合）→ 6。
   1. （已完成）B-1 闭合：web_search citations 结构化透传 loop；
   2. （已完成）web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
   3. （已完成）机械预筛模块（候选池净化 + 排序标签）与结构化结果扩展；
-  4. browser_read 范围/模式参数（全文/预览/关键词提取）工具能力扩展；
+  4. （已完成）browser_read 范围/模式参数（全文/预览/关键词提取）工具能力扩展；
   5. （已完成）输出级引用校验器与交付边界接线；
   6. 提示词相应缩短（计数/预筛/引用规则）与测试更新。
 - 建议并入：DC 剩余两信号（`same_module_no_evidence` / `key_surface_unexamined`）接线。
@@ -246,6 +246,18 @@
   任务——主车道模型可见投影移除 browser_read，子代理投影从 host registry
   恢复（实现 + 单测，设计 §1.3 注更新）；步骤 4（browser_read 范围/模式参数
   扩展）按此实施。
+- 2026-08-14：P0-B 步骤 4 闭合登记——browser_read 范围/模式参数扩展与第二段
+  计数域复用实施完成（mode=full/preview/keywords + keywords 数组契约，
+  preview 4K / keywords 16/64/3/160/12K 常量；browser_read 与 web_fetch 共用
+  同一 activation 计数域与 cap，拒绝码 browser_read_candidate_*，
+  tool_completed 计数字段覆盖 browser_read；证据按 mode 降级；Schema/
+  verifier 先行，`_verify_v02_candidate_count` 覆盖两家族；conformance 14
+  场景重捕，local-browser-read 携带计数字段；ACAF e2e browser_read 场景
+  迁移到子代理车道，主车道直呼 fail-closed）；orz-host 205 / orz-loop 280 /
+  orz-assurance 151 / orz-tui 178 / orz-bin 42、Python runtime 244 /
+  assurance 1607+14 skipped、仓库门禁 valid；批次下一步为步骤 6（提示词
+  相应缩短与测试更新）。详见
+  [GAP-RETRIEVAL-MECH 步骤 4 实施审计](audits/GAP_RETRIEVAL_MECH_STEP4_BROWSER_READ_MODES_IMPL_AUDIT_2026-08-14.md)。
 - 2026-08-14：ORZ-CACHE-CONTEXT-COST 登记（P1）——缓存与上下文成本收敛三项
   （请求 header 留痕、探针准确性、单轮注入预算 + 策略化读取），ADR-0010 v1.9、
   探针设计 §11 同步；否决方向一并登记（per-window 探测、预热轮、工具层后置渲染、

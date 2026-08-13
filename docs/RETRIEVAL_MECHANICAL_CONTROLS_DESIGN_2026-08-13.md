@@ -1,6 +1,7 @@
 # 检索侧机械控制设计（2026-08-13，v0.1 定稿）
 
-> 状态：`approved`（设计已冻结；用户已裁决放行实施；B-1 已闭合，批次实施中）。
+> 状态：`approved`（设计已冻结；用户已裁决放行实施；步骤 1-5 已闭合，
+> 剩余步骤 6 实施中）。
 > 范围：设计定稿；B-1 已实施闭合，批次剩余步骤按 BACKLOG P0-B 执行。
 > 关联：ADR-0010 §3.7 条 12（来源加权）/ §3.7.9（引用纪律）/ §3.7.1（mode
 > 门禁）；[`TOOL_AVAILABILITY_PROBE_DESIGN`](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)。
@@ -35,15 +36,29 @@
 ### 1.3 两段式（全量 vs 关键词）
 
 - local_browser：页面已打开，门禁计完数后模型可决定全文读取或关键词提取；
-  需要 `browser_read` 支持范围/模式参数（全文/预览/关键词提取）——属后续工具
-  能力扩展，不在本轮；
+  需要 `browser_read` 支持范围/模式参数（全文/预览/关键词提取）；
+  > 契约（2026-08-14 步骤 4 定稿）：`mode` 可选枚举
+  > `full`/`preview`/`keywords`，默认 `full`；`keywords` 为字符串数组
+  > （仅 mode=keywords 必需，1..16 个非空、去重、每词 ≤64 字符）。
+  > `full` 保持既有 ≤100K 字符读取；`preview` 返回前 4_000 字符
+  > （`PREVIEW_READ_CHARS`，短页未截断时证据按全文处理，截断打机械页脚）；
+  > `keywords` 机械提取命中上下文摘录（纯 ASCII 文本/词大小写不敏感、
+  > 其余精确子串；每词 ≤3 段、半径 160 字符、总输出 ≤12_000 字符，
+  > 恒 `truncated=true` 并打页脚），证据恒为 `partial_text_observed`。
   > 注（2026-08-14 用户裁决）：`browser_read` 是 host 路由工具（route=Host、
   > 不进 external dispatch 车道），但主 Agent 不执行检索任务——主车道模型
   > 可见投影移除 `browser_read`，local_browser 读取只由检索子代理执行；第二段
   > 计数域直接复用 web_fetch 的 per-activation 语义（activation 累计、去重
   > URL 计数、continue 重入不重置、activation 关闭清零），随子代理循环传参并
-  > 回写激活侧车。步骤 4 按此实施（browser_read 范围/模式参数扩展），本裁决
-  > 不影响 web_fetch 门禁。
+  > 回写激活侧车。步骤 4 按此实施（browser_read 范围/模式参数扩展 + 同一计数
+  > 域门禁、拒绝码 `browser_read_candidate_*`、`tool_completed` 计数字段覆盖
+  > browser_read），本裁决不影响 web_fetch 门禁。
+  > 步骤 4 已闭合（2026-08-14）：browser_read 范围/模式参数与第二段计数域
+  > 复用实施完成（契约见上；拒绝码 `browser_read_candidate_*`、
+  > `tool_completed` 计数字段覆盖 browser_read、证据按 mode 降级、
+  > Schema/verifier/fixtures 同步、ACAF e2e browser_read 场景迁移到子代理
+  > 车道）。实施审计见
+  > `docs/audits/GAP_RETRIEVAL_MECH_STEP4_BROWSER_READ_MODES_IMPL_AUDIT_2026-08-14.md`。
 - framework_fallback：无第二段（local_browser 专属）；web_fetch 的计数门禁
   仍适用，但只有"抓或不抓"。
 

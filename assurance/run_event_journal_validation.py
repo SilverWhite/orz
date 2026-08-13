@@ -1077,21 +1077,29 @@ def _is_web_fetch_tool(name: str) -> bool:
     return name == "web_fetch" or name.startswith("web_fetch_")
 
 
-def _verify_v02_web_fetch_candidate_count(events: list[dict[str, Any]]) -> list[str]:
-    """FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): web_fetch candidate
-    count fields on tool_completed events:
+def _is_candidate_counted_tool(name: str) -> bool:
+    """FUS-RETRIEVAL-MECH P0-B step 2/4: the candidate-counted family —
+    web_fetch variants plus `browser_read` (local_browser second segment
+    shares the SAME per-activation count domain; mirrors the Rust relay's
+    `is_candidate_counted_tool`)."""
+    return _is_web_fetch_tool(name) or name == "browser_read"
 
-    - candidate_count/candidate_cap appear only on web_fetch-family tools
+
+def _verify_v02_candidate_count(events: list[dict[str, Any]]) -> list[str]:
+    """FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): candidate count
+    fields on tool_completed events (web_fetch family + browser_read):
+
+    - candidate_count/candidate_cap appear only on candidate-counted tools
       and only together;
     - 0 <= candidate_count <= candidate_cap, candidate_cap >= 1;
-    - a non-error LANE web_fetch completion (no `target` — the tool actually
-      executed) must carry both fields; the dispatch wrapper completion
-      (`target` present — the parent call answered by the subagent dispatch,
-      not a fetch) must NOT carry them;
+    - a non-error LANE candidate-counted completion (no `target` — the tool
+      actually executed) must carry both fields; the dispatch wrapper
+      completion (`target` present — the parent call answered by the
+      subagent dispatch, not a fetch/read) must NOT carry them;
     - a cap-exceeded rejection carries status=error with
-      error=web_fetch_candidate_cap_exceeded and candidate_count ==
-      candidate_cap (the refusal happens at the cap boundary), and must
-      carry both fields.
+      error={web_fetch|browser_read}_candidate_cap_exceeded and
+      candidate_count == candidate_cap (the refusal happens at the cap
+      boundary), and must carry both fields.
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -1110,23 +1118,26 @@ def _verify_v02_web_fetch_candidate_count(events: list[dict[str, Any]]) -> list[
         if not has_count:
             if (
                 p.get("status") != "error"
-                and _is_web_fetch_tool(tool)
+                and _is_candidate_counted_tool(tool)
                 and p.get("target") is None
             ):
                 errors.append(
-                    f"event {index}: non-error lane web_fetch completion for "
+                    f"event {index}: non-error lane candidate-counted completion for "
                     f"{tool!r} must carry candidate_count/candidate_cap"
                 )
-            elif p.get("error") == "web_fetch_candidate_cap_exceeded":
+            elif p.get("error") in (
+                "web_fetch_candidate_cap_exceeded",
+                "browser_read_candidate_cap_exceeded",
+            ):
                 errors.append(
                     f"event {index}: cap-exceeded refusal must carry "
                     "candidate_count/candidate_cap"
                 )
             continue
-        if not _is_web_fetch_tool(tool):
+        if not _is_candidate_counted_tool(tool):
             errors.append(
-                f"event {index}: tool {tool!r} carries web_fetch candidate "
-                "count fields (web_fetch family only)"
+                f"event {index}: tool {tool!r} carries candidate count "
+                "fields (web_fetch/browser_read family only)"
             )
             continue
         count = p["candidate_count"]
@@ -1144,7 +1155,10 @@ def _verify_v02_web_fetch_candidate_count(events: list[dict[str, Any]]) -> list[
                 f"event {index}: candidate_count {count!r} / candidate_cap "
                 f"{cap!r} out of range — need 0 <= count <= cap, cap >= 1"
             )
-        if p.get("error") == "web_fetch_candidate_cap_exceeded":
+        if p.get("error") in (
+            "web_fetch_candidate_cap_exceeded",
+            "browser_read_candidate_cap_exceeded",
+        ):
             if p.get("status") != "error":
                 errors.append(
                     f"event {index}: cap-exceeded refusal must be status=error"
@@ -1866,7 +1880,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_source_weighting(events))
         errors.extend(_verify_v02_search_candidate_pool(events))
         errors.extend(_verify_v02_candidate_prefilter(events))
-        errors.extend(_verify_v02_web_fetch_candidate_count(events))
+        errors.extend(_verify_v02_candidate_count(events))
         errors.extend(_verify_v02_citation_validation(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))

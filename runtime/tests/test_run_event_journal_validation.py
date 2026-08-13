@@ -3032,9 +3032,9 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
 
 
 class WebFetchCandidateCountTests(unittest.TestCase):
-    """FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): web_fetch candidate
-    count fields on tool_completed events — pairing, range, family and
-    cap-boundary shape (cross-layer verifier)."""
+    """FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): candidate count
+    fields on tool_completed events (web_fetch family + browser_read) —
+    pairing, range, family and cap-boundary shape (cross-layer verifier)."""
 
     def _event(self, payload: dict) -> dict:
         return _mk_v02_event("tool_completed", payload, 0, None)
@@ -3077,7 +3077,7 @@ class WebFetchCandidateCountTests(unittest.TestCase):
         errors = validate_journal_text(_v02_journal([event]))
         self.assertIn("travel together", " | ".join(errors))
 
-    def test_fields_only_on_web_fetch_family(self) -> None:
+    def test_fields_only_on_candidate_counted_family(self) -> None:
         event = self._event(
             {
                 "tool": "web_search",
@@ -3088,7 +3088,7 @@ class WebFetchCandidateCountTests(unittest.TestCase):
             }
         )
         errors = validate_journal_text(_v02_journal([event]))
-        self.assertIn("web_fetch family only", " | ".join(errors))
+        self.assertIn("web_fetch/browser_read family only", " | ".join(errors))
 
     def test_count_over_cap_rejected(self) -> None:
         event = self._event(
@@ -3158,6 +3158,71 @@ class WebFetchCandidateCountTests(unittest.TestCase):
                 "target": "external_retrieval",
                 "status": "error",
                 "error": "web_fetch_candidate_cap_exceeded",
+                "candidate_count": 7,
+                "candidate_cap": 8,
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("must equal candidate_cap", " | ".join(errors))
+
+    def test_valid_browser_read_success_carries_count_and_cap(self) -> None:
+        event = self._event(
+            {
+                "tool": "browser_read",
+                "call_id": "call-b1",
+                "exit_code": 0,
+                "candidate_count": 1,
+                "candidate_cap": 8,
+            }
+        )
+        self.assertEqual(validate_journal_text(_v02_journal([event])), [])
+
+    def test_browser_read_non_error_lane_must_carry_fields(self) -> None:
+        event = self._event(
+            {
+                "tool": "browser_read",
+                "call_id": "call-b1",
+                "exit_code": 0,
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("must carry candidate_count/candidate_cap", " | ".join(errors))
+
+    def test_valid_browser_read_cap_exceeded_refusal_at_boundary(self) -> None:
+        event = self._event(
+            {
+                "tool": "browser_read",
+                "call_id": "call-b9",
+                "target": "external_retrieval",
+                "status": "error",
+                "error": "browser_read_candidate_cap_exceeded",
+                "candidate_count": 8,
+                "candidate_cap": 8,
+            }
+        )
+        self.assertEqual(validate_journal_text(_v02_journal([event])), [])
+
+    def test_browser_read_cap_exceeded_without_count_fields_rejected(self) -> None:
+        event = self._event(
+            {
+                "tool": "browser_read",
+                "call_id": "call-b9",
+                "target": "external_retrieval",
+                "status": "error",
+                "error": "browser_read_candidate_cap_exceeded",
+            }
+        )
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("cap-exceeded refusal must carry", " | ".join(errors))
+
+    def test_browser_read_cap_exceeded_count_must_equal_cap(self) -> None:
+        event = self._event(
+            {
+                "tool": "browser_read",
+                "call_id": "call-b9",
+                "target": "external_retrieval",
+                "status": "error",
+                "error": "browser_read_candidate_cap_exceeded",
                 "candidate_count": 7,
                 "candidate_cap": 8,
             }
