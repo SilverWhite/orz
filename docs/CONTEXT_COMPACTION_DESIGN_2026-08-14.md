@@ -6,6 +6,12 @@
 > 取代范围：本文推翻并取代 2026-08-08「LLM 摘要否决（零模型摘要）」与「节奏压缩仅最终答案间隙」
 > 裁决；存档材料 `存档/docs/implementation-history/INQUIRY_FIX_AND_BLACKBOARD_PARTITION_2026-08-08.md`
 > 保持 provenance，不随本设计回填。
+>
+> v1.15 注（2026-08-14 用户裁决，实施未开始）：「黑板 edit 窗口随压缩滚动（用后擦净）」
+> 机制废止——黑板生命周期改按 plan epoch 轮换（见
+> `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md` / ADR-0010 §14.15）。本文 v1.14 相关小节
+> 保留为已实施状态记录，正文修订随实施登记；当前代码行为仍为 v1.14（压缩成功后清空黑板
+> edit 窗口）。
 
 ## 1. 设计目标与边界
 
@@ -49,7 +55,9 @@
     要求模型先落盘。
 - 零模型调用：台账行由 controller 从结构化 tool 事件确定性生成，不调用摘要模型。
 - 窗口滚动（v1.14 审查修复）：压缩成功后清空黑板 edit 窗口（用后擦净）；路径槽因此天然是
-  "本窗口增量"，全量窗口路径由摘要存档承载，黑板上不再累积历史编辑。
+  "本窗口增量"，全量窗口路径由摘要存档承载，黑板上不再累积历史编辑（v1.15 已废止：黑板
+  改按 plan epoch 轮换，见 `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`；本条保留为
+  v1.14 实施记录）。
 
 ## 4. 第二层：五段模板摘要（LLM 调用，受冷却约束）
 
@@ -64,6 +72,8 @@
 | 后续衔接 | 模型生成（derived_unverified） | 3K |
 | 合计 | — | 17K |
 
+- v1.15 注：路径槽语义随黑板解耦改为「本 plan epoch 增量」；Top-40 条 + 5K 字符双上限不变，
+  溢出指针指向当前 plan epoch 快照（见 `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md` §5）。
 - 不设「用户原问题」槽：最近用户消息保留在最近尾；目的槽取自当前黑板，避免旧语义惯性/混淆
   （用户纠错后新摘要天然反映新目的）。
 - 摘要链：旧摘要只进审计存档（`.gsa/compaction/`），不继承语义；每次新摘要是「当前黑板目的 +
@@ -72,7 +82,8 @@
 ### 4.2 校验与失败处理
 
 - 机械校验：五槽齐全、每槽 ≤ 上限、合计 ≤17K 字符、路径槽条目来自当前黑板编辑窗口（压缩后窗口
-  滚动，天然为本窗口增量）、digest 绑定、derived_unverified 标记。
+  滚动，天然为本窗口增量；v1.15 起改为本 plan epoch 增量，压缩不再滚动黑板，见
+  `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`）、digest 绑定、derived_unverified 标记。
 - LLM 槽超限/缺失/退化：拒绝并重做 ≤3 次；退化判定为 ORZ 自定 300 等效字符门（CJK 表意字一字
   折算 2 等效字符，替代 orz-compaction 英文向 500 字符门，v1.14 审查修复）；单次摘要调用设
   120s 专用超时。
@@ -98,6 +109,8 @@
 - 每个压缩点后注入一个 marker（复用 `[前文上下文已压缩]` 前缀），内容=被压轮次范围、动作台账
   摘要、涉及文件/证据路径、摘要存档位置（`.gsa/compaction/<id>.md`）与 digest、`blackboard_read`
   分区范围。
+- v1.15 起 marker 携带 `plan_epoch`，随恢复过滤保留（见
+  `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md` §5）。
 - 多次压缩只保留最新 marker（旧 marker 随内容进入存档），防止 marker 累积。
 - marker 与白名单块必须通过恢复过滤保留（D3-1 前置）；marker 不进停滞守卫 ngram
   （既有 `is_injected_block_text` 语义保留）。
@@ -153,7 +166,9 @@
 - S5：审查修复（2026-08-14 用户裁决）——守卫失败重试/强制压缩 + `guard_failed`、会话结束压缩
   治本（`session_end`）、存档写失败显式重试报告（`archive_write_failed`）、退化守卫 300 等效
   字符 + 中文折算、黑板 edit 窗口滚动、冷却 3→2 模型轮、120s 摘要超时、路径槽 Top-40 双上限、
-  Schema/verifier/fixtures 扩展——**已闭合**。
+  Schema/verifier/fixtures 扩展——**已闭合**（v1.15 注：其中「黑板 edit 窗口滚动」已废止，
+  黑板按 plan epoch 轮换，见 `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`；本条保留为
+  已闭合历史记录）。
 - S6：二次复查处理（2026-08-14，用户要求处理复查全部问题）——§6/§7 与 ADR 口径对齐
   （session_end 160K 阈值补写、复用边界内联化）、schema/代码注释冷却残留修正、终止态 marker
   占位 digest 改显式"（未生成）"、fixtures 生成器回写对齐、chars/2 中文低估登记 P1 校准——
@@ -168,4 +183,6 @@
 - marker 与摘要存档的 retention——**已实施**：`.gsa/compaction/` 纳入既有 7 天
   retention 清扫（rebuildable/audit → sweepable）。
 - 路径槽 Top-N——**已定案并修订（v1.14 审查修复）**：N=40、按黑板编辑插入序（时间序）；
-  溢出行指向本次摘要存档（黑板 edit 窗口随压缩滚动，不再承担累积查询）。
+  溢出行指向本次摘要存档（黑板 edit 窗口随压缩滚动，不再承担累积查询；v1.15 已废止该机制，
+  改为本 plan epoch 增量 + 溢出指向 epoch 快照，见
+  `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`）。

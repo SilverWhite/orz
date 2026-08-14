@@ -27,7 +27,7 @@ ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构
 | Windows incident/case evidence | `pending` | 目录已建立，首批结构化证据尚未闭环 |
 | Source quality weighting | `implemented` | 机械三档判定器 + 机器可读种子名单 + 模型加权标注已接线（Schema 先行），见索引 GAP-SOURCE-WEIGHTING-IMPL 与[实施审计](docs/audits/GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md) |
 | Encoding gate | `implemented` | 机械编码门控已闭合（固定解码链 + `tool_completed.output_encoding`，[实施审计](docs/audits/GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13.md)），见索引 GAP-ENCODING-GATE |
-| Context compaction | `implemented` | P0-D 压缩机制 S1-S6 已闭合（恢复前置、动作台账坍缩、五段模板摘要、守卫强制报告、会话结束压缩、黑板窗口滚动与复查对齐；ADR-0010 v1.14），见索引 FUS-COMPACTION-REDESIGN 与[实施审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) |
+| Context compaction | `implemented` | P0-D 压缩机制 S1-S6 已闭合（恢复前置、动作台账坍缩、五段模板摘要、守卫强制报告、会话结束压缩、黑板窗口滚动与复查对齐；ADR-0010 v1.14）；v1.15 起「黑板窗口滚动」废止，黑板改按 plan epoch 轮换（实施未开始，见索引 FUS-BLACKBOARD-PLAN-EPOCH），见索引 FUS-COMPACTION-REDESIGN 与[实施审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) |
 
 实现状态不能用 Phase 完成、测试全绿或单次评测结果替代。当前差距见 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距) 和 [`ADR-0010 冻结审计`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
 

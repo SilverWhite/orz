@@ -170,6 +170,8 @@
   `.gsa/compaction/` 存档 + 7 天 retention、TUI 投影、守卫强制报告、会话结束压缩、
   存档写失败显式报告、黑板窗口滚动）；orz-loop 305 / orz-host 208 / orz-tui 178 通过，
   工作区编译 exit 0，Python 事件校验 171 通过，仓库门禁 valid。
+- v1.15 注（2026-08-14 用户裁决，实施未开始）：其中「黑板 edit 窗口随压缩滚动」机制
+  已废止，黑板生命周期改按 plan epoch 轮换（见 6e）；压缩机制其余部分不变。
 
 ## P1 — 可并行审计 / 证据
 
@@ -228,6 +230,22 @@
   [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [TODO](../TODO.md)。
 
+### 6e. ORZ-BLACKBOARD-PLAN-EPOCH（`approved`；P1，2026-08-14 登记）
+
+- 定位：黑板生命周期按 plan epoch 轮换，与压缩生命周期解耦——plan 区为单写者复写区
+  （`plan_id`/`plan_epoch`）；仅新 plan epoch 批准触发原子轮换（归档旧 epoch 快照 →
+  清 edits/tool_actions/exec 工作区并复写 plan → 写新 plan）；gate_log、白名单与
+  检索分区不清；压缩不再清黑板（废止 v1.14「黑板 edit 窗口随压缩滚动」）；路径槽=
+  本 epoch 增量（Top-40 + 5K + 指针）；marker 带 `plan_epoch`；`blackboard_read`
+  跨 epoch 走归档。
+- 决策依据：长任务压缩频繁，黑板随压缩擦除会破坏任务工作状态并动摇中立问询的
+  task_position/计划锚点（2026-08-14 用户裁决）。
+- 实施前置：plan 批准事件/plan_epoch 身份接线（当前 with_plan 仅构造时一次）；
+  ADR-0010 §3.6 正文修订待随实施登记。
+- 入口：[设计](BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md)；
+  [ADR-0010 §14.15](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
+  [TODO](../TODO.md)。
+
 ## P2 — 生产化决策门
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
@@ -278,6 +296,12 @@
 
 ## 变更记录
 
+- 2026-08-14：黑板擦除机制重设计登记（用户裁决）——ADR-0010 v1.15（§14.15 补写）、
+  新设计文档 `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`、压缩设计 v1.15 注记、
+  P1 6e 登记；废止「压缩成功后清空黑板 edit 窗口」机制（设计层面，实施未开始）；
+  黑板按 plan epoch 轮换（归档/清工作区/复写 plan 原子提交；gate_log/白名单/检索分区
+  豁免）；路径槽=本 epoch 增量、marker 带 plan_epoch、blackboard_read 跨 epoch 走归档；
+  中立问询/DC 锚点跨压缩稳定。
 - 2026-08-14：P0-D 二次复查处理登记（用户要求处理复查全部问题）——设计投影 §7
   复用边界对齐（orz-compaction 500 字符门表述移除、语义等价内联）、ADR §3.6/§14.14
   补写 session_end 160K 触发阈值、代码注释与 schema 冷却残留修正、终止态 marker

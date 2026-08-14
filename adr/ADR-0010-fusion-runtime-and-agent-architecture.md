@@ -1218,3 +1218,29 @@ Schema 与机械证据：
       （P1 6d）实施前置校准项。
    来源：P0-D 二次全面复查结论与用户处理指示（2026-08-14）；实施审计
    `docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md` §8。
+
+### 14.15 v1.15 补写裁决索引（2026-08-14）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代既往条款（实施前旧行为
+仍为当前代码状态；ADR §3.6 正文修订待随实施登记）。
+
+1. **黑板擦除机制重设计（2026-08-14，用户裁决）**：
+   ① 解耦：黑板生命周期与压缩生命周期分离——压缩不再清空/滚动黑板；「压缩成功后清空
+      blackboard edit 窗口（用后擦净）」机制废止（取代 §14.14 条目 1 ⑤ 的机制面）。
+   ② 轮换触发：黑板按 plan epoch 轮换——plan 区为单写者复写区，每个已批准计划携带
+      `plan_id`/`plan_epoch`；只有新 plan epoch 批准触发轮换；同 epoch 修订不清黑板；
+      不按 plan 文本变化、不按当前任务完成判定。
+   ③ 轮换范围：清 edits/tool_actions/exec 工作记录并复写 plan（含 analysis/decisions/
+      auth_grants）；保留 gate_log、白名单与 internal/external retrieval 分区（检索
+      分区继续按 activation close/continue 生命周期管理）。
+   ④ 原子性与归档：轮换=归档旧 epoch 快照 → 清工作区 → 写新 plan 的单次提交；epoch
+      快照（如 `.gsa/blackboard/epoch-<id>.json`）承载全量路径/动作记录；`blackboard_read`
+      跨 epoch 回查走归档或 epoch 参数。
+   ⑤ 压缩衔接：路径槽语义改为「本 plan epoch 增量」（Top-40 + 5K 双上限，溢出指针指向
+      epoch 快照/摘要存档）；marker 携带 `plan_epoch`；恢复随 sidecar 恢复 epoch 快照。
+   ⑥ 中立问询/DC：同 epoch 压缩不动黑板锚点；轮换在新 epoch 首动作前完成，问询不读
+      半空黑板。
+   ⑦ 实施前置：plan 批准事件/plan_epoch 身份接线（当前 with_plan 仅构造时一次）；
+      ADR §3.6 正文修订待随实施登记；BACKLOG 6e / TODO 登记；实施审计另行出具。
+   来源：2026-08-14 用户裁决（黑板擦除机制重设计讨论）；设计文档
+   `docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`。

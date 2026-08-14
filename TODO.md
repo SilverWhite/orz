@@ -52,7 +52,8 @@
 - [x] S5：审查修复（ADR-0010 v1.14）——守卫失败重试 3 次后强制压缩并 `guard_failed` 报告；
   会话结束自动压缩（`session_end`，marker 固定进 sidecar，恢复治本）；存档写失败显式重试
   ≤3 次并 `archive_write_failed` 报告；退化守卫 300 等效字符（CJK 一字折算 2）；黑板 edit
-  窗口随压缩滚动；冷却 3→2 模型轮；摘要 120s 超时；路径槽 Top-40 双上限；
+  窗口随压缩滚动（v1.15 已废止：改为 plan epoch 轮换，见 P1 ORZ-BLACKBOARD-PLAN-EPOCH）；
+  冷却 3→2 模型轮；摘要 120s 超时；路径槽 Top-40 双上限；
   Schema/verifier/fixtures 扩展与 `$id` 修正。
 - [x] S6：二次复查处理（2026-08-14）——设计投影 §7/§6 与 ADR 口径对齐（session_end 160K
   阈值补写、复用边界内联化）、schema/代码注释冷却残留修正、终止态 marker 占位 digest
@@ -112,6 +113,16 @@
 - [ ] 测试（到达/未到达、usage 缺失兜底、headless 分支、幂等）+ 实施审计 + BACKLOG/TODO/索引状态同步。
 
 入口：[设计](docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6d](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### ORZ-BLACKBOARD-PLAN-EPOCH（`approved`；P1，2026-08-14 登记）
+
+- [ ] S1 plan epoch 身份与批准事件接线：`plan_id`/`plan_epoch` 随 plan 批准事件写入（当前 `with_plan` 仅构造时一次）；区分同 epoch 修订（不清）与新 epoch 批准（轮换）。
+- [ ] S2 原子轮换与归档：归档旧 epoch 快照 → 清 edits/tool_actions/exec 工作区并复写 plan → 写新 plan；gate_log/白名单/检索分区豁免；epoch 快照落盘（如 `.gsa/blackboard/epoch-<id>.json`）。
+- [ ] S3 压缩解耦：移除压缩成功后 `blackboard.edits.clear()`；路径槽=本 epoch 增量（Top-40 + 5K + 指针）；marker 携带 `plan_epoch`；恢复随 sidecar 恢复 epoch 快照。
+- [ ] S4 `blackboard_read` 跨 epoch 回查：live 视图清空后走归档或 `epoch` 参数，保持按分区/时间范围取用契约。
+- [ ] S5 测试与审计：压缩不清板、轮换原子性/范围、跨 epoch 回查、恢复、契约扩展；实施审计 + BACKLOG/TODO/索引状态同步。
+
+入口：[设计](docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) / [ADR-0010 §14.15](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6e](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## P2 — 生产化决策门
 

@@ -171,3 +171,13 @@
 - 验证：orz-loop 305 passed / 3 ignored；orz-host 208 / 4 ignored；orz-tui 178；
   Python runtime 事件校验 157 passed、压缩相关 41 passed；`check_repository.py`
   valid、0 errors；`git diff --check` 干净。
+
+## 9. v1.15 后续修订注记（2026-08-14）
+
+- 本审计 §7 ⑤「黑板窗口滚动（压缩成功后 `blackboard.edits.clear()`）」已由用户裁决废止
+  （设计层面）：黑板生命周期改按 plan epoch 轮换，压缩不再清黑板；实现改造未开始，
+  登记于 [BACKLOG 6e](../BACKLOG_AND_PRIORITIES.md) / [TODO](../../TODO.md)
+  （ORZ-BLACKBOARD-PLAN-EPOCH）。
+- 本文件保持为 v1.14 实施记录；新机制实施审计另行出具。
+- 入口：[黑板 plan epoch 设计](../BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) /
+  [ADR-0010 §14.15](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
