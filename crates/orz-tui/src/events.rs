@@ -209,6 +209,12 @@ pub enum TuiEvent {
         rounds_dropped: u64,
         estimated_tokens_after: u64,
     },
+    // D2-2 (2026-08-14, ADR-0010 v1.10): recovery pre-check truncation.
+    ContextRecoveryTruncated {
+        before_estimate_tokens: u64,
+        rounds_dropped: u64,
+        after_estimate_tokens: u64,
+    },
 
     // ── IP5 snapshot ──
     SnapshotCreated {
@@ -312,6 +318,7 @@ impl TuiEvent {
             TuiEvent::ControlTicketConsumed { .. } => "control_ticket_consumed",
             TuiEvent::ControlTicketRejected { .. } => "control_ticket_rejected",
             TuiEvent::ContextCompressed { .. } => "context_compressed",
+            TuiEvent::ContextRecoveryTruncated { .. } => "context_recovery_truncated",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
             TuiEvent::SnapshotRestored { .. } => "snapshot_restored",
             TuiEvent::ArtifactRegistered { .. } => "artifact_registered",

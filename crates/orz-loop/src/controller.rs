@@ -46,7 +46,7 @@ use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolRegistry, ToolResult};
 use crate::orientation::{AgentRole, OrientationSessionState};
-use crate::prompt::is_injected_block_text;
+use crate::prompt::{is_injected_block_text, is_restore_retained_block};
 use crate::relay::DispatchTarget;
 use crate::tool::ToolDispatcher;
 
@@ -114,33 +114,56 @@ pub const TEXT_DELTA_PACING: std::time::Duration = std::time::Duration::from_mil
 /// 90K compacted target, small enough not to squeeze the kept rounds).
 pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
 
-/// A6 (2026-08-08): explicit context compaction parameters (design §5 A6
-/// 定稿 + §8 C.1 用户裁决).
+/// P0-D (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §2-§6):
+/// context-compaction parameters for the redesigned mechanism — the A6
+/// parameter set (90K target / 20-round cooldown / 250K fallback) is
+/// revoked.
 ///
-/// Rhythm compaction (design §5 A6): trigger when the previous round's
-/// MEASURED prompt tokens exceed `trigger_tokens`, compact toward
-/// `target_tokens`, at least `min_rounds` apart. User decision 2026-08-08:
-/// the rhythm compaction fires ONLY at the "last inter-batch gap" — after
-/// the candidate-answer round (the model's last tool batch is done), just
-/// before the final answer — exactly once, so the run's action sequence is
-/// never interrupted mid-task. `trigger_tokens` 160K (user指示; 150K was
-/// the original design value) and `target_tokens` 90K (user指示: 保留后
-/// 90k 上下文，降低回查压力).
+/// - Template summary (S3): fires at any loop-top gap when the previous
+///   round's MEASURED prompt tokens exceed `trigger_tokens` (160K) with a
+///   ≥`min_rounds` (3) cooldown, or exceed `safety_tokens` (200K fallback)
+///   regardless of cooldown. Reduction guards: removable content ≥
+///   `min_compactable` (5K) and kept ≤ `max_reduction_ratio` (0.6) of
+///   before. The summary output is a five-section template (≤17K chars),
+///   archived under `.gsa/compaction/` with a digest, and the rolling
+///   single marker carries the pointer.
+/// - Mechanical collapse (S2): every completed OLD tool round collapses
+///   into a deterministic action-ledger row in the MODEL-VISIBLE request
+///   (zero model calls, no cooldown, `recent_tail_rounds` kept verbatim);
+///   the persisted conversation keeps the full records.
+/// - Recovery pre-check (D2-2): a restored conversation estimated over
+///   `recovery_trigger_tokens` (200K conservative) is mechanically
+///   truncated toward `recovery_target_tokens` (160K) before the first
+///   request, with the full sidecar copied into the run journal as the
+///   audit copy.
 ///
-/// `safety_tokens` is the window guard (design review D1-1, 2026-08-08):
-/// a long action loop must never approach the provider window before the
-/// final-answer gap arrives. Above `safety_tokens` compaction fires at any
-/// inter-batch gap (loop-top, never mid-batch) regardless of rhythm
-/// conditions — the cost of an extra cache miss is trivially smaller than
-/// a window-overflow run failure. A safety compaction resets the round
-/// counter so a later rhythm compaction judges normally (user decision).
-/// Default 250K sits under the ≥300K window (and under the 384K legal max).
+/// `target_tokens` (legacy A6 90K) is retained only for the pure
+/// `compact_messages` unit surface; the loop no longer uses it.
 #[derive(Debug, Clone, Copy)]
 pub struct ContextCompactConfig {
     pub trigger_tokens: u64,
     pub target_tokens: u64,
     pub min_rounds: u32,
     pub safety_tokens: u64,
+    /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
+    /// a restored conversation is pre-checked before the first request;
+    /// when the ESTIMATE exceeds this conservative threshold (min of the
+    /// 224K effective input budget and the 200K fallback = 200K), old
+    /// whole rounds are mechanically dropped toward `recovery_target_tokens`.
+    pub recovery_trigger_tokens: u64,
+    /// D2-2: recovery truncation target (160K — under the ordinary summary
+    /// trigger, so the first measured round may then drive a template
+    /// summary instead of another raw truncation).
+    pub recovery_target_tokens: u64,
+    /// P0-D S2/S3 (2026-08-14, ADR-0010 v1.10): bounded recent tail kept
+    /// verbatim in the model-visible collapsed view / after a summary.
+    pub recent_tail_rounds: usize,
+    /// P0-D S3: minimum droppable content (tokens) for a template summary
+    /// (reuse of orz-compaction `min_compactable` guard).
+    pub min_compactable: u64,
+    /// P0-D S3: maximum kept/before ratio — the summary must reduce by at
+    /// least 40% (`max_reduction_ratio` 0.6; reuse of orz-compaction).
+    pub max_reduction_ratio: f64,
 }
 
 impl Default for ContextCompactConfig {
@@ -148,8 +171,13 @@ impl Default for ContextCompactConfig {
         Self {
             trigger_tokens: 160_000,
             target_tokens: 90_000,
-            min_rounds: 20,
-            safety_tokens: 250_000,
+            min_rounds: 3,
+            safety_tokens: 200_000,
+            recovery_trigger_tokens: 200_000,
+            recovery_target_tokens: 160_000,
+            recent_tail_rounds: 2,
+            min_compactable: 5_000,
+            max_reduction_ratio: 0.6,
         }
     }
 }
@@ -1350,7 +1378,14 @@ impl ActivationRegistry {
                     conversation: a
                         .conversation
                         .iter()
-                        .filter(|m| !(m.role == Role::User && is_injected_block_text(&m.content)))
+                        // D3-1 (2026-08-14): same restore-retention rule as
+                        // the main lane — marker/whitelist survive, other
+                        // mechanical injected blocks stay filtered.
+                        .filter(|m| {
+                            !(m.role == Role::User
+                                && is_injected_block_text(&m.content)
+                                && !is_restore_retained_block(&m.content))
+                        })
                         .cloned()
                         .collect(),
                 })
@@ -1776,7 +1811,7 @@ pub(crate) struct CompactionStats {
 /// guess: CJK ≈ 2 chars/token, English would be ≈ 4 — over-estimating is
 /// the safe direction; the real next-round usage measurement is what the
 /// trigger uses).
-fn estimate_message_tokens(m: &Message) -> u64 {
+pub(crate) fn estimate_message_tokens(m: &Message) -> u64 {
     let mut chars = m.content.chars().count() as u64;
     if let Some(r) = &m.reasoning_content {
         chars += r.chars().count() as u64;
@@ -1790,7 +1825,7 @@ fn estimate_message_tokens(m: &Message) -> u64 {
     chars / 2
 }
 
-fn estimate_messages_tokens(messages: &[Message]) -> u64 {
+pub(crate) fn estimate_messages_tokens(messages: &[Message]) -> u64 {
     messages.iter().map(estimate_message_tokens).sum()
 }
 
@@ -3295,7 +3330,30 @@ impl AgentLoopController {
             target_tokens,
             min_rounds,
             safety_tokens,
+            ..ContextCompactConfig::default()
         };
+        self
+    }
+
+    /// D2-2 (2026-08-14): override the recovery pre-check threshold/target
+    /// (tests use tiny values; production keeps 200K/160K).
+    pub fn with_recovery_compact(mut self, trigger_tokens: u64, target_tokens: u64) -> Self {
+        self.context_compact.recovery_trigger_tokens = trigger_tokens;
+        self.context_compact.recovery_target_tokens = target_tokens;
+        self
+    }
+
+    /// P0-D S2/S3: override the recent-tail length (tests use small values;
+    /// production keeps 2).
+    pub fn with_recent_tail(mut self, rounds: usize) -> Self {
+        self.context_compact.recent_tail_rounds = rounds;
+        self
+    }
+
+    /// P0-D S3: override the summary reduction guards (tests relax them).
+    pub fn with_summary_guards(mut self, min_compactable: u64, max_reduction_ratio: f64) -> Self {
+        self.context_compact.min_compactable = min_compactable;
+        self.context_compact.max_reduction_ratio = max_reduction_ratio;
         self
     }
 
@@ -3386,34 +3444,6 @@ impl AgentLoopController {
     /// blackboard — total edit records + tool-action counts by category —
     /// the deterministic「摘要」for the compaction marker (zero model calls;
     /// dropped rounds dominate the totals, and the exact per-round
-    /// breakdown is available via blackboard_read). Labeled 累计 because it
-    /// covers the session's blackboard, not just the dropped rounds.
-    pub(crate) fn blackboard_summary_line(&self) -> Option<String> {
-        let bb = self.blackboard.read();
-        if bb.edits.is_empty() && bb.tool_actions.is_empty() {
-            return None;
-        }
-        let mut counts = HashMap::new();
-        for action in &bb.tool_actions {
-            *counts.entry(action.category).or_insert(0usize) += 1;
-        }
-        let mut parts: Vec<String> = Vec::new();
-        if !bb.edits.is_empty() {
-            parts.push(format!("编辑 {} 处", bb.edits.len()));
-        }
-        for (category, label) in [
-            ("read", "读"),
-            ("edit", "编辑"),
-            ("terminal", "终端"),
-            ("retrieval", "检索"),
-        ] {
-            if let Some(&n) = counts.get(category) {
-                parts.push(format!("{label} {n}"));
-            }
-        }
-        Some(parts.join("；"))
-    }
-
     /// A4 (2026-08-08): render the resident 极简状态行 from the blackboard
     /// plan section — `None` when no plan is set (zero injection). The block
     /// is a pure function of plan state, so it is byte-identical across
@@ -4151,6 +4181,66 @@ impl AgentLoopController {
                 m
             }
         };
+        // D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
+        // a restored conversation may exceed the provider window before the
+        // first request. Estimate it and, when over the conservative
+        // recovery threshold (200K), mechanically drop whole OLD rounds
+        // toward the recovery target — preamble/whitelist and the newest
+        // rounds stay verbatim. The FULL sidecar is copied into the run
+        // journal as the audit copy (the sidecar file itself is not modified
+        // here), a recovery marker is inserted, and the truncation is
+        // journaled. Grill turns are excluded (grill keeps its own history
+        // path; conversation and grill are mutually exclusive).
+        if conversation.is_some() {
+            let before_estimate = estimate_messages_tokens(&messages);
+            let cfg = self.context_compact;
+            if before_estimate > cfg.recovery_trigger_tokens {
+                let restored_full = conversation.as_deref().cloned().unwrap_or_default();
+                let stats = compact_messages(&mut messages, cfg.recovery_target_tokens);
+                if stats.rounds_dropped > 0 {
+                    let audit_path = host
+                        .journal()
+                        .journal_dir()
+                        .join("recovery-conversation-full.json");
+                    if let Ok(payload) = serde_json::to_string_pretty(&restored_full) {
+                        if let Some(parent) = audit_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(&audit_path, payload);
+                    }
+                    let marker = crate::prompt::recovery_truncation_marker(
+                        stats.rounds_dropped,
+                        before_estimate,
+                        stats.estimated_tokens_after,
+                        &audit_path.display().to_string(),
+                    );
+                    messages.insert(
+                        stats.marker_index,
+                        Message {
+                            role: Role::User,
+                            content: marker,
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        },
+                    );
+                    writer
+                        .record(
+                            EventType::ContextRecoveryTruncated,
+                            serde_json::json!({
+                                "before_estimate_tokens": before_estimate,
+                                "target_tokens": cfg.recovery_target_tokens,
+                                "after_estimate_tokens": stats.estimated_tokens_after,
+                                "rounds_dropped": stats.rounds_dropped,
+                                "messages_dropped": stats.messages_dropped,
+                                "messages_kept": stats.messages_kept + 1,
+                                "audit_path": audit_path.display().to_string(),
+                            }),
+                        )
+                        .await?;
+                }
+            }
+        }
         // GAP-SUBAGENT-RUNTIME (2026-08-10): the model↔tool loop body is
         // the shared `run_agent_loop` (agent_loop.rs) — the main agent and
         // both retrieval subagents run the SAME loop; the main profile
@@ -4286,7 +4376,15 @@ impl AgentLoopController {
                     .into_iter()
                     .enumerate()
                     .filter(|(i, m)| {
-                        *i == 0 || !(m.role == Role::User && is_injected_block_text(&m.content))
+                        // D3-1 (2026-08-14, ADR-0010 v1.10): the compaction
+                        // marker and the whitelist block are restore-retained
+                        // (a restored prompt must see the compression notice
+                        // and the task facts); every other mechanical
+                        // injected block stays filtered.
+                        *i == 0
+                            || !(m.role == Role::User
+                                && is_injected_block_text(&m.content)
+                                && !is_restore_retained_block(&m.content))
                     })
                     .map(|(_, m)| m)
                     .collect();
@@ -7187,7 +7285,7 @@ impl<'a> EventWriter<'a> {
         Ok(())
     }
 
-    fn seq(&self) -> u64 {
+    pub(crate) fn seq(&self) -> u64 {
         self.seq
     }
 
@@ -7243,6 +7341,12 @@ mod tests {
         }
         fn tools_registry(&self) -> &dyn ToolRegistry {
             &EmptyRegistry
+        }
+        // P0-D S3: summary archives are written under session_cwd/.gsa/ —
+        // point the shared test host at the per-test temp journal dir so
+        // successful summaries never pollute the crate workspace.
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
         }
         // Explicit override — the trait default is fail-closed Deny; the tool
         // round-trip tests need an authorized host.
@@ -9651,21 +9755,22 @@ mod tests {
         assert_eq!(messages.len(), 1);
     }
 
-    /// A6 (2026-08-08, §8 C.1): the RHYTHM compaction fires at the
-    /// final-answer gap — after the candidate-answer round (the model's
-    /// last tool batch is done, the counterexample gate is injected), just
-    /// before the gate reply — old rounds are dropped, the marker is
-    /// inserted, the pairing survives, and the `context_compressed` event
-    /// is journaled. It does NOT fire after tool rounds (mid-task gaps
-    /// stay uncompacted).
+    /// P0-D (2026-08-14, ADR-0010 v1.10): the template summary fires at
+    /// the first eligible loop-top gap after the cooldown when measured
+    /// prompt tokens cross the trigger — INCLUDING mid-task tool gaps (the
+    /// old A6 "final-answer gap only" rhythm is revoked). The summary call
+    /// is a pure chat round; the marker carries the archive pointer, the
+    /// archive is written under `.gsa/compaction/`, and the
+    /// `context_compressed` event carries the v0.2 fields.
     #[tokio::test]
-    async fn context_compact_triggers_on_measured_prompt_tokens() {
+    async fn context_compact_summary_fires_at_mid_task_gap() {
         // Host returning a DIFFERENT fat output per call — so the kept
-        // newest round is distinguishable from the dropped oldest round.
+        // newest rounds are distinguishable from the dropped oldest round.
         struct SeqHost {
             journal: JournalRecorder,
             outputs: Vec<String>,
             calls: AtomicU64,
+            cwd: std::path::PathBuf,
         }
         #[async_trait::async_trait]
         impl LoopHost for SeqHost {
@@ -9674,6 +9779,9 @@ mod tests {
             }
             fn tools_registry(&self) -> &dyn ToolRegistry {
                 &EmptyRegistry
+            }
+            fn session_cwd(&self) -> std::path::PathBuf {
+                self.cwd.clone()
             }
             async fn call_tool(
                 &self,
@@ -9700,13 +9808,12 @@ mod tests {
         }
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
-        // Fat per-round outputs (~600 chars → ~300 estimated tokens each
-        // round) so the compact walk keeps only the newest round under the
-        // target; round-1 output is "A"-fat, round-2 output is "B"-fat.
+        // Fat per-round outputs (~600 chars each) — distinguishable A/B/C.
         let host = SeqHost {
             journal,
-            outputs: vec!["A".repeat(600), "B".repeat(600)],
+            outputs: vec!["A".repeat(600), "B".repeat(600), "C".repeat(600)],
             calls: AtomicU64::new(0),
+            cwd: dir.clone(),
         };
         let tool_call = |id: &str| ScriptedResponse {
             text: None,
@@ -9722,14 +9829,17 @@ mod tests {
         let fake = Arc::new(FakeProvider::new(vec![
             tool_call("call-a1"),
             tool_call("call-a2"),
-            // The candidate-answer round must also report usage — the
-            // rhythm trigger measures the PREVIOUS round's tokens.
-            ScriptedResponse::text("第一轮完成").with_prompt_tokens(5_000),
+            tool_call("call-a3"),
+            // The summary fires after round 3 (cooldown 2 reached) — the
+            // summary call is a pure chat round consuming one script item.
+            summary_response(),
+            ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
             ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller =
-            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 2, 100_000);
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 2, 100_000)
+            .with_summary_guards(1, 1.0);
         controller
             .run_turn(
                 &host,
@@ -9744,62 +9854,96 @@ mod tests {
             .await
             .unwrap();
 
-        // The compaction event is journaled.
+        // The compaction event is journaled with the v0.2 template-summary
+        // fields.
         let compact_events: Vec<serde_json::Value> = events(&dir)
             .into_iter()
             .filter(|e| e.event_type == EventType::ContextCompressed)
             .map(|e| e.payload)
             .collect();
-        assert_eq!(compact_events.len(), 1, "exactly one compaction");
+        assert_eq!(compact_events.len(), 1, "exactly one summary");
         assert_eq!(compact_events[0]["trigger_tokens"], 5_000);
-        // Rounds before the gap: 2 tool rounds + 1 candidate-answer round.
+        // Three completed tool rounds before the summary.
         assert_eq!(compact_events[0]["rounds_since_last_compaction"], 3);
         assert_eq!(compact_events[0]["rounds_dropped"], 1);
+        assert_eq!(compact_events[0]["mode"], "template_summary");
+        assert_eq!(compact_events[0]["reason"], "rhythm");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
+        assert_eq!(compact_events[0]["retained_rounds"], 2);
 
-        // Mid-task gaps are NEVER compacted: the round-3 request (after
-        // tool round 2) carries no marker.
+        // The summary archive was written under .gsa/compaction/.
+        let archive_dir = dir.join(".gsa").join("compaction");
+        let archives: Vec<_> = std::fs::read_dir(&archive_dir)
+            .expect("archive dir exists")
+            .flatten()
+            .collect();
+        assert_eq!(archives.len(), 1, "{archives:?}");
+        let archive_text = std::fs::read_to_string(archives[0].path()).unwrap();
+        assert!(archive_text.contains("# ORZ 会话压缩摘要"), "{archive_text}");
+        assert!(archive_text.contains("derived_unverified"));
+
+        // The MID-TASK gap (request 4, after tool round 3) carries the
+        // marker — the old "final-answer gap only" semantics are revoked.
         let received = fake.received_requests();
-        assert!(received.len() >= 4, "{received:?}");
-        let round3 = &received[2].messages;
+        assert!(received.len() >= 5, "{received:?}");
+        let marker_idx = received
+            .iter()
+            .position(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.starts_with("[前文上下文已压缩"))
+            })
+            .expect("marker request present");
         assert!(
-            round3
-                .iter()
-                .all(|m| !m.content.starts_with("[前文上下文已压缩")),
-            "no mid-task compaction: {round3:?}"
+            marker_idx >= 3,
+            "marker must appear only after the tool rounds (mid-task): \
+             request {marker_idx}"
         );
-
-        // The FINAL-ANSWER gap (round-4 request, after the candidate
-        // answer + gate) reuses the compacted conversation: preamble +
-        // marker + newest round, pairing intact.
-        let round4 = &received[3].messages;
+        assert!(
+            received[..marker_idx]
+                .iter()
+                .all(|r| r.messages.iter().all(|m| !m.content.starts_with(
+                    "[前文上下文已压缩"
+                ))),
+            "no marker before the summary"
+        );
+        let round4 = &received[marker_idx].messages;
         assert!(
             round4
                 .iter()
                 .any(|m| m.content.starts_with("[前文上下文已压缩")),
-            "marker present: {round4:?}"
+            "marker present at the mid-task gap: {round4:?}"
+        );
+        // Oldest round dropped; the newest two kept verbatim (pairing
+        // intact).
+        assert!(
+            round4
+                .iter()
+                .all(|m| !m.content.contains(&"A".repeat(600))),
+            "oldest round's output gone: {round4:?}"
         );
         assert!(
             round4
                 .iter()
-                .any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-a2")),
-            "newest round's tool reply kept: {round4:?}"
+                .any(|m| m.content.contains(&"B".repeat(600)))
+                && round4
+                    .iter()
+                    .any(|m| m.content.contains(&"C".repeat(600))),
+            "newest rounds kept: {round4:?}"
         );
-        assert!(
-            !round4
-                .iter()
-                .any(|m| m.tool_call_id.as_deref() == Some("call-a1")),
-            "oldest round dropped: {round4:?}"
-        );
-        // The dropped round's content is gone; the kept round's content is
-        // still there — the two are distinguishable by their fat payloads.
-        assert!(
-            round4.iter().all(|m| !m.content.contains(&"A".repeat(600))),
-            "oldest round's output gone: {round4:?}"
-        );
-        assert!(
-            round4.iter().any(|m| m.content.contains(&"B".repeat(600))),
-            "newest round's output kept: {round4:?}"
-        );
+        let declared: Vec<&str> = round4
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .flat_map(|m| m.tool_calls.iter().map(|tc| tc.call_id.as_str()))
+            .collect();
+        for m in round4.iter().filter(|m| m.role == Role::Tool) {
+            assert!(
+                m.tool_call_id
+                    .as_deref()
+                    .is_some_and(|id| declared.contains(&id)),
+                "orphan tool result: {m:?}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -9944,6 +10088,7 @@ mod tests {
             journal: JournalRecorder,
             outputs: Vec<String>,
             calls: AtomicU64,
+            cwd: std::path::PathBuf,
         }
         #[async_trait::async_trait]
         impl LoopHost for SeqHost {
@@ -9952,6 +10097,9 @@ mod tests {
             }
             fn tools_registry(&self) -> &dyn ToolRegistry {
                 &EmptyRegistry
+            }
+            fn session_cwd(&self) -> std::path::PathBuf {
+                self.cwd.clone()
             }
             async fn call_tool(
                 &self,
@@ -9982,6 +10130,7 @@ mod tests {
             journal,
             outputs: vec!["A".repeat(600), "B".repeat(600)],
             calls: AtomicU64::new(0),
+            cwd: dir.clone(),
         };
         // Two whitelist writes in the SAME first batch — append semantics
         // in the resident message AND two archive lines (JSONL append).
@@ -10012,12 +10161,16 @@ mod tests {
             whitelist_calls,
             tool_call("call-w2"),
             tool_call("call-w3"),
+            // The template summary fires after the third tool round (the
+            // first loop-top with a droppable round under the tail).
+            summary_response(),
             ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
             ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller =
-            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 1, 100_000);
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 1, 100_000)
+            .with_summary_guards(1, 1.0);
         controller
             .run_turn(
                 &host,
@@ -10084,9 +10237,9 @@ mod tests {
             bb.read().tool_actions
         );
 
-        // Compaction (final-answer gap) — the whitelist SURVIVES as part
-        // of the always-kept preamble, while the OLDEST round (A-fat) is
-        // dropped and the newest (B-fat) stays.
+        // Summary compaction (mid-task gap) — the whitelist SURVIVES as part
+        // of the always-kept preamble, while the FIRST round (the whitelist
+        // tool round itself) is dropped and the newest rounds stay.
         let last = received.last().unwrap();
         let wl_count = last
             .messages
@@ -10103,8 +10256,8 @@ mod tests {
         assert!(
             last.messages
                 .iter()
-                .all(|m| !m.content.contains(&"A".repeat(600))),
-            "oldest round dropped: {:?}",
+                .all(|m| !m.content.contains("whitelist entry #1 written")),
+            "first (whitelist tool) round dropped: {:?}",
             last.messages
         );
         assert!(
@@ -10307,15 +10460,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A6 (2026-08-08, §8 C.1): the rhythm compaction fires ONLY in the
-    /// final-answer gap — over-threshold measurements after tool rounds are
-    /// not compacted (action flow stays smooth); the single gap (candidate
-    /// answer + gate) is the only rhythm point.
+    /// P0-D (2026-08-14): the summary requires a measured trigger — a run
+    /// whose rounds report usage BELOW the trigger never compacts, even at
+    /// the final-answer gap (the old A6 gap-only semantics are gone; the
+    /// measured threshold is the gate).
     #[tokio::test]
-    async fn context_compact_rhythm_gap_is_the_only_rhythm_point() {
+    async fn context_compact_requires_measured_trigger() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
-        // Fat tool output — so the compact walk has droppable rounds.
         let host = TestHost {
             journal,
             tool_result: Some(ToolResult {
@@ -10334,23 +10486,24 @@ mod tests {
             }],
             finish_reason: FinishReason::ToolCalls,
             reasoning_content: None,
-            prompt_tokens: Some(5_000),
+            prompt_tokens: Some(100), // below the tiny test trigger
         };
         let fake = Arc::new(FakeProvider::new(vec![
             tool_call("call-g1"),
             tool_call("call-g2"),
-            ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
-            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+            tool_call("call-g3"),
+            ScriptedResponse::text("候选答案").with_prompt_tokens(100),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(100),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // min_rounds=1 — the cooldown never blocks; only the gap gates.
-        let controller =
-            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 1, 100_000);
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 1, 100_000)
+            .with_summary_guards(1, 1.0);
         controller
             .run_turn(
                 &host,
                 "压缩测试",
-                "RUN-COMPACT-GAP",
+                "RUN-COMPACT-NOTRIG",
                 MANIFEST,
                 0,
                 None,
@@ -10360,39 +10513,21 @@ mod tests {
             .await
             .unwrap();
 
-        // Exactly one compaction — at the final-answer gap.
         let compact_events: Vec<serde_json::Value> = events(&dir)
             .into_iter()
             .filter(|e| e.event_type == EventType::ContextCompressed)
             .map(|e| e.payload)
             .collect();
-        assert_eq!(
-            compact_events.len(),
-            1,
-            "one gap compaction: {compact_events:?}"
-        );
-
-        // Tool-round gaps (requests 2 and 3) are untouched; the gate-reply
-        // request (4) carries the marker.
-        let received = fake.received_requests();
-        assert!(received.len() >= 4, "{received:?}");
-        for request in &received[..3] {
+        assert!(compact_events.is_empty(), "{compact_events:?}");
+        for request in fake.received_requests() {
             assert!(
                 request
                     .messages
                     .iter()
-                    .all(|m| !m.content.starts_with("[前文上下文已压缩")),
-                "no compaction at tool-round gaps: {request:?}"
+                    .all(|m| !m.content.contains("[前文上下文已压缩")),
+                "no marker without trigger: {request:?}"
             );
         }
-        assert!(
-            received[3]
-                .messages
-                .iter()
-                .any(|m| m.content.starts_with("[前文上下文已压缩")),
-            "marker at the final-answer gap: {:?}",
-            received[3].messages
-        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -10468,12 +10603,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A6 window guard (review D1-1, 2026-08-08): measured tokens above
-    /// `safety_tokens` compact IMMEDIATELY — the cooldown is bypassed so a
-    /// high-start task never approaches the provider window while waiting
-    /// for the amortization interval. The guard re-fires on every
-    /// over-safety round (the conversation stays over the line), each time
-    /// journaling the honest (short) rounds_since_last_compaction.
+    /// P0-D window guard (ADR-0010 v1.10 §2): measured tokens above
+    /// `safety_tokens` (the 200K fallback) fire the template summary
+    /// IMMEDIATELY — the cooldown is bypassed so a high-start task never
+    /// approaches the provider window while waiting for the interval. The
+    /// guard re-fires on every over-safety round that still has droppable
+    /// content, journaling the honest (short) rounds_since_last_compaction.
     #[tokio::test]
     async fn context_compact_safety_trigger_bypasses_cooldown() {
         let dir = test_dir();
@@ -10502,14 +10637,22 @@ mod tests {
             tool_call("call-s1"),
             tool_call("call-s2"),
             tool_call("call-s3"),
-            ScriptedResponse::text("第一轮完成"),
+            // First summary fires after round 3 (first point with a
+            // droppable round under the tail).
+            summary_response(),
+            tool_call("call-s4"),
+            // Second summary fires after round 4 — the fallback ignores
+            // the just-reset cooldown.
+            summary_response(),
+            ScriptedResponse::text("候选答案"),
             ScriptedResponse::text("最终答案"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // Cooldown 20 — far longer than the run — but the safety trigger
+        // Cooldown 20 — far longer than the run — but the fallback trigger
         // (100_000) must fire regardless of the cooldown.
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(150_000, 400, 20, 100_000);
+            .with_context_compact(150_000, 400, 20, 100_000)
+            .with_summary_guards(1, 1.0);
         controller
             .run_turn(
                 &host,
@@ -10529,28 +10672,121 @@ mod tests {
             .filter(|e| e.event_type == EventType::ContextCompressed)
             .map(|e| e.payload)
             .collect();
-        assert!(!compact_events.is_empty(), "safety trigger fired");
-        // Every compaction happened FAR before the 20-round cooldown — the
+        assert_eq!(compact_events.len(), 2, "fallback fired twice");
+        // Every summary happened FAR before the 20-round cooldown — the
         // payload honestly reports the bypassed interval.
         for event in &compact_events {
+            assert_eq!(event["reason"], "fallback");
+            assert_eq!(event["trigger_tokens"], 300_000);
             assert!(
                 event["rounds_since_last_compaction"].as_u64().unwrap() < 20,
                 "cooldown bypassed: {event:?}"
             );
-            assert_eq!(event["trigger_tokens"], 300_000);
         }
 
-        // The marker reached the request after the first compaction.
+        // The marker reached a request after the first fallback summary.
         let received = fake.received_requests();
         assert!(received.len() >= 3, "{received:?}");
         assert!(
-            received[2]
-                .messages
+            received
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content.starts_with(
+                    "[前文上下文已压缩"
+                ))),
+            "marker present after fallback summary"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-D (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4.2):
+    /// when the LLM slots fail validation on all ≤3 attempts, the run ends
+    /// in the termination state — mechanical slots only, marker flagged
+    /// `summary_incomplete`, no archive; on the FALLBACK path the
+    /// conversation is still mechanically truncated so the run never stays
+    /// over the window.
+    #[tokio::test]
+    async fn context_compact_summary_failure_termination_state() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000), // over the fallback gate
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-f1"),
+            tool_call("call-f2"),
+            tool_call("call-f3"),
+            // Three failed summary attempts (no slot markers).
+            ScriptedResponse::text("无效摘要"),
+            ScriptedResponse::text("无效摘要"),
+            ScriptedResponse::text("无效摘要"),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "one termination-state summary");
+        assert_eq!(compact_events[0]["summary_incomplete"], true);
+        assert_eq!(compact_events[0]["reason"], "fallback");
+        assert!(compact_events[0]["summary_id"].is_null());
+        assert!(compact_events[0]["summary_digest"].is_null());
+        assert!(compact_events[0]["summary_path"].is_null());
+
+        // The marker reaches the model and carries the incomplete flag.
+        let received = fake.received_requests();
+        let last = received.last().unwrap();
+        assert!(
+            last.messages
                 .iter()
                 .any(|m| m.content.starts_with("[前文上下文已压缩")),
             "marker present: {:?}",
-            received[2].messages
+            last.messages
         );
+        assert!(
+            last.messages
+                .iter()
+                .any(|m| m.content.contains("summary_incomplete")),
+            "incomplete flag in marker: {:?}",
+            last.messages
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -16695,6 +16931,45 @@ mod tests {
         }
     }
 
+    /// One complete tool round: an assistant declaration (with a tool call)
+    /// plus its tool result — protocol-valid seed material for recovery
+    /// truncation tests.
+    fn tool_round(call_id: &str, result: &str) -> Vec<Message> {
+        vec![
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"path": result}),
+                    call_id: call_id.to_string(),
+                }],
+                reasoning_content: None,
+            },
+            Message {
+                role: Role::Tool,
+                content: result.to_string(),
+                tool_call_id: Some(call_id.to_string()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+        ]
+    }
+
+    /// A valid five-section summary response (mechanical slots are filled
+    /// by the controller; only the two model slots matter here).
+    fn summary_response() -> ScriptedResponse {
+        ScriptedResponse::text(
+            format!(
+                "[注意事项] 关键事实：前缀缓存导致回归；{}\n[/注意事项]\n\
+                 [后续衔接] 下一步：跑回归测试；{}\n[/后续衔接]",
+                "补充说明。".repeat(60),
+                "继续执行。".repeat(60),
+            ),
+        )
+    }
+
     /// The conversation seeds the model context (prior history + new prompt)
     /// and the full conversation comes back on success — reasoning content
     /// included (the DeepSeek multi-turn replay requirement).
@@ -16759,6 +17034,154 @@ mod tests {
                 .all(|m| !is_injected_block_text(&m.content)),
             "injection blocks filtered: {conversation:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D3-1 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): the
+    /// restore write-back filter keeps the compaction marker and the
+    /// whitelist block (a restored prompt must see the compression notice
+    /// and the task facts) while still filtering other mechanical injected
+    /// blocks.
+    #[tokio::test]
+    async fn conversation_writeback_retains_marker_and_whitelist() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("收到"),
+            ScriptedResponse::text("收到"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut conversation = vec![
+            conv_message(Role::User, "第一问"),
+            conv_message(
+                Role::User,
+                &crate::prompt::build_whitelist_block(&["任务背景：修复缓存回归".to_string()]),
+            ),
+            conv_message(
+                Role::User,
+                &crate::prompt::context_compressed_marker(3, 160_000, None),
+            ),
+            conv_message(Role::User, "[ORIENTATION v0.1] 当前任务是什么？"),
+        ];
+        let _ = controller
+            .run_turn(
+                &host,
+                "第二问",
+                "RUN-RETAIN",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        let kept: Vec<&str> = conversation.iter().map(|m| m.content.as_str()).collect();
+        assert!(
+            kept.iter()
+                .any(|c| c.starts_with(crate::prompt::WHITELIST_PREFIX)),
+            "whitelist must survive restore write-back: {kept:?}"
+        );
+        assert!(
+            kept.iter()
+                .any(|c| c.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
+            "marker must survive restore write-back: {kept:?}"
+        );
+        assert!(
+            kept.iter()
+                .all(|c| !c.starts_with("[ORIENTATION")),
+            "other injected blocks stay filtered: {kept:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): a
+    /// restored conversation over the recovery window is mechanically
+    /// truncated before the first request — whole old rounds dropped, the
+    /// recovery marker inserted, the full sidecar copied into the run
+    /// journal as the audit copy, and `context_recovery_truncated` journaled.
+    #[tokio::test]
+    async fn recovery_conversation_over_window_truncates_before_first_request() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("收到"),
+            ScriptedResponse::text("收到"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(fake.clone()).with_recovery_compact(10, 2);
+        let mut conversation = vec![conv_message(Role::User, "第一问")];
+        conversation.extend(tool_round("call-r1", "第一轮工具结果"));
+        conversation.extend(tool_round("call-r2", "第二轮工具结果"));
+        let before = conversation.clone();
+        let _ = controller
+            .run_turn(
+                &host,
+                "第二问",
+                "RUN-REC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        let evs = events(&dir);
+        let trunc: Vec<&RunEvent> = evs
+            .iter()
+            .filter(|e| e.event_type == EventType::ContextRecoveryTruncated)
+            .collect();
+        assert_eq!(trunc.len(), 1, "{evs:?}");
+        assert!(
+            trunc[0].payload["rounds_dropped"].as_u64().unwrap() >= 1,
+            "must drop whole rounds: {:?}",
+            trunc[0].payload
+        );
+        let audit = dir.join("recovery-conversation-full.json");
+        assert!(audit.exists(), "full sidecar audit copy must exist");
+        let audit_payload: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&audit).unwrap()).unwrap();
+        assert_eq!(audit_payload, serde_json::to_value(&before).unwrap());
+        // The recovery marker reaches the first model request and survives
+        // the restore write-back (D3-1).
+        let reqs = fake.received_requests();
+        let first = &reqs[0].messages;
+        assert!(
+            first
+                .iter()
+                .any(|m| m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
+            "recovery marker must reach the first request: {first:?}"
+        );
+        assert!(
+            conversation
+                .iter()
+                .any(|m| m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
+            "marker must survive write-back: {conversation:?}"
+        );
+        // No orphaned tool results after truncation: every Tool message's
+        // call id must be declared by a surviving assistant message.
+        let declared: Vec<&str> = conversation
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .flat_map(|m| m.tool_calls.iter().map(|tc| tc.call_id.as_str()))
+            .collect();
+        for m in conversation.iter().filter(|m| m.role == Role::Tool) {
+            assert!(
+                m.tool_call_id
+                    .as_deref()
+                    .is_some_and(|id| declared.contains(&id)),
+                "orphan tool result after truncation: {m:?}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

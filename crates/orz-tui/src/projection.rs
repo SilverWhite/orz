@@ -437,6 +437,27 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             )]
         }
 
+        // D2-2 (2026-08-14): recovery pre-check truncation.
+        TuiEvent::ContextRecoveryTruncated {
+            before_estimate_tokens,
+            rounds_dropped,
+            after_estimate_tokens,
+        } => {
+            app.content.add_system_message(
+                &format!(
+                    "[上下文恢复截断] 恢复对话估 {}K，机械截断 {rounds_dropped} 轮（估 ~{}K）",
+                    before_estimate_tokens / 1000,
+                    after_estimate_tokens / 1000,
+                ),
+                true,
+            );
+            vec![format!(
+                "恢复对话已截断: {rounds_dropped} 轮（估 {b}K → {a}K）",
+                b = before_estimate_tokens / 1000,
+                a = after_estimate_tokens / 1000,
+            )]
+        }
+
         // ── IP5 snapshot ──
         TuiEvent::SnapshotCreated {
             tool,

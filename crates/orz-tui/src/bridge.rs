@@ -269,6 +269,11 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             rounds_dropped: get_u64(p, "rounds_dropped"),
             estimated_tokens_after: get_u64(p, "estimated_tokens_after"),
         },
+        EventType::ContextRecoveryTruncated => TuiEvent::ContextRecoveryTruncated {
+            before_estimate_tokens: get_u64(p, "before_estimate_tokens"),
+            rounds_dropped: get_u64(p, "rounds_dropped"),
+            after_estimate_tokens: get_u64(p, "after_estimate_tokens"),
+        },
         EventType::SnapshotCreated => TuiEvent::SnapshotCreated {
             tool: get_str(p, "tool"),
             targets: get_str_list(p, "targets"),

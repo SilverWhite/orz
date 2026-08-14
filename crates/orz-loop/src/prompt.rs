@@ -131,6 +131,12 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // validation degradation block is mechanical injected text — never
         // stagnation input.
         || content.starts_with(CITATION_VALIDATION_FAILED_PREFIX)
+        // P0-D S2 (2026-08-14): the model-visible action-ledger block
+        // (`[动作台账 v0.1] …`) is mechanical injected text — it exists only
+        // in per-request collapsed views, never in the persisted
+        // conversation; registered so it can never pollute stagnation or
+        // restore filters.
+        || content.starts_with(crate::action_ledger::ACTION_LEDGER_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
@@ -193,6 +199,37 @@ pub fn context_compressed_marker(
          {summary}\n\
          [/前文上下文已压缩]",
         trigger_k = trigger_tokens / 1000,
+    )
+}
+
+/// D3-1 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): blocks
+/// that MUST survive the conversation restore write-back filter — the
+/// compaction marker (rolling single pointer, `[前文上下文已压缩` prefix) and
+/// the resident whitelist (`[压缩白名单` prefix). Every other mechanical
+/// injected block is still filtered from the persisted conversation.
+pub fn is_restore_retained_block(content: &str) -> bool {
+    content.starts_with(CONTEXT_COMPRESSED_PREFIX) || content.starts_with(WHITELIST_PREFIX)
+}
+
+/// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): the
+/// recovery-truncation marker — tells the model a restored conversation was
+/// mechanically truncated before the first request and points at the audit
+/// copy in the run journal. Shares the `[前文上下文已压缩` prefix so D3-1
+/// retains it across further restores.
+pub fn recovery_truncation_marker(
+    rounds_dropped: u32,
+    before_estimate: u64,
+    after_estimate: u64,
+    audit_path: &str,
+) -> String {
+    format!(
+        "{CONTEXT_COMPRESSED_PREFIX} v0.1-恢复]\n\
+         恢复对话超过窗口，已机械截断 {rounds_dropped} 轮（估算 {before_k}K → {after_k}K \
+         tokens）。完整历史保留于审计副本 {audit_path}；如需回看历史，请调用 \
+         blackboard_read 工具（分区: plan / edits / tool_actions / exec）。\n\
+         [/前文上下文已压缩]",
+        before_k = before_estimate / 1000,
+        after_k = after_estimate / 1000,
     )
 }
 
@@ -608,6 +645,23 @@ mod tests {
         // A closing tag alone must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/TOOL_ROUND_BUDGET]"));
         assert!(!is_injected_block_text(""));
+    }
+
+    /// D3-1 (2026-08-14): only the compaction marker and the whitelist
+    /// block are restore-retained; other mechanical injected blocks are not.
+    #[test]
+    fn restore_retained_blocks_identified() {
+        assert!(is_restore_retained_block("[前文上下文已压缩 v0.1]\n内容"));
+        assert!(is_restore_retained_block("[压缩白名单 v0.1]\n条目"));
+        assert!(!is_restore_retained_block("[ORIENTATION v0.1] 当前任务是什么？"));
+        assert!(!is_restore_retained_block("普通对话"));
+        // Recovery markers share the compaction prefix and therefore count.
+        assert!(is_restore_retained_block(&recovery_truncation_marker(
+            2,
+            250_000,
+            150_000,
+            ".gsa/runs/RUN-X/recovery.json"
+        )));
     }
 
     #[test]

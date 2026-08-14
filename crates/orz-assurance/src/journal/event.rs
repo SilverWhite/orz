@@ -90,6 +90,11 @@ pub enum EventType {
     // A6 explicit context compaction (2026-08-08 — controller-written;
     // mirrors run-event schema)
     ContextCompressed,
+    // D2-2 (2026-08-14, ADR-0010 v1.10 — CONTEXT_COMPACTION_DESIGN §6):
+    // a restored conversation was mechanically truncated before the first
+    // request (recovery pre-check over the conservative window threshold;
+    // the full sidecar was copied into the run journal for audit).
+    ContextRecoveryTruncated,
 
     // IP5 pre-mutation snapshot (Phase 3, slice #4 wiring)
     SnapshotCreated,

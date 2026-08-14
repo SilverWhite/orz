@@ -24,7 +24,7 @@ use crate::blackboard::SharedBlackboard;
 use crate::controller::{
     AgentLoopController, AgentLoopError, ContextCompactConfig, DENIAL_BREAKER_CONSECUTIVE,
     DenialKey, DenialState, EventWriter, PolicyFeedback, TEXT_DELTA_PACING, compact_messages,
-    format_edit_record,
+    estimate_messages_tokens, format_edit_record,
 };
 use crate::diagnostic_coverage::{DebugEpisodeState, maybe_consume_dc_signal, maybe_fire_dc};
 use crate::gateway::model::{
@@ -353,17 +353,12 @@ pub(crate) async fn run_agent_loop(
     // `OrientationSessionState` threaded through the turn chain; output
     // repetition belongs to the runtime stagnation guard only.
     let mut counterexample_fired = false;
-    // A6 (2026-08-08, §8 C.1): explicit context compaction state — the
-    // previous round's MEASURED prompt tokens (provider usage; None
-    // until the first round reports usage), the rounds since the last
-    // compaction (per-turn — the conversation is per-turn too), and
-    // whether the previous round was a TOOL round (declaration +
-    // execution + pushes) — the rhythm compaction fires only in the
-    // gap after the model's LAST tool round (candidate answer round:
-    // `!last_round_had_tools` while `counterexample_fired`).
+    // P0-D (2026-08-14, ADR-0010 v1.10): template-summary state — the
+    // previous round's MEASURED prompt tokens (provider usage; None until
+    // the first round reports usage) and the rounds since the last summary
+    // (the ≥3-round cooldown; the 200K fallback bypasses it).
     let mut last_prompt_tokens: Option<u64> = None;
     let mut rounds_since_compact: u32 = 0;
-    let mut last_round_had_tools = false;
 
     loop {
         // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -400,77 +395,244 @@ pub(crate) async fn run_agent_loop(
             tokio::time::sleep(TEXT_DELTA_PACING).await;
         }
 
-        // A6 (2026-08-08, §8 C.1 用户裁决): explicit context compaction
-        // — triggered by the previous round's MEASURED prompt tokens
-        // (provider usage prompt_tokens; `None` until the first round
-        // reports usage). Two triggers:
-        //   - SAFETY (window guard, review D1-1): measured >
-        //     `safety_tokens` — fires at any inter-batch gap, ignoring
-        //     rhythm conditions; the cost of an extra cache miss is
-        //     trivially cheaper than a window-overflow run failure.
-        //     Resets the round counter so a later rhythm compaction
-        //     judges normally (user decision).
-        //   - RHYTHM: measured > `trigger_tokens` with a ≥ min_rounds
-        //     cooldown, AND the model just finished its LAST tool batch
-        //     (the candidate-answer round — no tool calls — means the
-        //     action sequence is complete and the final answer is next
-        //     behind the counterexample gate). Mid-task gaps (after
-        //     tool rounds) are NEVER compacted — the run's action flow
-        //     stays smooth and stable; the final answer round then runs
-        //     on a compacted context (~90K) with low look-back pressure.
-        //     This gap exists exactly once per run (the gate fires
-        //     once), so the rhythm compaction is at most once.
-        // Compaction keeps the preamble (original prompt + whitelist)
-        // and the newest rounds verbatim; older rounds are dropped
-        // whole (declaration + tool replies + injected pushes stay
-        // paired); the marker tells the model history was compressed
-        // (explicit notice — the model has no metacognition to guess,
-        // design §5 A6) and blackboard_read is the look-back window.
-        let rhythm_gap = !last_round_had_tools && counterexample_fired;
-        let compact_now = match last_prompt_tokens {
-            Some(measured) => {
-                measured > svc.context_compact.safety_tokens
-                    || (rhythm_gap
-                        && measured > svc.context_compact.trigger_tokens
-                        && rounds_since_compact >= svc.context_compact.min_rounds)
-            }
-            None => false,
-        };
-        if compact_now && let Some(measured) = last_prompt_tokens {
-            let stats = compact_messages(messages, svc.context_compact.target_tokens);
-            if stats.rounds_dropped > 0 {
-                let rounds_since = rounds_since_compact;
-                rounds_since_compact = 0;
-                messages.insert(
-                    stats.marker_index,
-                    Message {
-                        role: Role::User,
-                        content: crate::prompt::context_compressed_marker(
-                            stats.rounds_dropped,
-                            measured,
-                            controller.blackboard_summary_line().as_deref(),
-                        ),
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                    },
-                );
-                writer
-                    .record(
-                        EventType::ContextCompressed,
-                        serde_json::json!({
-                            "trigger_tokens": measured,
-                            "target_tokens": svc.context_compact.target_tokens,
-                            "rounds_since_last_compaction": rounds_since,
-                            "rounds_dropped": stats.rounds_dropped,
-                            "messages_dropped": stats.messages_dropped,
-                            // The marker message was inserted above —
-                            // the final conversation is +1.
-                            "messages_kept": stats.messages_kept + 1,
-                            "estimated_tokens_after": stats.estimated_tokens_after,
-                        }),
-                    )
-                    .await?;
+        // P0-D (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §2-§4):
+        // template-summary trigger at any safe loop-top gap (never inside a
+        // batch). Measured = the previous round's provider prompt tokens on
+        // the COLLAPSED request. Two triggers:
+        //   - RHYTHM: measured > trigger_tokens (160K) with a ≥ min_rounds
+        //     (3) cooldown.
+        //   - FALLBACK (window guard): measured > safety_tokens (200K),
+        //     bypassing the cooldown — the emergency path must not stay
+        //     over the line even when the summary fails (mechanical
+        //     truncation fallback, D2-2 semantics).
+        // Reduction guards (orz-compaction reuse): removable content ≥
+        // min_compactable and kept ≤ max_reduction_ratio of before.
+        // The summary is a pure chat call (no tools, no probe/compaction
+        // feedback loop); the five-section output is validated mechanically
+        // and redone ≤3 times; on termination the mechanical slots stay,
+        // the recent tail widens, and the marker is flagged
+        // `summary_incomplete`.
+        let fallback_now = last_prompt_tokens
+            .is_some_and(|m| m > svc.context_compact.safety_tokens);
+        let rhythm_now = last_prompt_tokens
+            .is_some_and(|m| m > svc.context_compact.trigger_tokens)
+            && rounds_since_compact >= svc.context_compact.min_rounds;
+        let summary_now = fallback_now || rhythm_now;
+        let mut failure_widened_tail = false;
+        if summary_now && let Some(measured) = last_prompt_tokens {
+            let cfg = svc.context_compact;
+            let tail = cfg.recent_tail_rounds;
+            // The rolling single marker: any older marker is archived with
+            // the summary chain (审计存档) — only the newest stays.
+            messages.retain(|m| !m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
+            if let Some(kept_start) = crate::action_ledger::collapsed_cut(messages, tail) {
+                let after = estimate_messages_tokens(&messages[..kept_start])
+                    + estimate_messages_tokens(&messages[kept_start..])
+                    + crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
+                let removable = measured.saturating_sub(after);
+                let reduction_ok =
+                    after as f64 <= measured as f64 * cfg.max_reduction_ratio;
+                if removable >= cfg.min_compactable && reduction_ok {
+                    let rounds_dropped =
+                        crate::action_ledger::collapsed_round_count(messages, tail) as u32;
+                    let rounds_since = rounds_since_compact;
+                    let mechanical = {
+                        let bb = svc.blackboard.read();
+                        let (purpose, plan, paths) = crate::summary::mechanical_slots(&bb);
+                        crate::summary::SummarySlots {
+                            purpose,
+                            plan,
+                            paths,
+                            notes: String::new(),
+                            continuation: String::new(),
+                        }
+                    };
+                    // Summary input = mechanical slots + the collapsed
+                    // history prefix (tool records already mechanically
+                    // handled by the first layer).
+                    let summary_input = {
+                        let mut input = vec![Message {
+                            role: Role::User,
+                            content: crate::summary::summary_user_prompt(&mechanical),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        }];
+                        input.extend(crate::action_ledger::build_collapsed_request(
+                            messages,
+                            tail,
+                        ));
+                        input
+                    };
+                    let mut outcome: Option<crate::summary::SummarySlots> = None;
+                    for _attempt in 0..crate::summary::SUMMARY_MAX_ATTEMPTS {
+                        match agent
+                            .run_round(
+                                &crate::summary::summary_system_prompt(),
+                                summary_input.clone(),
+                                Vec::new(),
+                                crate::summary::SUMMARY_MAX_TOKENS,
+                                cancel,
+                                heartbeat,
+                                &mut |_| {},
+                            )
+                            .await
+                        {
+                            Ok(resp) => {
+                                match crate::summary::parse_model_output(
+                                    resp.text.as_deref().unwrap_or(""),
+                                    &mechanical,
+                                ) {
+                                    Ok(slots) => {
+                                        outcome = Some(slots);
+                                        break;
+                                    }
+                                    Err(_) => continue,
+                                }
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+                    let first_round_start = messages
+                        .iter()
+                        .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+                        .unwrap_or(messages.len());
+                    if let Some(slots) = outcome {
+                        let id = format!(
+                            "compaction-{}-{:04}",
+                            writer.run_id(),
+                            writer.seq()
+                        );
+                        let archive_dir = host
+                            .session_cwd()
+                            .join(".gsa")
+                            .join("compaction");
+                        let archive_path = archive_dir.join(format!("{id}.md"));
+                        let markdown = crate::summary::summary_archive_markdown(
+                            &id,
+                            &slots,
+                            rounds_dropped,
+                            false,
+                        );
+                        let digest = crate::summary::archive_digest(&markdown);
+                        let _ = std::fs::create_dir_all(&archive_dir);
+                        let _ = std::fs::write(&archive_path, markdown);
+                        let marker = crate::summary::build_summary_marker(
+                            &id,
+                            &digest,
+                            &archive_path,
+                            &slots,
+                            rounds_dropped,
+                            false,
+                        );
+                        let messages_dropped = messages
+                            .drain(first_round_start..kept_start)
+                            .count();
+                        messages.insert(
+                            first_round_start,
+                            Message {
+                                role: Role::User,
+                                content: marker,
+                                tool_call_id: None,
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                            },
+                        );
+                        rounds_since_compact = 0;
+                        writer
+                            .record(
+                                EventType::ContextCompressed,
+                                serde_json::json!({
+                                    "trigger_tokens": measured,
+                                    "target_tokens": after,
+                                    "rounds_since_last_compaction": rounds_since,
+                                    "rounds_dropped": rounds_dropped,
+                                    "messages_dropped": messages_dropped,
+                                    "messages_kept": messages.len(),
+                                    "estimated_tokens_after": after,
+                                    "mode": "template_summary",
+                                    "reason": if fallback_now { "fallback" } else { "rhythm" },
+                                    "summary_id": id,
+                                    "summary_digest": digest,
+                                    "summary_path": archive_path.display().to_string(),
+                                    "summary_incomplete": false,
+                                    "retained_rounds": tail,
+                                }),
+                            )
+                            .await?;
+                    } else {
+                        // Termination state: mechanical slots only, marker
+                        // flagged, wider recent tail; on the FALLBACK path
+                        // also mechanically truncate whole rounds (D2-2
+                        // emergency — never stay over the line).
+                        let mechanical_slots = crate::summary::SummarySlots {
+                            notes: String::new(),
+                            continuation: String::new(),
+                            ..mechanical
+                        };
+                        let marker = crate::summary::build_summary_marker(
+                            "summary-incomplete",
+                            "0".repeat(64).as_str(),
+                            &host.session_cwd().join(".gsa/compaction"),
+                            &mechanical_slots,
+                            rounds_dropped,
+                            true,
+                        );
+                        let mut dropped = rounds_dropped;
+                        let mut messages_dropped = 0usize;
+                        let mut final_after = after;
+                        if fallback_now {
+                            let stats = compact_messages(
+                                messages,
+                                cfg.recovery_target_tokens,
+                            );
+                            if stats.rounds_dropped > 0 {
+                                dropped = stats.rounds_dropped;
+                                messages_dropped = stats.messages_dropped;
+                                final_after = stats.estimated_tokens_after;
+                            }
+                        }
+                        let insert_at = messages
+                            .iter()
+                            .position(|m| {
+                                m.role == Role::Assistant && !m.tool_calls.is_empty()
+                            })
+                            .unwrap_or(messages.len());
+                        messages.insert(
+                            insert_at,
+                            Message {
+                                role: Role::User,
+                                content: marker,
+                                tool_call_id: None,
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                            },
+                        );
+                        rounds_since_compact = 0;
+                        failure_widened_tail = true;
+                        writer
+                            .record(
+                                EventType::ContextCompressed,
+                                serde_json::json!({
+                                    "trigger_tokens": measured,
+                                    "target_tokens": cfg.recovery_target_tokens,
+                                    "rounds_since_last_compaction": rounds_since,
+                                    "rounds_dropped": dropped,
+                                    "messages_dropped": messages_dropped,
+                                    "messages_kept": messages.len(),
+                                    "estimated_tokens_after": final_after,
+                                    "mode": "template_summary",
+                                    "reason": if fallback_now { "fallback" } else { "rhythm" },
+                                    "summary_id": null,
+                                    "summary_digest": null,
+                                    "summary_path": null,
+                                    "summary_incomplete": true,
+                                    "retained_rounds": tail + 1,
+                                }),
+                            )
+                            .await?;
+                    }
+                }
             }
         }
 
@@ -596,10 +758,21 @@ pub(crate) async fn run_agent_loop(
         };
 
         let mut partial_text: Vec<String> = Vec::new();
+        // P0-D S2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN
+        // §3): the MODEL-VISIBLE view collapses completed old tool rounds
+        // into deterministic action-ledger rows (bounded recent tail kept
+        // verbatim); `messages` itself stays full for journal/sidecar
+        // audit, so the persisted conversation keeps the complete records.
+        let request_tail = svc.context_compact.recent_tail_rounds
+            + if failure_widened_tail { 1 } else { 0 };
+        let request_messages = crate::action_ledger::build_collapsed_request(
+            messages,
+            request_tail,
+        );
         let response = match agent
             .run_round(
                 &system,
-                messages.clone(),
+                request_messages,
                 current_tool_defs.clone(),
                 max_tokens,
                 cancel,
@@ -697,13 +870,11 @@ pub(crate) async fn run_agent_loop(
             )
             .await?;
 
-        // A6: track the round — measured prompt tokens feed the next
-        // loop-top trigger check; the round counter is the compaction
-        // cooldown; the tool-round flag gates the rhythm compaction to
-        // the gap after the LAST tool round (§8 C.1).
+        // P0-D: track the round — measured prompt tokens feed the next
+        // loop-top trigger check; the round counter is the summary
+        // cooldown.
         last_prompt_tokens = response.prompt_tokens;
         rounds_since_compact += 1;
-        last_round_had_tools = !response.tool_calls.is_empty();
 
         // GAP-INQUIRY-SPLIT (2026-08-09): the model round just COMPLETED —
         // count it against the session-level orientation counter (ADR-0010

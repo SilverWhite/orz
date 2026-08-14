@@ -6003,6 +6003,7 @@ dependencies = [
  "chrono",
  "futures",
  "orz-assurance",
+ "orz-compaction",
  "orz-secrets",
  "reqwest 0.12.24",
  "serde",

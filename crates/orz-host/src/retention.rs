@@ -20,6 +20,11 @@
 //!   safe (the next query rebuilds it in one pass) — the contrast with
 //!   `keystore/` below, which must NEVER be swept, is exactly the
 //!   "rebuildable → sweepable" judgement.
+//! - `compaction/` (P0-D S3 2026-08-14) — five-section template summary
+//!   archives (`.gsa/compaction/compaction-<run>-<seq>.md`). The archive is
+//!   an audit copy (the journal carries the same summary digest); the
+//!   rolling marker is only a pointer, so sweeping old archives is safe —
+//!   the same "rebuildable/audit → sweepable" judgement as conversations.
 //! - `keystore/` is NEVER swept: deleting the installation key would
 //!   silently invalidate every permit signed under it (a permit issued
 //!   under key A fails verification under key B).
@@ -79,6 +84,10 @@ pub struct PruneReport {
     /// GAP-PROJECT-DOC-INDEX-CACHE (2026-08-11): the doc-index cache file
     /// (`project-doc-index/cache.json`) — rebuildable, so swept by age.
     pub removed_project_doc_caches: Vec<String>,
+    /// P0-D S3 (2026-08-14): compaction summary archives
+    /// (`compaction/*.md`) — audit copies, swept by age (the journal and
+    /// the rolling marker carry the digest/pointer).
+    pub removed_compaction_archives: Vec<String>,
     /// PDF evidence (2026-08-11): content-addressed PDF evidence documents
     /// (`pdf-evidence/{p2}/{full64}/`) — rebuildable from the source URL, so
     /// swept by age (document ids referenced by older runs lapse — explicit
@@ -120,6 +129,14 @@ pub fn prune_old_records(
     prune_old_files(
         &mut report.removed_project_doc_caches,
         &gsa_root.join("project-doc-index"),
+        cutoff,
+    );
+    // P0-D S3 (2026-08-14): compaction summary archives — the marker is a
+    // rolling single pointer and the journal carries the digest, so old
+    // archive files are sweepable by age (retention 7 days).
+    prune_old_files(
+        &mut report.removed_compaction_archives,
+        &gsa_root.join("compaction"),
         cutoff,
     );
     // local_browser (2026-08-10): orphaned browser profiles — a session
@@ -633,6 +650,35 @@ mod tests {
         assert_eq!(report.removed_project_doc_caches, vec!["cache.json"]);
         assert!(!old.exists());
         assert!(caches.join("fresh.json").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// P0-D S3 (2026-08-14): old compaction summary archives are swept by
+    /// age; fresh ones (a live session's recent summaries) survive.
+    #[test]
+    fn sweep_removes_old_compaction_archives_keeps_fresh() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        let archives = gsa.join("compaction");
+        std::fs::create_dir_all(&archives).unwrap();
+        let old = archives.join("compaction-RUN-OLD-0001.md");
+        std::fs::write(&old, "# 摘要").unwrap();
+        backdate(&old, 10);
+        std::fs::write(
+            archives.join("compaction-RUN-FRESH-0002.md"),
+            "# 摘要",
+        )
+        .unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(
+            report.removed_compaction_archives,
+            vec!["compaction-RUN-OLD-0001.md"]
+        );
+        assert!(!old.exists());
+        assert!(archives.join("compaction-RUN-FRESH-0002.md").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }

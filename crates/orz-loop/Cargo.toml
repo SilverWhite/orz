@@ -12,6 +12,10 @@ orz-assurance = { path = "../orz-assurance" }
 # context (redact_secrets/redact_user_paths) — self-built workspace crate,
 # zero new third-party deps.
 orz-secrets = { workspace = true }
+# P0-D S3 (2026-08-14, ADR-0010 v1.10 §14.10 ⑤): shared compaction guards —
+# degenerate-summary rejection (`MIN_SUMMARY_SEED_CHARS`=500) reused from
+# the orz-compaction crate.
+orz-compaction = { workspace = true }
 
 # Runtime
 tokio = { workspace = true, features = ["full"] }

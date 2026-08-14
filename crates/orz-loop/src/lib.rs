@@ -9,6 +9,7 @@
 //! No Grok crate depends on orz-loop.
 
 pub mod acaf;
+pub mod action_ledger;
 mod agent_loop;
 pub mod agents;
 pub mod blackboard;
@@ -20,6 +21,7 @@ pub mod host;
 pub mod orientation;
 pub mod prompt;
 pub mod relay;
+pub mod summary;
 pub mod tool;
 pub mod tool_probe;
 
