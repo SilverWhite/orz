@@ -95,7 +95,10 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
    （二进制 include 为默认，`ORZ_SOURCE_WEIGHTING_CONFIG` env 覆盖替换；
    官方媒体 1.0、公众号与个人主页/博客入劣质源见种子文档 §3）；
 2. 单次检索候选核验数量上限——**已定**：≤5 写进检索提示词合同（软约束，
-   120 轮工具预算是硬背板）；
+   120 轮工具预算是硬背板）。**已取代（2026-08-14，P0-B 步骤 2/6）**：候选上限
+   升级为机械硬门 `ORZ_WEB_FETCH_CANDIDATE_CAP`（默认 8，per-activation 累计 +
+   去重 URL 计数），不再写死在提示词；提示词只保留机械预算反馈契约
+   （"候选 N/M，剩余 K"）。详见 `RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md`。
 3. 结构化结果 schema weight/tier 字段——**已加**：source_entry 新增
    tier/mechanical_weight/weight_reason/model_weight/model_weight_reason/
    annotation_status，organized_response 新增 source_annotations，
@@ -108,9 +111,13 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
    输出 tier/weight/reason 进 source_ledger；
    边界：当前加权面为 web_fetch/[SOURCE]/URL 形态 PDF 证据；web_search 引用 URL
    未透传 loop（审计 B-1）、browser_read 主车道无 ledger（审计 B-2），候选上限为
-   软约束（审计 B-3）。
+   软约束（审计 B-3）。**候选上限已由 FUS-RETRIEVAL-MECH 步骤 2/6 取代为机械硬门**
+   （`ORZ_WEB_FETCH_CANDIDATE_CAP`，默认 8；提示词软约束文本已移除，2026-08-14）。
 2. **web_search 第二层**——检索提示词合同：机械预筛 + 模型初选 + `web_fetch`
-   候选原文核验，候选 ≤5、禁 `browser_read`（候选上限为软约束，见边界 B-3）；
+   候选原文核验，候选 ≤5、禁 `browser_read`（候选上限为软约束，见边界 B-3）。
+   **已更新（2026-08-14，P0-B 步骤 6）**：候选 ≤5 软约束文本从检索提示词移除，
+   改指机械预算反馈（"候选 N/M，剩余 K"）；禁 `browser_read`（二存一）与
+   "只抓高价值/结论依赖候选"的选择纪律保留。
 3. **第三层模型加权标注**——`[RESULT_JSON].source_annotations` 校验后合并进
    ledger（model_weight/reason/annotation_status）并回写
    `organized_response.source_annotations`；非法标注（未知 source_id、weight 越界、

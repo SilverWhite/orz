@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-RETRIEVAL-MECH、CLASSICAL-EXEC-ASSISTANT（POC 已通）、ORZ-COMPACTION-REDESIGN（实施待放行） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（POC 已通）、ORZ-COMPACTION-REDESIGN（实施待放行） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -61,7 +61,7 @@
   assessment"（Active 无 pending / continue 已决均不完整）；plan 模式探针以交互用户
   信号代理，未来 headless 计划模式会话需独立能力信号。
 
-### 2. FUS-RETRIEVAL-MECH（`approved`；P0-B）
+### 2. FUS-RETRIEVAL-MECH（`implemented`；P0-B，批次 1-6 已闭合 2026-08-14）
 
 - 入口：[设计](RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)。
 - 决策门：2026-08-13 用户已裁决放行实施。
@@ -103,14 +103,24 @@
   orz-tui 178 / orz-bin 42 通过，Python runtime 239 / assurance 1621 通过，
   仓库门禁 valid；既有 13 份 journals 重捕无漂移。审计：
   [GAP-RETRIEVAL-MECH 步骤 5 实施审计](audits/GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT_2026-08-14.md)。
+- 进度（2026-08-14）：**步骤 6 已完成**——提示词相应缩短与测试更新：
+  主 Agent 提示词引用纪律缩减为"标记格式 + verifier 交付前机械校验"
+  （设计 §3.3）；检索子代理提示词移除"候选 ≤5 / never the full reference
+  list"软约束，改指机械预算反馈（"候选 N/M，剩余 K"）；来源加权/引用规则
+  段落去冗余；prompt.rs 测试同步更新。验证：orz-loop 281 / orz-assurance
+  151+1 doctest / orz-host 207 / orz-tui 178 / orz-bin 42 通过，Python
+  runtime 244 / assurance 1607+14 skipped 通过，仓库门禁 valid、0 错误。
+  审计：
+  [GAP-RETRIEVAL-MECH 步骤 6 实施审计](audits/GAP_RETRIEVAL_MECH_STEP6_PROMPT_SHORTENING_IMPL_AUDIT_2026-08-14.md)。
 - 依赖顺序：1（B-1 闭合）→ 2/3/5 → 4（闭合）→ 6。
   1. （已完成）B-1 闭合：web_search citations 结构化透传 loop；
   2. （已完成）web_fetch 计数门禁 + 计数反馈 + `ORZ_WEB_FETCH_CANDIDATE_CAP` 接线；
   3. （已完成）机械预筛模块（候选池净化 + 排序标签）与结构化结果扩展；
   4. （已完成）browser_read 范围/模式参数（全文/预览/关键词提取）工具能力扩展；
   5. （已完成）输出级引用校验器与交付边界接线；
-  6. 提示词相应缩短（计数/预筛/引用规则）与测试更新。
-- 建议并入：DC 剩余两信号（`same_module_no_evidence` / `key_surface_unexamined`）接线。
+  6. （已完成）提示词相应缩短（计数/预筛/引用规则）与测试更新。
+- 批次已闭合（2026-08-14）：DC 剩余两信号（`same_module_no_evidence` /
+  `key_surface_unexamined`）未并入批次，转 P3 遗留小项独立跟踪。
 
 ### 3. CLASSICAL-EXEC-ASSISTANT（POC 已通；实施中）
 
@@ -220,6 +230,12 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 6 闭合登记——提示词相应缩短与测试更新实施完成
+  （主提示词引用纪律缩减为"标记格式 + verifier 交付前机械校验"、检索提示词
+  移除候选 ≤5 软约束改指机械预算反馈、来源加权/引用规则去冗余、prompt.rs
+  测试同步）；P0-B 批次 1-6 全部闭合，FUS-RETRIEVAL-MECH 转 `implemented`，
+  DC 剩余两信号转 P3 独立跟踪。详见
+  [GAP-RETRIEVAL-MECH 步骤 6 实施审计](audits/GAP_RETRIEVAL_MECH_STEP6_PROMPT_SHORTENING_IMPL_AUDIT_2026-08-14.md)。
 - 2026-08-14：压缩机制重设计定稿登记——ADR-0010 v1.10（§3.6 修订 + §14.10 裁决索引）、
   设计文档 `CONTEXT_COMPACTION_DESIGN_2026-08-14.md`、索引 FUS-COMPACTION-REDESIGN pending；
   参数=384K 有效窗口 / 160K 触发 / 200K 兜底 / 五段模板 17K / 冷却 3 步；推翻零模型摘要与

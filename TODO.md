@@ -12,7 +12,7 @@
 
 ## P0 — 当前工作集
 
-### P0-B FUS-RETRIEVAL-MECH（`partial`；设计 approved，步骤 1/2/3/4/5 已闭合）
+### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
 依赖顺序：1（B-1，已闭合）→ 2/3/5（已闭合）→ 4（已闭合）→ 6。
 
@@ -21,8 +21,12 @@
 - [x] 步骤 3：机械预筛模块——候选池净化（canonical URL / host 级去重、已知失败形态、相关性粗筛）+ tier/weight 排序标签，进结构化结果（2026-08-14 闭合；`candidate_urls` 升级为预筛后保留池，`candidate_pool`/`prefilter_log` 契约先行）。
 - [x] 步骤 5：输出级引用校验器与交付边界接线——`[来源]` 结构化解析、source_id/visibility/claim 上限校验、失败显式降级（覆盖 V11-IMPL-004 的 source binding 与 claim verifier；2026-08-14 闭合，审计见 `docs/audits/GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT_2026-08-14.md`）。
 - [x] 步骤 4：browser_read 范围/模式参数扩展（全文/预览/关键词提取；local_browser 第二段复用同一计数域——2026-08-14 用户裁决：计数域挂载在检索子代理 activation（复用 web_fetch per-activation 语义），主 Agent 不执行检索任务、主车道投影移除 browser_read（投影移除与子代理恢复已实施），见设计 §1.3 注；2026-08-14 闭合，审计见 `docs/audits/GAP_RETRIEVAL_MECH_STEP4_BROWSER_READ_MODES_IMPL_AUDIT_2026-08-14.md`（含 2026-08-14 全面审查修复：计数消费后置、12K 严格上限、输入截断、maxLength、页脚 terms 语义、字段改名））。
-- [ ] 步骤 6：提示词相应缩短（计数/预筛/引用规则）与测试更新。
-- [ ] 建议并入：DC 剩余两信号（`same_module_no_evidence` / `key_surface_unexamined`）接线。
+- [x] 步骤 6：提示词相应缩短（计数/预筛/引用规则）与测试更新——主提示词引用纪律
+  缩减为"标记格式 + verifier 交付前机械校验"，检索提示词移除候选 ≤5 软约束改指
+  机械预算反馈（"候选 N/M，剩余 K"），来源加权/引用规则去冗余；prompt.rs 测试同步
+  （2026-08-14 闭合，审计见 `docs/audits/GAP_RETRIEVAL_MECH_STEP6_PROMPT_SHORTENING_IMPL_AUDIT_2026-08-14.md`）。
+- 注：DC 剩余两信号（`same_module_no_evidence` / `key_surface_unexamined`）未并入
+  批次，已转 P3 遗留小项独立跟踪。
 
 入口：[检索机械控制设计](docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md) / [B-1 实施审计](docs/audits/GAP_RETRIEVAL_MECH_B1_CITATIONS_IMPL_AUDIT_2026-08-13.md) / [步骤 2 实施审计](docs/audits/GAP_RETRIEVAL_MECH_STEP2_WEB_FETCH_CANDIDATE_COUNT_IMPL_AUDIT_2026-08-14.md) / [步骤 4 实施审计](docs/audits/GAP_RETRIEVAL_MECH_STEP4_BROWSER_READ_MODES_IMPL_AUDIT_2026-08-14.md)。
 
@@ -104,6 +108,7 @@
 - [ ] V11-IMPL-003：Global Review receipt 与真正审查结论严格分离——复核并登记闭合或转 gap。
 - [ ] V11-IMPL-007：Toolbar/run-history 数据源统一到 ORZ session ownership、旧路径残留——复核并登记闭合或转 gap。
 - [ ] orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`）——复核并登记闭合或转 gap。
+- [ ] DC 硬信号 4/6：`same_module_no_evidence` / `key_surface_unexamined` 接线（原建议并入 P0-B，批次已闭合，独立待办）。
 - [x] 前置收尾：提交当前未提交登记（995a384，2026-08-13）。
 
 ## 审计登记边界（条件触发，不占当前优先级）
