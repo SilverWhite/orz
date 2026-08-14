@@ -24,14 +24,19 @@
 /// local-code fallback); the marker is a WRITER-SIDE binding, NOT a
 /// verification claim — a verifier must check source identity / visibility
 /// / claim limits, not grep the text.
+///
+/// FUS-RETRIEVAL-MECH P0-B step 6 (2026-08-14): shortened per
+/// `RETRIEVAL_MECHANICAL_CONTROLS_DESIGN` §3.3 — the output-level verifier
+/// is mechanical now, so the prompt carries only the marker formats + a
+/// verifier notice (identity / visibility / claim limits), not the full
+/// discipline essay.
 pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent workbench。\
 遵循注入的 assurance 上下文块执行任务；工具列表由运行时按轮声明，不得自行推断。\
-\n引用纪律：凡基于外部依据、参考实现或内部文档的引用，必须在引用处附带内联标记 \
-`[来源: source_id]`（已有 ledger 记录时）或 `[来源: 路径:行号]`（本地代码 observation-time \
-定位）；外部来源引用 URL/document identity + observed scope（如 `[来源: <url> metadata_only]`，\
-metadata-only 不得生成全文级归因）；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。\
-内部文档引用用 文档ID §节/锚点 而非裸行号（行号会漂移）。标记是写入侧绑定，不构成验证；\
-来源身份、可见性等级与 claim 上限由 verifier 机械检查。\
+\n引用纪律：基于外部依据、参考实现或内部文档的引用，必须附带内联标记 \
+`[来源: source_id]`（ledger 记录）或 `[来源: 路径:行号]`（本地代码 observation-time 定位）；\
+外部来源引用 URL/document identity + observed scope（如 `[来源: <url> metadata_only]`）；\
+内部文档引用用 文档ID §节/锚点；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。\
+标记格式、来源身份、可见性等级与 claim 上限由 verifier 在交付前机械校验，不通过即阻止交付。\
 \n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
 compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
 写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
@@ -316,13 +321,19 @@ pub fn tool_round_budget_exhaustion_block(budget: u32) -> String {
 /// subagent's system prompt (NOT `BASE_SYSTEM_PROMPT`: a retrieval task
 /// contract is not a run-semantic; GAP-SUBAGENT-RUNTIME 2026-08-10).
 ///
-/// The citation-rule text is preserved verbatim from the pre-split
-/// one-shot pass (`retrieval.rs`, 2026-08-10) — the stable interface;
-/// the delivery contract (the `[DOC]`/`[SOURCE]` line protocol the
-/// caller parses mechanically) is now an explicit clause instead of an
-/// implicit write contract. `blocks` carries the shared availability +
-/// budget declarations (the subagent budget is its own — independent
-/// per-session accounting).
+/// The citation-rule text descends from the pre-split one-shot pass
+/// (`retrieval.rs`, 2026-08-10) — the stable interface; the delivery
+/// contract (the `[DOC]`/`[SOURCE]` line protocol the caller parses
+/// mechanically) is an explicit clause instead of an implicit write
+/// contract. `blocks` carries the shared availability + budget
+/// declarations (the subagent budget is its own — independent per-session
+/// accounting).
+///
+/// FUS-RETRIEVAL-MECH P0-B step 6 (2026-08-14): the obsolete soft
+/// "at most 5 candidates" prompt rule is gone — the candidate budget is
+/// mechanical (`ORZ_WEB_FETCH_CANDIDATE_CAP`, per-result feedback
+/// "候选 N/M，剩余 K"); the source-weighting / citation-rule paragraphs
+/// are de-duplicated.
 pub fn build_retrieval_system_prompt(
     section_name: &str,
     goal: &str,
@@ -336,11 +347,11 @@ pub fn build_retrieval_system_prompt(
     // and WHICH channel may verify what (二存一 — never mix lanes).
     let weighting_contract = match retrieval_mode {
         "framework_fallback" => {
-            "Retrieval channel: web_search (server-side search) is the entry; \
-             verify ONLY high-value / conclusion-dependent candidate URLs \
-             with web_fetch — at most 5 candidates, never the full reference \
-             list. browser_read is FORBIDDEN in this mode (one channel per \
-             task)."
+            "Retrieval channel: web_search is the entry; verify only \
+             high-value / conclusion-dependent candidates with web_fetch \
+             — the candidate budget is mechanical (per-result feedback \
+             '候选 N/M，剩余 K'). browser_read is FORBIDDEN in this mode \
+             (one channel per task)."
         }
         "local_browser" => {
             "Retrieval channel: browser_read reads pages directly — the \
@@ -352,24 +363,20 @@ pub fn build_retrieval_system_prompt(
     format!(
         "Retrieval subagent ({section_name}). Goal: {goal}\n\
          Source weighting (ADR-0010 §3.7 条 12): every web source carries a \
-         mechanical tier in the ledger — authoritative 1.1 (government/agency, \
-         direct adoption), default 1.0, low_quality 0.7 (platforms, personal \
-         blogs, unverified media/accounts). Prefer higher-weight sources for \
-         conclusions; a low-quality source MAY be used but MUST be explicitly \
-         annotated in `source_annotations` with status \"annotated\" (v0: \
-         annotate + rank, no hard interception).\n\
+         mechanical tier in the ledger (authoritative 1.1 / default 1.0 / \
+         low_quality 0.7). Prefer higher-weight sources for conclusions; a \
+         low-quality source MAY be used but MUST be explicitly annotated in \
+         `source_annotations` with status \"annotated\" (v0: annotate + rank, \
+         no hard interception).\n\
          {weighting_contract}\n\
-         Citation rule (D-1, FIX_PLAN 2026-08-06; ADR-0010 §3.7.9): \
-         any claim based on external evidence, a reference \
-         implementation, or internal docs must carry an inline \
-         `[来源: source_id]` marker (ledger-backed) at the citing site \
-         — the ledger is the single binding authority; observation-time \
-         path references are notes only, never a verification claim. \
-         Content without a locatable source must not be cited — never \
+         Citation rule (ADR-0010 §3.7.9): every claim based on external \
+         evidence, a reference implementation, or internal docs must carry \
+         an inline `[来源: source_id]` marker (ledger-backed) at the citing \
+         site. Content without a locatable source must not be cited — never \
          claim '参考自某处' from memory. Internal docs cite as 文档ID \
-         §节/锚点; EXTERNAL sources cite as URL/document identity + \
-         observed scope (e.g. `[来源: <url> metadata_only]`) — never \
-         full-text attribution for metadata-only material.\n\
+         §节/锚点; external sources cite as URL/document identity + \
+         observed scope (e.g. `[来源: <url> metadata_only]`) — \
+         metadata-only material never gets full-text attribution.\n\
          Delivery contract: use your actual tool results. Output \
          `[DOC]`-prefixed lines for project docs and `[SOURCE]`-prefixed \
          lines for sources (internal: source_ledger; external: \
@@ -441,8 +448,12 @@ mod tests {
             "observation-time path:line fallback still present"
         );
         assert!(
-            BASE_SYSTEM_PROMPT.contains("不构成验证"),
-            "marker is a binding, not a verification claim"
+            BASE_SYSTEM_PROMPT.contains("由 verifier 在交付前机械校验"),
+            "verifier notice present"
+        );
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("不通过即阻止交付"),
+            "verifier blocks delivery on failure"
         );
         assert!(
             BASE_SYSTEM_PROMPT.contains("不得凭记忆声称"),
@@ -664,7 +675,14 @@ mod tests {
         assert!(framework.contains("Source weighting"));
         assert!(framework.contains("source_annotations"));
         assert!(framework.contains("browser_read is FORBIDDEN in this mode"));
-        assert!(framework.contains("at most 5 candidates"));
+        assert!(
+            framework.contains("候选 N/M，剩余 K"),
+            "mechanical budget feedback contract present"
+        );
+        assert!(
+            !framework.contains("at most 5"),
+            "obsolete soft candidate cap removed"
+        );
         assert!(framework.contains("\"annotated\""));
 
         let local = build_retrieval_system_prompt("external_ret", "goal", "local_browser", "");
