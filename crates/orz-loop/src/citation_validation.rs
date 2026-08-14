@@ -103,7 +103,10 @@ pub fn parse_markers(text: &str) -> Vec<CitationMarker> {
     let mut search_from = 0usize;
     let mut index = 0usize;
     while search_from < text.len() {
-        if let Some(code) = mask.iter().find(|(s, e)| *s <= search_from && search_from < *e) {
+        if let Some(code) = mask
+            .iter()
+            .find(|(s, e)| *s <= search_from && search_from < *e)
+        {
             search_from = code.1;
             continue;
         }
@@ -162,9 +165,7 @@ fn code_mask(text: &str) -> Vec<(usize, usize)> {
     for line in text.split_inclusive('\n') {
         let line_end = offset + line.len();
         let trimmed = line.trim_start();
-        let is_fence_line = ["```", "~~~"]
-            .iter()
-            .any(|d| trimmed.starts_with(*d));
+        let is_fence_line = ["```", "~~~"].iter().any(|d| trimmed.starts_with(*d));
         if is_fence_line {
             ranges.push((offset, line_end));
             in_fence = !in_fence;
@@ -920,12 +921,18 @@ mod tests {
         )])];
         // Explicit default port + uppercase host canonicalise to the same
         // identity as the ledger URL.
-        let report =
-            validate_final_answer("[来源: https://X.EXAMPLE:443/doc full_text_observed]", &ledgers, &[]);
+        let report = validate_final_answer(
+            "[来源: https://X.EXAMPLE:443/doc full_text_observed]",
+            &ledgers,
+            &[],
+        );
         assert!(report.passed, "{:?}", report.reason_codes);
         // A fragment is dropped by the shared canonicalisation.
-        let report =
-            validate_final_answer("[来源: https://x.example/doc#sec-2 full_text_observed]", &ledgers, &[]);
+        let report = validate_final_answer(
+            "[来源: https://x.example/doc#sec-2 full_text_observed]",
+            &ledgers,
+            &[],
+        );
         assert!(report.passed, "{:?}", report.reason_codes);
     }
 
