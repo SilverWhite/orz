@@ -223,6 +223,7 @@
 ### 11. 遗留小项
 
 - DC 硬信号 4/6：`same_module_no_evidence` / `key_surface_unexamined` 接线（建议并入 P0/检索机械控制批次）。
+- prompt observed-scope 枚举补列（可选优化，P0-B 步骤 6 复核观察登记）：主提示词/检索提示词未列出合法 scope 枚举（`full_text_observed` / `partial_text_observed` / `metadata_only`），模型可能先踩一次 verifier 拒绝（`url_missing_observed_scope`）再修正；verifier 机械兜底已覆盖，暂不实施。
 - V11-IMPL-003：Global Review receipt 与真正审查结论严格分离——复核并登记闭合或转 gap。
 - V11-IMPL-007：Toolbar/run-history 数据源统一到 ORZ session ownership、旧路径残留检查——复核并登记闭合或转 gap。
 - orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`，顺序/负载相关、与本批无关）——复核并登记闭合或转 gap。
@@ -230,6 +231,10 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-B 步骤 6 全面复核补记——索引 GAP-SOURCE-WEIGHTING-IMPL
+  条目补"候选 ≤5 已机械取代"注记（P3 已处理）；审查观察登记：提示词未列
+  observed scope 合法枚举（P3 可选优化，暂不实施）。详见
+  [GAP-RETRIEVAL-MECH 步骤 6 实施审计](audits/GAP_RETRIEVAL_MECH_STEP6_PROMPT_SHORTENING_IMPL_AUDIT_2026-08-14.md) §7。
 - 2026-08-14：P0-B 步骤 6 闭合登记——提示词相应缩短与测试更新实施完成
   （主提示词引用纪律缩减为"标记格式 + verifier 交付前机械校验"、检索提示词
   移除候选 ≤5 软约束改指机械预算反馈、来源加权/引用规则去冗余、prompt.rs

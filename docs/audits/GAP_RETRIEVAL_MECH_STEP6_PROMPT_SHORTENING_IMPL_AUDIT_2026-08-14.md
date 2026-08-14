@@ -89,3 +89,28 @@
 - 检索提示词软约束 "候选 ≤5" 已全部移除，改指机械预算反馈（候选 N/M，剩余 K）；
 - 来源加权/引用规则段落去冗余且未改变行为契约；
 - 测试与门禁全绿；未宣称超出步骤 6 范围的语义。
+
+## 7. 复核补充（2026-08-14 全面检查）
+
+针对步骤 6 实施后的全面复核（设计合理性 / 实现合理性 / 设计与实现符合性），
+补充登记如下：
+
+1. **P3 索引残留旧时态表述（已处理）**：`CLI_PROJECT_INDEX.md`
+   GAP-SOURCE-WEIGHTING-IMPL 条目原以当前时态写"web_fetch ≤5"与"候选上限
+   软约束"，未标注已被取代；已补注"候选 ≤5 软约束已由 FUS-RETRIEVAL-MECH
+   步骤 2/6 取代为机械硬门（`ORZ_WEB_FETCH_CANDIDATE_CAP`，默认 8）"。
+   历史审计文档（`GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md`）中的
+   ≤5 表述属当时事实，不修改。
+2. **观察（明文记录，暂不处理）**：主 Agent 系统提示词未列出 observed
+   scope 合法枚举（`full_text_observed` / `partial_text_observed` /
+   `metadata_only`）；verifier 对裸外部 URL 以 `url_missing_observed_scope`
+   拒绝，对超出可见性的 scope/claim 以 `claim_exceeds_visibility` 拒绝
+   （`citation_validation.rs` 测试 `bare_url_requires_observed_scope` 与
+   `url_with_strong_scope_fails` 覆盖）。旧提示词同样未列枚举，非步骤 6
+   回归；当前由 verifier 机械兜底，但模型可能先踩一次校验失败再修正。
+   列为 P3 可选优化（BACKLOG/TODO 已登记，暂不实施）：在提示词引用纪律中
+   列出合法枚举，降低模型侧首次失败率。
+
+复核独立重跑：orz-loop 281 passed / 3 ignored（prompt 9/9）；
+`python scripts/check_repository.py` valid、0 错误；两仓库 `git diff --check`
+干净。
