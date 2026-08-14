@@ -518,11 +518,14 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("计划已提出: {plan_id}")]
         }
         TuiEvent::PlanApproved {
-            plan_id, authority, ..
+            plan_id, plan_epoch, authority, ..
         } => {
             app.content
-                .add_system_message(&format!("[计划] {plan_id} 已批准（{authority}）"), false);
-            vec![format!("计划已批准: {plan_id}")]
+                .add_system_message(
+                    &format!("[计划] {plan_id}（epoch {plan_epoch}）已批准（{authority}）"),
+                    false,
+                );
+            vec![format!("计划已批准: {plan_id}（epoch {plan_epoch}）")]
         }
         TuiEvent::PlanRejected { plan_id } => {
             app.content
@@ -890,6 +893,7 @@ mod tests {
         });
         a.accept_event(TuiEvent::PlanApproved {
             plan_id: "PLAN-1".into(),
+            plan_epoch: 1,
             authority: "user".into(),
             decision: "approve".into(),
             execution_policy: "manual".into(),

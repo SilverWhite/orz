@@ -301,6 +301,7 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         },
         EventType::PlanApproved => TuiEvent::PlanApproved {
             plan_id: get_str(p, "plan_id"),
+            plan_epoch: get_u64(p, "plan_epoch"),
             authority: get_str(p, "authority"),
             decision: get_str(p, "decision"),
             execution_policy: get_str(p, "execution_policy"),

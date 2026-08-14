@@ -246,6 +246,7 @@ pub enum TuiEvent {
     },
     PlanApproved {
         plan_id: String,
+        plan_epoch: u64,
         authority: String,
         decision: String,
         execution_policy: String,

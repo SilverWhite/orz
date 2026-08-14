@@ -16,6 +16,7 @@ pub mod blackboard;
 pub(crate) mod citation_validation;
 pub mod controller;
 mod diagnostic_coverage;
+pub mod epoch;
 pub mod gateway;
 pub mod host;
 pub mod orientation;

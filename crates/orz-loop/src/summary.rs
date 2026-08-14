@@ -126,17 +126,21 @@ pub enum SummaryError {
     Degenerate,
 }
 
-/// Path-slot Top-N (design §10 / audit D-4): at most 40 window edits by
-/// insertion order; the overflow line points at the summary archive (the
-/// blackboard edit window rolls after every compaction — the archive is
-/// the permanent holder of the full window path list).
+/// Path-slot Top-N (design §10 / audit D-4): at most 40 plan-epoch edits by
+/// insertion order; the overflow line points at the current plan-epoch
+/// snapshot (v1.15, 2026-08-14 — the epoch archive is the permanent holder
+/// of the full path/action list; the summary archive keeps the human-
+/// readable projection).
 const PATH_TOP_N: usize = 40;
 
 /// Mechanical slot rendering — 目的 from the plan goal, 计划 from the plan
-/// steps, 变动文件路径 from the blackboard edit records.
+/// steps, 变动文件路径 from the blackboard edit records. `epoch_archive`
+/// is the current plan-epoch snapshot path — the overflow pointer target
+/// when the path slot overflows (falls back to the compaction archive).
 pub fn mechanical_slots(
     blackboard: &Blackboard,
     archive_path: &Path,
+    epoch_archive: Option<&Path>,
 ) -> (String, String, String) {
     let purpose = blackboard
         .plan
@@ -144,7 +148,7 @@ pub fn mechanical_slots(
         .clone()
         .unwrap_or_else(|| "（未设置）".to_string());
     let plan = render_plan(&blackboard.plan.steps);
-    let paths = render_paths(blackboard, archive_path);
+    let paths = render_paths(blackboard, archive_path, epoch_archive);
     (purpose, plan, paths)
 }
 
@@ -175,7 +179,11 @@ fn render_plan(steps: &[PlanStep]) -> String {
     out
 }
 
-fn render_paths(blackboard: &Blackboard, archive_path: &Path) -> String {
+fn render_paths(
+    blackboard: &Blackboard,
+    archive_path: &Path,
+    epoch_archive: Option<&Path>,
+) -> String {
     let mut out = String::new();
     let mut overflow = 0usize;
     for edit in blackboard.edits.iter().take(PATH_TOP_N) {
@@ -199,9 +207,12 @@ fn render_paths(blackboard: &Blackboard, archive_path: &Path) -> String {
     if out.is_empty() {
         out = "（本窗口无编辑）".to_string();
     } else if overflow > 0 {
+        let holder = epoch_archive
+            .unwrap_or(archive_path)
+            .to_string_lossy()
+            .to_string();
         out.push_str(&format!(
-            "\n（其余 {overflow} 条路径见本次摘要存档 {archive}）",
-            archive = archive_path.display()
+            "\n（其余 {overflow} 条路径见本 plan epoch 快照 {holder}）",
         ));
     }
     out
@@ -318,6 +329,7 @@ pub fn build_summary_marker(
     incomplete: bool,
     guard_failed: bool,
     archive_write_failed: bool,
+    plan_epoch: u64,
 ) -> String {
     let state = if incomplete { "（summary_incomplete）" } else { "" };
     // P0-D S6 (2026-08-14): when no archive was written (termination state)
@@ -334,14 +346,20 @@ pub fn build_summary_marker(
          {archive_note}\
          摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮\n\
          摘要存档: {}\n{digest_line}\n\
+         黑板 plan_epoch: {}\n\
          目的: {}\n\
          计划: {}\n\
          变动文件路径: {}\n\
          注意事项: {}\n\
          后续衔接: {}\n\
-         回查: blackboard_read（分区 plan / edits / tool_actions / exec）\n\
+         回查: blackboard_read（分区 plan / edits / tool_actions / exec；历史 plan epoch 用 epoch 参数）\n\
          [/前文上下文已压缩]",
         archive_path.display(),
+        if plan_epoch > 0 {
+            plan_epoch.to_string()
+        } else {
+            "（未设置）".to_string()
+        },
         slots.purpose,
         slots.plan,
         slots.paths,
@@ -446,7 +464,7 @@ mod tests {
             });
         }
         let (purpose, plan, paths) =
-            mechanical_slots(&bb.read(), Path::new(".gsa/compaction/x.md"));
+            mechanical_slots(&bb.read(), Path::new(".gsa/compaction/x.md"), None);
         assert_eq!(purpose, "修复 bug");
         assert!(plan.contains("复现"));
         assert!(plan.contains("进行中"));
@@ -469,13 +487,17 @@ mod tests {
             }
         }
         let archive = Path::new(".gsa/compaction/compaction-RUN-X-0099.md");
-        let (_purpose, _plan, paths) = mechanical_slots(&bb.read(), archive);
+        let epoch_archive = Path::new(".gsa/blackboard/epoch-3.json");
+        let (_purpose, _plan, paths) = mechanical_slots(&bb.read(), archive, Some(epoch_archive));
         // Top-40 by insertion order: f0..f39 appear, f40..f44 are overflow.
         assert!(paths.contains("f0.py"));
         assert!(paths.contains("f39.py"));
         assert!(!paths.contains("f40.py"));
         assert!(paths.contains("其余 5 条路径"));
-        assert!(paths.contains(archive.to_string_lossy().as_ref()));
+        // v1.15: the overflow pointer targets the plan-epoch snapshot, not
+        // the compaction archive.
+        assert!(paths.contains(epoch_archive.to_string_lossy().as_ref()));
+        assert!(!paths.contains(archive.to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -535,11 +557,13 @@ mod tests {
             false,
             false,
             false,
+            3,
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
         assert!(marker.contains(&digest));
         assert!(marker.contains("compaction-RUN-X-001.md"));
         assert!(marker.contains("修复缓存回归"));
+        assert!(marker.contains("黑板 plan_epoch: 3"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
         assert!(crate::prompt::is_injected_block_text(&marker));
     }
@@ -560,11 +584,13 @@ mod tests {
             true,
             false,
             false,
+            2,
         );
         assert!(marker.contains("summary_incomplete"));
         assert!(marker.contains("（生成失败）"));
         assert!(marker.contains("摘要 digest: （未生成"));
         assert!(!marker.contains("sha256:000000"));
+        assert!(marker.contains("黑板 plan_epoch: 2"));
     }
 
     #[test]
@@ -579,9 +605,11 @@ mod tests {
             false,
             true,
             true,
+            0,
         );
         assert!(marker.contains("机制失败：缩减守卫连续不满足"));
         assert!(marker.contains("存档写入失败：摘要未落盘"));
+        assert!(marker.contains("黑板 plan_epoch: （未设置）"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
     }
 }

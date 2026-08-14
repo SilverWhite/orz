@@ -325,8 +325,10 @@ pub(crate) enum CompactDecision {
 /// compaction (reason = "session_end", forced). Runs the summary ≤3 times,
 /// persists the archive with bounded retries (an archive failure is
 /// explicitly reported in the marker and the event), truncates the
-/// conversation, rolls the blackboard edit window, inserts the rolling
-/// single marker and journals `context_compressed` v0.2.
+/// conversation, inserts the rolling single marker and journals
+/// `context_compressed` v0.2. v1.15 (2026-08-14): compaction never touches
+/// the blackboard — the blackboard lifecycle is the plan epoch, not the
+/// context window.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_template_compact(
     svc: &SharedLoopServices<'_>,
@@ -366,9 +368,19 @@ pub(crate) async fn run_template_compact(
     let id = format!("compaction-{}-{:04}", writer.run_id(), writer.seq());
     let archive_dir = host.session_cwd().join(".gsa").join("compaction");
     let archive_path = archive_dir.join(format!("{id}.md"));
+    // v1.15 (2026-08-14): the path slot's overflow pointer targets the
+    // current plan-epoch snapshot (the epoch archive is the permanent
+    // holder of the full path/action records).
+    let plan_epoch = svc.blackboard.read().plan.plan_epoch;
+    let epoch_archive = (plan_epoch > 0).then(|| {
+        host.session_cwd()
+            .join(crate::epoch::EPOCH_ARCHIVE_DIR)
+            .join(format!("epoch-{plan_epoch}.json"))
+    });
     let mechanical = {
         let bb = svc.blackboard.read();
-        let (purpose, plan, paths) = crate::summary::mechanical_slots(&bb, &archive_path);
+        let (purpose, plan, paths) =
+            crate::summary::mechanical_slots(&bb, &archive_path, epoch_archive.as_deref());
         crate::summary::SummarySlots {
             purpose,
             plan,
@@ -450,6 +462,7 @@ pub(crate) async fn run_template_compact(
             false,
             guard_failed,
             archive_write_failed,
+            plan_epoch,
         );
         let messages_dropped = messages.drain(first_round_start..kept_start).count();
         messages.insert(
@@ -462,11 +475,6 @@ pub(crate) async fn run_template_compact(
                 reasoning_content: None,
             },
         );
-        // P0-D review fix (2026-08-14): the blackboard edit window is
-        // consumed by the compaction — the window paths now live in the
-        // archive/marker, so the board is rolled (擦干净) instead of
-        // accumulating stale paths into the next summary.
-        svc.blackboard.write().edits.clear();
         writer
             .record(
                 EventType::ContextCompressed,
@@ -511,6 +519,7 @@ pub(crate) async fn run_template_compact(
             true,
             guard_failed,
             false,
+            plan_epoch,
         );
         let mut dropped = rounds_dropped;
         let mut messages_dropped = 0usize;

@@ -381,6 +381,12 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
             let mut seq = handle.next_sequence;
             let mut prev_hash = handle.last_event_sha256.clone();
             let gateway = build_gateway();
+            // v1.15 (2026-08-14): the blackboard plan-epoch archive lives
+            // under the session cwd's `.gsa/blackboard`. A fresh CLI run
+            // starts its epoch AFTER every epoch already archived there, so
+            // workspace-level epoch numbers stay unique across runs.
+            let blackboard_archive_dir = cwd.join(".gsa").join("blackboard");
+            let plan_epoch = orz_loop::epoch::next_plan_epoch_from_archive(&blackboard_archive_dir);
 
             // Plan phase — on error the journal must still terminate
             // (review P2-1): record RunFailed continuing the chain, then
@@ -393,6 +399,7 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
                 prompt,
                 &gateway,
                 &heartbeat,
+                plan_epoch,
             )
             .await
             {
@@ -416,7 +423,10 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
             // plans later keep the same ingestion point).
             let controller = orz_loop::AgentLoopController::with_gateway(gateway)
                 .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                .with_blackboard_archive_dir(Some(blackboard_archive_dir))
                 .with_plan(
+                    artifact.plan_id.clone(),
+                    plan_epoch,
                     prompt.to_string(),
                     artifact
                         .sections
@@ -508,6 +518,7 @@ async fn run_plan_phase(
     prompt: &str,
     gateway: &Arc<dyn ModelGateway>,
     heartbeat: &orz_loop::gateway::model::ActivityClock,
+    plan_epoch: u64,
 ) -> Result<orz_assurance::plan::PlanArtifact, String> {
     let mut sm = orz_assurance::plan::PlanStateMachine::new();
     sm.enter_planning(None).map_err(|e| format!("plan: {e}"))?;
@@ -611,6 +622,7 @@ async fn run_plan_phase(
             "authority": approval.authority,
             "decision": approval.decision.as_str(),
             "execution_policy": sm.approval_policy,
+            "plan_epoch": plan_epoch,
         }),
     )
     .await?;
@@ -1197,6 +1209,7 @@ mod tests {
             "hi",
             &gateway,
             &heartbeat,
+            1,
         )
         .await;
         assert!(err.is_err(), "gate round must fail on an empty script");
@@ -1807,6 +1820,7 @@ mod conformance_capture {
                     "hi",
                     &gateway,
                     &heartbeat,
+                    1,
                 )
                 .await
                 .unwrap();

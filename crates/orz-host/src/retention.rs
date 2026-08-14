@@ -35,6 +35,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Default retention window (design §5 A5: `.gsa` 默认保留 7 天).
@@ -88,6 +89,12 @@ pub struct PruneReport {
     /// (`compaction/*.md`) — audit copies, swept by age (the journal and
     /// the rolling marker carry the digest/pointer).
     pub removed_compaction_archives: Vec<String>,
+    /// v1.15 (2026-08-14) / v1.15⑧ (2026-08-15): blackboard plan-epoch
+    /// snapshots (`blackboard/epoch-*.json`) — full path/action archives of
+    /// rotated epochs; swept by age (retention 7 days) EXCEPT the
+    /// highest-numbered epoch, which is the restore entry for a live board
+    /// and is therefore always kept.
+    pub removed_blackboard_epoch_archives: Vec<String>,
     /// PDF evidence (2026-08-11): content-addressed PDF evidence documents
     /// (`pdf-evidence/{p2}/{full64}/`) — rebuildable from the source URL, so
     /// swept by age (document ids referenced by older runs lapse — explicit
@@ -137,6 +144,15 @@ pub fn prune_old_records(
     prune_old_files(
         &mut report.removed_compaction_archives,
         &gsa_root.join("compaction"),
+        cutoff,
+    );
+    // v1.15⑧ (2026-08-15): blackboard plan-epoch snapshots — swept by age
+    // EXCEPT the highest-numbered epoch (the restore entry). Keeping the
+    // latest archive also keeps `latest_epoch_snapshot` working for
+    // long-lived boards whose current epoch file is older than the cutoff.
+    prune_blackboard_epochs(
+        &mut report.removed_blackboard_epoch_archives,
+        &gsa_root.join("blackboard"),
         cutoff,
     );
     // local_browser (2026-08-10): orphaned browser profiles — a session
@@ -345,6 +361,55 @@ fn prune_old_files(removed: &mut Vec<String>, dir: &Path, cutoff: SystemTime) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
+        if entry_older_than(&path, cutoff) && std::fs::remove_file(&path).is_ok() {
+            removed.push(name);
+        }
+    }
+}
+
+/// Sweep blackboard plan-epoch snapshots by age, EXCEPT the highest-numbered
+/// one (v1.15⑧, 2026-08-15). The newest archive is the restore entry —
+/// `epoch::latest_epoch_snapshot` loads the max file — so it must survive
+/// even when older than the retention cutoff (a long-lived live board).
+/// Epoch numbers are timestamp-stamped monotonic (2026-08-15), so the
+/// highest number is always the most recent identity.
+fn prune_blackboard_epochs(removed: &mut Vec<String>, dir: &Path, cutoff: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(u64, PathBuf)> = Vec::new();
+    let mut latest: Option<u64> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(rest) = name
+            .strip_prefix("epoch-")
+            .and_then(|r| r.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let Ok(epoch) = rest.parse::<u64>() else {
+            continue;
+        };
+        if latest.map_or(true, |m| epoch > m) {
+            latest = Some(epoch);
+        }
+        files.push((epoch, path));
+    }
+    for (epoch, path) in files {
+        if latest == Some(epoch) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         if entry_older_than(&path, cutoff) && std::fs::remove_file(&path).is_ok() {
             removed.push(name);
         }
@@ -627,6 +692,56 @@ mod tests {
         assert_eq!(report.removed_conversation_sidecars, vec!["sess-old.json"]);
         assert!(!old.exists());
         assert!(conv.join("sess-fresh.json").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// v1.15 (2026-08-14): old blackboard plan-epoch snapshots are swept by
+    /// age; fresh ones survive (the current epoch is still live).
+    #[test]
+    fn sweep_removes_old_blackboard_epoch_archives_keeps_fresh() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        let bb = gsa.join("blackboard");
+        std::fs::create_dir_all(&bb).unwrap();
+        let old = bb.join("epoch-1.json");
+        std::fs::write(&old, "{}").unwrap();
+        backdate(&old, 10);
+        std::fs::write(bb.join("epoch-2.json"), "{}").unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(report.removed_blackboard_epoch_archives, vec!["epoch-1.json"]);
+        assert!(!old.exists());
+        assert!(bb.join("epoch-2.json").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// v1.15⑧ (2026-08-15): the highest-numbered blackboard epoch archive
+    /// survives even when older than the cutoff — it is the restore entry
+    /// for a long-lived live board.
+    #[test]
+    fn sweep_keeps_latest_blackboard_epoch_even_when_old() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        let bb = gsa.join("blackboard");
+        std::fs::create_dir_all(&bb).unwrap();
+        let old1 = bb.join("epoch-1.json");
+        let old2 = bb.join("epoch-2.json");
+        std::fs::write(&old1, "{}").unwrap();
+        std::fs::write(&old2, "{}").unwrap();
+        backdate(&old1, 10);
+        backdate(&old2, 10);
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(
+            report.removed_blackboard_epoch_archives,
+            vec!["epoch-1.json"]
+        );
+        assert!(!old1.exists());
+        assert!(old2.exists(), "latest epoch archive is the restore entry");
 
         let _ = std::fs::remove_dir_all(&base);
     }

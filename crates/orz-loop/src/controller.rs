@@ -23,6 +23,7 @@
 //! INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2 §4.5).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -301,6 +302,12 @@ pub struct AgentLoopController {
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
     snapshot_store: Option<Arc<SnapshotStore>>,
+    /// v1.15 (2026-08-14): plan-epoch archive directory
+    /// (`<session_cwd>/.gsa/blackboard`). `Some` enables epoch snapshot
+    /// persistence on rotation, restore-from-archive on construction and
+    /// cross-epoch `blackboard_read`; `None` keeps epochs purely
+    /// in-memory (tests / hosts without a session cwd).
+    blackboard_archive_dir: Option<PathBuf>,
     /// Monotonic model-round counter across turns (streaming pacing guard).
     /// Kept on the controller (not per-turn) so a turn ≥ 2's FIRST round is
     /// also paced: a programmatic stdio client issuing prompt #2 immediately
@@ -1967,6 +1974,7 @@ impl AgentLoopController {
             candidate_cap: web_fetch_candidate_cap_override()
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             snapshot_store: None,
+            blackboard_archive_dir: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
             context_compact: ContextCompactConfig::default(),
@@ -3280,6 +3288,22 @@ impl AgentLoopController {
         self
     }
 
+    /// v1.15 (2026-08-14): attach the plan-epoch archive directory
+    /// (`<session_cwd>/.gsa/blackboard`). When `Some`, the latest archived
+    /// epoch snapshot is restored into the blackboard (plan/edits/
+    /// tool_actions/exec — the epoch restore entry), later rotations
+    /// persist their snapshots there, and `blackboard_read` can query
+    /// archived epochs.
+    pub fn with_blackboard_archive_dir(mut self, dir: Option<PathBuf>) -> Self {
+        if let Some(dir) = &dir
+            && let Some(snapshot) = crate::epoch::latest_epoch_snapshot(dir)
+        {
+            self.blackboard.write().restore_epoch_snapshot(&snapshot);
+        }
+        self.blackboard_archive_dir = dir;
+        self
+    }
+
     /// GAP-SUBAGENT-RUNTIME (M4/M5 tests): an independent small budget —
     /// the main loop AND the subagent loops share the configured cap
     /// (env override mirrors the main; ADR-0010 §3.4.6 independent
@@ -3297,35 +3321,83 @@ impl AgentLoopController {
         self
     }
 
-    /// 2026-08-08 blackboard partition (A4): ingest an approved plan —
-    /// goal + step descriptions — into the blackboard plan section (the
-    /// plan-mode state-machine mapping; §4.1: goal、步骤 + 状态). The first
-    /// step is marked in-progress, the rest pending; step transitions are a
-    /// later refinement (steps stay pending until then — the status line is
+    /// 2026-08-08 blackboard partition (A4) + v1.15 (2026-08-14): ingest an
+    /// approved plan — `plan_id` + `plan_epoch` identity, goal + step
+    /// descriptions — into the blackboard plan section (the plan-mode
+    /// state-machine mapping; §4.1: goal、步骤 + 状态). The first step is
+    /// marked in-progress, the rest pending; step transitions are a later
+    /// refinement (steps stay pending until then — the status line is
     /// byte-stable across rounds, which is exactly what the prefix-cache
     /// discipline wants). Non-plan runs simply never call this: the status
     /// line is absent and zero dilution.
     ///
+    /// Same `plan_id` = same-epoch revision (plan text replaced, blackboard
+    /// untouched). New `plan_id` = new plan epoch: the old epoch's
+    /// plan/edits/tool_actions/exec are captured and archived (when an
+    /// archive dir is configured), then the epoch-scoped partitions are
+    /// cleared and the new plan written — one atomic rotation. The current
+    /// epoch's snapshot is always persisted after ingest (approval or
+    /// revision) so a process restart can restore the live epoch — the
+    /// rotation archive preserves the replaced epochs.
+    ///
+    /// Identity invariants (v1.15⑧, 2026-08-15): the `plan_id ↔ plan_epoch`
+    /// mapping is one-to-one and enforced — same `plan_id` must reuse the
+    /// SAME `plan_epoch`; a new `plan_id` must advance to a STRICTLY GREATER
+    /// `plan_epoch` (timestamp-stamped monotonic numbering). Violations
+    /// fail fast via `try_with_plan`/`with_plan` and never mutate the board.
+    ///
     /// The plan section feeds both the resident status line (`[任务状态]`
     /// block in the system prompt) and the `blackboard_read` plan partition.
-    pub fn with_plan(self, goal: String, steps: Vec<String>) -> Self {
-        use crate::blackboard::StepStatus;
-        {
+    pub fn with_plan(
+        self,
+        plan_id: String,
+        plan_epoch: u64,
+        goal: String,
+        steps: Vec<String>,
+    ) -> Self {
+        self.try_with_plan(plan_id, plan_epoch, goal, steps).expect(
+            "plan epoch identity invariant violated (same plan_id must reuse \
+             its plan_epoch; a new plan_id must advance to a strictly greater \
+             plan_epoch)",
+        )
+    }
+
+    /// Fallible form of [`Self::with_plan`]: returns the identity violation
+    /// instead of panicking. On `Err` the blackboard is left untouched.
+    pub fn try_with_plan(
+        self,
+        plan_id: String,
+        plan_epoch: u64,
+        goal: String,
+        steps: Vec<String>,
+    ) -> Result<Self, crate::blackboard::PlanEpochError> {
+        let rotated = {
             let mut w = self.blackboard.write();
-            w.plan.goal = Some(goal);
-            for (i, desc) in steps.into_iter().enumerate() {
-                w.plan.steps.push(crate::blackboard::PlanStep {
-                    id: format!("step-{}", i + 1),
-                    description: desc,
-                    status: if i == 0 {
-                        StepStatus::InProgress
-                    } else {
-                        StepStatus::Pending
-                    },
-                });
+            w.rotate_to_plan(plan_id, plan_epoch, goal, steps, &chrono_utc_now())?
+        };
+        if let Some(dir) = &self.blackboard_archive_dir {
+            if let Some(snapshot) = rotated {
+                if !crate::epoch::write_epoch_archive_retry(dir, &snapshot) {
+                    tracing::warn!(
+                        "epoch archive write failed ({}): epoch {} — rotation still committed",
+                        dir.display(),
+                        snapshot.plan_epoch,
+                    );
+                }
+            }
+            let current = {
+                let bb = self.blackboard.read();
+                bb.epoch_snapshot(&chrono_utc_now())
+            };
+            if !crate::epoch::write_epoch_archive_retry(dir, &current) {
+                tracing::warn!(
+                    "epoch archive write failed ({}): epoch {} — live board still committed",
+                    dir.display(),
+                    current.plan_epoch,
+                );
             }
         }
-        self
+        Ok(self)
     }
 
     /// A6 (2026-08-08): override the explicit context-compaction parameters
@@ -3492,6 +3564,7 @@ impl AgentLoopController {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             snapshot_store: None,
+            blackboard_archive_dir: None,
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
             context_compact: ContextCompactConfig::default(),
@@ -3527,112 +3600,57 @@ impl AgentLoopController {
         &self.blackboard
     }
 
-    /// 2026-08-08 blackboard partition (A3): render one blackboard section
-    /// for the `blackboard_read` tool. `since` (ISO 8601 / RFC 3339 — the
-    /// journal timestamp format) filters timestamped entries; plan has
-    /// current state only (no per-entry timestamps) and exec entries carry
-    /// none — `since` applies to edits and tool_actions.
+    /// 2026-08-08 blackboard partition (A3) + v1.15 (2026-08-14): render one
+    /// blackboard section for the `blackboard_read` tool. `since` (ISO 8601 /
+    /// RFC 3339 — the journal timestamp format) filters timestamped entries;
+    /// plan has current state only (no per-entry timestamps) and exec entries
+    /// carry none — `since` applies to edits and tool_actions.
+    ///
+    /// `epoch = Some(n)` reads the ARCHIVED epoch-n snapshot instead of the
+    /// live view (cross-epoch look-back). Missing archive or unconfigured
+    /// archive dir returns an explicit message — never a silent fallback to
+    /// the live board.
     ///
     /// Review closure (P2-2, 2026-08-08): `since` is parsed as RFC 3339 —
     /// a bare string compare silently dropped same-instant records when the
     /// model passed 'Z' or truncated precision. Unparseable values fall
     /// back to no filtering (read everything), never nothing.
-    fn render_blackboard_section(&self, section: &str, since: Option<&str>) -> String {
-        let since_dt = since.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
-        let after_since = |ts: &str| -> bool {
-            match since_dt {
-                None => true,
-                Some(dt) => chrono::DateTime::parse_from_rfc3339(ts)
-                    .map(|t| t >= dt)
-                    // The record's own timestamp unparseable — keep it
-                    // (lenient: never hide records over a filter edge).
-                    .unwrap_or(true),
-            }
-        };
-        let bb = self.blackboard.read();
-        match section {
-            "plan" => {
-                let goal = bb.plan.goal.as_deref().unwrap_or("(no goal set)");
-                let mut lines = vec![format!("goal: {goal}")];
-                if bb.plan.steps.is_empty() {
-                    lines.push("(no steps)".to_string());
-                }
-                for step in &bb.plan.steps {
-                    let status = match step.status {
-                        crate::blackboard::StepStatus::Pending => "pending",
-                        crate::blackboard::StepStatus::InProgress => "in-progress",
-                        crate::blackboard::StepStatus::Completed => "completed",
-                        crate::blackboard::StepStatus::Blocked => "blocked",
-                    };
-                    lines.push(format!("- [{status}] {}", step.description));
-                }
-                lines.join("\n")
-            }
-            "edits" => {
-                let lines: Vec<String> = bb
-                    .edits
-                    .iter()
-                    .filter(|r| after_since(&r.timestamp))
-                    .map(|r| format!("{} {}", r.timestamp, format_edit_record(r)))
-                    .collect();
-                if lines.is_empty() {
-                    "(no edit records)".to_string()
-                } else {
-                    lines.join("\n")
-                }
-            }
-            "tool_actions" => {
-                let mut lines: Vec<String> = Vec::new();
-                for category in ["read", "edit", "terminal", "retrieval", "other"] {
-                    let entries: Vec<String> = bb
-                        .tool_actions
-                        .iter()
-                        .filter(|r| r.category == category)
-                        .filter(|r| after_since(&r.timestamp))
-                        .map(|r| format!("{} {}", r.timestamp, r.tool))
-                        .collect();
-                    if !entries.is_empty() {
-                        lines.push(format!("== {category} =="));
-                        lines.extend(entries);
-                    }
-                }
-                if lines.is_empty() {
-                    "(no tool actions yet)".to_string()
-                } else {
-                    lines.join("\n")
-                }
-            }
-            "exec" => {
-                let mut lines = Vec::new();
-                lines.extend(bb.exec.results.iter().cloned());
-                lines.extend(bb.exec.errors.iter().cloned());
-                if lines.is_empty() {
-                    "(no exec results yet)".to_string()
-                } else {
-                    // Review D2-2 (2026-08-08): the exec partition renders
-                    // only the most recent entries — the compaction marker
-                    // invites look-backs, and an unbounded render would
-                    // push everything compaction saved back into the
-                    // conversation (a 100-round task's exec log can exceed
-                    // the compaction target by itself). The model narrows
-                    // with `since_timestamp` or reads files directly.
-                    const EXEC_RENDER_CAP: usize = 50;
-                    if lines.len() > EXEC_RENDER_CAP {
-                        let omitted = lines.len() - EXEC_RENDER_CAP;
-                        let head = format!(
-                            "[exec: 共 {} 条，仅显示最近 {EXEC_RENDER_CAP} 条（较早条目省略 {omitted} 条）]",
-                            lines.len(),
-                        );
-                        lines.drain(0..omitted);
-                        lines.insert(0, head);
-                    }
-                    lines.join("\n")
-                }
-            }
-            other => format!(
-                "unknown blackboard section: {other} (expected plan|edits|tool_actions|exec)"
-            ),
+    fn render_blackboard_section(
+        &self,
+        section: &str,
+        since: Option<&str>,
+        epoch: Option<u64>,
+    ) -> String {
+        if let Some(epoch) = epoch {
+            let Some(dir) = &self.blackboard_archive_dir else {
+                return format!(
+                    "epoch snapshot {epoch} unavailable: blackboard archive dir not configured"
+                );
+            };
+            return match crate::epoch::load_epoch_snapshot(dir, epoch) {
+                Some(snapshot) => crate::epoch::render_section(
+                    &snapshot.plan,
+                    &snapshot.edits,
+                    &snapshot.tool_actions,
+                    &snapshot.exec,
+                    section,
+                    since,
+                ),
+                None => format!(
+                    "epoch snapshot {epoch} not found (archive: {})",
+                    dir.display()
+                ),
+            };
         }
+        let bb = self.blackboard.read();
+        crate::epoch::render_section(
+            &bb.plan,
+            &bb.edits,
+            &bb.tool_actions,
+            &bb.exec,
+            section,
+            since,
+        )
     }
 
     /// Run a single turn of the agent loop for a given user prompt.
@@ -3989,8 +4007,11 @@ impl AgentLoopController {
                      accumulated log; read_file still works for files). Optional \
                      `since_timestamp` (RFC 3339, e.g. the timestamp this tool \
                      returned earlier) filters the edits / tool_actions entries \
-                     to those at or after that time. Call this when you need to \
-                     recall what changed or what you did earlier — it costs \
+                     to those at or after that time. Optional `epoch` (integer) \
+                     reads that plan-epoch ARCHIVE instead of the live view — \
+                     use it to recall a previous task's plan/edits after a new \
+                     plan epoch rotated the blackboard. Call this when you need \
+                     to recall what changed or what you did earlier — it costs \
                      nothing when you do not call it."
                     .to_string(),
                 parameters: serde_json::json!({
@@ -4001,6 +4022,11 @@ impl AgentLoopController {
                             "enum": ["plan", "edits", "tool_actions", "exec"],
                         },
                         "since_timestamp": {"type": "string"},
+                        "epoch": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Optional plan-epoch archive to read (cross-epoch look-back).",
+                        },
                     },
                     "required": ["section"],
                 }),
@@ -5279,7 +5305,7 @@ impl AgentLoopController {
         {
             let mut w = self.blackboard.write();
             w.tool_actions.push(ToolActionRecord {
-                category: "retrieval",
+                category: "retrieval".to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
             });
@@ -5854,7 +5880,7 @@ impl AgentLoopController {
         {
             let mut w = self.blackboard.write();
             w.tool_actions.push(ToolActionRecord {
-                category: "other",
+                category: "other".to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
             });
@@ -6609,7 +6635,7 @@ impl AgentLoopController {
             // 2026-08-08 blackboard partition: fold the executed call into
             // the tool-action section (terminal — a fixed command run).
             self.blackboard.write().tool_actions.push(ToolActionRecord {
-                category: ToolDispatcher::action_category(&tc.name),
+                category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
             });
@@ -6815,7 +6841,7 @@ impl AgentLoopController {
                 )
                 .await?;
             self.blackboard.write().tool_actions.push(ToolActionRecord {
-                category: ToolDispatcher::action_category(&tc.name),
+                category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
             });
@@ -6853,20 +6879,25 @@ impl AgentLoopController {
                 .unwrap_or("plan")
                 .to_string();
             let since = tc.arguments.get("since_timestamp").and_then(|s| s.as_str());
-            let content = self.render_blackboard_section(&section, since);
+            let epoch = tc.arguments.get("epoch").and_then(|v| v.as_u64());
+            let content = self.render_blackboard_section(&section, since, epoch);
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 0,
+                "section": section,
+            });
+            if let Some(epoch) = epoch {
+                completed["epoch"] = serde_json::json!(epoch);
+            }
             writer
                 .record(
                     EventType::ToolCompleted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "exit_code": 0,
-                        "section": section,
-                    }),
+                    completed,
                 )
                 .await?;
             self.blackboard.write().tool_actions.push(ToolActionRecord {
-                category: ToolDispatcher::action_category(&tc.name),
+                category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
             });
@@ -6978,7 +7009,7 @@ impl AgentLoopController {
                 // 2026-08-08 blackboard partition: fold the executed call
                 // into the tool-action section (category from the dispatcher).
                 self.blackboard.write().tool_actions.push(ToolActionRecord {
-                    category: ToolDispatcher::action_category(&tc.name),
+                    category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
                     timestamp: chrono_utc_now(),
                 });
@@ -7042,7 +7073,7 @@ impl AgentLoopController {
                 // "实际变动" rule applies to edit records, not to the action
                 // ledger).
                 self.blackboard.write().tool_actions.push(ToolActionRecord {
-                    category: ToolDispatcher::action_category(&tc.name),
+                    category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
                     timestamp: chrono_utc_now(),
                 });
@@ -9366,6 +9397,8 @@ mod tests {
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-TEST-A".to_string(),
+            1,
             "修复 bug".to_string(),
             vec!["调查".to_string(), "实施".to_string()],
         );
@@ -9410,6 +9443,218 @@ mod tests {
         assert!(system.contains("目标: 修复 bug"));
         assert!(system.contains("当前第 1 步「调查」"));
         assert!(system.contains("[/任务状态]"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// v1.15 (2026-08-14): a new plan_id rotates the blackboard — the old
+    /// epoch's plan/edits/tool_actions/exec are archived to the configured
+    /// archive dir, the epoch-scoped partitions are cleared, and the new
+    /// plan carries plan_id + plan_epoch. A same-plan_id approval is a
+    /// revision: no rotation, no clearing, same epoch.
+    #[test]
+    fn plan_epoch_rotation_archives_and_revision_keeps_board() {
+        let dir = test_dir().join("gsa").join("blackboard");
+        let mut controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+                .with_blackboard_archive_dir(Some(dir.clone()));
+        controller = controller.with_plan(
+            "PLAN-ROT-A".to_string(),
+            1,
+            "任务A".to_string(),
+            vec!["步骤A".to_string()],
+        );
+        {
+            let mut bb = controller.blackboard().write();
+            bb.edits.push(EditRecord {
+                file: "a.py".into(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+            bb.tool_actions.push(ToolActionRecord {
+                category: "read".to_string(),
+                tool: "read_file".into(),
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+        }
+        // The current epoch snapshot is persisted at approval (the restore
+        // entry), even before any rotation.
+        assert!(dir.join("epoch-1.json").exists(), "current epoch persisted");
+        let first: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("epoch-1.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(first["plan_id"], "PLAN-ROT-A");
+
+        // New plan_id → epoch 2, old epoch-1 archived, work partitions cleared.
+        controller = controller.with_plan(
+            "PLAN-ROT-B".to_string(),
+            2,
+            "任务B".to_string(),
+            vec!["步骤B".to_string()],
+        );
+        let bb = controller.blackboard();
+        {
+            let r = bb.read();
+            assert_eq!(r.plan.plan_id.as_deref(), Some("PLAN-ROT-B"));
+            assert_eq!(r.plan.plan_epoch, 2);
+            assert!(r.edits.is_empty());
+            assert!(r.tool_actions.is_empty());
+        }
+        let archived = dir.join("epoch-1.json");
+        assert!(archived.exists(), "old epoch must be archived");
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&archived).unwrap()).unwrap();
+        assert_eq!(snapshot["plan_id"], "PLAN-ROT-A");
+        assert_eq!(snapshot["plan_epoch"], 1);
+        assert_eq!(snapshot["edits"][0]["file"], "a.py");
+
+        // Same plan_id → revision: no rotation, no archive, same epoch.
+        controller = controller.with_plan(
+            "PLAN-ROT-B".to_string(),
+            2,
+            "任务B（修订）".to_string(),
+            vec!["步骤B".to_string(), "步骤B2".to_string()],
+        );
+        let r = controller.blackboard().read();
+        assert_eq!(r.plan.plan_epoch, 2);
+        assert_eq!(r.plan.goal.as_deref(), Some("任务B（修订）"));
+        assert_eq!(r.plan.steps.len(), 2);
+        // The revision refreshes the CURRENT epoch snapshot (restore sees
+        // the latest approved plan text) without creating a new epoch.
+        let current: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("epoch-2.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(current["plan_epoch"], 2);
+        assert_eq!(current["plan"]["goal"], "任务B（修订）");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// v1.15⑧ (2026-08-15): the plan_id ↔ plan_epoch mapping is one-to-one —
+    /// same plan_id with a different epoch, or a new plan_id without a
+    /// strictly greater epoch, is rejected before any mutation.
+    #[test]
+    fn try_with_plan_enforces_epoch_identity_invariants() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_plan(
+                "PLAN-INV-A".to_string(),
+                1,
+                "任务A".to_string(),
+                vec!["步骤A".to_string()],
+            );
+        // Same plan_id, different epoch → rejected.
+        let err = match controller.try_with_plan(
+                "PLAN-INV-A".to_string(),
+                2,
+                "任务A（错误修订）".to_string(),
+                vec!["步骤A".to_string()],
+            ) {
+            Err(e) => e,
+            Ok(_) => panic!("same plan_id with a different epoch must be rejected"),
+        };
+        assert!(
+            matches!(
+                err,
+                crate::blackboard::PlanEpochError::SamePlanEpochMismatch {
+                    expected: 1,
+                    got: 2,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rotate_to_plan_rejects_zero_or_non_advancing_epochs() {
+        let mut bb = crate::blackboard::Blackboard::new();
+        bb.plan.plan_id = Some("PLAN-INV-A".into());
+        bb.plan.plan_epoch = 1;
+        // New plan_id must strictly advance.
+        let err = bb
+            .rotate_to_plan(
+                "PLAN-INV-B".into(),
+                1,
+                "B".into(),
+                vec!["b".into()],
+                "2026-08-15T00:00:00Z",
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            crate::blackboard::PlanEpochError::NewPlanEpochNotGreater {
+                current_epoch: 1,
+                got: 1,
+            }
+        );
+        // Zero epoch is never valid.
+        let err = bb
+            .rotate_to_plan(
+                "PLAN-INV-C".into(),
+                0,
+                "C".into(),
+                vec!["c".into()],
+                "2026-08-15T00:00:00Z",
+            )
+            .unwrap_err();
+        assert_eq!(err, crate::blackboard::PlanEpochError::ZeroEpoch);
+        // Violations leave the board untouched.
+        assert_eq!(bb.plan.plan_id.as_deref(), Some("PLAN-INV-A"));
+        assert_eq!(bb.plan.plan_epoch, 1);
+    }
+
+    /// v1.15 (2026-08-14): `blackboard_read` with `epoch` reads the archived
+    /// snapshot; a missing epoch / unconfigured archive is explicit — never
+    /// a silent fallback to the live board.
+    #[tokio::test]
+    async fn blackboard_read_cross_epoch_and_restore() {
+        let dir = test_dir().join("gsa").join("blackboard");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec![
+            "ok",
+            "ok",
+        ])))
+        .with_blackboard_archive_dir(Some(dir.clone()))
+        .with_plan(
+            "PLAN-RESTORE-A".to_string(),
+            1,
+            "旧任务".to_string(),
+            vec!["旧步骤".to_string()],
+        );
+        {
+            let mut bb = controller.blackboard().write();
+            bb.edits.push(EditRecord {
+                file: "old.py".into(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+        }
+        // Rotate: epoch-1 archived with the old plan + edit record.
+        let controller = controller.with_plan(
+            "PLAN-RESTORE-B".to_string(),
+            2,
+            "新任务".to_string(),
+            vec!["新步骤".to_string()],
+        );
+        let live = controller.render_blackboard_section("plan", None, None);
+        assert!(live.contains("新任务"));
+        assert!(live.contains("plan_epoch: 2"));
+        let archived = controller.render_blackboard_section("edits", None, Some(1));
+        assert!(archived.contains("old.py"), "cross-epoch read: {archived}");
+        let missing = controller.render_blackboard_section("plan", None, Some(99));
+        assert!(missing.contains("epoch snapshot 99 not found"));
+
+        // A new controller with the same archive dir restores the latest
+        // epoch (the restore entry).
+        let restored = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_blackboard_archive_dir(Some(dir.clone()));
+        let r = restored.blackboard().read();
+        assert_eq!(r.plan.plan_id.as_deref(), Some("PLAN-RESTORE-B"));
+        assert_eq!(r.plan.plan_epoch, 2);
+        assert_eq!(r.plan.goal.as_deref(), Some("新任务"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -9472,7 +9717,7 @@ mod tests {
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_plan("任务".to_string(), vec!["步骤一".to_string()]);
+            .with_plan("PLAN-STABLE".to_string(), 1, "任务".to_string(), vec!["步骤一".to_string()]);
         controller
             .run_turn(&host, "开始", "RUN-STABLE", MANIFEST, 0, None, None, None)
             .await
@@ -11032,7 +11277,7 @@ mod tests {
     /// pinned into the persisted conversation (restore 治本) and the
     /// blackboard edit window is rolled.
     #[tokio::test]
-    async fn session_end_compact_pins_marker_into_sidecar_and_rolls_edits() {
+    async fn session_end_compact_pins_marker_into_sidecar_and_keeps_edits() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -11060,7 +11305,8 @@ mod tests {
             .with_session_end_trigger(1)
             .with_summary_guards(1, 1.0);
         // Seed a fat conversation (three big tool rounds) and two edit
-        // records — the window the end-of-session compaction consumes.
+        // records — the epoch-scoped window the end-of-session compaction
+        // must NOT touch (v1.15: compaction decoupled from the blackboard).
         let mut conversation = vec![conv_message(Role::User, "第一问")];
         conversation.extend(tool_round("call-r1", &"A".repeat(600)));
         conversation.extend(tool_round("call-r2", &"B".repeat(600)));
@@ -11125,8 +11371,9 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(archives.len(), 1);
-        // The blackboard edit window is rolled (擦干净).
-        assert!(controller.blackboard().read().edits.is_empty());
+        // v1.15 (2026-08-14): compaction never clears the blackboard — the
+        // edit records stay live for the current plan epoch.
+        assert_eq!(controller.blackboard().read().edits.len(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
