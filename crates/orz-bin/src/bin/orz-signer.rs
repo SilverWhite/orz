@@ -959,7 +959,7 @@ mod tests {
             sha256_hex(canonical.as_bytes()),
             "signer template digest must pin the injected block"
         );
-        assert!(ORIENTATION_TEMPLATE.contains("[ORIENTATION v0.2]"));
+        assert!(ORIENTATION_TEMPLATE.contains("[ORIENTATION v0.3]"));
         assert!(ORIENTATION_TEMPLATE.contains("[/ORIENTATION]"));
     }
 }

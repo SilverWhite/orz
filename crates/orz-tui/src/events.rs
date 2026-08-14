@@ -148,6 +148,18 @@ pub enum TuiEvent {
         checkpoint_id: String,
         threshold_stage: i64,
     },
+    // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
+    // forced-template checkpoint round's answer/validation verdict — the
+    // TUI shows the outcome and error summary; the full parsed template and
+    // cross-check stay in the journal payload.
+    CheckpointResponse {
+        checkpoint_id: String,
+        inquiry_kind: String,
+        attempt: i64,
+        outcome: String,
+        validation_valid: bool,
+        validation_error_count: i64,
+    },
     InformationSufficiencyAssessment {
         assessment_id: String,
         status: String,
@@ -314,6 +326,7 @@ impl TuiEvent {
             TuiEvent::CounterexampleGate { .. } => "counterexample_gate",
             TuiEvent::RetrievalCompletionCheck { .. } => "retrieval_completion_check",
             TuiEvent::DiagnosticCoverageCheckpoint { .. } => "diagnostic_coverage_checkpoint",
+            TuiEvent::CheckpointResponse { .. } => "checkpoint_response",
             TuiEvent::InformationSufficiencyAssessment { .. } => {
                 "information_sufficiency_assessment"
             }

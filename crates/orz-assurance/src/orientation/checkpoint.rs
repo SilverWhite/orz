@@ -5,17 +5,43 @@
 //! / `verify_orientation_response`. Receipt/context jsonschema validation stays on
 //! the Python side (conformance suite + schema authority).
 
-/// Fixed three-section Chinese orientation prompt (Python `ORIENTATION_BLOCK`).
+/// The forced-template JSON answer contract text (ADR-0010 §4.2/§14.16;
+/// design §2.2). Shared by the Orientation block and the Diagnostic
+/// Coverage block — the two inquiry families use the same template
+/// mechanism (模板按触发类型微调 only in the surrounding block text).
+macro_rules! template_answer_instructions {
+    () => {
+        "请暂停动作，只输出下面的 JSON 问询模板答案；不要调用任何工具，不要输出其他文本。\n\
+         {\n\
+         \"task_position\": \"当前任务位置/目标（必填，≤400 字）\",\n\
+         \"progress_evidence\": [\"已确认的证据/产物身份（可选；应为本会话真实存在的证据身份）\"],\n\
+         \"blockers\": [\"当前阻塞（可选）\"],\n\
+         \"next_action\": \"continue|adjust|gather_evidence|ask_user|handoff\",\n\
+         \"changed_direction\": true 或 false,\n\
+         \"missing_evidence\": [\"仅当 next_action=gather_evidence 时必填：缺失的证据面\"]\n\
+         }"
+    };
+}
+
+/// The JSON template answer instructions — canonical single source for the
+/// Diagnostic Coverage block (orz-loop) and any future template carrier.
+pub const TEMPLATE_ANSWER_INSTRUCTIONS: &str = template_answer_instructions!();
+
+/// Forced-template orientation prompt (ADR-0010 §4.2 / §14.16;
+/// `ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md` §2.2 — the old
+/// three-question free-text block is replaced by the JSON template round:
+/// the model must answer the template fields and no tools are offered).
 ///
 /// GAP-INQUIRY-SPLIT (2026-08-09): re-tagged `[ORIENTATION v0.2]` — the v0.2
 /// producer actually injects the block (the old monitor wrote the event but
 /// never injected it), so the marker must match the `ORIENTATION_INJECTED_PREFIX`
-/// registration in the stagnation filter. The three questions are unchanged.
-pub const ORIENTATION_BLOCK: &str = "[ORIENTATION v0.2]\n\
-当前正在做什么？\n\
-当前任务定位是什么？\n\
-下一步输出应该服务哪个用户目标？\n\
-[/ORIENTATION]";
+/// registration in the stagnation filter. v0.3 (2026-08-15) carries the
+/// forced-template JSON answer contract.
+pub const ORIENTATION_BLOCK: &str = concat!(
+    "[ORIENTATION v0.3]\n",
+    template_answer_instructions!(),
+    "\n[/ORIENTATION]"
+);
 
 /// Checklist context prefix template (Python `CHECKLIST_CONTEXT_TEMPLATE`).
 pub const CHECKLIST_CONTEXT_TEMPLATE: &str = "[CHECKLIST_CONTEXT v0.1]\n\
@@ -225,16 +251,28 @@ mod tests {
     }
 
     #[test]
-    fn message_block_contains_three_sections() {
+    fn message_block_carries_forced_template_contract() {
         let c = cp("TASK", 0);
-        assert!(c.message_block.contains("当前正在做什么？"));
-        assert!(c.message_block.contains("当前任务定位是什么？"));
-        assert!(c.message_block.contains("下一步输出应该服务哪个用户目标？"));
-        // GAP-INQUIRY-SPLIT: v0.2 marker — the injected block must match the
-        // `[ORIENTATION` prefix registered with the stagnation filter.
-        assert!(c.message_block.starts_with("[ORIENTATION v0.2]"));
+        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+        // v0.3 marker + the JSON template fields the model must answer.
+        assert!(c.message_block.starts_with("[ORIENTATION v0.3]"));
         assert!(c.message_block.ends_with("[/ORIENTATION]"));
         assert!(c.message_block.starts_with("[ORIENTATION"));
+        for field in [
+            "task_position",
+            "progress_evidence",
+            "blockers",
+            "next_action",
+            "changed_direction",
+            "missing_evidence",
+        ] {
+            assert!(
+                c.message_block.contains(field),
+                "template field missing from block: {field}"
+            );
+        }
+        assert!(c.message_block.contains("不要调用任何工具"));
+        assert!(c.message_block.contains("gather_evidence"));
     }
 
     #[test]

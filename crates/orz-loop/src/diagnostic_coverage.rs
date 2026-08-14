@@ -9,8 +9,11 @@
 //! produced once at the in-process consumption point), and injects exactly
 //! one neutral checkpoint per threshold stage (2 → 3 → 4 → 5, capped at 5).
 //! A passing `run_tests` (bug resolved, mechanically verifiable) resets the
-//! threshold to 2. The checkpoint is not a hard gate — the block is a
-//! neutral message and the loop continues.
+//! threshold to 2. ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010
+//! §14.16): on the MAIN lane the checkpoint is now a forced-template round —
+//! no tools are offered and the model must answer the JSON template before
+//! actions resume; the fire state commits only after the template round
+//! completes (accepted or degraded).
 //!
 //! Episode scope: one episode per run (`DC-{run_id}` — the run's journal
 //! chain; ACP builds a controller per prompt, so an episode never spans
@@ -341,19 +344,24 @@ pub(crate) async fn maybe_consume_dc_retrieval_evidence(
 /// exactly once per stage; a neutral message block + the v0.2
 /// `diagnostic_coverage_checkpoint` event). Called at the loop's two
 /// injection gaps (loop-top / post-tool-batch — the same safe gaps as
-/// orientation). Not a hard gate — the loop continues after the injection.
+/// orientation). ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15): the stage
+/// transition is DEFERRED — the caller stores the returned payload as the
+/// pending checkpoint and calls [`commit_dc_fire`] after the template round
+/// completes (accepted or degraded, §2.4); a run that ends mid-checkpoint
+/// keeps the count and signals so the stage can fire again.
 pub(crate) async fn maybe_fire_dc(
     dc: &Mutex<DebugEpisodeState>,
     writer: &mut EventWriter<'_>,
     messages: &mut Vec<Message>,
-) -> Result<(), AgentLoopError> {
-    // Build the payload + commit the stage transition UNDER the guard (no
-    // await inside — the std Mutex guard must never cross one); the
-    // journal write and injection happen after.
+) -> Result<Option<serde_json::Value>, AgentLoopError> {
+    // Build the payload UNDER the guard (no await inside — the std Mutex
+    // guard must never cross one); the journal write and injection happen
+    // after. Signals are CLONED, not drained — the stage transition stays
+    // pending until the checkpoint round commits.
     let (payload, message_block) = {
-        let mut s = dc.lock().unwrap();
+        let s = dc.lock().unwrap();
         if s.episode_id.is_none() || s.signal_count < s.threshold {
-            return Ok(());
+            return Ok(None);
         }
         let run_id = writer.run_id().to_string();
         let episode_id = s
@@ -365,12 +373,12 @@ pub(crate) async fn maybe_fire_dc(
         let trigger_count = s.trigger_count;
         let signals: Vec<serde_json::Value> = s
             .pending_signals
-            .drain(..)
+            .iter()
             .map(|sig| {
                 serde_json::json!({
                     "signal_id": format!("SIG-{}-{}", sig.signal_type, &sha256_hex(sig.evidence_identity.as_bytes())[..8]),
                     "signal_type": sig.signal_type,
-                    "evidence_identity": sig.evidence_identity,
+                    "evidence_identity": sig.evidence_identity.clone(),
                 })
             })
             .collect();
@@ -386,9 +394,10 @@ pub(crate) async fn maybe_fire_dc(
             .filter(|t| !covered.contains(t))
             .collect();
         let message_block = format!(
-            "{DIAGNOSTIC_COVERAGE_PREFIX} v0.2] 已覆盖: {}；缺失: {}。\
-             建议下一步: {MINIMAL_NEXT_DIAGNOSTIC_ACTION}。\
-             这不是硬门禁——请基于证据继续当前方向。[/DIAGNOSTIC_COVERAGE]",
+            "{DIAGNOSTIC_COVERAGE_PREFIX} v0.3] 已覆盖: {}；缺失: {}。\n\
+             建议下一步: {MINIMAL_NEXT_DIAGNOSTIC_ACTION}。\n\
+             {}\n\
+             [/DIAGNOSTIC_COVERAGE]",
             if covered_surfaces.is_empty() {
                 "无".to_string()
             } else {
@@ -399,11 +408,17 @@ pub(crate) async fn maybe_fire_dc(
             } else {
                 missing_surfaces.join(", ")
             },
+            orz_assurance::orientation::checkpoint::TEMPLATE_ANSWER_INSTRUCTIONS,
         );
         let payload = serde_json::json!({
             "checkpoint_id": format!("DIAG-COV-{run_id}-{trigger_count}"),
             "inquiry_family": "neutral",
             "inquiry_kind": "diagnostic_coverage_checkpoint",
+            // Main-lane only (§14.16 主车道; 检索车道不产生 checkpoint 轮) —
+            // the forced-template response event carries the same role, and
+            // the verifier cross-checks fire↔response agent_role when the
+            // fire payload carries it (legacy fires may omit it).
+            "agent_role": "main",
             "debug_episode_id": episode_id,
             "threshold_stage": threshold,
             "hard_signal_count": signal_count,
@@ -414,16 +429,10 @@ pub(crate) async fn maybe_fire_dc(
             "message_block": message_block,
             "minimal_next_diagnostic_action": MINIMAL_NEXT_DIAGNOSTIC_ACTION,
         });
-        // §4.6.1: count cleared, next threshold +1 (capped 5) — the count
-        // zeroing is the once-per-stage guarantee; the next fire needs the
-        // next threshold's signals.
-        s.signal_count = 0;
-        s.threshold = (s.threshold + 1).min(5);
-        s.trigger_count += 1;
         (payload, message_block)
     };
     writer
-        .record(EventType::DiagnosticCoverageCheckpoint, payload)
+        .record(EventType::DiagnosticCoverageCheckpoint, payload.clone())
         .await?;
     messages.push(Message {
         role: Role::User,
@@ -432,7 +441,31 @@ pub(crate) async fn maybe_fire_dc(
         tool_calls: Vec::new(),
         reasoning_content: None,
     });
-    Ok(())
+    Ok(Some(payload))
+}
+
+/// Commit the deferred DC stage transition AFTER the forced-template
+/// checkpoint round completed (accepted or degraded — §2.4: 仅实际完成
+/// 校验通过的模板轮才重置；降级轮按触发族既定语义，本族每次 fire 即消费
+/// 阶段). Reads the advanced threshold/trigger values from the fired
+/// payload — the next fire needs the NEXT stage's signals.
+pub(crate) fn commit_dc_fire(dc: &Mutex<DebugEpisodeState>, payload: &serde_json::Value) {
+    let mut s = dc.lock().unwrap();
+    let threshold = payload
+        .get("threshold_stage")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(2) as u32;
+    let trigger_count = payload
+        .get("trigger_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
+    // §4.6.1: count cleared, next threshold +1 (capped 5) — the count
+    // zeroing is the once-per-stage guarantee; the next fire needs the
+    // next threshold's signals.
+    s.pending_signals.clear();
+    s.signal_count = 0;
+    s.threshold = (threshold + 1).min(5);
+    s.trigger_count = trigger_count + 1;
 }
 
 /// Extract the first error class from a tool output's leading lines

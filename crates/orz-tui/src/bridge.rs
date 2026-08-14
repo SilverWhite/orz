@@ -204,6 +204,24 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             checkpoint_id: get_str(p, "checkpoint_id"),
             threshold_stage: get_i64(p, "threshold_stage"),
         },
+        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+        // forced-template checkpoint round answer/validation verdict — the
+        // TUI projects the outcome and validation summary only.
+        EventType::CheckpointResponse => TuiEvent::CheckpointResponse {
+            checkpoint_id: get_str(p, "checkpoint_id"),
+            inquiry_kind: get_str(p, "inquiry_kind"),
+            attempt: get_i64(p, "attempt"),
+            outcome: get_str(p, "outcome"),
+            validation_valid: p
+                .pointer("/validation/valid")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            validation_error_count: p
+                .pointer("/validation/errors")
+                .and_then(serde_json::Value::as_array)
+                .map(|a| a.len() as i64)
+                .unwrap_or(0),
+        },
         EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
             assessment_id: get_str(p, "assessment_id"),
             status: get_str(p, "status"),
@@ -484,6 +502,16 @@ mod tests {
                 json!({
                     "decision": "block",
                     "reason_codes": ["unknown_source_id"],
+                }),
+            ),
+            (
+                EventType::CheckpointResponse,
+                json!({
+                    "checkpoint_id": "ORIENT-RUN-1-0000",
+                    "inquiry_kind": "orientation_checkpoint",
+                    "attempt": 1,
+                    "outcome": "accepted",
+                    "validation": {"valid": true, "errors": [], "ignored_fields": []},
                 }),
             ),
         ];

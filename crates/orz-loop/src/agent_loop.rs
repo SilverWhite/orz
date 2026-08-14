@@ -22,6 +22,7 @@ use orz_assurance::{EventType, GateDecision};
 
 use crate::agents::SubagentRole;
 use crate::blackboard::SharedBlackboard;
+use crate::checkpoint::{self, PendingCheckpoint};
 use crate::controller::{
     AgentLoopController, AgentLoopError, ContextCompactConfig, DENIAL_BREAKER_CONSECUTIVE,
     DenialKey, DenialState, EventWriter, PolicyFeedback, TEXT_DELTA_PACING, compact_messages,
@@ -639,6 +640,13 @@ pub(crate) async fn run_agent_loop(
     // `OrientationSessionState` threaded through the turn chain; output
     // repetition belongs to the runtime stagnation guard only.
     let mut counterexample_fired = false;
+    // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
+    // checkpoint fire whose block was injected but whose forced-template
+    // round has not completed yet (main lane only — retrieval lanes commit
+    // at fire time and never set this). While pending, the loop skips
+    // compaction and further fires, offers NO tools, and runs the template
+    // round at the next loop-top.
+    let mut pending_checkpoint: Option<PendingCheckpoint> = None;
     // P0-D (2026-08-14, ADR-0010 v1.10 / v1.14): template-summary state —
     // the previous round's MEASURED prompt tokens (provider usage; None
     // until the first round reports usage), the rounds since the last
@@ -700,9 +708,14 @@ pub(crate) async fn run_agent_loop(
         // next trigger rounds (no content interruption, no raw truncation)
         // and after GUARD_RETRY_LIMIT consecutive failures forces one
         // compaction and reports `guard_failed` for explicit handling.
-        let fallback_now = last_prompt_tokens
+        // A pending checkpoint round has priority over compaction — the
+        // injected template block must reach the model before any window
+        // collapse (§14.16: 触发点下一安全动作间隙暂停).
+        let fallback_now = pending_checkpoint.is_none()
+            && last_prompt_tokens
             .is_some_and(|m| m > svc.context_compact.safety_tokens);
-        let rhythm_now = last_prompt_tokens
+        let rhythm_now = pending_checkpoint.is_none()
+            && last_prompt_tokens
             .is_some_and(|m| m > svc.context_compact.trigger_tokens)
             && rounds_since_compact >= svc.context_compact.min_rounds;
         let summary_now = fallback_now || rhythm_now;
@@ -785,22 +798,44 @@ pub(crate) async fn run_agent_loop(
         // point (a restored session's persisted count crosses here).
         // Fires at most once per loop iteration (commit resets the
         // lane), so the two injection points never double-fire.
-        if let Some(role) = profile.orientation_role {
-            controller
+        // One pending checkpoint at a time — while a forced-template round
+        // is pending, neither family may fire again (the counts are not
+        // committed yet, so the gate is the only thing preventing a
+        // double-fire at the next loop-top).
+        if pending_checkpoint.is_none()
+            && let Some(role) = profile.orientation_role
+            && let Some(record) = controller
                 .maybe_fire_orientation(
                     writer,
                     messages,
                     orientation.as_deref_mut(),
                     role,
                     "loop_top_gap",
+                    // Main lane: the checkpoint round is forced (no tools,
+                    // template answer); retrieval lanes keep the legacy
+                    // fire-and-continue behavior (§14.16 检索车道不变).
+                    profile.role == AgentRole::Main,
                 )
-                .await?;
+                .await?
+        {
+            pending_checkpoint = Some(PendingCheckpoint::Orientation {
+                record,
+                attempt: 1,
+            });
         }
         // M5 (2026-08-10): DC checkpoint fire at the same safe gap (the
         // stage threshold was met by signals consumed in a prior tool
-        // round — the block is neutral, never a hard gate, §4.6.4).
-        if profile.dc_enabled {
-            maybe_fire_dc(svc.dc_state, writer, messages).await?;
+        // round). §14.16: one checkpoint round at a time — when Orientation
+        // and DC are due in the same gap, Orientation wins and DC fires at
+        // the next safe gap after its template round completes.
+        if pending_checkpoint.is_none()
+            && profile.dc_enabled
+            && let Some(payload) = maybe_fire_dc(svc.dc_state, writer, messages).await?
+        {
+            pending_checkpoint = Some(PendingCheckpoint::DiagnosticCoverage {
+                payload,
+                attempt: 1,
+            });
         }
 
         // FUS-TOOL-PROBE P0-A-2 (design §4/§5 v0.2): per-round work-tool
@@ -813,7 +848,11 @@ pub(crate) async fn run_agent_loop(
         // projection (no second `tool_availability_check` inside a lane).
         // The call-time permission gate remains the final backstop (design
         // invariant 2).
-        let current_tool_defs: Vec<ToolDef> = if profile.probe_work_tools {
+        let current_tool_defs: Vec<ToolDef> = if pending_checkpoint.is_some() {
+            // §14.16: a checkpoint round is a tool-free pause — no registry
+            // projection and no probe; the model gets no tools to call.
+            Vec::new()
+        } else if profile.probe_work_tools {
             let probe_context = crate::tool_probe::ProbeContext {
                 cwd: host.session_cwd(),
                 policy: host.tool_policy(),
@@ -1024,6 +1063,103 @@ pub(crate) async fn run_agent_loop(
         // the old per-round double-consumption is deleted.
         if let (Some(o), Some(role)) = (orientation.as_deref_mut(), profile.orientation_role) {
             o.feed_round(role);
+        }
+
+        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+        // a pending checkpoint's model round is the FORCED TEMPLATE round —
+        // no tools were offered, so nothing may execute. Validate the JSON
+        // answer, journal the `checkpoint_response` event (parsed fields +
+        // mechanical validation + evidence-identity cross-check + degrade
+        // reason), and either ask once for a re-fill or commit the fire
+        // (accepted/degraded, §2.4). The checkpoint answer itself counts as
+        // one completed logical model round (feed above) and stays in the
+        // conversation; the loop always continues after the branch.
+        if let Some(pending) = pending_checkpoint.take() {
+            let attempt = pending.attempt();
+            let mut verdict =
+                checkpoint::parse_and_validate(response.text.as_deref().unwrap_or_default());
+            // A checkpoint round may never dispatch tools — a tool_calls
+            // response is a template violation (the calls are not executed).
+            if !response.tool_calls.is_empty() {
+                verdict.errors.push("tool_calls_not_allowed".to_string());
+            }
+            // §2.3 缓解必做: `progress_evidence` (and the gathered-evidence
+            // missing surface) cross-checked against journal evidence
+            // identities — the main lane's own evidence + committed
+            // retrieval ledger ids/refs + DC examined-surface ids.
+            let mut identities: std::collections::HashSet<String> =
+                controller.checkpoint_source_identities().into_iter().collect();
+            if let Some(evidence) = svc.evidence {
+                identities.extend(
+                    evidence
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|record| record.identity.clone()),
+                );
+            }
+            {
+                let dc = svc.dc_state.lock().unwrap();
+                identities.extend(dc.evidence_ids.iter().cloned());
+            }
+            let cross = checkpoint::cross_check(verdict.response.as_ref(), &identities);
+            let outcome = checkpoint::decide_outcome(attempt, &verdict.errors);
+            let (outcome_str, degrade_reason) = match outcome {
+                checkpoint::CheckpointRoundOutcome::Accepted => ("accepted", None),
+                checkpoint::CheckpointRoundOutcome::RefillRequested => {
+                    ("refill_requested", None)
+                }
+                checkpoint::CheckpointRoundOutcome::Degraded { reason } => {
+                    ("degraded", Some(reason))
+                }
+            };
+            writer
+                .record(
+                    EventType::CheckpointResponse,
+                    checkpoint::checkpoint_response_payload(
+                        &pending,
+                        attempt,
+                        outcome_str,
+                        &verdict,
+                        &cross,
+                        degrade_reason,
+                    ),
+                )
+                .await?;
+            // The template answer is model output — keep it in the
+            // conversation (the re-fill feedback below is injected text).
+            if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                messages.push(Message {
+                    role: Role::Assistant,
+                    content: text,
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+            }
+            match outcome {
+                checkpoint::CheckpointRoundOutcome::Accepted
+                | checkpoint::CheckpointRoundOutcome::Degraded { .. } => {
+                    // §2.4: only a completed template round (accepted or
+                    // degraded) commits the fire / advances the DC stage.
+                    checkpoint::commit_pending(
+                        pending,
+                        orientation.as_deref_mut(),
+                        svc.dc_state,
+                    );
+                }
+                checkpoint::CheckpointRoundOutcome::RefillRequested => {
+                    messages.push(Message {
+                        role: Role::User,
+                        content: checkpoint::refill_feedback_block(&verdict.errors),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                    pending_checkpoint = Some(pending.with_attempt(attempt + 1));
+                }
+            }
+            continue;
         }
 
         // D-8: the post-exhaustion final round may only produce TEXT — a
@@ -1451,25 +1587,39 @@ pub(crate) async fn run_agent_loop(
         // GAP-INQUIRY-SPLIT (2026-08-09) — MAIN orientation injection
         // point: the post-tool-batch gap (a safe action gap: the tool
         // results are in, the next generate has not started). The fired
-        // block rides into the SAME turn's next generate. When this is
-        // the budget-exhausting round, the final (post-budget) round
-        // answers both the orientation block and the exhaustion notice
-        // (review D2-1, 2026-08-10: two competing directives on the
-        // closing round — accepted; the run is ending anyway).
-        if let Some(role) = profile.orientation_role {
-            controller
+        // block rides into the next generate — which, on the main lane, is
+        // now a FORCED TEMPLATE round (no tools; the model answers the JSON
+        // template before actions resume). When this is the budget-exhausting
+        // round, the checkpoint round runs first and the post-budget final
+        // round reports the partial result after it (§14.16).
+        if pending_checkpoint.is_none()
+            && let Some(role) = profile.orientation_role
+            && let Some(record) = controller
                 .maybe_fire_orientation(
                     writer,
                     messages,
                     orientation.as_deref_mut(),
                     role,
                     "post_tool_batch_gap",
+                    profile.role == AgentRole::Main,
                 )
-                .await?;
+                .await?
+        {
+            pending_checkpoint = Some(PendingCheckpoint::Orientation {
+                record,
+                attempt: 1,
+            });
         }
-        // M5: DC checkpoint fire (same gap semantics as orientation).
-        if profile.dc_enabled {
-            maybe_fire_dc(svc.dc_state, writer, messages).await?;
+        // M5: DC checkpoint fire (same gap semantics as orientation; one
+        // pending checkpoint at a time — orientation wins a same-gap tie).
+        if pending_checkpoint.is_none()
+            && profile.dc_enabled
+            && let Some(payload) = maybe_fire_dc(svc.dc_state, writer, messages).await?
+        {
+            pending_checkpoint = Some(PendingCheckpoint::DiagnosticCoverage {
+                payload,
+                attempt: 1,
+            });
         }
 
         tool_rounds += 1;

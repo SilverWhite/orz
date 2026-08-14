@@ -137,6 +137,11 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // conversation; registered so it can never pollute stagnation or
         // restore filters.
         || content.starts_with(crate::action_ledger::ACTION_LEDGER_PREFIX)
+        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+        // the one-shot checkpoint re-fill feedback block is mechanical
+        // injected text — never stagnation input and never persisted back
+        // into the conversation (same rule as the other User-role blocks).
+        || content.starts_with(crate::checkpoint::CHECKPOINT_REFILL_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
@@ -579,8 +584,12 @@ mod tests {
         let orientation_block = orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
         assert!(is_injected_block_text(orientation_block));
         assert!(is_injected_block_text(
-            "[ORIENTATION v0.2] 当前任务、位置与下一目标"
+            "[ORIENTATION v0.3] 当前任务、位置与下一目标"
         ));
+        // §14.16: the checkpoint re-fill feedback is injected text.
+        assert!(is_injected_block_text(&crate::checkpoint::refill_feedback_block(
+            &["next_action 越界".to_string()]
+        )));
         // The closing tag must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/ORIENTATION]"));
         // The retired blocks must NOT match — nothing injects them anymore.

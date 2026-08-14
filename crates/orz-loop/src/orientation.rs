@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(rec.agent_role, AgentRole::Main);
         assert_eq!(rec.trigger, "completed_turns_interval");
         assert_eq!(rec.message_block, ORIENTATION_BLOCK);
-        assert!(rec.message_block.starts_with("[ORIENTATION v0.2]"));
+        assert!(rec.message_block.starts_with("[ORIENTATION v0.3]"));
 
         // Not committed yet — the state is untouched (review P2-2: the
         // journal write happens between build and commit; a failure leaves

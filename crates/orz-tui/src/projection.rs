@@ -304,6 +304,29 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("诊断覆盖检查点: {checkpoint_id}")]
         }
+        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+        // forced-template checkpoint round answer/validation verdict.
+        TuiEvent::CheckpointResponse {
+            checkpoint_id,
+            inquiry_kind,
+            attempt,
+            outcome,
+            validation_valid,
+            validation_error_count,
+        } => {
+            let state = if validation_valid {
+                "通过".to_string()
+            } else {
+                format!("失败({validation_error_count} 项)")
+            };
+            app.content.add_system_message(
+                &format!(
+                    "[模板检查点] {inquiry_kind} {checkpoint_id} 第 {attempt} 次: {outcome}（校验{state}）"
+                ),
+                false,
+            );
+            vec![format!("模板检查点: {checkpoint_id} → {outcome}")]
+        }
         TuiEvent::InformationSufficiencyAssessment {
             assessment_id,
             status,

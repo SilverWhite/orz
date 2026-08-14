@@ -63,6 +63,13 @@ pub enum EventType {
     // GAP-INQUIRY-SPLIT (2026-08-09): v0.2 mechanism events (ADR-0010 §5.1 —
     // five independent event types; two more were already present above).
     DiagnosticCoverageCheckpoint,
+    // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
+    // forced-template checkpoint round's answer — parsed template fields,
+    // mechanical validation result, evidence-identity cross-check and
+    // degrade reason. One event type for both inquiry families; the payload
+    // `inquiry_kind` names the fire event (`orientation_checkpoint` /
+    // `diagnostic_coverage_checkpoint`) it answers.
+    CheckpointResponse,
     InformationSufficiencyAssessment,
     RetrievalParentDisposition,
     RetrievalCloseRecord,

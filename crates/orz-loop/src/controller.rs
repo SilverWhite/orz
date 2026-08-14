@@ -48,7 +48,7 @@ use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolRegistry, ToolResult};
-use crate::orientation::{AgentRole, OrientationSessionState};
+use crate::orientation::{AgentRole, OrientationFireRecord, OrientationSessionState};
 use crate::prompt::{is_injected_block_text, is_restore_retained_block};
 use crate::relay::DispatchTarget;
 use crate::tool::ToolDispatcher;
@@ -4578,6 +4578,29 @@ impl AgentLoopController {
         crate::citation_validation::validate_final_answer(text, &ledgers, &evidence)
     }
 
+    /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
+    /// journal evidence identities available to the forced-template
+    /// `progress_evidence` cross-check — committed retrieval ledger ids /
+    /// refs plus the main lane's own evidence identities. Non-blocking
+    /// mitigation (强制表达，不验证诚实): the checkpoint response event
+    /// records which identities matched and which did not.
+    pub(crate) fn checkpoint_source_identities(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        for ledger in self.run_source_ledgers.lock().unwrap().iter() {
+            let Some(entries) = ledger.as_array() else {
+                continue;
+            };
+            for entry in entries {
+                for key in ["source_id", "source_url_or_ref", "source_title"] {
+                    if let Some(value) = entry.get(key).and_then(serde_json::Value::as_str) {
+                        ids.push(value.to_string());
+                    }
+                }
+            }
+        }
+        ids
+    }
+
     /// Runtime stagnation guard — mechanical, per-turn (§4.5 FUS-STAGNATION;
     /// shared by the main loop and the retrieval subagent loops — ADR-0010
     /// §3.1: the same guard defaults apply to every agent). Runtime-injected
@@ -4649,11 +4672,17 @@ impl AgentLoopController {
     /// threshold, journal the v0.2 `orientation_checkpoint` event (10-field
     /// payload — `inquiry_family=neutral` + `inquiry_kind=orientation_checkpoint`
     /// consts cross-checked by the verifier) and inject the orientation block
-    /// as a User message so the next generate answers it. Firing resets the
-    /// lane (§4.2: only an actual fire resets; compaction/handoff/recovery
-    /// never do). `None` orientation state is a no-op (grill / one-shot CLI).
-    /// Fires at most once per call — the commit-then-reset guarantees the two
-    /// injection points (post-tool-batch gap + loop-top) never double-fire.
+    /// as a User message so the next generate answers it. `None` orientation
+    /// state is a no-op (grill / one-shot CLI).
+    /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): on the
+    /// MAIN lane (`force_template_round=true`) the commit is DEFERRED — the
+    /// caller stores the returned record as the pending checkpoint and calls
+    /// `commit_fire` after the forced-template round completes (accepted or
+    /// degraded, §2.4); the retrieval lanes keep the legacy commit-at-fire
+    /// behavior (检索车道不变). Fires at most once per call — the
+    /// commit-then-reset (legacy lanes) / pending-gate (main lane) guarantees
+    /// the two injection points (post-tool-batch gap + loop-top) never
+    /// double-fire.
     /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a
     /// journal-write failure propagates before the counter is reset, so a
     /// failed run never persists a reset-but-never-fired counter.
@@ -4664,13 +4693,14 @@ impl AgentLoopController {
         orientation: Option<&mut OrientationSessionState>,
         role: AgentRole,
         injection_position: &str,
-    ) -> Result<(), AgentLoopError> {
+        force_template_round: bool,
+    ) -> Result<Option<OrientationFireRecord>, AgentLoopError> {
         let Some(state) = orientation else {
-            return Ok(());
+            return Ok(None);
         };
         let run_id = writer.run_id().to_string();
         let Some(rec) = state.build_fire_record(role, &run_id, injection_position) else {
-            return Ok(());
+            return Ok(None);
         };
         // ACAF Slice 1 (ADR-0011 §4.2/§4.6): an orientation fire is a control
         // event — ticket it first (shadow mode: rejected tickets journal
@@ -4686,7 +4716,7 @@ impl AgentLoopController {
             )
             .await?;
         if let TicketGate::Blocked { .. } = &gate {
-            return Ok(());
+            return Ok(None);
         }
         writer
             .record(
@@ -4705,19 +4735,22 @@ impl AgentLoopController {
                 }),
             )
             .await?;
-        // Commit AFTER the journaled event — the reset must not survive a
-        // failed write (review P2-2). `commit_fire` only reads the record's
-        // injection_position, so it must run before `message_block` moves
-        // into the injected message below.
-        state.commit_fire(role, &rec);
+        // Main lane: defer the commit to the forced-template round's
+        // completion point (§2.4); retrieval lanes commit at fire time
+        // (legacy behavior, 检索车道不变). The reset must never survive a
+        // failed write (review P2-2) — in both modes the commit happens
+        // only after the journaled event above.
+        if !force_template_round {
+            state.commit_fire(role, &rec);
+        }
         messages.push(Message {
             role: Role::User,
-            content: rec.message_block,
+            content: rec.message_block.clone(),
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
-        Ok(())
+        Ok(force_template_round.then_some(rec))
     }
 
     /// Run a retrieval subagent for a retrieval-shaped tool call.
@@ -15229,6 +15262,13 @@ mod tests {
         assert_eq!(orientation.internal.completed_rounds, 1);
         assert_eq!(orientation.main.completed_rounds, 3);
         assert_eq!(orientation.external.completed_rounds, 0);
+        // §14.16 检索车道不变: the subagent lane keeps the legacy
+        // fire-and-continue behavior — no forced template round, no
+        // `checkpoint_response` event.
+        assert!(
+            events.iter().all(|e| e.event_type != EventType::CheckpointResponse),
+            "retrieval lanes must not produce checkpoint_response events"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -15296,10 +15336,19 @@ mod tests {
         }
     }
 
+    /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
+    /// valid JSON template answer for a forced checkpoint round.
+    fn template_answer(next_action: &str) -> ScriptedResponse {
+        ScriptedResponse::text(format!(
+            r#"{{"task_position":"修复测试失败","progress_evidence":[],"blockers":[],"next_action":"{next_action}","changed_direction":false}}"#
+        ))
+    }
+
     /// DC: the threshold progresses 2 → 3 (each fire clears the count), the
     /// checkpoint carries the mechanical payload, and the run continues
-    /// past the checkpoint (not a hard gate — §4.6.4). The DC-answer round
-    /// counts toward the orientation seven-round counter like any round.
+    /// past the forced-template checkpoint rounds. The checkpoint answer
+    /// rounds count toward the orientation seven-round counter like any
+    /// round; each fire is answered by an accepted template round.
     #[tokio::test]
     async fn dc_threshold_progresses_and_fires_mechanical_checkpoint() {
         let dir = test_dir();
@@ -15312,8 +15361,11 @@ mod tests {
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            template_answer("continue"),
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t3")]),
+            template_answer("continue"),
             ScriptedResponse::text("根据失败继续修复"),
             ScriptedResponse::text("修复完成。"),
         ]));
@@ -15367,16 +15419,37 @@ mod tests {
                 .unwrap()
                 .starts_with("[DIAGNOSTIC_COVERAGE")
         );
-        // The run CONTINUED past the checkpoint (not a hard gate) and the
-        // DC-answer rounds counted toward the orientation counter: 5
-        // completed main rounds, no orientation fire (threshold 7 never
-        // crossed — the DC fire is a separate mechanism).
+        // §14.16: every DC fire is answered by an accepted template round.
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
+        for r in &responses {
+            assert_eq!(
+                r.payload.get("inquiry_kind").and_then(|v| v.as_str()),
+                Some("diagnostic_coverage_checkpoint")
+            );
+            assert_eq!(
+                r.payload.get("outcome").and_then(|v| v.as_str()),
+                Some("accepted")
+            );
+            assert_eq!(
+                r.payload.get("attempt").and_then(|v| v.as_u64()),
+                Some(1)
+            );
+        }
+        // The run CONTINUED past the checkpoint rounds and the checkpoint
+        // answer rounds counted toward the orientation counter: 7 completed
+        // main rounds, no orientation fire (the 7-round crossing lands on
+        // the final answer round and the loop breaks before the next
+        // loop-top — §4.2 count persists to the next run).
         assert_eq!(
             events.last().unwrap().event_type,
             EventType::RunFinished,
             "run continues past the checkpoint"
         );
-        assert_eq!(orientation.main.completed_rounds, 5);
+        assert_eq!(orientation.main.completed_rounds, 7);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -15393,7 +15466,9 @@ mod tests {
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            template_answer("continue"),
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -15419,7 +15494,8 @@ mod tests {
         // GAP-RETRIEVAL-TOOLS (2026-08-10): each failing run now also
         // produces `key_surface_unexamined` (the FAILED line references
         // tests/test_x.py, never read by the model) — call 1's 3 signals
-        // fire at threshold 2, call 2's 3 signals reach threshold 3.
+        // fire at threshold 2, call 2's 3 signals reach threshold 3. Each
+        // fire is answered by an accepted forced-template round (§14.16).
         assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
         assert_eq!(
             checkpoints[0].payload.get("threshold_stage"),
@@ -15428,6 +15504,16 @@ mod tests {
         assert_eq!(
             checkpoints[1].payload.get("threshold_stage"),
             Some(&serde_json::json!(3))
+        );
+        let responses: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2);
+        assert!(
+            responses
+                .iter()
+                .all(|r| r.payload["outcome"] == serde_json::json!("accepted"))
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -15454,10 +15540,14 @@ mod tests {
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            template_answer("continue"),
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t3")]),
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t4")]),
+            template_answer("continue"),
             ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t5")]),
+            template_answer("continue"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -15481,13 +15571,420 @@ mod tests {
             .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
             .collect();
         // fail ×2 (3 signals each — incl. key_surface_unexamined) → fire at
-        // 2 and 3; pass → reset to 2; fail ×2 → fire at 2 and 3 again.
+        // 2 and 3; pass → reset to 2; fail ×2 → fire at 2 and 3 again. Each
+        // fire is answered by an accepted forced-template round (§14.16).
         let stages: Vec<u32> = checkpoints
             .iter()
             .map(|c| c.payload["threshold_stage"].as_u64().unwrap() as u32)
             .collect();
         assert_eq!(stages, vec![2, 3, 2, 3], "{stages:?}");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16) ─────
+
+    /// Main lane: 7 completed rounds cross the orientation threshold; the
+    /// next round is a FORCED template round (no tools offered, the model
+    /// answers the JSON template), and actions resume only after the
+    /// accepted answer. The fire commits at the template round's completion.
+    #[tokio::test]
+    async fn orientation_forced_template_pauses_then_accepts_and_resumes() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        script.push(template_answer("continue"));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template1");
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPL1",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let fires: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 1, "{:?}", event_types(&dir));
+        assert_eq!(
+            responses[0].payload["inquiry_kind"].as_str(),
+            Some("orientation_checkpoint")
+        );
+        assert_eq!(responses[0].payload["outcome"].as_str(), Some("accepted"));
+        assert_eq!(responses[0].payload["attempt"].as_u64(), Some(1));
+        // The checkpoint round was tool-free: no tool event between the
+        // fire and the accepted response.
+        let fire_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::OrientationCheckpoint)
+            .unwrap();
+        let resp_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::CheckpointResponse)
+            .unwrap();
+        assert!(resp_idx > fire_idx);
+        assert!(
+            !events[fire_idx..=resp_idx]
+                .iter()
+                .any(|e| e.event_type == EventType::ToolStarted),
+            "checkpoint round must be tool-free: {fire_idx}..={resp_idx}"
+        );
+        // The fire committed after the accepted template round: the 7
+        // pre-fire rounds + the checkpoint round fed, then reset to 0; the
+        // two final rounds feed 2.
+        assert_eq!(orientation.main.completed_rounds, 2);
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished,
+            "actions resume after the accepted template round"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Invalid first answer → one error-feedback re-fill → accepted on
+    /// attempt 2; the fire commits only after the accepted round.
+    #[tokio::test]
+    async fn orientation_forced_template_refills_once_then_accepts() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // Checkpoint round 1: not a JSON object → refill requested.
+        script.push(ScriptedResponse::text("根据任务继续"));
+        // Checkpoint round 2: valid JSON → accepted.
+        script.push(template_answer("continue"));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template2");
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPL2",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            responses[0].payload["outcome"].as_str(),
+            Some("refill_requested")
+        );
+        assert_eq!(responses[0].payload["attempt"].as_u64(), Some(1));
+        assert!(
+            responses[0].payload["validation"]["errors"]
+                .as_array()
+                .is_some_and(|e| !e.is_empty())
+        );
+        assert_eq!(
+            responses[1].payload["outcome"].as_str(),
+            Some("accepted")
+        );
+        assert_eq!(responses[1].payload["attempt"].as_u64(), Some(2));
+        // The fire was NOT committed after the failed attempt 1 — the
+        // checkpoint round count was fed (8) and still pending; after the
+        // accepted attempt 2 the commit reset to 0, then the two final
+        // rounds fed 2.
+        assert_eq!(orientation.main.completed_rounds, 2);
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two invalid answers → mechanical degrade with an explicit reason;
+    /// the fire still commits (a degrade is a completed template round,
+    /// §2.4) and the run continues without hanging.
+    #[tokio::test]
+    async fn orientation_forced_template_degrades_after_two_invalid_answers() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        script.push(ScriptedResponse::text("无法填写模板"));
+        script.push(ScriptedResponse::text("仍然无法填写模板"));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template3");
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPL3",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            responses[0].payload["outcome"].as_str(),
+            Some("refill_requested")
+        );
+        assert_eq!(
+            responses[1].payload["outcome"].as_str(),
+            Some("degraded")
+        );
+        assert_eq!(
+            responses[1].payload["degrade_reason"].as_str(),
+            Some("validation_failed_after_refill")
+        );
+        // Degrade still commits the fire (§2.4 降级轮按触发族既定语义):
+        // the checkpoint round fed to 8, commit reset to 0, the two final
+        // rounds fed 2 — the loop never re-fires in the same run.
+        assert_eq!(orientation.main.completed_rounds, 2);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+                .count(),
+            1
+        );
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tool_calls answer during the checkpoint round is a validation
+    /// error (`tool_calls_not_allowed`) — nothing executes, one re-fill is
+    /// offered, and the accepted answer resumes the run.
+    #[tokio::test]
+    async fn checkpoint_round_tool_call_is_refused_without_execution() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // The checkpoint round illegally requests a tool (the loop offers
+        // none) — the call must never execute.
+        script.push(ScriptedResponse::tool_calls(vec![tool_call(
+            "web_search",
+            "call-cp",
+        )]));
+        script.push(template_answer("continue"));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template4");
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPL4",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            responses[0].payload["outcome"].as_str(),
+            Some("refill_requested")
+        );
+        assert!(
+            responses[0].payload["validation"]["errors"]
+                .as_array()
+                .is_some_and(|errors| errors
+                    .iter()
+                    .any(|e| e.as_str() == Some("tool_calls_not_allowed")))
+        );
+        let fire_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::OrientationCheckpoint)
+            .unwrap();
+        let resp_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::CheckpointResponse)
+            .unwrap();
+        assert!(
+            !events[fire_idx..=resp_idx]
+                .iter()
+                .any(|e| e.event_type == EventType::ToolStarted),
+            "illegal checkpoint tool call must not execute"
+        );
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DC: a degraded template round still commits the stage (threshold
+    /// 2→3) — the next fire needs the next threshold (once-per-stage
+    /// guarantee survives the forced-template mechanism).
+    #[tokio::test]
+    async fn dc_forced_template_degrade_commits_stage_and_fires_next() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(vec![failing_test_run(), failing_test_run()].into()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            ScriptedResponse::text("无法填写模板"),
+            ScriptedResponse::text("仍然无法填写模板"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC4",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let checkpoints: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            checkpoints[0].payload["threshold_stage"].as_u64(),
+            Some(2)
+        );
+        assert_eq!(
+            checkpoints[1].payload["threshold_stage"].as_u64(),
+            Some(3)
+        );
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 3, "{:?}", event_types(&dir));
+        assert_eq!(
+            responses[0].payload["outcome"].as_str(),
+            Some("refill_requested")
+        );
+        assert_eq!(
+            responses[1].payload["outcome"].as_str(),
+            Some("degraded")
+        );
+        assert_eq!(
+            responses[2].payload["outcome"].as_str(),
+            Some("accepted")
+        );
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
