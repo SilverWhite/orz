@@ -7,6 +7,12 @@
 //! 3/3/5/3/3K = 17K total; the LLM output is validated mechanically and
 //! redone ≤3 times; the termination state keeps the mechanical slots and
 //! marks the marker `summary_incomplete`.
+//!
+//! P0-D review fix (2026-08-14, ADR-0010 v1.14): the degeneration guard is
+//! ORZ's own 300-effective-char gate (CJK ideographs count double — the
+//! orz-compaction 500 gate was calibrated for English); the path slot is
+//! capped by Top-40 AND 5K chars; archive writes retry explicitly and the
+//! failure is surfaced in the marker/event instead of being swallowed.
 
 use std::path::Path;
 
@@ -19,18 +25,33 @@ pub const SUMMARY_SLOT_LIMITS: [usize; 5] = [3_000, 3_000, 5_000, 3_000, 3_000];
 pub const SUMMARY_MAX_ATTEMPTS: u32 = 3;
 /// Completion budget for one summary call (17K chars ≈ ≤12K tokens).
 pub const SUMMARY_MAX_TOKENS: u32 = 12_000;
-/// Reused orz-compaction guard: a summary seed shorter than 500 chars is
-/// degenerate (ADR-0010 v1.10 §14.10 ⑤ — `MIN_SUMMARY_SEED_CHARS`).
-pub const MIN_SUMMARY_SEED_CHARS: usize = orz_compaction::MIN_SUMMARY_SEED_CHARS;
+/// ORZ's own degeneration gate (P0-D review fix 2026-08-14): a summary
+/// whose EFFECTIVE length is below 300 is degenerate. The orz-compaction
+/// 500-char gate was calibrated for English text; CJK ideographs carry
+/// roughly twice the information of one English character, so each CJK
+/// char counts as 2 effective chars (150 CJK chars pass the gate).
+pub const SUMMARY_MIN_EFFECTIVE_CHARS: usize = 300;
+
+/// Bounded retries for persisting the summary archive — a write failure is
+/// an audit gap and must be retried explicitly, then reported.
+pub const ARCHIVE_WRITE_MAX_ATTEMPTS: usize = 3;
 
 pub const NOTES_OPEN: &str = "[注意事项]";
 pub const NOTES_CLOSE: &str = "[/注意事项]";
 pub const CONTINUATION_OPEN: &str = "[后续衔接]";
 pub const CONTINUATION_CLOSE: &str = "[/后续衔接]";
 
-/// Estimated tokens of one summary marker in the kept context (chars/2
-/// of the marker content — conservative CJK-aware guess).
-pub const SUMMARY_MARKER_ESTIMATE_TOKENS: u64 = 2_000;
+/// Estimated tokens of one summary marker in the kept context. The marker
+/// carries the five slots (up to ~17K chars ≈ 8.5K tokens under the
+/// chars/2 estimate) plus framing — 9K is the conservative ceiling.
+/// (P0-D review fix 2026-08-14: the previous 2K constant undercounted the
+/// marker by up to ~4× and skewed the reduction guard.)
+pub const SUMMARY_MARKER_ESTIMATE_TOKENS: u64 = 9_000;
+
+/// One summary chat call's wall-clock budget (ADR-0010 v1.10 §4.2 "超时
+/// 120s" — the session transport's own timeouts are far longer and must
+/// not hold the emergency path).
+pub const SUMMARY_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The five summary slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +74,46 @@ impl SummarySlots {
     }
 }
 
+/// Effective character length for the degeneration gate: CJK ideographs
+/// count as 2, everything else as 1.
+pub fn effective_summary_chars(s: &str) -> usize {
+    s.chars()
+        .map(|c| if is_cjk_ideograph(c) { 2 } else { 1 })
+        .sum()
+}
+
+fn is_cjk_ideograph(c: char) -> bool {
+    matches!(c as u32,
+        0x3400..=0x4DBF   // CJK Extension A
+        | 0x4E00..=0x9FFF // CJK Unified Ideographs
+        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+        | 0x20000..=0x2A6DF // Extension B
+        | 0x2A700..=0x2B73F // Extension C
+        | 0x2B740..=0x2B81F // Extension D
+        | 0x2B820..=0x2CEAF // Extension E
+    )
+}
+
+/// ORZ degeneration guard — replaces the orz-compaction 500-char gate.
+pub fn is_degenerate_summary(output: &str) -> bool {
+    effective_summary_chars(output) < SUMMARY_MIN_EFFECTIVE_CHARS
+}
+
+/// Persist the summary archive with bounded retries. Returns whether the
+/// file exists after the attempts; a failure is NEVER silent here — the
+/// caller surfaces it in the marker and the `context_compressed` event.
+pub fn write_archive_retry(archive_dir: &Path, archive_path: &Path, markdown: &str) -> bool {
+    for _ in 0..ARCHIVE_WRITE_MAX_ATTEMPTS {
+        if std::fs::create_dir_all(archive_dir).is_ok()
+            && std::fs::write(archive_path, markdown).is_ok()
+            && archive_path.exists()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SummaryError {
     #[error("summary slot {0} missing from model output")]
@@ -65,21 +126,25 @@ pub enum SummaryError {
     Degenerate,
 }
 
-/// Path-slot Top-N pointer for the overflow line (the full path list stays
-/// on the blackboard, indexable via `blackboard_read` — never truncated
-/// content).
+/// Path-slot Top-N (design §10 / audit D-4): at most 40 window edits by
+/// insertion order; the overflow line points at the summary archive (the
+/// blackboard edit window rolls after every compaction — the archive is
+/// the permanent holder of the full window path list).
 const PATH_TOP_N: usize = 40;
 
 /// Mechanical slot rendering — 目的 from the plan goal, 计划 from the plan
 /// steps, 变动文件路径 from the blackboard edit records.
-pub fn mechanical_slots(blackboard: &Blackboard) -> (String, String, String) {
+pub fn mechanical_slots(
+    blackboard: &Blackboard,
+    archive_path: &Path,
+) -> (String, String, String) {
     let purpose = blackboard
         .plan
         .goal
         .clone()
         .unwrap_or_else(|| "（未设置）".to_string());
     let plan = render_plan(&blackboard.plan.steps);
-    let paths = render_paths(blackboard);
+    let paths = render_paths(blackboard, archive_path);
     (purpose, plan, paths)
 }
 
@@ -110,10 +175,10 @@ fn render_plan(steps: &[PlanStep]) -> String {
     out
 }
 
-fn render_paths(blackboard: &Blackboard) -> String {
+fn render_paths(blackboard: &Blackboard, archive_path: &Path) -> String {
     let mut out = String::new();
     let mut overflow = 0usize;
-    for edit in &blackboard.edits {
+    for edit in blackboard.edits.iter().take(PATH_TOP_N) {
         let line = format!(
             "{}（{}→{} 行，{}）",
             edit.file, edit.old_lines, edit.new_lines, edit.timestamp
@@ -130,11 +195,13 @@ fn render_paths(blackboard: &Blackboard) -> String {
             overflow += 1;
         }
     }
+    overflow += blackboard.edits.len().saturating_sub(PATH_TOP_N);
     if out.is_empty() {
         out = "（本窗口无编辑）".to_string();
     } else if overflow > 0 {
         out.push_str(&format!(
-            "\n（其余 {overflow} 条路径见 blackboard_read 分区 edits；存档摘要保留 Top-{PATH_TOP_N} 索引化指针）"
+            "\n（其余 {overflow} 条路径见本次摘要存档 {archive}）",
+            archive = archive_path.display()
         ));
     }
     out
@@ -181,7 +248,7 @@ pub fn parse_model_output(
 ) -> Result<SummarySlots, SummaryError> {
     let notes = extract_slot(output, NOTES_OPEN, NOTES_CLOSE)?;
     let continuation = extract_slot(output, CONTINUATION_OPEN, CONTINUATION_CLOSE)?;
-    if orz_compaction::is_degenerate_summary(output) {
+    if is_degenerate_summary(output) {
         return Err(SummaryError::Degenerate);
     }
     if notes.chars().count() > SUMMARY_SLOT_LIMITS[3] {
@@ -209,13 +276,16 @@ pub fn summary_archive_markdown(
     slots: &SummarySlots,
     rounds_dropped: u32,
     incomplete: bool,
+    guard_failed: bool,
 ) -> String {
     let mut out = format!(
         "# ORZ 会话压缩摘要 {id}\n\n\
          - 状态: {}\n- derived_unverified: 注意事项/后续衔接为模型生成，未机械验证\n\
-         - 被压轮次: {rounds_dropped}\n\n\
+         - 被压轮次: {rounds_dropped}\n\
+         - 守卫强制: {}\n\n\
          ## 目的\n{}\n\n## 计划\n{}\n\n## 变动文件路径\n{}\n\n## 注意事项\n{}\n\n## 后续衔接\n{}\n",
         if incomplete { "summary_incomplete" } else { "complete" },
+        if guard_failed { "是（缩减守卫连续不满足，已强制压缩）" } else { "否" },
         slots.purpose,
         slots.plan,
         slots.paths,
@@ -246,10 +316,14 @@ pub fn build_summary_marker(
     slots: &SummarySlots,
     rounds_dropped: u32,
     incomplete: bool,
+    guard_failed: bool,
+    archive_write_failed: bool,
 ) -> String {
     let state = if incomplete { "（summary_incomplete）" } else { "" };
     format!(
         "[前文上下文已压缩 v0.2 {state}]\n\
+         {guard_note}\
+         {archive_note}\
          摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮\n\
          摘要存档: {}\n摘要 digest: sha256:{}\n\
          目的: {}\n\
@@ -273,6 +347,16 @@ pub fn build_summary_marker(
             "（生成失败）"
         } else {
             &slots.continuation
+        },
+        guard_note = if guard_failed {
+            "机制失败：缩减守卫连续不满足，已强制压缩，需处理\n"
+        } else {
+            ""
+        },
+        archive_note = if archive_write_failed {
+            "存档写入失败：摘要未落盘，需处理\n"
+        } else {
+            ""
         },
     )
 }
@@ -354,7 +438,8 @@ mod tests {
                 timestamp: "2026-08-14T00:00:00Z".into(),
             });
         }
-        let (purpose, plan, paths) = mechanical_slots(&bb.read());
+        let (purpose, plan, paths) =
+            mechanical_slots(&bb.read(), Path::new(".gsa/compaction/x.md"));
         assert_eq!(purpose, "修复 bug");
         assert!(plan.contains("复现"));
         assert!(plan.contains("进行中"));
@@ -363,9 +448,76 @@ mod tests {
     }
 
     #[test]
+    fn render_paths_caps_at_top_40_with_archive_pointer() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            for i in 0..45 {
+                w.edits.push(EditRecord {
+                    file: format!("f{i}.py"),
+                    old_lines: 1,
+                    new_lines: 2,
+                    timestamp: "2026-08-14T00:00:00Z".into(),
+                });
+            }
+        }
+        let archive = Path::new(".gsa/compaction/compaction-RUN-X-0099.md");
+        let (_purpose, _plan, paths) = mechanical_slots(&bb.read(), archive);
+        // Top-40 by insertion order: f0..f39 appear, f40..f44 are overflow.
+        assert!(paths.contains("f0.py"));
+        assert!(paths.contains("f39.py"));
+        assert!(!paths.contains("f40.py"));
+        assert!(paths.contains("其余 5 条路径"));
+        assert!(paths.contains(archive.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn degenerate_guard_english_threshold() {
+        let short = "x".repeat(SUMMARY_MIN_EFFECTIVE_CHARS - 1);
+        assert!(is_degenerate_summary(&short));
+        let boundary = "x".repeat(SUMMARY_MIN_EFFECTIVE_CHARS);
+        assert!(!is_degenerate_summary(&boundary));
+    }
+
+    #[test]
+    fn degenerate_guard_chinese_counts_double() {
+        // 149 CJK chars = 298 effective chars — degenerate.
+        assert!(is_degenerate_summary(&"汉".repeat(149)));
+        // 150 CJK chars = 300 effective chars — accepted.
+        assert!(!is_degenerate_summary(&"汉".repeat(150)));
+        // Mixed: 100 CJK + 100 ASCII = 300 effective chars — accepted.
+        let mixed = format!("{}{}", "汉".repeat(100), "x".repeat(100));
+        assert!(!is_degenerate_summary(&mixed));
+    }
+
+    #[test]
+    fn archive_write_retry_persists_and_reports_failure() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-summary-archive-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let archive_dir = dir.join(".gsa").join("compaction");
+        let archive_path = archive_dir.join("compaction-RUN-X-0001.md");
+        assert!(write_archive_retry(&archive_dir, &archive_path, "# 摘要"));
+        assert!(archive_path.exists());
+
+        // A path occupied by a FILE can never become the archive dir — the
+        // bounded retries all fail and the caller must report it.
+        let blocked = dir.join("blocked");
+        std::fs::write(&blocked, "occupied").unwrap();
+        let blocked_archive = blocked.join("compaction-RUN-X-0002.md");
+        assert!(!write_archive_retry(&blocked, &blocked_archive, "# 摘要"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn marker_carries_content_pointer_and_digest() {
         let slots = slots();
-        let markdown = summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false);
+        let markdown = summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, false);
         let digest = archive_digest(&markdown);
         let marker = build_summary_marker(
             "compaction-RUN-X-001",
@@ -373,6 +525,8 @@ mod tests {
             Path::new(".gsa/compaction/compaction-RUN-X-001.md"),
             &slots,
             3,
+            false,
+            false,
             false,
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
@@ -397,8 +551,28 @@ mod tests {
             &slots,
             2,
             true,
+            false,
+            false,
         );
         assert!(marker.contains("summary_incomplete"));
         assert!(marker.contains("（生成失败）"));
+    }
+
+    #[test]
+    fn marker_reports_guard_and_archive_failures() {
+        let slots = slots();
+        let marker = build_summary_marker(
+            "compaction-RUN-X-003",
+            "d".repeat(64).as_str(),
+            Path::new(".gsa/compaction/x.md"),
+            &slots,
+            2,
+            false,
+            true,
+            true,
+        );
+        assert!(marker.contains("机制失败：缩减守卫连续不满足"));
+        assert!(marker.contains("存档写入失败：摘要未落盘"));
+        assert!(crate::prompt::is_restore_retained_block(&marker));
     }
 }

@@ -291,10 +291,280 @@ pub(crate) struct SharedLoopServices<'a> {
 pub(crate) struct LoopOutcome {
     pub last_text: Option<String>,
     pub tool_rounds: u32,
+    /// Rounds since the last compaction at loop exit — the session-end
+    /// compaction reports it honestly (P0-D review fix 2026-08-14).
+    pub rounds_since_compact: u32,
     /// Read by the subagent terminal mapping (M3) — the main caller's
     /// terminal event carries `tool_rounds` only.
     #[allow(dead_code)] // consumed by the subagent path (GAP-SUBAGENT-RUNTIME M3)
     pub budget_exhausted: bool,
+}
+
+/// P0-D review fix (2026-08-14, ADR-0010 v1.14): the reduction-guard retry
+/// budget — a guard that cannot be satisfied retries on the next trigger
+/// rounds (without interrupting content) and only after three consecutive
+/// failures forces one compaction and reports `guard_failed`.
+pub(crate) const GUARD_RETRY_LIMIT: u32 = 3;
+
+/// Outcome of one template-summary attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompactDecision {
+    /// Nothing collapsible (or the trigger did not reach this path).
+    NoOp,
+    /// Collapsible content exists but the reduction guard is not
+    /// satisfiable and the compaction was not forced.
+    GuardBlocked,
+    /// A compaction executed (summary complete or `summary_incomplete`
+    /// termination state).
+    Executed { incomplete: bool },
+}
+
+/// The shared five-section template-summary flow (P0-D S3 + review fixes).
+///
+/// Used by the loop-top rhythm/fallback trigger and by the end-of-session
+/// compaction (reason = "session_end", forced). Runs the summary ≤3 times,
+/// persists the archive with bounded retries (an archive failure is
+/// explicitly reported in the marker and the event), truncates the
+/// conversation, rolls the blackboard edit window, inserts the rolling
+/// single marker and journals `context_compressed` v0.2.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_template_compact(
+    svc: &SharedLoopServices<'_>,
+    writer: &mut EventWriter<'_>,
+    host: &dyn LoopHost,
+    agent: &dyn RoundAgent,
+    messages: &mut Vec<Message>,
+    measured: u64,
+    reason: &str,
+    force: bool,
+    guard_failed: bool,
+    rounds_since: u32,
+    tail: usize,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+    heartbeat: Option<&ActivityClock>,
+) -> Result<CompactDecision, AgentLoopError> {
+    // The rolling single marker: any older marker is archived with the
+    // summary chain (审计存档) — only the newest stays.
+    messages.retain(|m| !m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
+    let Some(kept_start) = crate::action_ledger::collapsed_cut(messages, tail) else {
+        return Ok(CompactDecision::NoOp);
+    };
+    let cfg = svc.context_compact;
+    let after = estimate_messages_tokens(&messages[..kept_start])
+        + estimate_messages_tokens(&messages[kept_start..])
+        + crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
+    let removable = measured.saturating_sub(after);
+    let reduction_ok = after as f64 <= measured as f64 * cfg.max_reduction_ratio;
+    if !force && (removable < cfg.min_compactable || !reduction_ok) {
+        return Ok(CompactDecision::GuardBlocked);
+    }
+
+    let rounds_dropped = crate::action_ledger::collapsed_round_count(messages, tail) as u32;
+    // The archive id rides the writer's CURRENT seq — no event is recorded
+    // between here and the `context_compressed` journal, so the id is
+    // stable and unique within the run.
+    let id = format!("compaction-{}-{:04}", writer.run_id(), writer.seq());
+    let archive_dir = host.session_cwd().join(".gsa").join("compaction");
+    let archive_path = archive_dir.join(format!("{id}.md"));
+    let mechanical = {
+        let bb = svc.blackboard.read();
+        let (purpose, plan, paths) = crate::summary::mechanical_slots(&bb, &archive_path);
+        crate::summary::SummarySlots {
+            purpose,
+            plan,
+            paths,
+            notes: String::new(),
+            continuation: String::new(),
+        }
+    };
+    // Summary input = mechanical slots + the collapsed history prefix
+    // (tool records already mechanically handled by the first layer).
+    let summary_input = {
+        let mut input = vec![Message {
+            role: Role::User,
+            content: crate::summary::summary_user_prompt(&mechanical),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        }];
+        input.extend(crate::action_ledger::build_collapsed_request(messages, tail));
+        input
+    };
+    let mut outcome: Option<crate::summary::SummarySlots> = None;
+    for _attempt in 0..crate::summary::SUMMARY_MAX_ATTEMPTS {
+        // P0-D review fix (2026-08-14): the summary call has its own 120s
+        // wall-clock budget — a hung summarizer must fall through to the
+        // retry/termination path instead of holding the run at the session
+        // transport's far longer timeouts.
+        let timed = tokio::time::timeout(
+            crate::summary::SUMMARY_CALL_TIMEOUT,
+            agent.run_round(
+                &crate::summary::summary_system_prompt(),
+                summary_input.clone(),
+                Vec::new(),
+                crate::summary::SUMMARY_MAX_TOKENS,
+                cancel,
+                heartbeat,
+                &mut |_| {},
+            ),
+        )
+        .await;
+        match timed {
+            Ok(Ok(resp)) => {
+                match crate::summary::parse_model_output(
+                    resp.text.as_deref().unwrap_or(""),
+                    &mechanical,
+                ) {
+                    Ok(slots) => {
+                        outcome = Some(slots);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            Ok(Err(_)) | Err(_) => continue,
+        }
+    }
+
+    let first_round_start = messages
+        .iter()
+        .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .unwrap_or(messages.len());
+    if let Some(slots) = outcome {
+        let markdown = crate::summary::summary_archive_markdown(
+            &id,
+            &slots,
+            rounds_dropped,
+            false,
+            guard_failed,
+        );
+        let digest = crate::summary::archive_digest(&markdown);
+        let archive_write_failed =
+            !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
+        let marker = crate::summary::build_summary_marker(
+            &id,
+            &digest,
+            &archive_path,
+            &slots,
+            rounds_dropped,
+            false,
+            guard_failed,
+            archive_write_failed,
+        );
+        let messages_dropped = messages.drain(first_round_start..kept_start).count();
+        messages.insert(
+            first_round_start,
+            Message {
+                role: Role::User,
+                content: marker,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+        );
+        // P0-D review fix (2026-08-14): the blackboard edit window is
+        // consumed by the compaction — the window paths now live in the
+        // archive/marker, so the board is rolled (擦干净) instead of
+        // accumulating stale paths into the next summary.
+        svc.blackboard.write().edits.clear();
+        writer
+            .record(
+                EventType::ContextCompressed,
+                serde_json::json!({
+                    "trigger_tokens": measured,
+                    "target_tokens": after,
+                    "rounds_since_last_compaction": rounds_since,
+                    "rounds_dropped": rounds_dropped,
+                    "messages_dropped": messages_dropped,
+                    "messages_kept": messages.len(),
+                    "estimated_tokens_after": after,
+                    "mode": "template_summary",
+                    "reason": reason,
+                    "summary_id": id,
+                    "summary_digest": digest,
+                    "summary_path": archive_path.display().to_string(),
+                    "summary_incomplete": false,
+                    "retained_rounds": tail,
+                    "guard_failed": guard_failed,
+                    "archive_write_failed": archive_write_failed,
+                }),
+            )
+            .await?;
+        Ok(CompactDecision::Executed { incomplete: false })
+    } else {
+        // Termination state: mechanical slots only, marker flagged
+        // `summary_incomplete`, wider recent tail; on the FALLBACK trigger
+        // the conversation is still mechanically truncated so the run never
+        // stays over the window (D2-2 emergency — the guard-failure path
+        // itself never uses raw truncation, per the review fix).
+        let mechanical_slots = crate::summary::SummarySlots {
+            notes: String::new(),
+            continuation: String::new(),
+            ..mechanical
+        };
+        let marker = crate::summary::build_summary_marker(
+            "summary-incomplete",
+            "0".repeat(64).as_str(),
+            &archive_dir,
+            &mechanical_slots,
+            rounds_dropped,
+            true,
+            guard_failed,
+            false,
+        );
+        let mut dropped = rounds_dropped;
+        let mut messages_dropped = 0usize;
+        let mut final_after = after;
+        if reason == "fallback" {
+            let stats = compact_messages(messages, cfg.recovery_target_tokens);
+            if stats.rounds_dropped > 0 {
+                dropped = stats.rounds_dropped;
+                messages_dropped = stats.messages_dropped;
+                final_after = stats.estimated_tokens_after;
+            }
+        }
+        let insert_at = messages
+            .iter()
+            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .unwrap_or(messages.len());
+        messages.insert(
+            insert_at,
+            Message {
+                role: Role::User,
+                content: marker,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+        );
+        if final_after == after {
+            final_after = estimate_messages_tokens(messages);
+        }
+        writer
+            .record(
+                EventType::ContextCompressed,
+                serde_json::json!({
+                    "trigger_tokens": measured,
+                    "target_tokens": final_after,
+                    "rounds_since_last_compaction": rounds_since,
+                    "rounds_dropped": dropped,
+                    "messages_dropped": messages_dropped,
+                    "messages_kept": messages.len(),
+                    "estimated_tokens_after": final_after,
+                    "mode": "template_summary",
+                    "reason": reason,
+                    "summary_id": null,
+                    "summary_digest": null,
+                    "summary_path": null,
+                    "summary_incomplete": true,
+                    "retained_rounds": tail + 1,
+                    "guard_failed": guard_failed,
+                    "archive_write_failed": false,
+                }),
+            )
+            .await?;
+        Ok(CompactDecision::Executed { incomplete: true })
+    }
 }
 
 /// The shared model↔tool loop (M1 extraction, 2026-08-10).
@@ -353,12 +623,15 @@ pub(crate) async fn run_agent_loop(
     // `OrientationSessionState` threaded through the turn chain; output
     // repetition belongs to the runtime stagnation guard only.
     let mut counterexample_fired = false;
-    // P0-D (2026-08-14, ADR-0010 v1.10): template-summary state — the
-    // previous round's MEASURED prompt tokens (provider usage; None until
-    // the first round reports usage) and the rounds since the last summary
-    // (the ≥3-round cooldown; the 200K fallback bypasses it).
+    // P0-D (2026-08-14, ADR-0010 v1.10 / v1.14): template-summary state —
+    // the previous round's MEASURED prompt tokens (provider usage; None
+    // until the first round reports usage), the rounds since the last
+    // summary (the 2-model-round cooldown; the 200K fallback bypasses it)
+    // and the reduction-guard retry chain (GUARD_RETRY_LIMIT consecutive
+    // failures force one compaction and report `guard_failed`).
     let mut last_prompt_tokens: Option<u64> = None;
     let mut rounds_since_compact: u32 = 0;
+    let mut guard_failures: u32 = 0;
 
     loop {
         // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -405,13 +678,12 @@ pub(crate) async fn run_agent_loop(
         //     bypassing the cooldown — the emergency path must not stay
         //     over the line even when the summary fails (mechanical
         //     truncation fallback, D2-2 semantics).
-        // Reduction guards (orz-compaction reuse): removable content ≥
-        // min_compactable and kept ≤ max_reduction_ratio of before.
-        // The summary is a pure chat call (no tools, no probe/compaction
-        // feedback loop); the five-section output is validated mechanically
-        // and redone ≤3 times; on termination the mechanical slots stay,
-        // the recent tail widens, and the marker is flagged
-        // `summary_incomplete`.
+        // Reduction guards: removable content ≥ min_compactable and kept ≤
+        // max_reduction_ratio of before. P0-D review fix (2026-08-14): a
+        // guard that cannot be satisfied is NOT skipped — it retries on the
+        // next trigger rounds (no content interruption, no raw truncation)
+        // and after GUARD_RETRY_LIMIT consecutive failures forces one
+        // compaction and reports `guard_failed` for explicit handling.
         let fallback_now = last_prompt_tokens
             .is_some_and(|m| m > svc.context_compact.safety_tokens);
         let rhythm_now = last_prompt_tokens
@@ -420,217 +692,67 @@ pub(crate) async fn run_agent_loop(
         let summary_now = fallback_now || rhythm_now;
         let mut failure_widened_tail = false;
         if summary_now && let Some(measured) = last_prompt_tokens {
-            let cfg = svc.context_compact;
-            let tail = cfg.recent_tail_rounds;
-            // The rolling single marker: any older marker is archived with
-            // the summary chain (审计存档) — only the newest stays.
-            messages.retain(|m| !m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
-            if let Some(kept_start) = crate::action_ledger::collapsed_cut(messages, tail) {
-                let after = estimate_messages_tokens(&messages[..kept_start])
-                    + estimate_messages_tokens(&messages[kept_start..])
-                    + crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
-                let removable = measured.saturating_sub(after);
-                let reduction_ok =
-                    after as f64 <= measured as f64 * cfg.max_reduction_ratio;
-                if removable >= cfg.min_compactable && reduction_ok {
-                    let rounds_dropped =
-                        crate::action_ledger::collapsed_round_count(messages, tail) as u32;
-                    let rounds_since = rounds_since_compact;
-                    let mechanical = {
-                        let bb = svc.blackboard.read();
-                        let (purpose, plan, paths) = crate::summary::mechanical_slots(&bb);
-                        crate::summary::SummarySlots {
-                            purpose,
-                            plan,
-                            paths,
-                            notes: String::new(),
-                            continuation: String::new(),
-                        }
-                    };
-                    // Summary input = mechanical slots + the collapsed
-                    // history prefix (tool records already mechanically
-                    // handled by the first layer).
-                    let summary_input = {
-                        let mut input = vec![Message {
-                            role: Role::User,
-                            content: crate::summary::summary_user_prompt(&mechanical),
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                        }];
-                        input.extend(crate::action_ledger::build_collapsed_request(
+            let reason = if fallback_now { "fallback" } else { "rhythm" };
+            let tail = svc.context_compact.recent_tail_rounds;
+            match run_template_compact(
+                svc,
+                writer,
+                host,
+                agent,
+                messages,
+                measured,
+                reason,
+                false,
+                false,
+                rounds_since_compact,
+                tail,
+                cancel,
+                heartbeat,
+            )
+            .await?
+            {
+                CompactDecision::Executed { incomplete } => {
+                    // A compaction consumed the window (complete or
+                    // termination state): the cooldown restarts and the
+                    // guard retry chain resets.
+                    guard_failures = 0;
+                    rounds_since_compact = 0;
+                    failure_widened_tail = incomplete;
+                }
+                CompactDecision::NoOp => {
+                    guard_failures = 0;
+                }
+                CompactDecision::GuardBlocked => {
+                    // The guard cannot be satisfied THIS round — retry on
+                    // the next trigger rounds without interrupting content;
+                    // after the retry budget is exhausted, force one
+                    // compaction and report the mechanism failure.
+                    guard_failures += 1;
+                    if guard_failures >= GUARD_RETRY_LIMIT {
+                        match run_template_compact(
+                            svc,
+                            writer,
+                            host,
+                            agent,
                             messages,
-                            tail,
-                        ));
-                        input
-                    };
-                    let mut outcome: Option<crate::summary::SummarySlots> = None;
-                    for _attempt in 0..crate::summary::SUMMARY_MAX_ATTEMPTS {
-                        match agent
-                            .run_round(
-                                &crate::summary::summary_system_prompt(),
-                                summary_input.clone(),
-                                Vec::new(),
-                                crate::summary::SUMMARY_MAX_TOKENS,
-                                cancel,
-                                heartbeat,
-                                &mut |_| {},
-                            )
-                            .await
-                        {
-                            Ok(resp) => {
-                                match crate::summary::parse_model_output(
-                                    resp.text.as_deref().unwrap_or(""),
-                                    &mechanical,
-                                ) {
-                                    Ok(slots) => {
-                                        outcome = Some(slots);
-                                        break;
-                                    }
-                                    Err(_) => continue,
-                                }
-                            }
-                            Err(_) => continue,
-                        }
-                    }
-                    let first_round_start = messages
-                        .iter()
-                        .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-                        .unwrap_or(messages.len());
-                    if let Some(slots) = outcome {
-                        let id = format!(
-                            "compaction-{}-{:04}",
-                            writer.run_id(),
-                            writer.seq()
-                        );
-                        let archive_dir = host
-                            .session_cwd()
-                            .join(".gsa")
-                            .join("compaction");
-                        let archive_path = archive_dir.join(format!("{id}.md"));
-                        let markdown = crate::summary::summary_archive_markdown(
-                            &id,
-                            &slots,
-                            rounds_dropped,
-                            false,
-                        );
-                        let digest = crate::summary::archive_digest(&markdown);
-                        let _ = std::fs::create_dir_all(&archive_dir);
-                        let _ = std::fs::write(&archive_path, markdown);
-                        let marker = crate::summary::build_summary_marker(
-                            &id,
-                            &digest,
-                            &archive_path,
-                            &slots,
-                            rounds_dropped,
-                            false,
-                        );
-                        let messages_dropped = messages
-                            .drain(first_round_start..kept_start)
-                            .count();
-                        messages.insert(
-                            first_round_start,
-                            Message {
-                                role: Role::User,
-                                content: marker,
-                                tool_call_id: None,
-                                tool_calls: Vec::new(),
-                                reasoning_content: None,
-                            },
-                        );
-                        rounds_since_compact = 0;
-                        writer
-                            .record(
-                                EventType::ContextCompressed,
-                                serde_json::json!({
-                                    "trigger_tokens": measured,
-                                    "target_tokens": after,
-                                    "rounds_since_last_compaction": rounds_since,
-                                    "rounds_dropped": rounds_dropped,
-                                    "messages_dropped": messages_dropped,
-                                    "messages_kept": messages.len(),
-                                    "estimated_tokens_after": after,
-                                    "mode": "template_summary",
-                                    "reason": if fallback_now { "fallback" } else { "rhythm" },
-                                    "summary_id": id,
-                                    "summary_digest": digest,
-                                    "summary_path": archive_path.display().to_string(),
-                                    "summary_incomplete": false,
-                                    "retained_rounds": tail,
-                                }),
-                            )
-                            .await?;
-                    } else {
-                        // Termination state: mechanical slots only, marker
-                        // flagged, wider recent tail; on the FALLBACK path
-                        // also mechanically truncate whole rounds (D2-2
-                        // emergency — never stay over the line).
-                        let mechanical_slots = crate::summary::SummarySlots {
-                            notes: String::new(),
-                            continuation: String::new(),
-                            ..mechanical
-                        };
-                        let marker = crate::summary::build_summary_marker(
-                            "summary-incomplete",
-                            "0".repeat(64).as_str(),
-                            &host.session_cwd().join(".gsa/compaction"),
-                            &mechanical_slots,
-                            rounds_dropped,
+                            measured,
+                            reason,
                             true,
-                        );
-                        let mut dropped = rounds_dropped;
-                        let mut messages_dropped = 0usize;
-                        let mut final_after = after;
-                        if fallback_now {
-                            let stats = compact_messages(
-                                messages,
-                                cfg.recovery_target_tokens,
-                            );
-                            if stats.rounds_dropped > 0 {
-                                dropped = stats.rounds_dropped;
-                                messages_dropped = stats.messages_dropped;
-                                final_after = stats.estimated_tokens_after;
+                            true,
+                            rounds_since_compact,
+                            tail,
+                            cancel,
+                            heartbeat,
+                        )
+                        .await?
+                        {
+                            CompactDecision::Executed { incomplete } => {
+                                rounds_since_compact = 0;
+                                failure_widened_tail = incomplete;
                             }
+                            _ => {}
                         }
-                        let insert_at = messages
-                            .iter()
-                            .position(|m| {
-                                m.role == Role::Assistant && !m.tool_calls.is_empty()
-                            })
-                            .unwrap_or(messages.len());
-                        messages.insert(
-                            insert_at,
-                            Message {
-                                role: Role::User,
-                                content: marker,
-                                tool_call_id: None,
-                                tool_calls: Vec::new(),
-                                reasoning_content: None,
-                            },
-                        );
-                        rounds_since_compact = 0;
-                        failure_widened_tail = true;
-                        writer
-                            .record(
-                                EventType::ContextCompressed,
-                                serde_json::json!({
-                                    "trigger_tokens": measured,
-                                    "target_tokens": cfg.recovery_target_tokens,
-                                    "rounds_since_last_compaction": rounds_since,
-                                    "rounds_dropped": dropped,
-                                    "messages_dropped": messages_dropped,
-                                    "messages_kept": messages.len(),
-                                    "estimated_tokens_after": final_after,
-                                    "mode": "template_summary",
-                                    "reason": if fallback_now { "fallback" } else { "rhythm" },
-                                    "summary_id": null,
-                                    "summary_digest": null,
-                                    "summary_path": null,
-                                    "summary_incomplete": true,
-                                    "retained_rounds": tail + 1,
-                                }),
-                            )
-                            .await?;
+                        guard_failures = 0;
                     }
                 }
             }
@@ -1378,6 +1500,7 @@ pub(crate) async fn run_agent_loop(
     Ok(LoopOutcome {
         last_text,
         tool_rounds,
+        rounds_since_compact,
         budget_exhausted,
     })
 }

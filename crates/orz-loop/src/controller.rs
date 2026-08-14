@@ -39,7 +39,9 @@ use orz_assurance::{
 
 use orz_assurance::session::snapshot::SnapshotStore;
 
-use crate::agent_loop::{LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop};
+use crate::agent_loop::{
+    LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop, run_template_compact,
+};
 use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole};
 use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
 use crate::gateway::fake::FakeProvider;
@@ -121,12 +123,15 @@ pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
 ///
 /// - Template summary (S3): fires at any loop-top gap when the previous
 ///   round's MEASURED prompt tokens exceed `trigger_tokens` (160K) with a
-///   ≥`min_rounds` (3) cooldown, or exceed `safety_tokens` (200K fallback)
-///   regardless of cooldown. Reduction guards: removable content ≥
-///   `min_compactable` (5K) and kept ≤ `max_reduction_ratio` (0.6) of
-///   before. The summary output is a five-section template (≤17K chars),
-///   archived under `.gsa/compaction/` with a digest, and the rolling
-///   single marker carries the pointer.
+///   ≥`min_rounds` (2 model rounds — review fix 2026-08-14) cooldown, or
+///   exceed `safety_tokens` (200K fallback) regardless of cooldown.
+///   Reduction guards: removable content ≥ `min_compactable` (5K) and kept
+///   ≤ `max_reduction_ratio` (0.6) of before. A guard that cannot be
+///   satisfied retries across trigger rounds and forces one compaction
+///   after `GUARD_RETRY_LIMIT` failures (`guard_failed`). The summary
+///   output is a five-section template (≤17K chars), archived under
+///   `.gsa/compaction/` with a digest, and the rolling single marker
+///   carries the pointer.
 /// - Mechanical collapse (S2): every completed OLD tool round collapses
 ///   into a deterministic action-ledger row in the MODEL-VISIBLE request
 ///   (zero model calls, no cooldown, `recent_tail_rounds` kept verbatim);
@@ -155,6 +160,12 @@ pub struct ContextCompactConfig {
     /// trigger, so the first measured round may then drive a template
     /// summary instead of another raw truncation).
     pub recovery_target_tokens: u64,
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): the end-of-session
+    /// compaction gate — a successful run whose FULL conversation estimate
+    /// exceeds this threshold compacts once before the sidecar write-back,
+    /// pinning the summary marker into the persisted conversation (the
+    /// restore pre-check remains the fallback for older sidecars).
+    pub session_end_trigger_tokens: u64,
     /// P0-D S2/S3 (2026-08-14, ADR-0010 v1.10): bounded recent tail kept
     /// verbatim in the model-visible collapsed view / after a summary.
     pub recent_tail_rounds: usize,
@@ -171,10 +182,11 @@ impl Default for ContextCompactConfig {
         Self {
             trigger_tokens: 160_000,
             target_tokens: 90_000,
-            min_rounds: 3,
+            min_rounds: 2,
             safety_tokens: 200_000,
             recovery_trigger_tokens: 200_000,
             recovery_target_tokens: 160_000,
+            session_end_trigger_tokens: 160_000,
             recent_tail_rounds: 2,
             min_compactable: 5_000,
             max_reduction_ratio: 0.6,
@@ -3343,6 +3355,13 @@ impl AgentLoopController {
         self
     }
 
+    /// P0-D review fix (2026-08-14): override the end-of-session compaction
+    /// gate (tests use tiny values; production keeps 160K).
+    pub fn with_session_end_trigger(mut self, tokens: u64) -> Self {
+        self.context_compact.session_end_trigger_tokens = tokens;
+        self
+    }
+
     /// P0-D S2/S3: override the recent-tail length (tests use small values;
     /// production keeps 2).
     pub fn with_recent_tail(mut self, rounds: usize) -> Self {
@@ -4287,6 +4306,7 @@ impl AgentLoopController {
         let LoopOutcome {
             last_text,
             tool_rounds,
+            rounds_since_compact,
             ..
         } = outcome;
 
@@ -4329,6 +4349,45 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
+        }
+        // P0-D review fix (2026-08-14, ADR-0010 v1.14): end-of-session
+        // compaction — 治本 for restore. A successful run compacts its
+        // conversation BEFORE the terminal event and the sidecar write-back,
+        // pinning the summary marker into the persisted conversation (D3-1
+        // retains it on restore); the D2-2 recovery pre-check remains the
+        // fallback for older sidecars that never ran this path. Grill turns
+        // are excluded (they keep their own one-shot history). The summary
+        // call is forced (terminal housekeeping, not a mid-task cost gate).
+        if matches!(stagnation_decision, StagnationDecision::Continue) && conversation.is_some()
+        {
+            let estimate = estimate_messages_tokens(&messages);
+            if estimate > self.context_compact.session_end_trigger_tokens {
+                let svc = SharedLoopServices {
+                    blackboard: &self.blackboard,
+                    denial_state: &self.denial_state,
+                    pacing_rounds: &self.pacing_rounds,
+                    context_compact: &self.context_compact,
+                    dc_state: &self.dc_state,
+                    evidence: Some(&self.main_evidence),
+                    policy_revision: &self.policy_revision,
+                };
+                let _ = run_template_compact(
+                    &svc,
+                    writer,
+                    host,
+                    &self.main_agent,
+                    &mut messages,
+                    estimate,
+                    "session_end",
+                    true,
+                    false,
+                    rounds_since_compact,
+                    self.context_compact.recent_tail_rounds,
+                    cancel,
+                    heartbeat,
+                )
+                .await?;
+            }
         }
         writer
             .record(
@@ -4909,9 +4968,42 @@ impl AgentLoopController {
         // fails the retrieval: a subagent has no handoff target (registered
         // decision 2026-08-10; the terminal close record arrives in M4).
         let result: Result<LoopOutcome, AgentLoopError> = match &loop_outcome {
-            Ok(_) => {
+            Ok(outcome_ref) => {
                 let decision = self.evaluate_stagnation(writer, &act.conversation).await?;
                 if matches!(decision, StagnationDecision::Continue) {
+                    // P0-D review fix (2026-08-14, ADR-0010 v1.14): the
+                    // retrieval sidecar gets the same end-of-session
+                    // compaction as the main lane — a restored activation
+                    // resumes from a pinned summary marker instead of a raw
+                    // restore-time truncation.
+                    let estimate = estimate_messages_tokens(&act.conversation);
+                    if estimate > self.context_compact.session_end_trigger_tokens {
+                        let svc = SharedLoopServices {
+                            blackboard: &self.blackboard,
+                            denial_state: &self.denial_state,
+                            pacing_rounds: &self.pacing_rounds,
+                            context_compact: &self.context_compact,
+                            dc_state: &self.dc_state,
+                            evidence: Some(&self.evidence),
+                            policy_revision: &self.policy_revision,
+                        };
+                        let _ = run_template_compact(
+                            &svc,
+                            writer,
+                            host,
+                            subagent,
+                            &mut act.conversation,
+                            estimate,
+                            "session_end",
+                            true,
+                            false,
+                            outcome_ref.rounds_since_compact,
+                            self.context_compact.recent_tail_rounds,
+                            cancel,
+                            heartbeat,
+                        )
+                        .await?;
+                    }
                     loop_outcome
                 } else {
                     Err(AgentLoopError::Assurance(
@@ -9824,7 +9916,7 @@ mod tests {
             }],
             finish_reason: FinishReason::ToolCalls,
             reasoning_content: None,
-            prompt_tokens: Some(5_000), // over the tiny test trigger
+            prompt_tokens: Some(50_000), // over the tiny test trigger
         };
         let fake = Arc::new(FakeProvider::new(vec![
             tool_call("call-a1"),
@@ -9862,7 +9954,7 @@ mod tests {
             .map(|e| e.payload)
             .collect();
         assert_eq!(compact_events.len(), 1, "exactly one summary");
-        assert_eq!(compact_events[0]["trigger_tokens"], 5_000);
+        assert_eq!(compact_events[0]["trigger_tokens"], 50_000);
         // Three completed tool rounds before the summary.
         assert_eq!(compact_events[0]["rounds_since_last_compaction"], 3);
         assert_eq!(compact_events[0]["rounds_dropped"], 1);
@@ -10155,7 +10247,7 @@ mod tests {
             }],
             finish_reason: FinishReason::ToolCalls,
             reasoning_content: None,
-            prompt_tokens: Some(5_000),
+            prompt_tokens: Some(50_000),
         };
         let fake = Arc::new(FakeProvider::new(vec![
             whitelist_calls,
@@ -10788,6 +10880,347 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host whose session `.gsa` path is blocked by a FILE — the summary
+    /// archive write must fail loudly instead of being swallowed.
+    struct BlockedArchiveHost {
+        inner: TestHost,
+        blocked_cwd: PathBuf,
+    }
+
+    #[async_trait]
+    impl LoopHost for BlockedArchiveHost {
+        fn journal(&self) -> &JournalRecorder {
+            self.inner.journal()
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            self.inner.tools_registry()
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.blocked_cwd.clone()
+        }
+        async fn request_permission(
+            &self,
+            risk: RiskClass,
+            tool: &str,
+            args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            self.inner.request_permission(risk, tool, args).await
+        }
+        async fn call_tool(
+            &self,
+            name: &str,
+            args: serde_json::Value,
+            call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            self.inner.call_tool(name, args, call_id).await
+        }
+    }
+
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): a reduction guard that
+    /// cannot be satisfied retries across trigger rounds WITHOUT interrupting
+    /// content or raw truncation; after GUARD_RETRY_LIMIT consecutive
+    /// failures one compaction is forced and reported `guard_failed`.
+    #[test]
+    fn context_compact_defaults_follow_v1_14_review() {
+        let cfg = ContextCompactConfig::default();
+        // Cooldown is 2 MODEL rounds (review fix — avoids long-action
+        // accumulation); the session-end gate defaults to the 160K rhythm
+        // threshold; the recovery pre-check stays 200K/160K.
+        assert_eq!(cfg.min_rounds, 2);
+        assert_eq!(cfg.session_end_trigger_tokens, 160_000);
+        assert_eq!(cfg.recovery_trigger_tokens, 200_000);
+        assert_eq!(cfg.recovery_target_tokens, 160_000);
+        assert_eq!(cfg.recent_tail_rounds, 2);
+    }
+
+    #[tokio::test]
+    async fn context_compact_guard_failure_retries_then_forces() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-f1"),
+            tool_call("call-f2"),
+            tool_call("call-f3"),
+            tool_call("call-f4"),
+            tool_call("call-f5"),
+            // Three guard-blocked rounds → the forced compaction fires on
+            // the next loop-top (round 6's gap) and reports guard_failed.
+            summary_response(),
+            ScriptedResponse {
+                text: Some("第六轮".to_string()),
+                tool_calls: vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "b.txt"}),
+                    call_id: "call-f6".to_string(),
+                }],
+                finish_reason: FinishReason::ToolCalls,
+                reasoning_content: None,
+                prompt_tokens: Some(50_000),
+            },
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000)
+            // The guard can never be satisfied — min_compactable is huge.
+            .with_summary_guards(u64::MAX, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-GUARD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "{compact_events:?}");
+        assert_eq!(compact_events[0]["guard_failed"], true);
+        assert_eq!(compact_events[0]["reason"], "fallback");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
+        assert!(compact_events[0]["summary_digest"].as_str().is_some());
+
+        // The failure report reaches the model in the marker.
+        let received = fake.received_requests();
+        assert!(
+            received
+                .iter()
+                .any(|r| r.messages.iter().any(|m| {
+                    m.content.contains("机制失败：缩减守卫连续不满足")
+                })),
+            "guard failure must be explicitly reported: {received:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): a successful run whose
+    /// FULL conversation estimate crosses the session-end gate compacts once
+    /// BEFORE the terminal event and the sidecar write-back — the marker is
+    /// pinned into the persisted conversation (restore 治本) and the
+    /// blackboard edit window is rolled.
+    #[tokio::test]
+    async fn session_end_compact_pins_marker_into_sidecar_and_rolls_edits() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse {
+                text: Some("候选答案".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                reasoning_content: None,
+                prompt_tokens: Some(100),
+            },
+            ScriptedResponse {
+                text: Some("最终答案".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                reasoning_content: None,
+                prompt_tokens: Some(100),
+            },
+            summary_response(),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone())
+            .with_session_end_trigger(1)
+            .with_summary_guards(1, 1.0);
+        // Seed a fat conversation (three big tool rounds) and two edit
+        // records — the window the end-of-session compaction consumes.
+        let mut conversation = vec![conv_message(Role::User, "第一问")];
+        conversation.extend(tool_round("call-r1", &"A".repeat(600)));
+        conversation.extend(tool_round("call-r2", &"B".repeat(600)));
+        conversation.extend(tool_round("call-r3", &"C".repeat(600)));
+        {
+            let mut bb = controller.blackboard().write();
+            bb.edits.push(EditRecord {
+                file: "a.py".into(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+            bb.edits.push(EditRecord {
+                file: "b.rs".into(),
+                old_lines: 3,
+                new_lines: 4,
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+        }
+        let _ = controller
+            .run_turn(
+                &host,
+                "继续",
+                "RUN-SE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "{compact_events:?}");
+        assert_eq!(compact_events[0]["reason"], "session_end");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
+        assert_eq!(compact_events[0]["guard_failed"], false);
+        assert_eq!(compact_events[0]["archive_write_failed"], false);
+
+        // The marker is pinned into the persisted conversation; the old
+        // rounds are gone from it.
+        assert!(
+            conversation
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩")),
+            "marker must ride the sidecar: {conversation:?}"
+        );
+        assert!(
+            conversation
+                .iter()
+                .all(|m| !m.content.contains(&"A".repeat(600))),
+            "old rounds must be drained from the sidecar"
+        );
+        // The archive was written under .gsa/compaction.
+        let archives: Vec<_> = std::fs::read_dir(dir.join(".gsa").join("compaction"))
+            .expect("archive dir exists")
+            .flatten()
+            .collect();
+        assert_eq!(archives.len(), 1);
+        // The blackboard edit window is rolled (擦干净).
+        assert!(controller.blackboard().read().edits.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): a summary archive write
+    /// failure is retried and then EXPLICITLY reported in the event and the
+    /// marker — never swallowed.
+    #[tokio::test]
+    async fn summary_archive_write_failure_is_reported() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let blocked_cwd = test_dir();
+        // `.gsa` exists as a FILE — create_dir_all(.gsa/compaction) fails.
+        std::fs::write(blocked_cwd.join(".gsa"), "occupied").unwrap();
+        let host = BlockedArchiveHost {
+            inner: TestHost {
+                journal,
+                tool_result: Some(ToolResult {
+                    output: "x".repeat(600),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                }),
+            },
+            blocked_cwd: blocked_cwd.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-a1"),
+            tool_call("call-a2"),
+            tool_call("call-a3"),
+            summary_response(),
+            tool_call("call-a4"),
+            // Round a4 also reports 300K — the fallback re-fires on the next
+            // loop-top (the first summary did not shrink measured tokens).
+            summary_response(),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-ARCHIVE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        // The fallback re-fires while the measured tokens stay over the
+        // safety line — every summary attempt reports the write failure.
+        assert_eq!(compact_events.len(), 2, "{compact_events:?}");
+        for event in &compact_events {
+            assert_eq!(event["archive_write_failed"], true);
+            assert_eq!(event["summary_incomplete"], false);
+            assert!(event["summary_path"].as_str().is_some());
+        }
+        // The archive path/digest are still reported (the intended pointer),
+        // and the marker carries the explicit failure note.
+        let received = fake.received_requests();
+        assert!(
+            received
+                .iter()
+                .any(|r| r.messages.iter().any(|m| {
+                    m.content.contains("存档写入失败：摘要未落盘")
+                })),
+            "archive failure must reach the model: {received:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&blocked_cwd);
     }
 
     /// 2026-08-08 blackboard partition: a FAILED edit records no edit-action
