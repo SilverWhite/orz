@@ -41,16 +41,16 @@
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。
 
-### P0-D ORZ-COMPACTION-REDESIGN（设计定稿；实施待放行）
+### P0-D ORZ-COMPACTION-REDESIGN（`implemented`；S1-S4 已全部闭合，2026-08-14）
 
-- [ ] S1：D2-2 恢复超窗预估算截断——恢复加载后首请求前估算预检 + 整轮截断 + journal 恢复截断事件（完整侧车保留审计）。
-- [ ] S1：D3-1 恢复保留 marker/白名单——恢复回写过滤放行 `[前文上下文已压缩` 与白名单块，首请求可见。
-- [ ] S2：工具调用记录机械坍缩——动作台账行（工具/目标/指针/digest/最终回复）+ 配对纪律 + 依赖完整性。
-- [ ] S3：五段模板摘要接线——orz-compaction 复用（HistoryThenSteps、DeepSeek V4 模型覆盖）、17K 字符校验、LLM 段重做 ≤3 次 + 终止态。
-- [ ] S3：`context_compressed` 事件 Schema 扩展（摘要段/digest/retained 范围）+ verifier/fixtures 同步。
-- [ ] S4：实施审计、ADR/索引状态同步、README 表述更新。
+- [x] S1：D2-2 恢复超窗预估算截断——恢复加载后首请求前估算预检 + 整轮截断 + `context_recovery_truncated` 事件（完整侧车审计副本 `recovery-conversation-full.json`）。
+- [x] S1：D3-1 恢复保留 marker/白名单——恢复回写过滤放行 `[前文上下文已压缩` 与白名单块，首请求可见（主车道 + 子代理 snapshot 同规则）。
+- [x] S2：工具调用记录机械坍缩——动作台账行（工具/目标/指针/digest/最终回复）+ 配对纪律 + 有界尾部（请求视图，侧车保留全文）。
+- [x] S3：五段模板摘要接线——机械槽位（黑板目的/计划/路径）+ 模型槽位校验（≤17K、退化拒绝复用 orz-compaction 500 字符守卫、重做 ≤3 次、summary_incomplete 终止态 + fallback 机械截断）。
+- [x] S3：`context_compressed` 事件 Schema v0.2 扩展（mode/reason/summary_id/digest/path/summary_incomplete/retained_rounds）+ verifier/fixtures 同步 + `.gsa/compaction/` 存档与 7 天 retention + TUI 投影。
+- [x] S4：实施审计、ADR-0010 §14.10 补写、索引/BACKLOG/TODO 状态同步、设计文档状态更新。
 
-入口：[压缩设计](docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / [ADR-0010 §14.10](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 3b](docs/BACKLOG_AND_PRIORITIES.md)。
+入口：[压缩设计](docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / [ADR-0010 §14.10](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [P0-D 实施审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 3b](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## P1 — 可并行审计 / 证据
 

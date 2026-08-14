@@ -152,6 +152,19 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "tool-availability-check",
         RUNTIME / "tool-availability-check-event-payload-v0.2.schema.json",
     ),
+    # D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
+    # recovery pre-check truncation of a restored conversation — written by
+    # the controller between prompt_submitted and the first model_request.
+    "context_recovery_truncated": (
+        "context-recovery-truncated",
+        RUNTIME / "context-recovery-truncated-event-payload-v0.2.schema.json",
+    ),
+    # P0-D S3 (2026-08-14): template-summary payload on the v0.2 track (the
+    # v0.1 file stays authoritative for the v0.1 replay track).
+    "context_compressed": (
+        "context-compressed",
+        RUNTIME / "context-compressed-event-payload-v0.2.schema.json",
+    ),
 }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -1246,6 +1259,73 @@ def _verify_v02_citation_validation(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+def _verify_v02_recovery_truncation(events: list[dict[str, Any]]) -> list[str]:
+    """D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
+    a `context_recovery_truncated` event is the controller's pre-request
+    recovery pre-check — it must appear after `prompt_submitted` and before
+    the first `model_request`, and it must drop at least one whole round
+    (a no-op recovery truncation is never journaled)."""
+    errors: list[str] = []
+    seen_model_request = False
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type == "model_request":
+            seen_model_request = True
+            continue
+        if event_type != "context_recovery_truncated":
+            continue
+        if seen_model_request:
+            errors.append(
+                f"event {index}: context_recovery_truncated must precede the "
+                "first model_request"
+            )
+        if event["payload"]["rounds_dropped"] <= 0:
+            errors.append(
+                f"event {index}: context_recovery_truncated must drop at "
+                "least one whole round"
+            )
+    return errors
+
+
+def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
+    """P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4):
+    the v0.2 `context_compressed` event is a five-section template summary:
+    - mode must be `template_summary`, reason one of rhythm/fallback;
+    - a complete summary must carry a non-null archive id/digest/path;
+    - the termination state (summary_incomplete=true) must carry null
+      archive fields (no archive was written)."""
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "context_compressed":
+            continue
+        payload = event["payload"]
+        if payload.get("mode") != "template_summary":
+            errors.append(
+                f"event {index}: context_compressed mode must be template_summary"
+            )
+        if payload.get("reason") not in ("rhythm", "fallback"):
+            errors.append(
+                f"event {index}: context_compressed reason must be rhythm/fallback"
+            )
+        incomplete = payload.get("summary_incomplete", False)
+        archive_fields = (
+            payload.get("summary_id"),
+            payload.get("summary_digest"),
+            payload.get("summary_path"),
+        )
+        if incomplete and any(f is not None for f in archive_fields):
+            errors.append(
+                f"event {index}: incomplete summary must carry null archive fields"
+            )
+        if not incomplete and any(f is None for f in archive_fields):
+            errors.append(
+                f"event {index}: complete summary must carry archive id/digest/path"
+            )
+    return errors
+
+
 def _verify_v02_activation_restore(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §3.3/§4.4 restore facts on the v0.2 track: the same activation
     is restored at most once per journal (each prompt's controller build may
@@ -1882,6 +1962,8 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_candidate_prefilter(events))
         errors.extend(_verify_v02_candidate_count(events))
         errors.extend(_verify_v02_citation_validation(events))
+        errors.extend(_verify_v02_recovery_truncation(events))
+        errors.extend(_verify_v02_context_compressed(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))
         errors.extend(_verify_v02_tool_availability_probe(events))

@@ -117,10 +117,12 @@ V02_EVENT_TYPES = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
+    "citation_validation",
     "control_ticket_issued",
     "control_ticket_consumed",
     "control_ticket_rejected",
     "context_compressed",
+    "context_recovery_truncated",
     "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
@@ -143,9 +145,11 @@ SLUGS_V02 = {
     "retrieval_mode_transition": "retrieval-mode-transition",
     "retrieval_result_committed": "retrieval-result",
     "retrieval_activation_restored": "retrieval-activation-restored",
+    "citation_validation": "citation-validation",
     "control_ticket_issued": "control-ticket-issued",
     "control_ticket_consumed": "control-ticket-consumed",
     "control_ticket_rejected": "control-ticket-rejected",
+    "context_recovery_truncated": "context-recovery-truncated",
 }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
@@ -160,6 +164,9 @@ V02_PAYLOAD_EVENTS = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
+    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
+    # verifier block event.
+    "citation_validation",
     # ACAF Slice 1 (设计文档 §4.2/§4.6) — control-ticket lifecycle events.
     "control_ticket_issued",
     "control_ticket_consumed",
@@ -167,6 +174,11 @@ V02_PAYLOAD_EVENTS = [
     # FUS-TOOL-PROBE (2026-08-13; P0-A-2): two-state single probe face
     # snapshot (work tools).
     "tool_availability_check",
+    # D2-2 (2026-08-14; ADR-0010 v1.10): recovery pre-check truncation.
+    "context_recovery_truncated",
+    # P0-D S3 (2026-08-14; ADR-0010 v1.10): five-section template summary
+    # (the A6 whole-round drop payload stays v0.1 replay-only).
+    "context_compressed",
 ]
 
 SLUGS = {
@@ -709,6 +721,27 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
     },
+    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
+    # verifier block (ADR-0010 §3.7.9).
+    "citation_validation": {
+        "schema_version": "0.2.0-draft",
+        "position": "final_answer",
+        "decision": "block",
+        "marker_count": 1,
+        "reason_codes": ["unknown_source_id"],
+        "degraded": True,
+        "message_block": "[CITATION_VALIDATION_FAILED v0.1]\n最终回答的引用标记未通过机械校验，已阻止交付。\nreason_codes: unknown_source_id\n[/CITATION_VALIDATION_FAILED]",
+        "markers": [
+            {
+                "index": 0,
+                "raw": "[来源: SRC-999]",
+                "target": "SRC-999",
+                "binding": "ledger_source_id",
+                "status": "failed",
+                "reason_codes": ["unknown_source_id"],
+            }
+        ],
+    },
     # ACAF Slice 1 (设计文档 §4.2/§4.6) — control-ticket lifecycle events.
     "control_ticket_issued": {
         "ticket_id": "TKT-CONF-0001",
@@ -776,6 +809,33 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
             {"tool": "use_tool", "reason": "能力注册未配置"},
         ],
         "gate_decision": "pass",
+    },
+    # D2-2 (2026-08-14; ADR-0010 v1.10): recovery pre-check truncation.
+    "context_recovery_truncated": {
+        "before_estimate_tokens": 260000,
+        "target_tokens": 160000,
+        "after_estimate_tokens": 155000,
+        "rounds_dropped": 3,
+        "messages_dropped": 9,
+        "messages_kept": 7,
+        "audit_path": ".gsa/runs/RUN-CONF-0001/recovery-conversation-full.json",
+    },
+    # P0-D S3 (2026-08-14): five-section template summary (v0.2 shape).
+    "context_compressed": {
+        "trigger_tokens": 165000,
+        "target_tokens": 12000,
+        "rounds_since_last_compaction": 3,
+        "rounds_dropped": 12,
+        "messages_dropped": 40,
+        "messages_kept": 9,
+        "estimated_tokens_after": 11000,
+        "mode": "template_summary",
+        "reason": "rhythm",
+        "summary_id": "compaction-RUN-CONF-0001-0001",
+        "summary_digest": ZERO_HASH,
+        "summary_path": ".gsa/compaction/compaction-RUN-CONF-0001-0001.md",
+        "summary_incomplete": False,
+        "retained_rounds": 2,
     },
 }
 
@@ -951,6 +1011,27 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
     },
+    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): a block decision that
+    # does not degrade violates the conditional contract.
+    "citation_validation": {
+        "schema_version": "0.2.0-draft",
+        "position": "final_answer",
+        "decision": "block",
+        "marker_count": 1,
+        "reason_codes": [],
+        "degraded": False,
+        "message_block": "[CITATION_VALIDATION_FAILED v0.1]\nblocked",
+        "markers": [
+            {
+                "index": 0,
+                "raw": "[来源: SRC-999]",
+                "target": "SRC-999",
+                "binding": "ledger_source_id",
+                "status": "failed",
+                "reason_codes": ["unknown_source_id"],
+            }
+        ],
+    },
     # ACAF Slice 1 (设计文档 §4.2) — constraint violations: capability_scope
     # disagrees with ticket_kind (conditional allOf; the activation binding
     # stays valid so exactly ONE constraint is violated — review C2-4),
@@ -1018,6 +1099,34 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
             {"tool": "use_tool", "reason": "能力注册未配置"},
         ],
         "gate_decision": "stop",
+    },
+    "context_recovery_truncated": {
+        "before_estimate_tokens": 260000,
+        "target_tokens": 160000,
+        # Negative rounds_dropped violates the schema minimum (the verifier's
+        # ≥1-round rule is a separate cross-check).
+        "after_estimate_tokens": 155000,
+        "rounds_dropped": -1,
+        "messages_dropped": 9,
+        "messages_kept": 7,
+        "audit_path": ".gsa/runs/RUN-CONF-0001/recovery-conversation-full.json",
+    },
+    "context_compressed": {
+        "trigger_tokens": 165000,
+        "target_tokens": 12000,
+        "rounds_since_last_compaction": 3,
+        "rounds_dropped": 12,
+        "messages_dropped": 40,
+        "messages_kept": 9,
+        "estimated_tokens_after": 11000,
+        # mode outside the const violates exactly one schema constraint.
+        "mode": "whole_round_drop",
+        "reason": "rhythm",
+        "summary_id": "compaction-RUN-CONF-0001-0001",
+        "summary_digest": ZERO_HASH,
+        "summary_path": ".gsa/compaction/compaction-RUN-CONF-0001-0001.md",
+        "summary_incomplete": False,
+        "retained_rounds": 2,
     },
 }
 

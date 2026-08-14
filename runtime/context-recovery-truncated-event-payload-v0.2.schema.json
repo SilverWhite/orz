@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/context-recovery-truncated-event-payload-v0.1.schema.json",
+  "title": "Context recovery truncation runtime event payload (D2-2)",
+  "description": "D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): a restored conversation exceeded the conservative recovery window (200K) before the first request — the controller mechanically dropped whole old tool rounds toward the recovery target, copied the full sidecar into the run journal as the audit copy, inserted a recovery marker, and journaled this event.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "before_estimate_tokens": {
+      "description": "Estimated restored-conversation tokens (chars/2, conservative CJK-aware) before truncation.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "target_tokens": {
+      "description": "Recovery truncation target — kept conversation estimates under this.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "after_estimate_tokens": {
+      "description": "Estimated kept-conversation tokens after truncation (before the marker insert).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "rounds_dropped": {
+      "description": "Complete tool rounds dropped (each round = one assistant declaration plus its tool replies and injected pushes).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "messages_dropped": {
+      "description": "Messages removed from the seeded conversation.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "messages_kept": {
+      "description": "Messages remaining after truncation plus the inserted recovery marker.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "audit_path": {
+      "description": "Run-journal path of the full pre-truncation sidecar copy (audit evidence).",
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "before_estimate_tokens",
+    "target_tokens",
+    "after_estimate_tokens",
+    "rounds_dropped",
+    "messages_dropped",
+    "messages_kept",
+    "audit_path"
+  ]
+}

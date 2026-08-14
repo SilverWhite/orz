@@ -60,6 +60,7 @@
         "control_ticket_consumed",
         "control_ticket_rejected",
         "context_compressed",
+        "context_recovery_truncated",
         "snapshot_created",
         "snapshot_restored",
         "artifact_registered",

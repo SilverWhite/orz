@@ -1,8 +1,10 @@
 # GAP-CONVERSATION-RESTORE 实施审计（2026-08-10）
 
-> **2026-08-14 状态注记**：D2-2（恢复超窗卡死）与 D3-1（marker/白名单被恢复过滤）已由压缩机制
-> 重设计裁决为实施前置（ADR-0010 v1.10 / `docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md`），
-> 实施切片 S1 登记于 TODO/BACKLOG；本边界条目在对应切片闭合前保持开放。
+> **2026-08-14 状态注记（已闭合）**：D2-2（恢复超窗卡死）与 D3-1（marker/白名单被恢复过滤）
+> 已由压缩机制重设计裁决为实施前置（ADR-0010 v1.10），实施切片 S1 于 2026-08-14 闭合——
+> 恢复超窗整轮截断 + 审计副本 + `context_recovery_truncated` 事件；恢复回写过滤放行
+> marker/白名单。详见
+> [`GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md`](GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md)。
 
 > **三面审查闭环（2026-08-11 更新）**：设计合理性/实现合理性/符合性三独立代理审查——**无 D1/P0/P1/C1/C2**；修复批 8 项（见 §3 更新 + §7），登记项见 §4/§8。
 
@@ -66,7 +68,10 @@
 ## 4. 边界（明确未做，登记给后续切片）
 
 - **显式 resume 留后续**：本切片只做同 session_id 自动延续 + 侧车落盘备将来；会话列表 UI / restore 事件类型 / permission 驱动的显式恢复（§5.4.5 独立 restore event/receipt）未接——机制已就位（侧车跨进程可恢复），后续只需接线
-- **恢复 conversation 超 provider 窗口（D2-2 登记，2026-08-11）**：A6 compaction 的 safety 触发依赖上一轮实测 tokens（首轮 None 不触发）——恢复的长 conversation 首请求若超窗直接 400，成功-only 回写保留超窗历史 → 每次 prompt 同路径失败，会话卡死（retention/删侧车兜底）。修复（首请求前 token 估算截断或侧车大小上限）留后续切片
+- **恢复 conversation 超 provider 窗口（D2-2 登记，2026-08-11；**已闭合 2026-08-14**）**：
+  A6 compaction 的 safety 触发依赖上一轮实测 tokens（首轮 None 不触发）——恢复的长
+  conversation 首请求若超窗直接 400。修复=首请求前估算预检整轮截断（P0-D S1），完整侧车
+  副本入运行目录审计，`context_recovery_truncated` 事件记录前后估算/丢弃轮数
 - **子代理对话失败持久化不对称（D2-3 登记，2026-08-11）**：主 conversation 侧车成功-only；子代理 conversation 经 activation 侧车**无条件**落盘（既有 persist 模式）——失败 run 的子代理中间消息会跨进程持久化，恢复后子代理从残缺对话继续。journal 是失败证据面；对称化（按 run 成功与否过滤）留后续
 - **跨会话不共享**：侧车按 session8 文件隔离，不同 session_id 互不可见
 - **grill 不接**：`GrillTurn.history` 既有路径不变（run_turn_inner 的 grill 分支零改动）
@@ -76,7 +81,9 @@
 - **恢复的 journal 不可观测性**：零事件变更——conversation 恢复只影响模型输入与后续输出内容（非事件序列）；`retrieval_activation_restored` 不带 conversation digest
 - **侧车大小**：长会话数百 KB，每成功 prompt 全量重写（best-effort 不阻塞 run；retention 兜底；增量/截断策略留后续）
 - **同 session 并发 prompt 竞态（P3-2 登记）**：`runs` 注册表对 prompt-vs-prompt 是既有覆盖语义（不互斥）——并发 prompt 的 conversation take-out 竞争，last-writer-wins 丢一方对话（journal 留证）。TUI 有 running 门，直接 API 客户端可触达；与 orientation/activation 既有模型一致，非新缺陷
-- **压缩 marker/白名单被过滤（D3-1 登记）**：压缩 marker 与白名单块注册于 is_injected_block_text，回写一并剔除——恢复后模型看不到压缩告知且丢白名单任务事实（journal ContextCompressed 事件是证据面）；恢复面保留 marker 留后续
+- **压缩 marker/白名单被过滤（D3-1 登记；**已闭合 2026-08-14**）**：压缩 marker 与白名单块
+  注册于 is_injected_block_text，回写一并剔除——修复=恢复回写过滤放行 `[前文上下文已压缩`
+  与 `[压缩白名单` 块（P0-D S1），主车道与子代理 snapshot 同规则
 
 ## 5. 验证
 
@@ -111,7 +118,8 @@
 
 ## 8. 审查记录项（登记不修）
 
-- **D2-2 超窗卡死**（见 §4）：恢复 conversation 超 provider 窗口 → 首请求 400 → 成功-only 回写保留超窗历史 → 会话卡死；截断策略留后续
+- **D2-2 超窗卡死**（见 §4；**已闭合 2026-08-14**）：恢复 conversation 超 provider 窗口 →
+  首请求 400 → 成功-only 回写保留超窗历史 → 会话卡死；截断策略=P0-D S1 恢复预检整轮截断
 - **D2-3 子代理失败持久化不对称**（见 §4）：activation 侧车无条件落盘（既有模式）vs 主对话成功-only
 - **C3-1**：审计正文 "grill :2240/:2364" 为 base 版本行号（当前工作树 :2276/~2414）
 - **C3-2**：orz-bin 调用点实际 15 处（审计 §1.2 "~14" 近似）

@@ -1077,6 +1077,13 @@ Schema 与机械证据：
    ⑥ 实施前置：D2-2（恢复超窗预估算截断）与 D3-1（marker/白名单恢复保留）必须先于
       压缩接线闭合；本补写推翻 2026-08-08「LLM 摘要否决」与「节奏压缩仅最终答案间隙」
       裁决；保留轮/工具配对、白名单优先级、50K 单轮注入预算与 derived_unverified 契约。
+   ⑦ 实施闭环（2026-08-14，S1-S4 全部闭合）：D2-2 恢复预检截断 +
+      `context_recovery_truncated` 事件、D3-1 marker/白名单恢复保留、动作台账机械坍缩
+      （请求视图，侧车保留全文）、五段模板摘要（160K/200K/3 轮/5K/0.6，重做 ≤3，
+      `summary_incomplete` 终止态 + fallback 机械截断）、`.gsa/compaction/` 存档 +
+      7 天 retention、`context_compressed` v0.2 payload、TUI 投影；检索子代理同构触发，
+      摘要调用不计工具轮/orientation 轮。实施审计：
+      `docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md`。
    来源：2026-08-14 压缩机制设计评审（对照 Grok 0.2.111 compaction 组件与 DeepSeek V4
    检索质量数据；设计入口 `docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md`）。
 

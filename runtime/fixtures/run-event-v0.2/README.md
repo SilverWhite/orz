@@ -7,8 +7,8 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-  legal / one-constraint-violation payloads for the **twelve** v0.2 mechanism
-  events with their own v0.2 payload schema: `orientation_checkpoint`
+  legal / one-constraint-violation payloads for the v0.2 mechanism events
+  with their own v0.2 payload schema: `orientation_checkpoint`
   (v0.2 shape), `diagnostic_coverage_checkpoint`,
   `information_sufficiency_assessment`, `retrieval_parent_disposition`,
   `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
@@ -19,6 +19,15 @@ Scope:
   HMAC tag, which stays inside the issuing process), plus
   `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
   single probe face snapshot — complete/incomplete cover ALL work tools).
+- P0-D S1 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
+  `context_recovery_truncated` — the D2-2 recovery pre-check event
+  (before/after estimates, dropped rounds and the run-journal audit path
+  of the full sidecar copy).
+- P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4):
+  `context_compressed` moves to a v0.2 payload shape — the five-section
+  template summary (mode/reason, archive id/digest/path, completeness and
+  retained tail; the v0.1 file stays authoritative for the v0.1 replay
+  track).
 - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
@@ -28,8 +37,8 @@ Scope:
   negative payload fixture for the fixed tier/weight table (authoritative
   MUST pair with 1.1; the good fixture carries the full weighting fields).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (42 events). The twelve v0.2-payload events carry
-  their v0.2 payload; the other 30 events reuse the v0.1 payload shape
+  event in the v0.2 enum (44 events). The v0.2-payload events carry
+  their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for
   unchanged payloads). `chained-run-finished.valid.json` covers the
@@ -47,7 +56,7 @@ extension 2026-08-10):
   v0.2 enum — they exist only on the v0.1 track for historical journal
   replay (ADR-0010 §11.2).
 - The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
-  The cross-validator resolves the twelve v0.2-payload events to their v0.2
+  The cross-validator resolves the v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
 - **ACAF ticket kinds are payload-level** (Slice 1, 2026-08-12; Slice 2
   2026-08-12): the control-ticket trio's event types are stable; the

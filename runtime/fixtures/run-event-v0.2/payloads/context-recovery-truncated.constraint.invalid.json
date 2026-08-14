@@ -1,0 +1,9 @@
+{
+  "before_estimate_tokens": 260000,
+  "target_tokens": 160000,
+  "after_estimate_tokens": 155000,
+  "rounds_dropped": -1,
+  "messages_dropped": 9,
+  "messages_kept": 7,
+  "audit_path": ".gsa/runs/RUN-CONF-0001/recovery-conversation-full.json"
+}

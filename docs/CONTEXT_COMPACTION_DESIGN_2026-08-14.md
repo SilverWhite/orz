@@ -1,6 +1,7 @@
 # ORZ 上下文压缩机制重设计（2026-08-14）
 
-> 状态：`pending`（设计已冻结；实施未开始，实施切片见 TODO/BACKLOG）
+> 状态：`implemented`（2026-08-14 S1-S4 全部闭合；实施审计见
+> `docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md`）
 > 权威：ADR-0010 §3.6 / §14.10（v1.10 补写）；本文件是设计投影与实施入口，不新增与 ADR 冲突的语义。
 > 取代范围：本文推翻并取代 2026-08-08「LLM 摘要否决（零模型摘要）」与「节奏压缩仅最终答案间隙」
 > 裁决；存档材料 `存档/docs/implementation-history/INQUIRY_FIX_AND_BLACKBOARD_PARTITION_2026-08-08.md`
@@ -125,14 +126,19 @@
 
 ## 9. 实施切片（登记于 TODO/BACKLOG，待放行）
 
-- S1：D2-2 恢复预检截断 + D3-1 marker/白名单恢复保留（含测试）。
-- S2：工具调用记录机械坍缩（动作台账行 + 配对纪律 + 指针完整性 + 测试）。
+- S1：D2-2 恢复预检截断 + D3-1 marker/白名单恢复保留（含测试）——**已闭合**。
+- S2：工具调用记录机械坍缩（动作台账行 + 配对纪律 + 指针完整性 + 测试）——**已闭合**。
 - S3：五段模板摘要接线（orz-compaction 复用、模型覆盖、17K 校验、重做/终止态、
-  `context_compressed` 事件 Schema 扩展 + verifier/fixtures）。
-- S4：实施审计、ADR/索引状态同步、README 表述更新。
+  `context_compressed` 事件 Schema 扩展 + verifier/fixtures）——**已闭合**。
+- S4：实施审计、ADR/索引状态同步、README 表述更新——**已闭合**。
+
+实施详情见 [`GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md`](audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md)。
 
 ## 10. 未决/边界
 
-- 检索子代理的压缩触发与 activation 预算的交互（实施 S3 时复核）；
-- marker 与摘要存档的 retention（纳入既有 7 天 retention 评估）；
-- 路径槽 Top-N 的 N 值与排序规则（按时间倒序/按编辑频次，实施时定）。
+- 检索子代理的压缩触发与 activation 预算的交互——**已复核（2026-08-14）**：共享
+  loop 同构触发；摘要调用不消耗工具轮预算、不计数 orientation 轮，互不干扰。
+- marker 与摘要存档的 retention——**已实施**：`.gsa/compaction/` 纳入既有 7 天
+  retention 清扫（rebuildable/audit → sweepable）。
+- 路径槽 Top-N——**已定案**：N=40、按黑板编辑插入序（时间序）；溢出行给
+  blackboard_read 分区指针，全量路径索引化不截断。

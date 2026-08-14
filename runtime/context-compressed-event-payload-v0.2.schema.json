@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/context-compressed-event-payload-v0.2.schema.json",
+  "title": "Context compaction runtime event payload (v0.2 template summary)",
+  "description": "P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4): the five-section template summary replaces the A6 whole-round drop as the primary compaction mechanism. All v0.1 counters stay; the v0.2 fields describe the summary trigger (rhythm 160K / fallback 200K), the archive pointer (id/digest/path), completeness (summary_incomplete termination state) and the retained recent tail.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "trigger_tokens": {
+      "description": "Measured prompt tokens of the previous (collapsed) model round — the value that crossed the trigger.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "target_tokens": {
+      "description": "Kept-conversation estimate after the summary (marker + preamble + recent tail).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "rounds_since_last_compaction": {
+      "description": "Model rounds since the previous summary (the ≥3-round cooldown, measured before this summary).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "rounds_dropped": {
+      "description": "Complete tool rounds removed by the summary (each round = one assistant declaration plus its tool replies and injected pushes).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "messages_dropped": {
+      "description": "Messages removed from the conversation.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "messages_kept": {
+      "description": "Messages remaining after the summary plus the injected marker.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "estimated_tokens_after": {
+      "description": "Estimated kept-conversation tokens (chars/2 — conservative CJK-aware estimate).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "mode": {
+      "const": "template_summary"
+    },
+    "reason": {
+      "enum": ["rhythm", "fallback"]
+    },
+    "summary_id": {
+      "description": "Archive id under .gsa/compaction/ (null when the summary failed and no archive was written).",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "summary_digest": {
+      "description": "sha256 of the archive markdown (null when no archive was written).",
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "summary_path": {
+      "description": "Archive file path (null when no archive was written).",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "summary_incomplete": {
+      "description": "Termination state — the LLM slots failed validation after ≤3 attempts; only mechanical slots were kept and the marker carries the flag.",
+      "type": "boolean"
+    },
+    "retained_rounds": {
+      "description": "Recent tail rounds kept verbatim after the summary (2 normally; widened by 1 on the termination state).",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "trigger_tokens",
+    "target_tokens",
+    "rounds_since_last_compaction",
+    "rounds_dropped",
+    "messages_dropped",
+    "messages_kept",
+    "estimated_tokens_after",
+    "mode",
+    "reason",
+    "summary_id",
+    "summary_digest",
+    "summary_path",
+    "summary_incomplete",
+    "retained_rounds"
+  ]
+}
