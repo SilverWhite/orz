@@ -275,7 +275,11 @@ pub fn browser_read_tool_def() -> ToolDef {
                 },
                 "keywords": {
                     "type": "array",
-                    "items": { "type": "string", "minLength": 1 },
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_KEYWORD_CHARS,
+                    },
                     "maxItems": 16,
                     "description": "Required when mode=keywords: 1..16 non-empty \
                         terms (each up to 64 chars) to extract excerpts for.",
@@ -431,7 +435,18 @@ pub async fn handle_browser_read(
                     text
                 }
                 MODE_KEYWORDS => {
-                    let (excerpts, matched_terms, excerpt_count) =
+                    // Review fix (2026-08-14): bound the extraction INPUT
+                    // too — full mode caps at MAX_READ_CHARS, but keywords
+                    // previously scanned the whole rendered page (a huge
+                    // page cost a full copy + scan). Matches beyond the
+                    // cap are out of scope for the excerpt; the footer
+                    // says so.
+                    let mut input_capped = false;
+                    if text.chars().count() > MAX_READ_CHARS {
+                        text = text.chars().take(MAX_READ_CHARS).collect();
+                        input_capped = true;
+                    }
+                    let (excerpts, emitted_terms, excerpt_count) =
                         keyword_excerpts(&text, &keywords);
                     let mut output = if excerpts.is_empty() {
                         format!(
@@ -442,9 +457,14 @@ pub async fn handle_browser_read(
                         excerpts
                     };
                     output.push_str(TRUNCATED_FOOTER_PREFIX);
+                    let cap_note = if input_capped {
+                        format!(", input capped at {MAX_READ_CHARS} chars")
+                    } else {
+                        String::new()
+                    };
                     output.push_str(&format!(
-                        " keyword excerpts ({} terms, {} excerpts), page text only]",
-                        matched_terms, excerpt_count
+                        " keyword excerpts ({} terms, {} excerpts){cap_note}, page text only]",
+                        emitted_terms, excerpt_count
                     ));
                     truncated = true;
                     output
@@ -526,10 +546,14 @@ fn ceil_char_boundary(text: &str, mut idx: usize) -> usize {
 /// substring matching for pure-ASCII text+terms, exact substring matching
 /// otherwise; overlapping/adjacent matches merge into one excerpt; each term
 /// contributes at most [`KEYWORD_EXCERPTS_PER_TERM`] merged spans and the
-/// total output is bounded by [`KEYWORD_TOTAL_CHARS`]. Returns the joined
-/// excerpts, the number of terms with ≥1 match, and the excerpt count.
+/// returned excerpt body is STRICTLY bounded by [`KEYWORD_TOTAL_CHARS`]
+/// characters — separators and ellipsis markers count against the budget
+/// (review fix 2026-08-14). Returns the joined excerpts, the number of
+/// terms actually represented in the returned output, and the excerpt count.
 fn keyword_excerpts(text: &str, keywords: &[String]) -> (String, usize, usize) {
-    let mut matched_terms = 0usize;
+    // Per-keyword merged spans (up to KEYWORD_EXCERPTS_PER_TERM each) —
+    // kept for emitted-term attribution after the budget clip.
+    let mut keyword_spans: Vec<Vec<(usize, usize)>> = Vec::with_capacity(keywords.len());
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for kw in keywords {
         let matches: Vec<(usize, usize)> = if text.is_ascii() && kw.is_ascii() {
@@ -544,9 +568,6 @@ fn keyword_excerpts(text: &str, keywords: &[String]) -> (String, usize, usize) {
                 .map(|(i, m)| (i, i + m.len()))
                 .collect()
         };
-        if !matches.is_empty() {
-            matched_terms += 1;
-        }
         // Merge overlapping/adjacent matches within one term.
         let mut merged: Vec<(usize, usize)> = Vec::new();
         for (s, e) in matches {
@@ -560,7 +581,10 @@ fn keyword_excerpts(text: &str, keywords: &[String]) -> (String, usize, usize) {
                 merged.push((s, e));
             }
         }
-        spans.extend(merged.into_iter().take(KEYWORD_EXCERPTS_PER_TERM));
+        let kept: Vec<(usize, usize)> =
+            merged.into_iter().take(KEYWORD_EXCERPTS_PER_TERM).collect();
+        keyword_spans.push(kept.clone());
+        spans.extend(kept);
     }
     // Global merge across terms (overlapping excerpts collapse).
     spans.sort_unstable();
@@ -580,6 +604,7 @@ fn keyword_excerpts(text: &str, keywords: &[String]) -> (String, usize, usize) {
     let mut out = String::new();
     let mut total_chars = 0usize;
     let mut excerpt_count = 0usize;
+    let mut emitted_spans: Vec<(usize, usize)> = Vec::new();
     for (s, e) in merged_spans {
         if total_chars >= KEYWORD_TOTAL_CHARS {
             break;
@@ -587,35 +612,52 @@ fn keyword_excerpts(text: &str, keywords: &[String]) -> (String, usize, usize) {
         let start = floor_char_boundary(text, s.saturating_sub(KEYWORD_EXCERPT_RADIUS));
         let end = ceil_char_boundary(text, (e + KEYWORD_EXCERPT_RADIUS).min(text.len()));
         let excerpt: String = text[start..end].chars().collect();
-        let excerpt_chars = excerpt.chars().count();
+        // The whole piece (separator + ellipsis markers + excerpt) counts
+        // against the strict budget — no uncounted characters (review fix
+        // 2026-08-14).
+        let mut piece = String::new();
         if !out.is_empty() {
-            out.push_str("\n---\n");
-            total_chars += 5;
+            piece.push_str("\n---\n");
         }
-        if total_chars + excerpt_chars > KEYWORD_TOTAL_CHARS {
-            let remaining = KEYWORD_TOTAL_CHARS.saturating_sub(total_chars);
-            let clipped: String = excerpt.chars().take(remaining).collect();
-            if start > 0 {
-                out.push('…');
+        if start > 0 {
+            piece.push('…');
+        }
+        piece.push_str(&excerpt);
+        if end < text.len() {
+            piece.push('…');
+        }
+        let piece_chars = piece.chars().count();
+        let remaining = KEYWORD_TOTAL_CHARS.saturating_sub(total_chars);
+        if piece_chars > remaining {
+            // The separator must fit cleanly before we fill the tail; a
+            // dangling separator-only tail is not an excerpt.
+            let separator = if out.is_empty() { 0 } else { 5 };
+            if remaining <= separator {
+                break;
             }
-            out.push_str(&clipped);
-            if end < text.len() {
-                out.push('…');
-            }
+            out.push_str(&piece.chars().take(remaining).collect::<String>());
             total_chars = KEYWORD_TOTAL_CHARS;
-        } else {
-            if start > 0 {
-                out.push('…');
-            }
-            out.push_str(&excerpt);
-            if end < text.len() {
-                out.push('…');
-            }
-            total_chars += excerpt_chars;
+            emitted_spans.push((s, e));
+            excerpt_count += 1;
+            break;
         }
+        out.push_str(&piece);
+        total_chars += piece_chars;
+        emitted_spans.push((s, e));
         excerpt_count += 1;
     }
-    (out, matched_terms, excerpt_count)
+
+    // Terms actually represented in the emitted output (after the budget
+    // clip) — a matched term whose spans were all dropped by the budget
+    // does not appear in the footer count (review fix 2026-08-14).
+    let emitted_terms = keyword_spans
+        .iter()
+        .filter(|term| {
+            term.iter()
+                .any(|(s1, e1)| emitted_spans.iter().any(|(s2, e2)| s1 <= e2 && s2 <= e1))
+        })
+        .count();
+    (out, emitted_terms, excerpt_count)
 }
 
 /// Whether `browser_read` should be declared/run (same source of truth as
@@ -1010,6 +1052,74 @@ pub(crate) mod tests {
         );
     }
 
+    /// Review fix (2026-08-14): the excerpt BODY is strictly bounded by
+    /// KEYWORD_TOTAL_CHARS — separators and ellipsis markers count against
+    /// the budget, so the model-visible body never exceeds it even with
+    /// many matches across all 16 terms.
+    #[tokio::test]
+    async fn keywords_mode_output_stays_within_total_chars_budget() {
+        let mut page = String::new();
+        for _block in 0..20 {
+            for term in 0..16 {
+                page.push_str(&format!("needle{term} "));
+                page.push_str(&"x".repeat(200));
+            }
+        }
+        let keywords: Vec<String> = (0..16).map(|i| format!("needle{i}")).collect();
+        let browser = StubBrowser {
+            outcome: Ok(sample_outcome(&page)),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome(&page))),
+        };
+        let result = handle_browser_read(
+            &browser,
+            &json!({
+                "url": "https://example.com/",
+                "mode": "keywords",
+                "keywords": keywords,
+            }),
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["truncated"], true);
+        let content = parsed["content"].as_str().unwrap();
+        let body = content.split(TRUNCATED_FOOTER_PREFIX).next().unwrap();
+        let body_chars = body.chars().count();
+        assert!(
+            body_chars <= KEYWORD_TOTAL_CHARS,
+            "excerpt body exceeds the strict budget: {body_chars} > {KEYWORD_TOTAL_CHARS}"
+        );
+    }
+
+    /// Review fix (2026-08-14): keywords extraction caps its INPUT at
+    /// MAX_READ_CHARS like full mode — a keyword that only appears past
+    /// the cap is out of scope, reported via the no-match note and the
+    /// input-cap footer.
+    #[tokio::test]
+    async fn keywords_mode_caps_input_before_extraction() {
+        let mut page = String::new();
+        page.push_str(&"x".repeat(MAX_READ_CHARS + 100));
+        page.push_str("needle");
+        let browser = StubBrowser {
+            outcome: Ok(sample_outcome(&page)),
+            download: Ok(BrowserDownloadOutcome::Page(sample_outcome(&page))),
+        };
+        let result = handle_browser_read(
+            &browser,
+            &json!({"url": "https://example.com/", "mode": "keywords", "keywords": ["needle"]}),
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        let content = parsed["content"].as_str().unwrap();
+        assert!(
+            content.contains("no matching excerpts"),
+            "match past the input cap must be out of scope: {content}"
+        );
+        assert!(content.contains("input capped"), "{content}");
+        assert_eq!(parsed["truncated"], true);
+    }
+
     /// P0-B step 4 (2026-08-14): strict argument validation for the new
     /// mode/keywords surface — invalid mode, keywords outside keywords mode,
     /// empty/duplicate/oversized terms and non-array keywords all carry the
@@ -1059,6 +1169,10 @@ pub(crate) mod tests {
         assert_eq!(
             def.parameters["properties"]["keywords"]["maxItems"],
             MAX_KEYWORDS
+        );
+        assert_eq!(
+            def.parameters["properties"]["keywords"]["items"]["maxLength"],
+            MAX_KEYWORD_CHARS
         );
         assert_eq!(def.parameters["required"][0], "url");
     }

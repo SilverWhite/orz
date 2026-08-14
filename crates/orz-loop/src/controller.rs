@@ -188,12 +188,19 @@ pub(crate) enum TicketGate {
 }
 
 /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the candidate gate's
-/// decision — allowed (with the post-call count/cap for the model-visible
-/// feedback) or refused (event + tool message already journaled by the
-/// gate). Covers the web_fetch family and `browser_read` (same
-/// per-activation count domain, design §1.1/§1.3).
+/// decision — allowed (the URL is committed by the caller at the execution
+/// boundary; the post-call count/cap rides the `tool_completed` feedback)
+/// or refused (event + tool message already journaled by the gate). Covers
+/// the web_fetch family and `browser_read` (same per-activation count
+/// domain, design §1.1/§1.3).
 pub(crate) enum CandidateGateDecision {
-    Allowed { count: usize, cap: usize },
+    /// Decision only — the URL is NOT consumed here; the caller commits it
+    /// at the execution boundary after the permission/ACAF gates pass
+    /// (review fix 2026-08-14 — a later-gate refusal consumes no budget).
+    Allowed {
+        url: String,
+        cap: usize,
+    },
     Refused(ToolResult, Option<PolicyFeedback>),
 }
 
@@ -207,6 +214,19 @@ fn candidate_tool_prefix(tool: &str) -> &'static str {
     } else {
         "browser_read"
     }
+}
+
+/// FUS-RETRIEVAL-MECH P0-B step 2/4 review fix (2026-08-14): commit one
+/// candidate URL to the shared per-activation counter at the execution
+/// boundary — after the permission/ACAF gates passed and immediately
+/// before ToolStarted. Exact-string dedup (the same URL re-read consumes
+/// nothing); returns the post-commit (count, cap).
+fn commit_candidate(counter: &Mutex<Vec<String>>, url: &str, cap: usize) -> (usize, usize) {
+    let mut seen = counter.lock().unwrap();
+    if !seen.iter().any(|u| u == url) {
+        seen.push(url.to_string());
+    }
+    (seen.len(), cap)
 }
 
 /// The main agent loop controller.
@@ -1310,7 +1330,7 @@ impl ActivationRegistry {
                     contract_revision: a.contract_revision,
                     status: a.status,
                     tool_rounds_used: a.tool_rounds_used,
-                    web_fetch_candidates: a.web_fetch_candidates.clone(),
+                    candidate_urls: a.candidate_urls.clone(),
                     result_digest: a.result_digest.clone(),
                     result_archive_ref: a.result_archive_ref.clone(),
                     next_goal: a.next_goal.clone(),
@@ -1402,7 +1422,7 @@ impl ActivationRegistry {
                     result_digest: stored.result_digest.clone(),
                     submitted: Vec::new(),
                     tool_rounds_used: stored.tool_rounds_used,
-                    web_fetch_candidates: stored.web_fetch_candidates.clone(),
+                    candidate_urls: stored.candidate_urls.clone(),
                     result_archive_ref: stored.result_archive_ref.clone(),
                 },
             );
@@ -1456,18 +1476,16 @@ pub(crate) struct ActivationState {
     /// activation starts at 0). Read as `initial_tool_rounds` by the
     /// shared loop and written back from `LoopOutcome.tool_rounds`.
     pub tool_rounds_used: u32,
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the activation's
-    /// web_fetch candidate URLs — exact-string dedup, first-seen order,
-    /// per-activation accumulation (design §1.1). A `continue` re-entry is
-    /// the SAME retrieval session, so the count accumulates across
-    /// dispatches and resets only when the activation closes; it rides the
-    /// sidecar like `tool_rounds_used` (cross-run restore keeps the cap
-    /// meaningful). P0-B step 4 (2026-08-14): the SAME domain also counts
-    /// `browser_read` (local_browser second segment, design §1.3) — one
-    /// shared candidate budget per activation. Moved into the dispatch's
-    /// shared counter while the subagent loop runs and written back on
-    /// every path.
-    pub web_fetch_candidates: Vec<String>,
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the activation's
+    /// candidate URLs — exact-string dedup, first-seen order,
+    /// per-activation accumulation (design §1.1; shared count domain for
+    /// the web_fetch family + browser_read, design §1.3). A `continue`
+    /// re-entry is the SAME retrieval session, so the count accumulates
+    /// across dispatches and resets only when the activation closes; it
+    /// rides the sidecar like `tool_rounds_used` (cross-run restore keeps
+    /// the cap meaningful). Moved into the dispatch's shared counter while
+    /// the subagent loop runs and written back on every path.
+    pub candidate_urls: Vec<String>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): the committed structured result's
     /// artifact path (ADR-0010 §3.3.5 archive_ref — the close record cites
     /// the real artifact instead of the `run-journal:{run_id}` placeholder).
@@ -1523,14 +1541,13 @@ pub(crate) struct StoredActivation {
     pub contract_revision: u32,
     pub status: ActivationStatus,
     pub tool_rounds_used: u32,
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the activation's
-    /// deduplicated web_fetch candidate URLs — rides the sidecar so a
-    /// cross-run `continue` resumes with the same candidate budget
-    /// (matches `tool_rounds_used` lifecycle; shared with browser_read
-    /// since P0-B step 4). `#[serde(default)]` keeps old sidecars
-    /// parseable.
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the activation's
+    /// deduplicated candidate URLs (shared count domain — web_fetch family
+    /// + browser_read) — rides the sidecar so a cross-run `continue`
+    /// resumes with the same candidate budget (matches `tool_rounds_used`
+    /// lifecycle). `#[serde(default)]` keeps old sidecars parseable.
     #[serde(default)]
-    pub web_fetch_candidates: Vec<String>,
+    pub candidate_urls: Vec<String>,
     #[serde(default)]
     pub result_digest: Option<String>,
     #[serde(default)]
@@ -4683,11 +4700,11 @@ impl AgentLoopController {
                             // A fresh activation starts a fresh budget
                             // (F5, user adjudication 2026-08-10 — the
                             // budget accumulates only within one
-                            // activation's lifetime) and a fresh web_fetch
-                            // candidate count (P0-B step 2, 2026-08-14 —
-                            // design §1.1: reset only on activation close).
+                            // activation's lifetime) and a fresh candidate
+                            // count (P0-B step 2/4, 2026-08-14 — design
+                            // §1.1: reset only on activation close).
                             tool_rounds_used: 0,
-                            web_fetch_candidates: Vec::new(),
+                            candidate_urls: Vec::new(),
                             result_archive_ref: None,
                         },
                         goal.clone(),
@@ -4704,7 +4721,7 @@ impl AgentLoopController {
         // path below, so a `continue` re-entry resumes the same count and
         // a new activation starts empty (design §1.1: per-activation
         // accumulation, reset only on close).
-        let fetch_candidates = Arc::new(Mutex::new(std::mem::take(&mut act.web_fetch_candidates)));
+        let fetch_candidates = Arc::new(Mutex::new(std::mem::take(&mut act.candidate_urls)));
 
         // The subagent's tool projection = the parent's registry minus the
         // main-only control/whitelist tools (the retrieval lane never sees
@@ -4811,7 +4828,7 @@ impl AgentLoopController {
         // Write the candidate counter back into the activation (every
         // path — success, error and cancel keep the count; the close
         // record still observes the consumed candidates).
-        act.web_fetch_candidates = std::mem::take(&mut *fetch_candidates.lock().unwrap());
+        act.candidate_urls = std::mem::take(&mut *fetch_candidates.lock().unwrap());
 
         // Re-insert the activation — the conversation is preserved on every
         // path (§4.4: journal, docs, ledger, receipts never deleted).
@@ -6090,14 +6107,18 @@ impl AgentLoopController {
         // becomes a hard per-activation cap (ORZ_WEB_FETCH_CANDIDATE_CAP,
         // default 8, user adjudication 2026-08-14), shared by web_fetch
         // (framework_fallback) and browser_read (local_browser second
-        // segment, design §1.3). Counts BEFORE any fetch/read action:
-        // per-activation accumulation, exact-string URL dedup (same page
-        // re-read consumes no new candidate; canonical / host-level dedup
-        // is step 3), no reset on continue re-entry (only activation
-        // close). Refusals are no-ToolStarted (same shape as the mode
-        // gates) and feed the consecutive-denial breaker (no retry space,
-        // ADR-0010 §3.5.4).
+        // segment, design §1.3). The gate DECIDES before any fetch/read
+        // action: per-activation accumulation, exact-string URL dedup
+        // (same page re-read consumes no new candidate; canonical /
+        // host-level dedup is step 3), no reset on continue re-entry
+        // (only activation close). Refusals are no-ToolStarted (same shape
+        // as the mode gates) and feed the consecutive-denial breaker (no
+        // retry space, ADR-0010 §3.5.4). Consumption is committed later —
+        // after the permission/ACAF gates pass and immediately before
+        // ToolStarted — so a permission/ticket-blocked call consumes no
+        // budget (review fix 2026-08-14).
         let mut candidate_counts: Option<(usize, usize)> = None;
+        let mut candidate_commit: Option<(String, usize)> = None;
         if crate::relay::is_candidate_counted_tool(&tc.name) {
             match self
                 .candidate_gate(writer, messages, tc, fetch_candidates)
@@ -6106,8 +6127,8 @@ impl AgentLoopController {
                 CandidateGateDecision::Refused(result, feedback) => {
                     return Ok((result, feedback));
                 }
-                CandidateGateDecision::Allowed { count, cap } => {
-                    candidate_counts = Some((count, cap));
+                CandidateGateDecision::Allowed { url, cap } => {
+                    candidate_commit = Some((url, cap));
                 }
             }
         }
@@ -6490,6 +6511,18 @@ impl AgentLoopController {
                             .await?;
                     }
                 }
+            }
+        }
+
+        // FUS-RETRIEVAL-MECH P0-B step 2/4 review fix (2026-08-14): commit
+        // the candidate consumption NOW — after the permission and ACAF
+        // ticket gates passed, immediately before ToolStarted. A call
+        // blocked by a later gate (permission deny / ticket reject) never
+        // reaches this point, so it consumes no budget and its refusal
+        // carries no candidate counts.
+        if let Some((url, cap)) = candidate_commit.take() {
+            if let Some(counter) = fetch_candidates {
+                candidate_counts = Some(commit_candidate(counter, &url, cap));
             }
         }
 
@@ -6887,8 +6920,10 @@ impl AgentLoopController {
     /// — count domain lookup, exact-string URL dedup and cap check (design
     /// §1), shared by the web_fetch family and `browser_read` (local_browser
     /// second segment). Runs BEFORE any fetch/read action and BEFORE
-    /// ToolStarted / ACAF ticketing (a refused call needs no ticket).
-    /// Returns the post-call count/cap for the model-visible feedback.
+    /// ToolStarted / ACAF ticketing (a refused call needs no ticket). The
+    /// decision is consumption-free: the caller commits the URL at the
+    /// execution boundary after the permission/ACAF gates pass (review fix
+    /// 2026-08-14).
     ///
     /// Fail-closed arms (per tool family, stable `{family}_candidate_*`
     /// codes):
@@ -6917,6 +6952,7 @@ impl AgentLoopController {
                     &format!("{prefix}_candidate_count_unbound"),
                     &format!("{prefix} 已拒绝 — 候选核验计数域不可用"),
                     None,
+                    false,
                 )
                 .await;
         };
@@ -6934,27 +6970,26 @@ impl AgentLoopController {
                     &format!("{prefix}_candidate_url_missing"),
                     &format!("{prefix} 已拒绝 — 缺少 url 参数，候选核验无法计数"),
                     None,
+                    true,
                 )
                 .await;
         };
         let cap = self.candidate_cap as usize;
-        // The count/update happen in a short synchronous scope — the std
-        // MutexGuard must not cross the async refusal below (Send).
+        // Decision only — no mutation here; consumption commits at the
+        // execution boundary (review fix 2026-08-14). The std MutexGuard
+        // must not cross the async refusal below (Send).
         let outcome = {
-            let mut seen = counter.lock().unwrap();
+            let seen = counter.lock().unwrap();
             let count = seen.len();
             let is_new = !seen.iter().any(|u| u == &url);
             if is_new && count >= cap {
                 Err((count, cap))
             } else {
-                if is_new {
-                    seen.push(url);
-                }
-                Ok((if is_new { count + 1 } else { count }, cap))
+                Ok(())
             }
         };
         match outcome {
-            Ok((count, cap)) => Ok(CandidateGateDecision::Allowed { count, cap }),
+            Ok(()) => Ok(CandidateGateDecision::Allowed { url, cap }),
             Err((count, cap)) => {
                 self.refuse_candidate(
                     writer,
@@ -6963,6 +6998,7 @@ impl AgentLoopController {
                     &format!("{prefix}_candidate_cap_exceeded"),
                     &format!("{prefix} 已拒绝 — 候选核验数量已达上限 {cap}（当前 {count}/{cap}）"),
                     Some((count, cap)),
+                    true,
                 )
                 .await
             }
@@ -6980,14 +7016,20 @@ impl AgentLoopController {
         code: &str,
         msg: &str,
         counts: Option<(usize, usize)>,
+        lane: bool,
     ) -> Result<CandidateGateDecision, AgentLoopError> {
         let mut payload = serde_json::json!({
             "tool": tc.name,
             "call_id": tc.call_id,
-            "target": "external_retrieval",
             "status": "error",
             "error": code,
         });
+        // Only lane refusals carry the dispatch target: `count_unbound`
+        // fires in a lane with no count domain (main/grill belt-and-braces),
+        // where no dispatch occurred (review fix 2026-08-14).
+        if lane {
+            payload["target"] = serde_json::json!("external_retrieval");
+        }
         if let Some((count, cap)) = counts {
             payload["candidate_count"] = serde_json::json!(count);
             payload["candidate_cap"] = serde_json::json!(cap);
@@ -8188,7 +8230,7 @@ mod tests {
                 result_digest: Some("a".repeat(64)),
                 submitted: vec![("DISP-1".to_string(), vec![1, 2, 3])],
                 tool_rounds_used: 7,
-                web_fetch_candidates: vec![
+                candidate_urls: vec![
                     "https://a.example".to_string(),
                     "https://b.example".to_string(),
                 ],
@@ -8211,7 +8253,7 @@ mod tests {
                 result_digest: None,
                 submitted: Vec::new(),
                 tool_rounds_used: 0,
-                web_fetch_candidates: Vec::new(),
+                candidate_urls: Vec::new(),
                 result_archive_ref: None,
             },
         );
@@ -8241,7 +8283,7 @@ mod tests {
         // the sidecar — a restored activation resumes the same count
         // (cross-run `continue` keeps the cap meaningful).
         assert_eq!(
-            act.web_fetch_candidates,
+            act.candidate_urls,
             vec![
                 "https://a.example".to_string(),
                 "https://b.example".to_string()
@@ -8277,7 +8319,7 @@ mod tests {
                 result_digest: None,
                 submitted: Vec::new(),
                 tool_rounds_used: 0,
-                web_fetch_candidates: Vec::new(),
+                candidate_urls: Vec::new(),
                 result_archive_ref: None,
             };
         let undisposed = Some(PendingDisposition {
@@ -12822,6 +12864,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Review fix (2026-08-14): the candidate gate only DECIDES — it must
+    /// not consume; consumption commits at the execution boundary with
+    /// exact-string dedup, so a permission/ticket-blocked call consumes no
+    /// budget.
+    #[tokio::test]
+    async fn candidate_gate_decides_without_consuming_and_commit_is_deduplicating() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&host.journal),
+            EventTrack::V02,
+            "RUN-BRGATE",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |url: &str| ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": url }),
+            call_id: "call-g1".to_string(),
+        };
+        // Gate decision must not mutate the counter.
+        let decision = controller
+            .candidate_gate(
+                &mut writer,
+                &mut messages,
+                &call("https://a.example"),
+                Some(&counter),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, CandidateGateDecision::Allowed { .. }),
+            "fresh URL under the cap must be allowed"
+        );
+        assert!(
+            counter.lock().unwrap().is_empty(),
+            "the gate must not consume — only the execution-boundary commit does"
+        );
+        // Commit consumes with exact-string dedup.
+        assert_eq!(commit_candidate(&counter, "https://a.example", 8), (1, 8));
+        assert_eq!(
+            commit_candidate(&counter, "https://a.example", 8),
+            (1, 8),
+            "duplicate URL consumes nothing"
+        );
+        assert_eq!(commit_candidate(&counter, "https://b.example", 8), (2, 8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): the per-activation
     /// count domain flows through the external retrieval lane for
     /// browser_read — the counter writes back into the activation, and the
@@ -12858,7 +12960,7 @@ mod tests {
             .get(&SubagentRole::ExternalRetrieval)
             .unwrap();
         assert_eq!(
-            act.web_fetch_candidates,
+            act.candidate_urls,
             vec![
                 "https://a.example".to_string(),
                 "https://b.example".to_string()
@@ -12939,7 +13041,7 @@ mod tests {
             "continue re-entered the same activation"
         );
         assert_eq!(
-            act.web_fetch_candidates,
+            act.candidate_urls,
             vec![
                 "https://a.example".to_string(),
                 "https://b.example".to_string()
@@ -13002,7 +13104,7 @@ mod tests {
             .get(&SubagentRole::ExternalRetrieval)
             .unwrap();
         assert_eq!(
-            act.web_fetch_candidates,
+            act.candidate_urls,
             vec![
                 "https://a.example".to_string(),
                 "https://b.example".to_string()
@@ -13087,7 +13189,7 @@ mod tests {
             "continue re-entered the same activation"
         );
         assert_eq!(
-            act.web_fetch_candidates,
+            act.candidate_urls,
             vec![
                 "https://a.example".to_string(),
                 "https://b.example".to_string()
@@ -16787,7 +16889,7 @@ mod tests {
             result_digest: None,
             submitted: Vec::new(),
             tool_rounds_used: 1,
-            web_fetch_candidates: Vec::new(),
+            candidate_urls: Vec::new(),
             result_archive_ref: None,
         };
         controller

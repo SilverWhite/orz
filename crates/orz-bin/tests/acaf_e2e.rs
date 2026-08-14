@@ -1704,6 +1704,16 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
             arguments: serde_json::json!({ "url": "https://example.com/doc" }),
             call_id: "call-s1".to_string(),
         }]),
+        // Subagent retries after the refusal: the one-shot injected
+        // failure is consumed, the ticket verifies, and the tool executes.
+        // The blocked call must NOT have consumed a candidate (review fix
+        // 2026-08-14 — consumption commits after the ticket gate passes),
+        // so this completion carries candidate_count=1.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com/doc" }),
+            call_id: "call-s2".to_string(),
+        }]),
         ScriptedResponse::text("检索完成"),
         ScriptedResponse::text("完成"),
         ScriptedResponse::text("完成"),
@@ -1766,8 +1776,28 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
         })
         .collect();
     assert_eq!(
+        completed.len(),
+        2,
+        "blocked + retried completions: {types:?}"
+    );
+    assert_eq!(
         completed[0].payload["error"],
         "control_ticket_rejected:signer_unreachable"
+    );
+    assert!(
+        completed[0].payload.get("candidate_count").is_none(),
+        "a ticket-blocked call consumes no candidate and carries no count: {:?}",
+        completed[0].payload
+    );
+    assert_eq!(completed[1].payload["exit_code"], 0);
+    assert_eq!(completed[1].payload["candidate_count"], 1);
+    assert_eq!(completed[1].payload["candidate_cap"], 8);
+    assert!(
+        events.iter().any(|e| {
+            e.event_type.to_string() == "tool_started"
+                && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-s2")
+        }),
+        "the retried browser_read must actually execute: {types:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
