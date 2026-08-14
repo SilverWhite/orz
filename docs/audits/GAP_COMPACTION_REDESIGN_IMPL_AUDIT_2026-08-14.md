@@ -140,3 +140,34 @@
   的 `FIXTURES_README_V02` 与 `citation_validation` 负样例/信封时间戳未与提交树
   完全同步（P0-B step 5 的手工修订未回写生成器）；本次重生成后已手动还原无关文件，
   未回改生成器模板以避免噪音；建议后续登记 P3 卫生项统一对齐。
+
+## 8. 二次复查处理登记（2026-08-14，用户要求处理复查全部问题）
+
+- 范围：P0-D 二次全面复查（设计合理性/实现合理性/符合性）发现问题的全部处理；
+  权威=ADR-0010 v1.14 + §14.14 条目 2；不新增设计语义，只做口径对齐与卫生修复。
+- ① 设计投影 §7 复用边界对齐：原"直接复用 orz-compaction（select.rs、缩减守卫、
+  退化摘要拒绝 MIN_SUMMARY_SEED_CHARS=500）"改为"语义等价内联"——orz-loop 仅依赖
+  orz-assurance/orz-secrets（Cargo.toml 事实），退化守卫为 ORZ 自定 300 等效字符门；
+  历史"必须适配/不引入"约束保留。设计投影 §7 与 ADR §14.14 条目 2 同步。
+- ② 会话结束压缩触发阈值补写：ADR §3.6、§14.14 ①-② 与设计投影 §6 明确
+  "全量消息估算 > `session_end_trigger_tokens`（默认 160K）才压缩"；实现不变
+  （`ContextCompactConfig::default()` 已如此，见 §7-②）。
+- ③ 冷却残留修正：`agent_loop.rs` 循环注释与
+  `context-compressed-event-payload-v0.2.schema.json` 中
+  `rounds_since_last_compaction` 描述的"≥3-round cooldown"改为 2 轮（v1.14 口径）。
+- ④ 终止态 marker 占位 digest 修正：`summary.rs` 终止态不再写 64 位 "0" 占位，
+  `build_summary_marker` 对空 digest 输出"摘要 digest: （未生成——摘要重试失败）"，
+  与事件 `summary_digest=null` 一致；测试 `incomplete_marker_flags_state` 更新。
+- ⑤ fixtures 生成器回写对齐（P0-B step 5 手工修订回写）：`FIXTURES_README_V02`
+  与提交树 README 逐字对齐（44 events、P0-D S1/S3/S5 段落、14 个 journals 表、
+  2 空格缩进）；`PAYLOAD_BAD_V02["citation_validation"]` 移除 `message_block`；
+  新增 `V02_ENVELOPE_TIMESTAMP_OVERRIDES`（citation-validation 信封时间戳
+  2026-08-14）；新增 `_compact_citation_reason_codes` 后处理保持三个
+  citation-validation 文件的紧凑单行数组格式；`write_json`/README 写回统一
+  LF 行尾（对齐 .gitattributes eol=lf）。验证=提权重生成后
+  `git diff --name-only` 为 0、`git hash-object` 与 HEAD blob 逐文件一致。
+- ⑥ 恢复预检估算校准（chars/2 对中文可能低估）：登记为 ORZ-SESSION-CONTEXT-MONITOR
+  （P1 6d）实施前置校准项，BACKLOG/TODO 同步，不单独占 P0-D 切片。
+- 验证：orz-loop 305 passed / 3 ignored；orz-host 208 / 4 ignored；orz-tui 178；
+  Python runtime 事件校验 157 passed、压缩相关 41 passed；`check_repository.py`
+  valid、0 errors；`git diff --check` 干净。

@@ -47,6 +47,14 @@ ZERO_HASH = "0" * 64
 DUMMY_HASH = "1" * 64
 TIMESTAMP = "2026-08-06T00:00:00Z"
 
+# P0-B step 5 manual revision write-back (2026-08-14, P0-D S6): the
+# `citation-validation` envelope in the committed tree carries its own
+# timestamp (the hand-edited file was never re-generated). Keep the
+# override so a regeneration is byte-identical to the committed tree.
+V02_ENVELOPE_TIMESTAMP_OVERRIDES = {
+    "citation_validation": "2026-08-14T00:00:00Z",
+}
+
 # 33 event types in run-event-v0.1.schema.json enum order.
 EVENT_TYPES = [
     "run_preflight",
@@ -1022,7 +1030,6 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "marker_count": 1,
         "reason_codes": [],
         "degraded": False,
-        "message_block": "[CITATION_VALIDATION_FAILED v0.1]\nblocked",
         "markers": [
             {
                 "index": 0,
@@ -1290,7 +1297,7 @@ def _envelope_v02(event_type: str, payload: dict, sequence: int, previous: str |
         "run_id": f"RUN-CONF-{slug.upper()}",
         "event_id": f"EVT-CONF-{sequence:03d}",
         "sequence": sequence,
-        "timestamp": TIMESTAMP,
+        "timestamp": V02_ENVELOPE_TIMESTAMP_OVERRIDES.get(event_type, TIMESTAMP),
         "event_type": event_type,
         "run_manifest_sha256": ZERO_HASH,
         "previous_event_sha256": previous,
@@ -1429,8 +1436,8 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-  legal / one-constraint-violation payloads for the **twelve** v0.2 mechanism
-  events with their own v0.2 payload schema: `orientation_checkpoint`
+  legal / one-constraint-violation payloads for the v0.2 mechanism events
+  with their own v0.2 payload schema: `orientation_checkpoint`
   (v0.2 shape), `diagnostic_coverage_checkpoint`,
   `information_sufficiency_assessment`, `retrieval_parent_disposition`,
   `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
@@ -1449,9 +1456,21 @@ Scope:
 - GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
   negative payload fixture for the fixed tier/weight table (authoritative
   MUST pair with 1.1; the good fixture carries the full weighting fields).
+- P0-D S1 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
+  `context_recovery_truncated` — the D2-2 recovery pre-check event
+  (before/after estimates, dropped rounds and the run-journal audit path
+  of the full sidecar copy).
+- P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4):
+  `context_compressed` moves to a v0.2 payload shape — the five-section
+  template summary (mode/reason, archive id/digest/path, completeness and
+  retained tail; the v0.1 file stays authoritative for the v0.1 replay
+  track).
+- P0-D S5 (2026-08-14, ADR-0010 v1.14): extra `context_compressed` payload
+  positives — `session_end` reason, `guard_failed` (guard-retry force) and
+  `archive_write_failed` (explicit archive-write failure).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (42 events). The twelve v0.2-payload events carry
-  their v0.2 payload; the other 30 events reuse the v0.1 payload shape
+  event in the v0.2 enum (44 events). The v0.2-payload events carry
+  their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for
   unchanged payloads). `chained-run-finished.valid.json` covers the
@@ -1469,7 +1488,7 @@ extension 2026-08-10):
   v0.2 enum — they exist only on the v0.1 track for historical journal
   replay (ADR-0010 §11.2).
 - The v0.2 envelope's `payload_schema` value is `"run-event-v0.2.schema.json"`.
-  The cross-validator resolves the twelve v0.2-payload events to their v0.2
+  The cross-validator resolves the v0.2-payload events to their v0.2
   payload schema files and every other event to its v0.1 payload schema file.
 - **ACAF ticket kinds are payload-level** (Slice 1, 2026-08-12; Slice 2
   2026-08-12): the control-ticket trio's event types are stable; the
@@ -1518,9 +1537,12 @@ The 14 journals below are captured by the orz conformance capture tests
 (`cargo test -p orz-bin -- --ignored conformance_capture --test-threads=1`,
 staged under `target/conformance-journals/` and dev-copied here — see the
 GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
-fixes (H1 off projection now hides `project_doc_index` too); the 13th
-(`local-browser-read`) is the local_browser slice (2026-08-10) available-
-capability scenario:
+  fixes (H1 off projection now hides `project_doc_index` too); the 13th
+  (`local-browser-read`) is the local_browser slice (2026-08-10) available-
+  capability scenario; the 14th (`citation-validation-block`, 2026-08-14) is
+  the P0-B step 5 output-level citation verifier block scenario. Re-captured
+  again 2026-08-14 (P0-B step 4: browser_read joins the candidate count
+  domain — `tool_completed` carries `candidate_count`/`candidate_cap`):
 
 | journal | scenario |
 |---|---|
@@ -1533,16 +1555,45 @@ capability scenario:
 | `orientation-fire-run.jsonl` | **7 retrieval tool rounds cross the session-level threshold — the orientation fires once in the post-tool-batch gap of round 7, and each retrieval round records a mechanical `information_sufficiency_assessment` (`indeterminate`) plus a `retrieval_result_committed`** |
 | `mode-off-refusal.jsonl` | retrieval dispatch under mode=off — refused as `retrieval_mode_off` with NO ToolStarted (verifier mode rule) |
 | `local-browser-capability.jsonl` | bootstrap transition to `local_browser` with capability `unsupported` — dispatch fails explicitly (`retrieval_capability_unavailable`), no silent fallback |
-| `local-browser-read.jsonl` | bootstrap transition to `local_browser` with capability `available` — external lane runs the host `browser_read` tool (fake lane), committed result carries real full-text `web_page` evidence (ADR §3.7.3/§3.7.5) |
+| `local-browser-read.jsonl` | bootstrap transition to `local_browser` with capability `available` — external lane runs the host `browser_read` tool (fake lane), committed result carries real full-text `web_page` evidence (ADR §3.7.3/§3.7.5); P0-B step 4: browser_read 计入候选计数域，`tool_completed` 携带 `candidate_count`/`candidate_cap` |
 | `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
 | `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
 | `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |
+| `citation-validation-block.jsonl` | P0-B step 5: final answer `[来源: SRC-999]` (unknown source) → `citation_validation{decision: block}` + mechanical degradation block, run finishes normally (ADR §3.7.9) |
 """
 
 
 def write_json(path: Path, data: dict) -> None:
     path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _compact_citation_reason_codes(text: str) -> str:
+    """P0-B step 5 manual revision write-back (2026-08-14, P0-D S6): the
+    committed citation-validation fixtures carry `reason_codes` as compact
+    single-line arrays (hand-edited, never re-generated). Re-apply the exact
+    formatting for the three indentation levels so a regeneration is
+    byte-identical to the committed tree."""
+    return (
+        text.replace(
+            '  "reason_codes": [\n    "unknown_source_id"\n  ],\n',
+            '  "reason_codes": ["unknown_source_id"],\n',
+        )
+        .replace(
+            '    "reason_codes": [\n      "unknown_source_id"\n    ],\n',
+            '    "reason_codes": ["unknown_source_id"],\n',
+        )
+        .replace(
+            '      "reason_codes": [\n        "unknown_source_id"\n      ]\n',
+            '      "reason_codes": ["unknown_source_id"]\n',
+        )
+        .replace(
+            '        "reason_codes": [\n          "unknown_source_id"\n        ]\n',
+            '        "reason_codes": ["unknown_source_id"]\n',
+        )
     )
 
 
@@ -1573,7 +1624,9 @@ def main() -> None:
     for name, payload in CANONICAL_CLI_GOOD.items():
         write_json(canonical_cli_dir / f"{name}.minimal.valid.json", payload)
 
-    fixture_root.joinpath("README.md").write_text(FIXTURES_README, encoding="utf-8")
+    fixture_root.joinpath("README.md").write_text(
+        FIXTURES_README, encoding="utf-8", newline="\n"
+    )
 
     # v0.2 tree (Phase B): payload fixtures for the five v0.2-payload events;
     # envelope fixtures for every event in the v0.2 enum.
@@ -1614,7 +1667,23 @@ def main() -> None:
     for name, payload in V02_ENVELOPE_BAD.items():
         write_json(v02_envelope_dir / f"{name}.invalid.json", payload)
 
-    v02_root.joinpath("README.md").write_text(FIXTURES_README_V02, encoding="utf-8")
+    # P0-B step 5 manual revision write-back (2026-08-14, P0-D S6): keep the
+    # committed citation-validation files byte-identical on regeneration.
+    for rel in (
+        "payloads/citation-validation.minimal.valid.json",
+        "payloads/citation-validation.constraint.invalid.json",
+        "envelope/citation-validation.valid.json",
+    ):
+        path = v02_root / rel
+        path.write_text(
+            _compact_citation_reason_codes(path.read_text(encoding="utf-8")),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+    v02_root.joinpath("README.md").write_text(
+        FIXTURES_README_V02, encoding="utf-8", newline="\n"
+    )
 
     print(
         f"payloads: {len(PAYLOAD_GOOD) * 2} files, "

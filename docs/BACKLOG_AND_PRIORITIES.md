@@ -221,7 +221,9 @@
 - 定位：会话累计上下文监测——度量=会话累计模型可见输入 token（usage 优先、journal
   估算兜底）；384K 机械提醒、500K 机械总结推荐（可配）；最简实现=阈值到达的最后一轮
   模型输出末尾机械附提醒；headless 仅日志；TUI/journal 事件为 beta 前可选；与压缩独立。
-- 实施前置：度量接线、阈值配置、机械附言注入点、测试、实施审计与索引同步。
+- 实施前置：度量接线、阈值配置、机械附言注入点、测试、实施审计与索引同步；
+  压缩恢复预检估算校准（chars/2 对中文可能低估，P0-D 二次复查登记 2026-08-14）
+  随度量接线一并校准估算口径。
 - 入口：[设计](SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md)；
   [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [TODO](../TODO.md)。
@@ -276,6 +278,13 @@
 
 ## 变更记录
 
+- 2026-08-14：P0-D 二次复查处理登记（用户要求处理复查全部问题）——设计投影 §7
+  复用边界对齐（orz-compaction 500 字符门表述移除、语义等价内联）、ADR §3.6/§14.14
+  补写 session_end 160K 触发阈值、代码注释与 schema 冷却残留修正、终止态 marker
+  占位 digest 改显式"（未生成）"、fixtures 生成器回写 P0-B step 5 手工修订（README/
+  负样例/信封时间戳/LF 行尾）、chars/2 中文低估登记为 6d 实施前置校准项；
+  ADR-0010 §14.14 条目 2、审计 §8；详见
+  [GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md](audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) §8。
 - 2026-08-14：P0-D 压缩机制实施闭合登记（用户放行）——S1（D2-2 恢复预检截断 +
   `context_recovery_truncated` 事件 + D3-1 marker/白名单恢复保留）、S2（动作台账机械坍缩，
   请求视图）、S3（五段模板摘要接线：160K/200K/3 轮/5K/0.6、重做 ≤3、summary_incomplete

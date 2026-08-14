@@ -307,7 +307,8 @@ journal/侧车审计面；模板摘要采用五段固化结构（目的/计划/�
 derived_unverified；摘要冷却 ≥2 模型轮（v1.14 审查修复，防长动作累积），摘要链只进审计存档、
 不继承旧语义，滚动单 marker 附回查清单。v1.14 审查修复（2026-08-14）追加：缩减守卫不满足时
 跨触发轮重试 ≤3 次、仍失败则强制执行一轮压缩并以 `guard_failed` 显式报告机制失败（不使用原始
-机械截断）；每次成功会话（主车道与检索子代理一致）在结束时自动执行一轮压缩，把摘要 marker
+机械截断）；每次成功会话（主车道与检索子代理一致）在结束时对全量消息估算超过
+`session_end_trigger_tokens`（默认 160K）的会话自动执行一轮压缩，把摘要 marker
 固定进 sidecar 一起存档（恢复治本，D2-2 恢复预检保留为旧会话兜底）；路径槽按 Top-40+5K 字符
 封顶，黑板 edit 窗口随每次压缩滚动（用后擦净，全量路径由摘要存档承载）；退化守卫改为 ORZ 自定
 300 等效字符（CJK 一字折算 2 等效字符，替代 orz-compaction 英文向 500 字符门）；摘要存档写失败
@@ -1182,8 +1183,9 @@ Schema 与机械证据：
       `guard_failed=true`、marker 附"机制失败，需处理"提示；兜底 200K 的"摘要失败
       后机械截断"保留（仅限摘要 LLM 失败路径，不复用于守卫失败路径）。
    ② 恢复会话治本：每次成功 run 结束（主车道与检索子代理一致；grill 除外）在
-      terminal 事件前自动执行一轮压缩（`reason=session_end`、强制、不受缩减守卫
-      约束），摘要 marker 随 sidecar 写回固定存档；D2-2 恢复预检保留为旧侧车兜底。
+      terminal 事件前对全量消息估算超过 `session_end_trigger_tokens`（默认 160K）
+      的会话自动执行一轮压缩（`reason=session_end`、强制、不受缩减守卫约束），
+      摘要 marker 随 sidecar 写回固定存档；D2-2 恢复预检保留为旧侧车兜底。
    ③ 摘要存档写失败：显式重试 ≤3 次；仍失败时事件带 `archive_write_failed=true`、
       marker 附"存档写入失败：摘要未落盘，需处理"，不再静默。
    ④ 退化守卫：废止 orz-compaction 500 字符英文向门，改为 ORZ 自定 300 等效字符
@@ -1200,3 +1202,19 @@ Schema 与机械证据：
       schema `$id` 版本号修正为 v0.2。
    来源：P0-D 全面检查结论与用户逐项裁决（2026-08-14）；实施审计
    `docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md` §7。
+
+2. **P0-D 二次复查文档对齐（2026-08-14，用户要求处理复查全部问题，§3.6 口径修订）**：
+   ① 会话结束压缩触发阈值补写：全量消息估算 > `session_end_trigger_tokens`
+      （默认 160K）才执行，正文 §3.6 与设计投影 §6 同步（实现不变，审计 §7 已登记）。
+   ② 设计投影 §7 复用边界更新为语义等价内联：orz-loop 不再依赖 orz-compaction，
+      退化守卫为 ORZ 自定 300 等效字符门（500 字符门表述全部移除）。
+   ③ 冷却残留修正：代码注释与 schema 描述中"≥3-round cooldown"改为 2 轮（v1.14 口径）。
+   ④ 终止态 marker 的 64 位 "0" 占位 digest 改为显式"（未生成）"，与事件
+      `summary_digest=null` 一致。
+   ⑤ fixtures 生成器回写 P0-B step 5 手工修订：`FIXTURES_README_V02`、
+      `citation_validation` 负样例（移除 `message_block`）与
+      `citation-validation` 信封时间戳（2026-08-14）对齐提交树，消除生成器漂移。
+   ⑥ 恢复预检估算校准（chars/2 对中文可能低估）登记为 ORZ-SESSION-CONTEXT-MONITOR
+      （P1 6d）实施前置校准项。
+   来源：P0-D 二次全面复查结论与用户处理指示（2026-08-14）；实施审计
+   `docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md` §8。

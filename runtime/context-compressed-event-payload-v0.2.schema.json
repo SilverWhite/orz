@@ -17,7 +17,7 @@
       "minimum": 0
     },
     "rounds_since_last_compaction": {
-      "description": "Model rounds since the previous summary (the ≥3-round cooldown, measured before this summary).",
+      "description": "Model rounds since the previous summary (the 2-round cooldown per ADR-0010 v1.14, measured before this summary).",
       "type": "integer",
       "minimum": 0
     },

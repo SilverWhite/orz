@@ -1,6 +1,6 @@
 # ORZ 上下文压缩机制重设计（2026-08-14）
 
-> 状态：`implemented`（2026-08-14 S1-S4 闭合、S5 审查修复闭合；实施审计见
+> 状态：`implemented`（2026-08-14 S1-S4 闭合、S5 审查修复闭合、S6 复查文档对齐闭合；实施审计见
 > `docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md`）
 > 权威：ADR-0010 §3.6 / §14.10 / §14.14（v1.10 + v1.14 补写）；本文件是设计投影与实施入口，不新增与 ADR 冲突的语义。
 > 取代范围：本文推翻并取代 2026-08-08「LLM 摘要否决（零模型摘要）」与「节奏压缩仅最终答案间隙」
@@ -109,21 +109,25 @@
 - D2-2：恢复加载 conversation 后、首次请求前，用估算函数预检；估算超窗（有效输入预算 224K
   与兜底线 200K 取保守）时，复用整轮丢弃逻辑截到目标，preamble/白名单/最近轮保留，完整侧车
   保留审计，journal 记录恢复截断事件（前后估算、丢弃轮数）。
-- 会话结束压缩治本（v1.14 审查修复）：每次成功 run 结束（主车道与检索子代理一致；grill 除外）
-  在 terminal 事件前、sidecar 写回前自动执行一轮压缩（`reason=session_end`、强制），摘要 marker
-  随 sidecar 一起存档；恢复时直接加载固定摘要。D2-2 恢复预检保留为旧侧车/未走该路径的兜底。
+- 会话结束压缩治本（v1.14 审查修复；S6 复查补写触发阈值）：每次成功 run 结束（主车道与检索
+  子代理一致；grill 除外）在全量消息估算超过 `session_end_trigger_tokens`（默认 160K）时，
+  于 terminal 事件前、sidecar 写回前自动执行一轮压缩（`reason=session_end`、强制、不受缩减
+  守卫约束），摘要 marker 随 sidecar 一起存档；恢复时直接加载固定摘要。D2-2 恢复预检保留为
+  旧侧车/未走该路径的兜底。
 - D3-1：恢复回写过滤只放行 marker（`[前文上下文已压缩` 前缀）与白名单块，其余注入块继续过滤；
   恢复后首请求必须可见 marker 与白名单。
 - 顺序：D2-2/D3-1 先于压缩机制接线闭合。
 
-## 7. 复用边界（orz-compaction crate）
+## 7. 复用与内联边界（v1.14 修订，S6 复查对齐）
 
-- 直接复用：`select.rs`（工具配对安全选择）、`min_compactable_tokens`、`max_reduction_ratio`、
-  退化摘要拒绝（`MIN_SUMMARY_SEED_CHARS`=500）、采样超时/重试、用户查询保留与截断、
-  `compaction_version` 审计字段。
+- 语义等价内联（S5 审查修复，2026-08-14）：工具配对安全选择、缩减守卫
+  （`min_compactable`=5K / `max_reduction_ratio`=0.6）、用户查询保留与截断由 orz-loop
+  自行承担（`action_ledger.rs` / `compact_messages`），不再依赖 orz-compaction crate；
+  退化摘要拒绝为 ORZ 自定 300 等效字符门（CJK 表意字一字折算 2，替代 orz-compaction
+  英文向 500 字符门）。
 - 必须适配：模式=HistoryThenSteps 形态（旧前缀摘要+最近尾保留），禁用 FullReplace 默认；
-  摘要模型名覆盖为 DeepSeek V4；摘要 prompt 替换为 §4.1 五段模板；宿主触发/持久化/事件由
-  orz-loop 承担。
+  摘要模型=会话模型（DeepSeek V4）纯文本 chat 调用（无工具、120s 专用超时）；摘要 prompt
+  替换为 §4.1 五段模板；宿主触发/持久化/事件由 orz-loop 承担。
 - 不引入：Grok 的 two-pass 预热摘要与 memory flush（额外模型调用，本期不做）。
 
 ## 8. 推翻与保留（治理清单）
@@ -150,6 +154,10 @@
   治本（`session_end`）、存档写失败显式重试报告（`archive_write_failed`）、退化守卫 300 等效
   字符 + 中文折算、黑板 edit 窗口滚动、冷却 3→2 模型轮、120s 摘要超时、路径槽 Top-40 双上限、
   Schema/verifier/fixtures 扩展——**已闭合**。
+- S6：二次复查处理（2026-08-14，用户要求处理复查全部问题）——§6/§7 与 ADR 口径对齐
+  （session_end 160K 阈值补写、复用边界内联化）、schema/代码注释冷却残留修正、终止态 marker
+  占位 digest 改显式"（未生成）"、fixtures 生成器回写对齐、chars/2 中文低估登记 P1 校准——
+  **已闭合**。
 
 实施详情见 [`GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md`](audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md)。
 

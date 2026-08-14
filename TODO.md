@@ -41,7 +41,7 @@
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。
 
-### P0-D ORZ-COMPACTION-REDESIGN（`implemented`；S1-S5 已全部闭合，2026-08-14）
+### P0-D ORZ-COMPACTION-REDESIGN（`implemented`；S1-S6 已全部闭合，2026-08-14）
 
 - [x] S1：D2-2 恢复超窗预估算截断——恢复加载后首请求前估算预检 + 整轮截断 + `context_recovery_truncated` 事件（完整侧车审计副本 `recovery-conversation-full.json`）。
 - [x] S1：D3-1 恢复保留 marker/白名单——恢复回写过滤放行 `[前文上下文已压缩` 与白名单块，首请求可见（主车道 + 子代理 snapshot 同规则）。
@@ -54,6 +54,10 @@
   ≤3 次并 `archive_write_failed` 报告；退化守卫 300 等效字符（CJK 一字折算 2）；黑板 edit
   窗口随压缩滚动；冷却 3→2 模型轮；摘要 120s 超时；路径槽 Top-40 双上限；
   Schema/verifier/fixtures 扩展与 `$id` 修正。
+- [x] S6：二次复查处理（2026-08-14）——设计投影 §7/§6 与 ADR 口径对齐（session_end 160K
+  阈值补写、复用边界内联化）、schema/代码注释冷却残留修正、终止态 marker 占位 digest
+  改显式"（未生成）"、fixtures 生成器回写 P0-B step 5 手工修订并统一 LF 行尾、
+  chars/2 中文低估登记为 6d 实施前置校准项。
 
 入口：[压缩设计](docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / [ADR-0010 §14.10/§14.14](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [P0-D 实施审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 3b](docs/BACKLOG_AND_PRIORITIES.md)。
 
@@ -100,6 +104,8 @@
 
 ### ORZ-SESSION-CONTEXT-MONITOR（`approved`；P1，2026-08-14 登记）
 
+- [ ] 压缩恢复预检估算校准：chars/2 对中文可能低估（P0-D 二次复查登记，2026-08-14），
+  随本项度量接线一并校准估算口径。
 - [ ] 度量接线：模型完成轮后累加 usage 输入 token（transport/loop 完成点）；usage 缺失时 journal 估算兜底。
 - [ ] 阈值配置（env/TOML，默认 384K 提醒 / 500K 总结推荐）；同一阈值只触发一次。
 - [ ] 最简实现：阈值到达的最后一轮模型输出末尾机械附提醒；headless/自动化仅写日志；500K 附五段模板 + 新窗口开场提示骨架。
