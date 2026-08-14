@@ -147,23 +147,29 @@
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
 
 - 入口：[设计](CONTEXT_COMPACTION_DESIGN_2026-08-14.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；
-  权威：ADR-0010 §3.6 / §14.10（v1.10）；实施审计：
+  权威：ADR-0010 §3.6 / §14.10 / §14.14（v1.10 + v1.14）；实施审计：
   [GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md](audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md)。
 - 决策门：2026-08-14 用户裁决定稿——有效窗口 384K、160K 普通触发 / 200K 兜底、工具调用记录每轮
-  机械坍缩（零模型调用）、五段模板摘要（≤17K 字符、derived_unverified、冷却 3 步、摘要链只进
+  机械坍缩（零模型调用）、五段模板摘要（≤17K 字符、derived_unverified、冷却 2 模型轮、摘要链只进
   审计、滚动回查 marker）；推翻 2026-08-08 零模型摘要与仅最终答案间隙裁决；2026-08-14 用户
-  放行实施。
+  放行实施；2026-08-14 审查修复裁决（v1.14）——守卫失败重试 3 次后强制压缩并报告、会话结束
+  自动压缩治本、存档写失败显式重试报告、退化守卫 300 等效字符（CJK 折算 2）、黑板 edit 窗口
+  滚动、冷却 3→2 模型轮。
 - 实施切片：
   1. S1：D2-2 恢复超窗预估算截断 + D3-1 marker/白名单恢复保留（含测试）——**已闭合**；
   2. S2：工具调用记录机械坍缩（动作台账行 + 配对纪律 + 指针完整性 + 测试）——**已闭合**；
-  3. S3：五段模板摘要接线（orz-compaction 退化守卫复用、会话模型覆盖、17K 校验、重做/终止态、
+  3. S3：五段模板摘要接线（退化守卫 300 等效字符门、会话模型覆盖、17K 校验、重做/终止态、
      `context_compressed` 事件 Schema v0.2 + verifier/fixtures）——**已闭合**；
   4. S4：实施审计、ADR-0010 §14.10 补写、索引/BACKLOG/TODO 同步、设计文档状态更新——**已闭合**。
-- 进度（2026-08-14）：S1-S4 全部闭合——恢复预检（`context_recovery_truncated` 事件 +
+  5. S5：审查修复（守卫重试/强制压缩 + `guard_failed`、会话结束压缩 `session_end`、
+     存档写失败 `archive_write_failed`、黑板窗口滚动、120s 超时、Top-40、契约扩展）——
+     **已闭合**。
+- 进度（2026-08-14）：S1-S5 全部闭合——恢复预检（`context_recovery_truncated` 事件 +
   完整侧车审计副本）、marker/白名单恢复保留、动作台账请求视图坍缩、五段模板摘要
-  （160K/200K/3 轮/5K/0.6、重做 ≤3、summary_incomplete 终止态 + fallback 机械截断、
-  `.gsa/compaction/` 存档 + 7 天 retention、TUI 投影）；orz-loop 296 / orz-host 208 /
-  orz-tui 178 通过，工作区全量 exit 0，Python 事件校验 164 通过，仓库门禁 valid。
+  （160K/200K/2 模型轮/5K/0.6、重做 ≤3、summary_incomplete 终止态 + fallback 机械截断、
+  `.gsa/compaction/` 存档 + 7 天 retention、TUI 投影、守卫强制报告、会话结束压缩、
+  存档写失败显式报告、黑板窗口滚动）；orz-loop 305 / orz-host 208 / orz-tui 178 通过，
+  工作区编译 exit 0，Python 事件校验 171 通过，仓库门禁 valid。
 
 ## P1 — 可并行审计 / 证据
 

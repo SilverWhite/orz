@@ -3376,5 +3376,95 @@ class RetrievalActivationRestoreTests(unittest.TestCase):
         self.assertIn("unknown assessment", " | ".join(errors))
 
 
+def _context_compressed(**overrides: object) -> dict:
+    payload: dict[str, object] = {
+        "trigger_tokens": 165000,
+        "target_tokens": 12000,
+        "rounds_since_last_compaction": 3,
+        "rounds_dropped": 12,
+        "messages_dropped": 40,
+        "messages_kept": 9,
+        "estimated_tokens_after": 11000,
+        "mode": "template_summary",
+        "reason": "rhythm",
+        "summary_id": "compaction-RUN-CONF-0001-0001",
+        "summary_digest": _ZERO,
+        "summary_path": ".gsa/compaction/compaction-RUN-CONF-0001-0001.md",
+        "summary_incomplete": False,
+        "retained_rounds": 2,
+        "guard_failed": False,
+        "archive_write_failed": False,
+    }
+    payload.update(overrides)
+    return _mk_v02_event("context_compressed", payload, 0, None)
+
+
+class ContextCompressedV02RuleTests(unittest.TestCase):
+    """P0-D review fix (2026-08-14, ADR-0010 v1.14): the five-section
+    summary's v0.2 cross-rules — session_end reason, the guard-retry force
+    report (guard_failed only on rhythm/fallback) and the explicit
+    archive-write failure (only on a complete summary)."""
+
+    def test_complete_rhythm_with_new_flags_validates(self) -> None:
+        journal = _v02_journal([_context_compressed()])
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_session_end_validates(self) -> None:
+        journal = _v02_journal(
+            [_context_compressed(reason="session_end", trigger_tokens=155000)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_guard_failed_fallback_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _context_compressed(
+                    reason="fallback",
+                    trigger_tokens=210000,
+                    guard_failed=True,
+                )
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_guard_failed_never_rides_session_end(self) -> None:
+        journal = _v02_journal(
+            [
+                _context_compressed(
+                    reason="session_end",
+                    guard_failed=True,
+                )
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("guard_failed may only ride", " | ".join(errors))
+
+    def test_archive_write_failed_on_complete_summary_validates(self) -> None:
+        journal = _v02_journal(
+            [_context_compressed(archive_write_failed=True)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_archive_write_failed_never_rides_incomplete_summary(self) -> None:
+        journal = _v02_journal(
+            [
+                _context_compressed(
+                    summary_incomplete=True,
+                    summary_id=None,
+                    summary_digest=None,
+                    summary_path=None,
+                    archive_write_failed=True,
+                )
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("archive_write_failed may only ride", " | ".join(errors))
+
+    def test_unknown_reason_rejected(self) -> None:
+        journal = _v02_journal([_context_compressed(reason="whole_round_drop")])
+        errors = validate_journal_text(journal)
+        self.assertIn("not one of", " | ".join(errors))
+
+
 if __name__ == "__main__":
     unittest.main()

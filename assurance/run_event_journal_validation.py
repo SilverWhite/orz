@@ -1295,7 +1295,14 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
     - mode must be `template_summary`, reason one of rhythm/fallback;
     - a complete summary must carry a non-null archive id/digest/path;
     - the termination state (summary_incomplete=true) must carry null
-      archive fields (no archive was written)."""
+      archive fields (no archive was written).
+
+    P0-D review fix (2026-08-14, ADR-0010 v1.14): reason may also be
+    `session_end` (the end-of-session compaction); the reduction-guard
+    retry/force path reports `guard_failed` (only on rhythm/fallback — the
+    session-end compaction is deliberately forced and never reports a guard
+    failure); an `archive_write_failed` report may only ride a COMPLETE
+    summary (a failed summary never attempts the archive write)."""
     errors: list[str] = []
     for index, event in enumerate(events):
         if not _is_v02(event) or event.get("event_type") != "context_compressed":
@@ -1305,9 +1312,17 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
             errors.append(
                 f"event {index}: context_compressed mode must be template_summary"
             )
-        if payload.get("reason") not in ("rhythm", "fallback"):
+        reason = payload.get("reason")
+        if reason not in ("rhythm", "fallback", "session_end"):
             errors.append(
-                f"event {index}: context_compressed reason must be rhythm/fallback"
+                f"event {index}: context_compressed reason must be "
+                "rhythm/fallback/session_end"
+            )
+        guard_failed = payload.get("guard_failed", False)
+        if guard_failed and reason == "session_end":
+            errors.append(
+                f"event {index}: guard_failed may only ride rhythm/fallback "
+                "triggers, never session_end"
             )
         incomplete = payload.get("summary_incomplete", False)
         archive_fields = (
@@ -1322,6 +1337,12 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
         if not incomplete and any(f is None for f in archive_fields):
             errors.append(
                 f"event {index}: complete summary must carry archive id/digest/path"
+            )
+        archive_write_failed = payload.get("archive_write_failed", False)
+        if archive_write_failed and incomplete:
+            errors.append(
+                f"event {index}: archive_write_failed may only ride a "
+                "complete summary (a failed summary never attempts the write)"
             )
     return errors
 

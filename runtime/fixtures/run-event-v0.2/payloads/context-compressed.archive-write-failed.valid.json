@@ -14,5 +14,5 @@
   "summary_incomplete": false,
   "retained_rounds": 2,
   "guard_failed": false,
-  "archive_write_failed": false
+  "archive_write_failed": true
 }

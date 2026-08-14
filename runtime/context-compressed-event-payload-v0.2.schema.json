@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/context-compressed-event-payload-v0.2.schema.json",
   "title": "Context compaction runtime event payload (v0.2 template summary)",
-  "description": "P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4): the five-section template summary replaces the A6 whole-round drop as the primary compaction mechanism. All v0.1 counters stay; the v0.2 fields describe the summary trigger (rhythm 160K / fallback 200K), the archive pointer (id/digest/path), completeness (summary_incomplete termination state) and the retained recent tail.",
+  "description": "P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4): the five-section template summary replaces the A6 whole-round drop as the primary compaction mechanism. All v0.1 counters stay; the v0.2 fields describe the summary trigger (rhythm 160K / fallback 200K / session_end), the archive pointer (id/digest/path), completeness (summary_incomplete termination state), the retained recent tail, guard-retry force (guard_failed) and archive write outcome (archive_write_failed). 2026-08-14 review fix: cooldown is 2 model rounds; guard failures retry up to 3 times then force one compaction and report guard_failed; the session-end compaction pins the marker into the sidecar.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -45,7 +45,16 @@
       "const": "template_summary"
     },
     "reason": {
-      "enum": ["rhythm", "fallback"]
+      "description": "Trigger class: rhythm = measured tokens crossed the 160K ordinary trigger with the 2-round cooldown met; fallback = the 200K window guard bypassed the cooldown; session_end = the end-of-session compaction that pins the summary into the sidecar before write-back.",
+      "enum": ["rhythm", "fallback", "session_end"]
+    },
+    "guard_failed": {
+      "description": "Reduction-guard retry exhausted: the guard was evaluated but not satisfiable on three consecutive trigger rounds, so one compaction was forced without the guard (2026-08-14 review fix). Absent/omitted on older v0.2 payloads; the producer always writes it (false unless forced).",
+      "type": "boolean"
+    },
+    "archive_write_failed": {
+      "description": "The summary archive could not be persisted after the bounded write retries — the marker and event still carry the intended path/digest, and the failure is explicitly surfaced (2026-08-14 review fix). Absent/omitted on older v0.2 payloads; the producer always writes it (false unless a write retry loop failed).",
+      "type": "boolean"
     },
     "summary_id": {
       "description": "Archive id under .gsa/compaction/ (null when the summary failed and no archive was written).",

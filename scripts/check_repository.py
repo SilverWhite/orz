@@ -2026,6 +2026,21 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()
     }
+    # P0-D review fix (2026-08-14): extra context_compressed fixtures for
+    # the v1.14 shapes — session_end reason, guard-retry force and the
+    # explicit archive-write failure (schema-valid positives), plus the
+    # verifier-rule violation (guard_failed may never ride session_end).
+    context_compressed_schema = (
+        ROOT / "runtime/context-compressed-event-payload-v0.2.schema.json"
+    )
+    for name in (
+        "context-compressed.session-end.valid.json",
+        "context-compressed.guard-failed.valid.json",
+        "context-compressed.archive-write-failed.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            context_compressed_schema
+        )
     # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative fixture for the
     # fixed tier/weight table (authoritative must pair with 1.1; the good
     # fixture carries the full weighting fields).

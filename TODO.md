@@ -41,16 +41,21 @@
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。
 
-### P0-D ORZ-COMPACTION-REDESIGN（`implemented`；S1-S4 已全部闭合，2026-08-14）
+### P0-D ORZ-COMPACTION-REDESIGN（`implemented`；S1-S5 已全部闭合，2026-08-14）
 
 - [x] S1：D2-2 恢复超窗预估算截断——恢复加载后首请求前估算预检 + 整轮截断 + `context_recovery_truncated` 事件（完整侧车审计副本 `recovery-conversation-full.json`）。
 - [x] S1：D3-1 恢复保留 marker/白名单——恢复回写过滤放行 `[前文上下文已压缩` 与白名单块，首请求可见（主车道 + 子代理 snapshot 同规则）。
 - [x] S2：工具调用记录机械坍缩——动作台账行（工具/目标/指针/digest/最终回复）+ 配对纪律 + 有界尾部（请求视图，侧车保留全文）。
-- [x] S3：五段模板摘要接线——机械槽位（黑板目的/计划/路径）+ 模型槽位校验（≤17K、退化拒绝复用 orz-compaction 500 字符守卫、重做 ≤3 次、summary_incomplete 终止态 + fallback 机械截断）。
+- [x] S3：五段模板摘要接线——机械槽位（黑板目的/计划/路径）+ 模型槽位校验（≤17K、退化拒绝 300 等效字符门（CJK 一字折算 2）、重做 ≤3 次、summary_incomplete 终止态 + fallback 机械截断）。
 - [x] S3：`context_compressed` 事件 Schema v0.2 扩展（mode/reason/summary_id/digest/path/summary_incomplete/retained_rounds）+ verifier/fixtures 同步 + `.gsa/compaction/` 存档与 7 天 retention + TUI 投影。
 - [x] S4：实施审计、ADR-0010 §14.10 补写、索引/BACKLOG/TODO 状态同步、设计文档状态更新。
+- [x] S5：审查修复（ADR-0010 v1.14）——守卫失败重试 3 次后强制压缩并 `guard_failed` 报告；
+  会话结束自动压缩（`session_end`，marker 固定进 sidecar，恢复治本）；存档写失败显式重试
+  ≤3 次并 `archive_write_failed` 报告；退化守卫 300 等效字符（CJK 一字折算 2）；黑板 edit
+  窗口随压缩滚动；冷却 3→2 模型轮；摘要 120s 超时；路径槽 Top-40 双上限；
+  Schema/verifier/fixtures 扩展与 `$id` 修正。
 
-入口：[压缩设计](docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / [ADR-0010 §14.10](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [P0-D 实施审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 3b](docs/BACKLOG_AND_PRIORITIES.md)。
+入口：[压缩设计](docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / [ADR-0010 §14.10/§14.14](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [P0-D 实施审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 3b](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## P1 — 可并行审计 / 证据
 

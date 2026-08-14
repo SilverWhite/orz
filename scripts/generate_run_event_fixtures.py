@@ -836,6 +836,8 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "summary_path": ".gsa/compaction/compaction-RUN-CONF-0001-0001.md",
         "summary_incomplete": False,
         "retained_rounds": 2,
+        "guard_failed": False,
+        "archive_write_failed": False,
     },
 }
 
@@ -1180,6 +1182,33 @@ EXTRA_V02_PAYLOAD_BADS[
     "retrieval-result.tier-weight-mismatch.constraint.invalid"
 ] = _weighting_bad
 
+
+# P0-D review fix (2026-08-14, ADR-0010 v1.14): the five-section summary
+# gained three schema-legal shapes — session_end reason, guard-retry forced
+# compaction (guard_failed), and the explicit archive-write failure. The
+# guard_failed×session_end prohibition is a verifier cross-rule, exercised
+# synthetically in runtime/tests/test_run_event_journal_validation.py.
+def _v02_context_compressed_payload() -> dict:
+    return json.loads(json.dumps(PAYLOAD_GOOD_V02["context_compressed"]))
+
+
+_session_end = _v02_context_compressed_payload()
+_session_end["reason"] = "session_end"
+_session_end["trigger_tokens"] = 155000
+EXTRA_V02_PAYLOAD_POSITIVES["context-compressed.session-end.valid"] = _session_end
+
+_guard_failed = _v02_context_compressed_payload()
+_guard_failed["reason"] = "fallback"
+_guard_failed["trigger_tokens"] = 210000
+_guard_failed["guard_failed"] = True
+EXTRA_V02_PAYLOAD_POSITIVES["context-compressed.guard-failed.valid"] = _guard_failed
+
+_archive_failed = _v02_context_compressed_payload()
+_archive_failed["reason"] = "rhythm"
+_archive_failed["archive_write_failed"] = True
+EXTRA_V02_PAYLOAD_POSITIVES["context-compressed.archive-write-failed.valid"] = (
+    _archive_failed
+)
 
 # canonical_cli payload shapes (its own `canonical-cli-*` track). Shapes taken
 # from canonical_cli.py event_specs (fake path L900-1009, real path L1322-1360).

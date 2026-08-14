@@ -304,10 +304,16 @@ Context compaction 对三个 Agent 使用同一策略（v1.10，2026-08-14）：
 每轮机械坍缩为动作台账行（工具、目标、结果指针/digest，零模型调用、无冷却），完整记录保留在
 journal/侧车审计面；模板摘要采用五段固化结构（目的/计划/变动文件路径/注意事项/后续衔接，字符
 上限 3/3/5/3/3K=17K），目的/计划/路径由黑板机械填充，注意事项/后续衔接由模型生成并标
-derived_unverified；摘要冷却 ≥3 工具轮，摘要链只进审计存档、不继承旧语义，滚动单 marker 附回查
-清单。首个工具批次可以通过 `compaction_whitelist_add` 写入最多 16K 字符的客观任务背景；白名单
-常驻 preamble、跳过压缩，并随 session journal/retention 记录。详见 §14.10 与
-`docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md`。
+derived_unverified；摘要冷却 ≥2 模型轮（v1.14 审查修复，防长动作累积），摘要链只进审计存档、
+不继承旧语义，滚动单 marker 附回查清单。v1.14 审查修复（2026-08-14）追加：缩减守卫不满足时
+跨触发轮重试 ≤3 次、仍失败则强制执行一轮压缩并以 `guard_failed` 显式报告机制失败（不使用原始
+机械截断）；每次成功会话（主车道与检索子代理一致）在结束时自动执行一轮压缩，把摘要 marker
+固定进 sidecar 一起存档（恢复治本，D2-2 恢复预检保留为旧会话兜底）；路径槽按 Top-40+5K 字符
+封顶，黑板 edit 窗口随每次压缩滚动（用后擦净，全量路径由摘要存档承载）；退化守卫改为 ORZ 自定
+300 等效字符（CJK 一字折算 2 等效字符，替代 orz-compaction 英文向 500 字符门）；摘要存档写失败
+显式重试 ≤3 次并在事件/marker 中报告；摘要调用设 120s 专用超时。首个工具批次可以通过
+`compaction_whitelist_add` 写入最多 16K 字符的客观任务背景；白名单常驻 preamble、跳过压缩，并随
+session journal/retention 记录。详见 §14.10/§14.14 与 `docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md`。
 
 每个模型轮的新注入工具结果设置 token 预算（v1.9，2026-08-14）：默认 50K、可经 env
 `ORZ_MAX_INJECT_TOKENS_PER_ROUND` 调整，按模型轮累计（并行批内多结果累加），超限拒绝本批
@@ -1165,3 +1171,32 @@ Schema 与机械证据：
    （jobs/schedule/workflow 与异步调度封禁裁决冲突；插件/UI 生态形态不引入）。
    来源：`docs/DEEPSEEK_HARNESS_BORROW_RESEARCH_2026-08-14.md` /
    `docs/DSH_BORROW_DESIGN_DECOMPOSITION_2026-08-14.md`。
+
+### 14.14 v1.14 补写裁决索引（2026-08-14）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代既往条款。
+
+1. **P0-D 审查修复（2026-08-14，基于全面检查的六项用户裁决，§3.6 修订）**：
+   ① 缩减守卫失败不再跳过或机械截断——跨触发轮重试守卫（不打断当前内容），连续
+      `GUARD_RETRY_LIMIT`=3 次仍失败时强制执行一轮模板压缩，事件带
+      `guard_failed=true`、marker 附"机制失败，需处理"提示；兜底 200K 的"摘要失败
+      后机械截断"保留（仅限摘要 LLM 失败路径，不复用于守卫失败路径）。
+   ② 恢复会话治本：每次成功 run 结束（主车道与检索子代理一致；grill 除外）在
+      terminal 事件前自动执行一轮压缩（`reason=session_end`、强制、不受缩减守卫
+      约束），摘要 marker 随 sidecar 写回固定存档；D2-2 恢复预检保留为旧侧车兜底。
+   ③ 摘要存档写失败：显式重试 ≤3 次；仍失败时事件带 `archive_write_failed=true`、
+      marker 附"存档写入失败：摘要未落盘，需处理"，不再静默。
+   ④ 退化守卫：废止 orz-compaction 500 字符英文向门，改为 ORZ 自定 300 等效字符
+      门——CJK 表意字一字折算 2 等效字符（150 个汉字即达标）。
+   ⑤ 黑板窗口滚动：压缩成功后清空 blackboard edit 窗口（用后擦净），路径槽天然为
+      "本窗口增量"；路径槽按 Top-40 条 + 5K 字符双上限，溢出指针指向本次摘要存档
+      （全量路径不再依赖黑板上累积查询）。
+   ⑥ 摘要冷却：确认按模型轮计数，默认 3 轮降为 2 轮（避免长动作累积；160K/200K
+      双阈值仍是主要安全网）；摘要调用补 120s 专用超时（`SUMMARY_CALL_TIMEOUT`）。
+   ⑦ 事件契约：`context_compressed` v0.2 的 reason 增加 `session_end`，新增可选
+      `guard_failed` / `archive_write_failed` 布尔（旧 v0.2 payload 无此二字段仍可
+      replay）；verifier 交叉规则：guard_failed 只允许 rhythm/fallback、
+      archive_write_failed 只允许完整摘要；`context-recovery-truncated` payload
+      schema `$id` 版本号修正为 v0.2。
+   来源：P0-D 全面检查结论与用户逐项裁决（2026-08-14）；实施审计
+   `docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md` §7。

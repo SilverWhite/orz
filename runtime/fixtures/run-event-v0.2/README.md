@@ -19,6 +19,14 @@ Scope:
   HMAC tag, which stays inside the issuing process), plus
   `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
   single probe face snapshot — complete/incomplete cover ALL work tools).
+- ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
+  three extra positive payload fixtures for the new pre-signing reject codes
+  `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
+  (each carries `ticket_id: null` — no ticket exists when the refusal
+  happens, D-14/D-15).
+- GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
+  negative payload fixture for the fixed tier/weight table (authoritative
+  MUST pair with 1.1; the good fixture carries the full weighting fields).
 - P0-D S1 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
   `context_recovery_truncated` — the D2-2 recovery pre-check event
   (before/after estimates, dropped rounds and the run-journal audit path
@@ -28,14 +36,9 @@ Scope:
   template summary (mode/reason, archive id/digest/path, completeness and
   retained tail; the v0.1 file stays authoritative for the v0.1 replay
   track).
-- ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
-  three extra positive payload fixtures for the new pre-signing reject codes
-  `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
-  (each carries `ticket_id: null` — no ticket exists when the refusal
-  happens, D-14/D-15).
-- GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
-  negative payload fixture for the fixed tier/weight table (authoritative
-  MUST pair with 1.1; the good fixture carries the full weighting fields).
+- P0-D S5 (2026-08-14, ADR-0010 v1.14): extra `context_compressed` payload
+  positives — `session_end` reason, `guard_failed` (guard-retry force) and
+  `archive_write_failed` (explicit archive-write failure).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
   event in the v0.2 enum (44 events). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape

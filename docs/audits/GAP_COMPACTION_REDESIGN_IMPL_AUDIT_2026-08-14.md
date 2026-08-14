@@ -1,13 +1,13 @@
 # ORZ-COMPACTION-REDESIGN 实施审计（2026-08-14）
 
-- 范围：P0-D 压缩机制重设计实施（S1→S4）；权威=ADR-0010 v1.10（§3.6 / §14.10）；
+- 范围：P0-D 压缩机制重设计实施（S1→S5）；权威=ADR-0010 v1.10 + v1.14（§3.6 / §14.10 / §14.14）；
   设计入口=`docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md`；用户已放行实施（2026-08-14）。
 - 实施切片：S1（D2-2/D3-1 恢复前置）→ S2（工具记录机械坍缩）→ S3（五段模板摘要接线）→
-  S4（审计、ADR/索引/BACKLOG/TODO/README 同步）。
-- 验证：orz-loop 296 passed / 3 ignored；orz-host 208 passed / 4 ignored；
-  orz-tui 178 passed；`cargo test --workspace` exit 0（含 orz-agent 570）；
-  Python runtime 事件校验 164 passed；`python scripts/check_repository.py` **valid**、
-  0 errors；`git diff --check` 干净。
+  S4（审计、ADR/索引/BACKLOG/TODO/README 同步）→ S5（审查修复，见 §7）。
+- 验证：orz-loop 305 passed / 3 ignored；orz-host 208 passed / 4 ignored；
+  orz-tui 178 passed；`cargo check -p orz-host -p orz-tui -p orz-bin` exit 0；
+  Python runtime 事件校验 171 passed（conformance + journal validation）；
+  `python scripts/check_repository.py` **valid**、0 errors；`git diff --check` 干净。
 
 ## 1. S1 — 恢复路径前置（D2-2 / D3-1）
 
@@ -79,7 +79,7 @@
 | D-2 | 摘要成功时**真实截断** conversation（preamble+marker+最近尾）并落档 | §4 目标=17K 摘要 + 白名单 + 最近尾；journal 与 `.gsa/compaction` 存档承担审计 |
 | D-3 | 恢复截断事件独立为 `context_recovery_truncated`（不复用 context_compressed 文案字段） | ADR §5.1 明确类型；D2-2 是独立机制事件 |
 | D-4 | 路径槽 Top-N=40、按黑板编辑插入序（时间序） | 设计 §10 未决项定案；全量路径仍在 blackboard_read edits 可查 |
-| D-5 | orz-compaction 复用面=退化摘要拒绝 + MIN_SUMMARY_SEED_CHARS（选择/缩减守卫做语义等价内联） | crate 引擎为 Grok 形态（CompactionItem trait 管线），ORZ loop 自有消息模型；按复杂度治理只接守卫常量，不引入平行抽象 |
+| D-5 | orz-compaction 复用面=退化摘要拒绝 + MIN_SUMMARY_SEED_CHARS（选择/缩减守卫做语义等价内联）；**S5 修订（v1.14）**：退化守卫改为 ORZ 自定 300 等效字符门（CJK 一字折算 2），orz-loop 不再依赖 orz-compaction | crate 引擎为 Grok 形态（CompactionItem trait 管线），ORZ loop 自有消息模型；500 字符门为英文向标定，中文场景需独立折算 |
 | D-6 | 摘要调用不计工具轮、不计 orientation 轮；三 Agent 同构触发 | 同构约束（§3.1）；activation 预算交互复核无新计数面 |
 
 ## 5. 边界与登记
@@ -98,3 +98,45 @@
 - `docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md` —— 状态转 implemented，§9/§10 更新。
 - `CLI_PROJECT_INDEX.md` —— FUS-COMPACTION-REDESIGN 转 implemented。
 - `TODO.md` / `docs/BACKLOG_AND_PRIORITIES.md` —— P0-D 全部勾选/关闭。
+
+## 7. S5 审查修复实施（2026-08-14，ADR-0010 v1.14）
+
+- 范围：P0-D 全面检查发现的差距按用户逐项裁决修复；权威=ADR-0010 v1.14 §14.14。
+- ① 守卫失败重试与强制压缩：`agent_loop.rs` 新增 `GUARD_RETRY_LIMIT`=3、
+  `CompactDecision`（NoOp/GuardBlocked/Executed）与共享压缩流 `run_template_compact`；
+  loop-top 守卫不满足时 `GuardBlocked` 计数，跨触发轮重试（不打断内容、不机械截断），
+  第 3 次仍失败即 force=true 执行一轮压缩，事件带 `guard_failed=true`、marker 附
+  "机制失败：缩减守卫连续不满足，已强制压缩，需处理"；摘要 LLM 失败路径的 fallback
+  机械截断保留（终止态语义不变）。测试
+  `context_compact_guard_failure_retries_then_forces`。
+- ② 会话结束压缩治本：`run_turn_inner` 与检索子代理 dispatcher 在 stagnation
+  Continue、terminal 事件前（sidecar 写回前）调用同一压缩流（`reason=session_end`、
+  force=true、不消耗工具轮/orientation 轮）；`ContextCompactConfig` 新增
+  `session_end_trigger_tokens`（默认 160K，全量消息估算触发）；marker 随 D3-1
+  过滤写回 sidecar 固定存档；D2-2 恢复预检保留为旧侧车兜底。测试
+  `session_end_compact_pins_marker_into_sidecar_and_rolls_edits`。
+- ③ 存档写失败显式重试：`summary.rs` 新增 `ARCHIVE_WRITE_MAX_ATTEMPTS`=3 与
+  `write_archive_retry`；仍失败时事件带 `archive_write_failed=true`、marker 附
+  "存档写入失败：摘要未落盘，需处理"，不再静默忽略。测试
+  `summary_archive_write_failure_is_reported` + `archive_write_retry_persists_and_reports_failure`。
+- ④ 退化守卫：废止 orz-compaction 500 字符门，ORZ 自定 `SUMMARY_MIN_EFFECTIVE_CHARS`=300，
+  CJK 表意字一字折算 2 等效字符（150 汉字达标）；orz-loop 移除对 orz-compaction 的依赖。
+  测试 `degenerate_guard_english_threshold` / `degenerate_guard_chinese_counts_double`。
+- ⑤ 黑板窗口滚动：压缩成功后 `blackboard.edits.clear()`（擦干净），路径槽天然为本窗口
+  增量；路径槽按 Top-40 条 + 5K 字符双上限，溢出指针指向本次摘要存档。测试
+  `render_paths_caps_at_top_40_with_archive_pointer`。
+- ⑥ 冷却与超时：`min_rounds` 默认 3→2（模型轮口径确认）；摘要调用加 120s 专用超时
+  （`SUMMARY_CALL_TIMEOUT`）；marker token 估算 2K→9K（对齐 17K 字符上限）。测试
+  `context_compact_defaults_follow_v1_14_review`。
+- ⑦ 事件契约：`context_compressed` v0.2 reason 增 `session_end`、新增可选
+  `guard_failed`/`archive_write_failed`（旧 payload 可 replay）；verifier 交叉规则
+  （guard_failed 仅 rhythm/fallback、archive_write_failed 仅完整摘要）+ 合成 journal
+  测试 + fixtures 正样例（session-end / guard-failed / archive-write-failed）；
+  `context-recovery-truncated` schema `$id` 修正为 v0.2。
+- 决策与登记：压缩流程重构为共享函数（loop-top 与 session_end 同构）；`LoopOutcome`
+  增加 `rounds_since_compact` 以便 session_end 事件诚实上报冷却；终止态事件的
+  `target_tokens` 改为实际保留估算（原固定 160K 在 rhythm 终止态下失真）。
+- 已知生成器漂移（非本次引入，登记为卫生观察）：`generate_run_event_fixtures.py`
+  的 `FIXTURES_README_V02` 与 `citation_validation` 负样例/信封时间戳未与提交树
+  完全同步（P0-B step 5 的手工修订未回写生成器）；本次重生成后已手动还原无关文件，
+  未回改生成器模板以避免噪音；建议后续登记 P3 卫生项统一对齐。
