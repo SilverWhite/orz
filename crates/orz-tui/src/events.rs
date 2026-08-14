@@ -215,6 +215,14 @@ pub enum TuiEvent {
         rounds_dropped: u64,
         after_estimate_tokens: u64,
     },
+    // F7 (2026-08-15, BACKLOG 6e 复查遗留): a blackboard plan-epoch
+    // snapshot failed to persist — the rotation still committed, but the
+    // archive is missing (audit trace; the journal payload is the record).
+    EpochArchiveWriteFailed {
+        plan_epoch: u64,
+        archive_dir: String,
+        kind: String,
+    },
 
     // ── IP5 snapshot ──
     SnapshotCreated {
@@ -320,6 +328,7 @@ impl TuiEvent {
             TuiEvent::ControlTicketRejected { .. } => "control_ticket_rejected",
             TuiEvent::ContextCompressed { .. } => "context_compressed",
             TuiEvent::ContextRecoveryTruncated { .. } => "context_recovery_truncated",
+            TuiEvent::EpochArchiveWriteFailed { .. } => "epoch_archive_write_failed",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
             TuiEvent::SnapshotRestored { .. } => "snapshot_restored",
             TuiEvent::ArtifactRegistered { .. } => "artifact_registered",

@@ -131,7 +131,7 @@ impl Blackboard {
     /// snapshot — plan + edits + tool_actions + exec. Gate log, whitelist
     /// and the retrieval partitions are NOT part of an epoch snapshot
     /// (they survive rotation by design).
-    pub fn epoch_snapshot(&self, rotated_at: &str) -> EpochSnapshot {
+    pub fn epoch_snapshot(&self, persisted_at: &str) -> EpochSnapshot {
         EpochSnapshot {
             plan_id: self.plan.plan_id.clone(),
             plan_epoch: self.plan.plan_epoch,
@@ -139,7 +139,7 @@ impl Blackboard {
             edits: self.edits.clone(),
             tool_actions: self.tool_actions.clone(),
             exec: self.exec.clone(),
-            rotated_at: rotated_at.to_string(),
+            persisted_at: persisted_at.to_string(),
         }
     }
 
@@ -176,7 +176,7 @@ impl Blackboard {
         plan_epoch: u64,
         goal: String,
         steps: Vec<String>,
-        rotated_at: &str,
+        persisted_at: &str,
     ) -> Result<Option<EpochSnapshot>, PlanEpochError> {
         use crate::blackboard::StepStatus;
         if plan_epoch == 0 {
@@ -215,7 +215,7 @@ impl Blackboard {
             }
         }
         let old = if self.plan.plan_epoch > 0 {
-            Some(self.epoch_snapshot(rotated_at))
+            Some(self.epoch_snapshot(persisted_at))
         } else {
             None
         };
@@ -302,7 +302,13 @@ pub struct EpochSnapshot {
     pub edits: Vec<EditRecord>,
     pub tool_actions: Vec<ToolActionRecord>,
     pub exec: ExecSection,
-    pub rotated_at: String,
+    /// When this snapshot was PERSISTED (approval/revision refresh or
+    /// rotation). F9 (2026-08-15, BACKLOG 6e 复查遗留): the old name
+    /// `rotated_at` misleadingly implied rotation-only — the current-epoch
+    /// persistence happens at every approval/revision. `alias` keeps old
+    /// archives loadable (the JSON key is `persisted_at` for new writes).
+    #[serde(alias = "rotated_at")]
+    pub persisted_at: String,
 }
 
 /// Thread-safe wrapper around the Blackboard.

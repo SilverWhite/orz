@@ -21,6 +21,9 @@ use crate::blackboard::{
 pub const EPOCH_ARCHIVE_DIR: &str = ".gsa/blackboard";
 /// Bounded retries for persisting an epoch archive (same as compaction).
 pub const EPOCH_ARCHIVE_MAX_ATTEMPTS: usize = 3;
+/// F4 (2026-08-15): bounded collision retries when claiming an epoch
+/// against concurrent processes.
+pub const EPOCH_CLAIM_MAX_ATTEMPTS: usize = 8;
 
 /// Full path of one epoch archive.
 pub fn epoch_archive_path(archive_dir: &Path, plan_epoch: u64) -> PathBuf {
@@ -48,6 +51,32 @@ fn max_archived_epoch(archive_dir: &Path) -> Option<u64> {
     max_epoch
 }
 
+/// Highest epoch number already claimed via a `.claim-<n>` reservation file
+/// (`None` = no claim yet). Claim files outlive their claimant on purpose
+/// (F4, 2026-08-15): a process that crashes between claiming and writing
+/// the snapshot still owns the number — timestamp-stamped numbering makes
+/// burning one number free, and reuse would break the one-to-one identity
+/// convention. Retention sweeps stale claims by age (see `orz-host`).
+fn max_claimed_epoch(archive_dir: &Path) -> Option<u64> {
+    let mut max_epoch = None;
+    if let Ok(entries) = std::fs::read_dir(archive_dir) {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            let Some(rest) = name.strip_prefix(".claim-") else {
+                continue;
+            };
+            if let Ok(epoch) = rest.parse::<u64>() {
+                if max_epoch.map_or(true, |m| epoch > m) {
+                    max_epoch = Some(epoch);
+                }
+            }
+        }
+    }
+    max_epoch
+}
+
 /// Next epoch number for a new plan approval (v1.15⑧, 2026-08-15):
 /// a timestamp-stamped monotonic number — `max(now_ms, disk_max + 1)`.
 ///
@@ -56,30 +85,81 @@ fn max_archived_epoch(archive_dir: &Path) -> Option<u64> {
 /// retention sweep: old epoch numbers are always smaller than any future
 /// number, so `plan_epoch` in markers / `blackboard_read` can never collide
 /// with a later reuse. `disk_max + 1` keeps the sequence monotonic across
-/// clock rollback and same-millisecond serial approvals.
+/// clock rollback and same-millisecond serial approvals. F4 (2026-08-15):
+/// `.claim-*` reservations are part of `disk_max`, so a crashed claimant's
+/// number is never re-proposed.
 pub fn next_plan_epoch_from_archive(archive_dir: &Path) -> u64 {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    now_ms.max(max_archived_epoch(archive_dir).map_or(0, |m| m + 1))
+    let disk_max = max_archived_epoch(archive_dir)
+        .into_iter()
+        .chain(max_claimed_epoch(archive_dir))
+        .max();
+    now_ms.max(disk_max.map_or(0, |m| m + 1))
 }
 
-/// Persist one epoch snapshot with bounded retries. Returns whether the
-/// file exists after the attempts; failures are logged by the caller.
+/// Atomically claim a plan epoch against concurrent processes (F4,
+/// 2026-08-15, BACKLOG 6e 复查遗留).
+///
+/// Creates the `.claim-<plan_epoch>` reservation file with `create_new` —
+/// exactly one process can win per epoch number. Returns `true` only for
+/// the winner. On a collision the caller should bump and retry (bounded by
+/// [`EPOCH_CLAIM_MAX_ATTEMPTS`]). The reservation is intentionally NOT
+/// removed on success: it remains as the durable proof that this number was
+/// allocated, so even a crash between claim and snapshot write cannot lead
+/// to reuse. Retention sweeps old claim files by age (they are only
+/// meaningful near their timestamp).
+pub fn claim_plan_epoch(archive_dir: &Path, plan_epoch: u64) -> bool {
+    std::fs::create_dir_all(archive_dir).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(archive_dir.join(format!(".claim-{plan_epoch}")))
+            .is_ok()
+}
+
+/// Persist one epoch snapshot atomically with bounded retries. Returns
+/// whether the final file exists after the attempts; failures are logged
+/// by the caller.
+///
+/// F2 (2026-08-15, BACKLOG 6e 复查遗留): the snapshot is written to a
+/// `<name>.json.tmp` sibling first and re-parsed as a self-check, then
+/// renamed over the final `epoch-<n>.json` (same directory → same
+/// filesystem → atomic on the local disk). A crash before the rename
+/// leaves only the `.tmp` file, which the `epoch-*.json` scans ignore —
+/// the highest-numbered FINAL file always points at a complete snapshot,
+/// so a half-written file can never become the restore entry.
 pub fn write_epoch_archive_retry(archive_dir: &Path, snapshot: &EpochSnapshot) -> bool {
     let Ok(json) = serde_json::to_string_pretty(snapshot) else {
         return false;
     };
     let path = epoch_archive_path(archive_dir, snapshot.plan_epoch);
+    let tmp_path = path.with_extension("json.tmp");
     for _ in 0..EPOCH_ARCHIVE_MAX_ATTEMPTS {
-        if std::fs::create_dir_all(archive_dir).is_ok()
-            && std::fs::write(&path, &json).is_ok()
-            && path.exists()
-        {
+        if std::fs::create_dir_all(archive_dir).is_err() {
+            continue;
+        }
+        if std::fs::write(&tmp_path, &json).is_err() {
+            continue;
+        }
+        // Self-check before the file may become final: a snapshot that
+        // cannot be parsed back must never be published under the final
+        // name (a torn write or a serializer bug must not poison restore).
+        let parseable = std::fs::read_to_string(&tmp_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<EpochSnapshot>(&text).ok())
+            .is_some();
+        if !parseable {
+            let _ = std::fs::remove_file(&tmp_path);
+            continue;
+        }
+        if std::fs::rename(&tmp_path, &path).is_ok() {
             return true;
         }
     }
+    let _ = std::fs::remove_file(&tmp_path);
     false
 }
 
@@ -105,10 +185,38 @@ pub fn load_epoch_snapshot(archive_dir: &Path, plan_epoch: u64) -> Option<EpochS
 }
 
 /// Load the highest-numbered epoch snapshot (restore entry). `None` = no
-/// archive yet. Scans the archive directly (the next-epoch number may be a
-/// wall-clock value greater than every archived file).
+/// usable archive yet. Scans the archive directly (the next-epoch number
+/// may be a wall-clock value greater than every archived file) and walks
+/// epochs from high to low, returning the FIRST parseable snapshot.
+///
+/// F2 (2026-08-15, BACKLOG 6e 复查遗留): a corrupt/unreadable highest file
+/// (e.g. a pre-F2 half-written archive, or an externally damaged file) must
+/// not make recovery fail — the previous valid snapshot is the fallback.
 pub fn latest_epoch_snapshot(archive_dir: &Path) -> Option<EpochSnapshot> {
-    load_epoch_snapshot(archive_dir, max_archived_epoch(archive_dir)?)
+    let mut epochs: Vec<u64> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(archive_dir) {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            let Some(rest) = name
+                .strip_prefix("epoch-")
+                .and_then(|r| r.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if let Ok(epoch) = rest.parse::<u64>() {
+                epochs.push(epoch);
+            }
+        }
+    }
+    epochs.sort_unstable_by(|a, b| b.cmp(a));
+    for epoch in epochs {
+        if let Some(snapshot) = load_epoch_snapshot(archive_dir, epoch) {
+            return Some(snapshot);
+        }
+    }
+    None
 }
 
 /// Render one blackboard partition for `blackboard_read`, shared by the
@@ -348,6 +456,121 @@ mod tests {
         assert_eq!(loaded.edits[0].file, "x.py");
         assert!(latest_epoch_snapshot(&dir).is_some());
         assert!(load_epoch_snapshot(&dir, 99).is_none());
+        // F2: the atomic write leaves only the final file — no `.json.tmp`
+        // residue that could be mistaken for a snapshot.
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".json.tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "tmp residue: {leftovers:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn latest_epoch_snapshot_falls_back_from_corrupt_highest() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-epoch-fallback-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut bb = crate::blackboard::Blackboard::new();
+        bb.plan.plan_id = Some("PLAN-OLD".into());
+        bb.plan.plan_epoch = 7;
+        bb.edits.push(EditRecord {
+            file: "old.py".into(),
+            old_lines: 1,
+            new_lines: 2,
+            timestamp: "2026-08-14T00:00:00Z".into(),
+        });
+        let snapshot = bb.epoch_snapshot("2026-08-14T01:00:00Z");
+        assert!(write_epoch_archive_retry(&dir, &snapshot));
+
+        // A half-written/highest file (pre-F2 torn write or external
+        // damage) must not break restore — the previous valid snapshot is
+        // the fallback.
+        std::fs::write(dir.join("epoch-8.json"), "{\"plan_epoch\": 8, ").unwrap();
+        let restored = latest_epoch_snapshot(&dir).expect("falls back to valid snapshot");
+        assert_eq!(restored.plan_epoch, 7);
+        assert_eq!(restored.plan.plan_id.as_deref(), Some("PLAN-OLD"));
+
+        // A stray `.json.tmp` (crash before rename) never becomes the
+        // restore entry and never influences the next-epoch scan.
+        std::fs::write(dir.join("epoch-999.json.tmp"), "{}").unwrap();
+        assert_eq!(latest_epoch_snapshot(&dir).expect("loads").plan_epoch, 7);
+        let next = next_plan_epoch_from_archive(&dir);
+        assert!(next > 8, "tmp must not extend the epoch scan: {next}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claim_epoch_is_atomic_and_never_reuses_reserved_numbers() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-epoch-claim-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Exactly one claimant wins per epoch number.
+        assert!(claim_plan_epoch(&dir, 42));
+        assert!(
+            !claim_plan_epoch(&dir, 42),
+            "second claimant of the same epoch must lose"
+        );
+        assert!(claim_plan_epoch(&dir, 43));
+
+        // Claim files (including a crashed claimant's) reserve numbers in
+        // the next-epoch scan — no reuse even in the same millisecond.
+        let next = next_plan_epoch_from_archive(&dir);
+        assert!(next > 43, "reserved epoch reused: {next}");
+
+        // Retention-style sweep of stale claims (by age) is safe because
+        // timestamp-stamped numbers are always smaller than future numbers.
+        assert!(dir.join(".claim-42").is_file());
+        assert!(dir.join(".claim-43").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_rotated_at_archives_still_load_as_persisted_at() {
+        // F9 (2026-08-15): pre-rename archives carry `rotated_at`; the
+        // serde alias keeps them loadable (the JSON key is `persisted_at`
+        // for new writes).
+        let old = r#"{
+            "plan_id": "PLAN-OLD",
+            "plan_epoch": 1,
+            "plan": {
+                "plan_id": "PLAN-OLD",
+                "plan_epoch": 1,
+                "goal": "旧任务",
+                "steps": [],
+                "analysis": [],
+                "decisions": [],
+                "auth_grants": []
+            },
+            "edits": [],
+            "tool_actions": [],
+            "exec": {
+                "results": [],
+                "observations": [],
+                "errors": [],
+                "auth_requests": []
+            },
+            "rotated_at": "2026-08-14T00:00:00Z"
+        }"#;
+        let snapshot: EpochSnapshot = serde_json::from_str(old).expect("alias loads old archives");
+        assert_eq!(snapshot.persisted_at, "2026-08-14T00:00:00Z");
+
+        // New writes use the corrected key.
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains("\"persisted_at\""), "{json}");
+        assert!(!json.contains("\"rotated_at\""), "{json}");
     }
 }

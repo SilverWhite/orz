@@ -15,6 +15,7 @@
 //! inside the parent run's hash chain (M3, 2026-08-10) — the run
 //! terminal uniqueness stays with the parent.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::{EventType, GateDecision};
@@ -283,6 +284,10 @@ pub(crate) struct SharedLoopServices<'a> {
     /// feeds the role-gate denial key (a bump is a key change → the breaker
     /// resets, ADR-0010 §3.5.4).
     pub policy_revision: &'a std::sync::atomic::AtomicU64,
+    /// F5 (2026-08-15, BACKLOG 6e 复查遗留): the controller-configured
+    /// epoch archive directory — the single source for the path-slot
+    /// overflow pointer (never re-derived from the session cwd).
+    pub blackboard_archive_dir: Option<&'a Path>,
 }
 
 /// What the loop produced — the caller maps it to its own terminal
@@ -370,13 +375,15 @@ pub(crate) async fn run_template_compact(
     let archive_path = archive_dir.join(format!("{id}.md"));
     // v1.15 (2026-08-14): the path slot's overflow pointer targets the
     // current plan-epoch snapshot (the epoch archive is the permanent
-    // holder of the full path/action records).
+    // holder of the full path/action records). F5 (2026-08-15): the path
+    // comes from the controller's configured archive dir — the single
+    // source — so a custom archive dir stays the real pointer target.
     let plan_epoch = svc.blackboard.read().plan.plan_epoch;
     let epoch_archive = (plan_epoch > 0).then(|| {
-        host.session_cwd()
-            .join(crate::epoch::EPOCH_ARCHIVE_DIR)
-            .join(format!("epoch-{plan_epoch}.json"))
+        svc.blackboard_archive_dir
+            .map(|dir| dir.join(format!("epoch-{plan_epoch}.json")))
     });
+    let epoch_archive = epoch_archive.flatten();
     let mechanical = {
         let bb = svc.blackboard.read();
         let (purpose, plan, paths) =

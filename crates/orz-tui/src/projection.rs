@@ -458,6 +458,23 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             )]
         }
 
+        // F7 (2026-08-15): a blackboard plan-epoch archive write failed —
+        // the rotation committed in memory but the durable snapshot is
+        // missing (audit trace; shown as a warning).
+        TuiEvent::EpochArchiveWriteFailed {
+            plan_epoch,
+            archive_dir,
+            kind,
+        } => {
+            app.content.add_system_message(
+                &format!(
+                    "[黑板归档失败] epoch {plan_epoch}（{kind}）未落盘: {archive_dir}"
+                ),
+                true,
+            );
+            vec![format!("黑板归档失败: epoch {plan_epoch}（{kind}）")]
+        }
+
         // ── IP5 snapshot ──
         TuiEvent::SnapshotCreated {
             tool,

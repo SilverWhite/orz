@@ -386,7 +386,25 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
             // starts its epoch AFTER every epoch already archived there, so
             // workspace-level epoch numbers stay unique across runs.
             let blackboard_archive_dir = cwd.join(".gsa").join("blackboard");
-            let plan_epoch = orz_loop::epoch::next_plan_epoch_from_archive(&blackboard_archive_dir);
+            // F4 (2026-08-15, BACKLOG 6e 复查遗留): same-millisecond
+            // concurrent processes must not claim the same epoch — atomically
+            // reserve the number with a `.claim-<n>` file; a collision means
+            // another process already owns it, so bump and retry (bounded).
+            let mut plan_epoch =
+                orz_loop::epoch::next_plan_epoch_from_archive(&blackboard_archive_dir);
+            let mut claim_attempts = 0usize;
+            while !orz_loop::epoch::claim_plan_epoch(&blackboard_archive_dir, plan_epoch) {
+                plan_epoch += 1;
+                claim_attempts += 1;
+                if claim_attempts >= orz_loop::epoch::EPOCH_CLAIM_MAX_ATTEMPTS {
+                    return Err(format!(
+                        "could not claim a plan epoch after {} attempts ({}): \
+                         another process is racing the blackboard archive",
+                        claim_attempts,
+                        blackboard_archive_dir.display()
+                    ));
+                }
+            }
 
             // Plan phase — on error the journal must still terminate
             // (review P2-1): record RunFailed continuing the chain, then

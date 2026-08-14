@@ -274,6 +274,13 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             rounds_dropped: get_u64(p, "rounds_dropped"),
             after_estimate_tokens: get_u64(p, "after_estimate_tokens"),
         },
+        // F7 (2026-08-15): blackboard plan-epoch archive write failure —
+        // the rotation committed but the durable snapshot is missing.
+        EventType::EpochArchiveWriteFailed => TuiEvent::EpochArchiveWriteFailed {
+            plan_epoch: get_u64(p, "plan_epoch"),
+            archive_dir: get_str(p, "archive_dir"),
+            kind: get_str(p, "kind"),
+        },
         EventType::SnapshotCreated => TuiEvent::SnapshotCreated {
             tool: get_str(p, "tool"),
             targets: get_str_list(p, "targets"),
@@ -463,6 +470,15 @@ mod tests {
             ),
             (EventType::PlanRejected, json!({"plan_id": "PLAN-1"})),
             (EventType::ActionApproved, json!({"action_id": "A"})),
+            (
+                EventType::EpochArchiveWriteFailed,
+                json!({
+                    "archive_dir": ".gsa/blackboard",
+                    "plan_epoch": 2,
+                    "kind": "rotated",
+                    "attempts": 3,
+                }),
+            ),
             (
                 EventType::CitationValidation,
                 json!({

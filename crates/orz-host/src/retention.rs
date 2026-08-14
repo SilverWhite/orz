@@ -373,6 +373,11 @@ fn prune_old_files(removed: &mut Vec<String>, dir: &Path, cutoff: SystemTime) {
 /// even when older than the retention cutoff (a long-lived live board).
 /// Epoch numbers are timestamp-stamped monotonic (2026-08-15), so the
 /// highest number is always the most recent identity.
+///
+/// F4 (2026-08-15, BACKLOG 6e 复查遗留): `.claim-*` reservation files are
+/// swept by age like old snapshots (no latest exception — a claim is only
+/// meaningful near its timestamp; once 7 days old it can never collide with
+/// a future timestamp-stamped number).
 fn prune_blackboard_epochs(removed: &mut Vec<String>, dir: &Path, cutoff: SystemTime) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -382,6 +387,16 @@ fn prune_blackboard_epochs(removed: &mut Vec<String>, dir: &Path, cutoff: System
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
+            continue;
+        }
+        // F4: stale `.claim-<n>` reservations — age-swept, no exception.
+        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        if let Some(rest) = name.strip_prefix(".claim-")
+            && rest.parse::<u64>().is_ok()
+        {
+            if entry_older_than(&path, cutoff) && std::fs::remove_file(&path).is_ok() {
+                removed.push(name);
+            }
             continue;
         }
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -714,6 +729,32 @@ mod tests {
         assert_eq!(report.removed_blackboard_epoch_archives, vec!["epoch-1.json"]);
         assert!(!old.exists());
         assert!(bb.join("epoch-2.json").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// F4 (2026-08-15): stale `.claim-*` reservations are swept by age like
+    /// old snapshots (no latest exception — after 7 days a claim can never
+    /// collide with a future timestamp-stamped epoch number).
+    #[test]
+    fn sweep_removes_old_blackboard_epoch_claims_keeps_fresh() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        let bb = gsa.join("blackboard");
+        std::fs::create_dir_all(&bb).unwrap();
+        let old_claim = bb.join(".claim-1");
+        std::fs::write(&old_claim, "").unwrap();
+        backdate(&old_claim, 10);
+        std::fs::write(bb.join(".claim-2"), "").unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(
+            report.removed_blackboard_epoch_archives,
+            vec![".claim-1"]
+        );
+        assert!(!old_claim.exists());
+        assert!(bb.join(".claim-2").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }

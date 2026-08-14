@@ -23,7 +23,7 @@
 //! INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2 §4.5).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -308,6 +308,11 @@ pub struct AgentLoopController {
     /// cross-epoch `blackboard_read`; `None` keeps epochs purely
     /// in-memory (tests / hosts without a session cwd).
     blackboard_archive_dir: Option<PathBuf>,
+    /// F7 (2026-08-15, BACKLOG 6e 复查遗留): epoch archive writes that
+    /// failed during plan ingest (builder phase — no journal writer yet).
+    /// Flushed as `epoch_archive_write_failed` v0.2 events at run start so
+    /// the loss of an old epoch's durable snapshot leaves an audit trace.
+    epoch_archive_errors: Mutex<Vec<(u64, EpochArchiveWriteKind)>>,
     /// Monotonic model-round counter across turns (streaming pacing guard).
     /// Kept on the controller (not per-turn) so a turn ≥ 2's FIRST round is
     /// also paced: a programmatic stdio client issuing prompt #2 immediately
@@ -1281,6 +1286,24 @@ pub(crate) fn build_structured_result(
     }
 }
 
+/// F7 (2026-08-15, BACKLOG 6e 复查遗留): which epoch snapshot failed to
+/// persist — the ROTATED old epoch (lost archive on rotation) or the
+/// CURRENT epoch (approval/revision persistence; restore entry weakened).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EpochArchiveWriteKind {
+    Rotated,
+    Current,
+}
+
+impl EpochArchiveWriteKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            EpochArchiveWriteKind::Rotated => "rotated",
+            EpochArchiveWriteKind::Current => "current",
+        }
+    }
+}
+
 impl AgentLoopController {
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): best-effort structured-result
     /// artifact persist — `{journal_dir}/retrieval-results/
@@ -1975,6 +1998,7 @@ impl AgentLoopController {
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             snapshot_store: None,
             blackboard_archive_dir: None,
+            epoch_archive_errors: Mutex::new(Vec::new()),
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
             context_compact: ContextCompactConfig::default(),
@@ -3304,6 +3328,16 @@ impl AgentLoopController {
         self
     }
 
+    /// F5 (2026-08-15, BACKLOG 6e 复查遗留): the single source of truth for
+    /// the epoch archive directory. Consumers (the path-slot overflow
+    /// pointer, cross-epoch `blackboard_read`, archive writes/restores)
+    /// must derive from this value — never re-derive a
+    /// `session_cwd/.gsa/blackboard` path, which would distort a custom
+    /// archive directory.
+    pub(crate) fn blackboard_archive_dir(&self) -> Option<&Path> {
+        self.blackboard_archive_dir.as_deref()
+    }
+
     /// GAP-SUBAGENT-RUNTIME (M4/M5 tests): an independent small budget —
     /// the main loop AND the subagent loops share the configured cap
     /// (env override mirrors the main; ADR-0010 §3.4.6 independent
@@ -3383,6 +3417,12 @@ impl AgentLoopController {
                         dir.display(),
                         snapshot.plan_epoch,
                     );
+                    // F7 (2026-08-15): queue the audit event — flushed at
+                    // run start when the journal writer exists.
+                    self.epoch_archive_errors
+                        .lock()
+                        .unwrap()
+                        .push((snapshot.plan_epoch, EpochArchiveWriteKind::Rotated));
                 }
             }
             let current = {
@@ -3395,9 +3435,45 @@ impl AgentLoopController {
                     dir.display(),
                     current.plan_epoch,
                 );
+                self.epoch_archive_errors
+                    .lock()
+                    .unwrap()
+                    .push((current.plan_epoch, EpochArchiveWriteKind::Current));
             }
         }
         Ok(self)
+    }
+
+    /// F7 (2026-08-15, BACKLOG 6e 复查遗留): flush plan-epoch archive
+    /// write failures queued during the builder phase into the journal as
+    /// `epoch_archive_write_failed` events. The rotation/approval already
+    /// committed in memory — this event is the durable audit trace that
+    /// the old epoch's snapshot is NOT on disk. A refused append fails the
+    /// run (journal integrity violation, same discipline as every event).
+    async fn flush_epoch_archive_write_failures(
+        &self,
+        writer: &mut EventWriter<'_>,
+    ) -> Result<(), AgentLoopError> {
+        let pending = std::mem::take(&mut *self.epoch_archive_errors.lock().unwrap());
+        for (plan_epoch, kind) in pending {
+            let archive_dir = self
+                .blackboard_archive_dir
+                .as_deref()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            writer
+                .record(
+                    EventType::EpochArchiveWriteFailed,
+                    serde_json::json!({
+                        "archive_dir": archive_dir,
+                        "plan_epoch": plan_epoch,
+                        "kind": kind.as_str(),
+                        "attempts": crate::epoch::EPOCH_ARCHIVE_MAX_ATTEMPTS,
+                    }),
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     /// A6 (2026-08-08): override the explicit context-compaction parameters
@@ -3565,6 +3641,7 @@ impl AgentLoopController {
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             snapshot_store: None,
             blackboard_archive_dir: None,
+            epoch_archive_errors: Mutex::new(Vec::new()),
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
             context_compact: ContextCompactConfig::default(),
@@ -3775,6 +3852,10 @@ impl AgentLoopController {
             previous_event_sha256,
             heartbeat.cloned(),
         );
+        // F7 (2026-08-15): plan-epoch archive failures queued during the
+        // builder phase get their audit events at run start — the first
+        // moment a journal writer exists.
+        self.flush_epoch_archive_write_failures(&mut writer).await?;
         let result = self
             .run_turn_inner(
                 &mut writer,
@@ -4315,6 +4396,7 @@ impl AgentLoopController {
                 // citation binding (P0-B step 5, ADR-0010 §3.7.9).
                 evidence: Some(&self.main_evidence),
                 policy_revision: &self.policy_revision,
+                blackboard_archive_dir: self.blackboard_archive_dir(),
             },
             self,
             writer,
@@ -4396,6 +4478,7 @@ impl AgentLoopController {
                     dc_state: &self.dc_state,
                     evidence: Some(&self.main_evidence),
                     policy_revision: &self.policy_revision,
+                    blackboard_archive_dir: self.blackboard_archive_dir(),
                 };
                 let _ = run_template_compact(
                     &svc,
@@ -4961,6 +5044,7 @@ impl AgentLoopController {
                 // Retrieval lane: collect tool-call evidence (§3.7.4).
                 evidence: Some(&self.evidence),
                 policy_revision: &self.policy_revision,
+                blackboard_archive_dir: self.blackboard_archive_dir(),
             },
             self,
             writer,
@@ -5012,6 +5096,7 @@ impl AgentLoopController {
                             dc_state: &self.dc_state,
                             evidence: Some(&self.evidence),
                             policy_revision: &self.policy_revision,
+                            blackboard_archive_dir: self.blackboard_archive_dir(),
                         };
                         let _ = run_template_compact(
                             &svc,
@@ -6879,7 +6964,50 @@ impl AgentLoopController {
                 .unwrap_or("plan")
                 .to_string();
             let since = tc.arguments.get("since_timestamp").and_then(|s| s.as_str());
-            let epoch = tc.arguments.get("epoch").and_then(|v| v.as_u64());
+            // F6 (2026-08-15, BACKLOG 6e 复查遗留): distinguish "epoch
+            // omitted" (live view) from "epoch present but invalid" (0,
+            // negative, float, string, …) — an invalid value is an explicit
+            // error, never a silent fallback to the live board.
+            let epoch = match tc.arguments.get("epoch") {
+                Some(raw) => match raw.as_u64() {
+                    Some(n) if n >= 1 => Some(n),
+                    _ => {
+                        let content = format!(
+                            "invalid blackboard_read epoch: {raw} — epoch must be a \
+                             positive integer (≥1); omit the parameter to read the \
+                             live view"
+                        );
+                        let completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": content,
+                        });
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                            category: ToolDispatcher::action_category(&tc.name).to_string(),
+                            tool: tc.name.clone(),
+                            timestamp: chrono_utc_now(),
+                        });
+                        let result = ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        return Ok((result, None));
+                    }
+                },
+                None => None,
+            };
             let content = self.render_blackboard_section(&section, since, epoch);
             let mut completed = serde_json::json!({
                 "tool": tc.name,
@@ -9533,6 +9661,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// F7 (2026-08-15, BACKLOG 6e 复查遗留): an epoch archive write failure
+    /// (rotated old snapshot or current-epoch persistence) is journaled as
+    /// `epoch_archive_write_failed` at run start — never only a warn.
+    #[tokio::test]
+    async fn epoch_archive_write_failure_is_journaled() {
+        let dir = test_dir();
+        let blocked = test_dir();
+        // `.gsa` exists as a FILE → create_dir_all(.gsa/blackboard) fails.
+        std::fs::write(blocked.join(".gsa"), "occupied").unwrap();
+        let archive_dir = blocked.join(".gsa").join("blackboard");
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let mut controller = AgentLoopController::with_gateway(gateway)
+            .with_blackboard_archive_dir(Some(archive_dir.clone()));
+        // PLAN-ARCH-A: the current snapshot write fails (queued current).
+        controller = controller.with_plan(
+            "PLAN-ARCH-A".to_string(),
+            1,
+            "任务A".to_string(),
+            vec!["步骤A".to_string()],
+        );
+        // PLAN-ARCH-B: the rotated old snapshot AND the new current
+        // snapshot writes fail (queued rotated + current).
+        controller = controller.with_plan(
+            "PLAN-ARCH-B".to_string(),
+            2,
+            "任务B".to_string(),
+            vec!["步骤B".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "归档失败",
+                "RUN-BAF",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let all_events = events(&dir);
+        let failed: Vec<&serde_json::Value> = all_events
+            .iter()
+            .filter(|e| e.event_type == EventType::EpochArchiveWriteFailed)
+            .map(|e| &e.payload)
+            .collect();
+        assert_eq!(failed.len(), 3, "{all_events:?}");
+        // Deterministic order: current(1) → rotated(1) → current(2).
+        assert_eq!(failed[0]["kind"], "current");
+        assert_eq!(failed[0]["plan_epoch"], 1);
+        assert_eq!(failed[1]["kind"], "rotated");
+        assert_eq!(failed[1]["plan_epoch"], 1);
+        assert_eq!(failed[2]["kind"], "current");
+        assert_eq!(failed[2]["plan_epoch"], 2);
+        let archive_dir_text = archive_dir.display().to_string();
+        for payload in failed {
+            assert_eq!(payload["attempts"], 3);
+            assert_eq!(payload["archive_dir"].as_str(), Some(archive_dir_text.as_str()));
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&blocked);
+    }
+
     /// v1.15⑧ (2026-08-15): the plan_id ↔ plan_epoch mapping is one-to-one —
     /// same plan_id with a different epoch, or a new plan_id without a
     /// strictly greater epoch, is rejected before any mutation.
@@ -11821,6 +12024,114 @@ mod tests {
             "{:?}",
             round.messages
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// F6 (2026-08-15, BACKLOG 6e 复查遗留): an epoch parameter that is
+    /// present but invalid (0 / negative / float) is an EXPLICIT error —
+    /// never a silent fallback to the live view.
+    #[tokio::test]
+    async fn blackboard_read_invalid_epoch_is_explicit_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "blackboard_read".to_string(),
+                    arguments: serde_json::json!({"section": "plan", "epoch": 0}),
+                    call_id: "call-b5".to_string(),
+                },
+                ToolCall {
+                    name: "blackboard_read".to_string(),
+                    arguments: serde_json::json!({"section": "plan", "epoch": -1}),
+                    call_id: "call-b6".to_string(),
+                },
+                ToolCall {
+                    name: "blackboard_read".to_string(),
+                    arguments: serde_json::json!({"section": "plan", "epoch": 1.5}),
+                    call_id: "call-b7".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "非法 epoch",
+                "RUN-BEI",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| {
+                e.payload
+                    .get("tool")
+                    .and_then(|t| t.as_str())
+                    == Some("blackboard_read")
+            })
+            .map(|e| e.payload)
+            .collect();
+        let invalid: Vec<_> = payloads
+            .iter()
+            .filter(|p| p["call_id"] == "call-b5" || p["call_id"] == "call-b6" || p["call_id"] == "call-b7")
+            .collect();
+        assert_eq!(invalid.len(), 3, "{invalid:?}");
+        for payload in invalid {
+            assert_eq!(payload["exit_code"], 1, "{payload:?}");
+            assert!(
+                payload["error"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("invalid blackboard_read epoch"),
+                "{payload:?}"
+            );
+        }
+
+        // The explicit error must not leak the live plan (no silent
+        // fallback): every reply line mentions the invalid epoch value.
+        let received = fake.received_requests();
+        for call_id in ["call-b5", "call-b6", "call-b7"] {
+            let round = received
+                .iter()
+                .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some(call_id)))
+                .unwrap_or_else(|| panic!("{call_id} round"));
+            let reply = round
+                .messages
+                .iter()
+                .find(|m| m.tool_call_id.as_deref() == Some(call_id))
+                .expect("reply message");
+            assert!(
+                reply.content.contains("invalid blackboard_read epoch"),
+                "{call_id}: {}",
+                reply.content
+            );
+            assert!(
+                !reply.content.contains("goal:"),
+                "{call_id} silently fell back to the live view: {}",
+                reply.content
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
