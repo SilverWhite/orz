@@ -47,7 +47,9 @@
   ToolStarted、不签发动作票；允许时才推进执行链路。
 - 计数语义：工具执行前机械计数；新 URL 且 count < cap → 计入并放行；重复
   URL（精确字符串相等）不计新候选但仍可读取；新 URL 且 count ≥ cap →
-  拒绝。
+  拒绝。（2026-08-14 复核：门禁只做决策，计数消费提交延后到权限/ACAF 票据
+  通过后、ToolStarted 前——被后置门禁拒绝的调用不消耗预算，见步骤 4 审计
+  §7。）
 - 未超限：`ToolResult.output` 追加 `\n候选 N/M，剩余 K`（成功与 host 错误都
   追加——失败抓取同样消耗了一个候选位），`tool_completed` 事件携带
   `candidate_count`/`candidate_cap`（审计面）。
@@ -73,7 +75,7 @@
 | D-5 | `tool_completed` 增加 `candidate_count`/`candidate_cap` 审计字段（Schema 先行） | 计数是步骤 2 自身反馈，模型可见文本不进 journal；事件面携带机器可读计数供回放/审计；与 B-1“citations 不扩表”边界不冲突（B-1 是避免复制候选池本身，本字段不复制 URL） |
 | D-6 | 计数反馈同时追加到成功与 host 错误输出 | 失败抓取同样已消耗候选位；模型必须看到一致预算 |
 | D-7 | internal lane 传 None、external lane 传共享域 | web_fetch 仅在 external lane 自执行（lane_self_execute）；内部车道永不触达，None 时门禁 fail-closed（防御性） |
-| D-8 | 门禁置于 mode 门之后、permission/ACAF/ToolStarted 之前 | 与既有拒绝形态一致（无 ToolStarted）；被拒调用不签发动作票、不咨询 permission |
+| D-8 | 门禁置于 mode 门之后、permission/ACAF/ToolStarted 之前（2026-08-14 复核：决策保持此顺序；计数消费改为权限/票据通过后、执行前提交） | 与既有拒绝形态一致（无 ToolStarted）；被拒调用不签发动作票、不咨询 permission；被权限/票据拒绝的调用不消耗候选预算（审查修复） |
 
 ## 4. 边界（明确未做，登记给后续步骤）
 

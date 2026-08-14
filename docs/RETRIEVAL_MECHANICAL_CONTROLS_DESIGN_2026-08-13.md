@@ -16,7 +16,9 @@
 ### 1.1 计数语义
 
 - 计数单位：按 **activation 累计**、按**去重后 URL** 计数（同一页重复读取不计新候选）；
-- 计数时机：工具执行前由机械门禁先计数，先于任何抓取动作；
+- 计数时机：工具执行前由机械门禁先计数，先于任何抓取动作（2026-08-14 审查修复：
+  门禁只做决策，计数消费在权限/ACAF 票据门禁通过后、执行前提交——被后置门禁拒绝的
+  调用不消耗预算，其拒绝事件不携带计数字段）；
 - 计数域：web_fetch 候选核验（framework_fallback）；local_browser 第二段读取
   （页面已打开时）复用同一计数域；
 - 阈值：外置为 `ORZ_WEB_FETCH_CANDIDATE_CAP`（**2026-08-14 用户裁决定档
@@ -59,6 +61,9 @@
   > Schema/verifier/fixtures 同步、ACAF e2e browser_read 场景迁移到子代理
   > 车道）。实施审计见
   > `docs/audits/GAP_RETRIEVAL_MECH_STEP4_BROWSER_READ_MODES_IMPL_AUDIT_2026-08-14.md`。
+  > 复核修复（2026-08-14）：keywords 摘录正文严格 ≤12K（分隔符/省略号计入预算）、
+  > 提取输入按 100K 截断并打页脚说明、工具定义补 `maxLength=64`、页脚 terms 数
+  > 改为实际输出词数；候选计数消费改为权限/票据通过后、执行前提交（§1.1）。
 - framework_fallback：无第二段（local_browser 专属）；web_fetch 的计数门禁
   仍适用，但只有"抓或不抓"。
 

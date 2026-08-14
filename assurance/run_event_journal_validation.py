@@ -1073,7 +1073,7 @@ def _verify_v02_candidate_prefilter(events: list[dict[str, Any]]) -> list[str]:
 def _is_web_fetch_tool(name: str) -> bool:
     """FUS-RETRIEVAL-MECH P0-B step 2: the web_fetch family — bare
     `web_fetch` and every `web_fetch_*` variant (mirrors the Rust relay's
-    `is_web_retrieval_tool` prefix boundary)."""
+    `is_web_fetch_tool` prefix boundary)."""
     return name == "web_fetch" or name.startswith("web_fetch_")
 
 

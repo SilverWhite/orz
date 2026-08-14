@@ -121,3 +121,34 @@
 - 本步横跨父仓库 `D:\CLI`（Schema/verifier/设计/审计/待办/fixture）与
   嵌套仓库 `D:\CLI\orz`（Rust 实现与 e2e）。
 - 提交顺序：先提交父仓库，再提交 orz 仓库（与既有步骤审计一致）。
+
+## 7. 复核修复（2026-08-14，全面审查批次）
+
+针对步骤 4 闭合后的全面审查（设计合理性/实现合理性/符合性），处理以下问题：
+
+1. **候选计数消费时机（审查主项）**：候选门禁此前在权限/ACAF 票据门禁之前直接
+   把 URL 写入计数域——被权限或票据拒绝的调用也会消耗候选，且拒绝事件不携带新
+   计数。修复：`candidate_gate` 只做决策（保持“候选拒绝无 ToolStarted、不签发票据”
+   的既有顺序），新增 `commit_candidate` 在权限/票据门禁通过后、ToolStarted 前提交
+   消费；被后置门禁拒绝的调用不消耗预算、拒绝事件不携带计数字段。登记：ADR-0010
+   §14.11、设计 §1.1/§1.3 注、步骤 2 审计 D-8 复核注。
+2. **keywords 12K 严格上限**：分隔符/省略号此前不计入 `KEYWORD_TOTAL_CHARS`，
+   输出可略超上限。修复：摘录正文按整段（分隔符+省略号+摘录）严格预算，超限时
+   干净截断；新增主机侧预算断言测试。
+3. **keywords 输入上限**：此前对整页原文全量扫描。修复：提取前按 `MAX_READ_CHARS`
+   截断输入并打“input capped”页脚说明；新增超出上限的 no-match 测试。
+4. **工具定义 Schema**：`keywords` 条目补 `maxLength=64`（与 `MAX_KEYWORD_CHARS`
+   同源），工具定义测试同步断言。
+5. **页脚 terms 语义**：改为“实际输出中代表的词数”（预算裁剪后），不再是匹配词数；
+   无命中仍报请求词数。
+6. **命名与事件**：`ActivationState.web_fetch_candidates` 改名为 `candidate_urls`
+   （共享计数域）；`refuse_candidate` 仅在车道拒绝事件携带
+   `target=external_retrieval`，`count_unbound`（无计数域的主/内车道兜底）不写
+   target；Python verifier docstring 修正 Rust 函数名引用。
+7. **测试更新**：orz-loop 新增门禁决策/提交拆分的去重与不消耗回归测试；orz-bin
+   e2e `fail_closed_verify_rpc_failure_journals_once_and_blocks` 扩展为
+   “票据拒绝不消耗 → 重试成功携带 candidate_count=1”的端到端断言。
+8. **验证汇总（复核后）**：orz-host 207 passed / 4 ignored；orz-loop 281 passed /
+   3 ignored；orz-bin 42 passed（acaf_e2e 21 项含扩展断言）；Python runtime +
+   assurance 1851 passed / 14 skipped；仓库门禁 valid（schemas 242）；
+   `git diff --check` 0。

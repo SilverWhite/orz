@@ -258,6 +258,16 @@
   assurance 1607+14 skipped、仓库门禁 valid；批次下一步为步骤 6（提示词
   相应缩短与测试更新）。详见
   [GAP-RETRIEVAL-MECH 步骤 4 实施审计](audits/GAP_RETRIEVAL_MECH_STEP4_BROWSER_READ_MODES_IMPL_AUDIT_2026-08-14.md)。
+- 2026-08-14：P0-B 步骤 4 全面审查修复登记——候选门禁改为“决策先行、消费后置”
+  （`candidate_gate` 只决策，`commit_candidate` 在权限/ACAF 票据通过后、
+  ToolStarted 前提交；被权限/票据拒绝的调用不消耗预算、拒绝事件不携带计数）；
+  keywords 摘录正文严格 ≤12K（分隔符/省略号计入）、提取输入按 100K 截断并打
+  “input capped”页脚、工具定义补 `maxLength=64`、页脚 terms 改为实际输出词数；
+  `ActivationState.web_fetch_candidates` 改名 `candidate_urls`；候选拒绝事件
+  仅在车道内携带 target；新增门禁/提交拆分单测与 e2e“拒绝不消耗→重试计数=1”
+  断言。登记：ADR-0010 §14.11、步骤 2/4 审计、设计 §1.1/§1.3 注。复核后：
+  orz-host 207 / orz-loop 281 / orz-bin 42、Python runtime + assurance
+  1851+14 skipped、仓库门禁 valid。
 - 2026-08-14：ORZ-CACHE-CONTEXT-COST 登记（P1）——缓存与上下文成本收敛三项
   （请求 header 留痕、探针准确性、单轮注入预算 + 策略化读取），ADR-0010 v1.9、
   探针设计 §11 同步；否决方向一并登记（per-window 探测、预热轮、工具层后置渲染、
