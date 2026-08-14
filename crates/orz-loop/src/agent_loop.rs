@@ -504,7 +504,7 @@ pub(crate) async fn run_template_compact(
         };
         let marker = crate::summary::build_summary_marker(
             "summary-incomplete",
-            "0".repeat(64).as_str(),
+            "",
             &archive_dir,
             &mechanical_slots,
             rounds_dropped,
@@ -673,7 +673,7 @@ pub(crate) async fn run_agent_loop(
         // batch). Measured = the previous round's provider prompt tokens on
         // the COLLAPSED request. Two triggers:
         //   - RHYTHM: measured > trigger_tokens (160K) with a ≥ min_rounds
-        //     (3) cooldown.
+        //     (2) model-round cooldown (v1.14 review fix).
         //   - FALLBACK (window guard): measured > safety_tokens (200K),
         //     bypassing the cooldown — the emergency path must not stay
         //     over the line even when the summary fails (mechanical

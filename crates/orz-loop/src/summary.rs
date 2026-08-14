@@ -320,12 +320,20 @@ pub fn build_summary_marker(
     archive_write_failed: bool,
 ) -> String {
     let state = if incomplete { "（summary_incomplete）" } else { "" };
+    // P0-D S6 (2026-08-14): when no archive was written (termination state)
+    // the digest placeholder must be explicit instead of a misleading
+    // 64-zero digest — the event already carries `summary_digest: null`.
+    let digest_line = if digest.is_empty() {
+        "摘要 digest: （未生成——摘要重试失败）".to_string()
+    } else {
+        format!("摘要 digest: sha256:{digest}")
+    };
     format!(
         "[前文上下文已压缩 v0.2 {state}]\n\
          {guard_note}\
          {archive_note}\
          摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮\n\
-         摘要存档: {}\n摘要 digest: sha256:{}\n\
+         摘要存档: {}\n{digest_line}\n\
          目的: {}\n\
          计划: {}\n\
          变动文件路径: {}\n\
@@ -334,7 +342,6 @@ pub fn build_summary_marker(
          回查: blackboard_read（分区 plan / edits / tool_actions / exec）\n\
          [/前文上下文已压缩]",
         archive_path.display(),
-        digest,
         slots.purpose,
         slots.plan,
         slots.paths,
@@ -546,7 +553,7 @@ mod tests {
         };
         let marker = build_summary_marker(
             "compaction-RUN-X-002",
-            "d" .repeat(64).as_str(),
+            "",
             Path::new(".gsa/compaction/x.md"),
             &slots,
             2,
@@ -556,6 +563,8 @@ mod tests {
         );
         assert!(marker.contains("summary_incomplete"));
         assert!(marker.contains("（生成失败）"));
+        assert!(marker.contains("摘要 digest: （未生成"));
+        assert!(!marker.contains("sha256:000000"));
     }
 
     #[test]
