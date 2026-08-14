@@ -230,7 +230,7 @@
   [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [TODO](../TODO.md)。
 
-### 6e. ORZ-BLACKBOARD-PLAN-EPOCH（`approved`；P1，2026-08-14 登记）
+### 6e. ORZ-BLACKBOARD-PLAN-EPOCH（`implemented`；P1，2026-08-14 实施闭合）
 
 - 定位：黑板生命周期按 plan epoch 轮换，与压缩生命周期解耦——plan 区为单写者复写区
   （`plan_id`/`plan_epoch`）；仅新 plan epoch 批准触发原子轮换（归档旧 epoch 快照 →
@@ -240,10 +240,27 @@
   跨 epoch 走归档。
 - 决策依据：长任务压缩频繁，黑板随压缩擦除会破坏任务工作状态并动摇中立问询的
   task_position/计划锚点（2026-08-14 用户裁决）。
-- 实施前置：plan 批准事件/plan_epoch 身份接线（当前 with_plan 仅构造时一次）；
-  ADR-0010 §3.6 正文修订待随实施登记。
+- 进度（2026-08-14）：S1-S5 全部闭合——plan 批准事件携带 `plan_epoch`（Schema/
+  fixtures 同步）；`with_plan` 带 `plan_id`+`plan_epoch` 身份，同 plan_id 修订不清板、
+  新 plan_id 原子轮换（归档旧 epoch → 清 edits/tool_actions/exec → 复写 plan）；
+  `.gsa/blackboard/epoch-<n>.json` 快照（批准/修订持久化当前 epoch，轮换归档旧 epoch；
+  写入有界重试、失败 warn 不阻断）；`blackboard_read` 增 `epoch` 参数跨 epoch 回查
+  （缺失显式提示，不静默回退）；压缩不再清黑板（`context_compressed` marker 携带
+  `plan_epoch`，路径槽溢出指针指向 epoch 快照）；archive dir 构造时装载最新 epoch
+  快照（恢复入口）；retention 覆盖 `.gsa/blackboard` 7 天清扫。验证：orz-loop 310 /
+  orz-host 209 / orz-tui 178 / orz-bin 全部通过；Python runtime journal 校验 157 +
+  conformance 14 通过；仓库门禁 valid、0 错误。
+- 补强（2026-08-15，全面复查 F1/F3，用户裁决）：`plan_epoch` 改为时间戳单调编号
+  （unix 毫秒为基底，`next = max(now_ms, 磁盘现存 max + 1)`）——清扫后编号不复用、
+  marker/`blackboard_read epoch` 引用跨窗口唯一；身份不变式强制（一一对应）：同
+  plan_id 必须沿用同 plan_epoch、新 plan_id 必须严格大于当前 plan_epoch，
+  `rotate_to_plan`/`try_with_plan` 返回错误、`with_plan` fail-fast、拒绝先于任何
+  黑板变更；retention 对 `.gsa/blackboard` 清扫保留最高编号快照（恢复入口）。
+  验证：orz-loop 312 / orz-host 210 / orz-tui 178 / orz-bin 全部通过；Python
+  runtime 251 通过；仓库门禁 valid、0 错误。
 - 入口：[设计](BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md)；
   [ADR-0010 §14.15](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
+  [实施审计](audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md)；
   [TODO](../TODO.md)。
 
 ## P2 — 生产化决策门
@@ -298,7 +315,8 @@
 
 - 2026-08-14：黑板擦除机制重设计登记（用户裁决）——ADR-0010 v1.15（§14.15 补写）、
   新设计文档 `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`、压缩设计 v1.15 注记、
-  P1 6e 登记；废止「压缩成功后清空黑板 edit 窗口」机制（设计层面，实施未开始）；
+  P1 6e 登记；废止「压缩成功后清空黑板 edit 窗口」机制（设计层面，2026-08-14 实施闭合，
+  见 `GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md`）；
   黑板按 plan epoch 轮换（归档/清工作区/复写 plan 原子提交；gate_log/白名单/检索分区
   豁免）；路径槽=本 epoch 增量、marker 带 plan_epoch、blackboard_read 跨 epoch 走归档；
   中立问询/DC 锚点跨压缩稳定。

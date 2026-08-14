@@ -380,6 +380,7 @@ PAYLOAD_GOOD: dict[str, dict] = {
     },
     "plan_approved": {
         "plan_id": "PLAN-RUN-CONF-0001",
+        "plan_epoch": 1,
         "authority": "user",
         "decision": "approve",
         "execution_policy": "manual",
@@ -502,6 +503,7 @@ PAYLOAD_BAD: dict[str, dict] = {
     "plan_proposed": {"plan_id": "PLANX-1", "task_id": "TASK-RUN-CONF-0001", "sections": 4},
     "plan_approved": {
         "plan_id": "PLAN-RUN-CONF-0001",
+        "plan_epoch": 1,
         "authority": "user",
         "decision": "approved",
         "execution_policy": "manual",

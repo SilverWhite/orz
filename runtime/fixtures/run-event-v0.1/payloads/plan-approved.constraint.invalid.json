@@ -1,5 +1,6 @@
 {
   "plan_id": "PLAN-RUN-CONF-0001",
+  "plan_epoch": 1,
   "authority": "user",
   "decision": "approved",
   "execution_policy": "manual"

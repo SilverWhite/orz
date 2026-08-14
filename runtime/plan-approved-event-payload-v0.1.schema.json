@@ -6,12 +6,14 @@
   "additionalProperties": false,
   "required": [
     "plan_id",
+    "plan_epoch",
     "authority",
     "decision",
     "execution_policy"
   ],
   "properties": {
     "plan_id": { "type": "string", "pattern": "^PLAN-" },
+    "plan_epoch": { "type": "integer", "minimum": 1, "description": "黑板 plan epoch（v1.15，2026-08-14；v1.15⑧ 补强 2026-08-15）——时间戳单调编号（unix 毫秒，磁盘现存 max+1 兜底），retention 清扫后不复用；身份不变式：同 plan_id 修订必须沿用同 plan_epoch，新 plan_id 必须严格大于当前 plan_epoch。" },
     "authority": { "type": "string" },
     "decision": { "enum": ["approve", "revise", "reject"] },
     "execution_policy": { "type": "string" }

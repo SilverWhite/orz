@@ -7,11 +7,12 @@
 > 裁决；存档材料 `存档/docs/implementation-history/INQUIRY_FIX_AND_BLACKBOARD_PARTITION_2026-08-08.md`
 > 保持 provenance，不随本设计回填。
 >
-> v1.15 注（2026-08-14 用户裁决，实施未开始）：「黑板 edit 窗口随压缩滚动（用后擦净）」
+> v1.15 注（2026-08-14 用户裁决，实施已闭合）：「黑板 edit 窗口随压缩滚动（用后擦净）」
 > 机制废止——黑板生命周期改按 plan epoch 轮换（见
 > `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md` / ADR-0010 §14.15）。本文 v1.14 相关小节
-> 保留为已实施状态记录，正文修订随实施登记；当前代码行为仍为 v1.14（压缩成功后清空黑板
-> edit 窗口）。
+> 保留为已实施状态记录；当前代码行为为 v1.15（压缩不再清空黑板，路径槽为本 plan epoch
+> 增量，溢出指针指向 epoch 快照；实施审计见
+> `docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md`）。
 
 ## 1. 设计目标与边界
 

@@ -1,11 +1,13 @@
 # ORZ 黑板 plan epoch 轮换设计（2026-08-14）
 
-> 状态：`design-confirmed`（2026-08-14 用户裁决；实施未开始）
+> 状态：`implemented`（2026-08-14 用户裁决放行；S1-S5 实施闭合；2026-08-15
+> 复查补强 v1.15⑧——编号时间戳化、身份不变式强制、retention 保留最新快照；
+> 审计见 `docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md`）
 > 权威：ADR-0010 §14.15（v1.15 补写）；本文件是黑板生命周期与压缩解耦的设计入口，
 > 不新增与 ADR 冲突的语义。
 > 取代范围：实施后取代 ADR-0010 §3.6 / §14.14 条目 1 ⑤ 与
 > `CONTEXT_COMPACTION_DESIGN_2026-08-14.md` 中「黑板 edit 窗口随压缩滚动（用后擦净）」
-> 机制；实施前旧机制仍是当前代码行为（压缩成功后清空黑板 edit 窗口）。
+> 机制；实施已闭合，当前代码行为为 v1.15（压缩不再触碰黑板）。
 
 ## 1. 背景与问题
 
@@ -21,6 +23,14 @@
 - 黑板生命周期 = plan epoch；压缩生命周期 = 上下文窗口；两者解耦。
 - plan 区为单写者复写区：永远只保存当前已批准计划；每个已批准计划携带 `plan_id` +
   `plan_epoch`。
+- `plan_epoch` 为**时间戳单调编号**（v1.15⑧，2026-08-15）：unix 毫秒为基底，
+  `next = max(now_ms, 磁盘现存 max + 1)`。时间戳进入编号本身（而非仅文件名），
+  因此 marker / schema / `blackboard_read epoch` 参数等引用方在 7 天 retention
+  清扫后仍唯一：旧编号永远小于未来编号，不会复用、不会歧义。
+- **身份不变式（一一对应，无误用可能）**：同 `plan_id` 修订必须沿用同
+  `plan_epoch`；新 `plan_id` 必须使用严格更大的 `plan_epoch`。违反在
+  `rotate_to_plan`/`try_with_plan` 返回错误（`with_plan` fail-fast），拒绝
+  发生在任何黑板变更之前。
 - 轮换触发 = 新 plan epoch 批准（机械事件）；**不是** plan 文本变化，**不是**当前任务完成。
   - 同 epoch 修订（同 plan_id 下步骤细化、用户纠偏）不轮换、不清黑板。
   - 新任务轮即使 plan 文本与旧轮相同，也因 epoch 身份不同而轮换。
@@ -44,6 +54,9 @@
 
 - 每个 epoch 轮换时写确定性快照（建议 `.gsa/blackboard/epoch-<plan_epoch>.json`；
   内容=plan + edits + tool_actions + exec + 轮换时间戳；随既有 7 天 retention 管理）。
+- retention 对 `.gsa/blackboard` 按年龄清扫，但**始终保留最高编号 epoch 快照**
+  （v1.15⑧，2026-08-15）：最高编号即恢复入口，长生命周期黑板即使当前 epoch
+  文件超过 7 天也不会失去恢复能力；旧编号因时间戳基底不会与新编号冲突。
 - epoch 快照是全量路径/动作记录的结构化承载；摘要存档保持人类可读投影，不再承担「全量」。
 - `blackboard_read` 跨 epoch 查询：live 视图清空后回查归档（或增加 `epoch` 参数），
   保持「按分区和时间范围取用」的既有契约。

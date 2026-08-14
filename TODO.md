@@ -114,15 +114,16 @@
 
 入口：[设计](docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6d](docs/BACKLOG_AND_PRIORITIES.md)。
 
-### ORZ-BLACKBOARD-PLAN-EPOCH（`approved`；P1，2026-08-14 登记）
+### ORZ-BLACKBOARD-PLAN-EPOCH（`implemented`；P1，S1-S5 已闭合，2026-08-14，保留供核对）
 
-- [ ] S1 plan epoch 身份与批准事件接线：`plan_id`/`plan_epoch` 随 plan 批准事件写入（当前 `with_plan` 仅构造时一次）；区分同 epoch 修订（不清）与新 epoch 批准（轮换）。
-- [ ] S2 原子轮换与归档：归档旧 epoch 快照 → 清 edits/tool_actions/exec 工作区并复写 plan → 写新 plan；gate_log/白名单/检索分区豁免；epoch 快照落盘（如 `.gsa/blackboard/epoch-<id>.json`）。
-- [ ] S3 压缩解耦：移除压缩成功后 `blackboard.edits.clear()`；路径槽=本 epoch 增量（Top-40 + 5K + 指针）；marker 携带 `plan_epoch`；恢复随 sidecar 恢复 epoch 快照。
-- [ ] S4 `blackboard_read` 跨 epoch 回查：live 视图清空后走归档或 `epoch` 参数，保持按分区/时间范围取用契约。
-- [ ] S5 测试与审计：压缩不清板、轮换原子性/范围、跨 epoch 回查、恢复、契约扩展；实施审计 + BACKLOG/TODO/索引状态同步。
+- [x] S1 plan epoch 身份与批准事件接线：`plan_id`/`plan_epoch` 随 plan 批准事件写入（PlanApproved payload 增 `plan_epoch`，Schema/fixtures 同步）；同 plan_id 修订不清板、新 plan_id 批准原子轮换。
+- [x] S2 原子轮换与归档：归档旧 epoch 快照 → 清 edits/tool_actions/exec 工作区并复写 plan → 写新 plan；gate_log/白名单/检索分区豁免；epoch 快照落盘 `.gsa/blackboard/epoch-<id>.json`（批准/修订持久化当前 epoch，轮换归档旧 epoch；写入有界重试 + warn）。
+- [x] S3 压缩解耦：移除压缩成功后 `blackboard.edits.clear()`；路径槽=本 plan epoch 增量（Top-40 + 5K，溢出指针指向 epoch 快照）；marker 携带 `plan_epoch`；archive dir 构造时装载最新 epoch 快照（恢复入口）。
+- [x] S4 `blackboard_read` 跨 epoch 回查：`epoch` 参数走归档读取，保持按分区/时间范围取用契约；缺失/未配置显式提示，不静默回退 live 视图。
+- [x] S5 测试与审计：压缩不清板、轮换原子性/范围、跨 epoch 回查、恢复、契约扩展（Schema/verifier/fixtures/journals）；实施审计 + BACKLOG/TODO/索引状态同步；retention 覆盖 `.gsa/blackboard` 7 天清扫。
+- [x] S6 复查补强（2026-08-15，F1/F3，用户裁决）：`plan_epoch` 时间戳单调编号（unix 毫秒基底、`max(now_ms, 磁盘 max+1)`）；身份不变式强制（同 plan_id 同 epoch、新 plan_id 严格递增；`rotate_to_plan`/`try_with_plan` 返回错误、`with_plan` fail-fast、拒绝先于变更）；retention 保留最高编号快照（恢复入口）；Schema 描述/设计/ADR/审计同步。验证：orz-loop 312 / orz-host 210 / orz-tui 178 / orz-bin 全部通过；Python runtime 251 通过；仓库门禁 valid、0 错误。
 
-入口：[设计](docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) / [ADR-0010 §14.15](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6e](docs/BACKLOG_AND_PRIORITIES.md)。
+入口：[设计](docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) / [ADR-0010 §14.15](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [实施审计](docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 6e](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## P2 — 生产化决策门
 

@@ -10,6 +10,7 @@
   "payload_schema": "run-event-v0.2.schema.json",
   "payload": {
     "plan_id": "PLAN-RUN-CONF-0001",
+    "plan_epoch": 1,
     "authority": "user",
     "decision": "approve",
     "execution_policy": "manual"
