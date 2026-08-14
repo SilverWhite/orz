@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/checkpoint-response-event-payload-v0.2.schema.json",
+  "title": "Forced-template checkpoint response event payload v0.2 (neutral inquiry)",
+  "description": "ADR-0010 §4.2/§14.16: the model's answer to a forced-template checkpoint round (Orientation or Diagnostic Coverage family). The checkpoint fire event stays at injection time; this response event carries the parsed template answer, mechanical validation result, evidence-identity cross-check and degrade reason. Neutral inquiry family — inquiry_kind names the fire event family it answers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkpoint_id",
+    "inquiry_family",
+    "inquiry_kind",
+    "agent_role",
+    "attempt",
+    "outcome",
+    "response",
+    "validation",
+    "cross_check",
+    "degrade_reason"
+  ],
+  "properties": {
+    "checkpoint_id": { "type": "string", "minLength": 1 },
+    "inquiry_family": { "const": "neutral" },
+    "inquiry_kind": {
+      "type": "string",
+      "enum": ["orientation_checkpoint", "diagnostic_coverage_checkpoint"]
+    },
+    "agent_role": {
+      "type": "string",
+      "enum": ["main"],
+      "description": "强制模板轮仅发生在主车道（ADR-0010 §14.16：检索车道保持旧 fire-and-continue，不产生 checkpoint_response），故角色恒为 main。"
+    },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 2 },
+    "outcome": {
+      "type": "string",
+      "enum": ["accepted", "refill_requested", "degraded"]
+    },
+    "response": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/template_response" }
+      ]
+    },
+    "validation": { "$ref": "#/$defs/validation" },
+    "cross_check": { "$ref": "#/$defs/cross_check" },
+    "degrade_reason": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1 }
+      ]
+    }
+  },
+  "$defs": {
+    "template_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_position": { "type": "string", "maxLength": 400 },
+        "progress_evidence": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "maxLength": 200 }
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "maxLength": 200 }
+        },
+        "missing_evidence": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "maxLength": 200 }
+        },
+        "next_action": {
+          "type": "string",
+          "enum": ["continue", "adjust", "gather_evidence", "ask_user", "handoff"]
+        },
+        "changed_direction": { "type": "boolean" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "errors", "ignored_fields"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "errors": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "ignored_fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "cross_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_identity_found",
+        "evidence_identity_missing",
+        "gather_evidence_missing_surface_provided"
+      ],
+      "properties": {
+        "evidence_identity_found": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "evidence_identity_missing": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "gather_evidence_missing_surface_provided": { "type": "boolean" }
+      }
+    }
+  }
+}

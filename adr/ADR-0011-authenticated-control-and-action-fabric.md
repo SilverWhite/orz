@@ -20,7 +20,8 @@
   缺参/缺依赖硬拒绝（D-14/D-15，新拒绝码
   missing_target_argument / missing_snapshot_store / missing_goal_context
   入 Schema）、rejected GoalRevisionV1 不迁移（D-16）；`ORZ_ACAF_FAIL_CLOSED=1`
-  显式翻转（默认影子，生产启用待用户裁决），见
+  显式翻转（默认影子；2026-08-15 用户已裁决生产启用放行，翻转执行与
+  核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施），见
   [`GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)；
   Slice 3/4 待实施）
 - 决策范围：跨信任边界控制事件与外部效果动作的票据授权面；独立签发器；三运行模式；

@@ -12,6 +12,7 @@
     "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
     "inquiry_family": "neutral",
     "inquiry_kind": "diagnostic_coverage_checkpoint",
+    "agent_role": "main",
     "debug_episode_id": "BUG-RUN-CONF-0001",
     "threshold_stage": 3,
     "hard_signal_count": 3,

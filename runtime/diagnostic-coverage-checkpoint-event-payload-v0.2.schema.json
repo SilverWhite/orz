@@ -23,6 +23,11 @@
     "checkpoint_id": { "type": "string", "pattern": "^DIAG-COV-[A-Z0-9._-]+-[0-9]+$" },
     "inquiry_family": { "const": "neutral" },
     "inquiry_kind": { "const": "diagnostic_coverage_checkpoint" },
+    "agent_role": {
+      "type": "string",
+      "const": "main",
+      "description": "主车道触发角色（ADR-0010 §14.16：DC 属主车道；检索车道不产生 checkpoint 轮）。可选以兼容 2026-08-15 之前的 fire 事件；新 fire 恒为 main，checkpoint_response 验证器仅在 fire 携带该字段时比对。"
+    },
     "debug_episode_id": { "type": "string", "minLength": 1 },
     "threshold_stage": { "type": "integer", "minimum": 2, "maximum": 5 },
     "hard_signal_count": { "type": "integer", "minimum": 0 },

@@ -10,7 +10,7 @@
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（POC 已通） |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-ORIENTATION-FORCED-TEMPLATE、ORZ-SESSION-CONTEXT-MONITOR |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
 
@@ -206,7 +206,7 @@
 - 入口：[ADR-0010 §14.9](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [探针设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；[TODO](../TODO.md)。
 
-### 6c. ORZ-ORIENTATION-FORCED-TEMPLATE（`approved`；P1，2026-08-14 登记）
+### 6c. ORZ-ORIENTATION-FORCED-TEMPLATE（`implemented`；P1，2026-08-15 闭合）
 
 - 定位：中立问询升级为强制模板轮——触发点下一安全动作间隙明确暂停，模型填写问询
   模板后才恢复动作（Orientation 与 DC 两族共用，主车道）；目的=拉回注意力、防跑偏
@@ -214,6 +214,17 @@
   校验、`gather_evidence` 必填缺失面）。
 - 实施前置：ADR-0010 §4.2 正文修订（v1.13 已登记裁决）；事件/Schema/verifier/
   fixtures；测试；实施审计与索引同步。
+- 2026-08-15 实施闭合：ADR-0010 §4.2 正文修订（v1.16）——「注入」→「触发点暂停并
+  填写模板」；强制模板轮实现（checkpoint 轮无工具、模板字段/机械校验、一次错误反馈
+  重填 + 降级兜底）；缓解必做（`progress_evidence` 与 journal 证据身份存在性交叉
+  校验、`gather_evidence` 必填缺失面）；v0.2 `checkpoint_response` 事件
+  （Schema/verifier/fixtures/TUI/枚举同步）；测试覆盖触发→暂停→填表→恢复、重填、
+  降级、checkpoint 轮工具拒绝、主车道隔离与计数语义。实施审计见
+  `docs/audits/GAP_ORIENTATION_FORCED_TEMPLATE_IMPL_AUDIT_2026-08-15.md`。
+  2026-08-15 二次全面审查后复核修复：DC fire 增可选 `agent_role=main`
+  （Schema/fixtures/生成器同步），验证器兼容历史 fire 并新增 outcome↔validation
+  与 gather_evidence 条件交叉；响应角色收紧主车道；Rust 长度按 trim 后值；
+  conformance 计数更名；orz-loop 333 / Python runtime 264 通过。
 - 入口：[设计](ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md)；
   [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [TODO](../TODO.md)。
@@ -289,7 +300,9 @@
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
 
-- 决策门：用户裁决 fail-closed 生产启用（前置：探针矩阵 + Slice 2B §6 核查清单 ①-⑪，⑦⑨⑩⑪ 仍登记）。
+- 决策门：**2026-08-15 用户已裁决 fail-closed 生产启用放行**——机制与
+  `ORZ_ACAF_FAIL_CLOSED=1` 开关就绪；翻转执行 + 核查清单 ⑦⑨⑩⑪ 收口/边界
+  登记 + 审计与索引同步待实施。
 - 剩余核查项：web_search 票化形态；host 侧执行参数绑定面；执行面与票据绑定面错位；network 重定向不重新票据。
 - Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 + policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）。
 - Slice 4：Windows Sandbox backend（D-11）。
@@ -335,6 +348,9 @@
 
 ## 变更记录
 
+- 2026-08-15：ACAF fail-closed 生产启用裁决登记——用户裁决放行（P2
+  IMPL-CONTROL-FABRIC 决策门）；翻转执行与核查清单 ⑦⑨⑩⑪ 收口待实施，
+  TODO/索引/ADR-0011 同步。
 - 2026-08-14：黑板擦除机制重设计登记（用户裁决）——ADR-0010 v1.15（§14.15 补写）、
   新设计文档 `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`、压缩设计 v1.15 注记、
   P1 6e 登记；废止「压缩成功后清空黑板 edit 窗口」机制（设计层面，2026-08-14 实施闭合，
@@ -362,6 +378,14 @@
   `SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md`；P1 登记 6c/6d；条件触发两候选；
   索引新增 FUS-ORIENTATION-FORCED-TEMPLATE / FUS-SESSION-CONTEXT-MONITOR /
   FUS-RECOVERY-TOOL-OUTCOME / FUS-DSH-BORROW-REVIEW。
+- 2026-08-15：ORZ-ORIENTATION-FORCED-TEMPLATE 实施闭合（用户指示优先）——
+  ADR-0010 §4.2 正文修订（v1.16）；强制模板轮实现（checkpoint 轮无工具、模板字段/
+  机械校验、一次重填 + 降级兜底、pending 单槽与 Orientation 优先、主车道/检索车道
+  边界）；缓解必做（`progress_evidence` 证据身份交叉校验、`gather_evidence` 必填
+  缺失面）；v0.2 `checkpoint_response` 事件（Schema/verifier/fixtures/TUI 同步）；
+  测试 orz-loop 332 通过（新增触发→暂停→恢复/重填/降级/工具拒绝/主车道隔离等用例）；
+  FUS-ORIENTATION-FORCED-TEMPLATE 转 `implemented`；实施审计
+  `docs/audits/GAP_ORIENTATION_FORCED_TEMPLATE_IMPL_AUDIT_2026-08-15.md`。
 - 2026-08-14：P0-B 步骤 6 全面复核补记——索引 GAP-SOURCE-WEIGHTING-IMPL
   条目补"候选 ≤5 已机械取代"注记（P3 已处理）；审查观察登记：提示词未列
   observed scope 合法枚举（P3 可选优化，暂不实施）。详见

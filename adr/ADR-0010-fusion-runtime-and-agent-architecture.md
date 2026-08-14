@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -425,7 +425,9 @@ Information Sufficiency 不再属于 inquiry family，也不产生模型判定�
 ### 4.2 Orientation 当前触发裁决
 
 1. 轮次触发按 **session-level 已完成对话轮**计数；`completed_turns_since_orientation >= 7`
-   时，在下一安全动作间隙注入一次 Orientation Checkpoint。
+   时，在下一安全动作间隙暂停并进入**强制模板轮（checkpoint 轮）**——本轮不派发任何
+   工具，模型只输出问询模板答案，机械校验通过后才恢复动作（v1.16 修订，取代旧「注入
+   文本、循环继续」表述；旧注入块 v0.2 文本同时退役为 v0.3 模板块）。
 2. 7 轮计数不因 Information Sufficiency、Retrieval Parent Disposition、Counterexample 或普通动作 cooldown
    被清零；只有实际发出 Orientation Checkpoint 后才重新计数。
 3. 输出重复不触发 Orientation，只进入 Runtime Stagnation Guard。
@@ -443,6 +445,21 @@ Information Sufficiency 不再属于 inquiry family，也不产生模型判定�
 9. compaction、handoff 准备和 session recovery 不清零计数。snapshot/session metadata 持久化该计数；
    恢复后第一个完成轮在恢复值上继续累加。只有实际发出 Orientation 后重置，或创建全新的独立 session
    才从 0 开始。三个 Agent 各自独立计数。
+10. 强制模板轮（v1.16，2026-08-15）：模板字段为 `task_position`（必填，≤400 字）、
+    `progress_evidence`（数组，可空）、`blockers`（数组，可空）、`next_action`
+    （`continue|adjust|gather_evidence|ask_user|handoff`）、`changed_direction`
+    （bool），以及条件字段 `missing_evidence`（`next_action=gather_evidence` 时必填
+    非空）。非法/未知字段丢弃并记 journal（`checkpoint_response` 事件
+    `ignored_fields`）；机械校验=必填/枚举/长度；失败给一次错误反馈重填；仍失败→按已填
+    部分机械降级 + journal 记录（事件含 validation 结果与降级原因），不挂死。
+11. 范围与计数：主车道（Orientation 与 DC 两族共用同一机制；检索车道保持注入后继续的
+    旧行为）。checkpoint 轮计入已完成逻辑模型轮；仅实际完成模板轮（accepted 或
+    degraded）才重置计数/推进 DC 阶段；同一安全间隙两族同时到期时 Orientation 优先，
+    DC 在下一安全间隙再触发（一次只排一个 checkpoint 轮）。
+12. 缓解必做（强制表达、不验证诚实）：`progress_evidence`/`missing_evidence` 与
+    journal 证据身份做存在性交叉校验——结果（found/missing 身份列表）随
+    `checkpoint_response` 事件记录，不阻断；`next_action=gather_evidence` 必须给出
+    缺失证据面（缺失为校验错误）。
 
 ### 4.3 信息充分性
 
@@ -1147,6 +1164,9 @@ Schema 与机械证据：
       执行层不冲突（暂停点在模型决策边界）。
    来源：`docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md`；实施前置：
    ADR §4.2 正文修订、事件/Schema/verifier/fixtures、测试。
+   ⑥ 实施登记（2026-08-15）：ADR §4.2 正文修订（v1.16）+ 强制模板轮实现闭合
+      （checkpoint 轮/机械校验/一次重填/降级兜底/证据交叉校验/契约与测试），
+      见 §14.16 与 `docs/audits/GAP_ORIENTATION_FORCED_TEMPLATE_IMPL_AUDIT_2026-08-15.md`。
 
 2. **会话累计上下文监测（2026-08-14，用户确认）**：
    ① 度量=当前会话累计模型可见输入 token（usage 实报优先，journal 估算兜底）；
@@ -1281,3 +1301,36 @@ ADR §3.6 正文修订随实施登记。
          兼容读取。
       ⑦ F10——设计 §5「随 sidecar 恢复」措辞改为「archive dir 装载最新 epoch 快照，
          与 marker 一起构成恢复上下文」，与本节 ⑦/⑧ 一致。
+
+### 14.16 v1.16 补写裁决索引（2026-08-15）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准（§4.2 正文已随本节修订）。
+
+1. **中立问询强制模板轮实施登记（2026-08-15，用户指示实施）**：
+   ① ADR §4.2 正文修订：触发点「注入文本、循环继续」→「下一安全动作间隙暂停并进入
+      强制模板轮（不派发任何工具，模型只输出 JSON 问询模板答案）」；模板字段与校验、
+      计数语义、缓解必做见 §4.2 条 10-12。
+   ② 事件面：新增 v0.2 `checkpoint_response`（checkpoint_id/inquiry_kind/agent_role/
+      attempt/outcome/response/validation/cross_check/degrade_reason）——fire 事件
+      仍在注入间隙写入，响应事件在模板轮完成后写入；Orientation 与 DC 共用同一事件
+      类型，`inquiry_kind` 标明所答 fire 族。`attempt` 1-2；`outcome`=
+      accepted|refill_requested|degraded。2026-08-15 复核：DC fire 事件可选携带
+      `agent_role=main`（主车道恒 main），验证器对未携带该字段的历史 fire 兼容；
+      `checkpoint_response.agent_role` 收紧为主车道 `main`（检索车道不产生响应事件）。
+   ③ 运行时：pending checkpoint 单槽（一次一轮）；pending 期间跳过压缩与再次触发、
+      工具探针与工具列表置空；响应校验失败给一次 `[CHECKPOINT_REFILL]` 错误反馈重填，
+      仍失败按已填部分机械降级（`degrade_reason=validation_failed_after_refill`），
+      不挂死。checkpoint 轮计入已完成逻辑模型轮；accepted/degraded 才提交
+      Orientation fire / 推进 DC 阶段（降级轮按各触发族既定语义提交）。同一间隙两族
+      同时到期时 Orientation 优先、DC 下一安全间隙再触发。
+   ④ 缓解必做：`progress_evidence`/`missing_evidence` 与 journal 证据身份（主车道
+      证据 `EvidenceRecord.identity` + 已提交检索 ledger source_id/url/title + DC
+      已检视面）存在性交叉校验，found/missing 随响应事件记录（非阻断）；
+      `next_action=gather_evidence` 必须给出 `missing_evidence`（校验错误）；
+      验证器同时复核 outcome↔validation 一致性与 gather_evidence 条件面
+      （2026-08-15 复核）。
+   ⑤ 范围：主车道（Orientation + DC）；检索车道保持注入后继续的旧行为（§14.16
+      不改变 §4.2 三个 Agent 各自独立计数的既有语义）。v0.3 模板块取代 v0.2 三问块
+      （`[ORIENTATION v0.3]` / `[DIAGNOSTIC_COVERAGE v0.3]`，前缀注册不变）。
+   来源：`docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md`；实施审计
+   `docs/audits/GAP_ORIENTATION_FORCED_TEMPLATE_IMPL_AUDIT_2026-08-15.md`。

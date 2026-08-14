@@ -113,6 +113,10 @@ V02_EVENT_TYPES = [
     "tool_completed",
     "orientation_checkpoint",
     "diagnostic_coverage_checkpoint",
+    # ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
+    # forced-template checkpoint round's answer + validation + evidence
+    # cross-check (one mechanism event for both inquiry families).
+    "checkpoint_response",
     "runtime_stagnation_guard",
     "tool_availability_check",
     "tool_belief_stagnation",
@@ -150,6 +154,7 @@ V02_EVENT_TYPES = [
 SLUGS_V02 = {
     "orientation_checkpoint": "orientation-checkpoint",
     "diagnostic_coverage_checkpoint": "diagnostic-coverage-checkpoint",
+    "checkpoint_response": "checkpoint-response",
     "information_sufficiency_assessment": "information-sufficiency-assessment",
     "retrieval_parent_disposition": "retrieval-parent-disposition",
     "retrieval_close_record": "retrieval-close-record",
@@ -170,6 +175,9 @@ SLUGS_V02 = {
 V02_PAYLOAD_EVENTS = [
     "orientation_checkpoint",
     "diagnostic_coverage_checkpoint",
+    # ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): forced
+    # template answer/validation/cross-check response event.
+    "checkpoint_response",
     "information_sufficiency_assessment",
     "retrieval_parent_disposition",
     "retrieval_close_record",
@@ -543,6 +551,7 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
         "inquiry_family": "neutral",
         "inquiry_kind": "diagnostic_coverage_checkpoint",
+        "agent_role": "main",
         "debug_episode_id": "BUG-RUN-CONF-0001",
         "threshold_stage": 3,
         "hard_signal_count": 3,
@@ -563,6 +572,32 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "missing_surfaces": ["edge_cases"],
         "message_block": "[DIAG_COV v0.2] 已覆盖：测试日志、堆栈；缺失：边界条件；最小补诊断动作：运行最小复现",
         "minimal_next_diagnostic_action": "运行最小复现并采集 trace",
+    },
+    "checkpoint_response": {
+        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "orientation_checkpoint",
+        "agent_role": "main",
+        "attempt": 1,
+        "outcome": "accepted",
+        "response": {
+            "task_position": "修复 orz 缓存回归",
+            "progress_evidence": ["src/cache.rs"],
+            "blockers": [],
+            "next_action": "continue",
+            "changed_direction": False,
+        },
+        "validation": {
+            "valid": True,
+            "errors": [],
+            "ignored_fields": [],
+        },
+        "cross_check": {
+            "evidence_identity_found": ["src/cache.rs"],
+            "evidence_identity_missing": [],
+            "gather_evidence_missing_surface_provided": True,
+        },
+        "degrade_reason": None,
     },
     "information_sufficiency_assessment": {
         "assessment_id": "ASSESS-0001",
@@ -887,6 +922,7 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
         "inquiry_family": "neutral",
         "inquiry_kind": "diagnostic_coverage_checkpoint",
+        "agent_role": "main",
         "debug_episode_id": "BUG-RUN-CONF-0001",
         "threshold_stage": 3,
         "hard_signal_count": 3,
@@ -902,6 +938,33 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "missing_surfaces": [],
         "message_block": "[DIAG_COV v0.2] x",
         "minimal_next_diagnostic_action": "运行最小复现",
+    },
+    "checkpoint_response": {
+        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "orientation_checkpoint",
+        "agent_role": "main",
+        "attempt": 1,
+        # One constraint violation: outcome outside the closed enum.
+        "outcome": "rejected",
+        "response": {
+            "task_position": "修复 orz 缓存回归",
+            "progress_evidence": ["src/cache.rs"],
+            "blockers": [],
+            "next_action": "continue",
+            "changed_direction": False,
+        },
+        "validation": {
+            "valid": True,
+            "errors": [],
+            "ignored_fields": [],
+        },
+        "cross_check": {
+            "evidence_identity_found": ["src/cache.rs"],
+            "evidence_identity_missing": [],
+            "gather_evidence_missing_surface_provided": True,
+        },
+        "degrade_reason": None,
     },
     "information_sufficiency_assessment": {
         "assessment_id": "ASSESS-0001",
@@ -1473,6 +1536,11 @@ Scope:
   HMAC tag, which stays inside the issuing process), plus
   `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
   single probe face snapshot — complete/incomplete cover ALL work tools).
+- ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+  `checkpoint_response` — the forced-template checkpoint round's parsed
+  answer, mechanical validation, evidence-identity cross-check and degrade
+  reason (one mechanism event for both inquiry families; the fire event
+  stays at injection time and the response event answers it).
 - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
@@ -1494,7 +1562,7 @@ Scope:
   positives — `session_end` reason, `guard_failed` (guard-retry force) and
   `archive_write_failed` (explicit archive-write failure).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (44 events). The v0.2-payload events carry
+  event in the v0.2 enum (46 events). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for

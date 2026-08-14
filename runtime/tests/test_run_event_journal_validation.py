@@ -25,6 +25,7 @@ from assurance.run_event_journal_validation import (
     _event_sha256,
     _payload_sha256,
     _resolve_payload_schema,
+    _verify_v02_checkpoint_responses,
     validate_journal_file,
     validate_journal_text,
 )
@@ -43,6 +44,71 @@ ALL_JOURNALS = (
     "failed-run.jsonl",
     "restore-run.jsonl",
 )
+
+
+def _v02_event(event_type: str, payload: dict) -> dict:
+    return {
+        "payload_schema": "run-event-v0.2.schema.json",
+        "event_type": event_type,
+        "payload": payload,
+    }
+
+
+_CHECKPOINT_FIRE = _v02_event(
+    "orientation_checkpoint",
+    {
+        "checkpoint_id": "ORIENT-RUN-1-0000",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "orientation_checkpoint",
+        "agent_role": "main",
+    },
+)
+
+_CHECKPOINT_FIRE_DC = _v02_event(
+    "diagnostic_coverage_checkpoint",
+    {
+        "checkpoint_id": "DIAG-COV-RUN-1-0001",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "diagnostic_coverage_checkpoint",
+        # 2026-08-15 复核：DC fire 可选携带 agent_role（主车道恒 main）；
+        # 验证器对无该字段的历史 fire 保持兼容。
+    },
+)
+
+
+def _checkpoint_response(**overrides: object) -> dict:
+    outcome = overrides.get("outcome", "accepted")
+    if outcome in ("refill_requested", "degraded") and "validation" not in overrides:
+        overrides["validation"] = {
+            "valid": False,
+            "errors": ["mechanical_validation_failed"],
+            "ignored_fields": [],
+        }
+    payload = {
+        "checkpoint_id": "ORIENT-RUN-1-0000",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "orientation_checkpoint",
+        "agent_role": "main",
+        "attempt": 1,
+        "outcome": outcome,
+        "response": {
+            "task_position": "修复缓存回归",
+            "progress_evidence": ["src/cache.rs"],
+            "blockers": [],
+            "missing_evidence": [],
+            "next_action": "continue",
+            "changed_direction": False,
+        },
+        "validation": {"valid": True, "errors": [], "ignored_fields": []},
+        "cross_check": {
+            "evidence_identity_found": [],
+            "evidence_identity_missing": [],
+            "gather_evidence_missing_surface_provided": True,
+        },
+        "degrade_reason": None,
+    }
+    payload.update(overrides)
+    return _v02_event("checkpoint_response", payload)
 
 # Exact event-type sequences per captured scenario — the staleness signal:
 # a re-captured journal with a changed loop structure fails here at commit
@@ -3464,6 +3530,302 @@ class ContextCompressedV02RuleTests(unittest.TestCase):
         journal = _v02_journal([_context_compressed(reason="whole_round_drop")])
         errors = validate_journal_text(journal)
         self.assertIn("not one of", " | ".join(errors))
+
+
+class CheckpointResponseCrossCheckTests(unittest.TestCase):
+    """ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
+    `_verify_v02_checkpoint_responses` fire↔response cross-check."""
+
+    def test_accepted_attempt_1_is_clean(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=1, outcome="accepted"),
+        ]
+        self.assertEqual(_verify_v02_checkpoint_responses(events), [])
+
+    def test_response_without_preceding_fire_is_rejected(self) -> None:
+        events = [_checkpoint_response(attempt=1, outcome="accepted")]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("no preceding" in e for e in errors), errors)
+
+    def test_response_before_fire_is_rejected(self) -> None:
+        events = [
+            _checkpoint_response(attempt=1, outcome="accepted"),
+            _CHECKPOINT_FIRE,
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("does not precede" in e for e in errors), errors)
+
+    def test_family_and_role_must_match_fire(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(
+                attempt=1,
+                outcome="accepted",
+                inquiry_kind="diagnostic_coverage_checkpoint",
+            ),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("inquiry_kind" in e for e in errors), errors)
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(
+                attempt=1,
+                outcome="accepted",
+                agent_role="internal_retrieval",
+            ),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("agent_role" in e for e in errors), errors)
+
+    def test_refill_requires_followup_and_cannot_be_last(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=1, outcome="refill_requested"),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("without a following attempt" in e for e in errors), errors)
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=1, outcome="refill_requested"),
+            _checkpoint_response(attempt=2, outcome="accepted"),
+        ]
+        self.assertEqual(_verify_v02_checkpoint_responses(events), [])
+
+    def test_degraded_requires_reason_and_attempt_2(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=1, outcome="refill_requested"),
+            _checkpoint_response(attempt=2, outcome="degraded", degrade_reason=None),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("degrade_reason" in e for e in errors), errors)
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(
+                attempt=1,
+                outcome="degraded",
+                degrade_reason="validation_failed_after_refill",
+            ),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("degrade only after" in e for e in errors), errors)
+
+    def test_accepted_cannot_have_later_attempt(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=1, outcome="accepted"),
+            _checkpoint_response(attempt=2, outcome="accepted"),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("later" in e and "accepted" in e for e in errors), errors)
+
+    def test_attempt_out_of_sequence_rejected(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=2, outcome="accepted"),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(any("out of sequence" in e for e in errors), errors)
+
+    def test_dc_legacy_fire_without_agent_role_is_clean(self) -> None:
+        # 2026-08-15 复核（P1）：DC fire 在 agent_role 字段引入前不携带该
+        # 字段；响应恒为 main，验证器必须容忍旧 fire。
+        events = [
+            _CHECKPOINT_FIRE_DC,
+            _v02_event(
+                "checkpoint_response",
+                {
+                    "checkpoint_id": "DIAG-COV-RUN-1-0001",
+                    "inquiry_family": "neutral",
+                    "inquiry_kind": "diagnostic_coverage_checkpoint",
+                    "agent_role": "main",
+                    "attempt": 1,
+                    "outcome": "accepted",
+                    "response": {
+                        "task_position": "修复缓存回归",
+                        "progress_evidence": [],
+                        "blockers": [],
+                        "missing_evidence": [],
+                        "next_action": "continue",
+                        "changed_direction": False,
+                    },
+                    "validation": {
+                        "valid": True,
+                        "errors": [],
+                        "ignored_fields": [],
+                    },
+                    "cross_check": {
+                        "evidence_identity_found": [],
+                        "evidence_identity_missing": [],
+                        "gather_evidence_missing_surface_provided": True,
+                    },
+                    "degrade_reason": None,
+                },
+            ),
+        ]
+        self.assertEqual(_verify_v02_checkpoint_responses(events), [])
+
+    def test_dc_fire_with_agent_role_matches_and_mismatch_detected(self) -> None:
+        fire = dict(_CHECKPOINT_FIRE_DC)
+        fire["payload"] = dict(fire["payload"], agent_role="main")
+        response = _v02_event(
+            "checkpoint_response",
+            {
+                "checkpoint_id": "DIAG-COV-RUN-1-0001",
+                "inquiry_family": "neutral",
+                "inquiry_kind": "diagnostic_coverage_checkpoint",
+                "agent_role": "main",
+                "attempt": 1,
+                "outcome": "accepted",
+                "response": {
+                    "task_position": "t",
+                    "progress_evidence": [],
+                    "blockers": [],
+                    "missing_evidence": [],
+                    "next_action": "continue",
+                    "changed_direction": False,
+                },
+                "validation": {"valid": True, "errors": [], "ignored_fields": []},
+                "cross_check": {
+                    "evidence_identity_found": [],
+                    "evidence_identity_missing": [],
+                    "gather_evidence_missing_surface_provided": True,
+                },
+                "degrade_reason": None,
+            },
+        )
+        self.assertEqual(_verify_v02_checkpoint_responses([fire, response]), [])
+
+        bad = dict(response)
+        bad["payload"] = dict(response["payload"], agent_role="internal_retrieval")
+        errors = _verify_v02_checkpoint_responses([fire, bad])
+        self.assertTrue(any("agent_role" in e for e in errors), errors)
+
+    def test_accepted_requires_valid_validation_and_non_null_response(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(
+                attempt=1,
+                outcome="accepted",
+                validation={
+                    "valid": False,
+                    "errors": ["x"],
+                    "ignored_fields": [],
+                },
+            ),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(
+            any("accepted but validation.valid" in e for e in errors),
+            errors,
+        )
+
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=1, outcome="accepted", response=None),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(
+            any("accepted but response is null" in e for e in errors),
+            errors,
+        )
+
+    def test_refill_and_degraded_require_invalid_validation(self) -> None:
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(attempt=1, outcome="refill_requested"),
+            _checkpoint_response(
+                attempt=2,
+                outcome="degraded",
+                degrade_reason="validation_failed_after_refill",
+                validation={
+                    "valid": True,
+                    "errors": [],
+                    "ignored_fields": [],
+                },
+            ),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(
+            any("degraded but validation.valid" in e for e in errors),
+            errors,
+        )
+
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(
+                attempt=1,
+                outcome="refill_requested",
+                validation={
+                    "valid": True,
+                    "errors": [],
+                    "ignored_fields": [],
+                },
+            ),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(
+            any("refill_requested but validation.valid" in e for e in errors),
+            errors,
+        )
+
+    def test_gather_evidence_requires_missing_surface_and_flag(self) -> None:
+        base_response = {
+            "task_position": "t",
+            "progress_evidence": [],
+            "blockers": [],
+            "missing_evidence": ["测试日志"],
+            "next_action": "gather_evidence",
+            "changed_direction": False,
+        }
+        clean = _checkpoint_response(
+            attempt=1,
+            outcome="accepted",
+            response=base_response,
+        )
+        self.assertEqual(
+            _verify_v02_checkpoint_responses([_CHECKPOINT_FIRE, clean]),
+            [],
+        )
+
+        missing = dict(base_response, missing_evidence=[])
+        events = [
+            _CHECKPOINT_FIRE,
+            _checkpoint_response(
+                attempt=1,
+                outcome="accepted",
+                response=missing,
+            ),
+        ]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(
+            any(
+                "requires non-empty response.missing_evidence" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+        flag_off = _checkpoint_response(
+            attempt=1,
+            outcome="accepted",
+            response=base_response,
+            cross_check={
+                "evidence_identity_found": [],
+                "evidence_identity_missing": [],
+                "gather_evidence_missing_surface_provided": False,
+            },
+        )
+        events = [_CHECKPOINT_FIRE, flag_off]
+        errors = _verify_v02_checkpoint_responses(events)
+        self.assertTrue(
+            any(
+                "gather_evidence_missing_surface_provided=true" in e
+                for e in errors
+            ),
+            errors,
+        )
 
 
 if __name__ == "__main__":

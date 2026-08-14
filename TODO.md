@@ -10,6 +10,21 @@
 - `[ ]` = 待办；`[x]` = 已完成（保留供核对，不计入开放项）。
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 
+## 未闭合扫描快照（2026-08-15）
+
+> 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态）。
+> 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
+> 后续扫描更新时同步替换本快照日期与计数。
+
+- 未闭合总数：**37 项**
+  - P0-C CLASSICAL-EXEC-ASSISTANT：4 项（小样 2、小样 3、orz 内嵌集成、正式组件决策门）
+  - P1 可并行审计/证据：14 项（组件登记 1、Windows 证据 3、DeepSeek 2、缓存上下文成本 3、会话上下文监测 5）
+  - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
+  - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
+  - 条件触发/审计登记边界：6 项（不占当前优先级）
+- 备注：ACAF fail-closed 生产启用已获用户裁决放行（2026-08-15），翻转执行未完成，
+  仍计入未闭合；其余用户裁决门为 OPS 生产接线与 P0-C 正式组件决策门。
+
 ## P0 — 当前工作集
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
@@ -93,13 +108,15 @@
 
 入口：[ADR-0010 §14.9](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [探针设计](docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md) / [BACKLOG](docs/BACKLOG_AND_PRIORITIES.md)。
 
-### ORZ-ORIENTATION-FORCED-TEMPLATE（`approved`；P1，2026-08-14 登记）
+### ORZ-ORIENTATION-FORCED-TEMPLATE（`implemented`；P1，2026-08-15 闭合）
 
-- [ ] ADR-0010 §4.2 正文修订登记（v1.13 裁决已登记）：「注入」→「触发点暂停并填写模板」。
-- [ ] 强制模板轮实现：触发点下一安全动作间隙暂停、独立无工具 checkpoint 轮、模板字段/机械校验、一次错误反馈重填 + 降级兜底。
-- [ ] 缓解必做：`progress_evidence` 与 journal 证据身份存在性交叉校验；`next_action=gather_evidence` 必填缺失面。
-- [ ] 事件/Schema/verifier/fixtures 同步（checkpoint 事件扩展模板/响应/校验结果字段或新增响应事件）+ 测试（触发→暂停→填表→恢复、重填、降级、主车道隔离、计数语义）。
-- [ ] 实施审计、BACKLOG/TODO/索引状态同步。
+- [x] ADR-0010 §4.2 正文修订登记（v1.13 裁决已登记；v1.16 正文修订 2026-08-15）：「注入」→「触发点暂停并填写模板」。
+- [x] 强制模板轮实现：触发点下一安全动作间隙暂停、独立无工具 checkpoint 轮、模板字段/机械校验、一次错误反馈重填 + 降级兜底（pending 单槽、Orientation 优先、主车道；检索车道旧行为不变）。
+- [x] 缓解必做：`progress_evidence` 与 journal 证据身份存在性交叉校验（found/missing 随 `checkpoint_response` 记录）；`next_action=gather_evidence` 必填缺失面（`missing_evidence`）。
+- [x] 事件/Schema/verifier/fixtures 同步（新增 v0.2 `checkpoint_response` 响应事件：模板/响应/校验结果/证据交叉校验/降级原因）+ 测试（触发→暂停→填表→恢复、重填、降级、checkpoint 轮工具拒绝、主车道隔离、计数语义；orz-loop 332 通过）。
+- [x] 实施审计、BACKLOG/TODO/索引状态同步（审计见 `docs/audits/GAP_ORIENTATION_FORCED_TEMPLATE_IMPL_AUDIT_2026-08-15.md`）。
+- [x] 二次全面审查修复（2026-08-15 复核）：DC fire 增 `agent_role=main`（Schema/fixtures/生成器）+ 验证器兼容旧 fire；验证器新增 outcome↔validation 与 gather_evidence 条件交叉；`checkpoint_response.agent_role` 收紧主车道；Rust trim 长度口径；conformance 计数更名；审计/设计/ADR 同步（orz-loop 333 / Python runtime 264 通过）。
+- [x] 二次全面审查修复（2026-08-15 复核）：DC fire 增 `agent_role=main`（Schema/fixtures/生成器）+ 验证器兼容旧 fire；验证器新增 outcome↔validation 与 gather_evidence 条件交叉；`checkpoint_response.agent_role` 收紧主车道；Rust trim 长度口径；conformance 计数更名；审计/设计/ADR 同步（orz-loop 333 / Python runtime 264 通过）。
 
 入口：[设计](docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6c](docs/BACKLOG_AND_PRIORITIES.md)。
 
@@ -130,7 +147,8 @@
 
 ### IMPL-CONTROL-FABRIC（`partial`）
 
-- [ ] fail-closed 生产启用（用户裁决；前置核查：web_search 票化形态⑦、host 侧执行参数绑定面⑨、执行面与票据绑定面错位⑩、network 重定向不重新票据⑪）。
+- [ ] fail-closed 生产启用（2026-08-15 用户已裁决放行；待实施：生产翻转 +
+  核查清单 ⑦⑨⑩⑪ 收口/边界登记 + 审计与 BACKLOG/TODO/索引同步）。
 - [ ] Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 + policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）。
 - [ ] Slice 4：Windows Sandbox backend（D-11）。
 - [ ] 可选：检索车道 web_fetch activation 绑定接线；conformance capture 票据场景；normalize_lexical 单源化；ACP 会话路径接 ACAF。

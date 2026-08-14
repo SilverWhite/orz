@@ -19,6 +19,11 @@ Scope:
   HMAC tag, which stays inside the issuing process), plus
   `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
   single probe face snapshot — complete/incomplete cover ALL work tools).
+- ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+  `checkpoint_response` — the forced-template checkpoint round's parsed
+  answer, mechanical validation, evidence-identity cross-check and degrade
+  reason (one mechanism event for both inquiry families; the fire event
+  stays at injection time and the response event answers it).
 - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
@@ -39,12 +44,8 @@ Scope:
 - P0-D S5 (2026-08-14, ADR-0010 v1.14): extra `context_compressed` payload
   positives — `session_end` reason, `guard_failed` (guard-retry force) and
   `archive_write_failed` (explicit archive-write failure).
-- F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15):
-  `epoch_archive_write_failed` — blackboard plan-epoch archive write failure
-  (the rotation committed in memory but the durable snapshot is missing;
-  `kind` = `rotated` | `current`, `attempts` = bounded retries exhausted).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (45 events). The v0.2-payload events carry
+  event in the v0.2 enum (46 events). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for

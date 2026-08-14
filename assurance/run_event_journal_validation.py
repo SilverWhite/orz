@@ -99,6 +99,14 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "diagnostic-coverage-checkpoint",
         RUNTIME / "diagnostic-coverage-checkpoint-event-payload-v0.2.schema.json",
     ),
+    # ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
+    # forced-template checkpoint round's answer + validation + evidence
+    # cross-check. One mechanism event for both inquiry families; the
+    # payload inquiry_kind names the fire event it answers.
+    "checkpoint_response": (
+        "checkpoint-response",
+        RUNTIME / "checkpoint-response-event-payload-v0.2.schema.json",
+    ),
     "information_sufficiency_assessment": (
         "information-sufficiency-assessment",
         RUNTIME / "information-sufficiency-assessment-event-payload-v0.2.schema.json",
@@ -390,6 +398,172 @@ def _verify_v02_inquiry_kind(events: list[dict[str, Any]]) -> list[str]:
                 errors.append(
                     f"event {index}: v0.2 neutral inquiry payload inquiry_kind "
                     f"{inquiry_kind!r} != envelope event_type {event_type!r}"
+                )
+    return errors
+
+
+def _verify_v02_checkpoint_responses(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §4.2/§14.16 forced-template checkpoint round cross-checks:
+
+    - a `checkpoint_response` must answer an earlier fire event of the same
+      family (inquiry_kind == fire event_type) with the same checkpoint_id
+      and agent_role (legacy fires without `agent_role` are tolerated —
+      the DC fire schema made the field optional for 2026-08-15 compatibility);
+    - attempt is 1-based; at most two attempts per checkpoint_id;
+    - `refill_requested` only on attempt 1 and must be followed by a second
+      response for the same checkpoint_id;
+    - `accepted` may close at attempt 1 or 2; `degraded` only closes at
+      attempt 2 and must carry a degrade_reason;
+    - a closing response (accepted/degraded) must be the LAST response for
+      that checkpoint_id;
+    - outcome↔validation consistency: accepted requires `validation.valid`
+      and a non-null template response; refill_requested/degraded require an
+      invalid validation result;
+    - `next_action=gather_evidence` requires a non-empty `missing_evidence`
+      and `cross_check.gather_evidence_missing_surface_provided=true`.
+    """
+    errors: list[str] = []
+    fire_by_id: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type not in _V02_NEUTRAL_INQUIRY_EVENTS:
+            continue
+        payload = event.get("payload", {})
+        cid = payload.get("checkpoint_id")
+        if isinstance(cid, str):
+            fire_by_id[cid] = (index, event)
+
+    responses: list[tuple[int, dict[str, Any]]] = []
+    for index, event in enumerate(events):
+        if _is_v02(event) and event.get("event_type") == "checkpoint_response":
+            responses.append((index, event))
+
+    by_checkpoint: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, event in responses:
+        payload = event["payload"]
+        cid = payload["checkpoint_id"]
+        by_checkpoint.setdefault(cid, []).append((index, event))
+
+    for cid, attempts in by_checkpoint.items():
+        attempts.sort(key=lambda item: item[0])
+        fire = fire_by_id.get(cid)
+        if fire is None:
+            errors.append(
+                f"event {attempts[0][0]}: checkpoint_response {cid!r} has no "
+                "preceding orientation_checkpoint / diagnostic_coverage_checkpoint fire"
+            )
+        else:
+            fire_index, fire_event = fire
+            fire_payload = fire_event["payload"]
+            if fire_index >= attempts[0][0]:
+                errors.append(
+                    f"event {attempts[0][0]}: checkpoint_response {cid!r} references "
+                    f"fire at event {fire_index}, which does not precede it"
+                )
+            for index, event in attempts:
+                payload = event["payload"]
+                if payload["inquiry_kind"] != fire_payload.get("inquiry_kind"):
+                    errors.append(
+                        f"event {index}: checkpoint_response {cid!r} inquiry_kind "
+                        f"{payload['inquiry_kind']!r} != fire inquiry_kind "
+                        f"{fire_payload.get('inquiry_kind')!r}"
+                    )
+                # DC fires predate the optional `agent_role` field
+                # (2026-08-15); compare only when the fire carries it.
+                fire_role = fire_payload.get("agent_role")
+                if fire_role is not None and payload.get("agent_role") != fire_role:
+                    errors.append(
+                        f"event {index}: checkpoint_response {cid!r} agent_role "
+                        f"{payload.get('agent_role')!r} != fire agent_role "
+                        f"{fire_role!r}"
+                    )
+        if len(attempts) > 2:
+            errors.append(
+                f"event {attempts[0][0]}: checkpoint {cid!r} has {len(attempts)} "
+                "response attempts (max 2)"
+            )
+        for position, (index, event) in enumerate(attempts):
+            payload = event["payload"]
+            attempt = payload["attempt"]
+            outcome = payload["outcome"]
+            if attempt != position + 1:
+                errors.append(
+                    f"event {index}: checkpoint {cid!r} attempt {attempt} "
+                    f"out of sequence (expected {position + 1})"
+                )
+            if outcome == "refill_requested":
+                if attempt != 1:
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} refill_requested on "
+                        f"attempt {attempt} (only attempt 1 may request a refill)"
+                    )
+                if position + 1 >= len(attempts):
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} refill_requested "
+                        "without a following attempt"
+                    )
+            if outcome == "degraded":
+                if attempt != 2:
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} degraded on attempt "
+                        f"{attempt} (degrade only after the refill attempt)"
+                    )
+                if not payload.get("degrade_reason"):
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} degraded without "
+                        "degrade_reason"
+                    )
+            if outcome == "accepted" and position + 1 < len(attempts):
+                errors.append(
+                    f"event {index}: checkpoint {cid!r} accepted but a later "
+                    "response attempt exists"
+                )
+            if outcome == "accepted":
+                if payload.get("validation", {}).get("valid") is not True:
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} accepted but "
+                        "validation.valid is not true"
+                    )
+                if payload.get("response") is None:
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} accepted but "
+                        "response is null"
+                    )
+            if outcome in ("refill_requested", "degraded"):
+                if payload.get("validation", {}).get("valid") is not False:
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} {outcome} but "
+                        "validation.valid is not false"
+                    )
+            response = payload.get("response")
+            if (
+                isinstance(response, dict)
+                and response.get("next_action") == "gather_evidence"
+            ):
+                missing = response.get("missing_evidence")
+                if not isinstance(missing, list) or not missing:
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} "
+                        "next_action=gather_evidence requires non-empty "
+                        "response.missing_evidence"
+                    )
+                if (
+                    payload.get("cross_check", {}).get(
+                        "gather_evidence_missing_surface_provided"
+                    )
+                    is not True
+                ):
+                    errors.append(
+                        f"event {index}: checkpoint {cid!r} "
+                        "next_action=gather_evidence requires "
+                        "cross_check.gather_evidence_missing_surface_provided=true"
+                    )
+            if payload["inquiry_family"] != "neutral":
+                errors.append(
+                    f"event {index}: checkpoint_response {cid!r} inquiry_family "
+                    f"{payload['inquiry_family']!r} != neutral"
                 )
     return errors
 
@@ -1982,6 +2156,7 @@ def validate_journal_text(text: str) -> list[str]:
         # violations present they would crash or report misleading facts, so
         # they run only on schema-valid input.
         errors.extend(_verify_v02_inquiry_kind(events))
+        errors.extend(_verify_v02_checkpoint_responses(events))
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))
