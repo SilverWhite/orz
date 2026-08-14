@@ -269,7 +269,8 @@ class RunEventV02ContractTests(unittest.TestCase):
         +control_ticket_consumed, +control_ticket_rejected).
         FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): 42 → 43
         (+citation_validation).
-        P0-D S1 (2026-08-14): 43 → 44 (+context_recovery_truncated)."""
+        P0-D S1 (2026-08-14): 43 → 44 (+context_recovery_truncated).
+        F7 (2026-08-15): 44 → 45 (+epoch_archive_write_failed)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -278,7 +279,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 44)
+        self.assertEqual(len(enum_events), 45)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
 

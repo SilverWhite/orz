@@ -161,11 +161,18 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
     ),
     # P0-D S3 (2026-08-14): template-summary payload on the v0.2 track (the
     # v0.1 file stays authoritative for the v0.1 replay track).
-    "context_compressed": (
-        "context-compressed",
-        RUNTIME / "context-compressed-event-payload-v0.2.schema.json",
-    ),
-}
+      "context_compressed": (
+          "context-compressed",
+          RUNTIME / "context-compressed-event-payload-v0.2.schema.json",
+      ),
+      # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
+      # plan-epoch archive write failure — audit trace when a rotation
+      # committed but the durable snapshot is missing.
+      "epoch_archive_write_failed": (
+          "epoch-archive-write-failed",
+          RUNTIME / "epoch-archive-write-failed-event-payload-v0.2.schema.json",
+      ),
+  }
 
 # Track-resolution table (contract §5 enforcement): every registered
 # `payload_schema` string outside the Rust track, mapped to the payload

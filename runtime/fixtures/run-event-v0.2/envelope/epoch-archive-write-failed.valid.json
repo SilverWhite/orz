@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-EPOCH-ARCHIVE-FAILED",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-15T00:00:00Z",
+  "event_type": "epoch_archive_write_failed",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "archive_dir": ".gsa/blackboard",
+    "plan_epoch": 2,
+    "kind": "rotated",
+    "attempts": 3
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

@@ -258,26 +258,28 @@
   黑板变更；retention 对 `.gsa/blackboard` 清扫保留最高编号快照（恢复入口）。
   验证：orz-loop 312 / orz-host 210 / orz-tui 178 / orz-bin 全部通过；Python
   runtime 251 通过；仓库门禁 valid、0 错误。
-- 复查遗留（2026-08-15 明确记录，未处理；来源：全面复查问题清单，F1/F3 已由
-  v1.15⑧ 补强处理，F8 随补强顺带修复）：
-  - F2（P2）：epoch 归档写盘非原子（直接 write，无临时文件+rename），且
-    `latest_epoch_snapshot` 只尝试最高编号——崩溃可能留下半截文件成为“最新”，
-    导致恢复失败且不回退前一个有效快照。建议：临时文件+rename，或从高到低
-    回退到第一个可解析快照。
-  - F4（P3）：并发进程同一毫秒启动可能撞号（`max(now_ms, 磁盘 max+1)` 无
-    跨进程锁）。建议：原子 claim 文件，或显式文档化该边界。
-  - F5（P3）：摘要路径槽溢出指针由 `session_cwd/.gsa/blackboard` 重算，未使用
-    controller 配置的 `blackboard_archive_dir`，自定义归档目录时指针失真。
-    建议：归档目录单一来源。
-  - F6（P3）：`blackboard_read` 的 `epoch` 参数为 0/负数/浮点等非法值时
-    `as_u64()` 返回 None，静默回退 live 视图。建议：区分“缺失”与“非法”，
-    非法值显式报错。
-  - F7（P3）：旧 epoch 归档写失败仅 warn、轮换照常提交，旧记录无事件痕迹
-    丢失。建议：并入事件面（如 `epoch_archive_write_failed`）。
-  - F9（P4）：`EpochSnapshot.rotated_at` 在“当前 epoch 批准/修订持久化”时
-    语义实为 persisted_at，命名略误导。建议：改名或注释说明。
-  - F10（P4）：设计文档 §5「恢复时随 sidecar 恢复 epoch 快照」与实现/ADR
-    （archive dir 装载）措辞不一致。建议：一句话对齐 ADR ⑦/⑧。
+- 复查遗留处理（2026-08-15 明确记录并全部闭合，v1.15⑨；来源：全面复查问题清单，
+  F1/F3 已由 v1.15⑧ 补强处理，F8 随补强顺带修复）：
+  - F2（P2，已处理）：epoch 归档写盘改为临时文件+自检解析+rename 原子提交，
+    崩溃只可能留下 `.tmp`；`latest_epoch_snapshot` 从高到低回退到第一个可解析
+    快照，半截文件不再阻断恢复。
+  - F4（P3，已处理）：epoch 分配增加 `.claim-<n>` 原子占号（`create_new`），
+    同毫秒并发进程只有一个能赢得编号，碰撞方递增重试；claim 计入下次分配扫描，
+    崩溃不导致复用，retention 按年龄清扫过期 claim。
+  - F5（P3，已处理）：路径槽溢出指针改从 controller 配置的归档目录单一来源
+    取路径，不再由 `session_cwd/.gsa/blackboard` 重算，自定义归档目录不失真。
+  - F6（P3，已处理）：`blackboard_read` 的 `epoch` 参数区分“缺失”与“非法”，
+    0/负数/浮点等非法值显式报错（exit_code=1），不静默回退 live 视图。
+  - F7（P3，已处理）：旧 epoch 归档写失败并入事件面——新增 v0.2
+    `epoch_archive_write_failed`（rotated/current + attempts），builder 阶段
+    排队、run 启动随 journal 写入，schema/fixtures/TUI 同步。
+  - F9（P4，已处理）：`EpochSnapshot.rotated_at` 更名 `persisted_at`
+    （serde alias 兼容旧归档），语义与实现一致。
+  - F10（P4，已处理）：设计文档 §5 恢复措辞对齐 ADR ⑦/⑧（archive dir
+    装载最新 epoch 快照）。
+  - 验证（2026-08-15）：orz-assurance 151 / orz-loop 317 / orz-host 211 /
+    orz-tui 178 / orz-bin 全部通过；Python runtime + assurance 1858 通过、
+    14 skipped；仓库门禁 valid、0 错误。设计/ADR/BACKLOG/TODO/审计已同步。
 - 入口：[设计](BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md)；
   [ADR-0010 §14.15](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [实施审计](audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md)；

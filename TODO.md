@@ -122,7 +122,7 @@
 - [x] S4 `blackboard_read` 跨 epoch 回查：`epoch` 参数走归档读取，保持按分区/时间范围取用契约；缺失/未配置显式提示，不静默回退 live 视图。
 - [x] S5 测试与审计：压缩不清板、轮换原子性/范围、跨 epoch 回查、恢复、契约扩展（Schema/verifier/fixtures/journals）；实施审计 + BACKLOG/TODO/索引状态同步；retention 覆盖 `.gsa/blackboard` 7 天清扫。
 - [x] S6 复查补强（2026-08-15，F1/F3，用户裁决）：`plan_epoch` 时间戳单调编号（unix 毫秒基底、`max(now_ms, 磁盘 max+1)`）；身份不变式强制（同 plan_id 同 epoch、新 plan_id 严格递增；`rotate_to_plan`/`try_with_plan` 返回错误、`with_plan` fail-fast、拒绝先于变更）；retention 保留最高编号快照（恢复入口）；Schema 描述/设计/ADR/审计同步。验证：orz-loop 312 / orz-host 210 / orz-tui 178 / orz-bin 全部通过；Python runtime 251 通过；仓库门禁 valid、0 错误。
-- [ ] 复查遗留（未排期，2026-08-15 明确记录）：F2（归档原子性/回退加载，P2）、F4（并发撞号，P3）、F5（归档目录单一来源，P3）、F6（epoch 非法值显式报错，P3）、F7（归档写失败入事件面，P3）、F9（rotated_at 命名，P4）、F10（设计 §5 措辞对齐，P4）。明细见 BACKLOG 6e「复查遗留」。
+- [x] S7 复查遗留闭合（2026-08-15，v1.15⑨）：F2 归档写盘原子化（临时文件+rename、恢复降序回退）、F4 跨进程 `.claim-<n>` 原子占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名（serde alias 兼容）、F10 设计 §5 措辞对齐；BACKLOG 6e / ADR §14.15 ⑨ / 审计 §7 同步。
 
 入口：[设计](docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) / [ADR-0010 §14.15](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [实施审计](docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 6e](docs/BACKLOG_AND_PRIORITIES.md)。
 

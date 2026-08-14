@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/epoch-archive-write-failed-event-payload-v0.2.schema.json",
+  "title": "Blackboard plan-epoch archive write failure runtime event payload v0.2",
+  "description": "F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): a blackboard plan-epoch snapshot could not be persisted after bounded retries. The plan rotation / live-board revision already committed in memory, but the durable archive is missing — this event is the audit trace. `kind` distinguishes the rotated OLD epoch snapshot (lost archive on rotation) from the CURRENT epoch persistence (approval/revision; the restore entry is weakened).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "archive_dir",
+    "plan_epoch",
+    "kind",
+    "attempts"
+  ],
+  "properties": {
+    "archive_dir": {
+      "description": "The configured blackboard archive directory the snapshot was written to.",
+      "type": "string",
+      "minLength": 1
+    },
+    "plan_epoch": {
+      "description": "The epoch whose snapshot failed to persist (timestamp-stamped monotonic identity, ≥ 1).",
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "description": "Which write failed: `rotated` = the old epoch archived during a rotation; `current` = the live epoch persisted at approval/revision.",
+      "enum": ["rotated", "current"]
+    },
+    "attempts": {
+      "description": "Bounded retry attempts exhausted before giving up.",
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

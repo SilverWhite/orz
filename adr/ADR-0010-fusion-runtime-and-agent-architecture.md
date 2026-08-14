@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧ 补强，见 §14.15 ⑧）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -29,6 +29,7 @@
   - **v1.12 补写（2026-08-14，P0-B 步骤 6 实施登记）**：检索机械控制提示词面收敛——主 Agent 提示词引用纪律缩减为"标记格式 + verifier 交付前机械校验"（设计 §3.3 语义）；检索子代理提示词移除"候选 ≤5 / never the full reference list"软约束，改指机械预算反馈（"候选 N/M，剩余 K"）；来源加权/引用规则段落去冗余。索引见 §14.12；来源：`docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md`。
   - **v1.15⑧ 补强（2026-08-15，黑板 plan epoch 全面复查 F1/F3 处理，用户裁决）**：plan_epoch 改为时间戳单调编号（unix 毫秒为基底，`next = max(now_ms, 磁盘现存 max + 1)`）——时间戳进入编号本身而非仅文件名，7 天 retention 全量清扫后编号不复用，marker/`blackboard_read epoch` 参数跨窗口仍唯一；身份不变式强制（一一对应、无误用可能）：同 plan_id 修订必须沿用同 plan_epoch、新 plan_id 必须使用严格更大的 plan_epoch，违反在 `rotate_to_plan`/`try_with_plan` 返回错误（`with_plan` fail-fast），拒绝先于任何黑板变更；retention 对 `.gsa/blackboard` 清扫时保留最高编号快照（恢复入口），长生命周期黑板不因当前 epoch 文件超龄而失去恢复。正文见 §3.6 注记，索引见 §14.15 ⑧；来源：2026-08-15 全面复查（F1/F3）与用户裁决。
 
+  - **v1.15⑨ 补强（2026-08-15，黑板 plan epoch 复查遗留 F2/F4-F7/F9/F10 处理）**：epoch 快照写盘原子化（临时文件+rename、恢复回退加载，F2）；epoch 分配加 `.claim-<n>` 原子占号防跨进程撞号（F4）；路径槽溢出指针取 controller 归档目录单一来源（F5）；`blackboard_read` 非法 epoch 显式报错（F6）；归档写失败新增 v0.2 `epoch_archive_write_failed` 事件入事件面（F7）；`EpochSnapshot.rotated_at` 更名 `persisted_at` 并 serde alias 兼容（F9）；设计 §5 恢复措辞对齐 ADR（F10）。索引见 §14.15 ⑨；来源：2026-08-15 全面复查遗留清单（BACKLOG 6e）与用户处理指示。
 ## 1. 背景
 
 ORZ 最初采用 runtime-neutral、upstream-first 路线：由 Grok Build 等成熟 runtime 拥有模型循环、
@@ -1262,3 +1263,21 @@ ADR §3.6 正文修订随实施登记。
    来源：2026-08-14 用户裁决（黑板擦除机制重设计讨论）；设计文档
    `docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`；实施审计
    `docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md`。
+   ⑨ 复查遗留闭合（2026-08-15，F2/F4-F7/F9/F10，用户处理指示）：
+      ① F2——epoch 快照写盘原子化：先写 `<name>.json.tmp` 并自检解析，再 rename 到最终
+         文件；崩溃只可能留下 `.tmp`，不会产生「半截文件成为最高编号恢复入口」；
+         `latest_epoch_snapshot` 从高到低回退到第一个可解析快照。
+      ② F4——跨进程分配：CLI 启动以 `.claim-<n>` 原子 claim（`create_new`）占号，同毫秒
+         并发进程只有一个能赢得编号，碰撞方递增重试（有界）；claim 计入下次分配扫描，
+         崩溃不导致复用；retention 按年龄清扫过期 claim。
+      ③ F5——归档目录单一来源：路径槽溢出指针取 controller 配置的
+         `blackboard_archive_dir`，不再由 `session_cwd/.gsa/blackboard` 重算。
+      ④ F6——`blackboard_read` 的 `epoch` 参数区分「缺失」（live 视图）与「非法」
+         （0/负数/浮点等显式报错，`exit_code=1`），不静默回退。
+      ⑤ F7——epoch 归档写失败并入事件面：新增 v0.2 `epoch_archive_write_failed`
+         （archive_dir/plan_epoch/kind=rotated|current/attempts）；builder 阶段无
+         journal writer，失败先排队，run 启动时随事件写入。
+      ⑥ F9——`EpochSnapshot.rotated_at` 更名 `persisted_at`，旧归档键经 serde alias
+         兼容读取。
+      ⑦ F10——设计 §5「随 sidecar 恢复」措辞改为「archive dir 装载最新 epoch 快照，
+         与 marker 一起构成恢复上下文」，与本节 ⑦/⑧ 一致。

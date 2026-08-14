@@ -136,3 +136,86 @@ BACKLOG/TODO/索引状态已随实施同步。
 
 - orz-loop 312 / orz-host 210 / orz-tui 178 / orz-bin 全部通过；
 - Python runtime 251 通过；仓库门禁 valid、0 错误。
+
+## 7. 复查遗留闭合（2026-08-15，F2/F4-F7/F9/F10）
+
+全面复查清单中 F1/F3 已由 v1.15⑧ 处理（§6）、F8 随补强顺带修复；本节闭合其余
+遗留项（来源：BACKLOG 6e「复查遗留」，用户处理指示 2026-08-15）。
+
+### F2 — 归档写盘原子性与恢复回退（P2）
+
+- `write_epoch_archive_retry` 改为**临时文件 + rename 原子提交**：先写
+  `epoch-<n>.json.tmp`（同目录，保证同文件系统），读回并解析自检通过后才
+  rename 到最终名；崩溃只可能留下 `.tmp`，`epoch-*.json` 扫描不会把它当作
+  快照，半截文件永远不会成为「最高编号恢复入口」。
+- `latest_epoch_snapshot` 从高到低遍历，返回**第一个可解析快照**（旧的半截
+  文件或外部损坏的最高文件不再阻断恢复，回退到前一个有效快照）。
+- 测试：`latest_epoch_snapshot_falls_back_from_corrupt_highest`（最高文件
+  损坏回退 epoch-7）、roundtrip 断言无 `.json.tmp` 残留、`.tmp` 不参与
+  next-epoch 扫描。
+
+### F4 — 并发进程同毫秒撞号（P3）
+
+- `epoch::claim_plan_epoch`：`create_new` 原子创建 `.claim-<n>` 占号文件，
+  同毫秒并发进程只有一个赢得该编号；CLI 启动在 plan 阶段前占号，碰撞方递增
+  重试（有界 `EPOCH_CLAIM_MAX_ATTEMPTS=8`，耗尽则显式失败）。
+- claim 文件计入 `next_plan_epoch_from_archive` 的磁盘最大值扫描：崩溃留下的
+  claim 永久保留该编号（时间戳基底使占号成本为零），不会复用。
+- retention `prune_blackboard_epochs` 按年龄清扫 `.claim-*`（无 latest
+  例外——过期 7 天的 claim 不可能再与未来时间戳编号冲突）。
+- 测试：`claim_epoch_is_atomic_and_never_reuses_reserved_numbers`；
+  `sweep_removes_old_blackboard_epoch_claims_keeps_fresh`。
+
+### F5 — 归档目录单一来源（P3）
+
+- `AgentLoopController::blackboard_archive_dir()` 成为归档目录唯一事实来源；
+  `SharedLoopServices` 增同名字段，四个构造点（主车道 / 主车道 session-end /
+  检索车道 / 检索 session-end）统一注入。
+- `run_template_compact` 的路径槽溢出指针改由该字段构造
+  `epoch-<plan_epoch>.json`，不再用 `session_cwd/.gsa/blackboard` 重算——
+  自定义归档目录时指针不再失真；未配置时回落摘要存档指针。
+
+### F6 — `blackboard_read` epoch 非法值显式报错（P3）
+
+- 区分「epoch 缺省」（live 视图）与「epoch 存在但非法」：0 / 负数 / 浮点 /
+  字符串等返回 `exit_code=1` 显式错误文本，并 journal `tool_completed`
+  `error` 字段；绝不静默回退 live 视图。
+- 测试：`blackboard_read_invalid_epoch_is_explicit_error`（0 / -1 / 1.5
+  三个调用均显式报错且不泄漏 live plan）。
+
+### F7 — 归档写失败入事件面（P3）
+
+- 新增 v0.2 事件 `epoch_archive_write_failed`（非终止）：
+  - payload：`archive_dir` / `plan_epoch` / `kind`（`rotated`|`current`）/
+    `attempts`；
+  - schema：`runtime/epoch-archive-write-failed-event-payload-v0.2.schema.json`；
+    `run-event-v0.2.schema.json` 枚举 + registry
+    `assurance/run_event_journal_validation.py` + fixtures 生成器同步；
+    v0.2 fixtures（payload good/bad + envelope）、conformance 44→45、README。
+  - Rust：`EventType::EpochArchiveWriteFailed`；`try_with_plan` 写失败不再
+    仅 warn——builder 阶段排队（`epoch_archive_errors`），run 启动
+    `flush_epoch_archive_write_failures` 随 journal 写入（事件顺序：current →
+    rotated → current）。
+  - TUI：`EpochArchiveWriteFailed` 变体 + bridge + projection 告警卡。
+  - 测试：`epoch_archive_write_failure_is_journaled`（.gsa 被文件占位，
+    三次失败全部成事件，kind/epoch/attempts 断言）。
+
+### F9 — `EpochSnapshot.rotated_at` 语义修正（P4）
+
+- 字段更名 `persisted_at`（当前 epoch 批准/修订持久化时语义为 persisted_at，
+  并非仅轮换时刻）；`#[serde(alias = "rotated_at")]` 兼容旧归档读取，新写
+  使用 `persisted_at` 键。
+- 测试：`old_rotated_at_archives_still_load_as_persisted_at`。
+
+### F10 — 设计 §5 措辞对齐（P4）
+
+- `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md` §5「恢复时随 sidecar 恢复
+  epoch 快照」改为「恢复经 archive dir 装载最新 epoch 快照，与 marker 一起
+  构成恢复上下文」，与 ADR-0010 §14.15 ⑦/⑧ 一致。
+
+### 验证（2026-08-15）
+
+- orz-assurance 151 / orz-loop 317（+5：F2/F4/F9 epoch 单测、F6/F7 控制器测试）/
+  orz-host 211（+1：claim 清扫测试）/ orz-tui 178 / orz-bin 全部通过；
+- Python runtime + assurance 1858 通过、14 skipped；仓库门禁
+  `scripts/check_repository.py` valid、0 错误（v0.2 契约计数同步 +3 fixtures）。

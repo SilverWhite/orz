@@ -128,10 +128,13 @@ V02_EVENT_TYPES = [
     "citation_validation",
     "control_ticket_issued",
     "control_ticket_consumed",
-    "control_ticket_rejected",
-    "context_compressed",
-    "context_recovery_truncated",
-    "snapshot_created",
+      "control_ticket_rejected",
+      "context_compressed",
+      "context_recovery_truncated",
+      # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
+      # plan-epoch archive write failure audit trace.
+      "epoch_archive_write_failed",
+      "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
     "plan_proposed",
@@ -156,9 +159,10 @@ SLUGS_V02 = {
     "citation_validation": "citation-validation",
     "control_ticket_issued": "control-ticket-issued",
     "control_ticket_consumed": "control-ticket-consumed",
-    "control_ticket_rejected": "control-ticket-rejected",
-    "context_recovery_truncated": "context-recovery-truncated",
-}
+      "control_ticket_rejected": "control-ticket-rejected",
+      "context_recovery_truncated": "context-recovery-truncated",
+      "epoch_archive_write_failed": "epoch-archive-write-failed",
+  }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
 # envelope reuses the v0.1 payload schema files). GAP-RETRIEVAL-TOOLS
@@ -184,10 +188,13 @@ V02_PAYLOAD_EVENTS = [
     "tool_availability_check",
     # D2-2 (2026-08-14; ADR-0010 v1.10): recovery pre-check truncation.
     "context_recovery_truncated",
-    # P0-D S3 (2026-08-14; ADR-0010 v1.10): five-section template summary
-    # (the A6 whole-round drop payload stays v0.1 replay-only).
-    "context_compressed",
-]
+      # P0-D S3 (2026-08-14; ADR-0010 v1.10): five-section template summary
+      # (the A6 whole-round drop payload stays v0.1 replay-only).
+      "context_compressed",
+      # F7 (2026-08-15; ADR-0010 §14.15): blackboard plan-epoch archive
+      # write failure (rotated/current + attempts).
+      "epoch_archive_write_failed",
+  ]
 
 SLUGS = {
     "run_preflight": "run-preflight",
@@ -831,9 +838,9 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "audit_path": ".gsa/runs/RUN-CONF-0001/recovery-conversation-full.json",
     },
     # P0-D S3 (2026-08-14): five-section template summary (v0.2 shape).
-    "context_compressed": {
-        "trigger_tokens": 165000,
-        "target_tokens": 12000,
+      "context_compressed": {
+          "trigger_tokens": 165000,
+          "target_tokens": 12000,
         "rounds_since_last_compaction": 3,
         "rounds_dropped": 12,
         "messages_dropped": 40,
@@ -846,10 +853,19 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "summary_path": ".gsa/compaction/compaction-RUN-CONF-0001-0001.md",
         "summary_incomplete": False,
         "retained_rounds": 2,
-        "guard_failed": False,
-        "archive_write_failed": False,
-    },
-}
+          "guard_failed": False,
+          "archive_write_failed": False,
+      },
+      # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
+      # plan-epoch archive write failure — rotation committed but the
+      # durable snapshot is missing.
+      "epoch_archive_write_failed": {
+          "archive_dir": ".gsa/blackboard",
+          "plan_epoch": 2,
+          "kind": "rotated",
+          "attempts": 3,
+      },
+  }
 
 # One constraint violation per v0.2 event (never a bare missing-required when
 # a sharper constraint exists; conditional constraints preferred where the
@@ -1122,9 +1138,9 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "messages_kept": 7,
         "audit_path": ".gsa/runs/RUN-CONF-0001/recovery-conversation-full.json",
     },
-    "context_compressed": {
-        "trigger_tokens": 165000,
-        "target_tokens": 12000,
+      "context_compressed": {
+          "trigger_tokens": 165000,
+          "target_tokens": 12000,
         "rounds_since_last_compaction": 3,
         "rounds_dropped": 12,
         "messages_dropped": 40,
@@ -1136,10 +1152,17 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "summary_id": "compaction-RUN-CONF-0001-0001",
         "summary_digest": ZERO_HASH,
         "summary_path": ".gsa/compaction/compaction-RUN-CONF-0001-0001.md",
-        "summary_incomplete": False,
-        "retained_rounds": 2,
-    },
-}
+          "summary_incomplete": False,
+          "retained_rounds": 2,
+      },
+      "epoch_archive_write_failed": {
+          "archive_dir": ".gsa/blackboard",
+          # kind outside the enum violates exactly one schema constraint.
+          "kind": "replaced",
+          "plan_epoch": 2,
+          "attempts": 3,
+      },
+  }
 
 # ACAF Slice 2 fail-closed (2026-08-13): extra positive payload fixtures for
 # the new reject codes — each carries a null ticket_id (no ticket was issued;
