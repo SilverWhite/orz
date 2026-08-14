@@ -83,6 +83,25 @@
 
 入口：[ADR-0010 §14.9](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [探针设计](docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md) / [BACKLOG](docs/BACKLOG_AND_PRIORITIES.md)。
 
+### ORZ-ORIENTATION-FORCED-TEMPLATE（`approved`；P1，2026-08-14 登记）
+
+- [ ] ADR-0010 §4.2 正文修订登记（v1.13 裁决已登记）：「注入」→「触发点暂停并填写模板」。
+- [ ] 强制模板轮实现：触发点下一安全动作间隙暂停、独立无工具 checkpoint 轮、模板字段/机械校验、一次错误反馈重填 + 降级兜底。
+- [ ] 缓解必做：`progress_evidence` 与 journal 证据身份存在性交叉校验；`next_action=gather_evidence` 必填缺失面。
+- [ ] 事件/Schema/verifier/fixtures 同步（checkpoint 事件扩展模板/响应/校验结果字段或新增响应事件）+ 测试（触发→暂停→填表→恢复、重填、降级、主车道隔离、计数语义）。
+- [ ] 实施审计、BACKLOG/TODO/索引状态同步。
+
+入口：[设计](docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6c](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### ORZ-SESSION-CONTEXT-MONITOR（`approved`；P1，2026-08-14 登记）
+
+- [ ] 度量接线：模型完成轮后累加 usage 输入 token（transport/loop 完成点）；usage 缺失时 journal 估算兜底。
+- [ ] 阈值配置（env/TOML，默认 384K 提醒 / 500K 总结推荐）；同一阈值只触发一次。
+- [ ] 最简实现：阈值到达的最后一轮模型输出末尾机械附提醒；headless/自动化仅写日志；500K 附五段模板 + 新窗口开场提示骨架。
+- [ ] 测试（到达/未到达、usage 缺失兜底、headless 分支、幂等）+ 实施审计 + BACKLOG/TODO/索引状态同步。
+
+入口：[设计](docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6d](docs/BACKLOG_AND_PRIORITIES.md)。
+
 ## P2 — 生产化决策门
 
 ### IMPL-CONTROL-FABRIC（`partial`）
@@ -118,6 +137,8 @@
 - [ ] headless 计划模式能力信号（plan 模式探针当前以交互用户信号代理，未来 headless 计划模式需独立信号）。
 - [ ] 下一次真实运行捕获自然携带 23 工具分区 journals（当前 12 个为已提交 fixtures 重建）。
 - [ ] B-1 后续：canonical URL/host 级去重留待预筛步骤 3；若 host/loop 拆为跨进程边界，补 `ToolResult.structured` 序列化契约。
+- [ ] ORZ-RECOVERY-TOOL-OUTCOME：崩溃恢复工具结果词汇（`TOOL_NOT_STARTED` / `TOOL_OUTCOME_UNKNOWN` 合成 Tool 消息 + 只重试只读/幂等指引）——出现恢复面 400 或副作用未知证据时实施（单点修复）。
+- [ ] ORZ-STAGNATION-TOOL-SIGNAL：停滞守卫「同工具同参数」信号——出现「同参循环且输出持续变化」证据时在 stagnation guard 内加最小计数信号。
 
 ## 近期已闭合（供核对，不计入开放项）
 

@@ -10,11 +10,12 @@
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（POC 已通）、ORZ-COMPACTION-REDESIGN（实施待放行） |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-ORIENTATION-FORCED-TEMPLATE、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
 
 - 复杂度治理判定（2026-08-13）：LIF 为高要求主项目、实验含相当程度自动运行；复杂度降低只砍冗余（OPS 平行执行层、双实现、文档仪式），保留服务 LIF 不变量的机制（journal/verifier、permission fail-closed、运行守卫、Windows 进程控制、来源证据、ACAF Slice 1/2）；ACAF Slice 3/4 暂缓，按实际自动化模式再定；不做机制×不变量清单，避免后续审查被带偏。
+- DSH 借鉴复核（2026-08-14，用户裁决）：orz 自身（除成熟底座外的一切）即整体化二进制薄层，底座可较简单切换；个人开发者无插件生态，不支付子系统化复杂度。三项机制复核结论——A（Windows ACL 沙箱）挂起不立项；B（文件观察策略）收编为 `workspace.search_replace` 动作契约规则（随 CLASSICAL-EXEC-ASSISTANT 小样 2 裁决）；C（工具结果裁剪）收编为纯函数（随 COMPACTION-REDESIGN S2 或 50K 注入预算实施）；其余 DSH 层已覆盖或不适配，不引入。本复核不新增独立实施项。
 
 ## P0 — 当前工作集
 
@@ -191,6 +192,28 @@
 - 入口：[ADR-0010 §14.9](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [探针设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；[TODO](../TODO.md)。
 
+### 6c. ORZ-ORIENTATION-FORCED-TEMPLATE（`approved`；P1，2026-08-14 登记）
+
+- 定位：中立问询升级为强制模板轮——触发点下一安全动作间隙明确暂停，模型填写问询
+  模板后才恢复动作（Orientation 与 DC 两族共用，主车道）；目的=拉回注意力、防跑偏
+  与钻牛角尖（强制表达、不验证诚实）；缓解必做（`progress_evidence` 存在性交叉
+  校验、`gather_evidence` 必填缺失面）。
+- 实施前置：ADR-0010 §4.2 正文修订（v1.13 已登记裁决）；事件/Schema/verifier/
+  fixtures；测试；实施审计与索引同步。
+- 入口：[设计](ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md)；
+  [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
+  [TODO](../TODO.md)。
+
+### 6d. ORZ-SESSION-CONTEXT-MONITOR（`approved`；P1，2026-08-14 登记）
+
+- 定位：会话累计上下文监测——度量=会话累计模型可见输入 token（usage 优先、journal
+  估算兜底）；384K 机械提醒、500K 机械总结推荐（可配）；最简实现=阈值到达的最后一轮
+  模型输出末尾机械附提醒；headless 仅日志；TUI/journal 事件为 beta 前可选；与压缩独立。
+- 实施前置：度量接线、阈值配置、机械附言注入点、测试、实施审计与索引同步。
+- 入口：[设计](SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md)；
+  [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
+  [TODO](../TODO.md)。
+
 ## P2 — 生产化决策门
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
@@ -229,8 +252,24 @@
 - orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`，顺序/负载相关、与本批无关）——复核并登记闭合或转 gap。
 - 工作区收尾：见 P0 前置收尾。
 
+## 条件触发（不占当前优先级）
+
+- ORZ-RECOVERY-TOOL-OUTCOME：崩溃恢复工具结果词汇——恢复中断轮次补
+  `TOOL_NOT_STARTED` / `TOOL_OUTCOME_UNKNOWN` 合成 Tool 消息 + "只重试只读/幂等
+  操作、验证副作用或询问"指引。出现恢复面 400 或副作用未知证据时实施（单点修复，
+  不建子系统）。入口：[调研附录候选 1](DEEPSEEK_HARNESS_BORROW_RESEARCH_2026-08-14.md)。
+- ORZ-STAGNATION-TOOL-SIGNAL：停滞守卫补「同工具同参数」信号——出现「同参循环且
+  输出持续变化」的具体证据时，在 stagnation guard 内加最小计数信号（同一工具连续
+  N 次调用），不复刻 reminder 链。入口：[调研附录候选 2](DEEPSEEK_HARNESS_BORROW_RESEARCH_2026-08-14.md)。
+
 ## 变更记录
 
+- 2026-08-14：DSH 借鉴复核与两项设计确认登记——ADR-0010 v1.13（中立问询强制模板轮、
+  会话累计上下文监测、崩溃恢复工具结果词汇条件项、DSH 借鉴复核结论）；新增设计文档
+  `ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md` 与
+  `SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md`；P1 登记 6c/6d；条件触发两候选；
+  索引新增 FUS-ORIENTATION-FORCED-TEMPLATE / FUS-SESSION-CONTEXT-MONITOR /
+  FUS-RECOVERY-TOOL-OUTCOME / FUS-DSH-BORROW-REVIEW。
 - 2026-08-14：P0-B 步骤 6 全面复核补记——索引 GAP-SOURCE-WEIGHTING-IMPL
   条目补"候选 ≤5 已机械取代"注记（P3 已处理）；审查观察登记：提示词未列
   observed scope 合法枚举（P3 可选优化，暂不实施）。详见

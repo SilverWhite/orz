@@ -1109,3 +1109,52 @@ Schema 与机械证据：
    ③ 来源加权与引用规则段落去冗余，prompt.rs 测试同步。
    来源：`docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md`；实施审计：
    `docs/audits/GAP_RETRIEVAL_MECH_STEP6_PROMPT_SHORTENING_IMPL_AUDIT_2026-08-14.md`。
+
+### 14.13 v1.13 补写裁决索引（2026-08-14）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写不改变本 ADR 任何既有条款的语义。
+
+1. **中立问询升级为强制模板轮（2026-08-14，用户确认，§4.2/§4.6 相关）**：
+   ① 触发点改为"下一安全动作间隙明确暂停，模型必须填写问询模板后才恢复动作"；
+      暂停=独立 checkpoint 轮，不派发任何工具，模型本轮只输出模板答案；
+   ② 模板字段：`task_position` / `progress_evidence` / `blockers` /
+      `next_action`（continue|adjust|gather_evidence|ask_user|handoff）/
+      `changed_direction`；复用 allowed/forbidden 词汇；
+   ③ 机械校验：必填/枚举/长度；失败给一次错误反馈重填；仍失败→按已填部分
+      机械降级 + journal 记录，不挂死；
+   ④ 目的定位：拉回注意力、防跑偏与钻牛角尖；强制表达、不验证诚实；缓解必做——
+      `progress_evidence` 与 journal 证据身份存在性交叉校验、`gather_evidence`
+      必填缺失面；
+   ⑤ 范围：主车道；Orientation 与 DC 两族共用，模板按触发类型微调；与机械助理
+      执行层不冲突（暂停点在模型决策边界）。
+   来源：`docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md`；实施前置：
+   ADR §4.2 正文修订、事件/Schema/verifier/fixtures、测试。
+
+2. **会话累计上下文监测（2026-08-14，用户确认）**：
+   ① 度量=当前会话累计模型可见输入 token（usage 实报优先，journal 估算兜底）；
+      与压缩独立——压缩把请求窗口钉在 384K 内，本监测是会话生命周期信号；
+   ② 阈值：384K 机械提醒、500K 机械总结推荐（可配）；
+   ③ 最简实现：到达阈值的最后一轮模型输出末尾机械附一句提醒；headless/自动化
+      仅写日志；
+   ④ 500K 推荐复用压缩五段模板 + 新窗口开场提示骨架；不自动开新窗口，只给产物；
+   ⑤ TUI 横幅与 journal 事件为进入用户侧 beta 前的后续可选。
+   来源：`docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md`。
+
+3. **崩溃恢复工具结果词汇（2026-08-14 记录，条件触发）**：
+   恢复中断轮次时补合成 Tool 消息——`TOOL_NOT_STARTED`（工具从未开始）与
+   `TOOL_OUTCOME_UNKNOWN`（已开始但结果未知），并明确告诉模型"只重试只读/幂等
+   操作，验证可能副作用或询问"。出现恢复面 400 或副作用未知证据时实施；单点修复，
+   不建子系统。来源：`docs/DEEPSEEK_HARNESS_BORROW_RESEARCH_2026-08-14.md`
+   附录候选 1。
+
+4. **DeepSeek Harness 借鉴复核（2026-08-14，用户裁决）**：
+   orz 自身（除成熟底座外的一切）即整体化二进制薄层，底座可较简单切换；个人开发者
+   无插件生态，不支付子系统化复杂度。三项机制复核结论——A（Windows ACL 沙箱）挂起
+   （与 BACKLOG"ACAF Slice 3/4 暂缓"一致）；B（文件观察策略）收编为
+   `workspace.search_replace` 动作契约规则（随 CLASSICAL-EXEC-ASSISTANT 小样 2
+   裁决）；C（工具结果裁剪）收编为纯函数（在 COMPACTION-REDESIGN S2 或 50K 注入
+   预算实施时顺带实现）。其余层已覆盖（hooks/transport 重试/token 计量/持久化/
+   停滞守卫/plan/goal/skills/terminal/lsp/web/ACP/凭据/子代理角色契约）或不适配
+   （jobs/schedule/workflow 与异步调度封禁裁决冲突；插件/UI 生态形态不引入）。
+   来源：`docs/DEEPSEEK_HARNESS_BORROW_RESEARCH_2026-08-14.md` /
+   `docs/DSH_BORROW_DESIGN_DECOMPOSITION_2026-08-14.md`。
