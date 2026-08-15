@@ -53,7 +53,10 @@ use crate::console::{
 };
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
-use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolRegistry, ToolResult};
+use crate::host::{
+    LoopHost, PermitDecision, PolicyDenial, PolicyDenialSource, ToolDef, ToolError, ToolRegistry,
+    ToolResult,
+};
 use crate::orientation::{AgentRole, OrientationFireRecord, OrientationSessionState};
 use crate::prompt::{is_injected_block_text, is_restore_retained_block};
 use crate::relay::DispatchTarget;
@@ -4928,6 +4931,7 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             });
         }
         // mode=local_browser with an unavailable capability fails EXPLICITLY
@@ -4980,6 +4984,7 @@ impl AgentLoopController {
                         exit_code: Some(1),
                         output_encoding: None,
                         structured: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -5058,6 +5063,7 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             });
         }
         let (mut act, task_goal) = {
@@ -5491,6 +5497,7 @@ impl AgentLoopController {
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 }
             }
             Err(e) => {
@@ -5520,6 +5527,7 @@ impl AgentLoopController {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 }
             }
         };
@@ -5586,6 +5594,7 @@ impl AgentLoopController {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 });
             }
         };
@@ -5610,6 +5619,7 @@ impl AgentLoopController {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 });
             }
         };
@@ -5640,6 +5650,7 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             });
         }
         if decision == "close" && requirement_delta.is_some() {
@@ -5656,6 +5667,7 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             });
         }
 
@@ -5706,6 +5718,7 @@ impl AgentLoopController {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 });
             }
         };
@@ -5760,6 +5773,7 @@ impl AgentLoopController {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             });
         }
 
@@ -5795,6 +5809,7 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             });
         }
         let pending = act.pending.as_ref().unwrap().clone();
@@ -5922,6 +5937,7 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             });
         }
         // D-16 (2026-08-13): a rejected GoalRevisionV1 under fail-closed
@@ -6118,6 +6134,7 @@ impl AgentLoopController {
             exit_code: Some(exit_code),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         })
     }
 
@@ -6332,8 +6349,14 @@ impl AgentLoopController {
                 serde_json::json!({
                     "tool": tc.name,
                     "call_id": tc.call_id,
+                    "exit_code": 1,
                     "status": "error",
                     "error": format!("control_ticket_rejected:{}", code.as_str()),
+                    "policy_denial": {
+                        "source": "acaf",
+                        "code": format!("control_ticket_rejected:{}", code.as_str()),
+                        "reason": detail,
+                    },
                 }),
             )
             .await?;
@@ -6356,6 +6379,11 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                policy_denial: Some(PolicyDenial {
+                    source: PolicyDenialSource::Acaf,
+                    code: format!("control_ticket_rejected:{}", code.as_str()),
+                    reason: detail.clone(),
+                }),
             },
             None,
         ))
@@ -6558,7 +6586,7 @@ impl AgentLoopController {
             call_id: call_id.to_string(),
         };
         let mut scratch: Vec<Message> = Vec::new();
-        let (result, feedback) = match self
+        let (result, _feedback) = match self
             .run_host_tool(
                 host,
                 writer,
@@ -6583,27 +6611,25 @@ impl AgentLoopController {
                 });
             }
         };
-        if matches!(feedback, Some(PolicyFeedback::Denied(_))) {
+        // P0-C S3 前置 (2026-08-15, P1-2 定案): the console adapter classifies
+        // policy refusals ONLY from the structured signal — the old
+        // stable-output-prefix judgment (`console_policy_refusal`) is
+        // retired and the failure text can never drive the step. The
+        // `PolicyFeedback` tuple element is intentionally discarded in the
+        // console path (issuance is post-tool-batch, and the optional
+        // denial-breaker unification for ACAF/mode gates is not
+        // implemented); it is never a classification signal here.
+        if let Some(denial) = &result.policy_denial {
             return Err(crate::console::ExecuteError::PolicyDenied {
                 message: result.output,
-                detail: Some(serde_json::json!({ "source": "permission_gate" })),
-            });
-        }
-        if self.console_policy_refusal(&result.output) {
-            return Err(crate::console::ExecuteError::PolicyDenied {
-                message: result.output,
-                detail: Some(serde_json::json!({ "source": "controller_gate" })),
+                detail: Some(serde_json::json!({
+                    "source": denial.source.as_str(),
+                    "code": denial.code,
+                    "reason": denial.reason,
+                })),
             });
         }
         Ok(result)
-    }
-
-    /// 机械识别 controller 侧无 `PolicyFeedback` 的策略拒绝（ACAF 票据门 /
-    /// 检索模式门）——输出前缀与 journal 的 `tool_completed.error` 同源，
-    /// 确定性、可审计。
-    fn console_policy_refusal(&self, output: &str) -> bool {
-        output.starts_with("ACAF ticket refused for ")
-            || (output.starts_with("retrieval '") && output.contains(" refused — retrieval mode"))
     }
 
     /// Run a host tool call through the permission and execution gates.
@@ -6674,15 +6700,27 @@ impl AgentLoopController {
             } else {
                 "internal_retrieval"
             };
+            let code = "retrieval_mode_off";
+            let policy_denial = PolicyDenial {
+                source: PolicyDenialSource::RetrievalMode,
+                code: code.to_string(),
+                reason: msg.clone(),
+            };
             writer
                 .record(
                     EventType::ToolCompleted,
                     serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
+                        "exit_code": 1,
                         "target": target,
                         "status": "error",
-                        "error": "retrieval_mode_off",
+                        "error": code,
+                        "policy_denial": {
+                            "source": "retrieval_mode",
+                            "code": code,
+                            "reason": msg,
+                        },
                     }),
                 )
                 .await?;
@@ -6699,6 +6737,7 @@ impl AgentLoopController {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    policy_denial: Some(policy_denial),
                 },
                 None,
             ));
@@ -6719,15 +6758,27 @@ impl AgentLoopController {
                 tc.name,
                 self.retrieval_mode.as_str(),
             );
+            let code = "retrieval_mode_requires_framework_fallback";
+            let policy_denial = PolicyDenial {
+                source: PolicyDenialSource::RetrievalMode,
+                code: code.to_string(),
+                reason: msg.clone(),
+            };
             writer
                 .record(
                     EventType::ToolCompleted,
                     serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
+                        "exit_code": 1,
                         "target": "external_retrieval",
                         "status": "error",
-                        "error": "retrieval_mode_requires_framework_fallback",
+                        "error": code,
+                        "policy_denial": {
+                            "source": "retrieval_mode",
+                            "code": code,
+                            "reason": msg,
+                        },
                     }),
                 )
                 .await?;
@@ -6744,6 +6795,7 @@ impl AgentLoopController {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    policy_denial: Some(policy_denial),
                 },
                 None,
             ));
@@ -6761,15 +6813,27 @@ impl AgentLoopController {
                 tc.name,
                 self.retrieval_mode.as_str(),
             );
+            let code = "retrieval_mode_requires_local_browser";
+            let policy_denial = PolicyDenial {
+                source: PolicyDenialSource::RetrievalMode,
+                code: code.to_string(),
+                reason: msg.clone(),
+            };
             writer
                 .record(
                     EventType::ToolCompleted,
                     serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
+                        "exit_code": 1,
                         "target": "external_retrieval",
                         "status": "error",
-                        "error": "retrieval_mode_requires_local_browser",
+                        "error": code,
+                        "policy_denial": {
+                            "source": "retrieval_mode",
+                            "code": code,
+                            "reason": msg,
+                        },
                     }),
                 )
                 .await?;
@@ -6786,6 +6850,7 @@ impl AgentLoopController {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    policy_denial: Some(policy_denial),
                 },
                 None,
             ));
@@ -6882,6 +6947,10 @@ impl AgentLoopController {
                 PermitDecision::Defer => "permission_defer".to_string(),
                 _ => unreachable!("decision narrowed to Deny|Defer above"),
             };
+            let output = format!(
+                "tool '{tool_name}' — 本次调用未获权限门禁放行",
+                tool_name = tc.name,
+            );
             let result = ToolResult {
                 // P0-A 步骤 6（2026-08-13）：兜底消息中性化——只陈述本次
                 // 调用事实（未获放行），不使用 可用/不可用/成功/失败/
@@ -6889,13 +6958,19 @@ impl AgentLoopController {
                 // （旧措辞 "NOT available in the current policy" 是静态
                 // 声明残留，与逐次判定语义矛盾）。烧轮防护由 §3.5.4 连续
                 // 拒绝熔断承担。
-                output: format!(
-                    "tool '{tool_name}' — 本次调用未获权限门禁放行",
-                    tool_name = tc.name,
-                ),
+                output: output.clone(),
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                // P0-C S3 前置 (2026-08-15, P1-2 定案): structured signal —
+                // permission denials stay event-less by the existing audit
+                // contract (no ToolCompleted), so only the ToolResult
+                // carries the denial for the console adapter.
+                policy_denial: Some(PolicyDenial {
+                    source: PolicyDenialSource::Permission,
+                    code: reason_code.clone(),
+                    reason: output,
+                }),
             };
             // Replay the denial as a tool message — the provider protocol
             // requires a tool message answering each declared call, even a
@@ -6978,6 +7053,7 @@ impl AgentLoopController {
                         exit_code: Some(1),
                         output_encoding: None,
                         structured: None,
+                        ..Default::default()
                     },
                     None,
                 ));
@@ -7075,6 +7151,7 @@ impl AgentLoopController {
                                 exit_code: None,
                                 output_encoding: None,
                                 structured: None,
+                                ..Default::default()
                             },
                             None,
                         ));
@@ -7122,6 +7199,7 @@ impl AgentLoopController {
                 exit_code: result.exit_code,
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             };
             messages.push(Message {
                 role: Role::Tool,
@@ -7281,6 +7359,7 @@ impl AgentLoopController {
                         exit_code: Some(1),
                         output_encoding: None,
                         structured: None,
+                        ..Default::default()
                     },
                     None,
                 ));
@@ -7334,6 +7413,7 @@ impl AgentLoopController {
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 },
                 None,
             ));
@@ -7382,6 +7462,7 @@ impl AgentLoopController {
                             exit_code: Some(1),
                             output_encoding: None,
                             structured: None,
+                            ..Default::default()
                         };
                         messages.push(Message {
                             role: Role::Tool,
@@ -7416,6 +7497,7 @@ impl AgentLoopController {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             };
             messages.push(Message {
                 role: Role::Tool,
@@ -7460,6 +7542,7 @@ impl AgentLoopController {
                         exit_code: Some(1),
                         output_encoding: None,
                         structured: None,
+                        ..Default::default()
                     },
                     None,
                 ));
@@ -7505,6 +7588,7 @@ impl AgentLoopController {
                         exit_code: Some(1),
                         output_encoding: None,
                         structured: None,
+                        ..Default::default()
                     },
                     None,
                 ));
@@ -7563,6 +7647,7 @@ impl AgentLoopController {
                             exit_code: Some(0),
                             output_encoding: None,
                             structured: None,
+                            ..Default::default()
                         },
                         None,
                     ));
@@ -7597,6 +7682,7 @@ impl AgentLoopController {
                             exit_code: Some(1),
                             output_encoding: None,
                             structured: None,
+                            ..Default::default()
                         },
                         None,
                     ));
@@ -7690,6 +7776,20 @@ impl AgentLoopController {
                 if let Some(enc) = &res.output_encoding {
                     completed_payload["output_encoding"] = serde_json::json!(enc);
                 }
+                // P0-C S3 前置 (2026-08-15, P1-2 定案): a host-level
+                // structured denial rides the ToolCompleted event too — it
+                // must stay a self-describing refusal completion
+                // (status=error + error code + non-zero exit_code), the same
+                // shape as the controller-side no-ToolStarted refusals.
+                if let Some(pd) = &res.policy_denial {
+                    completed_payload["status"] = serde_json::json!("error");
+                    completed_payload["error"] = serde_json::json!(pd.code);
+                    completed_payload["policy_denial"] = serde_json::json!({
+                        "source": pd.source.as_str(),
+                        "code": pd.code,
+                        "reason": pd.reason,
+                    });
+                }
                 writer
                     .record(EventType::ToolCompleted, completed_payload)
                     .await?;
@@ -7728,6 +7828,7 @@ impl AgentLoopController {
                         exit_code: res.exit_code,
                         output_encoding: None,
                         structured: None,
+                        policy_denial: res.policy_denial.clone(),
                     },
                     true,
                 )
@@ -7788,6 +7889,7 @@ impl AgentLoopController {
                         exit_code: Some(1),
                         output_encoding: None,
                         structured: None,
+                        ..Default::default()
                     },
                     false,
                 )
@@ -7956,6 +8058,7 @@ impl AgentLoopController {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             },
             Some(PolicyFeedback::Denied(DenialKey {
                 tool_name: tc.name.clone(),
@@ -8698,6 +8801,19 @@ mod tests {
             refused[0].payload["error"],
             "retrieval_mode_requires_local_browser"
         );
+        // P0-C S3 前置审查修复 (F1/F3): refusal completions must stay
+        // self-describing — non-zero exit_code + status=error + structured
+        // denial (the Python verifier cross-check locks this shape).
+        assert_eq!(refused[0].payload["exit_code"], serde_json::json!(1));
+        assert_eq!(refused[0].payload["status"], serde_json::json!("error"));
+        assert_eq!(
+            refused[0].payload["policy_denial"]["source"],
+            serde_json::json!("retrieval_mode")
+        );
+        assert_eq!(
+            refused[0].payload["policy_denial"]["code"],
+            serde_json::json!("retrieval_mode_requires_local_browser")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -8717,6 +8833,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -8790,6 +8907,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -8901,6 +9019,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -8979,6 +9098,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -9055,6 +9175,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -9133,6 +9254,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -9479,12 +9601,14 @@ mod tests {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         };
         let fail = ToolResult {
             output: "boom".to_string(),
             exit_code: Some(1),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         };
         // Failed call → no evidence.
         assert!(
@@ -9902,6 +10026,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -9988,6 +10113,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -10061,6 +10187,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -10145,6 +10272,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: Some("gb18030".to_string()),
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -10239,6 +10367,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -10619,6 +10748,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -10668,6 +10798,7 @@ mod tests {
             exit_code: Some(0),
             output_encoding: None,
             structured: Some(serde_json::json!({ "citations": citations })),
+            ..Default::default()
         };
 
         // Extraction: shape-checked + dedup, first-seen order preserved.
@@ -10678,6 +10809,7 @@ mod tests {
             structured: Some(serde_json::json!({
                 "citations": ["https://a.example", "https://b.example", "https://a.example", "", 7]
             })),
+            ..Default::default()
         });
         assert_eq!(
             urls,
@@ -10692,6 +10824,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             })
             .is_empty()
         );
@@ -10701,6 +10834,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: Some(serde_json::json!({"other": []})),
+                ..Default::default()
             })
             .is_empty()
         );
@@ -10797,6 +10931,7 @@ mod tests {
                     "https://example.com/unrelated"
                 ]
             })),
+            ..Default::default()
         };
         let ev = build_evidence_record("web_search", &call, &result).unwrap();
         assert_eq!(ev.candidate_urls.len(), 7);
@@ -10888,6 +11023,7 @@ mod tests {
                     "https://example.com/?redirect_url=https://other.example"
                 ]
             })),
+            ..Default::default()
         };
         let ev = build_evidence_record("web_search", &call, &result).unwrap();
         let mut source_seq = 0;
@@ -11052,6 +11188,7 @@ mod tests {
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 })
             }
             async fn request_permission(
@@ -11241,6 +11378,7 @@ mod tests {
                         exit_code: Some(0),
                         output_encoding: None,
                         structured: None,
+                        ..Default::default()
                     })
                 }
             }
@@ -11366,6 +11504,7 @@ mod tests {
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 })
             }
             async fn request_permission(
@@ -11537,6 +11676,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let whitelist_call = |id: &str, content: &str| {
@@ -11728,6 +11868,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -11798,6 +11939,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -11873,6 +12015,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -11967,6 +12110,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -12106,6 +12250,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let tool_call = |id: &str| ScriptedResponse {
@@ -12310,6 +12455,7 @@ mod tests {
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 }),
             },
             blocked_cwd: blocked_cwd.clone(),
@@ -12396,6 +12542,7 @@ mod tests {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -12453,6 +12600,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -12495,6 +12643,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -12586,6 +12735,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -12689,6 +12839,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -12752,6 +12903,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -12863,6 +13015,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -12979,6 +13132,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -13052,6 +13206,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
@@ -13122,6 +13277,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
@@ -13212,32 +13368,194 @@ mod tests {
         );
         assert_eq!(error["upstream"]["action"], "workspace.search_replace");
         assert_eq!(error["upstream"]["target_tool"], "search_replace");
+        // P0-C S3 前置 (2026-08-15, P1-2 定案): the receipt detail carries
+        // the structured source/code/reason — never a string-prefix guess.
+        assert_eq!(
+            error["upstream"]["detail"]["source"],
+            serde_json::json!("permission")
+        );
+        assert_eq!(
+            error["upstream"]["detail"]["code"],
+            serde_json::json!("permission_deny")
+        );
+        assert!(
+            error["upstream"]["detail"]["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("未获权限门禁放行")),
+            "reason is the neutral denial text: {error}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P0-C S2 (2026-08-15): 适配层对 controller 侧无反馈标记的策略拒绝
-    /// （ACAF 票据门 / 检索模式门）的机械分类——锁定当前稳定输出前缀，
-    /// 文案变更时此处测试即失败（防静默退化回 execute 失败）。
-    #[test]
-    fn console_s2_policy_refusal_classification_locked() {
+    /// P0-C S3 前置 (2026-08-15, P1-2 定案): 适配层只按结构化信号映射——
+    /// permission / acaf / retrieval_mode / taint 全部落到
+    /// `ExecuteError::PolicyDenied`，detail 携带 source/code/reason。
+    #[tokio::test]
+    async fn console_s2_structured_denial_sources_map_to_policy_step() {
+        use crate::host::PolicyDenialSource;
+
         let controller = AgentLoopController::new();
-        assert!(controller.console_policy_refusal(
+        for (source, code) in [
+            (PolicyDenialSource::Permission, "permission_deny"),
+            (
+                PolicyDenialSource::Acaf,
+                "control_ticket_rejected:missing_goal_context",
+            ),
+            (PolicyDenialSource::RetrievalMode, "retrieval_mode_off"),
+            (PolicyDenialSource::Taint, "taint_denied"),
+        ] {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal: journal.clone(),
+                tool_result: Some(ToolResult {
+                    output: format!("denied: {code}"),
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    policy_denial: Some(crate::host::PolicyDenial {
+                        source,
+                        code: code.to_string(),
+                        reason: "policy reason".to_string(),
+                    }),
+                }),
+            };
+            let mut writer = EventWriter::new(
+                Some(&journal),
+                EventTrack::V02,
+                "RUN-S3PD",
+                "",
+                0,
+                None,
+                None,
+            );
+            let err = controller
+                .run_console_target(
+                    &host,
+                    &mut writer,
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    0,
+                    None,
+                    "read_file",
+                    &serde_json::json!({ "path": "a.txt" }),
+                    "call-pd",
+                )
+                .await
+                .unwrap_err();
+            match err {
+                crate::console::ExecuteError::PolicyDenied { message, detail } => {
+                    assert!(message.contains("denied:"), "{message}");
+                    let detail = detail.expect("structured detail");
+                    assert_eq!(detail["source"], serde_json::json!(source.as_str()));
+                    assert_eq!(detail["code"], serde_json::json!(code));
+                    assert_eq!(detail["reason"], serde_json::json!("policy reason"));
+                }
+                other => panic!("expected PolicyDenied for {code}, got {other:?}"),
+            }
+            // P0-C S3 前置审查修复 (F3): a host-level denial must ride the
+            // ToolCompleted as a self-describing refusal completion —
+            // exit_code=1 + status=error + error code + structured denial.
+            let all_events = events(&dir);
+            let completed: Vec<_> = all_events
+                .iter()
+                .filter(|e| e.event_type == EventType::ToolCompleted)
+                .collect();
+            assert_eq!(completed.len(), 1, "one refusal completion expected");
+            assert_eq!(completed[0].payload["exit_code"], serde_json::json!(1));
+            assert_eq!(completed[0].payload["status"], serde_json::json!("error"));
+            assert_eq!(completed[0].payload["error"], serde_json::json!(code));
+            assert_eq!(
+                completed[0].payload["policy_denial"]["source"],
+                serde_json::json!(source.as_str())
+            );
+            assert_eq!(
+                completed[0].payload["policy_denial"]["code"],
+                serde_json::json!(code)
+            );
+            assert_eq!(
+                completed[0].payload["policy_denial"]["reason"],
+                serde_json::json!("policy reason")
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// P0-C S3 前置审查修复 (F4): `PolicyDenialSource::as_str` and the
+    /// serde snake_case wire names must never drift — both feed the same
+    /// journal/console contract (`permission|acaf|retrieval_mode|taint`).
+    #[test]
+    fn policy_denial_source_as_str_matches_serde_snake_case() {
+        use crate::host::PolicyDenialSource;
+        for source in [
+            PolicyDenialSource::Permission,
+            PolicyDenialSource::Acaf,
+            PolicyDenialSource::RetrievalMode,
+            PolicyDenialSource::Taint,
+        ] {
+            let serialized = serde_json::to_string(&source).expect("serde round-trip");
+            assert_eq!(
+                serialized,
+                format!("\"{}\"", source.as_str()),
+                "as_str must agree with the serde snake_case wire name"
+            );
+        }
+    }
+
+    /// P0-C S3 前置 (2026-08-15, P1-2 定案): 内容碰撞回归——成功输出即使
+    /// 包含旧拒绝前缀文案也必须判成功（策略判定只认结构化信号，不认文案）。
+    #[tokio::test]
+    async fn console_s2_old_refusal_prefix_in_success_output_is_not_policy() {
+        let controller = AgentLoopController::new();
+        for output in [
             "ACAF ticket refused for 'search_replace' — denied (missing_goal_context); \
-             the action was not executed."
-        ));
-        assert!(controller.console_policy_refusal(
+             the action was not executed.",
             "retrieval 'project_doc_index' refused — retrieval mode is 'off' for this \
-             session; no retrieval tools are available."
-        ));
-        assert!(controller.console_policy_refusal(
+             session; no retrieval tools are available.",
             "retrieval 'browser_read' refused — retrieval mode is 'local_browser' for \
-             this session; web tools require framework_fallback mode; no silent fallback."
-        ));
-        // 非策略拒绝不得误分类。
-        assert!(!controller.console_policy_refusal("tool error: boom"));
-        assert!(!controller.console_policy_refusal("tool 'run_tests' — 缺少测试运行器"));
-        assert!(!controller.console_policy_refusal("tool 'read_file' — 本次调用未获权限门禁放行"));
+             this session; web tools require framework_fallback mode; no silent fallback.",
+            "tool 'read_file' — 本次调用未获权限门禁放行",
+        ] {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal: journal.clone(),
+                tool_result: Some(ToolResult {
+                    output: output.to_string(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    policy_denial: None,
+                }),
+            };
+            let mut writer = EventWriter::new(
+                Some(&journal),
+                EventTrack::V02,
+                "RUN-S3CO",
+                "",
+                0,
+                None,
+                None,
+            );
+            let result = controller
+                .run_console_target(
+                    &host,
+                    &mut writer,
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    0,
+                    None,
+                    "read_file",
+                    &serde_json::json!({ "path": "a.txt" }),
+                    "call-co",
+                )
+                .await
+                .expect("old-prefix success output must not be classified as policy");
+            assert_eq!(result.exit_code, Some(0));
+            assert!(result.policy_denial.is_none());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[tokio::test]
@@ -13736,6 +14054,7 @@ mod tests {
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 })
             }
         }
@@ -13795,6 +14114,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -13856,6 +14176,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -13951,6 +14272,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -14014,6 +14336,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -14092,6 +14415,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -14208,6 +14532,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -14302,6 +14627,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -14539,6 +14865,14 @@ mod tests {
             "{}",
             result.output
         );
+        // P0-C S3 前置 (2026-08-15, P1-2 定案): the refusal carries the
+        // structured signal at the run_host_tool boundary.
+        let denial = result.policy_denial.as_ref().expect("structured denial");
+        assert_eq!(
+            denial.source,
+            crate::host::PolicyDenialSource::RetrievalMode
+        );
+        assert_eq!(denial.code, "retrieval_mode_off");
         assert!(feedback.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -14591,6 +14925,26 @@ mod tests {
                 == serde_json::json!("retrieval_mode_requires_framework_fallback")),
             "{refused:?}"
         );
+        assert!(
+            refused.iter().any(|e| {
+                e.payload["error"]
+                    == serde_json::json!("retrieval_mode_requires_framework_fallback")
+                    && e.payload["policy_denial"]["source"] == serde_json::json!("retrieval_mode")
+                    && e.payload["policy_denial"]["code"]
+                        == serde_json::json!("retrieval_mode_requires_framework_fallback")
+            }),
+            "framework_fallback refusal must carry the structured denial: {refused:?}"
+        );
+        // P0-C S3 前置审查修复 (F1): every refusal completion carries the
+        // non-zero exit_code required by the Python cross-check.
+        for event in &refused {
+            assert_eq!(
+                event.payload["exit_code"],
+                serde_json::json!(1),
+                "refusal completion must carry exit_code=1: {event:?}"
+            );
+            assert_eq!(event.payload["status"], serde_json::json!("error"));
+        }
         // The refused lane-internal web call (call-2) has NO ToolStarted —
         // same refusal shape as the other mode gates. (The main-lane
         // dispatch wrapper for call-1 does start — that is the subagent
@@ -14628,6 +14982,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
@@ -14872,6 +15227,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let controller = with_retrieval_enabled(
@@ -14987,6 +15343,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let controller = with_local_browser_enabled(AgentLoopController::with_gateway(Arc::new(
@@ -16070,6 +16427,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -16151,6 +16509,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -16276,6 +16635,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
 
@@ -16683,6 +17043,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let mut script = Vec::new();
@@ -16770,6 +17131,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let mut script = Vec::new();
@@ -16842,6 +17204,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let mut script = Vec::new();
@@ -16915,6 +17278,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let mut script = Vec::new();
@@ -18512,6 +18876,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
@@ -18589,6 +18954,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         // Two tool rounds then text — but the cap is 1, so the run must end
@@ -18863,6 +19229,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             })
         }
     }
@@ -19037,6 +19404,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
         };
         let read = ToolCall {
@@ -19244,6 +19612,7 @@ mod tests {
                     exit_code: None,
                     output_encoding: None,
                     structured: None,
+                    ..Default::default()
                 })
             }
         }

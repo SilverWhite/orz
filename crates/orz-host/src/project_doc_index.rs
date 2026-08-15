@@ -316,6 +316,7 @@ impl ProjectDocIndex {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         })
     }
 

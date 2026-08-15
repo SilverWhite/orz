@@ -201,6 +201,7 @@ pub async fn handle_browser_pdf(
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             })
         }
         BrowserDownloadOutcome::Pdf { path, final_url } => {
@@ -252,6 +253,7 @@ pub async fn handle_browser_pdf(
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             })
         }
     }
@@ -343,6 +345,7 @@ pub async fn handle_pdf_read(cwd: &Path, args: &Value) -> Result<ToolResult, Too
         exit_code: Some(0),
         output_encoding: None,
         structured: None,
+        ..Default::default()
     })
 }
 

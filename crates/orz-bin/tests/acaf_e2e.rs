@@ -298,6 +298,7 @@ async fn controller_control_events_carry_tickets() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -433,6 +434,7 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -592,6 +594,7 @@ async fn file_write_ticket_full_chain() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -713,6 +716,7 @@ async fn file_write_shadow_on_signer_unreachable() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -793,6 +797,7 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -968,6 +973,7 @@ async fn network_ticket_full_chain() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -1126,6 +1132,7 @@ async fn run_terminal_cmd_command_ticket_full_chain() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -1238,6 +1245,7 @@ async fn run_tests_command_ticket_full_chain() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: Some(TestRunner {
             command: vec!["python".to_string(), "-m".to_string(), "pytest".to_string()],
@@ -1358,6 +1366,7 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -1452,6 +1461,7 @@ async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() 
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -1538,6 +1548,7 @@ async fn missing_browser_read_url_refuses_before_acaf_with_count_gate() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -1688,6 +1699,7 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -1784,6 +1796,25 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
         completed[0].payload["error"],
         "control_ticket_rejected:signer_unreachable"
     );
+    // P0-C S3 前置审查修复 (F1): refusal completions carry the non-zero
+    // exit_code + status=error required by the Python cross-check.
+    assert_eq!(completed[0].payload["exit_code"], 1);
+    assert_eq!(completed[0].payload["status"], "error");
+    assert_eq!(
+        completed[0].payload["policy_denial"]["source"],
+        serde_json::json!("acaf")
+    );
+    assert_eq!(
+        completed[0].payload["policy_denial"]["code"],
+        serde_json::json!("control_ticket_rejected:signer_unreachable")
+    );
+    assert!(
+        completed[0].payload["policy_denial"]["reason"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty()),
+        "structured denial reason: {:?}",
+        completed[0].payload
+    );
     assert!(
         completed[0].payload.get("candidate_count").is_none(),
         "a ticket-blocked call consumes no candidate and carries no count: {:?}",
@@ -1832,6 +1863,7 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -1949,6 +1981,7 @@ async fn fail_closed_missing_url_blocks_network_tool() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -2050,6 +2083,7 @@ async fn fail_closed_missing_command_blocks_run_terminal_cmd() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -2130,6 +2164,7 @@ async fn fail_closed_signer_unreachable_blocks_file_write() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -2213,6 +2248,7 @@ async fn fail_closed_retrieval_lane_web_fetch_binds_activation_d13() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };
@@ -2336,6 +2372,7 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
             exit_code: Some(0),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         }),
         test_runner: None,
     };

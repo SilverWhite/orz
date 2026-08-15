@@ -1998,6 +1998,7 @@ async fn role_gate_denied(
             exit_code: Some(1),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         },
         PolicyFeedback::Denied(DenialKey {
             tool_name: tc.name.clone(),
@@ -2057,6 +2058,7 @@ async fn refuse_inject_budget(
             exit_code: Some(1),
             output_encoding: None,
             structured: None,
+            ..Default::default()
         },
         Some(PolicyFeedback::Denied(DenialKey {
             tool_name: tc.name.clone(),

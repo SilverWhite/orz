@@ -777,6 +777,7 @@ mod tests {
                         exit_code: Some(0),
                         output_encoding: None,
                         structured: Some(json!({"output": "hello"})),
+                        ..Default::default()
                     }),
                     seen: seen.clone(),
                 },
@@ -995,6 +996,7 @@ mod tests {
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: Some(json!({"unexpected": true})),
+                ..Default::default()
             }),
             seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
@@ -1028,6 +1030,7 @@ mod tests {
                 exit_code: Some(1),
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
             seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
@@ -1105,6 +1108,7 @@ mod tests {
                 exit_code: None,
                 output_encoding: None,
                 structured: None,
+                ..Default::default()
             }),
             seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };

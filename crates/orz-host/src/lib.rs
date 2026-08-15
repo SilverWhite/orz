@@ -1028,6 +1028,7 @@ impl LoopHost for OrzHost {
             // ride the structured seam into the loop (candidate pool for
             // the mechanical prefilter); every other tool is `None`.
             structured: crate::tools::structured_from_output(&result.output),
+            ..Default::default()
         })
     }
 

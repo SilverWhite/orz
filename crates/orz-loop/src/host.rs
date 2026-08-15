@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use orz_assurance::journal::JournalRecorder;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Risk classification for permission requests.
@@ -41,8 +42,48 @@ pub enum ToolPolicy {
     Benchmark,
 }
 
+/// The refusing gate family behind a structured policy denial
+/// (P0-C S3 前置, 2026-08-15, P1-2 定案).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyDenialSource {
+    /// The per-call permission bridge (user deny / headless defer).
+    Permission,
+    /// The ACAF ticket gate (Slice 2 fail-closed refusals).
+    Acaf,
+    /// The retrieval-mode gates (off / framework_fallback / local_browser).
+    RetrievalMode,
+    /// Reserved: taint action-combination policy (design item, not yet
+    /// wired at runtime).
+    Taint,
+}
+
+impl PolicyDenialSource {
+    /// Machine-readable source key (`permission` | `acaf` |
+    /// `retrieval_mode` | `taint`) — matches the serde snake_case names.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PolicyDenialSource::Permission => "permission",
+            PolicyDenialSource::Acaf => "acaf",
+            PolicyDenialSource::RetrievalMode => "retrieval_mode",
+            PolicyDenialSource::Taint => "taint",
+        }
+    }
+}
+
+/// Structured policy denial (P0-C S3 前置, 2026-08-15, P1-2 定案):
+/// `run_host_tool` refusals carry `{source, code, reason}` instead of
+/// relying on stable output prefixes; the console adapter maps ONLY this
+/// structured signal to `ExecuteError::PolicyDenied`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyDenial {
+    pub source: PolicyDenialSource,
+    pub code: String,
+    pub reason: String,
+}
+
 /// Result returned by a tool invocation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolResult {
     pub output: String,
     pub exit_code: Option<i32>,
@@ -59,6 +100,13 @@ pub struct ToolResult {
     /// All other tools leave it `None`; it is never derived from the
     /// model-visible output text.
     pub structured: Option<serde_json::Value>,
+    /// P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial when
+    /// the call was refused by a policy gate (permission / ACAF ticket /
+    /// retrieval mode; taint reserved). `None` for every executed call and
+    /// for non-policy refusals (candidate cap, inject budget, runner
+    /// availability). The console adapter classifies policy refusals ONLY
+    /// from this field — the old stable-output-prefix judgment is retired.
+    pub policy_denial: Option<PolicyDenial>,
 }
 
 /// Lightweight error from tool execution.
