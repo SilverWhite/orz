@@ -48,8 +48,8 @@ use crate::blackboard::{
     ActionOrder, ActionRegistration, ActionResult, EditRecord, SharedBlackboard, ToolActionRecord,
 };
 use crate::console::{
-    ActionExecutor, CODE_ORDER_STALE, ConsoleError, STEP_PROTOCOL, ServiceRegistry, TraceStore,
-    failure_envelope, issue_action,
+    ActionExecutor, ActionKind, CODE_ORDER_STALE, ConsoleError, STEP_PROTOCOL, ServiceRegistry,
+    TraceStore, failure_envelope, issue_action,
 };
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
@@ -6389,10 +6389,16 @@ impl AgentLoopController {
         ))
     }
 
-    /// P0-C S2 (2026-08-15): 注册板块投影——每轮机械刷新用（最小参数提示，
-    /// 不复制完整 schema）。
-    pub(crate) fn console_registrations(&self) -> Vec<ActionRegistration> {
-        self.console_registry.registrations()
+    /// P0-C S2/S3 (2026-08-15): 注册板块投影——每轮机械刷新用（最小参数提示，
+    /// 不复制完整 schema）。S3 起 = Profile/Bundle 加载集 ∩ 探针完整集：
+    /// 会话场景键取 `host.tool_policy()`，探针快照取本轮主车道工作工具
+    /// 探针；`probe=None`（无探针间隙）时只做 bundle 过滤。
+    pub(crate) fn console_registrations(
+        &self,
+        profile: crate::host::ToolPolicy,
+        probe: Option<&crate::tool_probe::ToolProbeSnapshot>,
+    ) -> Vec<ActionRegistration> {
+        self.console_registry.registrations_for(profile, probe)
     }
 
     /// P0-C S2 (2026-08-15): 轮末机械发放入口——动作栏有未消费订单时，
@@ -6470,15 +6476,59 @@ impl AgentLoopController {
             tool_rounds,
             heartbeat,
         };
-        match issue_action(
+        // P0-C S3: 控制台内部动作（assistant.trace / workspace.run_script）
+        // 不经 run_host_tool——审计事件面显式补 ToolStarted/ToolCompleted
+        // （读操作本身入 journal；run_script 的内层步骤仍经 run_host_tool
+        // 逐行留痕，外层用合成 call_id 区分）。
+        let is_internal = matches!(
+            self.console_registry.get(&order.action).map(|s| s.kind),
+            Some(ActionKind::TraceRead) | Some(ActionKind::RunScript)
+        );
+        if is_internal {
+            executor
+                .writer
+                .lock()
+                .await
+                .record(
+                    EventType::ToolStarted,
+                    serde_json::json!({
+                        "tool": order.action,
+                        "call_id": call_id,
+                    }),
+                )
+                .await?;
+        }
+        let result = issue_action(
             &self.console_registry,
             &executor,
+            Some(&self.console_traces),
             &order,
             &mut trace,
             &call_id,
         )
-        .await
-        {
+        .await;
+        if is_internal {
+            let (exit_code, error_code) = match &result {
+                Ok(_) => (0, None),
+                Err(err) => (1, Some(err.code)),
+            };
+            let mut payload = serde_json::json!({
+                "tool": order.action,
+                "call_id": call_id,
+                "exit_code": exit_code,
+            });
+            if let Some(code) = error_code {
+                payload["status"] = serde_json::json!("error");
+                payload["error"] = serde_json::json!(code);
+            }
+            executor
+                .writer
+                .lock()
+                .await
+                .record(EventType::ToolCompleted, payload)
+                .await?;
+        }
+        match result {
             Ok(response) => {
                 self.push_console_result(
                     order.order_id.clone(),
@@ -13045,10 +13095,38 @@ mod tests {
         let board = controller.blackboard();
         {
             let r = board.read();
-            // 注册板块每轮机械刷新：基础动作集 6 项。
+            // 注册板块每轮机械刷新（P0-C S3）：Profile/Bundle ∩ 探针完整集。
+            // TestHost 无测试运行器 → workspace.run_tests 被探针移除；
+            // 内部服务（assistant.trace/workspace.run_script）恒加载；
+            // workspace.index 目标为非工作工具（project_doc_index）不探
+            // 不标 → 7 项。
             assert_eq!(
                 r.actions.registration.len(),
-                6,
+                7,
+                "{:?}",
+                r.actions.registration
+            );
+            assert!(
+                !r.actions
+                    .registration
+                    .iter()
+                    .any(|reg| reg.name == "workspace.run_tests"),
+                "{:?}",
+                r.actions.registration
+            );
+            assert!(
+                r.actions
+                    .registration
+                    .iter()
+                    .any(|reg| reg.name == "assistant.trace"),
+                "{:?}",
+                r.actions.registration
+            );
+            assert!(
+                r.actions
+                    .registration
+                    .iter()
+                    .any(|reg| reg.name == "workspace.run_script"),
                 "{:?}",
                 r.actions.registration
             );
@@ -13115,6 +13193,191 @@ mod tests {
         assert!(actions_reply.content.contains("== registration =="));
         assert!(actions_reply.content.contains("workspace.read_file"));
         assert!(actions_reply.content.contains("ORD-000001 ok=true"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S3 (2026-08-15): `workspace.run_script` 生产发放——模型写一条
+    /// PTC 脚本订单，轮末机械发放逐行执行（内层经 run_host_tool 全链路），
+    /// 外层内部动作以 ToolStarted/ToolCompleted 留痕，receipt 返回
+    /// steps + result。
+    #[tokio::test]
+    async fn console_s3_run_script_issuance_flow() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.run_script",
+                    "arguments": {
+                        "script": [
+                            {
+                                "do": "workspace.read_file",
+                                "with": {"target_file": "a.txt"},
+                                "as": "a",
+                            },
+                            {
+                                "do": "workspace.read_file",
+                                "with": {"target_file": "b.txt"},
+                                "as": "b",
+                            },
+                        ]
+                    },
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake);
+        controller
+            .run_turn(&host, "跑脚本", "RUN-S3A", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let board = controller.blackboard();
+        {
+            let r = board.read();
+            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+            let receipt = &r.actions.results[0];
+            assert!(receipt.ok, "{:?}", receipt.error);
+            let response = receipt.response.as_ref().unwrap();
+            assert_eq!(response["steps"].as_array().unwrap().len(), 2);
+            assert_eq!(response["result"]["output"], "ok");
+            // 内层 host 调用经 run_host_tool（工具动作区留痕 2 条 read_file）。
+            let reads: Vec<_> = r
+                .tool_actions
+                .iter()
+                .filter(|t| t.tool == "read_file")
+                .collect();
+            assert_eq!(reads.len(), 2, "{:?}", r.tool_actions);
+        }
+        // 外层内部动作 ToolStarted/ToolCompleted 留痕（合成 call_id）。
+        let started: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|t| t.as_str())
+                        == Some("workspace.run_script")
+            })
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(started.len(), 1, "{started:?}");
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|t| t.as_str())
+                        == Some("workspace.run_script")
+            })
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(completed.len(), 1, "{completed:?}");
+        assert_eq!(completed[0]["call_id"], "ord-000001");
+        assert_eq!(completed[0]["exit_code"], 0);
+        // 内层 read_file 事件带 .s1/.s2 合成 call_id（可关联订单与步骤）。
+        let inner: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some("read_file")
+            })
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(inner.len(), 2, "{inner:?}");
+        assert_eq!(inner[0]["call_id"], "ord-000001.s1");
+        assert_eq!(inner[1]["call_id"], "ord-000001.s2");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S3 (2026-08-15): `assistant.trace` 生产发放——模型写读 trace
+    /// 订单，内部只读服务取回已 commit 的 trace，结果栏 receipt 携带事件。
+    #[tokio::test]
+    async fn console_s3_trace_read_issuance_flow() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 预置一个已 commit 的目标 trace（发放读 trace 订单时取回）。
+        let mut seed_store = crate::console::TraceStore::new();
+        let target_trace_id = {
+            let mut target = seed_store.new_trace(Some("ORD-000000".to_string()));
+            target.add(
+                "execute",
+                Some("workspace.read_file"),
+                true,
+                None,
+                None,
+                None,
+            );
+            seed_store.commit(&target);
+            target.trace_id
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "assistant.trace",
+                    "arguments": {
+                        "trace_id": target_trace_id,
+                        "tail": 5,
+                    },
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake);
+        *controller.console_traces.lock().unwrap() = seed_store;
+        controller
+            .run_turn(&host, "读 trace", "RUN-S3T", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none());
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(receipt.ok, "{:?}", receipt.error);
+        let response = receipt.response.as_ref().unwrap();
+        assert_eq!(response["trace_id"], target_trace_id);
+        assert_eq!(response["request_id"], "ORD-000000");
+        assert_eq!(response["events"].as_array().unwrap().len(), 1);
+        assert!(!response["truncated"].as_bool().unwrap());
+        drop(r);
+        // 读操作本身入事件面。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some("assistant.trace")
+            })
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(completed.len(), 1, "{completed:?}");
+        assert_eq!(completed[0]["exit_code"], 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

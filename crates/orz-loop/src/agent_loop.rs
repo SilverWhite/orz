@@ -982,35 +982,46 @@ pub(crate) async fn run_agent_loop(
         // projection (no second `tool_availability_check` inside a lane).
         // The call-time permission gate remains the final backstop (design
         // invariant 2).
-        let current_tool_defs: Vec<ToolDef> = if pending_checkpoint.is_some() {
-            // §14.16: a checkpoint round is a tool-free pause — no registry
-            // projection and no probe; the model gets no tools to call.
-            Vec::new()
-        } else if profile.probe_work_tools {
-            let probe_context = crate::tool_probe::ProbeContext {
-                cwd: host.session_cwd(),
-                policy: host.tool_policy(),
-                test_runner_present: host.test_runner().is_some(),
-                interactive_user: host.interactive_user(),
-                goal_context_present: controller.goal_context_present(),
-                pending_retrieval_activation: controller.has_live_activation(),
-                terminal_available: host.terminal_available(),
-                lsp_configured: host.lsp_configured(),
-                memory_enabled: host.memory_enabled(),
-                image_backend_configured: host.image_backend_configured(),
-                video_backend_configured: host.video_backend_configured(),
-                mcp_registry_available: host.mcp_registry_available(),
+        // P0-C S3 (2026-08-15): 探针快照提升到循环顶部作用域——同一快照
+        // 同时驱动模型可见工具投影与注册板块投影（Profile/Bundle ∩ 探针
+        // 完整集），避免两处各探一次导致投影不一致。
+        let probe_snapshot: Option<crate::tool_probe::ToolProbeSnapshot> =
+            if pending_checkpoint.is_some() {
+                // §14.16: a checkpoint round is a tool-free pause — no
+                // registry projection and no probe.
+                None
+            } else if profile.probe_work_tools {
+                let probe_context = crate::tool_probe::ProbeContext {
+                    cwd: host.session_cwd(),
+                    policy: host.tool_policy(),
+                    test_runner_present: host.test_runner().is_some(),
+                    interactive_user: host.interactive_user(),
+                    goal_context_present: controller.goal_context_present(),
+                    pending_retrieval_activation: controller.has_live_activation(),
+                    terminal_available: host.terminal_available(),
+                    lsp_configured: host.lsp_configured(),
+                    memory_enabled: host.memory_enabled(),
+                    image_backend_configured: host.image_backend_configured(),
+                    video_backend_configured: host.video_backend_configured(),
+                    mcp_registry_available: host.mcp_registry_available(),
+                };
+                let snapshot = crate::tool_probe::probe_work_tools(&probe_context);
+                if controller.probe_flip(&snapshot) {
+                    writer
+                        .record(
+                            EventType::ToolAvailabilityCheck,
+                            AgentLoopController::tool_availability_payload(&snapshot),
+                        )
+                        .await?;
+                }
+                Some(snapshot)
+            } else {
+                None
             };
-            let snapshot = crate::tool_probe::probe_work_tools(&probe_context);
-            if controller.probe_flip(&snapshot) {
-                writer
-                    .record(
-                        EventType::ToolAvailabilityCheck,
-                        AgentLoopController::tool_availability_payload(&snapshot),
-                    )
-                    .await?;
-            }
-            AgentLoopController::project_main_agent_tool_defs(tool_defs, &snapshot)
+        let current_tool_defs: Vec<ToolDef> = if pending_checkpoint.is_some() {
+            Vec::new()
+        } else if let Some(snapshot) = probe_snapshot.as_ref() {
+            AgentLoopController::project_main_agent_tool_defs(tool_defs, snapshot)
         } else {
             tool_defs.to_vec()
         };
@@ -1019,7 +1030,8 @@ pub(crate) async fn run_agent_loop(
         // `console::ServiceRegistry` 生成，不复制完整 schema）；板块常驻、
         // 内容按需读（模型用 blackboard_read section=actions 取回）。
         if profile.role == AgentRole::Main {
-            let registrations = controller.console_registrations();
+            let registrations =
+                controller.console_registrations(host.tool_policy(), probe_snapshot.as_ref());
             svc.blackboard
                 .write()
                 .actions
