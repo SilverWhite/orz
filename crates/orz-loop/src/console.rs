@@ -10,15 +10,27 @@
 //! 工具投影、不接入轮末发放、不触碰 ACAF/权限门；执行委托经 `ActionExecutor`
 //! 抽象，生产实现由 controller 复用 `run_host_tool`（权限 + ACAF + 事件链），
 //! 禁止直接绕过既有门直接调 `host.call_tool`。
+//!
+//! 2026-08-15 全面检查修复（用户裁决）：
+//! - 执行器返回 `ExecuteError`，区分执行失败（`step=execute`）与策略拒绝
+//!   （`step=policy` / `code=policy_denied`；权限/ACAF/taint/模式门经适配层归一化）；
+//! - 响应契约强制：`ActionSpec.response_schema` 必填，任何输出必须过机械验证
+//!   （审计的一部分），注册时校验并缓存 JSON Schema；
+//! - 成功退出码契约：`exit_code` 必须为 `Some(0)`；`None`/非零按执行失败
+//!   （生产 host 成功输出已归一化为 `Some(0)`，拒绝由适配层归一化为 PolicyDenied）；
+//! - `TraceStore` 提交语义：`new_trace` 返回工作副本，发放收口后 `commit`
+//!   使事件在 store 可见；trace 满 200 后失败事件滚动保底（替换最旧）；
+//! - 注册板块投影为最小参数提示（type/required/属性枚举/默认值），不复制完整 schema。
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::blackboard::ActionOrder;
-use crate::host::{ToolError, ToolResult};
+use crate::host::ToolResult;
 
 /// 单 trace 事件上限（POC 同构：200 条）。
 pub const TRACE_MAX_EVENTS: usize = 200;
@@ -41,6 +53,7 @@ pub const CODE_INVALID_ARGUMENTS: &str = "invalid_arguments";
 pub const CODE_INVALID_RESPONSE: &str = "invalid_response";
 pub const CODE_EXECUTION_FAILED: &str = "execution_failed";
 pub const CODE_OUT_OF_SCOPE: &str = "out_of_scope";
+pub const CODE_POLICY_DENIED: &str = "policy_denied";
 pub const CODE_INTERNAL_ERROR: &str = "internal_error";
 
 /// 一条有界执行日志事件。
@@ -70,7 +83,9 @@ pub struct Trace {
 }
 
 impl Trace {
-    /// Append one bounded event; events past `TRACE_MAX_EVENTS` are dropped.
+    /// Append one bounded event; ordinary events past `TRACE_MAX_EVENTS` are
+    /// dropped (POC parity). Failure events evict the oldest event instead,
+    /// so the execute-failure tail contract always has the failure visible.
     pub fn add(
         &mut self,
         step: impl Into<String>,
@@ -81,10 +96,15 @@ impl Trace {
         upstream: Option<Value>,
     ) {
         if self.events.len() >= TRACE_MAX_EVENTS {
-            return;
+            if !ok {
+                self.events.remove(0);
+            } else {
+                return;
+            }
         }
+        let seq = self.events.last().map_or(1, |e| e.seq + 1);
         self.events.push(TraceEvent {
-            seq: self.events.len() + 1,
+            seq,
             step: step.into(),
             action: action.map(str::to_string),
             ok,
@@ -113,7 +133,9 @@ impl TraceStore {
         Self::default()
     }
 
-    /// Allocate the next trace id and retain the trace (bounded).
+    /// Allocate the next trace id and return a detached working trace. The
+    /// store keeps a placeholder until `commit` stores the completed events —
+    /// callers must `commit` after issuing so `assistant.trace` can see them.
     pub fn new_trace(&mut self, request_id: Option<String>) -> Trace {
         self.seq += 1;
         let seq = self.seq;
@@ -129,6 +151,19 @@ impl TraceStore {
         trace
     }
 
+    /// Commit a completed trace by id, replacing the placeholder so its
+    /// events become visible to store lookups. No-op if the placeholder was
+    /// already evicted by the bounded store.
+    pub fn commit(&mut self, trace: &Trace) {
+        if let Some(existing) = self
+            .traces
+            .iter_mut()
+            .find(|t| t.trace_id == trace.trace_id)
+        {
+            *existing = trace.clone();
+        }
+    }
+
     pub fn get(&self, trace_id: &str) -> Option<&Trace> {
         self.traces.iter().find(|t| t.trace_id == trace_id)
     }
@@ -142,28 +177,40 @@ pub struct ActionSpec {
     /// 解析后的真实执行目标（既有 host 工具名；操作台不建第二执行器）。
     pub target_tool: String,
     pub input_schema: Value,
-    /// 对 `ToolResult.structured`（无则 `{"output": ...}`）做机械验证。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub response_schema: Option<Value>,
+    /// 响应契约（必填）：对 `ToolResult.structured`（无则 `{"output": ...}`）
+    /// 做机械验证——任何输出必须过机械验证（审计的一部分），注册时校验并缓存。
+    pub response_schema: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {
     Duplicate(String),
+    InvalidSchema {
+        name: String,
+        kind: &'static str,
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for RegistryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RegistryError::Duplicate(name) => write!(f, "duplicate service: {name}"),
+            RegistryError::InvalidSchema { name, kind, detail } => {
+                write!(f, "invalid {kind} schema for service {name}: {detail}")
+            }
         }
     }
 }
+
+/// Compiled JSON Schema validator, cached at registration (runtime近零).
+type CachedValidator = Arc<jsonschema::Validator>;
 
 /// HA 式服务注册表：动作名 → 契约 + 目标工具，确定性、无模型参与。
 #[derive(Debug, Clone, Default)]
 pub struct ServiceRegistry {
     actions: BTreeMap<String, ActionSpec>,
+    validators: BTreeMap<String, (CachedValidator, CachedValidator)>,
 }
 
 impl ServiceRegistry {
@@ -175,6 +222,22 @@ impl ServiceRegistry {
         if self.actions.contains_key(&spec.name) {
             return Err(RegistryError::Duplicate(spec.name));
         }
+        let input = jsonschema::validator_for(&spec.input_schema).map_err(|e| {
+            RegistryError::InvalidSchema {
+                name: spec.name.clone(),
+                kind: "input",
+                detail: e.to_string(),
+            }
+        })?;
+        let response = jsonschema::validator_for(&spec.response_schema).map_err(|e| {
+            RegistryError::InvalidSchema {
+                name: spec.name.clone(),
+                kind: "response",
+                detail: e.to_string(),
+            }
+        })?;
+        self.validators
+            .insert(spec.name.clone(), (Arc::new(input), Arc::new(response)));
         self.actions.insert(spec.name.clone(), spec);
         Ok(())
     }
@@ -195,9 +258,67 @@ impl ServiceRegistry {
             .map(|spec| crate::blackboard::ActionRegistration {
                 name: spec.name.clone(),
                 description: spec.description.clone(),
-                parameters: spec.input_schema.clone(),
+                parameters: minimal_parameter_hints(&spec.input_schema),
             })
             .collect()
+    }
+}
+
+/// 注册板块投影：最小参数提示（type/required/属性 type/description/enum/
+/// const/default），不复制完整 schema——防上下文膨胀（v0.5 用户确认：常驻按需读）。
+fn minimal_parameter_hints(schema: &Value) -> Value {
+    const HINT_KEYS: [&str; 5] = ["type", "description", "enum", "const", "default"];
+    let mut out = serde_json::Map::new();
+    if let Some(t) = schema.get("type") {
+        out.insert("type".to_string(), t.clone());
+    }
+    if let Some(required) = schema.get("required") {
+        out.insert("required".to_string(), required.clone());
+    }
+    if let Some(props) = schema.get("properties").and_then(Value::as_object) {
+        let trimmed = props
+            .iter()
+            .map(|(name, prop)| {
+                let mut hint = serde_json::Map::new();
+                for key in HINT_KEYS {
+                    if let Some(v) = prop.get(key) {
+                        hint.insert(key.to_string(), v.clone());
+                    }
+                }
+                (name.clone(), Value::Object(hint))
+            })
+            .collect();
+        out.insert("properties".to_string(), Value::Object(trimmed));
+    }
+    Value::Object(out)
+}
+
+/// 执行器错误：区分「执行失败」与「策略拒绝」（权限/ACAF/taint/模式门）。
+///
+/// 2026-08-15 用户裁决：适配层返回丰富结果，`issue_action` 据此把策略拒绝
+/// 映射为 `step=policy` / `code=policy_denied`，不落入 execute 失败。
+#[derive(Debug, Clone)]
+pub enum ExecuteError {
+    ExecutionFailed {
+        message: String,
+        detail: Option<Value>,
+    },
+    PolicyDenied {
+        message: String,
+        detail: Option<Value>,
+    },
+}
+
+impl std::fmt::Display for ExecuteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecuteError::ExecutionFailed { message, .. } => {
+                write!(f, "execution failed: {message}")
+            }
+            ExecuteError::PolicyDenied { message, .. } => {
+                write!(f, "policy denied: {message}")
+            }
+        }
     }
 }
 
@@ -210,7 +331,7 @@ pub trait ActionExecutor: Send + Sync {
         target_tool: &str,
         arguments: &Value,
         call_id: &str,
-    ) -> Result<ToolResult, ToolError>;
+    ) -> Result<ToolResult, ExecuteError>;
 }
 
 /// 机械构造的失败点（fail-closed 返回契约；无模型参与）。
@@ -279,10 +400,29 @@ pub fn error_envelope(err: &ConsoleError, trace: &Trace, tail: usize) -> ErrorEn
     }
 }
 
+/// 失败收口：先追加失败事件，再构造信封（POC `run_request` 的失败收口同构）。
+/// 调用方不再手工拼接 trace 事件与信封。
+pub fn failure_envelope(
+    trace: &mut Trace,
+    action: Option<&str>,
+    err: &ConsoleError,
+    tail: usize,
+) -> ErrorEnvelope {
+    trace.add(
+        err.step,
+        action,
+        false,
+        Some(err.code),
+        Some(err.message.clone()),
+        err.upstream.clone(),
+    );
+    error_envelope(err, trace, tail)
+}
+
 /// 发放一个动作订单：注册表路由 → 契约校验 → 目标解析 → 执行 → 响应验证。
 ///
-/// 每一步成功后追加 trace 事件；失败返回 `ConsoleError`（调用方负责在 trace
-/// 上追加失败事件并构造信封——与 POC `run_request` 的失败收口一致）。
+/// 每一步成功后追加 trace 事件；失败返回 `ConsoleError`（调用方用
+/// `failure_envelope` 收口——追加失败事件并构造信封）。
 pub async fn issue_action<E: ActionExecutor + ?Sized>(
     registry: &ServiceRegistry,
     executor: &E,
@@ -298,7 +438,11 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
     })?;
     trace.add(STEP_REGISTRY, Some(&order.action), true, None, None, None);
 
-    validate_arguments(&spec.input_schema, &order.arguments).map_err(|msg| ConsoleError {
+    let (input_validator, response_validator) = registry
+        .validators
+        .get(&order.action)
+        .expect("registry invariant: every registered action has cached validators");
+    validate_with(input_validator, &order.arguments).map_err(|msg| ConsoleError {
         step: STEP_CONTRACT,
         code: CODE_INVALID_ARGUMENTS,
         message: format!("{}: {msg}", spec.name),
@@ -321,20 +465,29 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
     let result = executor
         .execute(&spec.target_tool, &order.arguments, call_id)
         .await
-        .map_err(|err| ConsoleError {
-            step: STEP_EXECUTE,
-            code: CODE_EXECUTION_FAILED,
-            message: err.to_string(),
-            upstream: Some(json!({
-                "target_tool": spec.target_tool,
-                "action": spec.name,
-            })),
+        .map_err(|err| match err {
+            ExecuteError::ExecutionFailed { message, detail } => ConsoleError {
+                step: STEP_EXECUTE,
+                code: CODE_EXECUTION_FAILED,
+                message,
+                upstream: Some(execution_upstream(&spec.name, &spec.target_tool, detail)),
+            },
+            ExecuteError::PolicyDenied { message, detail } => ConsoleError {
+                step: STEP_POLICY,
+                code: CODE_POLICY_DENIED,
+                message,
+                upstream: Some(execution_upstream(&spec.name, &spec.target_tool, detail)),
+            },
         })?;
     if result.exit_code != Some(0) {
+        let exit_detail = match result.exit_code {
+            None => "no exit code (actions require an explicit success exit code)".to_string(),
+            Some(code) => format!("non-zero exit code {code}"),
+        };
         return Err(ConsoleError {
             step: STEP_EXECUTE,
             code: CODE_EXECUTION_FAILED,
-            message: "target tool returned a non-zero exit code".to_string(),
+            message: format!("target tool {exit_detail}"),
             upstream: Some(json!({
                 "target_tool": spec.target_tool,
                 "exit_code": result.exit_code,
@@ -348,29 +501,36 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
         Some(value) => value,
         None => json!({ "output": result.output }),
     };
-    if let Some(schema) = &spec.response_schema {
-        validate_response(schema, &response).map_err(|msg| ConsoleError {
-            step: STEP_VERIFY,
-            code: CODE_INVALID_RESPONSE,
-            message: format!("{}: response failed verification: {msg}", spec.name),
-            upstream: Some(json!({
-                "action": spec.name,
-                "target_tool": spec.target_tool,
-            })),
-        })?;
-    }
+    // 响应契约强制（2026-08-15 用户裁决）：任何输出必须过机械验证，
+    // 不仅是规整性与安全，也是审计的一部分。
+    validate_with(response_validator, &response).map_err(|msg| ConsoleError {
+        step: STEP_VERIFY,
+        code: CODE_INVALID_RESPONSE,
+        message: format!("{}: response failed verification: {msg}", spec.name),
+        upstream: Some(json!({
+            "action": spec.name,
+            "target_tool": spec.target_tool,
+        })),
+    })?;
     trace.add(STEP_VERIFY, Some(&order.action), true, None, None, None);
 
     Ok(response)
 }
 
-fn validate_arguments(schema: &Value, instance: &Value) -> Result<(), String> {
-    let validator = jsonschema::validator_for(schema).map_err(|e| e.to_string())?;
-    validator.validate(instance).map_err(|e| e.to_string())
+fn execution_upstream(action: &str, target_tool: &str, detail: Option<Value>) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("action".to_string(), Value::String(action.to_string()));
+    map.insert(
+        "target_tool".to_string(),
+        Value::String(target_tool.to_string()),
+    );
+    if let Some(detail) = detail {
+        map.insert("detail".to_string(), detail);
+    }
+    Value::Object(map)
 }
 
-fn validate_response(schema: &Value, instance: &Value) -> Result<(), String> {
-    let validator = jsonschema::validator_for(schema).map_err(|e| e.to_string())?;
+fn validate_with(validator: &jsonschema::Validator, instance: &Value) -> Result<(), String> {
     validator.validate(instance).map_err(|e| e.to_string())
 }
 
@@ -401,13 +561,13 @@ mod tests {
                 "required": ["path"],
                 "additionalProperties": false,
             }),
-            response_schema: Some(json!({
+            response_schema: json!({
                 "type": "object",
                 "properties": {
                     "output": {"type": "string"},
                 },
                 "required": ["output"],
-            })),
+            }),
         }
     }
 
@@ -422,7 +582,7 @@ mod tests {
     }
 
     struct FakeExecutor {
-        result: Result<ToolResult, String>,
+        result: Result<ToolResult, ExecuteError>,
         seen: std::sync::Arc<std::sync::Mutex<Vec<(String, Value, String)>>>,
     }
 
@@ -448,7 +608,10 @@ mod tests {
 
         fn fail() -> Self {
             Self {
-                result: Err("boom".to_string()),
+                result: Err(ExecuteError::ExecutionFailed {
+                    message: "boom".to_string(),
+                    detail: None,
+                }),
                 seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
@@ -461,13 +624,13 @@ mod tests {
             target_tool: &str,
             arguments: &Value,
             call_id: &str,
-        ) -> Result<ToolResult, ToolError> {
+        ) -> Result<ToolResult, ExecuteError> {
             self.seen.lock().unwrap().push((
                 target_tool.to_string(),
                 arguments.clone(),
                 call_id.to_string(),
             ));
-            self.result.clone().map_err(ToolError::NotFound)
+            self.result.clone()
         }
     }
 
@@ -611,15 +774,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.step, STEP_EXECUTE);
         assert_eq!(err.code, CODE_EXECUTION_FAILED);
-        trace.add(
-            err.step,
-            Some("workspace.read_file"),
-            false,
-            Some(err.code),
-            Some(err.message.clone()),
-            err.upstream.clone(),
-        );
-        let envelope = error_envelope(&err, &trace, 10);
+        let envelope = failure_envelope(&mut trace, Some("workspace.read_file"), &err, 10);
         assert!(!envelope.ok);
         assert_eq!(envelope.error.trace_id, "t000004");
         let tail = envelope.error.trace.unwrap();
@@ -695,6 +850,202 @@ mod tests {
         assert!(output.contains("[truncated]"));
     }
 
+    #[tokio::test]
+    async fn policy_denial_maps_to_policy_step() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(spec("workspace.read_file", "read_file"))
+            .unwrap();
+        let executor = FakeExecutor {
+            result: Err(ExecuteError::PolicyDenied {
+                message: "denied by policy".to_string(),
+                detail: Some(json!({"policy": "readonly"})),
+            }),
+            seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut trace = Trace {
+            trace_id: "t000007".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let err = issue_action(
+            &registry,
+            &executor,
+            &order("workspace.read_file", json!({"path": "a.txt"})),
+            &mut trace,
+            "call-1",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_POLICY);
+        assert_eq!(err.code, CODE_POLICY_DENIED);
+        let upstream = err.upstream.as_ref().unwrap();
+        assert_eq!(upstream["detail"]["policy"], "readonly");
+        let envelope = failure_envelope(&mut trace, Some("workspace.read_file"), &err, 10);
+        assert_eq!(envelope.error.step, STEP_POLICY);
+        assert_eq!(envelope.error.code, CODE_POLICY_DENIED);
+        assert!(
+            envelope.error.trace.is_none(),
+            "policy denial must not carry the execute trace tail"
+        );
+        assert_eq!(trace.events.last().unwrap().step, STEP_POLICY);
+        assert!(!trace.events.last().unwrap().ok);
+    }
+
+    #[tokio::test]
+    async fn missing_exit_code_is_execute_failure() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(spec("workspace.read_file", "read_file"))
+            .unwrap();
+        let executor = FakeExecutor {
+            result: Ok(ToolResult {
+                output: "ok".to_string(),
+                exit_code: None,
+                output_encoding: None,
+                structured: None,
+            }),
+            seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut trace = Trace {
+            trace_id: "t000008".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let err = issue_action(
+            &registry,
+            &executor,
+            &order("workspace.read_file", json!({"path": "a.txt"})),
+            &mut trace,
+            "call-1",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert!(err.message.contains("no exit code"));
+    }
+
+    #[test]
+    fn invalid_schema_rejected_at_registration() {
+        let mut registry = ServiceRegistry::new();
+        let bad_input = ActionSpec {
+            name: "bad.input".to_string(),
+            description: "bad input schema".to_string(),
+            target_tool: "read_file".to_string(),
+            input_schema: json!({"type": 42}),
+            response_schema: json!({"type": "object"}),
+        };
+        assert!(matches!(
+            registry.register(bad_input),
+            Err(RegistryError::InvalidSchema { kind: "input", .. })
+        ));
+        let bad_response = ActionSpec {
+            name: "bad.response".to_string(),
+            description: "bad response schema".to_string(),
+            target_tool: "read_file".to_string(),
+            input_schema: json!({"type": "object"}),
+            response_schema: json!([]),
+        };
+        assert!(matches!(
+            registry.register(bad_response),
+            Err(RegistryError::InvalidSchema {
+                kind: "response",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn registration_board_projects_minimal_hints() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "read a file".to_string(),
+                target_tool: "read_file".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "file path",
+                            "format": "path",
+                            "minLength": 1,
+                            "enum": ["a.txt", "b.txt"],
+                        }
+                    },
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({"type": "object"}),
+            })
+            .unwrap();
+        let board = registry.registrations();
+        assert_eq!(board.len(), 1);
+        let params = &board[0].parameters;
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["required"], json!(["path"]));
+        let path = &params["properties"]["path"];
+        assert_eq!(path["type"], "string");
+        assert_eq!(path["description"], "file path");
+        assert_eq!(path["enum"], json!(["a.txt", "b.txt"]));
+        assert!(
+            path.get("format").is_none(),
+            "format must not be copied into minimal hints"
+        );
+        assert!(path.get("minLength").is_none());
+        assert!(params.get("additionalProperties").is_none());
+    }
+
+    #[test]
+    fn trace_retains_failure_event_at_cap() {
+        let mut store = TraceStore::new();
+        let mut trace = store.new_trace(None);
+        for i in 0..TRACE_MAX_EVENTS {
+            trace.add("execute", None, true, None, Some(format!("ok {i}")), None);
+        }
+        assert_eq!(trace.events.len(), TRACE_MAX_EVENTS);
+        trace.add(
+            "execute",
+            None,
+            false,
+            Some(CODE_EXECUTION_FAILED),
+            Some("boom".to_string()),
+            None,
+        );
+        assert_eq!(trace.events.len(), TRACE_MAX_EVENTS);
+        assert_eq!(trace.events[0].seq, 2);
+        assert_eq!(trace.events[TRACE_MAX_EVENTS - 1].seq, TRACE_MAX_EVENTS + 1);
+        assert!(!trace.events[TRACE_MAX_EVENTS - 1].ok);
+        assert_eq!(
+            trace.events[TRACE_MAX_EVENTS - 1].code.as_deref(),
+            Some(CODE_EXECUTION_FAILED)
+        );
+    }
+
+    #[test]
+    fn trace_store_commit_makes_events_visible() {
+        let mut store = TraceStore::new();
+        let mut trace = store.new_trace(Some("req-1".to_string()));
+        trace.add(
+            "registry",
+            Some("workspace.read_file"),
+            true,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            store.get(&trace.trace_id).unwrap().events.is_empty(),
+            "placeholder must be empty until commit"
+        );
+        store.commit(&trace);
+        let stored = store.get(&trace.trace_id).expect("trace retained");
+        assert_eq!(stored.events.len(), 1);
+        assert_eq!(stored.events[0].step, "registry");
+        assert_eq!(stored.request_id.as_deref(), Some("req-1"));
+    }
+
     #[test]
     fn trace_bounds_events_and_store() {
         let mut store = TraceStore::new();
@@ -720,10 +1071,8 @@ mod tests {
             store.new_trace(Some(format!("req-{i}")));
         }
         assert!(store.get("t000001").is_none());
-        assert!(
-            store
-                .get(&format!("t{:06}", TRACE_STORE_MAX_TRACES + 10))
-                .is_some()
-        );
+        assert!(store
+            .get(&format!("t{:06}", TRACE_STORE_MAX_TRACES + 10))
+            .is_some());
     }
 }

@@ -5,7 +5,9 @@
 //!
 //! Single main agent + two retrieval subagents (fusion §4.5): the main agent
 //! writes Plan/Exec, each retrieval subagent writes its own section, and the
-//! controller writes GateLog.
+//! controller writes GateLog. The console action board (P0-C S1) adds three
+//! single-writer slots: the assistant layer refreshes the registration board
+//! and appends results; the model writes one order per round.
 
 use std::sync::RwLock;
 
@@ -106,12 +108,13 @@ pub struct ToolActionRecord {
 }
 
 /// 注册板块（v0.5 操作台模型，P0-C orz 内嵌集成）：助理层机械刷新、模型只读
-/// 的“按钮”投影——动作名 + 最小参数提示。
+/// 的“按钮”投影——动作名 + 最小参数提示（type/required/属性枚举/默认值；
+/// 不做完整 schema 复制，防上下文膨胀）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActionRegistration {
     pub name: String,
     pub description: String,
-    /// 输入契约投影（参数提示/枚举；不做完整 schema 复制）。
+    /// 输入契约的最小参数提示投影（由 `console::ServiceRegistry` 生成）。
     pub parameters: serde_json::Value,
 }
 
@@ -208,7 +211,9 @@ impl std::fmt::Display for ActionBoardError {
 
 impl std::error::Error for ActionBoardError {}
 
-/// The full blackboard with 5 sections + 2 controller-written partitions.
+/// The full blackboard with 5 sections + 2 controller-written partitions +
+/// the console action board (assistant writes registration/results, the
+/// model writes the single order slot).
 ///
 /// Read rule: all sections are readable by all agents.
 /// Write rule: each section has a single writer (enforced by convention).
@@ -517,17 +522,16 @@ mod tests {
             let taken = w.actions.take_order();
             assert_eq!(taken, Some(order));
             assert!(w.actions.order.is_none());
-            assert!(
-                w.actions
-                    .write_order(ActionOrder {
-                        order_id: "ORD-2".into(),
-                        action: "workspace.list_dir".into(),
-                        arguments: serde_json::json!({"path": "."}),
-                        round: 2,
-                        plan_epoch: 1,
-                    })
-                    .is_ok()
-            );
+            assert!(w
+                .actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-2".into(),
+                    action: "workspace.list_dir".into(),
+                    arguments: serde_json::json!({"path": "."}),
+                    round: 2,
+                    plan_epoch: 1,
+                })
+                .is_ok());
         }
     }
 
