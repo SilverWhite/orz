@@ -1,0 +1,272 @@
+{
+  "schema_version": 1,
+  "description": "Sample 3 fixed corpus: mechanical linear script mode (PTC). Each case stores fixture files, a deterministic script ($ref data references allowed), the sequential model-call baseline (hand-authored simulated model calls; one round per call; NOT real model output), and an exact final-response expectation.",
+  "cases": [
+    {
+      "id": "read_then_ref_path",
+      "description": "Read a file, then read the same file again through the resolved absolute path from the first step output.",
+      "files": {
+        "a.txt": "hello\n"
+      },
+      "script": [
+        {
+          "do": "workspace.read_file",
+          "with": {"path": "a.txt"},
+          "as": "a"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": {"$ref": "a.path"}},
+          "as": "b"
+        }
+      ],
+      "baseline_calls": [
+        {"service": "workspace.read_file", "data": {"path": "a.txt"}},
+        {"service": "workspace.read_file", "data": {"path": "a.txt"}}
+      ],
+      "expect": {"content": "hello\n"}
+    },
+    {
+      "id": "index_then_read_first_file",
+      "description": "Build the workspace index, then read the first indexed file via an array-element reference.",
+      "files": {
+        "a.txt": "alpha\n",
+        "b.txt": "beta\n"
+      },
+      "script": [
+        {
+          "do": "workspace.index",
+          "with": {},
+          "as": "idx"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": {"$ref": "idx.files.0"}},
+          "as": "first"
+        }
+      ],
+      "baseline_calls": [
+        {"service": "workspace.index", "data": {}},
+        {"service": "workspace.read_file", "data": {"path": "a.txt"}}
+      ],
+      "expect": {"content": "alpha\n"}
+    },
+    {
+      "id": "list_dir_then_read_first_entry",
+      "description": "List a directory, then read the first entry via object-field + array-index references.",
+      "files": {
+        "a.txt": "alpha\n",
+        "b.txt": "beta\n"
+      },
+      "script": [
+        {
+          "do": "workspace.list_dir",
+          "with": {"path": "."},
+          "as": "d"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": {"$ref": "d.entries.0.name"}},
+          "as": "first"
+        }
+      ],
+      "baseline_calls": [
+        {"service": "workspace.list_dir", "data": {"path": "."}},
+        {"service": "workspace.read_file", "data": {"path": "a.txt"}}
+      ],
+      "expect": {"content": "alpha\n"}
+    },
+    {
+      "id": "read_then_create_from_content",
+      "description": "Read a payload file, create a new file whose content is injected from the first step output.",
+      "files": {
+        "data.txt": "payload\n"
+      },
+      "script": [
+        {
+          "do": "workspace.read_file",
+          "with": {"path": "data.txt"},
+          "as": "a"
+        },
+        {
+          "do": "workspace.search_replace",
+          "with": {
+            "path": "out.txt",
+            "old_string": "",
+            "new_string": {"$ref": "a.content"}
+          },
+          "as": "edit"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": "out.txt"},
+          "as": "out"
+        }
+      ],
+      "baseline_calls": [
+        {"service": "workspace.read_file", "data": {"path": "data.txt"}},
+        {
+          "service": "workspace.search_replace",
+          "data": {
+            "path": "out.txt",
+            "old_string": "",
+            "new_string": "payload\n"
+          }
+        },
+        {"service": "workspace.read_file", "data": {"path": "out.txt"}}
+      ],
+      "expect": {"content": "payload\n"}
+    },
+    {
+      "id": "ref_content_into_edit",
+      "description": "Use a file's content as the old_string of a search/replace edit on another file.",
+      "files": {
+        "old.txt": "alpha",
+        "target.txt": "alpha beta\n"
+      },
+      "script": [
+        {
+          "do": "workspace.read_file",
+          "with": {"path": "old.txt"},
+          "as": "old"
+        },
+        {
+          "do": "workspace.search_replace",
+          "with": {
+            "path": "target.txt",
+            "old_string": {"$ref": "old.content"},
+            "new_string": "gamma"
+          },
+          "as": "edit"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": "target.txt"},
+          "as": "out"
+        }
+      ],
+      "baseline_calls": [
+        {"service": "workspace.read_file", "data": {"path": "old.txt"}},
+        {
+          "service": "workspace.search_replace",
+          "data": {
+            "path": "target.txt",
+            "old_string": "alpha",
+            "new_string": "gamma"
+          }
+        },
+        {"service": "workspace.read_file", "data": {"path": "target.txt"}}
+      ],
+      "expect": {"content": "gamma beta\n"}
+    },
+    {
+      "id": "sequential_edits_then_verify",
+      "description": "Two chained edits without step names, then a final read with a name; unnamed steps are allowed.",
+      "files": {
+        "f.txt": "alpha beta\n"
+      },
+      "script": [
+        {
+          "do": "workspace.search_replace",
+          "with": {
+            "path": "f.txt",
+            "old_string": "alpha",
+            "new_string": "ALPHA"
+          }
+        },
+        {
+          "do": "workspace.search_replace",
+          "with": {
+            "path": "f.txt",
+            "old_string": "beta",
+            "new_string": "BETA"
+          }
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": "f.txt"},
+          "as": "out"
+        }
+      ],
+      "baseline_calls": [
+        {
+          "service": "workspace.search_replace",
+          "data": {
+            "path": "f.txt",
+            "old_string": "alpha",
+            "new_string": "ALPHA"
+          }
+        },
+        {
+          "service": "workspace.search_replace",
+          "data": {
+            "path": "f.txt",
+            "old_string": "beta",
+            "new_string": "BETA"
+          }
+        },
+        {"service": "workspace.read_file", "data": {"path": "f.txt"}}
+      ],
+      "expect": {"content": "ALPHA BETA\n"}
+    },
+    {
+      "id": "read_gb18030_then_ref_path",
+      "description": "Read a GB18030-encoded file through the fixed decode chain, then re-read via its resolved path.",
+      "files": {
+        "gb.txt": "中文标题\n正文内容\n"
+      },
+      "encodings": {
+        "gb.txt": "gb18030"
+      },
+      "script": [
+        {
+          "do": "workspace.read_file",
+          "with": {"path": "gb.txt"},
+          "as": "a"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": {"$ref": "a.path"}},
+          "as": "b"
+        }
+      ],
+      "baseline_calls": [
+        {"service": "workspace.read_file", "data": {"path": "gb.txt"}},
+        {"service": "workspace.read_file", "data": {"path": "gb.txt"}}
+      ],
+      "expect": {"content": "中文标题\n正文内容\n"}
+    },
+    {
+      "id": "index_then_read_two",
+      "description": "Read two indexed files through repeated array references from one index step.",
+      "files": {
+        "a.txt": "alpha\n",
+        "b.txt": "beta\n",
+        "c.txt": "gamma\n"
+      },
+      "script": [
+        {
+          "do": "workspace.index",
+          "with": {},
+          "as": "idx"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": {"$ref": "idx.files.0"}},
+          "as": "first"
+        },
+        {
+          "do": "workspace.read_file",
+          "with": {"path": {"$ref": "idx.files.1"}},
+          "as": "second"
+        }
+      ],
+      "baseline_calls": [
+        {"service": "workspace.index", "data": {}},
+        {"service": "workspace.read_file", "data": {"path": "a.txt"}},
+        {"service": "workspace.read_file", "data": {"path": "b.txt"}}
+      ],
+      "expect": {"content": "beta\n"}
+    }
+  ]
+}

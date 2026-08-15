@@ -10,14 +10,14 @@
 - `[ ]` = 待办；`[x]` = 已完成（保留供核对，不计入开放项）。
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 
-## 未闭合扫描快照（2026-08-15；ORZ-CACHE-CONTEXT-COST 闭合后更新）
+## 未闭合扫描快照（2026-08-15；P0-C 小样 3 闭合后更新）
 
 > 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**34 项**
-  - P0-C CLASSICAL-EXEC-ASSISTANT：4 项（小样 2、小样 3、orz 内嵌集成、正式组件决策门）
+- 未闭合总数：**32 项**
+  - P0-C CLASSICAL-EXEC-ASSISTANT：2 项（orz 内嵌集成、正式组件决策门）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -49,8 +49,8 @@
 
 - [x] 小样 1：控制台路由（服务注册表 + hassil 意图 + stdio JSON；28/28 检查通过）。
 - [x] 槽位表由工作区索引动态生成（POC 闭合；生产接线复用 orz `project_doc_index` 缓存）。
-- [ ] 小样 2：编辑执行器 `workspace.search_replace`（收益裁决点：编辑应用成功率 + 主模型工具轮数）。
-- [ ] 小样 3：机械组合脚本模式（线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）。
+- [x] 小样 2：编辑执行器 `workspace.search_replace`（2026-08-15 闭合，用户裁决通过 + 独立判定一致；结果工件 `prototype/classical_console/sample2_result.json`）。
+- [x] 小样 3：机械组合脚本模式（线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——已闭合（2026-08-15 用户裁决通过 + 独立判定一致）；结果工件 `prototype/classical_console/sample3_result.json`。
 - [ ] orz 内嵌集成：HA 操作台接线（薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝；POC stdio 仅原型隔离）。
 - [ ] 正式组件决策门：小样全面达标后裁决；不达标即撤。
 

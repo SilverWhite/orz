@@ -77,7 +77,9 @@ def decode_text(data: bytes) -> tuple[str, str]:
         return data.decode("utf-8", errors="replace"), "utf-8-lossy"
 
 
-def read_file(data: dict[str, Any], allow_root: str) -> dict[str, Any]:
+def read_file(
+    data: dict[str, Any], allow_root: str, trace: Any = None
+) -> dict[str, Any]:
     target = resolve_path(data["path"], allow_root)
     if target.is_dir():
         raise InvalidTarget(
@@ -114,7 +116,9 @@ def read_file(data: dict[str, Any], allow_root: str) -> dict[str, Any]:
     }
 
 
-def list_dir(data: dict[str, Any], allow_root: str) -> dict[str, Any]:
+def list_dir(
+    data: dict[str, Any], allow_root: str, trace: Any = None
+) -> dict[str, Any]:
     target = resolve_path(data["path"], allow_root)
     if not target.exists():
         raise NotFound(
@@ -178,14 +182,20 @@ def index_workspace(allow_root: str) -> dict[str, Any]:
     return {"root": str(root), "files": files, "total": len(files), "truncated": truncated}
 
 
-def workspace_index(data: dict[str, Any], allow_root: str) -> dict[str, Any]:
+def workspace_index(
+    data: dict[str, Any], allow_root: str, trace: Any = None
+) -> dict[str, Any]:
     return index_workspace(allow_root)
 
 
 def register_all(registry, trace_store=None) -> None:
     from service_registry import Service
 
-    def assistant_trace(data: dict[str, Any], allow_root: str) -> dict[str, Any]:
+    from editor import register_editor_services
+
+    def assistant_trace(
+        data: dict[str, Any], allow_root: str, trace: Any = None
+    ) -> dict[str, Any]:
         if trace_store is None:
             raise TraceUnavailable("trace store unavailable", step="registry")
         trace = trace_store.get(data["trace_id"])
@@ -320,3 +330,7 @@ def register_all(registry, trace_store=None) -> None:
             description="Bounded workspace file index (slot-table source).",
         )
     )
+    register_editor_services(registry)
+    from script_runner import register_script_services
+
+    register_script_services(registry)

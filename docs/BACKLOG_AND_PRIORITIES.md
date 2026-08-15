@@ -132,15 +132,22 @@
 - 集成形态（v0.3 用户裁决）：HA 助理层与 orz 深度融合，是 orz 的一部分；薄接缝改置 orz 本体 ↔ 底座（模型后端，Grok/Codex 等），不是 orz ↔ ConsoleClient；POC 的 stdio 协议仅为原型隔离，不作为生产接缝。
 - 借鉴登记（2026-08-13）：DeepSeek Harness（v0.1 预览、MIT）只借设计本身、不引入其技术栈——PTC 程序化工具调用（模型输出程序化动作脚本，操作台逐行确定性执行、失败 fail-closed）+ Profile/Bundle 动作组合（按 Benchmark/ReadOnly/标准场景加载动作集）。
 - fail-closed 返回契约（2026-08-13，已落地）：调研 HA 原项目——WebSocket 成功回 `result:{context,response}`、失败回 `error:{code,message}`（message 带校验路径），无失败点/上游结果，不足；错误信封扩展为 `step`（失败点枚举 protocol/intent/registry/contract/target/execute/verify/policy）+ `code` + `message` + `upstream`（解析后真实目标/票据 id/部分输出/verifier 摘要，无则 null），模型可独立排障；POC 已实现并纳入冒烟（21/21）。
-- 动作粒度与稳定性裁决（2026-08-13）：细粒度优先——粗按钮（run_terminal_cmd 什么都做）才是限制模型（参数幻觉面大）；细动作必须配套机械组合层（PTC/管道/意图）避免碎片化。负担=构建期线性成本（注册+schema+handler+探针/策略映射+测试），运行时近零；风险在边界漂移与变更连锁；护栏=动作契约按版本化 API 管理（新增优先、废弃走迁移期、参数向后兼容）、探针决定可见性、Profile/Bundle 分区、契约即测试。小样 2 仍为收益量化裁决点。
+- 动作粒度与稳定性裁决（2026-08-13）：细粒度优先——粗按钮（run_terminal_cmd 什么都做）才是限制模型（参数幻觉面大）；细动作必须配套机械组合层（PTC/管道/意图）避免碎片化。负担=构建期线性成本（注册+schema+handler+探针/策略映射+测试），运行时近零；风险在边界漂移与变更连锁；护栏=动作契约按版本化 API 管理（新增优先、废弃走迁移期、参数向后兼容）、探针决定可见性、Profile/Bundle 分区、契约即测试。小样 2 收益量化裁决点已闭合（2026-08-15 用户裁决通过，独立判定一致）。
 - 执行失败特殊反馈与日志可见性（v0.4，已落地）：错误信封恒带 `trace_id`；`step=execute` 失败附有界 trace 尾部；新增只读服务 `assistant.trace`（有界、读入审计）——主模型可结合日志与操作台覆盖未预录内容；POC 冒烟 28/28。
 - 机械组合模型（v0.4 设计）：线性脚本模式（PTC）——步骤=注册动作实例 + `$ref` 数据引用，每步独立契约校验 + trace，任一步 fail-closed；无任意代码/隐式控制流，循环/条件暂不做；列入实施序列小样 3。
 - 黑板动作栏（v0.5 用户提案，定为生产协作形态）：黑板拆三块——注册板块（助理层维护、当前轮动作投影、常驻按需读）、动作栏（模型写订单，无副作用）、结果栏（receipt+trace_id+fail-closed）；发放=机械单一出口（模型轮结束触发、消费一次、round 防重）；模型面不再出现执行/发送工具；stdio 仍为原型隔离。
 - 进度（2026-08-13）：小样 1（控制台路由小样）已跑通——`prototype/classical_console/`（HA 式服务注册表 + hassil 意图 + stdio JSON 协议），服务模式（`workspace.read_file` / `workspace.list_dir` / `workspace.index` / `assistant.trace`）+ 意图模式（en/zh，槽位表由工作区索引动态生成），含 fail-closed 契约与执行日志，28/28 检查通过。
+- 进度（2026-08-15）：小样 3（机械组合脚本模式）已实施——`workspace.run_script`
+  服务（线性脚本 + `$ref` 数据引用，执行前静态校验引用存在/作用域/类型、名称唯一、
+  禁嵌套脚本；每步独立 schema 校验 + trace；失败保留内层 step/code 并带
+  script_step；上限 20 步/30s/4MiB）；固定语料 8 场景对照实验（baseline 逐轮串行
+  20 轮 vs candidate 单脚本 8 轮，成功率均 100%），冒烟 87/87；结果工件
+  `prototype/classical_console/sample3_result.json`；**已闭合（2026-08-15 用户
+  裁决通过，独立判定一致）**。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
-  2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）；
-  3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）；
+  2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
+  3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
   4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
@@ -362,6 +369,19 @@
 
 ## 变更记录
 
+- 2026-08-15：P0-C 小样 2 闭合登记——编辑执行器 `workspace.search_replace` 对照实验实施并测量（固定 10 场景语料；baseline 成功率 100%/平均 1.8 轮 vs candidate 100%/平均 1.0 轮，通过标准两项满足；POC smoke 57/57），用户裁决通过、独立判定一致；DSH B 项（文件观察策略收编为 search_replace 动作契约规则）随之落地；结果工件 `prototype/classical_console/sample2_result.json`，待办路由见 TODO P0-C。
+- 2026-08-15：P0-C 小样 3 闭合登记——机械组合脚本模式 `workspace.run_script`
+  （线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）对照实验实施并测量
+  （固定 8 场景语料；baseline 成功率 100%/共 20 轮/平均 2.5 轮 vs candidate
+  100%/共 8 轮/平均 1.0 轮，通过标准三项满足；POC smoke 87/87），用户裁决通过、
+  独立判定一致；结果工件 `prototype/classical_console/sample3_result.json`，
+  下一步=orz 内嵌集成，待办路由见 TODO P0-C。
+- 2026-08-15：P0-C 全面审查 P1 修复登记——三项 P1 处理完成：4 MiB 上限改为
+  最终响应累计（含未命名步骤与 `result`，错误码 `script_response_limit`）；
+  `$ref` 运行期解析失败结构化（`invalid_reference`/`step=execute`，upstream 带
+  `ref` 与 `script_step`）；baseline 人工模拟边界显式写入 README、语料描述与
+  结果工件 provenance（含 `evidence_boundary`）；结果工件重生成（指标不变），
+  POC smoke 90/90 通过。
 - 2026-08-15：ACAF fail-closed 生产启用裁决登记——用户裁决放行（P2
   IMPL-CONTROL-FABRIC 决策门）；翻转执行与核查清单 ⑦⑨⑩⑪ 收口待实施，
   TODO/索引/ADR-0011 同步。

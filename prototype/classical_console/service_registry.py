@@ -51,7 +51,7 @@ class UnknownIntent(ConsoleError):
 class Service:
     name: str
     input_schema: dict[str, Any]
-    handler: Callable[[dict[str, Any], str], dict[str, Any]]
+    handler: Callable[..., dict[str, Any]]
     response_schema: dict[str, Any]
     description: str = ""
 
@@ -69,6 +69,9 @@ class ServiceRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._services)
+
+    def get(self, name: str) -> Service | None:
+        return self._services.get(name)
 
     def call(
         self,
@@ -88,7 +91,7 @@ class ServiceRegistry:
             raise InvalidArguments(f"{name}: {exc.message}", step="contract") from exc
         if trace is not None:
             trace.add(step="contract", action=name, ok=True)
-        response = service.handler(data, allow_root)
+        response = service.handler(data, allow_root, trace)
         if trace is not None:
             trace.add(step="execute", action=name, ok=True)
         try:

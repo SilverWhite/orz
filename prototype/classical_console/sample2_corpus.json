@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "description": "Sample 2 fixed corpus: editor executor comparison (direct hunk vs intent -> rule-layer hunk). Each case stores the file content, the expected result, ordered direct-hunk attempts (hand-authored simulated model attempts; NOT real model output), and the structured intent the rule layer consumes.",
+  "cases": [
+    {
+      "id": "exact_single_line",
+      "file": "exact_single_line.py",
+      "content": "def old_name():\n    return 1\n",
+      "expected": "def new_name():\n    return 1\n",
+      "baseline_attempts": [
+        {"old_string": "def old_name():", "new_string": "def new_name():"}
+      ],
+      "intent": "replace 'def old_name():' with 'def new_name():'"
+    },
+    {
+      "id": "stale_context_indentation",
+      "file": "indent.py",
+      "content": "def run():\n    value = 1\n    return value\n",
+      "expected": "def run():\n    value = 2\n    return value\n",
+      "baseline_attempts": [
+        {
+          "old_string": "def run():\n  value = 1",
+          "new_string": "def run():\nvalue = 1"
+        },
+        {
+          "old_string": "def run():\n    value = 1",
+          "new_string": "def run():\n    value = 2"
+        }
+      ],
+      "intent": "replace 'value = 1' with 'value = 2'"
+    },
+    {
+      "id": "ambiguous_match",
+      "file": "ambiguous.py",
+      "content": "def helper():\n    return helper()\n\ndef main():\n    return helper()\n",
+      "expected": "def helper():\n    return helper()\n\ndef main():\n    return self.helper()\n",
+      "baseline_attempts": [
+        {"old_string": "return helper()", "new_string": "return self.helper()"},
+        {
+          "old_string": "def main():\n    return helper()",
+          "new_string": "def main():\n    return self.helper()"
+        }
+      ],
+      "intent": "replace 'def main():\\n    return helper()' with 'def main():\\n    return self.helper()'"
+    },
+    {
+      "id": "replace_all",
+      "file": "replace_all.py",
+      "content": "x = 1\ny = x + x\n",
+      "expected": "z = 1\ny = z + z\n",
+      "baseline_attempts": [
+        {"old_string": "x", "new_string": "z"},
+        {"old_string": "x", "new_string": "z", "replace_all": true}
+      ],
+      "intent": "replace 'x' with 'z' everywhere"
+    },
+    {
+      "id": "crlf_file",
+      "file": "crlf.txt",
+      "content": "alpha\r\nbeta\r\n",
+      "expected": "alpha\r\ngamma\r\n",
+      "baseline_attempts": [
+        {"old_string": "beta", "new_string": "gamma"}
+      ],
+      "intent": "replace 'beta' with 'gamma'"
+    },
+    {
+      "id": "gb18030_file",
+      "file": "gb.txt",
+      "content": "中文标题\n正文内容\n",
+      "content_encoding": "gb18030",
+      "expected": "中文标题\n正文替换\n",
+      "baseline_attempts": [
+        {"old_string": "正文内容", "new_string": "正文替换"}
+      ],
+      "intent": "replace '正文内容' with '正文替换'"
+    },
+    {
+      "id": "missing_text_hallucinated",
+      "file": "missing.py",
+      "content": "function foo() {}\n",
+      "expected": "function bar() {}\n",
+      "baseline_attempts": [
+        {
+          "old_string": "function foo() {\n  // TODO\n}",
+          "new_string": "function bar() {}"
+        },
+        {"old_string": "function baz() {}", "new_string": "function bar() {}"},
+        {"old_string": "function foo() {}", "new_string": "function bar() {}"}
+      ],
+      "intent": "replace 'function foo() {}' with 'function bar() {}'"
+    },
+    {
+      "id": "same_string_error",
+      "file": "same.txt",
+      "content": "keep\n",
+      "expected": "change\n",
+      "baseline_attempts": [
+        {"old_string": "keep", "new_string": "keep"},
+        {"old_string": "keep", "new_string": "change"}
+      ],
+      "intent": "replace 'keep' with 'change'"
+    },
+    {
+      "id": "curly_quotes_intent",
+      "file": "quotes.txt",
+      "content": "use \"foo\" here\n",
+      "expected": "use \"bar\" here\n",
+      "baseline_attempts": [
+        {"old_string": "\u201cfoo\u201d", "new_string": "\u201cbar\u201d"},
+        {"old_string": "\"foo\"", "new_string": "\"bar\""}
+      ],
+      "intent": "replace \u201cfoo\u201d with \u201cbar\u201d"
+    },
+    {
+      "id": "multiline_hunk",
+      "file": "multiline.py",
+      "content": "def old():\n    a = 1\n    b = 2\n    return a + b\n",
+      "expected": "def new():\n    a = 1\n    b = 2\n    return a + b\n",
+      "baseline_attempts": [
+        {
+          "old_string": "def old():\n    a = 1\n    return a + b",
+          "new_string": "def new():\n    a = 1\n    return a + b"
+        },
+        {
+          "old_string": "def old():\n    a = 1\n    b = 2\n    return a + b",
+          "new_string": "def new():\n    a = 1\n    b = 2\n    return a + b"
+        }
+      ],
+      "intent": "replace 'def old():\\n    a = 1\\n    b = 2\\n    return a + b' with 'def new():\\n    a = 1\\n    b = 2\\n    return a + b'"
+    }
+  ]
+}
