@@ -75,3 +75,17 @@
 发现的跨 run 防重放缺口修复）；未发现静默降级路径。S3（assistant.trace 只读
 服务接线、workspace.run_script 生产化、Profile/Bundle）与 S4（端到端 + 正式
 组件决策门材料）按 TODO/BACKLOG 继续。
+
+## 6. 补记（2026-08-15 全面检查定案）
+
+- **P1-1 双模式定案**：放弃「直接执行面永久移除」；console 默认 + direct 受控
+  降级（连续 3 次助理层故障面失败 → 无工具询问轮 → 模型选择 → 切换留痕；
+  权限不变；计划门约束 console 订单，direct 为有记录的例外，`console.step_done`
+  需证据置 done）。设计见 `docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md` §7 与
+  `CLI_PROJECT_INDEX.md` FUS-CONSOLE-DUAL-MODE（暂定，不进入实施路由）。
+- **P1-2 结构化策略拒绝定案**：拒绝路径（权限/ACAF/模式门；taint 预留）在
+  `run_host_tool` 边界返回 `ToolResult.policy_denial = {source, code, reason}`；
+  console 适配层仅按结构化信号判定，`console_policy_refusal` 前缀判定退役；
+  ToolCompleted 增可选 `policy_denial`（Schema/verifier/fixtures 先行）；
+  与 denial breaker 统一为可选实施决策。设计见 `CLASSICAL-EXEC` §7；实施随
+  S3 前置（TODO/BACKLOG P0-C）。

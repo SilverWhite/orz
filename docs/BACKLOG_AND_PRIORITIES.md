@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（POC 已通） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（POC 已通）；PLAN-FIRST-BLACKBOARD（模型面重构，2026-08-15 定案） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -135,6 +135,10 @@
   2026-08-15 全面检查修复：策略拒绝（权限/ACAF/taint/模式门）由执行器适配层
   归一化为 `step=policy` + `code=policy_denied`；响应契约强制必填（注册时校验
   并缓存 schema，任何输出过机械验证）；`exit_code=Some(0)` 成功契约。
+  2026-08-15 P1-2 定案补登记：拒绝路径（权限/ACAF/模式门；taint 预留）返回
+  结构化信号 `ToolResult.policy_denial = {source, code, reason}`，controller
+  删除「稳定输出前缀」字符串判定（`console_policy_refusal` 退役）；ToolCompleted
+  增可选 `policy_denial`（Schema/verifier/fixtures 先行）；实施随 S3 前置。
 - 动作粒度与稳定性裁决（2026-08-13）：细粒度优先——粗按钮（run_terminal_cmd 什么都做）才是限制模型（参数幻觉面大）；细动作必须配套机械组合层（PTC/管道/意图）避免碎片化。负担=构建期线性成本（注册+schema+handler+探针/策略映射+测试），运行时近零；风险在边界漂移与变更连锁；护栏=动作契约按版本化 API 管理（新增优先、废弃走迁移期、参数向后兼容）、探针决定可见性、Profile/Bundle 分区、契约即测试。小样 2 收益量化裁决点已闭合（2026-08-15 用户裁决通过，独立判定一致）。
 - 执行失败特殊反馈与日志可见性（v0.4，已落地）：错误信封恒带 `trace_id`；`step=execute` 失败附有界 trace 尾部；新增只读服务 `assistant.trace`（有界、读入审计）——主模型可结合日志与操作台覆盖未预录内容；POC 冒烟 28/28。
 - 机械组合模型（v0.4 设计）：线性脚本模式（PTC）——步骤=注册动作实例 + `$ref` 数据引用，每步独立契约校验 + trace，任一步 fail-closed；无任意代码/隐式控制流，循环/条件暂不做；列入实施序列小样 3。
@@ -177,8 +181,23 @@
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；S3 trace/PTC/Profile、S4 端到端 + 审计待续；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；S3 前置结构化策略拒绝（P1-2，2026-08-15 定案）、S3 trace/PTC/Profile、S4 端到端 + 审计待续；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
+
+### 3a. PLAN-FIRST-BLACKBOARD（模型面重构；2026-08-15 用户定案）
+
+- 入口：[设计](PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md)；索引：
+  [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)（AUTH-PLAN-FIRST-BLACKBOARD /
+  FUS-PLAN-FIRST-MODEL-SURFACE / FUS-PLAN-STEP-GATE / FUS-AGENTS-MD-PLAN-WRAPPER /
+  FUS-PROMPT-DEPERSONALIZE / FUS-CONSOLE-DUAL-MODE / FUS-CONSOLE-POLICY-DENIAL）；
+  权威：ADR-0010 §14.17（v1.17）。
+- 定案（2026-08-15 用户裁决）：放弃「直接执行面永久移除」；双模式 console 默认 +
+  direct 受控降级（3 连败助理层故障面 → 无工具询问轮 → 切换留痕；计划门约束
+  console 订单，direct 为有记录的例外，`console.step_done` 需证据置 done）；
+  结构化策略拒绝（P1-2）为 S3 前置。
+- 阶段：A（模板去人格 + AGENTS.md 计划型机械包裹 + 首轮计划轮硬门）；B（注册板块=
+  探针投影 + 工具栏刷新绑定黑板模型栏）；C（console 默认 + direct 受控降级）。
+  明细与验收见设计 §9/§11；实施勾选见 TODO P0-C。
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
 

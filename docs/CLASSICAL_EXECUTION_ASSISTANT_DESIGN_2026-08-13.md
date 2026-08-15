@@ -6,7 +6,7 @@
 > ——执行器错误细分/响应契约强制/TraceStore 提交语义/最小提示投影/S2 验收点
 > 显式登记）；orz 内嵌集成 S2 已落地（2026-08-15：模型面投影 + 轮末发放，
 > 见 §8「S2 落地」；S3 trace/PTC/Profile 待续）；正式组件决策门在内嵌集成
-> 小样全面达标后裁决）
+> 小样全面达标后裁决；v0.6 收编 PLAN-FIRST 模型面重构（2026-08-15 定案，见 §10））
 > 日期：2026-08-13
 > v0.2 修订（2026-08-13 用户裁决）：**不需要理解层**。助理层不解析意图、不理解动作
 > 语义，只按主模型输出（工具名/动作名 + 参数）逐层定位到组件并实际实施；
@@ -215,6 +215,19 @@
 - 策略拒绝（2026-08-15 裁决）：权限/ACAF/taint/模式门拒绝由执行器适配层
   归一化为 `step=policy` + `code=policy_denied`，不落入 execute 失败；执行器
   返回可区分执行失败与策略拒绝的丰富结果。
+- 结构化策略拒绝信号（2026-08-15 补登记，P1-2 定案）：拒绝路径（权限门 /
+  ACAF 票据门 / 检索模式门；taint 预留）在 `run_host_tool` 边界统一返回结构化
+  信号——`ToolResult.policy_denial = {source, code, reason}`（source ∈
+  permission | acaf | retrieval_mode | taint；`exit_code=Some(1)`）；console
+  适配层（`run_console_target`）只按结构化信号映射 `ExecuteError::PolicyDenied`
+  （detail 携带 source/code/reason），**删除「稳定输出前缀」字符串判定**
+  （`console_policy_refusal` 退役，不依赖拒绝文案）；ToolCompleted 事件增可选
+  `policy_denial` 对象（Schema v0.2 先行扩展，verifier/fixtures 同步；交叉规则：
+  存在 policy_denial 时 exit_code 必须非 0 且工具命中已知拒绝路径）；与 denial
+  breaker 统一（ACAF/模式门也产生 `PolicyFeedback::Denied`）为可选实施决策；
+  测试=结构化断言（permission/acaf/mode → step=policy + source 明细）+ 内容
+  碰撞回归（成功输出含旧拒绝前缀文案必须判成功）。实施随 S3 前置
+  （TODO/BACKLOG P0-C）。
 - 输出验证强制（2026-08-15 裁决）：动作契约必须声明响应 schema；输出无论
   结构化与否均过机械验证后才进入成功信封——验证既是规整性/安全手段，也是
   审计的一部分。schema 在注册时校验并缓存，非法 schema 注册即拒绝。
@@ -284,7 +297,8 @@
     → `TraceStore.commit`；round/plan_epoch/run_id 三重防重放与过期
     （`step=protocol` / `code=order_stale`，过期订单消费并显式拒绝）；策略
     拒绝归一化（权限门 PolicyFeedback::Denied + ACAF/模式门稳定输出前缀 →
-    `step=policy` / `code=policy_denied`，不携带 execute trace 尾部）；注册
+    `step=policy` / `code=policy_denied`，不携带 execute trace 尾部；〔P1-2
+    补登记：前缀判定随 S3 前置由结构化信号取代，见 §7〕）；注册
     板块每轮机械刷新（基础动作集 6 项：workspace.read_file/list_dir/grep/
     search_replace/run_tests/index，契约镜像生产 host 参数）。
     边界：注册板块当前为静态基础集，探针 ∩ Profile/Bundle 过滤随 S3 接线；
@@ -320,3 +334,29 @@
 - 组件形态（v0.3 已裁决）：宿主内嵌——HA 操作台为 orz 的一部分；POC 的
   stdio 协议仅是原型隔离，不作为生产接缝（薄接缝在 orz ↔ 底座模型后端）。
 - 来源/许可登记：进入组件登记表口径后逐项审计。
+
+## 10. v0.6 收编：计划-执行分离与黑板化指挥（2026-08-15）
+
+> 用户裁决（2026-08-15）：助理层承接全部下游执行（console 默认），主模型指挥助理层
+> 并以只读方式核查；放弃「直接执行面永久移除」，定案双模式——direct 为受控降级
+> （连续 3 次助理层故障面失败 → 无工具询问轮 → 模型选择后切换并留痕；权限不变；
+> 计划门约束 console 订单，direct 为有记录的例外）。设计主体见
+> [`PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md`](PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md)；
+> 权威登记 ADR-0010 §14.17。
+> 状态：**定案**（2026-08-15 用户裁决；进入实施路由 BACKLOG/TODO P0-C）。
+
+- 模型面三块（console 默认面）：写面 `plan_write` + `action_write`；读面 `blackboard_read` +
+  `assistant.trace` + 工作区只读；禁止直接执行/变更/shell/子代理 spawn/检索。
+- 双模式：console 默认 + direct 受控降级（3 连败助理层故障面 → 无工具询问轮 → 模型选择
+  switch 后写 `console_mode_transition` + gate_log；direct 动作带 transition_id；计划门
+  约束 console 订单，direct 为有记录的例外（`console.step_done` 需证据置 done）；
+  `console.return_to_console` 单向返回或 run 结束复位）。
+- 首轮计划轮（硬门）：首轮只暴露黑板读取 + `plan_write`，不派发执行工具；注册板块
+  = 探针投影唯一事实源（S2 静态基础集为接线前中间态）。
+- 分步计划硬契约：有序步骤 + 步骤状态机 `pending → in_progress → done(receipt_id)`；
+  下一步订单需上一步 receipt 机械放行，防惯性幻觉。
+- 反馈回路：订单 → 发放 → 结果栏 receipt + trace_id → 模型只读核查 → 推进/诊断重试；
+  核查面必须覆盖全部副作用出口。
+- 阶段：A（去人格 + AGENTS.md 计划型包裹 + 首轮计划轮）、B（注册板块=探针投影、
+  工具栏刷新绑定黑板模型栏）、C（助理层实战验证后模型面收敛为黑板+只读核查；
+  direct 受控降级保留，不永久移除）。

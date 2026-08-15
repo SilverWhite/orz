@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -1365,3 +1365,41 @@ ADR §3.6 正文修订随实施登记。
       （`[ORIENTATION v0.3]` / `[DIAGNOSTIC_COVERAGE v0.3]`，前缀注册不变）。
    来源：`docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md`；实施审计
    `docs/audits/GAP_ORIENTATION_FORCED_TEMPLATE_IMPL_AUDIT_2026-08-15.md`。
+
+### 14.17 v1.17 补写登记（2026-08-15）
+
+本节为**正式补写登记**：设计内容已由用户定案（2026-08-15），进入实施路由
+（BACKLOG/TODO P0-C）。规范正文修订（§3.6/§4.2 等）随实施登记。
+
+1. **模型面重构设计确认（计划-执行分离与黑板化指挥，用户裁决）**：
+   ① 模板去人格——除机械契约外，人格化内容从主/子代理模板与 Orchestrator prompt body
+      全删；persona 配置与子代理 `<persona>` 段退役（roles 保留）。
+   ② AGENTS.md 计划型机械包裹——注入固定前缀，唯一机制；不做规范模板、不做 schema 校验。
+   ③ 首轮计划轮硬门——首轮模型面=黑板只读（workboard/plan + actions 注册板块）+
+      `plan_write`；不派发执行工具；注册板块=探针投影唯一事实源（S2 静态基础集仅为
+      S3 接线前中间态）。
+   ④ 助理层全承接（双模式定案，2026-08-15 用户裁决）——主模型写面=`plan_write`/
+      `action_write`，读面=`blackboard_read`/`assistant.trace`/工作区只读；执行、变更、
+      shell、子代理 spawn、检索全部经助理层订单下发；核查面必须覆盖全部副作用出口；
+      放弃「直接执行面永久移除」——console 为默认，direct 为受控降级。
+   ⑤ 分步计划硬契约——计划=有序步骤数组；步骤状态机
+      `pending → in_progress → done(receipt_id) | failed(receipt_id)`；下一步订单需
+      上一步 receipt 机械放行，防惯性幻觉。
+   ⑥ 阶段——A 当前（去人格 + AGENTS.md 包裹 + 首轮计划轮）；B（注册板块=探针投影、
+      工具栏刷新绑定黑板模型栏）；C（助理层实战验证后模型面收敛为黑板读写 + 只读核查；
+      direct 受控降级保留，不永久移除）。
+   ⑦ 双模式机制——console（默认，§4 面）↔ direct（受控降级）：连续 3 次助理层故障面
+      失败（verify；execute 且无 exit code/host 错误；业务非零退出与
+      policy/protocol/registry/contract/order_stale/step_not_done 不计）→ 机械询问
+      （无工具轮、一次重填、降级 stay、每 run 至多一次）→ 模型选择 switch 后写
+      `console_mode_transition` + gate_log；direct 动作带 transition_id；权限/ACAF/模式门
+      不变；计划门约束 console 订单，direct 为有记录的例外（`console.step_done` 需
+      transition_id + trace_id 证据置 done）；`console.return_to_console` 单向返回或 run
+      结束复位；模式为 run 级状态，plan epoch 轮换不清；ActionOrder 增 `step_id`
+      （Schema 先行）。
+   ⑧ 结构化策略拒绝（P1-2 定案，2026-08-15）——拒绝路径（权限/ACAF/模式门；
+      taint 预留）在 `run_host_tool` 边界返回 `ToolResult.policy_denial` 结构化
+      信号，console 适配层删除字符串前缀判定；ToolCompleted 增可选
+      `policy_denial`（Schema/verifier/fixtures 先行）；实施随 S3 前置。
+   来源：`docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md`；关联：
+   CLASSICAL-EXEC-ASSISTANT v0.6。
