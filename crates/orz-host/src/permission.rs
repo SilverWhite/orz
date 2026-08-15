@@ -424,7 +424,14 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // not edit"). Without this mapping the fallthrough Edit branch
         // denied every call (project_doc_index precedent, review P1-1).
         AccessKind::Read(None)
-    } else if tool == "compaction_whitelist_add" || tool == "blackboard_read" {
+    } else if tool == "compaction_whitelist_add"
+        || tool == "blackboard_read"
+        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard.action_write`
+        // writes ONLY the in-memory action-bar slot — no external side
+        // effect (side effects happen at the mechanical issuance exit) —
+        // so the permission gate auto-allows it like the whitelist write.
+        || tool == "blackboard.action_write"
+    {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no
         // network, no worktree mutation (the whitelist's .gsa archive is a

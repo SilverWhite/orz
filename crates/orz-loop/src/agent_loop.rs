@@ -118,6 +118,10 @@ impl ToolFilter {
             ToolFilter::Retrieval => {
                 if tool == "run_tests" {
                     Some("retrieval_role_execution_denied")
+                } else if tool == "blackboard.action_write" {
+                    // P0-C S2 (2026-08-15): the console write button is
+                    // main-lane only — subagents never write action orders.
+                    Some("console_action_write_lane_denied")
                 } else if ToolDispatcher::modifies_files(tool) {
                     Some("retrieval_role_write_denied")
                 } else if ToolDispatcher::risk_class(tool) == RiskClass::SandboxEscape {
@@ -1010,6 +1014,17 @@ pub(crate) async fn run_agent_loop(
         } else {
             tool_defs.to_vec()
         };
+        // P0-C orz 内嵌集成 S2 (2026-08-15): 注册板块每轮机械刷新（主车道；
+        // 检索车道无操作台）。内容 = 动作名 + 最小参数提示（最小提示由
+        // `console::ServiceRegistry` 生成，不复制完整 schema）；板块常驻、
+        // 内容按需读（模型用 blackboard_read section=actions 取回）。
+        if profile.role == AgentRole::Main {
+            let registrations = controller.console_registrations();
+            svc.blackboard
+                .write()
+                .actions
+                .set_registration(registrations);
+        }
 
         // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：AVAILABLE 块不再注入——
         // 模型可见工具列表 = API tools 参数中的 registry 能力目录（全量，
@@ -1821,6 +1836,23 @@ pub(crate) async fn run_agent_loop(
                 payload,
                 attempt: 1,
             });
+        }
+        // P0-C orz 内嵌集成 S2 (2026-08-15): 轮末机械发放——动作栏有未消费
+        // 订单时在 post-tool-batch 安全间隙发放（副作用只发生在单一出口；
+        // 模型面只有读板块 + 写订单）。pending checkpoint 优先级：本间隙
+        // 已有 checkpoint 待轮时跳过发放，订单留在槽中；下一工具轮发放时
+        // round 不匹配会按 `order_stale` 显式拒绝（防重放/过期，fail-closed）。
+        if pending_checkpoint.is_none() && profile.role == AgentRole::Main {
+            controller
+                .issue_pending_console_order(
+                    host,
+                    writer,
+                    prompt,
+                    workspace_trust,
+                    tool_rounds,
+                    heartbeat,
+                )
+                .await?;
         }
 
         tool_rounds += 1;

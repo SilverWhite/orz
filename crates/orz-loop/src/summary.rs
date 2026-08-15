@@ -376,7 +376,7 @@ pub fn build_summary_marker(
          变动文件路径: {}\n\
          注意事项: {}\n\
          后续衔接: {}\n\
-         回查: blackboard_read（分区 plan / edits / tool_actions / exec；历史 plan epoch 用 epoch 参数）\n\
+ 回查: blackboard_read（分区 plan / edits / tool_actions / exec / actions；历史 plan epoch 用 epoch 参数）\n\
          [/前文上下文已压缩]",
         archive_path.display(),
         if plan_epoch > 0 {

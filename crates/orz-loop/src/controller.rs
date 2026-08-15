@@ -44,7 +44,13 @@ use crate::agent_loop::{
     LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop, run_template_compact,
 };
 use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole};
-use crate::blackboard::{EditRecord, SharedBlackboard, ToolActionRecord};
+use crate::blackboard::{
+    ActionOrder, ActionRegistration, ActionResult, EditRecord, SharedBlackboard, ToolActionRecord,
+};
+use crate::console::{
+    ActionExecutor, CODE_ORDER_STALE, ConsoleError, STEP_PROTOCOL, ServiceRegistry, TraceStore,
+    failure_envelope, issue_action,
+};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PermitDecision, ToolDef, ToolError, ToolRegistry, ToolResult};
@@ -465,6 +471,14 @@ pub struct AgentLoopController {
     /// events. Seeded by the pre-run_started probe and reset per run;
     /// never persisted across runs.
     probe_state: Mutex<crate::tool_probe::MinimalProbeMap>,
+    /// P0-C orz 内嵌集成 S2 (2026-08-15): 操作台注册表 —— 动作名 → 契约 →
+    /// 目标工具的确定性路由（注册时校验并缓存 schema）。生产基础动作集
+    /// 由 `console::default_service_registry()` 提供。
+    console_registry: ServiceRegistry,
+    /// P0-C S2: 操作台执行 trace 存储（有界 50 条；发放收口 commit）。
+    console_traces: Mutex<TraceStore>,
+    /// P0-C S2: 动作栏订单号机械分配（`ORD-<seq>`，单调）。
+    console_order_seq: std::sync::atomic::AtomicU64,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -2052,6 +2066,9 @@ impl AgentLoopController {
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
             probe_state: Mutex::new(crate::tool_probe::MinimalProbeMap::default()),
+            console_registry: crate::console::default_service_registry(),
+            console_traces: Mutex::new(TraceStore::new()),
+            console_order_seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -2239,7 +2256,13 @@ impl AgentLoopController {
     ) -> Vec<ToolDef> {
         let mut defs: Vec<ToolDef> = parent_tools
             .iter()
-            .filter(|t| t.name != "compaction_whitelist_add" && t.name != "retrieval_disposition")
+            .filter(|t| {
+                t.name != "compaction_whitelist_add"
+                    && t.name != "retrieval_disposition"
+                    // P0-C S2 (2026-08-15): the console write button is
+                    // main-lane only — subagents never write action orders.
+                    && t.name != "blackboard.action_write"
+            })
             .cloned()
             .collect();
         for name in ["browser_read"] {
@@ -3704,6 +3727,9 @@ impl AgentLoopController {
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
             probe_state: Mutex::new(crate::tool_probe::MinimalProbeMap::default()),
+            console_registry: crate::console::default_service_registry(),
+            console_traces: Mutex::new(TraceStore::new()),
+            console_order_seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -3744,6 +3770,7 @@ impl AgentLoopController {
                     &snapshot.edits,
                     &snapshot.tool_actions,
                     &snapshot.exec,
+                    &snapshot.actions,
                     section,
                     since,
                 ),
@@ -3759,6 +3786,7 @@ impl AgentLoopController {
             &bb.edits,
             &bb.tool_actions,
             &bb.exec,
+            &bb.actions,
             section,
             since,
         )
@@ -4119,22 +4147,24 @@ impl AgentLoopController {
                      records: file, line-range delta, timestamp), tool_actions \
                      (executed tool calls folded by category read/edit/terminal/\
                      retrieval with timestamps), exec (tool results — the full \
-                     accumulated log; read_file still works for files). Optional \
-                     `since_timestamp` (RFC 3339, e.g. the timestamp this tool \
-                     returned earlier) filters the edits / tool_actions entries \
-                     to those at or after that time. Optional `epoch` (integer) \
-                     reads that plan-epoch ARCHIVE instead of the live view — \
-                     use it to recall a previous task's plan/edits after a new \
-                     plan epoch rotated the blackboard. Call this when you need \
-                     to recall what changed or what you did earlier — it costs \
-                     nothing when you do not call it."
+                     accumulated log; read_file still works for files), actions \
+                     (P0-C console: current registration board buttons, the \
+                     pending action-bar order and recent result receipts). \
+                     Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
+                     this tool returned earlier) filters the edits / tool_actions \
+                     entries to those at or after that time. Optional `epoch` \
+                     (integer) reads that plan-epoch ARCHIVE instead of the \
+                     live view — use it to recall a previous task's plan/edits \
+                     after a new plan epoch rotated the blackboard. Call this \
+                     when you need to recall what changed or what you did \
+                     earlier — it costs nothing when you do not call it."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "section": {
                             "type": "string",
-                            "enum": ["plan", "edits", "tool_actions", "exec"],
+                            "enum": ["plan", "edits", "tool_actions", "exec", "actions"],
                         },
                         "since_timestamp": {"type": "string"},
                         "epoch": {
@@ -4144,6 +4174,48 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["section"],
+                }),
+            });
+        }
+        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard.action_write` —
+        // 模型面唯一的写单按钮（写无副作用；副作用只在轮末单一发放出口）。
+        // 主车道专属（子代理投影剥除 + ToolFilter 车道门 + run_host_tool
+        // activation 守卫）；ReadOnly 类（仅写内存黑板单槽，auto-allowed
+        // 于所有策略）。round/plan_epoch 由机械层盖章，模型只给
+        // `action` + `arguments`。
+        if !tool_defs
+            .iter()
+            .any(|t| t.name == "blackboard.action_write")
+        {
+            tool_defs.push(ToolDef {
+                name: "blackboard.action_write".to_string(),
+                description: "Write ONE action-bar order for the console \
+                     (P0-C classical execution assistant). `action` is a \
+                     registered action name from the registration board \
+                     (blackboard_read section=actions); `arguments` is the \
+                     JSON object of that action's parameters. The order \
+                     carries no side effects and is issued mechanically at \
+                     the END of this model round (single issuance exit — \
+                     registry/contract/target/ACAF/policy gates then run). \
+                     Only one pending order per round: if the action bar \
+                     already holds an order, this call is refused — wait \
+                     for the result receipt and write the next order after. \
+                     Do NOT call execution/sending tools directly; use the \
+                     console button instead."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "description": "Registered action name (see blackboard_read section=actions).",
+                        },
+                        "arguments": {
+                            "type": "object",
+                            "description": "Action parameters per the registration board's minimal hints.",
+                        },
+                    },
+                    "required": ["action", "arguments"],
                 }),
             });
         }
@@ -6289,6 +6361,251 @@ impl AgentLoopController {
         ))
     }
 
+    /// P0-C S2 (2026-08-15): 注册板块投影——每轮机械刷新用（最小参数提示，
+    /// 不复制完整 schema）。
+    pub(crate) fn console_registrations(&self) -> Vec<ActionRegistration> {
+        self.console_registry.registrations()
+    }
+
+    /// P0-C S2 (2026-08-15): 轮末机械发放入口——动作栏有未消费订单时，
+    /// round/plan_epoch 防重放与过期校验 → 取单（消费一次）→
+    /// `console::issue_action`（注册表/契约/目标/执行/验证；执行委托复用
+    /// `run_host_tool` 的权限/ACAF/模式门与事件链）→ 结果栏
+    /// receipt + trace_id → `TraceStore.commit`。
+    ///
+    /// 调用方（`run_agent_loop`）保证只在 post-tool-batch 安全间隙调用，
+    /// 且 pending checkpoint 优先（checkpoint 未完成时本入口不触发）。
+    /// 过期订单被消费（清槽）并写显式错误 receipt（`step=protocol` /
+    /// `code=order_stale`），模型下轮按结果栏反馈改写订单。
+    #[allow(clippy::too_many_arguments)] // mirrors run_host_tool's shared-loop contract
+    pub(crate) async fn issue_pending_console_order<'a, 'b>(
+        &self,
+        host: &dyn LoopHost,
+        writer: &'b mut EventWriter<'a>,
+        prompt: &str,
+        workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
+        tool_rounds: u32,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
+    ) -> Result<(), AgentLoopError> {
+        let Some(order) = self.blackboard.read().actions.order.clone() else {
+            return Ok(());
+        };
+        let current_epoch = self.blackboard.read().plan.plan_epoch;
+        let current_run = writer.run_id().to_string();
+        if order.round != tool_rounds
+            || order.plan_epoch != current_epoch
+            || order.run_id != current_run
+        {
+            let err = ConsoleError {
+                step: STEP_PROTOCOL,
+                code: CODE_ORDER_STALE,
+                message: format!(
+                    "order {} is stale: written in round {} / plan_epoch {} / run {} but \
+                     current round is {} / plan_epoch {} / run {} — rewrite the order",
+                    order.order_id,
+                    order.round,
+                    order.plan_epoch,
+                    order.run_id,
+                    tool_rounds,
+                    current_epoch,
+                    current_run,
+                ),
+                upstream: Some(serde_json::json!({
+                    "order_id": order.order_id,
+                    "order_round": order.round,
+                    "current_round": tool_rounds,
+                    "order_plan_epoch": order.plan_epoch,
+                    "current_plan_epoch": current_epoch,
+                    "order_run_id": order.run_id,
+                    "current_run_id": current_run,
+                })),
+            };
+            self.blackboard.write().actions.take_order();
+            self.consume_console_order(order, err);
+            return Ok(());
+        }
+        let Some(order) = self.blackboard.write().actions.take_order() else {
+            return Ok(());
+        };
+        let mut trace = self
+            .console_traces
+            .lock()
+            .unwrap()
+            .new_trace(Some(order.order_id.clone()));
+        let call_id = order.order_id.to_lowercase();
+        let executor = ControllerConsoleExecutor {
+            controller: self,
+            host,
+            writer: tokio::sync::Mutex::new(writer),
+            prompt,
+            workspace_trust,
+            tool_rounds,
+            heartbeat,
+        };
+        match issue_action(
+            &self.console_registry,
+            &executor,
+            &order,
+            &mut trace,
+            &call_id,
+        )
+        .await
+        {
+            Ok(response) => {
+                self.push_console_result(
+                    order.order_id.clone(),
+                    true,
+                    Some(response),
+                    None,
+                    trace.trace_id.clone(),
+                );
+            }
+            Err(err) => {
+                let envelope = failure_envelope(&mut trace, Some(&order.action), &err, 10);
+                let error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
+                    serde_json::json!({
+                        "step": err.step,
+                        "code": err.code,
+                        "message": err.message,
+                    })
+                });
+                self.push_console_result(
+                    order.order_id.clone(),
+                    false,
+                    None,
+                    Some(error_value),
+                    envelope.error.trace_id.clone(),
+                );
+            }
+        }
+        self.commit_console_trace(&trace);
+        Ok(())
+    }
+
+    /// 过期/失败订单收口：追加失败事件 → 构造信封 → 结果栏 receipt →
+    /// commit（`assistant.trace` 立即可见）。
+    fn consume_console_order(&self, order: ActionOrder, err: ConsoleError) {
+        let mut trace = self
+            .console_traces
+            .lock()
+            .unwrap()
+            .new_trace(Some(order.order_id.clone()));
+        let envelope = failure_envelope(&mut trace, Some(&order.action), &err, 10);
+        let error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
+            serde_json::json!({
+                "step": err.step,
+                "code": err.code,
+                "message": err.message,
+            })
+        });
+        self.push_console_result(
+            order.order_id,
+            false,
+            None,
+            Some(error_value),
+            envelope.error.trace_id.clone(),
+        );
+        self.commit_console_trace(&trace);
+    }
+
+    fn push_console_result(
+        &self,
+        order_id: String,
+        ok: bool,
+        response: Option<serde_json::Value>,
+        error: Option<serde_json::Value>,
+        trace_id: String,
+    ) {
+        self.blackboard.write().actions.push_result(ActionResult {
+            order_id,
+            ok,
+            response,
+            error,
+            trace_id,
+            timestamp: chrono_utc_now(),
+        });
+    }
+
+    fn commit_console_trace(&self, trace: &crate::console::Trace) {
+        self.console_traces.lock().unwrap().commit(trace);
+    }
+
+    /// P0-C S2 (2026-08-15): 生产执行器适配——`console::issue_action` 的
+    /// 执行委托复用 `run_host_tool`（权限桥 + ACAF 票据 + 模式门 + 事件链），
+    /// 禁止绕过既有门直接调 `host.call_tool`。工具回复消息写入 scratch
+    /// 缓冲区后丢弃——console 的反馈闭环是结果栏 receipt，不是模型对话
+    /// 中的 Tool 消息（发放发生在模型轮结束后，模型并不等待该回复）。
+    /// 策略拒绝归一化（v0.6 用户裁决）：权限门（PolicyFeedback::Denied）与
+    /// controller 侧无反馈标记的策略拒绝（ACAF/模式门）映射为
+    /// `ExecuteError::PolicyDenied`，`issue_action` 据此产出
+    /// `step=policy` / `code=policy_denied`。
+    #[allow(clippy::too_many_arguments)] // mirrors run_host_tool's shared-loop contract
+    async fn run_console_target(
+        &self,
+        host: &dyn LoopHost,
+        writer: &mut EventWriter<'_>,
+        prompt: &str,
+        workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
+        tool_rounds: u32,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        target_tool: &str,
+        arguments: &serde_json::Value,
+        call_id: &str,
+    ) -> Result<ToolResult, crate::console::ExecuteError> {
+        let tc = ToolCall {
+            name: target_tool.to_string(),
+            arguments: arguments.clone(),
+            call_id: call_id.to_string(),
+        };
+        let mut scratch: Vec<Message> = Vec::new();
+        let (result, feedback) = match self
+            .run_host_tool(
+                host,
+                writer,
+                &tc,
+                prompt,
+                workspace_trust,
+                &mut scratch,
+                tool_rounds,
+                heartbeat,
+                None,
+                None,
+                true,
+                true,
+            )
+            .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                return Err(crate::console::ExecuteError::ExecutionFailed {
+                    message: e.to_string(),
+                    detail: None,
+                });
+            }
+        };
+        if matches!(feedback, Some(PolicyFeedback::Denied(_))) {
+            return Err(crate::console::ExecuteError::PolicyDenied {
+                message: result.output,
+                detail: Some(serde_json::json!({ "source": "permission_gate" })),
+            });
+        }
+        if self.console_policy_refusal(&result.output) {
+            return Err(crate::console::ExecuteError::PolicyDenied {
+                message: result.output,
+                detail: Some(serde_json::json!({ "source": "controller_gate" })),
+            });
+        }
+        Ok(result)
+    }
+
+    /// 机械识别 controller 侧无 `PolicyFeedback` 的策略拒绝（ACAF 票据门 /
+    /// 检索模式门）——输出前缀与 journal 的 `tool_completed.error` 同源，
+    /// 确定性、可审计。
+    fn console_policy_refusal(&self, output: &str) -> bool {
+        output.starts_with("ACAF ticket refused for ")
+            || (output.starts_with("retrieval '") && output.contains(" refused — retrieval mode"))
+    }
+
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
@@ -7109,6 +7426,183 @@ impl AgentLoopController {
             });
             return Ok((result, None));
         }
+        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard.action_write` —
+        // 模型写订单（写无副作用；副作用只在轮末单一发放出口）。单轮一单：
+        // 已有 pending 订单机械拒绝（`order_slot_busy`）。round/plan_epoch
+        // 由机械层盖章（模型不提供——防重放信任锚）；动作名/参数合法性由
+        // 发放链的注册表/契约校验负责。main lane only（检索车道由投影 +
+        // ToolFilter write gate + 此处 activation 守卫三重拒绝）。
+        if tc.name == "blackboard.action_write" {
+            if activation_id.is_some() {
+                let msg = "console action write refused — the action board is main-lane only";
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "status": "error",
+                            "error": "console_action_write_lane_denied",
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.to_string(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output: msg.to_string(),
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                    },
+                    None,
+                ));
+            }
+            let action = tc
+                .arguments
+                .get("action")
+                .and_then(|a| a.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let arguments = tc
+                .arguments
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let Some(action) = action else {
+                let content =
+                    "invalid blackboard.action_write call: `action` must be a non-empty string"
+                        .to_string();
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "status": "error",
+                            "error": content,
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: content.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output: content,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                    },
+                    None,
+                ));
+            };
+            let seq = self
+                .console_order_seq
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            let order = ActionOrder {
+                order_id: format!("ORD-{seq:06}"),
+                action,
+                arguments,
+                round: tool_rounds,
+                plan_epoch: self.blackboard.read().plan.plan_epoch,
+                run_id: writer.run_id().to_string(),
+            };
+            let write_result = {
+                let mut w = self.blackboard.write();
+                w.actions.write_order(order.clone())
+            };
+            match write_result {
+                Ok(()) => {
+                    writer
+                        .record(
+                            EventType::ToolCompleted,
+                            serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "exit_code": 0,
+                                "order_id": order.order_id,
+                                "action": order.action,
+                                "round": order.round,
+                                "plan_epoch": order.plan_epoch,
+                            }),
+                        )
+                        .await?;
+                    self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        category: ToolDispatcher::action_category(&tc.name).to_string(),
+                        tool: tc.name.clone(),
+                        timestamp: chrono_utc_now(),
+                    });
+                    let output = format!(
+                        "order {} written (action={}, round={}, plan_epoch={}) — 本轮轮末机械发放",
+                        order.order_id, order.action, order.round, order.plan_epoch,
+                    );
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                    return Ok((
+                        ToolResult {
+                            output,
+                            exit_code: Some(0),
+                            output_encoding: None,
+                            structured: None,
+                        },
+                        None,
+                    ));
+                }
+                Err(crate::blackboard::ActionBoardError::OrderSlotBusy) => {
+                    let content =
+                        "action bar already holds a pending order — 本轮订单未发放完不进入下一轮写单（单轮一单）。\
+                         请先查看结果栏/等待轮末发放"
+                            .to_string();
+                    writer
+                        .record(
+                            EventType::ToolCompleted,
+                            serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "exit_code": 1,
+                                "status": "error",
+                                "error": "order_slot_busy",
+                            }),
+                        )
+                        .await?;
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: content.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                    return Ok((
+                        ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                        },
+                        None,
+                    ));
+                }
+            }
+        }
         // P1-1 (2026-08-08 stall guards): mirror the run_tests stamp — a
         // tool that journals nothing between ToolStarted/ToolCompleted must
         // not trip the stall watchdog (the tool itself is bounded by the
@@ -7478,6 +7972,47 @@ impl Default for AgentLoopController {
     }
 }
 
+/// P0-C S2 (2026-08-15): `console::ActionExecutor` 的生产实现——委托
+/// `AgentLoopController::run_console_target`（即 `run_host_tool` 全链路）。
+/// `writer` 经互斥量包裹以配合 `ActionExecutor::execute(&self)` 的签名；
+/// 发放为单线程顺序调用，锁不竞争。
+struct ControllerConsoleExecutor<'a, 'b, 'c, 'd, 'e> {
+    controller: &'c AgentLoopController,
+    host: &'e dyn LoopHost,
+    /// tokio mutex: the guard must stay Send across the `run_host_tool`
+    /// await (async_trait futures require Send).
+    writer: tokio::sync::Mutex<&'b mut EventWriter<'a>>,
+    prompt: &'d str,
+    workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
+    tool_rounds: u32,
+    heartbeat: Option<&'d crate::gateway::model::ActivityClock>,
+}
+
+#[async_trait::async_trait]
+impl<'a, 'b, 'c, 'd, 'e> ActionExecutor for ControllerConsoleExecutor<'a, 'b, 'c, 'd, 'e> {
+    async fn execute(
+        &self,
+        target_tool: &str,
+        arguments: &serde_json::Value,
+        call_id: &str,
+    ) -> Result<ToolResult, crate::console::ExecuteError> {
+        let mut writer = self.writer.lock().await;
+        self.controller
+            .run_console_target(
+                self.host,
+                &mut writer,
+                self.prompt,
+                self.workspace_trust,
+                self.tool_rounds,
+                self.heartbeat,
+                target_tool,
+                arguments,
+                call_id,
+            )
+            .await
+    }
+}
+
 /// Hash-chained event writer — owns the journal sequence state within a turn.
 /// `pub(crate)` (GAP-SUBAGENT-RUNTIME 2026-08-10): the shared loop in
 /// `agent_loop.rs` records through it.
@@ -7683,6 +8218,48 @@ mod tests {
             self.tool_result
                 .clone()
                 .ok_or_else(|| ToolError::NotFound("test host has no tool result".into()))
+        }
+    }
+
+    /// P0-C S2 (2026-08-15): a host that denies every permission — used to
+    /// verify the console adapter maps permission denials to
+    /// `step=policy` / `code=policy_denied`.
+    struct DenyHost {
+        journal: JournalRecorder,
+    }
+
+    #[async_trait]
+    impl LoopHost for DenyHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            // Real-host semantics: read-class tools auto-allow (console
+            // action_write included); mutations are denied.
+            if risk == RiskClass::ReadOnly {
+                Ok(PermitDecision::AllowOnce)
+            } else {
+                Ok(PermitDecision::Deny)
+            }
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            Err(ToolError::NotFound("deny host never executes".into()))
         }
     }
 
@@ -12270,6 +12847,399 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// P0-C S2 (2026-08-15): the console write→issue→receipt flow — the
+    /// model writes ONE order via `blackboard.action_write` (round/epoch
+    /// stamped mechanically), the post-tool-batch gap issues it through
+    /// `run_host_tool`, and the receipt (ok + trace_id) lands in the
+    /// action-board results. The registration board is refreshed per round.
+    #[tokio::test]
+    async fn console_s2_write_issue_and_receipt_flow() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "hello".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.read_file",
+                    "arguments": {"target_file": "a.txt"},
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "actions"}),
+                call_id: "call-a1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "读文件", "RUN-S2H", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let board = controller.blackboard();
+        {
+            let r = board.read();
+            // 注册板块每轮机械刷新：基础动作集 6 项。
+            assert_eq!(
+                r.actions.registration.len(),
+                6,
+                "{:?}",
+                r.actions.registration
+            );
+            assert!(
+                r.actions
+                    .registration
+                    .iter()
+                    .any(|reg| reg.name == "workspace.read_file"),
+                "{:?}",
+                r.actions.registration
+            );
+            // 单槽已消费、结果栏有成功 receipt。
+            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+            let receipt = &r.actions.results[0];
+            assert!(receipt.ok);
+            assert_eq!(
+                receipt.response,
+                Some(serde_json::json!({"output": "hello"}))
+            );
+            assert!(receipt.trace_id.starts_with('t'));
+            // 执行记录进入工具动作区（发放经 run_host_tool 全链路）。
+            assert!(
+                r.tool_actions
+                    .iter()
+                    .any(|t| t.category == "read" && t.tool == "read_file"),
+                "{:?}",
+                r.tool_actions
+            );
+        }
+
+        // trace 收口后对 `assistant.trace`（TraceStore）可见。
+        let receipt_id = board.read().actions.results[0].trace_id.clone();
+        let traces = controller.console_traces.lock().unwrap();
+        let trace = traces.get(&receipt_id).expect("committed trace visible");
+        assert_eq!(trace.request_id.as_deref(), Some("ORD-000001"));
+        let steps: Vec<&str> = trace.events.iter().map(|e| e.step.as_str()).collect();
+        assert_eq!(
+            steps,
+            vec!["registry", "contract", "target", "execute", "verify"]
+        );
+
+        // 发放的执行事件带合成 call_id（审计可关联订单）。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("read_file"))
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(completed.len(), 1, "{completed:?}");
+        assert_eq!(completed[0]["call_id"], "ord-000001");
+        assert_eq!(completed[0]["exit_code"], 0);
+
+        // 模型读 actions 分区的回复包含 receipt。
+        let received = fake.received_requests();
+        let actions_reply = received
+            .iter()
+            .find_map(|r| {
+                r.messages
+                    .iter()
+                    .find(|m| m.tool_call_id.as_deref() == Some("call-a1"))
+            })
+            .expect("actions reply");
+        assert!(actions_reply.content.contains("== registration =="));
+        assert!(actions_reply.content.contains("workspace.read_file"));
+        assert!(actions_reply.content.contains("ORD-000001 ok=true"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S2 (2026-08-15): 单轮一单——同批第二次 `blackboard.action_write`
+    /// 被机械拒绝（order_slot_busy），首单仍正常发放。
+    #[tokio::test]
+    async fn console_s2_action_write_slot_busy_refuses_second_order() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "blackboard.action_write".to_string(),
+                    arguments: serde_json::json!({
+                        "action": "workspace.list_dir",
+                        "arguments": {"target_directory": "."},
+                    }),
+                    call_id: "call-w1".to_string(),
+                },
+                ToolCall {
+                    name: "blackboard.action_write".to_string(),
+                    arguments: serde_json::json!({
+                        "action": "workspace.read_file",
+                        "arguments": {"target_file": "b.txt"},
+                    }),
+                    call_id: "call-w2".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "两个订单", "RUN-S2B", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        {
+            let r = controller.blackboard().read();
+            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+            assert!(r.actions.results[0].ok);
+            // 首单被发放（list_dir 经 host 执行）。
+            assert!(
+                r.tool_actions.iter().any(|t| t.tool == "list_dir"),
+                "{:?}",
+                r.tool_actions
+            );
+        }
+        // 第二单被显式拒绝。
+        let busy: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| {
+                e.payload.get("tool").and_then(|t| t.as_str()) == Some("blackboard.action_write")
+            })
+            .filter(|e| e.payload.get("call_id").and_then(|c| c.as_str()) == Some("call-w2"))
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(busy.len(), 1, "{busy:?}");
+        assert_eq!(busy[0]["exit_code"], 1);
+        assert_eq!(busy[0]["error"], "order_slot_busy");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S2 (2026-08-15): round/plan_epoch 防重放与过期——写单轮与发放轮
+    /// 不一致的订单被消费（清槽）并写显式 `order_stale` receipt，不执行。
+    #[tokio::test]
+    async fn console_s2_stale_order_is_consumed_with_explicit_receipt() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-000009".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "a.txt"}),
+                    round: 0,
+                    plan_epoch: 1,
+                    run_id: "RUN-OLD".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = discard_event_writer("RUN-S2S");
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "stale",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        assert_eq!(receipt.error.as_ref().unwrap()["step"], "protocol");
+        assert_eq!(receipt.error.as_ref().unwrap()["code"], "order_stale");
+        // 未执行任何目标工具。
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "read_file"),
+            "{:?}",
+            r.tool_actions
+        );
+        // 过期订单的失败 trace 已 commit。
+        let traces = controller.console_traces.lock().unwrap();
+        let trace = traces
+            .get(&receipt.trace_id)
+            .expect("stale trace committed");
+        assert_eq!(trace.events.last().unwrap().step, "protocol");
+        assert_eq!(
+            trace.events.last().unwrap().code.as_deref(),
+            Some(crate::console::CODE_ORDER_STALE)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S2 (2026-08-15): 跨 run 防重放——run_id 不匹配的遗留订单即使
+    /// round/plan_epoch 重合也按 `order_stale` 显式拒绝（不误发）。
+    #[tokio::test]
+    async fn console_s2_cross_run_leftover_order_is_stale() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-000010".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "a.txt"}),
+                    round: 1,
+                    plan_epoch: 1,
+                    run_id: "RUN-PREVIOUS".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = discard_event_writer("RUN-S2X");
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "cross-run",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none());
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        assert_eq!(receipt.error.as_ref().unwrap()["code"], "order_stale");
+        assert_eq!(
+            receipt.error.as_ref().unwrap()["upstream"]["order_run_id"],
+            "RUN-PREVIOUS"
+        );
+        assert_eq!(
+            receipt.error.as_ref().unwrap()["upstream"]["current_run_id"],
+            "RUN-S2X"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S2 (2026-08-15): 策略拒绝归一化——权限门拒绝经适配层映射为
+    /// `step=policy` + `code=policy_denied`，receipt 不带 execute trace 尾部。
+    #[tokio::test]
+    async fn console_s2_permission_denial_maps_to_policy_receipt() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = DenyHost { journal };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.search_replace",
+                    "arguments": {
+                        "file_path": "a.txt",
+                        "old_string": "x",
+                        "new_string": "y",
+                    },
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "被拒动作", "RUN-S2P", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().expect("error payload");
+        assert_eq!(error["step"], "policy");
+        assert_eq!(error["code"], "policy_denied");
+        assert!(
+            error.get("trace").is_none(),
+            "policy denial must not carry the execute trace tail: {error}"
+        );
+        assert_eq!(error["upstream"]["action"], "workspace.search_replace");
+        assert_eq!(error["upstream"]["target_tool"], "search_replace");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S2 (2026-08-15): 适配层对 controller 侧无反馈标记的策略拒绝
+    /// （ACAF 票据门 / 检索模式门）的机械分类——锁定当前稳定输出前缀，
+    /// 文案变更时此处测试即失败（防静默退化回 execute 失败）。
+    #[test]
+    fn console_s2_policy_refusal_classification_locked() {
+        let controller = AgentLoopController::new();
+        assert!(controller.console_policy_refusal(
+            "ACAF ticket refused for 'search_replace' — denied (missing_goal_context); \
+             the action was not executed."
+        ));
+        assert!(controller.console_policy_refusal(
+            "retrieval 'project_doc_index' refused — retrieval mode is 'off' for this \
+             session; no retrieval tools are available."
+        ));
+        assert!(controller.console_policy_refusal(
+            "retrieval 'browser_read' refused — retrieval mode is 'local_browser' for \
+             this session; web tools require framework_fallback mode; no silent fallback."
+        ));
+        // 非策略拒绝不得误分类。
+        assert!(!controller.console_policy_refusal("tool error: boom"));
+        assert!(!controller.console_policy_refusal("tool 'run_tests' — 缺少测试运行器"));
+        assert!(!controller.console_policy_refusal("tool 'read_file' — 本次调用未获权限门禁放行"));
+    }
+
     #[tokio::test]
     async fn denied_tool_round_replays_tool_message() {
         // A denied tool call must still be answered with a tool message —
@@ -12463,6 +13433,7 @@ mod tests {
             declared,
             vec![
                 "bash",
+                "blackboard.action_write",
                 "blackboard_read",
                 "compaction_whitelist_add",
                 "grep",
@@ -12513,6 +13484,7 @@ mod tests {
             declared,
             vec![
                 "bash",
+                "blackboard.action_write",
                 "blackboard_read",
                 "compaction_whitelist_add",
                 "grep",
@@ -16338,6 +17310,7 @@ mod tests {
             declared,
             vec![
                 "bash",                     // non-work tool — untouched
+                "blackboard.action_write",  // console button — always declared
                 "blackboard_read",          // storage chain complete
                 "compaction_whitelist_add", // storage chain complete
                 "read_file",                // read chain complete
@@ -16386,6 +17359,7 @@ mod tests {
             "web_search",
             "compaction_whitelist_add",
             "retrieval_disposition",
+            "blackboard.action_write",
         ]
         .iter()
         .map(|n| ToolDef {
@@ -16402,7 +17376,7 @@ mod tests {
         assert_eq!(
             names,
             vec!["browser_read", "read_file", "web_search"],
-            "subagent projection restores browser_read: {names:?}"
+            "subagent projection restores browser_read and strips console/main-only tools: {names:?}"
         );
 
         let absent = AgentLoopController::subagent_tool_projection(&parent, &EmptyRegistry);
@@ -16571,7 +17545,7 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec!["bash"],
+            vec!["bash", "blackboard.action_write"],
             "unreadable workspace removes every work tool: {declared:?}"
         );
         let all_events = events(&dir);

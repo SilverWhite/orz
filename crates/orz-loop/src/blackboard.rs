@@ -125,9 +125,13 @@ pub struct ActionOrder {
     pub action: String,
     pub arguments: serde_json::Value,
     /// 写单时的模型轮（round 防重放/过期）。
-    pub round: u64,
+    pub round: u32,
     /// 写单时的 plan epoch（跨 epoch 语义隔离）。
     pub plan_epoch: u64,
+    /// 写单时的 run id（P0-C S2：跨 run 防重放——run 结束遗留的订单在
+    /// 下一 run 按 `order_stale` 显式拒绝，不会因轮号/epoch 重合被误发）。
+    #[serde(default)]
+    pub run_id: String,
 }
 
 /// 结果栏 receipt（v0.5 操作台模型）：助理层写；成功携带 response，
@@ -508,6 +512,7 @@ mod tests {
             arguments: serde_json::json!({"path": "a.txt"}),
             round: 1,
             plan_epoch: 1,
+            run_id: "RUN-1".into(),
         };
         {
             let mut w = bb.write();
@@ -522,16 +527,18 @@ mod tests {
             let taken = w.actions.take_order();
             assert_eq!(taken, Some(order));
             assert!(w.actions.order.is_none());
-            assert!(w
-                .actions
-                .write_order(ActionOrder {
-                    order_id: "ORD-2".into(),
-                    action: "workspace.list_dir".into(),
-                    arguments: serde_json::json!({"path": "."}),
-                    round: 2,
-                    plan_epoch: 1,
-                })
-                .is_ok());
+            assert!(
+                w.actions
+                    .write_order(ActionOrder {
+                        order_id: "ORD-2".into(),
+                        action: "workspace.list_dir".into(),
+                        arguments: serde_json::json!({"path": "."}),
+                        round: 2,
+                        plan_epoch: 1,
+                        run_id: "RUN-1".into(),
+                    })
+                    .is_ok()
+            );
         }
     }
 
@@ -582,6 +589,7 @@ mod tests {
                 arguments: serde_json::json!({"path": "a.txt"}),
                 round: 1,
                 plan_epoch: 1,
+                run_id: "RUN-1".into(),
             })
             .unwrap();
         let snap = bb.epoch_snapshot("2026-08-15T00:00:00Z");

@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::blackboard::ActionOrder;
 use crate::host::ToolResult;
@@ -55,6 +55,183 @@ pub const CODE_EXECUTION_FAILED: &str = "execution_failed";
 pub const CODE_OUT_OF_SCOPE: &str = "out_of_scope";
 pub const CODE_POLICY_DENIED: &str = "policy_denied";
 pub const CODE_INTERNAL_ERROR: &str = "internal_error";
+/// 订单过期/重放（round/plan_epoch 防重放与过期校验失败）——请求类错误，
+/// 走 `step=protocol`（模型改订单后重写）。
+pub const CODE_ORDER_STALE: &str = "order_stale";
+
+/// 基础动作集响应契约：生产 host 工具当前统一返回文本输出
+/// （`ToolResult.structured` 接缝仅 web_search 使用；console 收口为
+/// `{"output": ...}` 信封并机械验证）。
+fn text_output_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "output": {"type": "string"},
+        },
+        "required": ["output"],
+    })
+}
+
+/// 生产注册动作集（S2 起接线；S3 由 Profile/Bundle 分区加载扩展）。
+/// 目标工具名必须与 orz-host 注册表一致；输入契约镜像真实参数
+/// （`target_file`/`target_directory`/`pattern`/`file_path` 等）。
+pub fn default_service_registry() -> ServiceRegistry {
+    let mut registry = ServiceRegistry::new();
+    for spec in [
+        ActionSpec {
+            name: "workspace.read_file".to_string(),
+            description: "读取工作区文件（行号锚点、可 offset/limit 分段续读）。".to_string(),
+            target_tool: "read_file".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target_file": {
+                        "type": "string",
+                        "description": "工作区相对路径或绝对路径（须在工作区内）。",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "起始行号（文件过大时分段读取）。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "读取行数上限。",
+                    },
+                },
+                "required": ["target_file"],
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
+        },
+        ActionSpec {
+            name: "workspace.list_dir".to_string(),
+            description: "列出目录内容（工作区相对路径或绝对路径）。".to_string(),
+            target_tool: "list_dir".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target_directory": {
+                        "type": "string",
+                        "description": "要列出的目录路径（相对工作区或绝对）。",
+                    },
+                },
+                "required": ["target_directory"],
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
+        },
+        ActionSpec {
+            name: "workspace.grep".to_string(),
+            description: "正则搜索文件内容（ripgrep；可限定路径/glob/类型/上下文）。".to_string(),
+            target_tool: "grep".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "要搜索的正则表达式（rg --regexp）。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "搜索的文件或目录（默认工作区）。",
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "文件过滤 glob（如 *.rs）。",
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "文件类型（rg --type，如 rust/py/js）。",
+                    },
+                    "head_limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "输出条数上限。",
+                    },
+                    "case_insensitive": {
+                        "type": "boolean",
+                        "description": "大小写不敏感（rg -i）。",
+                    },
+                },
+                "required": ["pattern"],
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
+        },
+        ActionSpec {
+            name: "workspace.search_replace".to_string(),
+            description:
+                "编辑执行器：唯一精确替换（old_string 必须唯一匹配，空 old_string 建新文件）。"
+                    .to_string(),
+            target_tool: "search_replace".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "目标文件（工作区相对路径）。",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "要替换的原文（须唯一匹配；空=新建文件）。",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "替换后的新文本。",
+                    },
+                },
+                "required": ["file_path", "old_string", "new_string"],
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
+        },
+        ActionSpec {
+            name: "workspace.run_tests".to_string(),
+            description: "运行会话固定的测试命令（模型不提供命令；host-owned）。".to_string(),
+            target_tool: "run_tests".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
+        },
+        ActionSpec {
+            name: "workspace.index".to_string(),
+            description: "索引并检索工作区项目文档（query 空=全量列表）。".to_string(),
+            target_tool: "project_doc_index".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "关键词（匹配路径/标题/标题行；空=列出全部）。",
+                    },
+                    "include_content": {
+                        "type": "boolean",
+                        "description": "返回截断全文。",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "结果上限（默认 10）。",
+                    },
+                },
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
+        },
+    ] {
+        // 基础动作集是静态契约——注册失败是编程错误（非法 schema 会在这里
+        // 拒绝，符合「非法 schema 注册即拒绝」的登记语义）。
+        registry
+            .register(spec)
+            .expect("static console registry valid");
+    }
+    registry
+}
 
 /// 一条有界执行日志事件。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -578,6 +755,7 @@ mod tests {
             arguments,
             round: 1,
             plan_epoch: 1,
+            run_id: "RUN-1".to_string(),
         }
     }
 
@@ -651,6 +829,29 @@ mod tests {
             registry.names(),
             vec!["workspace.list_dir", "workspace.read_file"]
         );
+    }
+
+    #[test]
+    fn default_registry_registers_base_action_set_with_valid_contracts() {
+        let registry = default_service_registry();
+        let names = registry.names();
+        assert_eq!(
+            names,
+            vec![
+                "workspace.grep",
+                "workspace.index",
+                "workspace.list_dir",
+                "workspace.read_file",
+                "workspace.run_tests",
+                "workspace.search_replace",
+            ]
+        );
+        for name in &names {
+            let spec = registry.get(name).expect("registered action");
+            // 响应契约必填且注册时已通过 JSON Schema 编译（校验器缓存）。
+            assert!(registry.validators.contains_key(name));
+            assert!(!spec.response_schema.is_null());
+        }
     }
 
     #[test]
@@ -1071,8 +1272,10 @@ mod tests {
             store.new_trace(Some(format!("req-{i}")));
         }
         assert!(store.get("t000001").is_none());
-        assert!(store
-            .get(&format!("t{:06}", TRACE_STORE_MAX_TRACES + 10))
-            .is_some());
+        assert!(
+            store
+                .get(&format!("t{:06}", TRACE_STORE_MAX_TRACES + 10))
+                .is_some()
+        );
     }
 }

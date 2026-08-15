@@ -44,7 +44,13 @@ pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent 
 \n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
 compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
 写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
-不写计划/步骤/推测/临时状态（计划由 plan mode 承载）。";
+不写计划/步骤/推测/临时状态（计划由 plan mode 承载）。\
+\n操作台（P0-C v0.5）：需要执行动作时不要直接调用执行/发送类工具——先读注册板块 \
+（blackboard_read section=actions，常驻按需读；内容=动作名+最小参数提示），\
+再写动作栏订单（blackboard.action_write：action + arguments）；写订单无副作用，\
+订单在轮末由机械层单一出口发放（注册表/契约/目标/ACAF/策略门），\
+结果写回结果栏 receipt（含 trace_id；失败含 step/code/upstream）。\
+单轮一单：本轮订单未发放完不进入下一轮写单，先看结果栏反馈再调整。";
 
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
@@ -202,9 +208,9 @@ pub fn context_compressed_marker(
         .unwrap_or_default();
     format!(
         "{CONTEXT_COMPRESSED_PREFIX} v0.1]\n\
-         前文 {rounds_dropped} 轮已压缩（触发于 {trigger_k}K tokens）。\
-         之前的工具结果全文不再在本对话中；如需回看历史，请调用 \
-         blackboard_read 工具（分区: plan / edits / tool_actions / exec）。\
+        前文 {rounds_dropped} 轮已压缩（触发于 {trigger_k}K tokens）。\
+        之前的工具结果全文不再在本对话中；如需回看历史，请调用 \
+         blackboard_read 工具（分区: plan / edits / tool_actions / exec / actions）。\
          {summary}\n\
          [/前文上下文已压缩]",
         trigger_k = trigger_tokens / 1000,
@@ -233,9 +239,9 @@ pub fn recovery_truncation_marker(
 ) -> String {
     format!(
         "{CONTEXT_COMPRESSED_PREFIX} v0.1-恢复]\n\
-         恢复对话超过窗口，已机械截断 {rounds_dropped} 轮（估算 {before_k}K → {after_k}K \
+        恢复对话超过窗口，已机械截断 {rounds_dropped} 轮（估算 {before_k}K → {after_k}K \
          tokens）。完整历史保留于审计副本 {audit_path}；如需回看历史，请调用 \
-         blackboard_read 工具（分区: plan / edits / tool_actions / exec）。\n\
+         blackboard_read 工具（分区: plan / edits / tool_actions / exec / actions）。\n\
          [/前文上下文已压缩]",
         before_k = before_estimate / 1000,
         after_k = after_estimate / 1000,

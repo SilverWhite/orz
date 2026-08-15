@@ -13,7 +13,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::blackboard::{EditRecord, EpochSnapshot, ExecSection, PlanSection, ToolActionRecord};
+use crate::blackboard::{
+    ActionBoard, EditRecord, EpochSnapshot, ExecSection, PlanSection, ToolActionRecord,
+};
 
 /// Archive directory name under the session cwd's `.gsa` root.
 pub const EPOCH_ARCHIVE_DIR: &str = ".gsa/blackboard";
@@ -231,6 +233,7 @@ pub fn render_section(
     edits: &[EditRecord],
     tool_actions: &[ToolActionRecord],
     exec: &ExecSection,
+    actions: &ActionBoard,
     section: &str,
     since: Option<&str>,
 ) -> String {
@@ -325,8 +328,85 @@ pub fn render_section(
                 lines.join("\n")
             }
         }
+        // P0-C orz 内嵌集成 S2 (2026-08-15): the console action board —
+        // registration (assistant-refreshed buttons), the pending order
+        // (model-written single slot) and the result receipts (issuance).
+        // Bounded renders: registration may grow with Profile/Bundle; the
+        // board's result list is already capped at 50, and the text view
+        // shows the latest 10 with an explicit count.
+        "actions" => {
+            let mut lines: Vec<String> = Vec::new();
+            lines.push("== registration ==".to_string());
+            if actions.registration.is_empty() {
+                lines.push("(no registered actions)".to_string());
+            }
+            for reg in &actions.registration {
+                let params =
+                    serde_json::to_string(&reg.parameters).unwrap_or_else(|_| "{}".to_string());
+                lines.push(format!(
+                    "{} — {} params={params}",
+                    reg.name, reg.description
+                ));
+            }
+            lines.push("== order ==".to_string());
+            match &actions.order {
+                Some(order) => {
+                    let args = serde_json::to_string(&order.arguments)
+                        .unwrap_or_else(|_| "{}".to_string());
+                    lines.push(format!(
+                        "{} action={} round={} plan_epoch={} run_id={} args={args}",
+                        order.order_id, order.action, order.round, order.plan_epoch, order.run_id,
+                    ));
+                }
+                None => lines.push("(no pending order)".to_string()),
+            }
+            lines.push("== results ==".to_string());
+            if actions.results.is_empty() {
+                lines.push("(no results yet)".to_string());
+            } else {
+                const RESULTS_RENDER_CAP: usize = 10;
+                if actions.results.len() > RESULTS_RENDER_CAP {
+                    let omitted = actions.results.len() - RESULTS_RENDER_CAP;
+                    lines.push(format!(
+                        "[actions: 共 {} 条，仅显示最近 {RESULTS_RENDER_CAP} 条（较早省略 {omitted} 条）]",
+                        actions.results.len(),
+                    ));
+                }
+                for result in actions.results.iter().rev().take(RESULTS_RENDER_CAP) {
+                    let line = if result.ok {
+                        let response = serde_json::to_string(&result.response)
+                            .unwrap_or_else(|_| "{}".to_string());
+                        format!(
+                            "{} ok=true trace_id={} response={response}",
+                            result.order_id, result.trace_id,
+                        )
+                    } else {
+                        let detail = result
+                            .error
+                            .as_ref()
+                            .and_then(|e| e.get("step"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("?");
+                        let code = result
+                            .error
+                            .as_ref()
+                            .and_then(|e| e.get("code"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("?");
+                        format!(
+                            "{} ok=false step={detail} code={code} trace_id={}",
+                            result.order_id, result.trace_id,
+                        )
+                    };
+                    lines.push(line);
+                }
+            }
+            lines.join("\n")
+        }
         other => {
-            format!("unknown blackboard section: {other} (expected plan|edits|tool_actions|exec)")
+            format!(
+                "unknown blackboard section: {other} (expected plan|edits|tool_actions|exec|actions)"
+            )
         }
     }
 }
@@ -334,7 +414,79 @@ pub fn render_section(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blackboard::{PlanStep, SharedBlackboard, StepStatus};
+    use crate::blackboard::{ActionBoard, ActionResult, PlanStep, SharedBlackboard, StepStatus};
+
+    #[test]
+    fn render_actions_section_shows_registration_order_and_results() {
+        let mut board = ActionBoard::default();
+        board.set_registration(vec![crate::blackboard::ActionRegistration {
+            name: "workspace.read_file".into(),
+            description: "read a file".into(),
+            parameters: serde_json::json!({"required": ["target_file"]}),
+        }]);
+        board
+            .write_order(crate::blackboard::ActionOrder {
+                order_id: "ORD-000001".into(),
+                action: "workspace.read_file".into(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                round: 0,
+                plan_epoch: 1,
+                run_id: "RUN-1".into(),
+            })
+            .unwrap();
+        board.push_result(ActionResult {
+            order_id: "ORD-000001".into(),
+            ok: true,
+            response: Some(serde_json::json!({"output": "hi"})),
+            error: None,
+            trace_id: "t000001".into(),
+            timestamp: "2026-08-15T00:00:00Z".into(),
+        });
+        board.push_result(ActionResult {
+            order_id: "ORD-000002".into(),
+            ok: false,
+            response: None,
+            error: Some(serde_json::json!({
+                "step": "policy",
+                "code": "policy_denied",
+                "message": "denied",
+                "trace_id": "t000002",
+            })),
+            trace_id: "t000002".into(),
+            timestamp: "2026-08-15T00:00:01Z".into(),
+        });
+
+        let plan = PlanSection::default();
+        let text = render_section(
+            &plan,
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+        );
+        assert!(text.contains("== registration =="));
+        assert!(text.contains("workspace.read_file"));
+        assert!(text.contains("== order =="));
+        assert!(text.contains("ORD-000001 action=workspace.read_file round=0 plan_epoch=1"));
+        assert!(text.contains("== results =="));
+        assert!(text.contains("ORD-000001 ok=true trace_id=t000001"));
+        assert!(text.contains("ORD-000002 ok=false step=policy code=policy_denied"));
+
+        // 未知分区显式报错并列出新分区。
+        let unknown = render_section(
+            &plan,
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "bogus",
+            None,
+        );
+        assert!(unknown.contains("unknown blackboard section: bogus"));
+        assert!(unknown.contains("actions"));
+    }
 
     #[test]
     fn next_epoch_is_timestamp_stamped_and_monotonic() {

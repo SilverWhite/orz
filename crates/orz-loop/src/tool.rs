@@ -67,6 +67,13 @@ impl ToolDispatcher {
             // triggering. (Its .gsa archive write is a mechanical best-
             // effort audit append, not a worktree mutation.)
             || tool_name == "compaction_whitelist_add"
+            // P0-C S2 (2026-08-15): `blackboard.action_write` writes ONLY
+            // the in-memory blackboard action-bar slot (the order) — no
+            // file, no network, no external side effect — so it is
+            // ReadOnly-classed like the whitelist write (declared and
+            // auto-allowed under every policy; side effects happen only at
+            // the mechanical issuance exit).
+            || tool_name == "blackboard.action_write"
             // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
             // workspace-local read (discovery + query) — ReadOnly class
             // (auto-allowed under every policy; the retrieval subagent's
@@ -121,6 +128,10 @@ impl ToolDispatcher {
             // A6 §8 C.2: whitelist writes are not a read (ReadOnly class
             // would fold them under "read") — they are session-state
             // bookkeeping; "other" is the honest fold.
+            "other"
+        } else if tool_name == "blackboard.action_write" {
+            // P0-C S2: the action-bar order write is session bookkeeping
+            // (same honest fold as the whitelist — in-memory only).
             "other"
         } else if Self::is_shell_tool(tool_name) {
             "terminal"
@@ -275,6 +286,13 @@ mod tests {
             RiskClass::ReadOnly
         );
         assert!(!ToolDispatcher::modifies_files("browser_read"));
+        // P0-C S2 (2026-08-15): `blackboard.action_write` writes only the
+        // in-memory action-bar slot — ReadOnly class (auto-allowed).
+        assert_eq!(
+            ToolDispatcher::risk_class("blackboard.action_write"),
+            RiskClass::ReadOnly
+        );
+        assert!(!ToolDispatcher::modifies_files("blackboard.action_write"));
     }
 
     #[test]
@@ -335,6 +353,11 @@ mod tests {
         assert_eq!(ToolDispatcher::action_category("read_file"), "read");
         assert_eq!(ToolDispatcher::action_category("grep"), "read");
         assert_eq!(ToolDispatcher::action_category("list_dir"), "read");
+        // P0-C S2: the action-bar order write is session bookkeeping.
+        assert_eq!(
+            ToolDispatcher::action_category("blackboard.action_write"),
+            "other"
+        );
         // blackboard_read is read-class (2026-08-08 review closure — the
         // `blackboard_` prefix misses the read_/list_/grep/search prefixes).
         assert_eq!(ToolDispatcher::action_category("blackboard_read"), "read");
