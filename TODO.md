@@ -57,8 +57,16 @@
     fail-closed 信封 / 有界 Trace+TraceStore，执行经 ActionExecutor 抽象
     委托，生产复用 run_host_tool 权限/ACAF 链）+ `blackboard::ActionBoard`
     （注册板块 / 动作栏单槽 / 结果栏有界 50，随 plan epoch 归档/轮换）。
-    2026-08-15 落地；新增 12 项测试，orz-loop 350 通过。
-  - [ ] S2：模型面投影（注册板块读取 + 动作栏写单工具）与轮末机械发放接线。
+    2026-08-15 落地；全面检查修复已闭合（ExecuteError 执行失败/策略拒绝、
+    响应契约强制必填并注册时校验缓存、exit_code=Some(0) 契约、TraceStore
+    commit + 失败事件滚动保底、注册板块最小提示投影）；新增 18 项测试
+    （console 15 + blackboard 3），orz-loop 356 通过。
+  - [ ] S2：模型面投影（注册板块读取=最小参数提示 + 动作栏写单工具
+    `blackboard.action_write`，已有 pending 机械拒绝）与轮末机械发放
+    （round/plan_epoch 防重放与过期 → 注册表/契约 → 真实目标解析 →
+    ACAF 票据 → 策略表/taint/模式门 → 经 `run_host_tool` 执行 → 响应
+    schema 验证 → 结果栏 receipt+trace_id；策略拒绝映射 `step=policy`；
+    发放收口 `TraceStore.commit`）。
   - [ ] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
     生产化 + Profile/Bundle 按钮组加载。
   - [ ] S4：端到端测试、实施审计与正式组件决策门材料。

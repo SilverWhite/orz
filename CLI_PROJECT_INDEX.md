@@ -10,7 +10,7 @@
 > 2026-08-15 缓存上下文成本二次全面审查修复登记：`request_header_change` payload 增 `change_kind`（机械「变化原因」，Schema/verifier 摘要差一致性校验）；verifier 允许每车道多链 initial（子代理多 activation/主车道多 run 合法）；新增 `_verify_v02_inject_budget`；压缩摘要/预检等 loop 外辅助模型请求留痕边界登记（详见审计 §7）。
 > 2026-08-15 P0-C 小样 2 闭合登记——编辑执行器 `workspace.search_replace` 对照实验通过（用户裁决 + 独立判定一致），下一裁决点=小样 3；结果工件见 CLASSICAL-EXEC-ASSISTANT 条目。
 > 2026-08-15 P0-C 小样 3 闭合登记——机械组合脚本模式 `workspace.run_script` 对照实验通过（用户裁决 + 独立判定一致），下一裁决点=orz 内嵌集成；结果工件见 CLASSICAL-EXEC-ASSISTANT 条目。
-> 2026-08-15 P0-C orz 内嵌集成 S1 登记——操作台核心（orz-loop `console`：注册表/契约/信封/trace，执行经 ActionExecutor 委托复用既有门）与黑板动作栏数据面（注册板块/动作栏单槽/结果栏）落地；模型面投影与轮末发放待续（S2）。
+> 2026-08-15 P0-C orz 内嵌集成 S1 登记——操作台核心（orz-loop `console`：注册表/契约/信封/trace，执行经 ActionExecutor 委托复用既有门）与黑板动作栏数据面（注册板块/动作栏单槽/结果栏）落地；模型面投影与轮末发放待续（S2）。同日全面检查修复登记——执行器错误细分 execute/policy（`policy_denied`）、响应契约强制必填、TraceStore 提交语义、最小参数提示投影、S2 验收点显式化。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

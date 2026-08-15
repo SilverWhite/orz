@@ -132,6 +132,9 @@
 - 集成形态（v0.3 用户裁决）：HA 助理层与 orz 深度融合，是 orz 的一部分；薄接缝改置 orz 本体 ↔ 底座（模型后端，Grok/Codex 等），不是 orz ↔ ConsoleClient；POC 的 stdio 协议仅为原型隔离，不作为生产接缝。
 - 借鉴登记（2026-08-13）：DeepSeek Harness（v0.1 预览、MIT）只借设计本身、不引入其技术栈——PTC 程序化工具调用（模型输出程序化动作脚本，操作台逐行确定性执行、失败 fail-closed）+ Profile/Bundle 动作组合（按 Benchmark/ReadOnly/标准场景加载动作集）。
 - fail-closed 返回契约（2026-08-13，已落地）：调研 HA 原项目——WebSocket 成功回 `result:{context,response}`、失败回 `error:{code,message}`（message 带校验路径），无失败点/上游结果，不足；错误信封扩展为 `step`（失败点枚举 protocol/intent/registry/contract/target/execute/verify/policy）+ `code` + `message` + `upstream`（解析后真实目标/票据 id/部分输出/verifier 摘要，无则 null），模型可独立排障；POC 已实现并纳入冒烟（21/21）。
+  2026-08-15 全面检查修复：策略拒绝（权限/ACAF/taint/模式门）由执行器适配层
+  归一化为 `step=policy` + `code=policy_denied`；响应契约强制必填（注册时校验
+  并缓存 schema，任何输出过机械验证）；`exit_code=Some(0)` 成功契约。
 - 动作粒度与稳定性裁决（2026-08-13）：细粒度优先——粗按钮（run_terminal_cmd 什么都做）才是限制模型（参数幻觉面大）；细动作必须配套机械组合层（PTC/管道/意图）避免碎片化。负担=构建期线性成本（注册+schema+handler+探针/策略映射+测试），运行时近零；风险在边界漂移与变更连锁；护栏=动作契约按版本化 API 管理（新增优先、废弃走迁移期、参数向后兼容）、探针决定可见性、Profile/Bundle 分区、契约即测试。小样 2 收益量化裁决点已闭合（2026-08-15 用户裁决通过，独立判定一致）。
 - 执行失败特殊反馈与日志可见性（v0.4，已落地）：错误信封恒带 `trace_id`；`step=execute` 失败附有界 trace 尾部；新增只读服务 `assistant.trace`（有界、读入审计）——主模型可结合日志与操作台覆盖未预录内容；POC 冒烟 28/28。
 - 机械组合模型（v0.4 设计）：线性脚本模式（PTC）——步骤=注册动作实例 + `$ref` 数据引用，每步独立契约校验 + trace，任一步 fail-closed；无任意代码/隐式控制流，循环/条件暂不做；列入实施序列小样 3。
@@ -151,14 +154,20 @@
   执行经 ActionExecutor 抽象委托，生产实现由 controller 复用 run_host_tool
   的权限/ACAF/事件链，禁止绕过既有门）+ 黑板动作栏数据面
   （`blackboard::ActionBoard`：注册板块/动作栏单槽（单轮一单）/
-  结果栏有界 50，随 plan epoch 快照归档与轮换）。新增 12 项测试；
-  orz-loop 350 通过 / 0 失败。模型面投影、轮末机械发放、
-  assistant.trace 服务与 PTC 生产化待续（S2-S4）。
+  结果栏有界 50，随 plan epoch 快照归档与轮换）。**2026-08-15 全面检查修复**——
+  执行器返回 ExecuteError（执行失败/策略拒绝，`step=policy` + `policy_denied`）；
+  响应契约强制必填（注册时校验并缓存 schema，任何输出过机械验证）；
+  `exit_code=Some(0)` 成功契约（None/非零按执行失败）；TraceStore 提交语义
+  （发放收口 commit，失败事件满员滚动保底）；注册板块最小参数提示投影；
+  S2 验收点显式登记（round/epoch 防重放、目标解析、ACAF 票据、策略表、
+  step=policy）。新增 18 项测试（console 15 + blackboard 3）；orz-loop
+  356 通过 / 0 失败。模型面投影、轮末机械发放、assistant.trace 服务与
+  PTC 生产化待续（S2-S4）。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S2 模型面投影 + 轮末发放、S3 trace/PTC/Profile、S4 端到端 + 审计待续；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；S2 验收点（round/epoch 防重放、真实目标解析、ACAF 票据、策略表、step=policy）已显式登记；S2 模型面投影 + 轮末发放、S3 trace/PTC/Profile、S4 端到端 + 审计待续；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
@@ -379,11 +388,18 @@
 
 ## 变更记录
 
+- 2026-08-15：P0-C 内嵌集成 S1 全面检查修复登记——执行器返回 ExecuteError
+  （执行失败/策略拒绝，`step=policy` + `policy_denied`）；响应契约强制必填
+  （注册时校验并缓存 schema，任何输出过机械验证）；`exit_code=Some(0)`
+  成功契约（None/非零按执行失败）；TraceStore commit 提交语义 + 失败事件
+  满员滚动保底；注册板块最小参数提示投影；S2 验收点显式化（round/epoch
+  防重放、真实目标解析、ACAF 票据、策略表、step=policy）；新增 18 项测试
+  （console 15 + blackboard 3），orz-loop 356 通过 / 0 失败。
 - 2026-08-15：P0-C 内嵌集成 S1 落地登记——orz-loop 新增 `console` 模块
   （ServiceRegistry/ActionSpec/issue_action/信封/Trace+TraceStore，执行经
   ActionExecutor 抽象委托）与黑板动作栏数据面（`blackboard::ActionBoard`
-  注册板块/动作栏单槽/结果栏有界，随 plan epoch 归档轮换）；新增 12 项测试，
-  orz-loop 350 通过；S2 模型面投影 + 轮末发放待续。
+  注册板块/动作栏单槽/结果栏有界，随 plan epoch 归档轮换）；S2 模型面投影
+  + 轮末发放待续。
 - 2026-08-15：P0-C 小样 2 闭合登记——编辑执行器 `workspace.search_replace` 对照实验实施并测量（固定 10 场景语料；baseline 成功率 100%/平均 1.8 轮 vs candidate 100%/平均 1.0 轮，通过标准两项满足；POC smoke 57/57），用户裁决通过、独立判定一致；DSH B 项（文件观察策略收编为 search_replace 动作契约规则）随之落地；结果工件 `prototype/classical_console/sample2_result.json`，待办路由见 TODO P0-C。
 - 2026-08-15：P0-C 小样 3 闭合登记——机械组合脚本模式 `workspace.run_script`
   （线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）对照实验实施并测量
