@@ -433,6 +433,10 @@
 
 ## 变更记录
 
+- 2026-08-15：推送惯例恢复登记——用户说明此前「Rust 修复不入 git、
+  用户手动推送」惯例源于分类器类故障（已修复），恢复正常推送；父仓库
+  main（`2ef2aa7`）与 orz 子模块分支 `feat/fusion-architecture`
+  （`a0c9ffc`）均已推送远端。
 - 2026-08-15：P0-C S3 前置全面审查修复（F1-F8）闭合登记——拒绝事件补
   `exit_code=1` + `status=error`（含 host 级拒绝）、verifier ACAF 家族补
   `web_fetch`/`browser_read`、permission 家族补 host 路由检索工具、新增

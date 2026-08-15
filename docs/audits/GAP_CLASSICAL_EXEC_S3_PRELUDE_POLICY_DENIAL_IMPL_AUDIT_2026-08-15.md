@@ -123,6 +123,9 @@ S3 前置的 4 项验收点全部有实现入口与测试证据：结构化信�
   `orz_source_manifest.sha256`（1406 文件）+
   `scripts/generate_orz_source_manifest.py`（生成/校验）并接入
   `check_repository.py` 仓库门禁，双保险检测未登记修改/丢失。
+  2026-08-15 用户说明：此前「Rust 修复不入 git、用户手动推送」惯例源于
+  分类器类故障（现已修复），恢复正常推送——父仓库 main（`2ef2aa7`）与
+  orz 子模块分支 `feat/fusion-architecture`（`a0c9ffc`）均已推送远端。
 - **F7（P3）**：verifier permission 家族扩展为「工作工具 + host 路由
   检索工具」（`_PERMISSION_GATED_TOOLS`），与主车道权限门实际可达集
   一致；web 族说明为当前不可达。
