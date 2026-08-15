@@ -198,7 +198,7 @@
   trace_id 有界取回、`not_found` fail-closed；读操作本身入 trace 与
   ToolStarted/ToolCompleted 事件面）；`workspace.run_script` 注册为控制台
   内部动作（`ActionKind::RunScript`：PTC 线性脚本生产化——`$ref` 静态/
-  运行时校验、逐行契约校验 + trace、上限 20 步/30s/4MiB、禁嵌套、失败
+  运行时校验、逐行契约校验 + trace、上限 8 步/30s/4MiB、禁嵌套、失败
   保留内层 step/code + `script_step`；内层步骤逐行经 `issue_action` 复用
   注册表/契约/目标/执行/验证五步链，仍走 `run_host_tool` 全链路）；注册
   板块升级为 Profile/Bundle ∩ 探针完整集（`ActionBundle` standard/
@@ -207,11 +207,17 @@
   fmt/clippy 无新增告警、orz-host/tui/bin/assurance check 通过、仓库门禁
   valid（含 orz 清单 1406 文件，已重新生成）。实施审计见
   `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`。
+  2026-08-16 全面审查收口（用户逐项裁决）：单订单步数上限 20→8
+  （`MAX_SCRIPT_STEPS_PER_ORDER`）、`assistant.trace` 查无 id 定案
+  `step=execute`+`not_found`、checkpoint 轮跳过注册板块刷新、注册不变式
+  补齐（内部 target/kind 唯一/bundle 非空/嵌套按 kind）、最终超限信封补
+  `script_step`；orz-loop 384 通过 / 0 失败；S4 登记项=单步超时（host 层
+  进程树收口）与脚本消耗 tool-round 预算，详见审计 §6。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；**S3（assistant.trace 接线 + run_script PTC 生产化 + Profile/Bundle 加载）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`；S4 端到端 + 审计待续；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；**S3（assistant.trace 接线 + run_script PTC 生产化 + Profile/Bundle 加载）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`（2026-08-16 审查收口 §6）；S4 待续=端到端测试 + 单步超时（host 层进程树收口）+ 脚本 tool-round 预算消耗 + 决策门材料；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3a. PLAN-FIRST-BLACKBOARD（模型面重构；2026-08-15 用户定案）
@@ -451,6 +457,16 @@
   用户手动推送」惯例源于分类器类故障（已修复），恢复正常推送；父仓库
   main（`2ef2aa7`）与 orz 子模块分支 `feat/fusion-architecture`
   （`a0c9ffc`）均已推送远端。
+- 2026-08-16：P0-C S3 全面审查收口登记——三层审查（设计/实现/符合性）
+  后用户逐项裁决：单订单步数上限 20→8（`MAX_SCRIPT_STEPS_PER_ORDER`）；
+  `assistant.trace` 查无 id 定案 `step=execute`+`not_found`；checkpoint 轮
+  跳过注册板块刷新（`pending_checkpoint` 守卫）；注册不变式补齐（内部动作
+  带 target 拒绝/内部动作类唯一/bundle 非空/嵌套按 kind 拒绝）；最终超限
+  信封补 `script_step`+`action`；测试补齐 7 项（运行时 `$ref` 失败、形状/
+  字段缺失、数组 items、tail>200、脚本内 TraceRead、9 步拒绝、注册不变式）；
+  orz-loop 384 通过 / 0 失败；S4 登记项：30s 墙钟=总墙钟+单步受控（截止
+  时间下沉 host 层、host 层进程树收口）、脚本按实际执行步数消耗 tool-round
+  预算（预检/减计/错误码/预算块反映）；详见 S3 审计 §6。
 - 2026-08-15：P0-C S3 前置全面审查修复（F1-F8）闭合登记——拒绝事件补
   `exit_code=1` + `status=error`（含 host 级拒绝）、verifier ACAF 家族补
   `web_fetch`/`browser_read`、permission 家族补 host 路由检索工具、新增

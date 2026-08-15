@@ -260,7 +260,8 @@
   - 静态可检查：引用存在性、类型匹配、作用域；上限：步骤数、墙钟、trace。
   - 循环/条件暂不做（线性优先），跑分有需要再加有界 map/条件。
   - POC 定档（2026-08-15；2026-08-15 全面审查后 P1 修复）：上限=20 步 / 30s
-    墙钟 / 4 MiB 最终响应累计（含全部步骤响应与 `result`，未命名步骤同样计入）；
+    墙钟 / 4 MiB 最终响应累计（含全部步骤响应与 `result`，未命名步骤同样计入；
+    〔2026-08-16 审查收口：生产单订单上限改为 8 步，见下方 S3 审查收口〕）；
     禁止嵌套脚本；`$ref` 运行期解析失败以 `invalid_reference`
     （`step=execute`，`upstream` 带 `ref` 与 `script_step`）结构化返回；失败信封
     保留内层 `step`/`code`，`upstream` 携带 `script_step` 与内层失败明细，
@@ -308,12 +309,33 @@
     内部动作 `assistant.trace`（`ActionKind::TraceRead`：按 trace_id 有界
     取回，读操作本身入 trace 与事件面）与 `workspace.run_script`
     （`ActionKind::RunScript`：PTC 线性脚本——`$ref` 数据引用、逐行契约
-    校验 + trace、上限 20 步/30s/4MiB、任一步 fail-closed、失败保留内层
+    校验 + trace、上限 8 步/30s/4MiB、任一步 fail-closed、失败保留内层
     step/code + `script_step`）；内部动作发放经 ToolStarted/ToolCompleted
     留痕（复用既有事件面，无 Schema 变更）。实施审计见
     [`GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15`](audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md)。
     边界：taint 组合禁令为设计项（运行时未实施），适配层已预留
     PolicyDenied 归一化；PTC 步骤仍逐行过既有权限/ACAF/模式门。
+  - S3 审查收口（2026-08-16，用户逐项裁决；审计见同文件 §6）：
+    - 单订单步数上限由 POC 定档的 20 改为 **8**（`MAX_SCRIPT_STEPS_PER_ORDER`，
+      schema `maxItems` 同步）——单轮动作受控，且每步将计 1 个 tool-round
+      预算单位（预算消耗语义随 S4 实施）。
+    - `assistant.trace` 查无 trace_id 定案：`step=execute` +
+      `code=not_found`——服务已解析、契约已过、存储查询失败属执行阶段，
+      失败信封按契约附本订单有界 trace 尾部（可区分无效 id 与环形淘汰）。
+    - checkpoint 轮（无探针间隙）**跳过注册板块刷新**，保留上一轮探针
+      过滤后的内容；其他无探针轮次仍按 bundle-only 刷新。
+    - 脚本内允许调用只读内部动作（含 `assistant.trace`）：非嵌套脚本、
+      逐行过五步链与既有门，读步骤输出进入脚本 steps/result 并受 4MiB
+      上限约束（有意边界，已登记）。
+    - trace 生命周期定案为**会话级**：TraceStore 挂在会话级控制器、
+      会话开始时空、结束即弃、侧车恢复不携带；50 条为会话内环形上限，
+      跨会话 trace_id 一律 `not_found`（有意边界，已登记）。
+    - 注册不变式补齐：内部动作携带 host 目标注册即拒绝（双向 fail-fast）、
+      内部动作类全局唯一（嵌套脚本按 kind 拒绝，防第二个 RunScript 名称
+      绕过）、bundle 至少启用一个场景。
+    - S4 待实施（已登记 TODO/BACKLOG）：30s 墙钟 = 总墙钟 + 单步受控，
+      截止时间下沉 host 层、由 host 层负责进程树收口；脚本按实际执行步数
+      消耗 tool-round 预算（发放前预检、不足零执行拒绝、下一轮预算块反映）。
 - 控制原理：写订单无副作用，副作用只发生在单一发放出口——执行幻觉最多
     污染订单，被机械校验拦下，不会直接产生执行。
   - 单轮一单（用户确认，先定）：本轮订单未发放完不进入下一轮写单，反馈闭环驱动。
@@ -344,6 +366,8 @@
 - 与单一探针面的事件/列表投影如何交互（2026-08-15 S3 已定案：注册板块 =
   Profile/Bundle ∩ 探针完整集，与模型可见工具投影共用同轮探针快照；
   非工作工具目标不探不标、按注册表声明保留）。
+- trace 查无 id 的 step 归属（2026-08-16 定案：`step=execute` +
+  `code=not_found`——服务已解析、存储查询失败属执行阶段；见 §8 审查收口）。
 - 组件形态（v0.3 已裁决）：宿主内嵌——HA 操作台为 orz 的一部分；POC 的
   stdio 协议仅是原型隔离，不作为生产接缝（薄接缝在 orz ↔ 底座模型后端）。
 - 来源/许可登记：进入组件登记表口径后逐项审计。
