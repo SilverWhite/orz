@@ -57,7 +57,7 @@
     fail-closed 信封 / 有界 Trace+TraceStore，执行经 ActionExecutor 抽象
     委托，生产复用 run_host_tool 权限/ACAF 链）+ `blackboard::ActionBoard`
     （注册板块 / 动作栏单槽 / 结果栏有界 50，随 plan epoch 归档/轮换）。
-    2026-08-15 落地；新增 14 项测试，orz-loop 350 通过。
+    2026-08-15 落地；新增 12 项测试，orz-loop 350 通过。
   - [ ] S2：模型面投影（注册板块读取 + 动作栏写单工具）与轮末机械发放接线。
   - [ ] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
     生产化 + Profile/Bundle 按钮组加载。

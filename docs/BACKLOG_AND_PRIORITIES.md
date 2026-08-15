@@ -151,7 +151,7 @@
   执行经 ActionExecutor 抽象委托，生产实现由 controller 复用 run_host_tool
   的权限/ACAF/事件链，禁止绕过既有门）+ 黑板动作栏数据面
   （`blackboard::ActionBoard`：注册板块/动作栏单槽（单轮一单）/
-  结果栏有界 50，随 plan epoch 快照归档与轮换）。新增 14 项测试；
+  结果栏有界 50，随 plan epoch 快照归档与轮换）。新增 12 项测试；
   orz-loop 350 通过 / 0 失败。模型面投影、轮末机械发放、
   assistant.trace 服务与 PTC 生产化待续（S2-S4）。
 - 实施序列：
@@ -382,7 +382,7 @@
 - 2026-08-15：P0-C 内嵌集成 S1 落地登记——orz-loop 新增 `console` 模块
   （ServiceRegistry/ActionSpec/issue_action/信封/Trace+TraceStore，执行经
   ActionExecutor 抽象委托）与黑板动作栏数据面（`blackboard::ActionBoard`
-  注册板块/动作栏单槽/结果栏有界，随 plan epoch 归档轮换）；新增 14 项测试，
+  注册板块/动作栏单槽/结果栏有界，随 plan epoch 归档轮换）；新增 12 项测试，
   orz-loop 350 通过；S2 模型面投影 + 轮末发放待续。
 - 2026-08-15：P0-C 小样 2 闭合登记——编辑执行器 `workspace.search_replace` 对照实验实施并测量（固定 10 场景语料；baseline 成功率 100%/平均 1.8 轮 vs candidate 100%/平均 1.0 轮，通过标准两项满足；POC smoke 57/57），用户裁决通过、独立判定一致；DSH B 项（文件观察策略收编为 search_replace 动作契约规则）随之落地；结果工件 `prototype/classical_console/sample2_result.json`，待办路由见 TODO P0-C。
 - 2026-08-15：P0-C 小样 3 闭合登记——机械组合脚本模式 `workspace.run_script`
