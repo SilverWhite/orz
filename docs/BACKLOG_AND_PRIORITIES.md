@@ -176,7 +176,7 @@
   policy_denied）；注册板块每轮机械刷新（基础动作集 6 项）。新增 8 项测试，
   orz-loop 364 通过 / 0 失败；实施审计见
   `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`。
-  assistant.trace 服务与 PTC/Profile 生产化待续（S3-S4）。
+  assistant.trace 服务与 PTC/Profile 生产化随后续切片落地。
 - 进度（2026-08-15）：**S3 前置（P1-2 结构化策略拒绝）已闭合**——
   `ToolResult.policy_denial = {source, code, reason}`（source ∈
   permission/acaf/retrieval_mode/taint）在 `run_host_tool` 边界五条拒绝
@@ -193,11 +193,25 @@
     Python runtime 213 通过、仓库门禁 valid（含 orz 清单 1406 文件）。
     实施审计见
     `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
+- 进度（2026-08-15）：**S3（trace/PTC/Profile）已闭合**——
+  `assistant.trace` 注册为控制台内部动作（`ActionKind::TraceRead`：按
+  trace_id 有界取回、`not_found` fail-closed；读操作本身入 trace 与
+  ToolStarted/ToolCompleted 事件面）；`workspace.run_script` 注册为控制台
+  内部动作（`ActionKind::RunScript`：PTC 线性脚本生产化——`$ref` 静态/
+  运行时校验、逐行契约校验 + trace、上限 20 步/30s/4MiB、禁嵌套、失败
+  保留内层 step/code + `script_step`；内层步骤逐行经 `issue_action` 复用
+  注册表/契约/目标/执行/验证五步链，仍走 `run_host_tool` 全链路）；注册
+  板块升级为 Profile/Bundle ∩ 探针完整集（`ActionBundle` standard/
+  read_only/benchmark + `registrations_for`，同轮探针快照同时驱动工具投影
+  与注册板块）。验证：orz-loop 377 通过 / 0 失败（3 ignored live）、
+  fmt/clippy 无新增告警、orz-host/tui/bin/assurance check 通过、仓库门禁
+  valid（含 orz 清单 1406 文件，已重新生成）。实施审计见
+  `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；S3 trace/PTC/Profile、S4 端到端 + 审计待续；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；**S3（assistant.trace 接线 + run_script PTC 生产化 + Profile/Bundle 加载）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`；S4 端到端 + 审计待续；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3a. PLAN-FIRST-BLACKBOARD（模型面重构；2026-08-15 用户定案）

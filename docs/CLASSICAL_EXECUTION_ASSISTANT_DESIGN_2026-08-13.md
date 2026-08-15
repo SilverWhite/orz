@@ -299,10 +299,21 @@
     拒绝归一化（权限门 PolicyFeedback::Denied + ACAF/模式门稳定输出前缀 →
     `step=policy` / `code=policy_denied`，不携带 execute trace 尾部；〔P1-2
     补登记：前缀判定随 S3 前置由结构化信号取代，见 §7〕）；注册
-    板块每轮机械刷新（基础动作集 6 项：workspace.read_file/list_dir/grep/
+   板块每轮机械刷新（基础动作集 6 项：workspace.read_file/list_dir/grep/
     search_replace/run_tests/index，契约镜像生产 host 参数）。
-    边界：注册板块当前为静态基础集，探针 ∩ Profile/Bundle 过滤随 S3 接线；
-    taint 组合禁令为设计项（运行时未实施），适配层已预留 PolicyDenied 归一化。
+  - S3 落地（2026-08-15）：注册板块升级为「Profile/Bundle ∩ 探针完整集」
+    ——`ActionBundle`（standard/read_only/benchmark 三档，场景键=
+    `ToolPolicy`）+ `ServiceRegistry::registrations_for`（Host 动作按工作
+    工具探针完整集过滤，非工作工具不探不标；内部动作恒加载）；新增控制台
+    内部动作 `assistant.trace`（`ActionKind::TraceRead`：按 trace_id 有界
+    取回，读操作本身入 trace 与事件面）与 `workspace.run_script`
+    （`ActionKind::RunScript`：PTC 线性脚本——`$ref` 数据引用、逐行契约
+    校验 + trace、上限 20 步/30s/4MiB、任一步 fail-closed、失败保留内层
+    step/code + `script_step`）；内部动作发放经 ToolStarted/ToolCompleted
+    留痕（复用既有事件面，无 Schema 变更）。实施审计见
+    [`GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15`](audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md)。
+    边界：taint 组合禁令为设计项（运行时未实施），适配层已预留
+    PolicyDenied 归一化；PTC 步骤仍逐行过既有权限/ACAF/模式门。
 - 控制原理：写订单无副作用，副作用只发生在单一发放出口——执行幻觉最多
     污染订单，被机械校验拦下，不会直接产生执行。
   - 单轮一单（用户确认，先定）：本轮订单未发放完不进入下一轮写单，反馈闭环驱动。
@@ -330,7 +341,9 @@
   语义独立于 todo）（2026-08-15 定案：复用黑板本体，新增 `actions` 分区并
   随 plan epoch 快照归档/轮换；写工具命名已定案并在 S2 落地——
   `blackboard.action_write`）。
-- 与单一探针面的事件/列表投影如何交互。
+- 与单一探针面的事件/列表投影如何交互（2026-08-15 S3 已定案：注册板块 =
+  Profile/Bundle ∩ 探针完整集，与模型可见工具投影共用同轮探针快照；
+  非工作工具目标不探不标、按注册表声明保留）。
 - 组件形态（v0.3 已裁决）：宿主内嵌——HA 操作台为 orz 的一部分；POC 的
   stdio 协议仅是原型隔离，不作为生产接缝（薄接缝在 orz ↔ 底座模型后端）。
 - 来源/许可登记：进入组件登记表口径后逐项审计。

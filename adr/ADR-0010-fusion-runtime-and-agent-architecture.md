@@ -1401,5 +1401,14 @@ ADR §3.6 正文修订随实施登记。
       taint 预留）在 `run_host_tool` 边界返回 `ToolResult.policy_denial` 结构化
       信号，console 适配层删除字符串前缀判定；ToolCompleted 增可选
       `policy_denial`（Schema/verifier/fixtures 先行）；实施随 S3 前置。
+   ⑨ P0-C S3 实施闭合（2026-08-15）——`assistant.trace` 只读服务接线
+      （`ActionKind::TraceRead`：按 trace_id 有界取回、读操作入 trace 与
+      ToolStarted/ToolCompleted 事件面）；`workspace.run_script` PTC 线性脚本
+      生产化（`ActionKind::RunScript`：`$ref` 静态/运行时校验、逐行契约校验 +
+      trace、20 步/30s/4MiB 上限、禁嵌套、fail-closed 保留内层 step/code +
+      `script_step`；内层步骤仍逐行经既有权限/ACAF/模式门）；注册板块 =
+      Profile/Bundle ∩ 探针完整集（`ActionBundle` standard/read_only/benchmark，
+      同轮探针快照同时驱动工具投影与注册板块）。实施审计：
+      `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`。
    来源：`docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md`；关联：
    CLASSICAL-EXEC-ASSISTANT v0.6。

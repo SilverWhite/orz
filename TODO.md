@@ -10,7 +10,7 @@
 - `[ ]` = 待办；`[x]` = 已完成（保留供核对，不计入开放项）。
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 
-## 未闭合扫描快照（2026-08-15；P0-C S3 前置闭合后更新）
+## 未闭合扫描快照（2026-08-15；P0-C S3 闭合后更新）
 
 > 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态；
 > P0-C S3 前置（P1-2 结构化策略拒绝）闭合后更新）。
@@ -18,7 +18,7 @@
 > 后续扫描更新时同步替换本快照日期与计数。
 
 - 未闭合总数：**35 项**
-  - P0-C：5 项（PLAN-FIRST 阶段 A/B/C、orz 内嵌集成 S3/S4、正式组件决策门）
+  - P0-C：5 项（PLAN-FIRST 阶段 A/B/C、orz 内嵌集成 S4、正式组件决策门）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -83,8 +83,27 @@
       `orz/` 登记为父仓库 git 子模块（SilverWhite/CLI
       `feat/fusion-architecture`，提交 a0c9ffc 已推送远端）+ 源码完整性
       清单（`orz_source_manifest.sha256`）接入仓库门禁。
-  - [ ] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
-    生产化 + Profile/Bundle 按钮组加载。
+  - [x] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
+    生产化 + Profile/Bundle 按钮组加载——2026-08-15 闭合：
+    - `assistant.trace` 注册为控制台内部动作（`ActionKind::TraceRead`）：
+      按 trace_id 有界取回（默认 tail=20）、`not_found` fail-closed；
+      发放链对内部动作补 ToolStarted/ToolCompleted 留痕（读操作本身入
+      journal；复用 v0.1 事件面，无 Schema 变更）。
+    - `workspace.run_script` 注册为控制台内部动作（`ActionKind::RunScript`）：
+      PTC 线性脚本生产化（`$ref` 静态/运行时校验、逐行契约校验 + trace、
+      上限 20 步/30s/4MiB、禁嵌套、失败保留内层 step/code + `script_step`）；
+      内层步骤逐行经 `issue_action` 复用注册表/契约/目标/执行/验证五步链，
+      仍走 `run_host_tool` 全链路（权限/ACAF/模式门）。
+    - Profile/Bundle 按钮组加载：`ActionBundle`（standard/read_only/
+      benchmark，场景键=`ToolPolicy`）+ 注册板块投影 = Profile/Bundle ∩
+      探针完整集（`registrations_for`；Host 动作按工作工具探针过滤，
+      非工作工具不探不标，内部动作恒加载）；同轮探针快照同时驱动工具
+      投影与注册板块。
+    - 验证：orz-loop 377 通过 / 0 失败（3 ignored live）；fmt/clippy 无
+      新增告警；orz-host/tui/bin/assurance check 通过；仓库门禁 valid
+      （`orz_source_manifest.sha256` 已重新生成）。
+    - 实施审计：
+      `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`。
   - [ ] S4：端到端测试、实施审计与正式组件决策门材料。
 - [ ] 正式组件决策门：小样全面达标后裁决；不达标即撤。
 
