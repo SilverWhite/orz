@@ -333,9 +333,24 @@
     - 注册不变式补齐：内部动作携带 host 目标注册即拒绝（双向 fail-fast）、
       内部动作类全局唯一（嵌套脚本按 kind 拒绝，防第二个 RunScript 名称
       绕过）、bundle 至少启用一个场景。
-    - S4 待实施（已登记 TODO/BACKLOG）：30s 墙钟 = 总墙钟 + 单步受控，
-      截止时间下沉 host 层、由 host 层负责进程树收口；脚本按实际执行步数
-      消耗 tool-round 预算（发放前预检、不足零执行拒绝、下一轮预算块反映）。
+  - S4 落地（2026-08-16；实施审计见
+    [`GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16`](audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md)）：
+    - 单步超时下沉 host 层（用户裁决）：`LoopHost::call_tool_with_timeout`
+      为每调用携带显式 wall-clock 覆盖；host 按 `min(覆盖, 配置预算)` 截止，
+      到期仍走既有进程树收口（`kill_active`，Windows Job Object/TaskKill）。
+      脚本每步把「总 30s 截止 - 已用时间」作为覆盖传入（单步受控），host
+      截止以结构化信号 `ToolResult.timed_out` 上浮——直接订单失败信封
+      `step=execute`+`code=tool_timeout`，脚本 runner 归一化为
+      `script_timeout` 并携带 `script_step`（不用文案前缀判定）。
+    - 脚本消耗 tool-round 预算：每个实际执行动作计 1 单位（直接订单 1、
+      脚本每步 1；执行前被拒步骤不计数）；发放前预检 = 当前模型轮 1 单位
+      + 脚本长度 ≤ 剩余预算，不足零执行拒绝（`step=protocol` +
+      `code=budget_insufficient`，不消耗预算、订单清槽、显式 receipt）；
+      按实际执行步数减计并计入 `tool_rounds`，下一轮预算块机械反映，
+      耗尽后同样进入最后无工具轮。
+    - 端到端测试：FakeProvider 完整任务会话（写 run_script/trace 订单 →
+      发放 → trace 读取 → 结果栏反馈 → 下一订单）、checkpoint 轮板块保留
+      e2e、超时/预算边界；orz-loop 392 通过 / 0 失败。
 - 控制原理：写订单无副作用，副作用只发生在单一发放出口——执行幻觉最多
     污染订单，被机械校验拦下，不会直接产生执行。
   - 单轮一单（用户确认，先定）：本轮订单未发放完不进入下一轮写单，反馈闭环驱动。

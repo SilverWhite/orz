@@ -10,16 +10,16 @@
 - `[ ]` = 待办；`[x]` = 已完成（保留供核对，不计入开放项）。
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 
-## 未闭合扫描快照（2026-08-16；P0-C S3 审查收口后更新）
+## 未闭合扫描快照（2026-08-16；P0-C S4 实施闭合后更新）
 
 > 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态；
 > P0-C S3 前置（P1-2 结构化策略拒绝）闭合后更新；2026-08-16 S3 全面审查
-> 收口，未闭合总数不变）。
+> 收口；2026-08-16 S4 实施闭合，未闭合总数 35 → 34）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**35 项**
-  - P0-C：5 项（PLAN-FIRST 阶段 A/B/C、orz 内嵌集成 S4、正式组件决策门）
+- 未闭合总数：**34 项**
+  - P0-C：4 项（PLAN-FIRST 阶段 A/B/C、正式组件决策门）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -111,17 +111,18 @@
       （orz-loop 384 通过 / 0 失败）。详见审计 §6。
     - 实施审计：
       `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`。
-  - [ ] S4：端到端测试、实施审计与正式组件决策门材料。
-    - [ ] 单步超时：30s=总墙钟+单步受控；脚本截止时间下沉 host 层，
-      host 层负责进程树收口（用户裁决，不得用脚本层 timeout 替代）。
-    - [ ] 脚本消耗 tool-round 预算：每执行一步扣 1 个预算单位；发放前
-      预检（长度≤剩余，不足零执行拒绝+显式错误码）；按实际执行步数减计；
-      下一轮预算块机械反映。
-    - [ ] 端到端测试（FakeProvider 完整任务会话：写 run_script/trace 订单
+  - [x] S4：端到端测试、实施审计与正式组件决策门材料（2026-08-16 闭合）。
+    - [x] 单步超时：30s=总墙钟+单步受控；脚本截止时间下沉 host 层
+      （`call_tool_with_timeout` 覆盖 + 进程树收口；结构化 `timed_out` →
+      `tool_timeout` / 脚本归一化 `script_timeout`+`script_step`）。
+    - [x] 脚本消耗 tool-round 预算：每执行一步扣 1 个预算单位；发放前
+      预检（当前轮 1 单位 + 长度 ≤ 剩余，不足零执行拒绝
+      `budget_insufficient`）；按实际执行步数减计；下一轮预算块机械反映。
+    - [x] 端到端测试（FakeProvider 完整任务会话：写 run_script/trace 订单
       → 发放 → trace 读取 → 结果栏反馈 → 下一订单；含 checkpoint 轮
-      板块保留断言与超时/预算边界）。
-    - [ ] 实施审计、正式组件决策门材料（小样 1/2/3 + S1-S4 审计汇总）与
-      文档同步。
+      板块保留断言与超时/预算边界）。orz-loop 392 通过 / 0 失败。
+    - [x] 实施审计（`docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`）、
+      正式组件决策门材料（小样 1/2/3 + S1-S4 审计汇总）与文档同步。
 - [ ] 正式组件决策门：小样全面达标后裁决；不达标即撤。
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。

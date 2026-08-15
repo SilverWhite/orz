@@ -212,12 +212,18 @@
   `step=execute`+`not_found`、checkpoint 轮跳过注册板块刷新、注册不变式
   补齐（内部 target/kind 唯一/bundle 非空/嵌套按 kind）、最终超限信封补
   `script_step`；orz-loop 384 通过 / 0 失败；S4 登记项=单步超时（host 层
-  进程树收口）与脚本消耗 tool-round 预算，详见审计 §6。
+  进程树收口）与脚本消耗 tool-round 预算，详见审计 §6。**S4 已闭合
+  （2026-08-16）**——单步超时下沉 host 层（`call_tool_with_timeout` 覆盖 +
+  结构化 `timed_out` → `tool_timeout`/`script_timeout`+`script_step`）、
+  脚本 tool-round 预算（预检 `budget_insufficient`/实际步数减计/下一轮预算
+  块反映）、端到端测试（完整会话/checkpoint 板块保留/超时/预算边界）；
+  orz-loop 392 通过 / 0 失败；实施审计见
+  `docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；**S3（assistant.trace 接线 + run_script PTC 生产化 + Profile/Bundle 加载）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`（2026-08-16 审查收口 §6）；S4 待续=端到端测试 + 单步超时（host 层进程树收口）+ 脚本 tool-round 预算消耗 + 决策门材料；
+   4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；**S3（assistant.trace 接线 + run_script PTC 生产化 + Profile/Bundle 加载）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`（2026-08-16 审查收口 §6）；**S4 已闭合（2026-08-16）**：端到端测试 + 单步超时（host 层进程树收口）+ 脚本 tool-round 预算消耗 + 决策门材料，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3a. PLAN-FIRST-BLACKBOARD（模型面重构；2026-08-15 用户定案）
@@ -467,6 +473,15 @@
   orz-loop 384 通过 / 0 失败；S4 登记项：30s 墙钟=总墙钟+单步受控（截止
   时间下沉 host 层、host 层进程树收口）、脚本按实际执行步数消耗 tool-round
   预算（预检/减计/错误码/预算块反映）；详见 S3 审计 §6。
+- 2026-08-16：P0-C S4 实施闭合登记——单步超时下沉 host 层
+  （`LoopHost::call_tool_with_timeout`：显式覆盖 = min(覆盖, 配置预算)，
+  到期 `kill_active` 进程树收口；脚本每步传剩余截止；`ToolResult.timed_out`
+  结构化信号 → 直接订单 `tool_timeout`、脚本归一化 `script_timeout`+
+  `script_step`）；脚本 tool-round 预算（发放前预检 `budget_insufficient`
+  零执行拒绝、实际执行步数减计、下一轮预算块机械反映）；端到端测试
+  （FakeProvider 完整任务会话、checkpoint 轮板块保留、超时/预算边界）；
+  orz-loop 392 通过 / 0 失败；决策门材料清单齐备；详见
+  `docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`。
 - 2026-08-15：P0-C S3 前置全面审查修复（F1-F8）闭合登记——拒绝事件补
   `exit_code=1` + `status=error`（含 host 级拒绝）、verifier ACAF 家族补
   `web_fetch`/`browser_read`、permission 家族补 host 路由检索工具、新增

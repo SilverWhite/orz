@@ -120,7 +120,7 @@
   （`tail_beyond_contract_rejected`）、脚本内 TraceRead
   （`run_script_step_trace_read_allowed`）。
 
-### 6.2 S4 登记项（不在本切片实施）
+### 6.2 S4 登记项（不在本切片实施；2026-08-16 已由 S4 实施闭合）
 
 - 30s 墙钟语义定案：总墙钟 + 单步受控；脚本截止时间下沉 host 层，由 host
   层负责进程树收口（用户裁决），不得用脚本层 timeout 替代进程收口。
@@ -129,6 +129,9 @@
   错误码）；按实际执行步数减计；下一轮预算块机械反映。
 - trace 会话级生命周期登记完成；会话结束归档/摘要为可选增强（S4 视
   端到端测试结果决定）。
+
+> 2026-08-16：上述前三项（单步超时、tool-round 预算、trace 会话级）已实施
+> 并登记，见 [`GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`](GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md)。
 
 ## 5. 审计结论
 
