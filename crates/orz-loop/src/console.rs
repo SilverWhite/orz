@@ -29,7 +29,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -84,9 +84,15 @@ pub const CODE_REFERENCE_SCOPE: &str = "reference_scope";
 pub const CODE_REFERENCE_TYPE_MISMATCH: &str = "reference_type_mismatch";
 pub const CODE_NESTED_SCRIPT: &str = "nested_script_not_allowed";
 pub const CODE_SCRIPT_TIMEOUT: &str = "script_timeout";
+/// P0-C S4 (2026-08-16)：单步宿主调用在 host 层被截止并收口进程树——
+/// 直接订单失败信封使用本码；脚本步骤由 runner 归一化为 `script_timeout`。
+pub const CODE_TOOL_TIMEOUT: &str = "tool_timeout";
 pub const CODE_SCRIPT_RESPONSE_LIMIT: &str = "script_response_limit";
 pub const CODE_TRACE_UNAVAILABLE: &str = "trace_unavailable";
 pub const CODE_NOT_FOUND: &str = "not_found";
+/// P0-C S4 (2026-08-16)：tool-round 预算不足——发放前零执行拒绝
+/// （脚本长度/直接动作 1 单位 > 剩余预算），显式失败码、不消耗预算。
+pub const CODE_BUDGET_INSUFFICIENT: &str = "budget_insufficient";
 
 /// 基础动作集响应契约：生产 host 工具当前统一返回文本输出
 /// （`ToolResult.structured` 接缝仅 web_search 使用；console 收口为
@@ -784,6 +790,9 @@ pub trait ActionExecutor: Send + Sync {
         target_tool: &str,
         arguments: &Value,
         call_id: &str,
+        // P0-C S4 (2026-08-16): per-call host timeout override (script
+        // step remaining deadline). `None` = host default.
+        timeout: Option<Duration>,
     ) -> Result<ToolResult, ExecuteError>;
 }
 
@@ -890,6 +899,35 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
     trace: &mut Trace,
     call_id: &str,
 ) -> Result<Value, ConsoleError> {
+    let mut consumed = 0u32;
+    issue_action_inner(
+        registry,
+        executor,
+        traces,
+        order,
+        trace,
+        call_id,
+        None,
+        &mut consumed,
+    )
+    .await
+}
+
+/// P0-C S4 (2026-08-16)：`issue_action` 的全量实现——`timeout` 为本次
+/// 执行的 host 截止时间覆盖（脚本每步 = 剩余墙钟；直接订单 = `None`）；
+/// `consumed` 按「实际执行动作/步骤」累计 tool-round 预算单位（直接订单
+/// 1、脚本每步 1；执行前被拒的步骤不计数；host 已启动并被截止的步骤计数）。
+#[allow(clippy::too_many_arguments)] // mirrors run_host_tool's shared-loop contract
+pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
+    registry: &ServiceRegistry,
+    executor: &E,
+    traces: Option<&std::sync::Mutex<TraceStore>>,
+    order: &ActionOrder,
+    trace: &mut Trace,
+    call_id: &str,
+    timeout: Option<Duration>,
+    consumed: &mut u32,
+) -> Result<Value, ConsoleError> {
     let spec = registry.get(&order.action).ok_or_else(|| ConsoleError {
         step: STEP_REGISTRY,
         code: CODE_UNKNOWN_SERVICE,
@@ -930,23 +968,51 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
                 Some(json!({ "target_tool": target_tool })),
             );
 
-            let result = executor
-                .execute(target_tool, &order.arguments, call_id)
+            let result = match executor
+                .execute(target_tool, &order.arguments, call_id, timeout)
                 .await
-                .map_err(|err| match err {
-                    ExecuteError::ExecutionFailed { message, detail } => ConsoleError {
-                        step: STEP_EXECUTE,
-                        code: CODE_EXECUTION_FAILED,
-                        message,
-                        upstream: Some(execution_upstream(&spec.name, target_tool, detail)),
-                    },
-                    ExecuteError::PolicyDenied { message, detail } => ConsoleError {
-                        step: STEP_POLICY,
-                        code: CODE_POLICY_DENIED,
-                        message,
-                        upstream: Some(execution_upstream(&spec.name, target_tool, detail)),
-                    },
-                })?;
+            {
+                Ok(result) => {
+                    // 执行边界已越过：host 已启动动作（即使结果非零/超时）。
+                    *consumed += 1;
+                    result
+                }
+                Err(err) => {
+                    return Err(match err {
+                        ExecuteError::ExecutionFailed { message, detail } => ConsoleError {
+                            step: STEP_EXECUTE,
+                            code: CODE_EXECUTION_FAILED,
+                            message,
+                            upstream: Some(execution_upstream(&spec.name, target_tool, detail)),
+                        },
+                        ExecuteError::PolicyDenied { message, detail } => ConsoleError {
+                            step: STEP_POLICY,
+                            code: CODE_POLICY_DENIED,
+                            message,
+                            upstream: Some(execution_upstream(&spec.name, target_tool, detail)),
+                        },
+                    });
+                }
+            };
+            // P0-C S4：结构化超时信号（host 已收口进程树）→ 显式
+            // `tool_timeout`；直接订单由模型按结果栏/trace 决定重试策略，
+            // 脚本步骤由 runner 归一化为 `script_timeout`。
+            if result.timed_out {
+                return Err(ConsoleError {
+                    step: STEP_EXECUTE,
+                    code: CODE_TOOL_TIMEOUT,
+                    message: format!(
+                        "target tool {target_tool} timed out at the host — process tree killed"
+                    ),
+                    upstream: Some(execution_upstream(
+                        &spec.name,
+                        target_tool,
+                        Some(json!({
+                            "output": truncate(&result.output, 4000),
+                        })),
+                    )),
+                });
+            }
             if result.exit_code != Some(0) {
                 let exit_detail = match result.exit_code {
                     None => {
@@ -1012,15 +1078,23 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
                 // 与 `step=registry`（服务解析失败/unknown_service）区分；
                 // 同时失败信封按契约携带本订单有界 trace 尾部，模型可
                 // 直接看到 registry/contract 已过、execute 查无此 id。
-                let found = guard.get(trace_id).ok_or_else(|| ConsoleError {
-                    step: STEP_EXECUTE,
-                    code: CODE_NOT_FOUND,
-                    message: format!("trace not found: {trace_id}"),
-                    upstream: Some(json!({ "trace_id": trace_id })),
-                })?;
+                let found = match guard.get(trace_id) {
+                    Some(found) => found,
+                    None => {
+                        // 执行阶段失败：服务已运行、查询已发生 → 计 1 单位。
+                        *consumed += 1;
+                        return Err(ConsoleError {
+                            step: STEP_EXECUTE,
+                            code: CODE_NOT_FOUND,
+                            message: format!("trace not found: {trace_id}"),
+                            upstream: Some(json!({ "trace_id": trace_id })),
+                        });
+                    }
+                };
                 let (events, truncated) = found.tail(tail);
                 (found.request_id.clone(), events, truncated)
             };
+            *consumed += 1;
             let response = json!({
                 "trace_id": trace_id,
                 "request_id": request_id,
@@ -1038,8 +1112,16 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
             Ok(response)
         }
         ActionKind::RunScript => {
-            let response =
-                run_script(registry, executor, traces, &order.arguments, trace, call_id).await?;
+            let response = run_script(
+                registry,
+                executor,
+                traces,
+                &order.arguments,
+                trace,
+                call_id,
+                consumed,
+            )
+            .await?;
             trace.add(STEP_EXECUTE, Some(&order.action), true, None, None, None);
             validate_with(response_validator, &response).map_err(|msg| ConsoleError {
                 step: STEP_VERIFY,
@@ -1362,6 +1444,7 @@ pub async fn run_script<E: ActionExecutor + ?Sized>(
     arguments: &Value,
     trace: &mut Trace,
     call_id: &str,
+    consumed: &mut u32,
 ) -> Result<Value, ConsoleError> {
     run_script_with_limits(
         registry,
@@ -1373,6 +1456,7 @@ pub async fn run_script<E: ActionExecutor + ?Sized>(
         MAX_SCRIPT_STEPS_PER_ORDER,
         MAX_SCRIPT_WALLCLOCK_SECONDS,
         MAX_SCRIPT_RESPONSE_BYTES,
+        consumed,
     )
     .await
 }
@@ -1389,6 +1473,7 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
     max_steps: usize,
     max_wallclock: f64,
     max_bytes: usize,
+    consumed: &mut u32,
 ) -> Result<Value, ConsoleError> {
     let script = arguments
         .get("script")
@@ -1411,14 +1496,18 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
         });
     }
     let metas = static_validate_script(script, registry)?;
-    let started = Instant::now();
+    // P0-C S4 (2026-08-16)：总墙钟截止时间在脚本层持有，每步把「剩余
+    // 截止时间」作为 host 调用覆盖下沉；单步在 host 层被截止并收口进程树
+    // （不得用脚本层 timeout 替代进程收口）。
+    let deadline = Instant::now() + Duration::from_secs_f64(max_wallclock);
     let mut outputs: BTreeMap<String, Value> = BTreeMap::new();
     let mut executed: Vec<Value> = Vec::with_capacity(metas.len());
     let mut response_bytes = 0usize;
     let mut final_response: Option<Value> = None;
 
     for meta in &metas {
-        if started.elapsed().as_secs_f64() > max_wallclock {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return Err(ConsoleError {
                 step: STEP_EXECUTE,
                 code: CODE_SCRIPT_TIMEOUT,
@@ -1441,23 +1530,34 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
         };
         // 递归（run_script → issue_action → run_script）需要指针间接层，
         // 避免 async future 无限尺寸；嵌套脚本已在静态校验阶段拒绝。
-        let response = match Box::pin(issue_action(
+        let response = match Box::pin(issue_action_inner(
             registry,
             executor,
             traces,
             &step_order,
             trace,
             &step_call_id,
+            Some(remaining),
+            consumed,
         ))
         .await
         {
             Ok(response) => response,
             Err(inner) => {
+                // P0-C S4：host 层截止（进程树已收口）归一化为
+                // `script_timeout`（携带 script_step），与执行失败区分。
+                let is_timeout = inner.code == CODE_TOOL_TIMEOUT;
+                let step = if is_timeout { STEP_EXECUTE } else { inner.step };
+                let code = if is_timeout {
+                    CODE_SCRIPT_TIMEOUT
+                } else {
+                    inner.code
+                };
                 trace.add(
                     "script",
                     Some(&meta.action),
                     false,
-                    Some(inner.code),
+                    Some(code),
                     Some(inner.message.clone()),
                     Some(json!({
                         "script_step": meta.index,
@@ -1466,12 +1566,19 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
                     })),
                 );
                 return Err(ConsoleError {
-                    step: inner.step,
-                    code: inner.code,
-                    message: format!(
-                        "script step {} ({}) failed: {}",
-                        meta.index, meta.action, inner.message
-                    ),
+                    step,
+                    code,
+                    message: if is_timeout {
+                        format!(
+                            "script step {} ({}) timed out at the host — process tree killed: {}",
+                            meta.index, meta.action, inner.message
+                        )
+                    } else {
+                        format!(
+                            "script step {} ({}) failed: {}",
+                            meta.index, meta.action, inner.message
+                        )
+                    },
                     upstream: Some(json!({
                         "script_step": meta.index,
                         "action": meta.action,
@@ -1664,6 +1771,7 @@ mod tests {
             target_tool: &str,
             arguments: &Value,
             call_id: &str,
+            _timeout: Option<Duration>,
         ) -> Result<ToolResult, ExecuteError> {
             self.seen.lock().unwrap().push((
                 target_tool.to_string(),
@@ -2556,9 +2664,11 @@ mod tests {
                 request_id: None,
                 events: Vec::new(),
             };
-            let err = run_script(&registry, &executor, None, &arguments, &mut trace, "call-s")
-                .await
-                .unwrap_err();
+            let err = run_script(
+                &registry, &executor, None, &arguments, &mut trace, "call-s", &mut 0,
+            )
+            .await
+            .unwrap_err();
             assert_eq!(err.step, expected_step, "{arguments}");
             assert_eq!(err.code, expected_code, "{arguments}");
         }
@@ -2591,6 +2701,7 @@ mod tests {
             &json!({"script": script}),
             &mut trace,
             "call-s",
+            &mut 0,
         )
         .await
         .unwrap_err();
@@ -2829,6 +2940,7 @@ mod tests {
             MAX_SCRIPT_STEPS_PER_ORDER,
             MAX_SCRIPT_WALLCLOCK_SECONDS,
             usize::MAX,
+            &mut 0,
         )
         .await
         .unwrap();
@@ -2850,6 +2962,7 @@ mod tests {
             MAX_SCRIPT_STEPS_PER_ORDER,
             MAX_SCRIPT_WALLCLOCK_SECONDS,
             success_len - 1,
+            &mut 0,
         )
         .await
         .unwrap_err();
@@ -2917,6 +3030,7 @@ mod tests {
             ]}),
             &mut trace,
             "call-s",
+            &mut 0,
         )
         .await
         .unwrap_err();
@@ -2987,6 +3101,7 @@ mod tests {
             MAX_SCRIPT_STEPS_PER_ORDER,
             0.0,
             MAX_SCRIPT_RESPONSE_BYTES,
+            &mut 0,
         )
         .await
         .unwrap_err();
@@ -3009,6 +3124,7 @@ mod tests {
             MAX_SCRIPT_STEPS_PER_ORDER,
             MAX_SCRIPT_WALLCLOCK_SECONDS,
             1,
+            &mut 0,
         )
         .await
         .unwrap_err();
@@ -3017,10 +3133,261 @@ mod tests {
         assert_eq!(executor.seen.lock().unwrap().len(), 1);
     }
 
+    /// P0-C S4 (2026-08-16)：单步 host 截止（结构化 `timed_out` 信号）→
+    /// 归一化为 `script_timeout` + `script_step`；该步已执行 → 消耗 1 单位。
+    #[tokio::test]
+    async fn script_host_timeout_maps_to_script_timeout_with_script_step() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "ref test action".to_string(),
+                target_tool: Some("read_file".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        let executor = SequenceExecutor::new(vec![Ok(ToolResult {
+            output: "tool TIMED OUT and was killed — it did not complete".to_string(),
+            exit_code: Some(1),
+            output_encoding: None,
+            structured: None,
+            timed_out: true,
+            ..Default::default()
+        })]);
+        let mut trace = Trace {
+            trace_id: "t000110".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let mut consumed = 0u32;
+        let err = run_script(
+            &registry,
+            &executor,
+            None,
+            &json!({"script": [
+                {"do": "workspace.read_file", "with": {"path": "a.txt"}},
+                {"do": "workspace.read_file", "with": {"path": "b.txt"}},
+            ]}),
+            &mut trace,
+            "call-s",
+            &mut consumed,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert_eq!(err.code, CODE_SCRIPT_TIMEOUT);
+        let upstream = err.upstream.as_ref().unwrap();
+        assert_eq!(upstream["script_step"], 1);
+        assert_eq!(upstream["code"], "tool_timeout");
+        assert_eq!(upstream["action"], "workspace.read_file");
+        // 步骤已下沉 host 层执行（剩余截止时间 > 0 且 ≤ 30s 覆盖）。
+        let timeouts = executor.timeouts.lock().unwrap();
+        assert_eq!(timeouts.len(), 1);
+        let step_budget = timeouts[0].expect("per-step remaining deadline passed");
+        assert!(step_budget > Duration::ZERO);
+        assert!(step_budget <= Duration::from_secs_f64(MAX_SCRIPT_WALLCLOCK_SECONDS));
+        drop(timeouts);
+        // 第二步未执行。
+        assert_eq!(executor.seen.lock().unwrap().len(), 1);
+        assert_eq!(consumed, 1);
+    }
+
+    /// P0-C S4 (2026-08-16)：按实际执行步数减计——host 已执行但返回非零
+    /// 的失败步骤也计 1 单位；后续步骤不执行也不计数。
+    #[tokio::test]
+    async fn script_consumes_only_actually_executed_steps() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "ref test action".to_string(),
+                target_tool: Some("read_file".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        let executor = SequenceExecutor::new(vec![
+            Ok(ref_result()),
+            Ok(ToolResult {
+                output: "failed".to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        ]);
+        let mut trace = Trace {
+            trace_id: "t000111".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let mut consumed = 0u32;
+        let err = run_script(
+            &registry,
+            &executor,
+            None,
+            &json!({"script": [
+                {"do": "workspace.read_file", "with": {"path": "a.txt"}},
+                {"do": "workspace.read_file", "with": {"path": "b.txt"}},
+                {"do": "workspace.read_file", "with": {"path": "c.txt"}},
+            ]}),
+            &mut trace,
+            "call-s",
+            &mut consumed,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert_eq!(err.code, CODE_EXECUTION_FAILED);
+        assert_eq!(err.upstream.as_ref().unwrap()["script_step"], 2);
+        // 第 1、2 步都越过了执行边界 → 2 单位；第 3 步未执行。
+        assert_eq!(consumed, 2);
+        assert_eq!(executor.seen.lock().unwrap().len(), 2);
+    }
+
+    /// P0-C S4 (2026-08-16)：执行前被策略拒绝的步骤不消耗预算单位。
+    #[tokio::test]
+    async fn script_policy_denied_step_consumes_nothing() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "ref test action".to_string(),
+                target_tool: Some("read_file".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        let executor = SequenceExecutor::new(vec![
+            Ok(ref_result()),
+            Err(ExecuteError::PolicyDenied {
+                message: "denied by policy".to_string(),
+                detail: None,
+            }),
+        ]);
+        let mut trace = Trace {
+            trace_id: "t000112".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let mut consumed = 0u32;
+        let err = run_script(
+            &registry,
+            &executor,
+            None,
+            &json!({"script": [
+                {"do": "workspace.read_file", "with": {"path": "a.txt"}},
+                {"do": "workspace.read_file", "with": {"path": "b.txt"}},
+            ]}),
+            &mut trace,
+            "call-s",
+            &mut consumed,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_POLICY);
+        assert_eq!(err.code, CODE_POLICY_DENIED);
+        assert_eq!(consumed, 1, "policy-refused step must not consume");
+    }
+
+    /// P0-C S4 (2026-08-16)：直接订单的 host 超时 → `step=execute` +
+    /// `code=tool_timeout`，且该动作已执行 → 消耗 1 单位。
+    #[tokio::test]
+    async fn direct_order_host_timeout_maps_to_tool_timeout() {
+        let registry = default_service_registry();
+        let executor = FakeExecutor {
+            result: Ok(ToolResult {
+                output: "killed".to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: None,
+                timed_out: true,
+                ..Default::default()
+            }),
+            seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let order = ActionOrder {
+            order_id: "ORD-000110".to_string(),
+            action: "workspace.read_file".to_string(),
+            arguments: json!({"target_file": "a.txt"}),
+            round: 0,
+            plan_epoch: 0,
+            run_id: String::new(),
+        };
+        let mut trace = Trace {
+            trace_id: "t000113".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let mut consumed = 0u32;
+        let err = issue_action_inner(
+            &registry,
+            &executor,
+            None,
+            &order,
+            &mut trace,
+            "call-1",
+            None,
+            &mut consumed,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert_eq!(err.code, CODE_TOOL_TIMEOUT);
+        assert_eq!(consumed, 1);
+    }
+
     /// 固定响应序列的执行器（脚本测试用）。
     struct SequenceExecutor {
         results: std::sync::Mutex<std::collections::VecDeque<Result<ToolResult, ExecuteError>>>,
         seen: std::sync::Arc<std::sync::Mutex<Vec<(String, Value, String)>>>,
+        timeouts: std::sync::Arc<std::sync::Mutex<Vec<Option<Duration>>>>,
     }
 
     impl SequenceExecutor {
@@ -3028,6 +3395,7 @@ mod tests {
             Self {
                 results: std::sync::Mutex::new(results.into()),
                 seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                timeouts: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
 
@@ -3043,12 +3411,14 @@ mod tests {
             target_tool: &str,
             arguments: &Value,
             call_id: &str,
+            timeout: Option<Duration>,
         ) -> Result<ToolResult, ExecuteError> {
             self.seen.lock().unwrap().push((
                 target_tool.to_string(),
                 arguments.clone(),
                 call_id.to_string(),
             ));
+            self.timeouts.lock().unwrap().push(timeout);
             self.results
                 .lock()
                 .unwrap()

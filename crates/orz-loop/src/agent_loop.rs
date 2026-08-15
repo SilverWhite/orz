@@ -1857,7 +1857,7 @@ pub(crate) async fn run_agent_loop(
         // 模型面只有读板块 + 写订单）。pending checkpoint 优先级：本间隙
         // 已有 checkpoint 待轮时跳过发放，订单留在槽中；下一工具轮发放时
         // round 不匹配会按 `order_stale` 显式拒绝（防重放/过期，fail-closed）。
-        if pending_checkpoint.is_none() && profile.role == AgentRole::Main {
+        let console_consumed = if pending_checkpoint.is_none() && profile.role == AgentRole::Main {
             controller
                 .issue_pending_console_order(
                     host,
@@ -1867,9 +1867,15 @@ pub(crate) async fn run_agent_loop(
                     tool_rounds,
                     heartbeat,
                 )
-                .await?;
-        }
+                .await?
+        } else {
+            0
+        };
 
+        // P0-C S4 (2026-08-16): 发放的 console 动作按实际执行单位计入同一
+        // tool-round 预算（直接订单 1、脚本每步 1）——下一轮 remaining 块
+        // 机械反映；耗尽后同样进入最后无工具轮并结束。
+        tool_rounds = tool_rounds.saturating_add(console_consumed);
         tool_rounds += 1;
         // D-8: mechanically re-declare the remaining budget after each
         // tool round — the model does not guess or drift (the previous

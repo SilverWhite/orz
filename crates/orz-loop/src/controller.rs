@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use orz_assurance::acaf::TicketKind;
 use orz_assurance::orientation::stagnation::{
@@ -48,8 +49,8 @@ use crate::blackboard::{
     ActionOrder, ActionRegistration, ActionResult, EditRecord, SharedBlackboard, ToolActionRecord,
 };
 use crate::console::{
-    ActionExecutor, ActionKind, CODE_ORDER_STALE, ConsoleError, STEP_PROTOCOL, ServiceRegistry,
-    TraceStore, failure_envelope, issue_action,
+    ActionExecutor, ActionKind, CODE_BUDGET_INSUFFICIENT, CODE_ORDER_STALE, ConsoleError,
+    STEP_PROTOCOL, ServiceRegistry, TraceStore, failure_envelope, issue_action_inner,
 };
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
@@ -6384,6 +6385,7 @@ impl AgentLoopController {
                     code: format!("control_ticket_rejected:{}", code.as_str()),
                     reason: detail.clone(),
                 }),
+                timed_out: false,
             },
             None,
         ))
@@ -6420,9 +6422,11 @@ impl AgentLoopController {
         workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         tool_rounds: u32,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
-    ) -> Result<(), AgentLoopError> {
+    ) -> Result<u32, AgentLoopError> {
+        // P0-C S4 (2026-08-16): 返回本次发放实际消耗的 tool-round 预算
+        // 单位（无订单/拒绝 = 0；直接订单 1；脚本 = 实际执行步数）。
         let Some(order) = self.blackboard.read().actions.order.clone() else {
-            return Ok(());
+            return Ok(0);
         };
         let current_epoch = self.blackboard.read().plan.plan_epoch;
         let current_run = writer.run_id().to_string();
@@ -6456,10 +6460,50 @@ impl AgentLoopController {
             };
             self.blackboard.write().actions.take_order();
             self.consume_console_order(order, err);
-            return Ok(());
+            return Ok(0);
+        }
+        // P0-C S4 (2026-08-16)：发放前预算预检——当前模型轮已消耗 1 单位
+        // （本轮结束后 `tool_rounds += 1`），剩余 = max − (tool_rounds + 1)。
+        // 脚本订单要求长度 ≤ 剩余（直接订单恒 1 单位）；不足零执行拒绝、
+        // 显式错误码、不消耗预算。未知动作/畸形脚本不预检，交注册表/
+        // 契约校验产生对应错误。
+        let required = match self.console_registry.get(&order.action).map(|s| s.kind) {
+            Some(ActionKind::RunScript) => order
+                .arguments
+                .get("script")
+                .and_then(Value::as_array)
+                .map(|steps| steps.len() as u32),
+            Some(ActionKind::TraceRead) | Some(ActionKind::Host) => Some(1),
+            _ => None,
+        };
+        let remaining = self
+            .max_tool_rounds
+            .saturating_sub(tool_rounds.saturating_add(1));
+        if let Some(required) = required
+            && required > remaining
+        {
+            let err = ConsoleError {
+                step: STEP_PROTOCOL,
+                code: CODE_BUDGET_INSUFFICIENT,
+                message: format!(
+                    "order {} needs {required} tool-round unit(s) but only {remaining} \
+                         remain (round {tool_rounds} / max {}) — rewrite with fewer steps",
+                    order.order_id, self.max_tool_rounds
+                ),
+                upstream: Some(json!({
+                    "action": order.action,
+                    "required": required,
+                    "remaining": remaining,
+                    "tool_rounds": tool_rounds,
+                    "max_tool_rounds": self.max_tool_rounds,
+                })),
+            };
+            self.blackboard.write().actions.take_order();
+            self.consume_console_order(order, err);
+            return Ok(0);
         }
         let Some(order) = self.blackboard.write().actions.take_order() else {
-            return Ok(());
+            return Ok(0);
         };
         let mut trace = self
             .console_traces
@@ -6498,13 +6542,16 @@ impl AgentLoopController {
                 )
                 .await?;
         }
-        let result = issue_action(
+        let mut consumed = 0u32;
+        let result = issue_action_inner(
             &self.console_registry,
             &executor,
             Some(&self.console_traces),
             &order,
             &mut trace,
             &call_id,
+            None,
+            &mut consumed,
         )
         .await;
         if is_internal {
@@ -6557,7 +6604,7 @@ impl AgentLoopController {
             }
         }
         self.commit_console_trace(&trace);
-        Ok(())
+        Ok(consumed)
     }
 
     /// 过期/失败订单收口：追加失败事件 → 构造信封 → 结果栏 receipt →
@@ -6626,6 +6673,7 @@ impl AgentLoopController {
         workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         tool_rounds: u32,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        timeout: Option<std::time::Duration>,
         target_tool: &str,
         arguments: &serde_json::Value,
         call_id: &str,
@@ -6637,7 +6685,7 @@ impl AgentLoopController {
         };
         let mut scratch: Vec<Message> = Vec::new();
         let (result, _feedback) = match self
-            .run_host_tool(
+            .run_host_tool_with_timeout(
                 host,
                 writer,
                 &tc,
@@ -6650,6 +6698,7 @@ impl AgentLoopController {
                 None,
                 true,
                 true,
+                timeout,
             )
             .await
         {
@@ -6720,6 +6769,44 @@ impl AgentLoopController {
         // as spurious recovery-flip events in the main audit stream).
         probe_writeback: bool,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+        self.run_host_tool_with_timeout(
+            host,
+            writer,
+            tc,
+            _prompt,
+            _workspace_trust,
+            messages,
+            tool_rounds,
+            heartbeat,
+            activation_id,
+            fetch_candidates,
+            permission_gated,
+            probe_writeback,
+            None,
+        )
+        .await
+    }
+
+    /// P0-C S4 (2026-08-16): same gate chain as `run_host_tool` with a
+    /// per-call host timeout override (script step deadlines). `None`
+    /// behaves exactly like `run_host_tool`.
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel/run_retrieval_subagent
+    pub(crate) async fn run_host_tool_with_timeout(
+        &self,
+        host: &dyn LoopHost,
+        writer: &mut EventWriter<'_>,
+        tc: &ToolCall,
+        _prompt: &str,
+        _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
+        messages: &mut Vec<Message>,
+        tool_rounds: u32,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        activation_id: Option<&str>,
+        fetch_candidates: Option<&Mutex<Vec<String>>>,
+        permission_gated: bool,
+        probe_writeback: bool,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         // The second tuple element is a pending policy feedback (a denial
         // key) that the caller aggregates at the END of the whole tool round
         // — the breaker user message must be injected after the tool batch
@@ -6788,6 +6875,7 @@ impl AgentLoopController {
                     output_encoding: None,
                     structured: None,
                     policy_denial: Some(policy_denial),
+                    timed_out: false,
                 },
                 None,
             ));
@@ -6846,6 +6934,7 @@ impl AgentLoopController {
                     output_encoding: None,
                     structured: None,
                     policy_denial: Some(policy_denial),
+                    timed_out: false,
                 },
                 None,
             ));
@@ -6901,6 +6990,7 @@ impl AgentLoopController {
                     output_encoding: None,
                     structured: None,
                     policy_denial: Some(policy_denial),
+                    timed_out: false,
                 },
                 None,
             ));
@@ -7021,6 +7111,7 @@ impl AgentLoopController {
                     code: reason_code.clone(),
                     reason: output,
                 }),
+                timed_out: false,
             };
             // Replay the denial as a tool message — the provider protocol
             // requires a tool message answering each declared call, even a
@@ -7757,7 +7848,7 @@ impl AgentLoopController {
         // successful call resets the denial streak (ADR-0010 §3.5.4);
         // timeout/error are neutral (分开记账 — neither reset nor count).
         let (mut result, succeeded) = match host
-            .call_tool(&tc.name, tc.arguments.clone(), &tc.call_id)
+            .call_tool_with_timeout(&tc.name, tc.arguments.clone(), &tc.call_id, timeout)
             .await
         {
             Ok(res) => {
@@ -7879,6 +7970,7 @@ impl AgentLoopController {
                         output_encoding: None,
                         structured: None,
                         policy_denial: res.policy_denial.clone(),
+                        timed_out: res.timed_out,
                     },
                     true,
                 )
@@ -7939,6 +8031,7 @@ impl AgentLoopController {
                         exit_code: Some(1),
                         output_encoding: None,
                         structured: None,
+                        timed_out: matches!(e, ToolError::Timeout(_)),
                         ..Default::default()
                     },
                     false,
@@ -8148,6 +8241,7 @@ impl<'a, 'b, 'c, 'd, 'e> ActionExecutor for ControllerConsoleExecutor<'a, 'b, 'c
         target_tool: &str,
         arguments: &serde_json::Value,
         call_id: &str,
+        timeout: Option<std::time::Duration>,
     ) -> Result<ToolResult, crate::console::ExecuteError> {
         let mut writer = self.writer.lock().await;
         self.controller
@@ -8158,6 +8252,7 @@ impl<'a, 'b, 'c, 'd, 'e> ActionExecutor for ControllerConsoleExecutor<'a, 'b, 'c
                 self.workspace_trust,
                 self.tool_rounds,
                 self.heartbeat,
+                timeout,
                 target_tool,
                 arguments,
                 call_id,
@@ -13382,6 +13477,414 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// P0-C S4 (2026-08-16)：完整任务会话 e2e——写 run_script 订单 →
+    /// 发放 → 结果栏 receipt → 读 trace → 结果栏反馈 → 下一订单。
+    /// trace_id 机械确定（TraceStore seq=1 → `t000001`），脚本模型可
+    /// 直接引用前单 receipt 的 trace。
+    #[tokio::test]
+    async fn console_s4_full_session_script_trace_feedback_next_order() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.run_script",
+                    "arguments": {
+                        "script": [
+                            {
+                                "do": "workspace.read_file",
+                                "with": {"target_file": "a.txt"},
+                                "as": "a",
+                            },
+                            {
+                                "do": "workspace.read_file",
+                                "with": {"target_file": "b.txt"},
+                                "as": "b",
+                            },
+                        ]
+                    },
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "assistant.trace",
+                    "arguments": {
+                        "trace_id": "t000001",
+                        "tail": 20,
+                    },
+                }),
+                call_id: "call-w2".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "actions"}),
+                call_id: "call-a1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.read_file",
+                    "arguments": {"target_file": "c.txt"},
+                }),
+                call_id: "call-w3".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        controller
+            .run_turn(&host, "完整会话", "RUN-S4E", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 3, "{:?}", r.actions.results);
+        // ① run_script receipt：2 步执行 + result。
+        let script_receipt = &r.actions.results[0];
+        assert!(script_receipt.ok, "{:?}", script_receipt.error);
+        let script_response = script_receipt.response.as_ref().unwrap();
+        assert_eq!(script_response["steps"].as_array().unwrap().len(), 2);
+        assert_eq!(script_response["result"]["output"], "ok");
+        // ② trace 读取 receipt：返回前单 trace 的事件序列（含脚本步）。
+        let trace_receipt = &r.actions.results[1];
+        assert!(trace_receipt.ok, "{:?}", trace_receipt.error);
+        let trace_response = trace_receipt.response.as_ref().unwrap();
+        assert_eq!(trace_response["trace_id"], "t000001");
+        assert_eq!(trace_response["request_id"], "ORD-000001");
+        let events: Vec<&str> = trace_response["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e.get("step").and_then(|s| s.as_str()))
+            .collect();
+        assert!(
+            events.contains(&"script"),
+            "script steps visible in trace: {events:?}"
+        );
+        assert!(events.contains(&"execute"), "{events:?}");
+        // ③ 反馈后下一订单 receipt：直接 host 动作。
+        let next_receipt = &r.actions.results[2];
+        assert!(next_receipt.ok, "{:?}", next_receipt.error);
+        assert_eq!(next_receipt.response.as_ref().unwrap()["output"], "ok");
+        // 3 次 read_file 实际执行（脚本 2 步 + 直接 1 单）。
+        let reads: Vec<_> = r
+            .tool_actions
+            .iter()
+            .filter(|t| t.tool == "read_file")
+            .collect();
+        assert_eq!(reads.len(), 3, "{:?}", r.tool_actions);
+        drop(r);
+
+        // 模型在 actions 板块读到结果栏反馈（receipt 行）。
+        let received = fake.received_requests();
+        let actions_reply = received
+            .iter()
+            .find_map(|req| {
+                req.messages
+                    .iter()
+                    .find(|m| m.tool_call_id.as_deref() == Some("call-a1"))
+            })
+            .expect("actions reply");
+        assert!(actions_reply.content.contains("ORD-000001 ok=true"));
+        assert!(actions_reply.content.contains("ORD-000002 ok=true"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 (2026-08-16)：tool-round 预算发放前预检——脚本长度超出剩余
+    /// 预算（含当前模型轮 1 单位）时零执行拒绝，显式
+    /// `budget_insufficient`，不消耗预算，下一轮 remaining 块机械反映。
+    #[tokio::test]
+    async fn console_s4_budget_precheck_rejects_over_budget_script() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.run_script",
+                    "arguments": {
+                        "script": [
+                            {"do": "workspace.read_file", "with": {"target_file": "a.txt"}},
+                            {"do": "workspace.read_file", "with": {"target_file": "b.txt"}},
+                        ]
+                    },
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let mut controller = AgentLoopController::with_gateway(fake.clone());
+        controller.max_tool_rounds = 2;
+        controller
+            .run_turn(
+                &host,
+                "超预算脚本",
+                "RUN-S4B",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "budget_insufficient");
+        assert_eq!(error["upstream"]["required"], 2);
+        assert_eq!(error["upstream"]["remaining"], 1);
+        assert_eq!(error["upstream"]["max_tool_rounds"], 2);
+        // 零执行：没有任何 host 工具动作。
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "read_file"),
+            "{:?}",
+            r.tool_actions
+        );
+        drop(r);
+        // 下一轮预算块机械反映：剩余 1（2 − 当前轮 1，拒绝未消耗）。
+        let received = fake.received_requests();
+        let round2 = &received[1];
+        assert!(
+            round2
+                .messages
+                .iter()
+                .any(|m| m.content.contains("REMAINING: 1 tool rounds left")),
+            "round 2 budget block: {:?}",
+            round2.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 (2026-08-16)：脚本按实际执行步数消耗 tool-round 预算——
+    /// 2 步脚本消耗 2 单位（叠加当前模型轮 1 单位），下一轮 remaining 块
+    /// 从 3 降到 1（max=4）。
+    #[tokio::test]
+    async fn console_s4_script_consumes_budget_and_next_block_reflects() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.run_script",
+                    "arguments": {
+                        "script": [
+                            {"do": "workspace.read_file", "with": {"target_file": "a.txt"}},
+                            {"do": "workspace.read_file", "with": {"target_file": "b.txt"}},
+                        ]
+                    },
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let mut controller = AgentLoopController::with_gateway(fake.clone());
+        controller.max_tool_rounds = 4;
+        controller
+            .run_turn(&host, "预算脚本", "RUN-S4C", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(receipt.ok, "{:?}", receipt.error);
+        assert_eq!(
+            receipt.response.as_ref().unwrap()["steps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            r.tool_actions
+                .iter()
+                .filter(|t| t.tool == "read_file")
+                .count(),
+            2
+        );
+        drop(r);
+        // 2 步执行 + 当前模型轮 = 3 单位；max=4 → 下一轮 REMAINING: 1。
+        let received = fake.received_requests();
+        let round2 = &received[1];
+        assert!(
+            round2
+                .messages
+                .iter()
+                .any(|m| m.content.contains("REMAINING: 1 tool rounds left")),
+            "round 2 budget block must reflect consumed script steps: {:?}",
+            round2.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 (2026-08-16)：checkpoint 轮跳过注册板块刷新（F3 收口的
+    /// e2e 断言）——取消落在 checkpoint 轮结束后、下一轮刷新前；板块保留
+    /// 上一轮探针过滤后的内容（本 host 会话 cwd 缺失 → 读/写探针不完整，
+    /// 若按 bundle-only 刷新会误显 read_file/search_replace）。
+    #[tokio::test]
+    async fn console_s4_checkpoint_round_retains_probe_filtered_registration() {
+        struct CheckpointProbeHost {
+            journal: JournalRecorder,
+            results: std::sync::Mutex<std::collections::VecDeque<crate::host::TestRunResult>>,
+        }
+        #[async_trait]
+        impl LoopHost for CheckpointProbeHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &FullRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.journal.journal_dir().join("missing-workspace")
+            }
+            fn test_runner(&self) -> Option<crate::host::TestRunner> {
+                Some(crate::host::TestRunner {
+                    command: vec!["pytest-stub".to_string()],
+                    timeout: None,
+                    env: Vec::new(),
+                })
+            }
+            async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
+                Ok(self
+                    .results
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("scripted test results exhausted"))
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = CheckpointProbeHost {
+            journal,
+            results: std::sync::Mutex::new(vec![failing_test_run()].into()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+                template_answer("continue"),
+                ScriptedResponse::text("完成"),
+                ScriptedResponse::text("完成"),
+            ])
+            .with_chunk_delay(std::time::Duration::from_millis(100)),
+        );
+        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let token = tokio_util::sync::CancellationToken::new();
+        let c = controller.clone();
+        let t = token.clone();
+        let run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(
+                &host,
+                "修复测试失败",
+                "RUN-S4CK",
+                MANIFEST,
+                0,
+                None,
+                Some(&t),
+                None,
+                None,
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        token.cancel();
+        let result = run.await.unwrap();
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+
+        // DC checkpoint 已触发且其轮是工具-free 的。
+        let all_events = events(&dir);
+        assert!(
+            all_events
+                .iter()
+                .any(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint),
+            "{:?}",
+            all_events
+                .iter()
+                .map(|e| format!("{:?}", e.event_type))
+                .collect::<Vec<_>>()
+        );
+        // 取消落在 checkpoint 轮结束后、下一轮刷新前 → 板块保留上一轮
+        // 探针过滤内容（读/写工具因会话 cwd 缺失被探针移除）。
+        let r = controller.blackboard().read();
+        let names: Vec<&str> = r
+            .actions
+            .registration
+            .iter()
+            .map(|reg| reg.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"workspace.run_tests"),
+            "probe-complete tool retained: {names:?}"
+        );
+        assert!(
+            names.contains(&"workspace.index"),
+            "non-work tool retained: {names:?}"
+        );
+        for excluded in ["workspace.read_file", "workspace.search_replace"] {
+            assert!(
+                !names.contains(&excluded),
+                "checkpoint round must not refresh bundle-only (retention broken): {names:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// P0-C S2 (2026-08-15): 单轮一单——同批第二次 `blackboard.action_write`
     /// 被机械拒绝（order_slot_busy），首单仍正常发放。
     #[tokio::test]
@@ -13677,6 +14180,7 @@ mod tests {
                     exit_code: Some(1),
                     output_encoding: None,
                     structured: None,
+                    timed_out: false,
                     policy_denial: Some(crate::host::PolicyDenial {
                         source,
                         code: code.to_string(),
@@ -13700,6 +14204,7 @@ mod tests {
                     "",
                     orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
                     0,
+                    None,
                     None,
                     "read_file",
                     &serde_json::json!({ "path": "a.txt" }),
@@ -13789,6 +14294,7 @@ mod tests {
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
+                    timed_out: false,
                     policy_denial: None,
                 }),
             };
@@ -13808,6 +14314,7 @@ mod tests {
                     "",
                     orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
                     0,
+                    None,
                     None,
                     "read_file",
                     &serde_json::json!({ "path": "a.txt" }),

@@ -87,6 +87,11 @@ pub struct PolicyDenial {
 pub struct ToolResult {
     pub output: String,
     pub exit_code: Option<i32>,
+    /// P0-C S4 (2026-08-16): true when the host hit a per-call wall-clock
+    /// bound and killed the tool's process tree before completion. The
+    /// console adapter maps this structured signal to `tool_timeout` /
+    /// `script_timeout` (never text prefix parsing).
+    pub timed_out: bool,
     /// Decode stage that produced `output` (GAP-ENCODING-GATE,
     /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`
     /// (comma-joined for multi-chunk streams). `None` when the tool has no
@@ -411,6 +416,23 @@ pub trait LoopHost: Send + Sync {
         _call_id: &str,
     ) -> Result<ToolResult, ToolError> {
         Err(ToolError::NotFound("not implemented".into()))
+    }
+
+    /// Execute a tool call under an explicit per-call wall-clock bound
+    /// (P0-C S4, 2026-08-16: script step deadlines). `None` = host default
+    /// (`call_tool` semantics). Hosts that honor the override MUST bound
+    /// the whole call with the shorter of the override and their configured
+    /// budget, and on expiry kill the tool's process tree and fail with
+    /// `ToolError::Timeout` — a script layer timeout alone must never
+    /// substitute for host-side process-tree reclamation.
+    async fn call_tool_with_timeout(
+        &self,
+        name: &str,
+        args: Value,
+        call_id: &str,
+        _timeout: Option<Duration>,
+    ) -> Result<ToolResult, ToolError> {
+        self.call_tool(name, args, call_id).await
     }
 
     /// Request user permission for a risky action.

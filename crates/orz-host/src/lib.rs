@@ -573,6 +573,206 @@ fn workspace_delta_diff(
     (entries, truncated)
 }
 
+impl OrzHost {
+    /// P0-C S4 (2026-08-16): shared tool-execution core with an optional
+    /// per-call timeout override (script step deadlines). `None` = the
+    /// configured host budget; an override is capped at the configured
+    /// budget (`min`) so the host ceiling can never be raised by callers.
+    async fn call_tool_inner(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        call_id: &str,
+        timeout_override: Option<std::time::Duration>,
+    ) -> Result<ToolResult, ToolError> {
+        // P0-1 (2026-08-08 stall guards): bounded tool execution. Every
+        // tool call runs under a wall-clock cap (default 5 min,
+        // configurable via `with_tool_timeout`) — a tool whose
+        // implementation awaits forever (a hung bash child, an
+        // `ask_user_question` with no user attached, a stuck fs read, …)
+        // used to hang the whole run with no bound anywhere (the
+        // dna-assembly 16:02 hang attribution). On expiry the tool's
+        // process tree is killed via the global process scope (Windows:
+        // per-child Job Object `TerminateJobObject` — kills grandchildren
+        // too, the 2026-08-07 orphan-holds-pipes mechanism) and the call
+        // fails with `ToolError::Timeout`; the controller journals
+        // `tool_completed{status:error}` and the model continues the loop.
+        //
+        // Recorded trade-off: the kill is process-global — any concurrently
+        // running tool child (e.g. an earlier background command) is
+        // terminated too. A hung tool poisons the session; leaving
+        // orphaned processes behind is worse. The bash tool itself carries
+        // a foreground timeout (120s default), so this wrapper is the
+        // coarse backstop for every tool, bash included.
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): the project-doc index is a
+        // host-owned tool (run_tests precedent) — routed before the
+        // finalize toolset; synchronous and workspace-local.
+        if name == "project_doc_index" {
+            return self.project_doc_index.query(&args);
+        }
+        // local_browser (2026-08-10): `browser_read` is host-owned (the
+        // browser lane is session state, not a finalized-toolset resource).
+        // The mode gate lives in the controller (`is_retrieval_mode_gated_
+        // host_tool`); here we only execute when the session carries a
+        // browser. Fail-closed: no handle → explicit error, never a stub
+        // success (ADR-0010 §3.7.2).
+        if name == "browser_read" {
+            if !self.browser.ready() {
+                return Err(ToolError::ExecutionFailed(
+                    "browser_read: browser lane not available (probe failed or \
+                     mode ≠ local_browser)"
+                        .to_string(),
+                ));
+            }
+            return crate::local_browser::handle_browser_read(self.browser.as_ref(), &args).await;
+        }
+        // PDF evidence (2026-08-11): `pdf_read` reads the local evidence
+        // store — synchronous, workspace-local (project_doc_index pattern).
+        if name == "pdf_read" {
+            return crate::pdf_evidence::handle_pdf_read(&self.cwd, &args).await;
+        }
+        // PDF evidence routing (2026-08-11): a `web_fetch` whose URL matches
+        // ORZ_PDF_BROWSER_DOMAINS is intercepted BEFORE the toolset — the
+        // whitelisted paper-library fetch happens through the browser
+        // (operator login). Everything else falls through to the toolset
+        // (direct channel, where PDFs are ingested inline). A whitelist hit
+        // with an unavailable browser is an explicit failure — never an
+        // automatic direct fallback (user ruling; §3.7.2).
+        if name == "web_fetch"
+            && crate::pdf_evidence::route_for_url(
+                args.get("url").and_then(|u| u.as_str()).unwrap_or(""),
+            )
+        {
+            let url = args.get("url").and_then(|u| u.as_str()).unwrap_or_default();
+            return crate::pdf_evidence::handle_browser_pdf(
+                &self.cwd,
+                self.session_id.as_deref(),
+                self.browser.as_ref(),
+                url,
+            )
+            .await;
+        }
+        // GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): global `web_search`
+        // concurrency is fixed at 1 (ADR-0010 §3.7.7/§11.3 — the main agent
+        // and the external-retrieval subagent share this semaphore; internal
+        // retrieval does not touch it, so internal + external sessions still
+        // run in parallel). Every `web_search*` call acquires the shared
+        // permit BEFORE execution. The P0-1 timeout wraps the whole
+        // acquire+call future, so a WAITING call is bounded by the same
+        // 300s budget, and the timeout drop releases the permit with the
+        // future — a holder can never leak the gate. `web_fetch` is not
+        // gated (the contract limits only web_search).
+        //
+        // P3-1 (review 2026-08-10, upgraded to a fix — the new timeout test
+        // reproduced the mis-kill): `started_exec` distinguishes a WAITING
+        // timeout from an EXECUTION timeout. A call that times out while
+        // waiting for the permit holds no process tree of its own, so the
+        // global `kill_active` would only destroy unrelated concurrent
+        // processes (reproduced: the parallel `call_tool_timeout_kills_
+        // process_tree` test lost its python child to the semaphore test's
+        // 100ms waiting timeout). Only an execution timeout kills.
+        let started_exec = std::sync::atomic::AtomicBool::new(false);
+        let fut = async {
+            if crate::tools::is_web_search_tool(name) {
+                tracing::debug!(
+                    tool = name,
+                    "web_search: acquiring the global semaphore (concurrency=1)"
+                );
+                let _permit = self
+                    .web_search_semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| {
+                        // P3-4 (review 2026-08-10): the map_tool_error
+                        // bridge surfaces only the Display text — inline the
+                        // code so a model never sees a bare "semaphore
+                        // closed" that reads like a tool being switched off.
+                        xai_tool_runtime::ToolError::custom(
+                            "web_search_semaphore",
+                            format!("web_search_semaphore: {e}"),
+                        )
+                    })?;
+                started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.registry
+                    .toolset()
+                    .call(name, args, call_id, None)
+                    .await
+            } else {
+                started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.registry
+                    .toolset()
+                    .call(name, args, call_id, None)
+                    .await
+            }
+        };
+        let effective_timeout = timeout_override
+            .map(|t| t.min(self.tool_timeout))
+            .unwrap_or(self.tool_timeout);
+        let result = match tokio::time::timeout(effective_timeout, fut).await {
+            Ok(result) => result.map_err(|e| crate::tools::map_tool_error(&e))?,
+            Err(_) if started_exec.load(std::sync::atomic::Ordering::SeqCst) => {
+                tracing::warn!(
+                    tool = name,
+                    timeout = ?effective_timeout,
+                    "tool call TIMED OUT — killing the tool process tree"
+                );
+                // 2026-08-08 review F1 (P1-1/D1-1): `kill_active` — NOT
+                // `kill_all`. The latter latches the global scope closed
+                // (its contract is "call only when the process is genuinely
+                // exiting"); a mid-session latch would kill every LATER
+                // spawn on the spot (terminal.rs ignores `register`'s
+                // return), so one tool timeout would poison all subsequent
+                // bash calls for the whole session.
+                orz_tools::util::global_process_scope().kill_active();
+                return Err(ToolError::Timeout(format!(
+                    "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
+                     process tree killed; the tool did not complete",
+                    timeout = effective_timeout,
+                )));
+            }
+            Err(_) => {
+                // Waiting timeout: bounded by the same 300s budget (D-3),
+                // but nothing was killed — the call never reached a tool.
+                tracing::warn!(
+                    tool = name,
+                    timeout = ?effective_timeout,
+                    "web_search call TIMED OUT while waiting for the global permit"
+                );
+                return Err(ToolError::Timeout(format!(
+                    "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
+                     still waiting for the global web_search permit (concurrency=1); \
+                     nothing was killed, retry when the holder finishes",
+                    timeout = effective_timeout,
+                )));
+            }
+        };
+        Ok(ToolResult {
+            output: result.prompt_text,
+            // 2026-08-08 blackboard-partition review closure (conformance
+            // agent D1-1): the controller's edit-action gate keys on
+            // `exit_code == Some(0)` ("实际变动" 才记). Previously this was
+            // hardcoded `None` — the production shape never reached the
+            // controller and A1/A2 (edit records + incremental push) were
+            // dead in real runs; test hosts fabricating `Some(0)` masked it.
+            // Map the structured output: bash carries its real exit code;
+            // search_replace reports "applied" only via the EditsApplied
+            // variant (NoMatchesFound etc. are Ok outputs that changed
+            // nothing → non-zero); every other successful output is 0.
+            exit_code: crate::tools::exit_code_from_output(&result.output),
+            // GAP-ENCODING-GATE: forward the decode stage observed by the
+            // tool implementation (run_terminal_cmd / read_file) to the
+            // journal's `tool_completed.output_encoding`.
+            output_encoding: result.output_encoding,
+            // FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs
+            // ride the structured seam into the loop (candidate pool for
+            // the mechanical prefilter); every other tool is `None`.
+            structured: crate::tools::structured_from_output(&result.output),
+            ..Default::default()
+        })
+    }
+}
+
 #[async_trait]
 impl LoopHost for OrzHost {
     fn journal(&self) -> &JournalRecorder {
@@ -848,188 +1048,21 @@ impl LoopHost for OrzHost {
         args: serde_json::Value,
         call_id: &str,
     ) -> Result<ToolResult, ToolError> {
-        // P0-1 (2026-08-08 stall guards): bounded tool execution. Every
-        // tool call runs under a wall-clock cap (default 5 min,
-        // configurable via `with_tool_timeout`) — a tool whose
-        // implementation awaits forever (a hung bash child, an
-        // `ask_user_question` with no user attached, a stuck fs read, …)
-        // used to hang the whole run with no bound anywhere (the
-        // dna-assembly 16:02 hang attribution). On expiry the tool's
-        // process tree is killed via the global process scope (Windows:
-        // per-child Job Object `TerminateJobObject` — kills grandchildren
-        // too, the 2026-08-07 orphan-holds-pipes mechanism) and the call
-        // fails with `ToolError::Timeout`; the controller journals
-        // `tool_completed{status:error}` and the model continues the loop.
-        //
-        // Recorded trade-off: the kill is process-global — any concurrently
-        // running tool child (e.g. an earlier background command) is
-        // terminated too. A hung tool poisons the session; leaving
-        // orphaned processes behind is worse. The bash tool itself carries
-        // a foreground timeout (120s default), so this wrapper is the
-        // coarse backstop for every tool, bash included.
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): the project-doc index is a
-        // host-owned tool (run_tests precedent) — routed before the
-        // finalize toolset; synchronous and workspace-local.
-        if name == "project_doc_index" {
-            return self.project_doc_index.query(&args);
-        }
-        // local_browser (2026-08-10): `browser_read` is host-owned (the
-        // browser lane is session state, not a finalized-toolset resource).
-        // The mode gate lives in the controller (`is_retrieval_mode_gated_
-        // host_tool`); here we only execute when the session carries a
-        // browser. Fail-closed: no handle → explicit error, never a stub
-        // success (ADR-0010 §3.7.2).
-        if name == "browser_read" {
-            if !self.browser.ready() {
-                return Err(ToolError::ExecutionFailed(
-                    "browser_read: browser lane not available (probe failed or \
-                     mode ≠ local_browser)"
-                        .to_string(),
-                ));
-            }
-            return crate::local_browser::handle_browser_read(self.browser.as_ref(), &args).await;
-        }
-        // PDF evidence (2026-08-11): `pdf_read` reads the local evidence
-        // store — synchronous, workspace-local (project_doc_index pattern).
-        if name == "pdf_read" {
-            return crate::pdf_evidence::handle_pdf_read(&self.cwd, &args).await;
-        }
-        // PDF evidence routing (2026-08-11): a `web_fetch` whose URL matches
-        // ORZ_PDF_BROWSER_DOMAINS is intercepted BEFORE the toolset — the
-        // whitelisted paper-library fetch happens through the browser
-        // (operator login). Everything else falls through to the toolset
-        // (direct channel, where PDFs are ingested inline). A whitelist hit
-        // with an unavailable browser is an explicit failure — never an
-        // automatic direct fallback (user ruling; §3.7.2).
-        if name == "web_fetch"
-            && crate::pdf_evidence::route_for_url(
-                args.get("url").and_then(|u| u.as_str()).unwrap_or(""),
-            )
-        {
-            let url = args.get("url").and_then(|u| u.as_str()).unwrap_or_default();
-            return crate::pdf_evidence::handle_browser_pdf(
-                &self.cwd,
-                self.session_id.as_deref(),
-                self.browser.as_ref(),
-                url,
-            )
-            .await;
-        }
-        // GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): global `web_search`
-        // concurrency is fixed at 1 (ADR-0010 §3.7.7/§11.3 — the main agent
-        // and the external-retrieval subagent share this semaphore; internal
-        // retrieval does not touch it, so internal + external sessions still
-        // run in parallel). Every `web_search*` call acquires the shared
-        // permit BEFORE execution. The P0-1 timeout wraps the whole
-        // acquire+call future, so a WAITING call is bounded by the same
-        // 300s budget, and the timeout drop releases the permit with the
-        // future — a holder can never leak the gate. `web_fetch` is not
-        // gated (the contract limits only web_search).
-        //
-        // P3-1 (review 2026-08-10, upgraded to a fix — the new timeout test
-        // reproduced the mis-kill): `started_exec` distinguishes a WAITING
-        // timeout from an EXECUTION timeout. A call that times out while
-        // waiting for the permit holds no process tree of its own, so the
-        // global `kill_active` would only destroy unrelated concurrent
-        // processes (reproduced: the parallel `call_tool_timeout_kills_
-        // process_tree` test lost its python child to the semaphore test's
-        // 100ms waiting timeout). Only an execution timeout kills.
-        let started_exec = std::sync::atomic::AtomicBool::new(false);
-        let fut = async {
-            if crate::tools::is_web_search_tool(name) {
-                tracing::debug!(
-                    tool = name,
-                    "web_search: acquiring the global semaphore (concurrency=1)"
-                );
-                let _permit = self
-                    .web_search_semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| {
-                        // P3-4 (review 2026-08-10): the map_tool_error
-                        // bridge surfaces only the Display text — inline the
-                        // code so a model never sees a bare "semaphore
-                        // closed" that reads like a tool being switched off.
-                        xai_tool_runtime::ToolError::custom(
-                            "web_search_semaphore",
-                            format!("web_search_semaphore: {e}"),
-                        )
-                    })?;
-                started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
-                self.registry
-                    .toolset()
-                    .call(name, args, call_id, None)
-                    .await
-            } else {
-                started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
-                self.registry
-                    .toolset()
-                    .call(name, args, call_id, None)
-                    .await
-            }
-        };
-        let result = match tokio::time::timeout(self.tool_timeout, fut).await {
-            Ok(result) => result.map_err(|e| crate::tools::map_tool_error(&e))?,
-            Err(_) if started_exec.load(std::sync::atomic::Ordering::SeqCst) => {
-                tracing::warn!(
-                    tool = name,
-                    timeout = ?self.tool_timeout,
-                    "tool call TIMED OUT — killing the tool process tree"
-                );
-                // 2026-08-08 review F1 (P1-1/D1-1): `kill_active` — NOT
-                // `kill_all`. The latter latches the global scope closed
-                // (its contract is "call only when the process is genuinely
-                // exiting"); a mid-session latch would kill every LATER
-                // spawn on the spot (terminal.rs ignores `register`'s
-                // return), so one tool timeout would poison all subsequent
-                // bash calls for the whole session.
-                orz_tools::util::global_process_scope().kill_active();
-                return Err(ToolError::Timeout(format!(
-                    "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
-                     process tree killed; the tool did not complete",
-                    timeout = self.tool_timeout,
-                )));
-            }
-            Err(_) => {
-                // Waiting timeout: bounded by the same 300s budget (D-3),
-                // but nothing was killed — the call never reached a tool.
-                tracing::warn!(
-                    tool = name,
-                    timeout = ?self.tool_timeout,
-                    "web_search call TIMED OUT while waiting for the global permit"
-                );
-                return Err(ToolError::Timeout(format!(
-                    "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
-                     still waiting for the global web_search permit (concurrency=1); \
-                     nothing was killed, retry when the holder finishes",
-                    timeout = self.tool_timeout,
-                )));
-            }
-        };
-        Ok(ToolResult {
-            output: result.prompt_text,
-            // 2026-08-08 blackboard-partition review closure (conformance
-            // agent D1-1): the controller's edit-action gate keys on
-            // `exit_code == Some(0)` ("实际变动" 才记). Previously this was
-            // hardcoded `None` — the production shape never reached the
-            // controller and A1/A2 (edit records + incremental push) were
-            // dead in real runs; test hosts fabricating `Some(0)` masked it.
-            // Map the structured output: bash carries its real exit code;
-            // search_replace reports "applied" only via the EditsApplied
-            // variant (NoMatchesFound etc. are Ok outputs that changed
-            // nothing → non-zero); every other successful output is 0.
-            exit_code: crate::tools::exit_code_from_output(&result.output),
-            // GAP-ENCODING-GATE: forward the decode stage observed by the
-            // tool implementation (run_terminal_cmd / read_file) to the
-            // journal's `tool_completed.output_encoding`.
-            output_encoding: result.output_encoding,
-            // FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs
-            // ride the structured seam into the loop (candidate pool for
-            // the mechanical prefilter); every other tool is `None`.
-            structured: crate::tools::structured_from_output(&result.output),
-            ..Default::default()
-        })
+        self.call_tool_inner(name, args, call_id, None).await
+    }
+
+    /// P0-C S4 (2026-08-16): script step deadlines — a per-call override
+    /// bounded by the configured host budget (`min`). The host still owns
+    /// process-tree reclamation on expiry (`kill_active`), exactly like the
+    /// default path.
+    async fn call_tool_with_timeout(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        call_id: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<ToolResult, ToolError> {
+        self.call_tool_inner(name, args, call_id, timeout).await
     }
 
     async fn request_permission(
@@ -2217,6 +2250,66 @@ mod tests {
             !text.contains(&gcid.to_string()),
             "grandchild {gcid} survived the tool-timeout tree kill: {text}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 (2026-08-16): a per-call timeout override is honored — the
+    /// host is configured with a LONG budget (10s), but
+    /// `call_tool_with_timeout` with a 1.2s override must kill the process
+    /// tree at the override bound, fail with `ToolError::Timeout` carrying
+    /// the override budget, and leave the session usable.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn call_tool_with_timeout_override_is_honored() {
+        let dir = test_dir();
+        let script = dir.join("hang.py");
+        std::fs::write(
+            &script,
+            "import time\n[time.sleep(1) for _ in range(999999)]\n",
+        )
+        .unwrap();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host")
+        .with_tool_timeout(std::time::Duration::from_secs(10));
+        let started = std::time::Instant::now();
+        let result = host
+            .call_tool_with_timeout(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": format!("python {}", script.display()),
+                    "description": "per-call override timeout test",
+                }),
+                "call-t3",
+                Some(std::time::Duration::from_millis(1200)),
+            )
+            .await;
+        let err = result.expect_err("override bound must time out");
+        assert!(
+            err.to_string().contains("TIMED OUT after 1.2s"),
+            "error carries the override budget: {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "override bound respected: {:?}",
+            started.elapsed()
+        );
+        // The session survives the override kill (kill_active not latched).
+        let follow_up = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": "echo orz-alive",
+                    "description": "post-override-timeout liveness",
+                }),
+                "call-t4",
+            )
+            .await
+            .expect("process-type tool works after the override timeout");
+        assert!(follow_up.output.contains("orz-alive"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
