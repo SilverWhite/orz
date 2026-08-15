@@ -142,10 +142,11 @@ fn session_new_and_prompt_over_real_frames() {
         replay.errors
     );
     // preflight + started + prompt_submitted + tool_availability
+    // + request_header_change (ORZ-CACHE-CONTEXT-COST 2026-08-15)
     // + model_output + counterexample_gate + model_output + stagnation
     // + finished (GAP-INQUIRY-SPLIT: no per-turn orientation event — the
     // orientation producer fires only on the session-level 7-round trigger)
-    assert_eq!(replay.event_count, 9);
+    assert_eq!(replay.event_count, 10);
     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
     let _ = std::fs::remove_dir_all(&dir);

@@ -31,6 +31,11 @@ pub enum EventType {
     ModelRequest,
     ModelResponseReceived,
     ModelOutput,
+    // ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9): the
+    // model-request header (system + tools + config) changed or was first
+    // observed — journaled so a prefix-cache miss is attributable and probe
+    // flips can be cross-checked against the actual request shape.
+    RequestHeaderChange,
 
     // ACP lifecycle
     AcpInitialize,

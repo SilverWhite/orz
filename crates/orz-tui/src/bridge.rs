@@ -114,6 +114,11 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             tool_calls: get_tool_calls(p),
             finish_reason: get_str(p, "finish_reason"),
         },
+        EventType::RequestHeaderChange => TuiEvent::RequestHeaderChange {
+            reason: get_str(p, "reason"),
+            tool_count: get_u64(p, "tool_count"),
+            header_sha256: get_str(p, "header_sha256"),
+        },
         EventType::AcpInitialize => TuiEvent::AcpInitialize {
             protocol_version: get_i64(p, "protocol_version"),
         },
@@ -405,6 +410,18 @@ mod tests {
             (
                 EventType::ModelOutput,
                 json!({"text": "ok", "tool_calls": [], "finish_reason": "stop"}),
+            ),
+            (
+                EventType::RequestHeaderChange,
+                json!({
+                    "reason": "initial",
+                    "header_sha256": "a".repeat(64),
+                    "system_sha256": "b".repeat(64),
+                    "tools_sha256": "c".repeat(64),
+                    "config_sha256": "d".repeat(64),
+                    "tools": ["read_file"],
+                    "tool_count": 1,
+                }),
             ),
             (EventType::AcpInitialize, json!({"protocol_version": 1})),
             (EventType::AcpSessionCreated, json!({"session_id": "s"})),

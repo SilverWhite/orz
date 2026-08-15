@@ -98,6 +98,19 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("模型请求: {model_id}")]
         }
         TuiEvent::ModelResponseReceived { .. } => vec!["模型响应已接收".into()],
+        TuiEvent::RequestHeaderChange {
+            reason,
+            tool_count,
+            header_sha256,
+        } => {
+            let short = header_sha256.chars().take(8).collect::<String>();
+            let label = if reason == "initial" { "初始" } else { "变化" };
+            app.content.add_system_message(
+                &format!("请求头{label}: {tool_count} 个工具，摘要 {short}…"),
+                false,
+            );
+            vec![format!("请求头{label}: {tool_count} 工具 {short}")]
+        }
         TuiEvent::ModelOutput {
             text,
             tool_calls,

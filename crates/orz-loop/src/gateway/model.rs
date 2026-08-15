@@ -327,6 +327,16 @@ impl Default for ActivityClock {
 pub trait ModelGateway: Send + Sync {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError>;
 
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): a stable
+    /// digest of the transport-level request configuration (provider,
+    /// model, endpoint, max_tokens, thinking, retry policy). Part of the
+    /// model-request header fingerprint journaled as `request_header_change`.
+    /// A change in any config knob is a real header change (cache-miss
+    /// attribution); the default keeps test fakes stable until they opt in.
+    fn config_fingerprint(&self) -> String {
+        "unknown-config".to_string()
+    }
+
     /// `cancel` is a cooperative cancellation check (Phase 3 slice #11):
     /// streaming transports poll it between wire chunks and bail with
     /// `GatewayError::Cancelled` when set. Buffered backends may ignore it —

@@ -18,6 +18,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use orz_assurance::journal::chain::{payload_hash, sha256_hex};
 use orz_assurance::{EventType, GateDecision};
 
 use crate::agents::SubagentRole;
@@ -26,7 +27,7 @@ use crate::checkpoint::{self, PendingCheckpoint};
 use crate::controller::{
     AgentLoopController, AgentLoopError, ContextCompactConfig, DENIAL_BREAKER_CONSECUTIVE,
     DenialKey, DenialState, EventWriter, PolicyFeedback, TEXT_DELTA_PACING, compact_messages,
-    estimate_messages_tokens, format_edit_record,
+    estimate_message_tokens, estimate_messages_tokens, format_edit_record,
 };
 use crate::diagnostic_coverage::{DebugEpisodeState, maybe_consume_dc_signal, maybe_fire_dc};
 use crate::gateway::model::{
@@ -52,6 +53,12 @@ pub const REQUEST_MAX_TOKENS: u32 = 160_000;
 #[allow(clippy::too_many_arguments)] // mirrors MainAgent::run_round's contract
 #[async_trait::async_trait]
 pub(crate) trait RoundAgent: Send + Sync {
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the gateway
+    /// config digest — part of the model-request header fingerprint.
+    fn config_fingerprint(&self) -> String {
+        "unknown-config".to_string()
+    }
+
     async fn run_round(
         &self,
         system: &str,
@@ -127,6 +134,120 @@ impl ToolFilter {
     fn denies_nested_dispatch(&self) -> bool {
         matches!(self, ToolFilter::Retrieval)
     }
+}
+
+/// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the model-request
+/// header fingerprint — the provider prefix-cache key components the client
+/// can observe (system + tools + config). Messages are deliberately NOT part
+/// of the header: they change every round and a header event exists to
+/// attribute cache misses caused by the STATIC prefix, not by new dialogue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequestHeader {
+    pub header_sha256: String,
+    pub system_sha256: String,
+    pub tools_sha256: String,
+    pub config_sha256: String,
+    pub tools: Vec<String>,
+}
+
+/// Compute the request-header fingerprint from the assembled system prompt,
+/// the projected tool list and the transport config digest.
+pub(crate) fn compute_request_header(
+    system: &str,
+    tools: &[ToolDef],
+    config_fingerprint: &str,
+) -> RequestHeader {
+    let system_sha256 = sha256_hex(system.as_bytes());
+    // 2026-08-15 review boundary (audit §5): the JSON fallback strings are
+    // theoretical only (serde_json cannot fail on these shapes) — if they
+    // ever appeared, real changes would collapse onto a constant digest, so
+    // they must be treated as a hard bug, not a silent degrade.
+    let mut tool_rows: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            })
+        })
+        .collect();
+    tool_rows.sort_by(|a, b| {
+        a.get("name")
+            .and_then(serde_json::Value::as_str)
+            .cmp(&b.get("name").and_then(serde_json::Value::as_str))
+    });
+    let tools_sha256 =
+        payload_hash(&tool_rows).unwrap_or_else(|_| "tools-hash-error".to_string());
+    let config_sha256 = sha256_hex(config_fingerprint.as_bytes());
+    let header_sha256 =
+        payload_hash(&serde_json::json!({
+            "system_sha256": system_sha256,
+            "tools_sha256": tools_sha256,
+            "config_sha256": config_sha256,
+        }))
+        .unwrap_or_else(|_| "header-hash-error".to_string());
+    let tools = tools.iter().map(|t| t.name.clone()).collect();
+    RequestHeader {
+        header_sha256,
+        system_sha256,
+        tools_sha256,
+        config_sha256,
+        tools,
+    }
+}
+
+/// ORZ-CACHE-CONTEXT-COST (2026-08-15 review fix, ADR-0010 §3.5 条6): which
+/// header component changed between two requests — `system`, `tools`,
+/// `config`, or `multiple` when more than one digest differs. This is the
+/// mechanical「变化原因」attribution carried by `request_header_change` on
+/// `reason=change`; probe-flip triggers are additionally attributable via
+/// the flip↔header verifier cross-check (`_verify_v02_probe_accuracy`).
+pub(crate) fn header_change_kind(prev: &RequestHeader, cur: &RequestHeader) -> &'static str {
+    let mut changed = Vec::with_capacity(3);
+    if prev.system_sha256 != cur.system_sha256 {
+        changed.push("system");
+    }
+    if prev.tools_sha256 != cur.tools_sha256 {
+        changed.push("tools");
+    }
+    if prev.config_sha256 != cur.config_sha256 {
+        changed.push("config");
+    }
+    match changed.as_slice() {
+        [single] => single,
+        _ => "multiple",
+    }
+}
+
+/// Build the `request_header_change` event payload. `reason` is `initial`
+/// for the first request of a loop invocation, `change` when the fingerprint
+/// differs from the previous request. `change_kind` is the mechanical
+///「变化原因」(system/tools/config/multiple) and is present only on `change`.
+pub(crate) fn request_header_payload(
+    header: &RequestHeader,
+    reason: &str,
+    previous_header_sha256: Option<&str>,
+    agent_role: &str,
+    change_kind: Option<&str>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "reason": reason,
+        "header_sha256": header.header_sha256,
+        "system_sha256": header.system_sha256,
+        "tools_sha256": header.tools_sha256,
+        "config_sha256": header.config_sha256,
+        "agent_role": agent_role,
+        "tools": header.tools,
+        "tool_count": header.tools.len(),
+    });
+    if let Some(prev) = previous_header_sha256 {
+        payload["previous_header_sha256"] = serde_json::json!(prev);
+    }
+    if let Some(kind) = change_kind {
+        payload["change_kind"] = serde_json::json!(kind);
+    }
+    payload
 }
 
 /// Role-specific loop semantics (ADR-0010 §3.2 — the ONLY difference surface
@@ -285,6 +406,12 @@ pub(crate) struct SharedLoopServices<'a> {
     /// feeds the role-gate denial key (a bump is a key change → the breaker
     /// resets, ADR-0010 §3.5.4).
     pub policy_revision: &'a std::sync::atomic::AtomicU64,
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the per-model-round
+    /// tool-result injection budget in estimated tokens
+    /// (`ORZ_MAX_INJECT_TOKENS_PER_ROUND`, default 50K). Read once at
+    /// controller construction; the loop refuses later calls of a batch once
+    /// the accumulated estimated tokens reach it.
+    pub max_inject_tokens_per_round: u64,
     /// F5 (2026-08-15, BACKLOG 6e 复查遗留): the controller-configured
     /// epoch archive directory — the single source for the path-slot
     /// overflow pointer (never re-derived from the session cwd).
@@ -656,6 +783,11 @@ pub(crate) async fn run_agent_loop(
     let mut last_prompt_tokens: Option<u64> = None;
     let mut rounds_since_compact: u32 = 0;
     let mut guard_failures: u32 = 0;
+    // ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the previous
+    // model-request header fingerprint of THIS loop invocation — `None`
+    // until the first request, so the first request journals `initial` and
+    // only real prefix changes journal `change`.
+    let mut last_request_header: Option<RequestHeader> = None;
 
     loop {
         // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -933,6 +1065,54 @@ pub(crate) async fn run_agent_loop(
             SystemPromptKind::Main => controller.main_agent_max_tokens(),
             SystemPromptKind::Retrieval { .. } => REQUEST_MAX_TOKENS,
         };
+
+        // ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9):
+        // request-header留痕 — journal the fingerprint (system + tools +
+        // config digests) only when it changes from the previous request of
+        // this loop (first request = `initial`). The event precedes the
+        // model round so a prefix-cache miss is attributable and probe
+        // flips (which re-projected `current_tool_defs` above) are
+        // cross-checkable against the actual request shape.
+        // Boundary (2026-08-15 review, ADR-0010 §14.9/审计 §5): auxiliary
+        // model requests OUTSIDE this loop — compaction summary calls
+        // (`run_template_compact`) and fast-preflight gates — do not emit
+        // header events by design: their header (fixed system prompt +
+        // empty tools + config) is constant and never interacts with probe
+        // flips, so they are deliberately excluded from the留痕 chain.
+        let current_header = compute_request_header(
+            &system,
+            &current_tool_defs,
+            &agent.config_fingerprint(),
+        );
+        if last_request_header
+            .as_ref()
+            .is_none_or(|prev| prev.header_sha256 != current_header.header_sha256)
+        {
+            let reason = if last_request_header.is_none() {
+                "initial"
+            } else {
+                "change"
+            };
+            let previous_sha = last_request_header
+                .as_ref()
+                .map(|prev| prev.header_sha256.clone());
+            let change_kind = last_request_header
+                .as_ref()
+                .map(|prev| header_change_kind(prev, &current_header));
+            writer
+                .record(
+                    EventType::RequestHeaderChange,
+                    request_header_payload(
+                        &current_header,
+                        reason,
+                        previous_sha.as_deref(),
+                        profile.role.as_str(),
+                        change_kind,
+                    ),
+                )
+                .await?;
+            last_request_header = Some(current_header);
+        }
 
         let mut partial_text: Vec<String> = Vec::new();
         // P0-D S2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN
@@ -1347,6 +1527,12 @@ pub(crate) async fn run_agent_loop(
         // counts 1), keyed by (tool, reason_code, policy_revision).
         let mut round_denials: Vec<crate::controller::DenialKey> = Vec::new();
         let mut round_had_success = false;
+        // ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the accumulated
+        // estimated tokens of THIS model round's injected tool results
+        // (chars/2 — the same estimator as compaction). Once at/over the
+        // budget, the remaining calls of the batch are refused without
+        // execution and told to continue with offset/grep-first.
+        let mut round_inject_tokens: u64 = 0;
         // 2026-08-08 blackboard partition (A2): snapshot the edit-action
         // length BEFORE this round's tools — the incremental push after
         // the batch reports exactly the records this round added.
@@ -1354,6 +1540,24 @@ pub(crate) async fn run_agent_loop(
         for tc in &response.tool_calls {
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 return Err(AgentLoopError::Cancelled);
+            }
+            if round_inject_tokens >= svc.max_inject_tokens_per_round {
+                let (result, feedback) = refuse_inject_budget(
+                    writer,
+                    messages,
+                    tc,
+                    round_inject_tokens,
+                    svc.max_inject_tokens_per_round,
+                    svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
+                )
+                .await?;
+                match feedback {
+                    Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
+                    Some(PolicyFeedback::Succeeded) => round_had_success = true,
+                    None => {}
+                }
+                assistant_parts.push(format!("[{}] {}", tc.name, result.output));
+                continue;
             }
             let target = route(&tc.name);
             // C2-1 (2026-08-11, ADR-0006 web-search slice): lane
@@ -1510,6 +1714,17 @@ pub(crate) async fn run_agent_loop(
                 None => {}
             }
             assistant_parts.push(format!("[{}] {}", tc.name, result.output));
+            // Count this result against the per-round injection budget (the
+            // same `[tool] output` text the model receives).
+            round_inject_tokens = round_inject_tokens.saturating_add(estimate_message_tokens(
+                &Message {
+                    role: Role::Tool,
+                    content: format!("[{}] {}", tc.name, result.output),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                },
+            ));
 
             // GAP-INQUIRY-SPLIT (2026-08-09): the old per-tool-call
             // counter feeds are deleted — `tool_calls` / `tool_variety`
@@ -1776,6 +1991,63 @@ async fn role_gate_denied(
     ))
 }
 
+/// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): per-round tool-result
+/// injection budget refusal — the batch is at/over
+/// `ORZ_MAX_INJECT_TOKENS_PER_ROUND` (default 50K), so this call is refused
+/// WITHOUT ToolStarted (nothing executed). The journal carries the used
+/// budget and the model receives an explicit offset/grep-first hint. The
+/// refusal feeds the consecutive-denial breaker (same normalized key →
+/// after 3 rounds the strategy-switch message fires, ADR-0010 §3.5.4).
+async fn refuse_inject_budget(
+    writer: &mut EventWriter<'_>,
+    messages: &mut Vec<Message>,
+    tc: &ToolCall,
+    used: u64,
+    budget: u64,
+    policy_revision: u64,
+) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+    let code = "round_inject_budget_exceeded";
+    let output = format!(
+        "tool '{}' — 本轮工具结果注入预算已满（已用 {} 估计 tokens / 上限 {}）；\
+         请改用 grep/结构提取优先，或对 read_file 使用 offset 分段续读。",
+        tc.name, used, budget,
+    );
+    writer
+        .record(
+            EventType::ToolCompleted,
+            serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "status": "error",
+                "error": code,
+                "inject_tokens_used": used,
+                "inject_tokens_budget": budget,
+            }),
+        )
+        .await?;
+    messages.push(Message {
+        role: Role::Tool,
+        content: output.clone(),
+        tool_call_id: Some(tc.call_id.clone()),
+        tool_calls: Vec::new(),
+        reasoning_content: None,
+    });
+    Ok((
+        ToolResult {
+            output,
+            exit_code: Some(1),
+            output_encoding: None,
+            structured: None,
+        },
+        Some(PolicyFeedback::Denied(DenialKey {
+            tool_name: tc.name.clone(),
+            reason_code: code.to_string(),
+            policy_revision,
+        })),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1810,6 +2082,93 @@ mod tests {
         // The main lane's gate refuses nothing.
         assert_eq!(ToolFilter::None.write_gate("search_replace"), None);
         assert_eq!(ToolFilter::None.write_gate("bash"), None);
+    }
+
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15): the request-header fingerprint
+    /// is stable for identical inputs and changes when ANY header component
+    /// (system / tools / config) changes.
+    #[test]
+    fn request_header_fingerprint_is_stable_and_component_sensitive() {
+        let tools = vec![
+            ToolDef {
+                name: "read_file".to_string(),
+                description: "reads a file".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+            ToolDef {
+                name: "grep".to_string(),
+                description: "searches text".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+        ];
+        let a = compute_request_header("system v1", &tools, "config-v1");
+        let b = compute_request_header("system v1", &tools, "config-v1");
+        assert_eq!(a, b);
+        assert_eq!(a.header_sha256.len(), 64);
+        assert_eq!(a.tools, vec!["read_file", "grep"]);
+
+        // Tool order must not change the digest (the canonical rows are
+        // sorted by name before hashing).
+        let swapped = vec![tools[1].clone(), tools[0].clone()];
+        let c = compute_request_header("system v1", &swapped, "config-v1");
+        assert_eq!(a.tools_sha256, c.tools_sha256);
+        assert_eq!(a.header_sha256, c.header_sha256);
+
+        // Each component change breaks the header digest.
+        assert_ne!(
+            a.header_sha256,
+            compute_request_header("system v2", &tools, "config-v1").header_sha256
+        );
+        assert_ne!(
+            a.header_sha256,
+            compute_request_header("system v1", &tools[..1], "config-v1").header_sha256
+        );
+        assert_ne!(
+            a.header_sha256,
+            compute_request_header("system v1", &tools, "config-v2").header_sha256
+        );
+    }
+
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15): the payload carries the reason,
+    /// the three component digests, the tool list and the change-kind
+    /// attribution; `change` includes the previous header digest.
+    #[test]
+    fn request_header_payload_shapes_initial_and_change() {
+        let header = compute_request_header("system", &[], "config");
+        let initial = request_header_payload(&header, "initial", None, "main", None);
+        assert_eq!(initial["reason"], "initial");
+        assert_eq!(initial["header_sha256"], header.header_sha256);
+        assert_eq!(initial["tool_count"], 0);
+        assert_eq!(initial["agent_role"], "main");
+        assert!(initial.get("previous_header_sha256").is_none());
+        assert!(initial.get("change_kind").is_none());
+
+        let changed =
+            request_header_payload(&header, "change", Some("prev"), "main", Some("system"));
+        assert_eq!(changed["reason"], "change");
+        assert_eq!(changed["previous_header_sha256"], "prev");
+        assert_eq!(changed["change_kind"], "system");
+    }
+
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15 review fix): the change-kind
+    /// attribution is exact — one component change names that component,
+    /// two or three name `multiple`.
+    #[test]
+    fn header_change_kind_attributes_component_changes() {
+        let tool = vec![ToolDef {
+            name: "read_file".to_string(),
+            description: "reads a file".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let base = compute_request_header("system v1", &[], "config-v1");
+        let system = compute_request_header("system v2", &[], "config-v1");
+        let tools = compute_request_header("system v1", &tool, "config-v1");
+        let config = compute_request_header("system v1", &[], "config-v2");
+        let all = compute_request_header("system v2", &tool, "config-v2");
+        assert_eq!(header_change_kind(&base, &system), "system");
+        assert_eq!(header_change_kind(&base, &tools), "tools");
+        assert_eq!(header_change_kind(&base, &config), "config");
+        assert_eq!(header_change_kind(&base, &all), "multiple");
     }
 
     fn denial_key(tool: &str, reason: &str, policy_revision: u64) -> DenialKey {

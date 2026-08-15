@@ -102,6 +102,25 @@ fn parse_web_fetch_candidate_cap(s: &str) -> Option<u32> {
     s.trim().parse().ok().filter(|v| *v > 0)
 }
 
+/// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the per-model-round
+/// tool-result injection budget (estimated tokens, chars/2) — default 50K.
+pub const DEFAULT_MAX_INJECT_TOKENS_PER_ROUND: u64 = 50_000;
+
+/// Env override for the per-round injection budget
+/// (`ORZ_MAX_INJECT_TOKENS_PER_ROUND`). Parsed at controller construction;
+/// absent/invalid/zero = the default.
+pub fn max_inject_tokens_per_round_override() -> Option<u64> {
+    std::env::var("ORZ_MAX_INJECT_TOKENS_PER_ROUND")
+        .ok()
+        .and_then(|s| parse_max_inject_tokens_per_round(&s))
+}
+
+/// Pure parse rule for the injection-budget env value (tested without env
+/// mutation): trimmed, positive integer; absent/invalid/zero → None.
+fn parse_max_inject_tokens_per_round(s: &str) -> Option<u64> {
+    s.trim().parse().ok().filter(|v| *v > 0)
+}
+
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
 /// first text delta arrives (deltas travel in-memory at arrival rate). The
@@ -299,6 +318,10 @@ pub struct AgentLoopController {
     /// adjudication 2026-08-14). Shared by web_fetch and browser_read.
     /// Settable for tests.
     candidate_cap: u32,
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): per-model-round
+    /// tool-result injection budget (estimated tokens, chars/2).
+    /// `ORZ_MAX_INJECT_TOKENS_PER_ROUND`, default 50K. Settable for tests.
+    max_inject_tokens_per_round: u64,
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
     snapshot_store: Option<Arc<SnapshotStore>>,
@@ -1994,8 +2017,10 @@ impl AgentLoopController {
             ),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
-            candidate_cap: web_fetch_candidate_cap_override()
-                .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
+        candidate_cap: web_fetch_candidate_cap_override()
+            .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
+        max_inject_tokens_per_round: max_inject_tokens_per_round_override()
+            .unwrap_or(DEFAULT_MAX_INJECT_TOKENS_PER_ROUND),
             snapshot_store: None,
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
@@ -3355,6 +3380,14 @@ impl AgentLoopController {
         self
     }
 
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): test seam for
+    /// the per-round injection budget (production reads
+    /// `ORZ_MAX_INJECT_TOKENS_PER_ROUND` at construction).
+    pub fn with_max_inject_tokens_per_round(mut self, budget: u64) -> Self {
+        self.max_inject_tokens_per_round = budget.max(1);
+        self
+    }
+
     /// 2026-08-08 blackboard partition (A4) + v1.15 (2026-08-14): ingest an
     /// approved plan — `plan_id` + `plan_epoch` identity, goal + step
     /// descriptions — into the blackboard plan section (the plan-mode
@@ -3639,6 +3672,7 @@ impl AgentLoopController {
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
+            max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,
             snapshot_store: None,
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
@@ -4396,6 +4430,7 @@ impl AgentLoopController {
                 // citation binding (P0-B step 5, ADR-0010 §3.7.9).
                 evidence: Some(&self.main_evidence),
                 policy_revision: &self.policy_revision,
+                max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                 blackboard_archive_dir: self.blackboard_archive_dir(),
             },
             self,
@@ -4478,6 +4513,7 @@ impl AgentLoopController {
                     dc_state: &self.dc_state,
                     evidence: Some(&self.main_evidence),
                     policy_revision: &self.policy_revision,
+                    max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                     blackboard_archive_dir: self.blackboard_archive_dir(),
                 };
                 let _ = run_template_compact(
@@ -5077,6 +5113,7 @@ impl AgentLoopController {
                 // Retrieval lane: collect tool-call evidence (§3.7.4).
                 evidence: Some(&self.evidence),
                 policy_revision: &self.policy_revision,
+                max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                 blackboard_archive_dir: self.blackboard_archive_dir(),
             },
             self,
@@ -5129,6 +5166,7 @@ impl AgentLoopController {
                             dc_state: &self.dc_state,
                             evidence: Some(&self.evidence),
                             policy_revision: &self.policy_revision,
+                            max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                             blackboard_archive_dir: self.blackboard_archive_dir(),
                         };
                         let _ = run_template_compact(
@@ -9177,6 +9215,9 @@ mod tests {
                 EventType::ToolAvailabilityCheck,
                 EventType::RunStarted,
                 EventType::PromptSubmitted,
+                // ORZ-CACHE-CONTEXT-COST (2026-08-15): the first model
+                // request of the loop journals its header fingerprint.
+                EventType::RequestHeaderChange,
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,
                 EventType::ModelOutput,
@@ -9264,6 +9305,9 @@ mod tests {
                 EventType::ToolAvailabilityCheck,
                 EventType::RunStarted,
                 EventType::PromptSubmitted,
+                // ORZ-CACHE-CONTEXT-COST (2026-08-15): initial request
+                // header fingerprint before the first model round.
+                EventType::RequestHeaderChange,
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,
                 EventType::ModelOutput,
@@ -9351,6 +9395,84 @@ mod tests {
             round2[4].content.contains("TOOL_ROUND_BUDGET"),
             "D-8: remaining-budget re-declaration: {:?}",
             round2[4]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the per-round
+    /// tool-result injection budget — results accumulate (chars/2) and once
+    /// at/over the budget the REST of the batch is refused WITHOUT
+    /// ToolStarted, journaled with the used/budget fields and answered with
+    /// an explicit offset/grep-first hint (provider protocol: every declared
+    /// call is answered).
+    #[tokio::test]
+    async fn inject_budget_refuses_later_calls_of_batch_with_offset_hint() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(400), // ≈200 estimated tokens
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                tool_call("read_file", "call-1"),
+                tool_call("read_file", "call-2"),
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_max_inject_tokens_per_round(1);
+        controller
+            .run_turn(&host, "读文件", "RUN-INJ", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // Only the FIRST call executes (one ToolStarted).
+        let started = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolStarted)
+            .count();
+        assert_eq!(started, 1, "second call of the batch must not execute");
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .collect();
+        assert_eq!(completed.len(), 2);
+        let refused = completed
+            .iter()
+            .find(|e| e.payload["error"] == "round_inject_budget_exceeded")
+            .expect("budget refusal journaled");
+        assert_eq!(refused.payload["tool"], "read_file");
+        assert_eq!(refused.payload["call_id"], "call-2");
+        assert_eq!(refused.payload["inject_tokens_budget"], 1);
+        assert!(
+            refused.payload["inject_tokens_used"].as_u64().unwrap() >= 1,
+            "used tokens must reflect the first result"
+        );
+
+        // Round 2's protocol shape answers both declared calls (the refused
+        // one carries the offset hint).
+        let received = fake.received_requests();
+        let round2 = &received[1].messages;
+        let tool_replies: Vec<&Message> = round2
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .collect();
+        assert_eq!(tool_replies.len(), 2, "{round2:?}");
+        assert!(
+            tool_replies
+                .iter()
+                .any(|m| m.content.contains("预算已满") && m.content.contains("offset")),
+            "{round2:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -13883,6 +14005,18 @@ mod tests {
         assert_eq!(parse_web_fetch_candidate_cap("-1"), None);
         assert_eq!(parse_web_fetch_candidate_cap("abc"), None);
         assert_eq!(parse_web_fetch_candidate_cap(""), None);
+    }
+
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15): `ORZ_MAX_INJECT_TOKENS_PER_ROUND`
+    /// parse rules — trimmed positive integer; invalid/zero → default.
+    #[test]
+    fn max_inject_tokens_per_round_parse_rules() {
+        assert_eq!(parse_max_inject_tokens_per_round("50000"), Some(50_000));
+        assert_eq!(parse_max_inject_tokens_per_round(" 1024 "), Some(1024));
+        assert_eq!(parse_max_inject_tokens_per_round("0"), None);
+        assert_eq!(parse_max_inject_tokens_per_round("-1"), None);
+        assert_eq!(parse_max_inject_tokens_per_round("abc"), None);
+        assert_eq!(parse_max_inject_tokens_per_round(""), None);
     }
 
     /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): browser_read joins the

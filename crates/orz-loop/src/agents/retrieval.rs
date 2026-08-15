@@ -65,6 +65,10 @@ impl RetrievalSubagent {
 /// output, the Anthropic subagent 8K hard-cap lesson).
 #[async_trait::async_trait]
 impl RoundAgent for RetrievalSubagent {
+    fn config_fingerprint(&self) -> String {
+        self.gateway.config_fingerprint()
+    }
+
     async fn run_round(
         &self,
         system: &str,

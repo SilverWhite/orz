@@ -126,6 +126,38 @@ impl DeepSeekTransport {
         .with_max_retries(policy.request_max_retries)
     }
 
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the
+    /// transport-level config digest for the request-header fingerprint.
+    /// The API key is deliberately excluded — a key rotation must never
+    /// surface as a header change (it is not part of the provider's
+    /// prefix-cache key). Boundary (2026-08-15 review): per-request
+    /// overrides (`request.max_tokens` min-cap and `request.thinking`) are
+    /// NOT part of the digest — current in-loop requests pass
+    /// config-equivalent values, and any future request-level override
+    /// routed through the loop must be registered here.
+    fn config_fingerprint_impl(&self) -> String {
+        let policy = &self.config.retry;
+        orz_assurance::journal::chain::payload_hash(&serde_json::json!({
+            "provider": self.config.provider,
+            "model_id": self.config.model_id,
+            "api_base": self.config.api_base,
+            "max_tokens": self.config.max_tokens,
+            "thinking": match self.config.thinking {
+                ThinkingMode::EnabledMax => "enabled_max",
+                ThinkingMode::Disabled => "disabled",
+            },
+            "retry": {
+                "request_max_retries": policy.request_max_retries,
+                "request_retry_window_ms": policy.request_retry_window.as_millis(),
+                "request_timeout_ms": policy.request_timeout.as_millis(),
+                "stream_idle_warn_ms": policy.stream_idle_warn.as_millis(),
+                "stream_idle_timeout_ms": policy.stream_idle_timeout.as_millis(),
+                "stream_total_timeout_ms": policy.stream_total_timeout.as_millis(),
+            },
+        }))
+        .unwrap_or_else(|_| "config-fingerprint-error".to_string())
+    }
+
     /// Whether a response is an abnormal empty-content case (D-6): the
     /// final round produced NO text AND NO tool calls — the thinking budget
     /// ate everything (finish=length with zero content) or the model
@@ -813,6 +845,10 @@ struct StreamToolCall {
 
 #[async_trait]
 impl ModelGateway for DeepSeekTransport {
+    fn config_fingerprint(&self) -> String {
+        self.config_fingerprint_impl()
+    }
+
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
         // D-6 empty-content retry chain: thinking max can legitimately burn
         // the whole budget on reasoning_content and leave content empty

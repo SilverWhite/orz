@@ -61,6 +61,15 @@ pub enum TuiEvent {
         tool_calls: Vec<ToolCallInfo>,
         finish_reason: String,
     },
+    // ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the model
+    // request header (system+tools+config fingerprint) was first observed
+    // or changed — shown so a prefix-cache miss / probe flip is explainable
+    // at a glance; full digests stay in the journal payload.
+    RequestHeaderChange {
+        reason: String,
+        tool_count: u64,
+        header_sha256: String,
+    },
 
     // ── ACP lifecycle ──
     AcpInitialize {
@@ -309,6 +318,7 @@ impl TuiEvent {
             TuiEvent::ModelRequest { .. } => "model_request",
             TuiEvent::ModelResponseReceived { .. } => "model_response_received",
             TuiEvent::ModelOutput { .. } => "model_output",
+            TuiEvent::RequestHeaderChange { .. } => "request_header_change",
             TuiEvent::AcpInitialize { .. } => "acp_initialize",
             TuiEvent::AcpSessionCreated { .. } => "acp_session_created",
             TuiEvent::ToolProposal { .. } => "tool_proposal",

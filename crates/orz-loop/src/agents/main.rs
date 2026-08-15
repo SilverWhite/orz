@@ -67,6 +67,10 @@ impl MainAgent {
 /// drives all three agents through one code path.
 #[async_trait::async_trait]
 impl RoundAgent for MainAgent {
+    fn config_fingerprint(&self) -> String {
+        self.gateway.config_fingerprint()
+    }
+
     async fn run_round(
         &self,
         system: &str,
