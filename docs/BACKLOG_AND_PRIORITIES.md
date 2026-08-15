@@ -205,6 +205,20 @@
      文件才全文。
 - 入口：[ADR-0010 §14.9](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [探针设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；[TODO](../TODO.md)。
+- 2026-08-15 实施闭合：① 请求 header 变化留痕——新增 v0.2
+  `request_header_change` 事件（system+tools+config 三摘要 + `agent_role` +
+  initial/change + `previous_header_sha256`；Schema/verifier/fixtures/TUI 同步）；
+  ② 探针准确性——验证器翻转↔header 交叉核对 + `assurance/probe_accuracy_audit.py`
+  （假完整/假不完整候选、门禁类 error 不计误判、旧 journal 兼容边界）；
+  ③ 单轮注入预算——`ORZ_MAX_INJECT_TOKENS_PER_ROUND` 默认 50K、按模型轮累计、
+  超限无 ToolStarted 拒批 + `inject_tokens_used/budget` 字段 + offset/grep 提示 +
+  提示词读取纪律；验证 orz-loop 337 / orz-assurance 151 / orz-tui 178 /
+  orz-bin 全绿，Python 1888+14 skipped，仓库门禁 valid。审计：
+  `docs/audits/GAP_CACHE_CONTEXT_COST_IMPL_AUDIT_2026-08-15.md`。
+- 2026-08-15 二次全面审查修复：payload 增 `change_kind`（机械「变化原因」，
+  Schema/verifier 校验摘要差一致）；verifier 允许每车道多链 initial（子代理
+  多 activation/主车道多 run 合法）；新增 `_verify_v02_inject_budget`；
+  辅助模型请求（压缩摘要/预检）留痕边界登记；预算计数口径注记。详见审计 §7。
 
 ### 6c. ORZ-ORIENTATION-FORCED-TEMPLATE（`implemented`；P1，2026-08-15 闭合）
 

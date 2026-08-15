@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/request-header-change-event-payload-v0.2.schema.json",
+  "title": "request_header_change runtime event payload",
+  "description": "ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the model-request header (system + tools + config) was first observed (initial) or changed (change) since the previous request of the loop. The header digest is the client-observable prefix-cache key; journaling it makes a prefix-cache miss attributable and lets probe flips be cross-checked against the actual request shape. Messages are NOT part of the header.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "reason",
+    "header_sha256",
+    "system_sha256",
+    "tools_sha256",
+    "config_sha256",
+    "agent_role",
+    "tools",
+    "tool_count"
+  ],
+  "properties": {
+    "reason": {
+      "enum": ["initial", "change"]
+    },
+    "header_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "system_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "tools_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "config_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "agent_role": {
+      "enum": ["main", "internal_retrieval", "external_retrieval"]
+    },
+    "previous_header_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "change_kind": {
+      "enum": ["system", "tools", "config", "multiple"],
+      "description": "ORZ-CACHE-CONTEXT-COST review fix (2026-08-15, ADR-0010 §3.5 条6): the mechanical「变化原因」— which header component changed when reason=change. Present only with reason=change; probe-flip triggers are additionally attributable via the flip↔header verifier cross-check."
+    },
+    "tools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "tool_count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "reason": { "const": "change" } },
+        "required": ["reason"]
+      },
+      "then": {
+        "required": ["change_kind", "previous_header_sha256"]
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

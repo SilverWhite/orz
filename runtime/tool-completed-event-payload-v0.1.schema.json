@@ -29,6 +29,16 @@
       "minimum": 1,
       "description": "FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the candidate cap in effect (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8), shared by web_fetch and browser_read. Present together with candidate_count."
     },
+    "inject_tokens_used": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the accumulated estimated tokens of this model round's injected tool results at the refusal (round_inject_budget_exceeded). Present together with inject_tokens_budget."
+    },
+    "inject_tokens_budget": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the per-round injection budget in effect (ORZ_MAX_INJECT_TOKENS_PER_ROUND, default 50K). Present together with inject_tokens_used."
+    },
     "section": { "type": "string" },
     "full_output_path": { "type": "string" },
     "workspace_delta": {

@@ -44,8 +44,14 @@ Scope:
 - P0-D S5 (2026-08-14, ADR-0010 v1.14): extra `context_compressed` payload
   positives — `session_end` reason, `guard_failed` (guard-retry force) and
   `archive_write_failed` (explicit archive-write failure).
+- ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9):
+  `request_header_change` — the model-request header fingerprint event
+  (initial/change per loop invocation; `change_kind` carries the mechanical
+  「变化原因」). Extra fixtures cover the `change` shape and the schema rule
+  that `reason=change` must carry `change_kind` +
+  `previous_header_sha256`.
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (46 events). The v0.2-payload events carry
+  event in the v0.2 enum (47 events). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for

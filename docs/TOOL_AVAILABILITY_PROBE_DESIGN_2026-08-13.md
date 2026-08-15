@@ -209,7 +209,7 @@
 > 处理；调用门禁仍为最终兜底）；plan 模式探针当前以交互用户信号代理，未来
 > headless 但支持 plan 模式的会话需换独立能力信号。
 
-## 11. 缓存代价、header 留痕与探针准确性（2026-08-14 裁决，登记不实施）
+## 11. 缓存代价、header 留痕与探针准确性（2026-08-14 裁决；2026-08-15 实施闭合）
 
 - 保持 v1.8 语义不动：探针每模型请求前重算，列表仅真实状态变化时翻转；工具集变化
   打穿 DeepSeek 前缀缓存（工具块由服务端模板前置渲染）属接受代价，第二轮同前缀
@@ -224,3 +224,21 @@
   可选后端接线时同步补翻转测试；不为缓存调整探针语义或降低 fail-closed 程度。
 - 短期范围：仅 DeepSeek OpenAI 兼容面；Anthropic cache_control / 多断点缓存不在
   当前范围，未来接入其他 API 时再评估。
+
+### 11.1 实施闭合（2026-08-15，ORZ-CACHE-CONTEXT-COST）
+
+- 请求 header 留痕已落地：每个模型请求前计算 header 指纹（system+tools+config
+  三摘要，SHA-256；`agent_role` 区分主/检索车道），同一 loop 内首请求记
+  `initial`、后续变化记 `change`（带 `previous_header_sha256`），journal 事件
+  `request_header_change`（v0.2 Schema/verifier/fixtures/TUI 同步）。
+  2026-08-15 二次审查修复：`change` 增 `change_kind`（system/tools/config/
+  multiple——机械「变化原因」，verifier 校验与相邻事件摘要差一致）；同一车道
+  可含多条链（每次 loop 调用首请求 `initial`，子代理多 activation 合法）。
+  边界：压缩摘要/预检等 loop 外辅助模型请求不参与 header 留痕（header 恒定、
+  与探针翻转无交互）。
+- 探针准确性配套已落地：验证器新增翻转↔header 交叉核对（探针完整集翻转后、下一
+  `model_output` 前必须有主车道 header change）；`assurance/probe_accuracy_audit.py`
+  对假完整/假不完整做候选审计（调用时门禁类 error code 不计误判）；旧 journal
+  兼容边界=无 header 事件的 v0.2 journal 不做该交叉核对。
+- 可选后端接线补翻转测试的既有边界不变（FUS-TOOL-PROBE §10 边界）——接线时须
+  翻转 orz-host 能力访问器并补翻转测试，此时 header 留痕会自动体现工具集变化。

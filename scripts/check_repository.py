@@ -2041,6 +2041,20 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
             context_compressed_schema
         )
+    # ORZ-CACHE-CONTEXT-COST (2026-08-15 review fix): the `change` shape of
+    # request_header_change carries the mechanical「变化原因」`change_kind`
+    # (schema-required when reason=change, together with
+    # previous_header_sha256).
+    request_header_change_schema = (
+        ROOT / "runtime/request-header-change-event-payload-v0.2.schema.json"
+    )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "request-header-change.change.valid.json"
+    ] = request_header_change_schema
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "request-header-change.change-missing-kind.constraint.invalid.json"
+    ] = request_header_change_schema
     # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative fixture for the
     # fixed tier/weight table (authoritative must pair with 1.1; the good
     # fixture carries the full weighting fields).

@@ -1080,6 +1080,37 @@ Schema 与机械证据：
    来源：2026-08-14 缓存与上下文成本设计评审（对照 deepseek-ai/DeepSeek-Harness 请求
    重建与 request-cache e2e 设计，仅借鉴 header 留痕与可验证性思想，不引入其技术栈）。
 
+2. **实施闭环（2026-08-15，ORZ-CACHE-CONTEXT-COST 三项全部闭合）**：
+   ① 请求 header 留痕——新增 v0.2 `request_header_change` 事件（Schema/verifier/
+   fixtures/TUI 同步）：每个模型请求前计算 header 指纹（system+tools+config 三
+   摘要，SHA-256；config 摘要来自 transport 的 `config_fingerprint()`，api_key
+   不入摘要），同一 loop 内首请求记 `initial`、后续变化记 `change` 并携带
+   `previous_header_sha256`；payload 带 `agent_role` 区分主/检索车道。
+   ② 探针准确性与稳定性——验证器新增翻转↔header 交叉核对（`tool_availability_check`
+   完整集翻转后、下一 `model_output` 前必须有主车道 `request_header_change
+   reason=change`）；新增独立审计模块 `assurance/probe_accuracy_audit.py`
+   （假完整/假不完整候选 + 翻转未留痕观察，门禁类 error code 不计误判）；
+   旧 journal 兼容边界：无 header 事件的 v0.2 journal 不做该交叉核对。
+   ③ 单轮工具结果注入预算——`ORZ_MAX_INJECT_TOKENS_PER_ROUND`（默认 50K，
+   chars/2 估算、按模型轮累计、并行批内多结果累加）；超限后本批后续调用
+   无 ToolStarted 拒绝，`tool_completed` 携带 `inject_tokens_used/budget`
+   （error=`round_inject_budget_exceeded`），模型面显式提示 offset 续读 /
+   grep 优先，拒绝键进连续拒绝熔断；提示词新增「读取纪律」段落（grep/结构
+   优先、证据关键文件才全文、大文件 offset 分段）。
+   验证：orz-loop 338 / orz-assurance 151 / orz-tui 178 / orz-bin 全部通过；
+   Python runtime+assurance 1896 通过、14 skipped；仓库门禁 valid、0 错误。
+   实施审计：`docs/audits/GAP_CACHE_CONTEXT_COST_IMPL_AUDIT_2026-08-15.md`。
+   **2026-08-15 二次全面审查修复**：① payload 增 `change_kind`
+   （system/tools/config/multiple——机械「变化原因」；Schema 在 reason=change
+   时必填 `change_kind` 与 `previous_header_sha256`，verifier 校验其与相邻
+   事件摘要差一致）；② verifier 允许每车道多条链——每次 loop 调用首请求
+   `initial`，子代理多 activation/主车道多 run 合法，`initial` 重置链起点；
+   ③ 新增 `_verify_v02_inject_budget`（`round_inject_budget_exceeded` 必带
+   `inject_tokens_used/budget`，且两字段仅该码可带）；④ 边界登记——压缩摘要/
+   预检等 loop 外辅助模型请求不参与 header 留痕（header 恒定、与探针无
+   交互）；⑤ 预算计数口径=本轮实际注入的 tool 消息（含无 ToolStarted 门禁
+   拒绝合成消息；预算拒绝提示本身不计）。
+
 ### 14.10 v1.10 补写裁决索引（2026-08-14）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

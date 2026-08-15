@@ -26,6 +26,9 @@ from assurance.run_event_journal_validation import (
     _payload_sha256,
     _resolve_payload_schema,
     _verify_v02_checkpoint_responses,
+    _verify_v02_inject_budget,
+    _verify_v02_probe_accuracy,
+    _verify_v02_request_header,
     validate_journal_file,
     validate_journal_text,
 )
@@ -3824,6 +3827,329 @@ class CheckpointResponseCrossCheckTests(unittest.TestCase):
                 "gather_evidence_missing_surface_provided=true" in e
                 for e in errors
             ),
+            errors,
+        )
+
+
+_H1 = "1" * 64
+_H2 = "2" * 64
+_H3 = "3" * 64
+_S1 = "a" * 64
+_S2 = "d" * 64
+_T1 = "b" * 64
+_T2 = "e" * 64
+_C1 = "c" * 64
+_C2 = "f" * 64
+
+
+def _header_event(
+    *,
+    role: str = "main",
+    reason: str = "initial",
+    header: str = _H1,
+    previous: str | None = None,
+    tools: list[str] | None = None,
+    system: str | None = None,
+    tools_sha: str | None = None,
+    config: str | None = None,
+    change_kind: str | None = None,
+    omit_change_kind: bool = False,
+) -> dict:
+    tools = tools if tools is not None else ["read_file"]
+    if reason == "change" and change_kind is None and not omit_change_kind:
+        change_kind = "system"
+    if reason == "change":
+        if change_kind == "system" and system is None:
+            system = _S2
+        if change_kind == "tools" and tools_sha is None:
+            tools_sha = _T2
+        if change_kind == "config" and config is None:
+            config = _C2
+        if change_kind == "multiple":
+            system = system or _S2
+            tools_sha = tools_sha or _T2
+            config = config or _C2
+    payload = {
+        "reason": reason,
+        "header_sha256": header,
+        "system_sha256": system or _S1,
+        "tools_sha256": tools_sha or _T1,
+        "config_sha256": config or _C1,
+        "agent_role": role,
+        "tools": tools,
+        "tool_count": len(tools),
+    }
+    if previous is not None:
+        payload["previous_header_sha256"] = previous
+    if change_kind is not None:
+        payload["change_kind"] = change_kind
+    return _v02_event("request_header_change", payload)
+
+
+class RequestHeaderChangeTests(unittest.TestCase):
+    """ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the
+    `_verify_v02_request_header` lane-partitioned initial/change chains.
+    Each loop invocation restarts a lane's chain with `initial` (subagent
+    activation / main run), so a lane may hold multiple chains."""
+
+    def test_initial_then_change_is_clean(self) -> None:
+        events = [
+            _header_event(header=_H1),
+            _header_event(reason="change", header=_H2, previous=_H1),
+        ]
+        self.assertEqual(_verify_v02_request_header(events), [])
+
+    def test_lanes_keep_independent_initial_chains(self) -> None:
+        events = [
+            _header_event(role="main", header=_H1),
+            _header_event(
+                role="external_retrieval",
+                header=_H2,
+                tools=["web_search", "web_fetch"],
+            ),
+            _header_event(
+                role="external_retrieval",
+                reason="change",
+                header=_H3,
+                previous=_H2,
+                tools=["web_search"],
+            ),
+        ]
+        self.assertEqual(_verify_v02_request_header(events), [])
+
+    def test_second_initial_starts_new_lane_chain(self) -> None:
+        # Review fix (2026-08-15): a later `initial` for the same lane is
+        # a NEW loop invocation (subagent multi-activation / multi-run),
+        # not an error — it resets the lane's last-observed header.
+        events = [
+            _header_event(header=_H1),
+            _header_event(header=_H2),
+            _header_event(reason="change", header=_H3, previous=_H2),
+        ]
+        self.assertEqual(_verify_v02_request_header(events), [])
+
+    def test_change_without_initial_rejected(self) -> None:
+        events = [_header_event(reason="change", header=_H2, previous=_H1)]
+        errors = _verify_v02_request_header(events)
+        self.assertTrue(any("without a prior initial" in e for e in errors), errors)
+
+    def test_initial_must_not_carry_previous_or_change_kind(self) -> None:
+        events = [_header_event(header=_H1, previous=_H2)]
+        errors = _verify_v02_request_header(events)
+        self.assertTrue(
+            any("must not carry previous_header_sha256" in e for e in errors),
+            errors,
+        )
+        events = [_header_event(header=_H1, change_kind="system")]
+        errors = _verify_v02_request_header(events)
+        self.assertTrue(any("must not carry change_kind" in e for e in errors), errors)
+
+    def test_change_previous_must_match_and_differ(self) -> None:
+        events = [
+            _header_event(header=_H1),
+            _header_event(reason="change", header=_H2, previous=_H3),
+        ]
+        errors = _verify_v02_request_header(events)
+        self.assertTrue(any("!= last header" in e for e in errors), errors)
+
+        events = [
+            _header_event(header=_H1),
+            _header_event(reason="change", header=_H1, previous=_H1),
+        ]
+        errors = _verify_v02_request_header(events)
+        self.assertTrue(any("must differ" in e for e in errors), errors)
+
+    def test_change_kind_required_and_must_match_digests(self) -> None:
+        # A change without change_kind is rejected.
+        events = [
+            _header_event(header=_H1),
+            _header_event(
+                reason="change",
+                header=_H2,
+                previous=_H1,
+                omit_change_kind=True,
+            ),
+        ]
+        errors = _verify_v02_request_header(events)
+        self.assertTrue(any("must carry change_kind" in e for e in errors), errors)
+
+        # change_kind="tools" with only the tools digest changed is clean.
+        events = [
+            _header_event(header=_H1),
+            _header_event(
+                reason="change",
+                header=_H2,
+                previous=_H1,
+                tools_sha=_T2,
+                change_kind="tools",
+            ),
+        ]
+        self.assertEqual(_verify_v02_request_header(events), [])
+
+        # change_kind contradicting the actual digest diff is rejected.
+        events = [
+            _header_event(header=_H1),
+            _header_event(
+                reason="change",
+                header=_H2,
+                previous=_H1,
+                tools_sha=_T2,
+                change_kind="system",
+            ),
+        ]
+        errors = _verify_v02_request_header(events)
+        self.assertTrue(
+            any("!= actual changed components" in e for e in errors), errors
+        )
+
+        # Two changed components require "multiple".
+        events = [
+            _header_event(header=_H1),
+            _header_event(
+                reason="change",
+                header=_H2,
+                previous=_H1,
+                system=_S2,
+                tools_sha=_T2,
+                change_kind="multiple",
+            ),
+        ]
+        self.assertEqual(_verify_v02_request_header(events), [])
+
+    def test_tool_count_mismatch_rejected(self) -> None:
+        event = _header_event()
+        event["payload"] = dict(event["payload"], tool_count=99)
+        errors = _verify_v02_request_header([event])
+        self.assertTrue(any("tool_count" in e for e in errors), errors)
+
+
+class InjectBudgetCrossCheckTests(unittest.TestCase):
+    """ORZ-CACHE-CONTEXT-COST (2026-08-15 review fix, ADR-0010 §3.6):
+    `_verify_v02_inject_budget` — refusal error code ⇄ inject field
+    pairing and ranges."""
+
+    def _completed(self, **overrides: object) -> dict:
+        payload: dict[str, object] = {
+            "tool": "read_file",
+            "call_id": "call-1",
+            "exit_code": 1,
+            "status": "error",
+            "error": "round_inject_budget_exceeded",
+            "inject_tokens_used": 50_000,
+            "inject_tokens_budget": 50_000,
+        }
+        payload.update(overrides)
+        return _v02_event("tool_completed", payload)
+
+    def test_refusal_must_carry_both_fields(self) -> None:
+        for key in ("inject_tokens_used", "inject_tokens_budget"):
+            event = self._completed()
+            event["payload"] = {
+                k: v for k, v in event["payload"].items() if k != key
+            }
+            errors = _verify_v02_inject_budget([event])
+            self.assertTrue(
+                any("must carry inject_tokens_used and inject_tokens_budget" in e for e in errors),
+                errors,
+            )
+
+    def test_fields_only_legal_with_refusal_code(self) -> None:
+        events = [self._completed(error="permission_denied")]
+        errors = _verify_v02_inject_budget(events)
+        self.assertTrue(
+            any("only legal with error=round_inject_budget_exceeded" in e for e in errors),
+            errors,
+        )
+
+    def test_fields_must_travel_together(self) -> None:
+        event = self._completed(error="permission_denied")
+        event["payload"] = {
+            k: v for k, v in event["payload"].items() if k != "inject_tokens_budget"
+        }
+        errors = _verify_v02_inject_budget([event])
+        self.assertTrue(any("travel together" in e for e in errors), errors)
+
+    def test_range_checks(self) -> None:
+        events = [self._completed(inject_tokens_used=-1)]
+        errors = _verify_v02_inject_budget(events)
+        self.assertTrue(any("out of range" in e for e in errors), errors)
+        events = [self._completed(inject_tokens_budget=0)]
+        errors = _verify_v02_inject_budget(events)
+        self.assertTrue(any("out of range" in e for e in errors), errors)
+
+    def test_clean_refusal_passes(self) -> None:
+        self.assertEqual(_verify_v02_inject_budget([self._completed()]), [])
+
+
+class ProbeAccuracyCrossCheckTests(unittest.TestCase):
+    """ADR-0010 §3.5 条7 (ORZ-CACHE-CONTEXT-COST 2026-08-15): a probe flip
+    must be followed by a main-lane request_header_change before the next
+    model_output — the mechanical flip↔header「事后核对」."""
+
+    def _probe(self, complete: list[str]) -> dict:
+        return _v02_event(
+            "tool_availability_check",
+            {
+                "probe_scope": "main_agent_work_tools",
+                "probe_timestamp": "2026-08-15T00:00:00Z",
+                "complete": complete,
+                "incomplete": [
+                    {"tool": "run_tests", "reason": "缺少测试运行器"},
+                    {"tool": "ask_user_question", "reason": "无交互式用户会话"},
+                ],
+                "gate_decision": "pass",
+            },
+        )
+
+    def test_flip_with_header_change_is_clean(self) -> None:
+        events = [
+            self._probe(["read_file"]),
+            self._probe(["read_file", "grep"]),
+            _header_event(reason="change", header=_H2, previous=_H1),
+            _v02_event("model_output", {"text": "ok"}),
+        ]
+        self.assertEqual(_verify_v02_probe_accuracy(events), [])
+
+    def test_flip_without_header_change_before_model_output_rejected(self) -> None:
+        events = [
+            _header_event(),
+            self._probe(["read_file"]),
+            self._probe(["read_file", "grep"]),
+            _v02_event("model_output", {"text": "ok"}),
+        ]
+        errors = _verify_v02_probe_accuracy(events)
+        self.assertTrue(
+            any("was not followed by a request_header_change" in e for e in errors),
+            errors,
+        )
+
+    def test_pre_feature_journal_without_header_events_is_clean(self) -> None:
+        # Compatibility boundary (2026-08-15): journals captured before the
+        # request-header feature carry no header events — the cross-check
+        # does not retroactively fail them.
+        events = [
+            self._probe(["read_file"]),
+            self._probe(["read_file", "grep"]),
+            _v02_event("model_output", {"text": "ok"}),
+        ]
+        self.assertEqual(_verify_v02_probe_accuracy(events), [])
+
+    def test_subagent_header_does_not_clear_main_flip(self) -> None:
+        events = [
+            self._probe(["read_file"]),
+            self._probe(["read_file", "grep"]),
+            _header_event(
+                role="external_retrieval",
+                reason="change",
+                header=_H2,
+                previous=_H1,
+                tools=["web_search"],
+            ),
+            _v02_event("model_output", {"text": "ok"}),
+        ]
+        errors = _verify_v02_probe_accuracy(events)
+        self.assertTrue(
+            any("was not followed by a request_header_change" in e for e in errors),
             errors,
         )
 

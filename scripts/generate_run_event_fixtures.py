@@ -104,6 +104,10 @@ V02_EVENT_TYPES = [
     "model_request",
     "model_response_received",
     "model_output",
+    # ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9): the
+    # model-request header fingerprint (system+tools+config) — initial/change
+    # only, per agent lane.
+    "request_header_change",
     "acp_initialize",
     "acp_session_created",
     "tool_proposal",
@@ -162,6 +166,7 @@ SLUGS_V02 = {
     "retrieval_result_committed": "retrieval-result",
     "retrieval_activation_restored": "retrieval-activation-restored",
     "citation_validation": "citation-validation",
+    "request_header_change": "request-header-change",
     "control_ticket_issued": "control-ticket-issued",
     "control_ticket_consumed": "control-ticket-consumed",
       "control_ticket_rejected": "control-ticket-rejected",
@@ -194,6 +199,9 @@ V02_PAYLOAD_EVENTS = [
     # FUS-TOOL-PROBE (2026-08-13; P0-A-2): two-state single probe face
     # snapshot (work tools).
     "tool_availability_check",
+    # ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): model-request
+    # header fingerprint event.
+    "request_header_change",
     # D2-2 (2026-08-14; ADR-0010 v1.10): recovery pre-check truncation.
     "context_recovery_truncated",
       # P0-D S3 (2026-08-14; ADR-0010 v1.10): five-section template summary
@@ -862,6 +870,18 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         ],
         "gate_decision": "pass",
     },
+    # ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): model-request
+    # header fingerprint — initial event of the main lane.
+    "request_header_change": {
+        "reason": "initial",
+        "header_sha256": ZERO_HASH,
+        "system_sha256": ZERO_HASH,
+        "tools_sha256": ZERO_HASH,
+        "config_sha256": ZERO_HASH,
+        "agent_role": "main",
+        "tools": ["read_file", "grep"],
+        "tool_count": 2,
+    },
     # D2-2 (2026-08-14; ADR-0010 v1.10): recovery pre-check truncation.
     "context_recovery_truncated": {
         "before_estimate_tokens": 260000,
@@ -1190,6 +1210,17 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         ],
         "gate_decision": "stop",
     },
+    "request_header_change": {
+        # reason outside the enum violates exactly one schema constraint.
+        "reason": "bogus",
+        "header_sha256": ZERO_HASH,
+        "system_sha256": ZERO_HASH,
+        "tools_sha256": ZERO_HASH,
+        "config_sha256": ZERO_HASH,
+        "agent_role": "main",
+        "tools": ["read_file"],
+        "tool_count": 1,
+    },
     "context_recovery_truncated": {
         "before_estimate_tokens": 260000,
         "target_tokens": 160000,
@@ -1277,6 +1308,23 @@ EXTRA_V02_PAYLOAD_BADS[
     "retrieval-result.tier-weight-mismatch.constraint.invalid"
 ] = _weighting_bad
 
+# ORZ-CACHE-CONTEXT-COST (2026-08-15 review fix): `reason=change` without
+# `change_kind` violates the schema's conditional requirement (allOf) — the
+# mechanical「变化原因」must always be attributed on a real header change.
+EXTRA_V02_PAYLOAD_BADS[
+    "request-header-change.change-missing-kind.constraint.invalid"
+] = {
+    "reason": "change",
+    "header_sha256": "1" * 64,
+    "system_sha256": ZERO_HASH,
+    "tools_sha256": "2" * 64,
+    "config_sha256": ZERO_HASH,
+    "agent_role": "main",
+    "previous_header_sha256": ZERO_HASH,
+    "tools": ["read_file"],
+    "tool_count": 1,
+}
+
 
 # P0-D review fix (2026-08-14, ADR-0010 v1.14): the five-section summary
 # gained three schema-legal shapes — session_end reason, guard-retry forced
@@ -1304,6 +1352,23 @@ _archive_failed["archive_write_failed"] = True
 EXTRA_V02_PAYLOAD_POSITIVES["context-compressed.archive-write-failed.valid"] = (
     _archive_failed
 )
+
+# ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9): the
+# `change` shape of request_header_change — carries the mechanical
+#「变化原因」`change_kind` and `previous_header_sha256` (both schema-required
+# when reason=change).
+EXTRA_V02_PAYLOAD_POSITIVES["request-header-change.change.valid"] = {
+    "reason": "change",
+    "header_sha256": "1" * 64,
+    "system_sha256": ZERO_HASH,
+    "tools_sha256": "2" * 64,
+    "config_sha256": ZERO_HASH,
+    "agent_role": "main",
+    "previous_header_sha256": ZERO_HASH,
+    "change_kind": "tools",
+    "tools": ["read_file"],
+    "tool_count": 1,
+}
 
 # canonical_cli payload shapes (its own `canonical-cli-*` track). Shapes taken
 # from canonical_cli.py event_specs (fake path L900-1009, real path L1322-1360).
@@ -1561,8 +1626,14 @@ Scope:
 - P0-D S5 (2026-08-14, ADR-0010 v1.14): extra `context_compressed` payload
   positives — `session_end` reason, `guard_failed` (guard-retry force) and
   `archive_write_failed` (explicit archive-write failure).
+- ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9):
+  `request_header_change` — the model-request header fingerprint event
+  (initial/change per loop invocation; `change_kind` carries the mechanical
+  「变化原因」). Extra fixtures cover the `change` shape and the schema rule
+  that `reason=change` must carry `change_kind` +
+  `previous_header_sha256`.
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (46 events). The v0.2-payload events carry
+  event in the v0.2 enum (47 events). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for

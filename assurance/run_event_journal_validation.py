@@ -160,6 +160,13 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "tool-availability-check",
         RUNTIME / "tool-availability-check-event-payload-v0.2.schema.json",
     ),
+    # ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9): the
+    # model-request header fingerprint — system+tools+config digests,
+    # emitted only on initial/change per agent lane.
+    "request_header_change": (
+        "request-header-change",
+        RUNTIME / "request-header-change-event-payload-v0.2.schema.json",
+    ),
     # D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
     # recovery pre-check truncation of a restored conversation — written by
     # the controller between prompt_submitted and the first model_request.
@@ -1698,6 +1705,237 @@ def _verify_v02_tool_availability_probe(events: list[dict[str, Any]]) -> list[st
     return errors
 
 
+def _verify_v02_request_header(events: list[dict[str, Any]]) -> list[str]:
+    """ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6) v0.2
+    cross-checks:
+
+    - per agent lane (payload `agent_role`), every loop invocation starts
+      with `initial` carrying no `previous_header_sha256` and no
+      `change_kind`; a lane may contain MULTIPLE chains (each subagent
+      activation / main run emits its own `initial`) — a later `initial`
+      resets the lane's last-observed header (2026-08-15 review fix);
+    - `change` must follow the lane's last event, carry
+      `previous_header_sha256` equal to it, differ from it, and carry
+      `change_kind` matching exactly the component digests that changed
+      (system/tools/config/multiple — the mechanical「变化原因」);
+    - `tools` is unique and `tool_count` matches its length.
+    """
+    errors: list[str] = []
+    last_by_role: dict[Any, tuple[int, str, Any, Any, Any]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "request_header_change":
+            continue
+        payload = event["payload"]
+        role = payload.get("agent_role")
+        reason = payload.get("reason")
+        header = payload.get("header_sha256")
+        previous = payload.get("previous_header_sha256")
+        change_kind = payload.get("change_kind")
+        tools = payload.get("tools", [])
+        if len(set(tools)) != len(tools):
+            errors.append(f"event {index}: request_header_change tools must be unique")
+        if payload.get("tool_count") != len(tools):
+            errors.append(
+                f"event {index}: request_header_change tool_count "
+                f"{payload.get('tool_count')!r} != tools length {len(tools)}"
+            )
+        last = last_by_role.get(role)
+        if reason == "initial":
+            if previous is not None:
+                errors.append(
+                f"event {index}: initial request_header_change must not carry "
+                "previous_header_sha256"
+            )
+            if change_kind is not None:
+                errors.append(
+                    f"event {index}: initial request_header_change must not carry "
+                    "change_kind"
+                )
+        elif reason == "change":
+            if last is None:
+                errors.append(
+                    f"event {index}: change request_header_change without a prior "
+                    f"initial for role {role!r}"
+                )
+            else:
+                _, last_header, last_system, last_tools, last_config = last
+                if previous != last_header:
+                    errors.append(
+                        f"event {index}: change previous_header_sha256 {previous!r} != "
+                        f"last header {last_header!r} for role {role!r}"
+                    )
+                if previous == header:
+                    errors.append(
+                        f"event {index}: change request_header_change must differ from "
+                        "the previous header"
+                    )
+                if change_kind is None:
+                    errors.append(
+                        f"event {index}: change request_header_change must carry "
+                        "change_kind"
+                    )
+                else:
+                    expected = _header_change_kind_from_digests(
+                        last_system,
+                        last_tools,
+                        last_config,
+                        payload.get("system_sha256"),
+                        payload.get("tools_sha256"),
+                        payload.get("config_sha256"),
+                    )
+                    if change_kind != expected:
+                        errors.append(
+                            f"event {index}: change_kind {change_kind!r} != actual "
+                            f"changed components {expected!r}"
+                        )
+        else:
+            errors.append(
+                f"event {index}: request_header_change reason {reason!r} not in "
+                "initial/change"
+            )
+        last_by_role[role] = (
+            index,
+            header,
+            payload.get("system_sha256"),
+            payload.get("tools_sha256"),
+            payload.get("config_sha256"),
+        )
+    return errors
+
+
+def _header_change_kind_from_digests(
+    prev_system: Any,
+    prev_tools: Any,
+    prev_config: Any,
+    system: Any,
+    tools: Any,
+    config: Any,
+) -> str:
+    """Mechanical「变化原因」: the set of header components whose digest
+    changed between two request_header_change events. One component → its
+    name; two or three → `multiple`. Mirrors the Rust producer's
+    `header_change_kind`."""
+    changed: list[str] = []
+    if prev_system != system:
+        changed.append("system")
+    if prev_tools != tools:
+        changed.append("tools")
+    if prev_config != config:
+        changed.append("config")
+    if len(changed) == 1:
+        return changed[0]
+    return "multiple"
+
+
+def _verify_v02_inject_budget(events: list[dict[str, Any]]) -> list[str]:
+    """ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6) cross-checks on
+    the per-round tool-result injection budget fields:
+
+    - `round_inject_budget_exceeded` must carry both
+      `inject_tokens_used` (>= 0) and `inject_tokens_budget` (>= 1);
+    - the fields travel together and are only legal with that error code.
+
+    Review fix (2026-08-15): the schema fields were producer-only before
+    this rule — a producer regression dropping them would have passed the
+    reference verifier (contrast `_verify_v02_candidate_count`)."""
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if event.get("event_type") != "tool_completed":
+            continue
+        payload = event.get("payload", {})
+        error = payload.get("error") or ""
+        used = payload.get("inject_tokens_used")
+        budget = payload.get("inject_tokens_budget")
+        has_used = "inject_tokens_used" in payload
+        has_budget = "inject_tokens_budget" in payload
+        if error == "round_inject_budget_exceeded":
+            if not has_used or not has_budget:
+                errors.append(
+                    f"event {index}: round_inject_budget_exceeded must carry "
+                    "inject_tokens_used and inject_tokens_budget"
+                )
+                continue
+            if (
+                not isinstance(used, int)
+                or isinstance(used, bool)
+                or used < 0
+                or not isinstance(budget, int)
+                or isinstance(budget, bool)
+                or budget < 1
+            ):
+                errors.append(
+                    f"event {index}: inject_tokens_used {used!r} / "
+                    f"inject_tokens_budget {budget!r} out of range — need "
+                    "used >= 0, budget >= 1"
+                )
+            continue
+        if has_used != has_budget:
+            errors.append(
+                f"event {index}: tool_completed carries inject_tokens_used but "
+                "not inject_tokens_budget (or vice versa) — the fields travel "
+                "together"
+            )
+        elif has_used:
+            errors.append(
+                f"event {index}: inject_tokens_used/inject_tokens_budget are "
+                f"only legal with error=round_inject_budget_exceeded (got "
+                f"{error!r})"
+            )
+    return errors
+
+
+def _verify_v02_probe_accuracy(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §3.5 条7 (ORZ-CACHE-CONTEXT-COST 2026-08-15): probe flips
+    must be accompanied by a real request-header change — a
+    `tool_availability_check` whose complete set changed must be followed by
+    a main-lane `request_header_change(reason=change)` before the next
+    `model_output`. This is the mechanical「翻转与 header 留痕事后核对」: a
+    flip with no header change would mean the projected tool list did not
+    actually change (a probe bug / stale flip)."""
+    errors: list[str] = []
+    # Compatibility boundary (2026-08-15): journals captured BEFORE the
+    # request-header feature carry no request_header_change events; the
+    # flip↔header cross-check applies only to journals produced by the
+    # current producer (a journal that HAS header events must satisfy it).
+    if not any(
+        _is_v02(event) and event.get("event_type") == "request_header_change"
+        for event in events
+    ):
+        return errors
+    prev_complete: frozenset[str] | None = None
+    pending_flip: tuple[int, frozenset[str], frozenset[str]] | None = None
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type == "tool_availability_check":
+            complete = frozenset(event["payload"].get("complete", []))
+            if prev_complete is not None and complete != prev_complete:
+                pending_flip = (index, prev_complete, complete)
+            prev_complete = complete
+            continue
+        if (
+            event_type == "request_header_change"
+            and event["payload"].get("agent_role") == "main"
+        ):
+            # Note (2026-08-15 review): a main-lane `initial` deliberately
+            # does NOT clear a pending flip. This is currently unreachable —
+            # an `initial` only precedes the first flip of a loop and the
+            # seed flip is ignored below — so no false positive exists.
+            if pending_flip is not None and event["payload"].get("reason") == "change":
+                pending_flip = None
+            continue
+        if event_type == "model_output" and pending_flip is not None:
+            flip_index, before, after = pending_flip
+            errors.append(
+                f"event {index}: tool_availability_check flip at event {flip_index} "
+                f"(complete {sorted(before)} -> {sorted(after)}) was not followed by "
+                "a request_header_change(reason=change) before the next model_output"
+            )
+            pending_flip = None
+    return errors
+
+
 def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §4.4 mechanical lifecycle facts on the v0.2 track:
 
@@ -2164,12 +2402,15 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_search_candidate_pool(events))
         errors.extend(_verify_v02_candidate_prefilter(events))
         errors.extend(_verify_v02_candidate_count(events))
+        errors.extend(_verify_v02_inject_budget(events))
         errors.extend(_verify_v02_citation_validation(events))
         errors.extend(_verify_v02_recovery_truncation(events))
         errors.extend(_verify_v02_context_compressed(events))
         errors.extend(_verify_v02_activation_restore(events))
         errors.extend(_verify_v02_control_tickets(events))
         errors.extend(_verify_v02_tool_availability_probe(events))
+        errors.extend(_verify_v02_request_header(events))
+        errors.extend(_verify_v02_probe_accuracy(events))
     return errors
 
 

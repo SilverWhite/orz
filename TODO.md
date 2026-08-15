@@ -10,15 +10,15 @@
 - `[ ]` = 待办；`[x]` = 已完成（保留供核对，不计入开放项）。
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 
-## 未闭合扫描快照（2026-08-15）
+## 未闭合扫描快照（2026-08-15；ORZ-CACHE-CONTEXT-COST 闭合后更新）
 
 > 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**37 项**
+- 未闭合总数：**34 项**
   - P0-C CLASSICAL-EXEC-ASSISTANT：4 项（小样 2、小样 3、orz 内嵌集成、正式组件决策门）
-  - P1 可并行审计/证据：14 项（组件登记 1、Windows 证据 3、DeepSeek 2、缓存上下文成本 3、会话上下文监测 5）
+  - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
   - 条件触发/审计登记边界：6 项（不占当前优先级）
@@ -102,9 +102,16 @@
 
 ### ORZ-CACHE-CONTEXT-COST（`approved`；P1，2026-08-14 登记）
 
-- [ ] 请求 header 变化留痕：模型请求 header（system+tools 摘要 + config + 原因 initial/change）变化时 journal 留痕（翻转可审计、miss 可归属）。
-- [ ] 探针准确性与稳定性：误判审计（假完整/假不完整）、翻转与 header 留痕事后核对、可选后端接线同步补翻转测试。
-- [ ] 单轮工具结果注入预算（默认 50K、`ORZ_MAX_INJECT_TOKENS_PER_ROUND` 可调、按轮累计、超限拒批 + offset 续读）与提示词策略化读取（grep/结构优先、证据关键文件才全文）。
+- [x] 请求 header 变化留痕：模型请求 header（system+tools 摘要 + config + 原因 initial/change）变化时 journal 留痕（翻转可审计、miss 可归属）。
+- [x] 探针准确性与稳定性：误判审计（假完整/假不完整）、翻转与 header 留痕事后核对、可选后端接线同步补翻转测试。
+- [x] 单轮工具结果注入预算（默认 50K、`ORZ_MAX_INJECT_TOKENS_PER_ROUND` 可调、按轮累计、超限拒批 + offset 续读）与提示词策略化读取（grep/结构优先、证据关键文件才全文）。
+
+> 2026-08-15 三项全部闭合：`request_header_change` v0.2 事件（Schema/verifier/
+> fixtures/TUI）、验证器翻转↔header 交叉核对 + `assurance/probe_accuracy_audit.py`
+> 误判审计、50K 注入预算（env 可调、无 ToolStarted 拒批、offset/grep 提示、读取
+> 纪律进提示词）；验证 orz-loop 337 / orz-assurance 151 / orz-tui 178 / orz-bin
+> 全绿、Python 1888+14 skipped、仓库门禁 valid；审计见
+> `docs/audits/GAP_CACHE_CONTEXT_COST_IMPL_AUDIT_2026-08-15.md`。
 
 入口：[ADR-0010 §14.9](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [探针设计](docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md) / [BACKLOG](docs/BACKLOG_AND_PRIORITIES.md)。
 

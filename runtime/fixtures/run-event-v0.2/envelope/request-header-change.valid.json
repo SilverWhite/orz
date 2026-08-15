@@ -1,0 +1,27 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-REQUEST-HEADER-CHANGE",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "request_header_change",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "reason": "initial",
+    "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "system_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "tools_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "agent_role": "main",
+    "tools": [
+      "read_file",
+      "grep"
+    ],
+    "tool_count": 2
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
