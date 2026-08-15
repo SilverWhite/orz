@@ -187,9 +187,11 @@
     （成功输出含旧前缀判成功）。**2026-08-15 全面审查修复（F1-F8）闭合**：
     拒绝事件补 `exit_code=1` + `status=error`（含 host 级拒绝）、verifier
     ACAF 家族补 `web_fetch`/`browser_read`、新增生产者事件→验证器对拍
-    测试、`orz/` 源码完整性清单接入仓库门禁。验证：orz-loop 367 通过 /
-    0 失败、acaf_e2e 21 通过、Python runtime 213 通过、仓库门禁 valid
-    （含 orz 清单 1406 文件）。实施审计见
+    测试、`orz/` 登记为父仓库 git 子模块（SilverWhite/CLI
+    `feat/fusion-architecture`，提交 a0c9ffc 已推送远端）+ 源码完整性清单
+    接入仓库门禁。验证：orz-loop 367 通过 / 0 失败、acaf_e2e 21 通过、
+    Python runtime 213 通过、仓库门禁 valid（含 orz 清单 1406 文件）。
+    实施审计见
     `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
@@ -435,9 +437,11 @@
   `exit_code=1` + `status=error`（含 host 级拒绝）、verifier ACAF 家族补
   `web_fetch`/`browser_read`、permission 家族补 host 路由检索工具、新增
   生产者事件→验证器对拍测试（`PolicyDenialProducerParityTests`）、
-  `orz/` 源码完整性清单（`orz_source_manifest.sha256`，1406 文件）接入
-  仓库门禁；验证：orz-loop 367 / acaf_e2e 21 / Python runtime 213 通过，
-  仓库门禁 valid；详见 S3 前置审计 §7。
+    `orz/` 源码完整性清单（`orz_source_manifest.sha256`，1406 文件）接入
+    仓库门禁，并登记为父仓库 git 子模块（SilverWhite/CLI
+    `feat/fusion-architecture`，提交 a0c9ffc 已推送远端）；验证：orz-loop
+    367 / acaf_e2e 21 / Python runtime 213 通过，仓库门禁 valid；详见 S3
+    前置审计 §7。
 - 2026-08-15：P0-C S3 前置（P1-2 结构化策略拒绝）闭合登记——`ToolResult.
   policy_denial`（source/code/reason）接线五条拒绝路径（权限/ACAF/检索
   模式门 ×3）、console 适配层退役前缀判定、ToolCompleted 增可选

@@ -1,0 +1,4 @@
+[submodule "orz"]
+	path = orz
+	url = https://github.com/SilverWhite/CLI.git
+	branch = feat/fusion-architecture

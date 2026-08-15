@@ -117,11 +117,12 @@ S3 前置的 4 项验收点全部有实现入口与测试证据：结构化信�
   生产端逐字形态构造 mode_off / acaf browser_read / host 级 permission
   拒绝事件，验证器必须通过；根因是此前无「生产事件 → Python 验证器」
   对拍。
-- **F6（P2）**：`orz/` 仍未纳入 git（仓库边界保持），新增提交的源码
-  完整性清单 `orz_source_manifest.sha256`（1406 文件）+
-  `scripts/generate_orz_source_manifest.py`（生成/校验），并接入
-  `check_repository.py` 仓库门禁；任何未登记修改/丢失会被门禁拦截。
-  完整版本控制仍为待用户裁决的仓库边界。
+- **F6（P2）**：`orz/` 已登记为父仓库 git 子模块（2026-08-15 用户裁决；
+  指向 SilverWhite/CLI 的 `feat/fusion-architecture` 分支，子模块提交
+  `a0c9ffc`，已推送远端）；同时保留源码完整性清单
+  `orz_source_manifest.sha256`（1406 文件）+
+  `scripts/generate_orz_source_manifest.py`（生成/校验）并接入
+  `check_repository.py` 仓库门禁，双保险检测未登记修改/丢失。
 - **F7（P3）**：verifier permission 家族扩展为「工作工具 + host 路由
   检索工具」（`_PERMISSION_GATED_TOOLS`），与主车道权限门实际可达集
   一致；web 族说明为当前不可达。
@@ -132,4 +133,4 @@ S3 前置的 4 项验收点全部有实现入口与测试证据：结构化信�
 permission 18；Python runtime 213；`cargo check -p orz-host -p orz-tui
 -p orz-bin --tests` 与 `cargo fmt --all -- --check` 通过；
 `python scripts/check_repository.py` valid、0 errors（含 orz 清单
-1406 文件）。
+1406 文件；orz 子模块提交 a0c9ffc 已推送远端）。
