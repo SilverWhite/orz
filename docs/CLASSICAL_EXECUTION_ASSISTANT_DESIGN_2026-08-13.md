@@ -4,7 +4,9 @@
 > v0.5 操作台模型为当前设计形态；orz 内嵌集成 S1 已落地（2026-08-15：
 > orz-loop `console` 操作台核心 + 黑板动作栏数据面；同日全面检查修复已闭合
 > ——执行器错误细分/响应契约强制/TraceStore 提交语义/最小提示投影/S2 验收点
-> 显式登记）；正式组件决策门在内嵌集成小样全面达标后裁决）
+> 显式登记）；orz 内嵌集成 S2 已落地（2026-08-15：模型面投影 + 轮末发放，
+> 见 §8「S2 落地」；S3 trace/PTC/Profile 待续）；正式组件决策门在内嵌集成
+> 小样全面达标后裁决）
 > 日期：2026-08-13
 > v0.2 修订（2026-08-13 用户裁决）：**不需要理解层**。助理层不解析意图、不理解动作
 > 语义，只按主模型输出（工具名/动作名 + 参数）逐层定位到组件并实际实施；
@@ -269,7 +271,25 @@
     策略表（taint/模式门）→ 经 `run_host_tool` 执行（权限 + 事件链）→
     响应 schema 验证 → 结果栏 receipt + trace_id；策略拒绝映射
     `step=policy`；发放收口执行 `TraceStore.commit`。
-  - 控制原理：写订单无副作用，副作用只发生在单一发放出口——执行幻觉最多
+  - S2 落地（2026-08-15）：模型面=扩展 `blackboard_read.section` 枚举至
+    `actions`（注册板块/动作栏单槽/结果栏有界渲染，随 plan epoch 归档可读）
+    + 新增 `blackboard.action_write` 写单按钮（ReadOnly 类、主车道专属——
+    子代理投影剥除 + ToolFilter 车道门 + run_host_tool activation 守卫三重
+    拒绝；round/plan_epoch/run_id 由机械层盖章，模型只给 action+arguments；
+    已有 pending 订单机械拒绝 `order_slot_busy`）；轮末发放=post-tool-batch
+    安全间隙（pending checkpoint 优先，推迟后按过期处理）→ 取单（消费一次）
+    → `console::issue_action`（注册表/契约/目标/执行/验证；执行经
+    ControllerConsoleExecutor 委托 `run_host_tool`，复用权限桥/ACAF 票据/
+    模式门/事件链，工具回复丢弃、反馈走结果栏）→ 结果栏 receipt + trace_id
+    → `TraceStore.commit`；round/plan_epoch/run_id 三重防重放与过期
+    （`step=protocol` / `code=order_stale`，过期订单消费并显式拒绝）；策略
+    拒绝归一化（权限门 PolicyFeedback::Denied + ACAF/模式门稳定输出前缀 →
+    `step=policy` / `code=policy_denied`，不携带 execute trace 尾部）；注册
+    板块每轮机械刷新（基础动作集 6 项：workspace.read_file/list_dir/grep/
+    search_replace/run_tests/index，契约镜像生产 host 参数）。
+    边界：注册板块当前为静态基础集，探针 ∩ Profile/Bundle 过滤随 S3 接线；
+    taint 组合禁令为设计项（运行时未实施），适配层已预留 PolicyDenied 归一化。
+- 控制原理：写订单无副作用，副作用只发生在单一发放出口——执行幻觉最多
     污染订单，被机械校验拦下，不会直接产生执行。
   - 单轮一单（用户确认，先定）：本轮订单未发放完不进入下一轮写单，反馈闭环驱动。
 - 配合规则（v0.5）：
@@ -294,7 +314,7 @@
 - 黑板分区与既有 blackboard_read/todo 机制的关系：复用黑板本体 + 新增分区，
   还是独立动作队列；动作栏写工具命名（v0.5 建议 `blackboard.action_write`，
   语义独立于 todo）（2026-08-15 定案：复用黑板本体，新增 `actions` 分区并
-  随 plan epoch 快照归档/轮换；写工具命名 S2 定案，候选保持
+  随 plan epoch 快照归档/轮换；写工具命名已定案并在 S2 落地——
   `blackboard.action_write`）。
 - 与单一探针面的事件/列表投影如何交互。
 - 组件形态（v0.3 已裁决）：宿主内嵌——HA 操作台为 orz 的一部分；POC 的

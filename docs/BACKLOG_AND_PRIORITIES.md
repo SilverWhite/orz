@@ -161,13 +161,23 @@
   （发放收口 commit，失败事件满员滚动保底）；注册板块最小参数提示投影；
   S2 验收点显式登记（round/epoch 防重放、目标解析、ACAF 票据、策略表、
   step=policy）。新增 18 项测试（console 15 + blackboard 3）；orz-loop
-  356 通过 / 0 失败。模型面投影、轮末机械发放、assistant.trace 服务与
-  PTC 生产化待续（S2-S4）。
+  356 通过 / 0 失败。**2026-08-15 S2 已落地**——模型面投影（
+  `blackboard_read` section=actions：注册板块/动作栏单槽/结果栏有界渲染，
+  随 plan epoch 归档可读 + `blackboard.action_write` 写单按钮，pending 机械
+  拒绝，round/plan_epoch/run_id 机械盖章，主车道专属三重守卫）+ 轮末机械
+  发放（post-tool-batch 安全间隙、pending checkpoint 优先；round/plan_epoch/
+  run_id 防重放与过期 → 注册表/契约 → 经 ControllerConsoleExecutor 委托
+  run_host_tool（权限/ACAF/模式门/事件链）→ 响应 schema 验证 → 结果栏
+  receipt + trace_id → TraceStore.commit；策略拒绝归一化 step=policy +
+  policy_denied）；注册板块每轮机械刷新（基础动作集 6 项）。新增 8 项测试，
+  orz-loop 364 通过 / 0 失败；实施审计见
+  `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`。
+  assistant.trace 服务与 PTC/Profile 生产化待续（S3-S4）。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；S2 验收点（round/epoch 防重放、真实目标解析、ACAF 票据、策略表、step=policy）已显式登记；S2 模型面投影 + 轮末发放、S3 trace/PTC/Profile、S4 端到端 + 审计待续；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；S3 trace/PTC/Profile、S4 端到端 + 审计待续；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
@@ -388,6 +398,16 @@
 
 ## 变更记录
 
+- 2026-08-15：P0-C 内嵌集成 S2 落地登记——模型面投影（`blackboard_read`
+  section=actions + `blackboard.action_write` 写单按钮，pending 机械拒绝、
+  round/plan_epoch/run_id 机械盖章、主车道专属）与轮末机械发放
+  （post-tool-batch 安全间隙、checkpoint 优先；round/plan_epoch/run_id
+  防重放与过期（`order_stale`）→ 注册表/契约 → 经 ControllerConsoleExecutor
+  委托 run_host_tool（权限/ACAF/模式门/事件链）→ 响应 schema 验证 → 结果栏
+  receipt + trace_id → TraceStore.commit；策略拒绝归一化 step=policy +
+  policy_denied）；注册板块每轮机械刷新（基础动作集 6 项）；新增 8 项测试，
+  orz-loop 364 通过 / 0 失败；审计见
+  `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`。
 - 2026-08-15：P0-C 内嵌集成 S1 全面检查修复登记——执行器返回 ExecuteError
   （执行失败/策略拒绝，`step=policy` + `policy_denied`）；响应契约强制必填
   （注册时校验并缓存 schema，任何输出过机械验证）；`exit_code=Some(0)`

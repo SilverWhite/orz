@@ -12,12 +12,13 @@
 
 ## 未闭合扫描快照（2026-08-15；P0-C 小样 3 闭合后更新）
 
-> 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态）。
+> 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态；
+> P0-C S2 落地后更新）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
 - 未闭合总数：**32 项**
-  - P0-C CLASSICAL-EXEC-ASSISTANT：2 项（orz 内嵌集成、正式组件决策门）
+  - P0-C CLASSICAL-EXEC-ASSISTANT：2 项（orz 内嵌集成 S3/S4、正式组件决策门）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -61,12 +62,14 @@
     响应契约强制必填并注册时校验缓存、exit_code=Some(0) 契约、TraceStore
     commit + 失败事件滚动保底、注册板块最小提示投影）；新增 18 项测试
     （console 15 + blackboard 3），orz-loop 356 通过。
-  - [ ] S2：模型面投影（注册板块读取=最小参数提示 + 动作栏写单工具
-    `blackboard.action_write`，已有 pending 机械拒绝）与轮末机械发放
-    （round/plan_epoch 防重放与过期 → 注册表/契约 → 真实目标解析 →
-    ACAF 票据 → 策略表/taint/模式门 → 经 `run_host_tool` 执行 → 响应
-    schema 验证 → 结果栏 receipt+trace_id；策略拒绝映射 `step=policy`；
-    发放收口 `TraceStore.commit`）。
+  - [x] S2：模型面投影（`blackboard_read` section=actions 读取最小参数提示
+    + `blackboard.action_write` 写单，pending 机械拒绝）与轮末机械发放
+    （round/plan_epoch/run_id 防重放与过期 → 注册表/契约 → 真实目标解析 →
+    ACAF 票据 → 策略表/模式门 → 经 `run_host_tool` 执行 → 响应 schema
+    验证 → 结果栏 receipt+trace_id；策略拒绝映射 `step=policy`；发放收口
+    `TraceStore.commit`）。2026-08-15 落地，实施审计见
+    `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；
+    orz-loop 364 通过 / 0 失败。
   - [ ] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
     生产化 + Profile/Bundle 按钮组加载。
   - [ ] S4：端到端测试、实施审计与正式组件决策门材料。
