@@ -49,8 +49,9 @@ pub const TRACE_TAIL_DEFAULT: usize = 20;
 pub const SCRIPT_SERVICE_NAME: &str = "workspace.run_script";
 /// 只读 trace 服务名（v0.4 定档）。
 pub const TRACE_SERVICE_NAME: &str = "assistant.trace";
-/// PTC 脚本上限（小样 3 定档：20 步 / 30s 墙钟 / 4 MiB 累计响应）。
-pub const MAX_SCRIPT_STEPS: usize = 20;
+/// PTC 脚本单订单上限（小样 3 定档 20 步；2026-08-16 审查收口改为 8——
+/// 单轮动作受控、每步计 1 个 tool-round 预算单位；30s / 4MiB 不变）。
+pub const MAX_SCRIPT_STEPS_PER_ORDER: usize = 8;
 pub const MAX_SCRIPT_WALLCLOCK_SECONDS: f64 = 30.0;
 pub const MAX_SCRIPT_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -307,11 +308,11 @@ pub fn default_service_registry() -> ServiceRegistry {
         },
         // P0-C S3：PTC 线性脚本服务——步骤 = 注册动作实例 + `$ref` 数据引用；
         // 逐行契约校验 + trace；任一步 fail-closed（POC `script_runner.py`
-        // 同构；上限 20 步 / 30s 墙钟 / 4 MiB 累计响应）。
+        // 同构；上限 8 步 / 30s 墙钟 / 4 MiB 累计响应）。
         ActionSpec {
             name: SCRIPT_SERVICE_NAME.to_string(),
             description: "执行确定性线性动作脚本（PTC）：步骤 = 注册动作实例 + `$ref` 数据引用；\
-                 逐行契约校验 + trace；任一步 fail-closed；上限 20 步/30s/4MiB。"
+                 逐行契约校验 + trace；任一步 fail-closed；上限 8 步/30s/4MiB。"
                 .to_string(),
             target_tool: None,
             kind: ActionKind::RunScript,
@@ -335,7 +336,7 @@ pub fn default_service_registry() -> ServiceRegistry {
                             "additionalProperties": false,
                         },
                         "minItems": 1,
-                        "maxItems": MAX_SCRIPT_STEPS,
+                        "maxItems": MAX_SCRIPT_STEPS_PER_ORDER,
                     }
                 },
                 "required": ["script"],
@@ -609,6 +610,33 @@ impl ServiceRegistry {
                 name: spec.name.clone(),
                 kind: "target",
                 detail: "host actions require a target tool".to_string(),
+            });
+        }
+        // P0-C S3 审查收口（2026-08-16）：双向 fail-fast——内部动作不得
+        // 携带 host 目标（内部分支忽略它，注册即拒绝，绝不运行时兜底）；
+        // 内部动作类全局唯一（否则按 kind 的嵌套脚本拒绝可被第二个
+        // RunScript 名称绕过）；bundle 至少启用一个场景（全 false 的
+        // 动作在任何会话都不可见，属注册错误）。
+        if spec.kind != ActionKind::Host && spec.target_tool.is_some() {
+            return Err(RegistryError::InvalidSchema {
+                name: spec.name.clone(),
+                kind: "target",
+                detail: "internal actions must not carry a target tool".to_string(),
+            });
+        }
+        if matches!(spec.kind, ActionKind::TraceRead | ActionKind::RunScript)
+            && let Some(existing) = self.actions.values().find(|s| s.kind == spec.kind)
+        {
+            return Err(RegistryError::Duplicate(format!(
+                "{}: {:?} internal action already registered as {}",
+                spec.name, spec.kind, existing.name
+            )));
+        }
+        if !(spec.bundle.standard || spec.bundle.read_only || spec.bundle.benchmark) {
+            return Err(RegistryError::InvalidSchema {
+                name: spec.name.clone(),
+                kind: "bundle",
+                detail: "at least one profile must be enabled".to_string(),
             });
         }
         let input = jsonschema::validator_for(&spec.input_schema).map_err(|e| {
@@ -979,8 +1007,13 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
             // 同步短锁取回快照，锁不跨 await（发放链可保持 Send）。
             let (request_id, events, truncated) = {
                 let guard = store.lock().unwrap();
+                // 2026-08-16 定案：trace 查无此 id 发生在执行阶段（服务已
+                // 解析、契约已过、存储查询失败），归 `step=execute` ——
+                // 与 `step=registry`（服务解析失败/unknown_service）区分；
+                // 同时失败信封按契约携带本订单有界 trace 尾部，模型可
+                // 直接看到 registry/contract 已过、execute 查无此 id。
                 let found = guard.get(trace_id).ok_or_else(|| ConsoleError {
-                    step: STEP_REGISTRY,
+                    step: STEP_EXECUTE,
                     code: CODE_NOT_FOUND,
                     message: format!("trace not found: {trace_id}"),
                     upstream: Some(json!({ "trace_id": trace_id })),
@@ -1183,7 +1216,10 @@ fn static_validate_script(
             message: format!("script[{index}].do: unknown service: {action}"),
             upstream: Some(json!({ "script_step": index, "action": action })),
         })?;
-        if action == SCRIPT_SERVICE_NAME {
+        // P0-C S3 审查收口（2026-08-16）：按动作类型拒绝嵌套，而非按服务名
+        // 字符串比较——注册表已保证 RunScript 类全局唯一，未来新增脚本类
+        // 动作名称也无法绕过。
+        if spec.kind == ActionKind::RunScript {
             return Err(ConsoleError {
                 step: STEP_CONTRACT,
                 code: CODE_NESTED_SCRIPT,
@@ -1334,7 +1370,7 @@ pub async fn run_script<E: ActionExecutor + ?Sized>(
         arguments,
         trace,
         call_id,
-        MAX_SCRIPT_STEPS,
+        MAX_SCRIPT_STEPS_PER_ORDER,
         MAX_SCRIPT_WALLCLOCK_SECONDS,
         MAX_SCRIPT_RESPONSE_BYTES,
     )
@@ -1507,6 +1543,8 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
                 "script response exceeded {max_bytes} bytes (includes final result duplication)"
             ),
             upstream: Some(json!({
+                "script_step": metas.last().map(|m| m.index),
+                "action": metas.last().map(|m| m.action.clone()),
                 "response_bytes": total_bytes,
                 "limit": max_bytes,
             })),
@@ -2276,7 +2314,9 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(err.step, STEP_REGISTRY);
+        // 2026-08-16 定案：trace 查询缺失归执行阶段失败（服务已解析、
+        // 存储查询失败），携带本订单 trace 尾部供排障。
+        assert_eq!(err.step, STEP_EXECUTE);
         assert_eq!(err.code, CODE_NOT_FOUND);
         assert_eq!(err.upstream.as_ref().unwrap()["trace_id"], "t999999");
     }
@@ -2330,7 +2370,7 @@ mod tests {
                             "type": "array",
                             "items": {"type": "object"},
                             "minItems": 1,
-                            "maxItems": MAX_SCRIPT_STEPS,
+                            "maxItems": MAX_SCRIPT_STEPS_PER_ORDER,
                         }
                     },
                     "required": ["script"],
@@ -2436,7 +2476,7 @@ mod tests {
                             "type": "array",
                             "items": {"type": "object"},
                             "minItems": 1,
-                            "maxItems": MAX_SCRIPT_STEPS,
+                            "maxItems": MAX_SCRIPT_STEPS_PER_ORDER,
                         }
                     },
                     "required": ["script"],
@@ -2478,6 +2518,23 @@ mod tests {
                 STEP_CONTRACT,
                 CODE_REFERENCE_TYPE_MISMATCH,
             ),
+            // $ref 形状错误：必须有「步骤名.字段」至少两段。
+            (
+                json!({"script": [
+                    {"do": "workspace.read_file", "with": {"path": {"$ref": "a"}}},
+                ]}),
+                STEP_CONTRACT,
+                CODE_INVALID_REFERENCE,
+            ),
+            // 引用的字段不在先序步骤响应 schema 中。
+            (
+                json!({"script": [
+                    {"do": "workspace.read_file", "with": {"path": "a.txt"}, "as": "a"},
+                    {"do": "workspace.read_file", "with": {"path": {"$ref": "a.missing"}}},
+                ]}),
+                STEP_CONTRACT,
+                CODE_INVALID_REFERENCE,
+            ),
             (
                 json!({"script": [
                     {"do": "workspace.run_script", "with": {"script": []}},
@@ -2508,6 +2565,303 @@ mod tests {
         assert!(
             executor.seen.lock().unwrap().is_empty(),
             "static validation must fail before any execution"
+        );
+    }
+
+    /// P0-C S3 审查收口（2026-08-16）：单订单步数上限 8——9 步脚本在
+    /// 任何执行前按契约拒绝。
+    #[tokio::test]
+    async fn run_script_rejects_over_cap_scripts() {
+        let registry = default_service_registry();
+        let executor = SequenceExecutor::ok_ref();
+        let script: Vec<Value> = (1..=9)
+            .map(|i| {
+                json!({"do": "workspace.read_file", "with": {"target_file": format!("f{i}.txt")}})
+            })
+            .collect();
+        let mut trace = Trace {
+            trace_id: "t000092".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let err = run_script(
+            &registry,
+            &executor,
+            None,
+            &json!({"script": script}),
+            &mut trace,
+            "call-s",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_CONTRACT);
+        assert_eq!(err.code, CODE_INVALID_SCRIPT);
+        assert!(executor.seen.lock().unwrap().is_empty());
+    }
+
+    /// P0-C S3 审查收口（2026-08-16）：注册不变式补齐——内部动作携带
+    /// host 目标、内部动作类重复、bundle 全 false 均在注册即拒绝。
+    #[test]
+    fn registry_rejects_invalid_internal_kind_and_bundle() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "ok".to_string(),
+                target_tool: Some("read_file".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({"type": "object"}),
+                response_schema: json!({"type": "object"}),
+            })
+            .unwrap();
+        // 内部动作携带 target → 拒绝（双向 fail-fast）。
+        let err = registry.register(ActionSpec {
+            name: "bad.internal".to_string(),
+            description: "internal with target".to_string(),
+            target_tool: Some("read_file".to_string()),
+            kind: ActionKind::TraceRead,
+            bundle: ActionBundle::ALL,
+            input_schema: json!({"type": "object"}),
+            response_schema: json!({"type": "object"}),
+        });
+        assert!(matches!(
+            err,
+            Err(RegistryError::InvalidSchema { kind: "target", .. })
+        ));
+        // RunScript 类全局唯一 → 第二个名称拒绝。
+        registry
+            .register(ActionSpec {
+                name: "workspace.run_script".to_string(),
+                description: "script".to_string(),
+                target_tool: None,
+                kind: ActionKind::RunScript,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({"type": "object"}),
+                response_schema: json!({"type": "object"}),
+            })
+            .unwrap();
+        let err = registry.register(ActionSpec {
+            name: "workspace.run_script2".to_string(),
+            description: "script2".to_string(),
+            target_tool: None,
+            kind: ActionKind::RunScript,
+            bundle: ActionBundle::ALL,
+            input_schema: json!({"type": "object"}),
+            response_schema: json!({"type": "object"}),
+        });
+        assert!(
+            matches!(err, Err(RegistryError::Duplicate(ref msg)) if msg.contains("RunScript")),
+            "{err:?}"
+        );
+        // bundle 全 false → 拒绝（任何会话都不可见的动作是注册错误）。
+        let err = registry.register(ActionSpec {
+            name: "workspace.nowhere".to_string(),
+            description: "empty bundle".to_string(),
+            target_tool: Some("read_file".to_string()),
+            kind: ActionKind::Host,
+            bundle: ActionBundle::default(),
+            input_schema: json!({"type": "object"}),
+            response_schema: json!({"type": "object"}),
+        });
+        assert!(matches!(
+            err,
+            Err(RegistryError::InvalidSchema { kind: "bundle", .. })
+        ));
+    }
+
+    /// P0-C S3 审查收口（2026-08-16）：`tail` 超出 200 条契约上限按请求
+    /// 错误拒绝（schema maximum），不会退回默认值。
+    #[tokio::test]
+    async fn tail_beyond_contract_rejected() {
+        let registry = default_service_registry();
+        let (executor, _) = FakeExecutor::ok();
+        let store = std::sync::Mutex::new(TraceStore::new());
+        let mut trace = Trace {
+            trace_id: "t000091".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let err = issue_action(
+            &registry,
+            &executor,
+            Some(&store),
+            &order(
+                "assistant.trace",
+                json!({"trace_id": "t000001", "tail": TRACE_MAX_EVENTS + 1}),
+            ),
+            &mut trace,
+            "call-t",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_CONTRACT);
+        assert_eq!(err.code, CODE_INVALID_ARGUMENTS);
+    }
+
+    /// P0-C S3 审查收口（2026-08-16）：脚本内允许调用只读内部服务
+    /// `assistant.trace`（非嵌套脚本；读步骤仍走五步链并进入脚本结果）。
+    #[tokio::test]
+    async fn run_script_step_trace_read_allowed() {
+        let registry = default_service_registry();
+        let (executor, _) = FakeExecutor::ok();
+        let store = std::sync::Mutex::new(TraceStore::new());
+        {
+            let mut guard = store.lock().unwrap();
+            let mut target = guard.new_trace(Some("ORD-T".to_string()));
+            for i in 0..3 {
+                target.add(
+                    "execute",
+                    Some("workspace.read_file"),
+                    true,
+                    None,
+                    Some(format!("e{i}")),
+                    None,
+                );
+            }
+            guard.commit(&target);
+        }
+        let mut trace = Trace {
+            trace_id: "t000090".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let response = issue_action(
+            &registry,
+            &executor,
+            Some(&store),
+            &order(
+                SCRIPT_SERVICE_NAME,
+                json!({"script": [
+                    {"do": "assistant.trace", "with": {"trace_id": "t000001", "tail": 2}},
+                ]}),
+            ),
+            &mut trace,
+            "call-t",
+        )
+        .await
+        .unwrap();
+        let step = &response["steps"][0];
+        assert_eq!(step["do"], "assistant.trace");
+        assert_eq!(step["ok"], true);
+        assert_eq!(step["response"]["events"].as_array().unwrap().len(), 2);
+        assert_eq!(step["response"]["truncated"], true);
+    }
+
+    /// P0-C S3 审查收口（2026-08-16）：最终 `result` 重复计算超限分支的
+    /// 失败信封携带 `script_step`（最后一步），便于模型定位。
+    #[tokio::test]
+    async fn run_script_final_response_limit_reports_script_step() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "ref test action".to_string(),
+                target_tool: Some("read_file".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        registry
+            .register(ActionSpec {
+                name: SCRIPT_SERVICE_NAME.to_string(),
+                description: "script action".to_string(),
+                target_tool: None,
+                kind: ActionKind::RunScript,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "script": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "minItems": 1,
+                            "maxItems": MAX_SCRIPT_STEPS_PER_ORDER,
+                        }
+                    },
+                    "required": ["script"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "steps": {"type": "array", "items": {"type": "object"}},
+                        "result": {"type": ["object", "null"]},
+                    },
+                    "required": ["steps", "result"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        let executor = SequenceExecutor::ok_ref();
+        let script: Vec<Value> = (1..=MAX_SCRIPT_STEPS_PER_ORDER)
+            .map(|_| json!({"do": "workspace.read_file", "with": {"path": "a.txt"}}))
+            .collect();
+        let arguments = json!({"script": script});
+        // 第一次以超大上限运行，得到成功响应及其序列化总长。
+        let mut trace = Trace {
+            trace_id: "t000089".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let ok_response = run_script_with_limits(
+            &registry,
+            &executor,
+            None,
+            &arguments,
+            &mut trace,
+            "call-s",
+            MAX_SCRIPT_STEPS_PER_ORDER,
+            MAX_SCRIPT_WALLCLOCK_SECONDS,
+            usize::MAX,
+        )
+        .await
+        .unwrap();
+        let success_len = serde_json::to_vec(&ok_response).unwrap().len();
+        // 第二次：上限收紧到 L-1——逐步累计仍通过，最终 result 重复计算
+        // 超限，错误携带最后一步 script_step（逐步/最终两条超限路径都覆盖）。
+        let mut trace = Trace {
+            trace_id: "t000088".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let err = run_script_with_limits(
+            &registry,
+            &executor,
+            None,
+            &arguments,
+            &mut trace,
+            "call-s",
+            MAX_SCRIPT_STEPS_PER_ORDER,
+            MAX_SCRIPT_WALLCLOCK_SECONDS,
+            success_len - 1,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert_eq!(err.code, CODE_SCRIPT_RESPONSE_LIMIT);
+        assert_eq!(
+            err.upstream.as_ref().unwrap()["script_step"],
+            MAX_SCRIPT_STEPS_PER_ORDER
+        );
+        assert_eq!(
+            executor.seen.lock().unwrap().len(),
+            MAX_SCRIPT_STEPS_PER_ORDER * 2
         );
     }
 
@@ -2630,7 +2984,7 @@ mod tests {
             &arguments,
             &mut trace,
             "call-s",
-            MAX_SCRIPT_STEPS,
+            MAX_SCRIPT_STEPS_PER_ORDER,
             0.0,
             MAX_SCRIPT_RESPONSE_BYTES,
         )
@@ -2652,7 +3006,7 @@ mod tests {
             &arguments,
             &mut trace,
             "call-s",
-            MAX_SCRIPT_STEPS,
+            MAX_SCRIPT_STEPS_PER_ORDER,
             MAX_SCRIPT_WALLCLOCK_SECONDS,
             1,
         )
@@ -2711,5 +3065,133 @@ mod tests {
             structured: Some(json!({"path": "a.txt", "content": "hello"})),
             ..Default::default()
         }
+    }
+
+    /// P0-C S3 审查收口（2026-08-16）：运行时 `$ref` 解析失败路径（静态
+    /// 校验通过后理论上不可达）仍结构化返回 `step=execute` + `invalid_reference`。
+    #[test]
+    fn substitute_runtime_ref_failure_is_structured() {
+        let empty = BTreeMap::new();
+        let err = substitute(&json!({"$ref": "a.path"}), &empty).unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert_eq!(err.code, CODE_INVALID_REFERENCE);
+        assert_eq!(err.upstream.as_ref().unwrap()["ref"], "a.path");
+        // 数组越界 / 数组字段用了非数字路径同样结构化失败。
+        let mut outputs = BTreeMap::new();
+        outputs.insert("a".to_string(), json!({"items": [1, 2]}));
+        let err = substitute(&json!({"$ref": "a.items.5"}), &outputs).unwrap_err();
+        assert_eq!(err.code, CODE_INVALID_REFERENCE);
+        let err = substitute(&json!({"$ref": "a.items.name"}), &outputs).unwrap_err();
+        assert_eq!(err.code, CODE_INVALID_REFERENCE);
+    }
+
+    /// P0-C S3 审查收口（2026-08-16）：`$ref` 数组 items 路径——静态类型
+    /// 解析（`a.list.0.name`）与运行时替换一致。
+    #[tokio::test]
+    async fn run_script_array_items_ref_resolves() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "array ref test".to_string(),
+                target_tool: Some("read_file".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "list": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"name": {"type": "string"}},
+                                "required": ["name"],
+                            },
+                        },
+                    },
+                    "required": ["list"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        registry
+            .register(ActionSpec {
+                name: SCRIPT_SERVICE_NAME.to_string(),
+                description: "script action".to_string(),
+                target_tool: None,
+                kind: ActionKind::RunScript,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "script": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "minItems": 1,
+                            "maxItems": MAX_SCRIPT_STEPS_PER_ORDER,
+                        }
+                    },
+                    "required": ["script"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "steps": {"type": "array", "items": {"type": "object"}},
+                        "result": {"type": ["object", "null"]},
+                    },
+                    "required": ["steps", "result"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        let executor = SequenceExecutor::new(vec![
+            Ok(ToolResult {
+                output: "list".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: Some(json!({"list": [{"name": "alpha"}]})),
+                ..Default::default()
+            }),
+            Ok(ToolResult {
+                output: "empty".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: Some(json!({"list": []})),
+                ..Default::default()
+            }),
+        ]);
+        let mut trace = Trace {
+            trace_id: "t000087".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let response = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order(
+                SCRIPT_SERVICE_NAME,
+                json!({"script": [
+                    {"do": "workspace.read_file", "with": {"path": "a.txt"}, "as": "a"},
+                    {"do": "workspace.read_file", "with": {"path": {"$ref": "a.list.0.name"}}},
+                ]}),
+            ),
+            &mut trace,
+            "call-s",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["steps"].as_array().unwrap().len(), 2);
+        let calls = executor.seen.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].1, json!({"path": "alpha"}));
+        assert_eq!(calls[1].2, "call-s.s2");
     }
 }

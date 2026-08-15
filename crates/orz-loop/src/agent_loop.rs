@@ -1029,7 +1029,10 @@ pub(crate) async fn run_agent_loop(
         // 检索车道无操作台）。内容 = 动作名 + 最小参数提示（最小提示由
         // `console::ServiceRegistry` 生成，不复制完整 schema）；板块常驻、
         // 内容按需读（模型用 blackboard_read section=actions 取回）。
-        if profile.role == AgentRole::Main {
+        // P0-C S3 审查收口（2026-08-16）：checkpoint 轮为无探针间隙——
+        // 跳过刷新，保留上一轮探针过滤后的板块；其他无探针轮次
+        // （probe_work_tools=false 等）仍按 bundle-only 刷新。
+        if profile.role == AgentRole::Main && pending_checkpoint.is_none() {
             let registrations =
                 controller.console_registrations(host.tool_policy(), probe_snapshot.as_ref());
             svc.blackboard
