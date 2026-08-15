@@ -177,16 +177,14 @@ pub(crate) fn compute_request_header(
             .and_then(serde_json::Value::as_str)
             .cmp(&b.get("name").and_then(serde_json::Value::as_str))
     });
-    let tools_sha256 =
-        payload_hash(&tool_rows).unwrap_or_else(|_| "tools-hash-error".to_string());
+    let tools_sha256 = payload_hash(&tool_rows).unwrap_or_else(|_| "tools-hash-error".to_string());
     let config_sha256 = sha256_hex(config_fingerprint.as_bytes());
-    let header_sha256 =
-        payload_hash(&serde_json::json!({
-            "system_sha256": system_sha256,
-            "tools_sha256": tools_sha256,
-            "config_sha256": config_sha256,
-        }))
-        .unwrap_or_else(|_| "header-hash-error".to_string());
+    let header_sha256 = payload_hash(&serde_json::json!({
+        "system_sha256": system_sha256,
+        "tools_sha256": tools_sha256,
+        "config_sha256": config_sha256,
+    }))
+    .unwrap_or_else(|_| "header-hash-error".to_string());
     let tools = tools.iter().map(|t| t.name.clone()).collect();
     RequestHeader {
         header_sha256,
@@ -480,7 +478,10 @@ pub(crate) async fn run_template_compact(
 ) -> Result<CompactDecision, AgentLoopError> {
     // The rolling single marker: any older marker is archived with the
     // summary chain (审计存档) — only the newest stays.
-    messages.retain(|m| !m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
+    messages.retain(|m| {
+        !m.content
+            .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+    });
     let Some(kept_start) = crate::action_ledger::collapsed_cut(messages, tail) else {
         return Ok(CompactDecision::NoOp);
     };
@@ -534,7 +535,9 @@ pub(crate) async fn run_template_compact(
             tool_calls: Vec::new(),
             reasoning_content: None,
         }];
-        input.extend(crate::action_ledger::build_collapsed_request(messages, tail));
+        input.extend(crate::action_ledger::build_collapsed_request(
+            messages, tail,
+        ));
         input
     };
     let mut outcome: Option<crate::summary::SummarySlots> = None;
@@ -844,11 +847,9 @@ pub(crate) async fn run_agent_loop(
         // injected template block must reach the model before any window
         // collapse (§14.16: 触发点下一安全动作间隙暂停).
         let fallback_now = pending_checkpoint.is_none()
-            && last_prompt_tokens
-            .is_some_and(|m| m > svc.context_compact.safety_tokens);
+            && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.safety_tokens);
         let rhythm_now = pending_checkpoint.is_none()
-            && last_prompt_tokens
-            .is_some_and(|m| m > svc.context_compact.trigger_tokens)
+            && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.trigger_tokens)
             && rounds_since_compact >= svc.context_compact.min_rounds;
         let summary_now = fallback_now || rhythm_now;
         let mut failure_widened_tail = false;
@@ -950,10 +951,7 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?
         {
-            pending_checkpoint = Some(PendingCheckpoint::Orientation {
-                record,
-                attempt: 1,
-            });
+            pending_checkpoint = Some(PendingCheckpoint::Orientation { record, attempt: 1 });
         }
         // M5 (2026-08-10): DC checkpoint fire at the same safe gap (the
         // stage threshold was met by signals consumed in a prior tool
@@ -1079,11 +1077,8 @@ pub(crate) async fn run_agent_loop(
         // header events by design: their header (fixed system prompt +
         // empty tools + config) is constant and never interacts with probe
         // flips, so they are deliberately excluded from the留痕 chain.
-        let current_header = compute_request_header(
-            &system,
-            &current_tool_defs,
-            &agent.config_fingerprint(),
-        );
+        let current_header =
+            compute_request_header(&system, &current_tool_defs, &agent.config_fingerprint());
         if last_request_header
             .as_ref()
             .is_none_or(|prev| prev.header_sha256 != current_header.header_sha256)
@@ -1120,12 +1115,10 @@ pub(crate) async fn run_agent_loop(
         // into deterministic action-ledger rows (bounded recent tail kept
         // verbatim); `messages` itself stays full for journal/sidecar
         // audit, so the persisted conversation keeps the complete records.
-        let request_tail = svc.context_compact.recent_tail_rounds
-            + if failure_widened_tail { 1 } else { 0 };
-        let request_messages = crate::action_ledger::build_collapsed_request(
-            messages,
-            request_tail,
-        );
+        let request_tail =
+            svc.context_compact.recent_tail_rounds + if failure_widened_tail { 1 } else { 0 };
+        let request_messages =
+            crate::action_ledger::build_collapsed_request(messages, request_tail);
         let response = match agent
             .run_round(
                 &system,
@@ -1267,8 +1260,10 @@ pub(crate) async fn run_agent_loop(
             // missing surface) cross-checked against journal evidence
             // identities — the main lane's own evidence + committed
             // retrieval ledger ids/refs + DC examined-surface ids.
-            let mut identities: std::collections::HashSet<String> =
-                controller.checkpoint_source_identities().into_iter().collect();
+            let mut identities: std::collections::HashSet<String> = controller
+                .checkpoint_source_identities()
+                .into_iter()
+                .collect();
             if let Some(evidence) = svc.evidence {
                 identities.extend(
                     evidence
@@ -1286,9 +1281,7 @@ pub(crate) async fn run_agent_loop(
             let outcome = checkpoint::decide_outcome(attempt, &verdict.errors);
             let (outcome_str, degrade_reason) = match outcome {
                 checkpoint::CheckpointRoundOutcome::Accepted => ("accepted", None),
-                checkpoint::CheckpointRoundOutcome::RefillRequested => {
-                    ("refill_requested", None)
-                }
+                checkpoint::CheckpointRoundOutcome::RefillRequested => ("refill_requested", None),
                 checkpoint::CheckpointRoundOutcome::Degraded { reason } => {
                     ("degraded", Some(reason))
                 }
@@ -1322,11 +1315,7 @@ pub(crate) async fn run_agent_loop(
                 | checkpoint::CheckpointRoundOutcome::Degraded { .. } => {
                     // §2.4: only a completed template round (accepted or
                     // degraded) commits the fire / advances the DC stage.
-                    checkpoint::commit_pending(
-                        pending,
-                        orientation.as_deref_mut(),
-                        svc.dc_state,
-                    );
+                    checkpoint::commit_pending(pending, orientation.as_deref_mut(), svc.dc_state);
                 }
                 checkpoint::CheckpointRoundOutcome::RefillRequested => {
                     messages.push(Message {
@@ -1548,7 +1537,8 @@ pub(crate) async fn run_agent_loop(
                     tc,
                     round_inject_tokens,
                     svc.max_inject_tokens_per_round,
-                    svc.policy_revision.load(std::sync::atomic::Ordering::SeqCst),
+                    svc.policy_revision
+                        .load(std::sync::atomic::Ordering::SeqCst),
                 )
                 .await?;
                 match feedback {
@@ -1716,15 +1706,14 @@ pub(crate) async fn run_agent_loop(
             assistant_parts.push(format!("[{}] {}", tc.name, result.output));
             // Count this result against the per-round injection budget (the
             // same `[tool] output` text the model receives).
-            round_inject_tokens = round_inject_tokens.saturating_add(estimate_message_tokens(
-                &Message {
+            round_inject_tokens =
+                round_inject_tokens.saturating_add(estimate_message_tokens(&Message {
                     role: Role::Tool,
                     content: format!("[{}] {}", tc.name, result.output),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
-                },
-            ));
+                }));
 
             // GAP-INQUIRY-SPLIT (2026-08-09): the old per-tool-call
             // counter feeds are deleted — `tool_calls` / `tool_variety`
@@ -1820,10 +1809,7 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?
         {
-            pending_checkpoint = Some(PendingCheckpoint::Orientation {
-                record,
-                attempt: 1,
-            });
+            pending_checkpoint = Some(PendingCheckpoint::Orientation { record, attempt: 1 });
         }
         // M5: DC checkpoint fire (same gap semantics as orientation; one
         // pending checkpoint at a time — orientation wins a same-gap tie).

@@ -13,9 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::blackboard::{
-    EditRecord, EpochSnapshot, ExecSection, PlanSection, ToolActionRecord,
-};
+use crate::blackboard::{EditRecord, EpochSnapshot, ExecSection, PlanSection, ToolActionRecord};
 
 /// Archive directory name under the session cwd's `.gsa` root.
 pub const EPOCH_ARCHIVE_DIR: &str = ".gsa/blackboard";
@@ -38,7 +36,10 @@ fn max_archived_epoch(archive_dir: &Path) -> Option<u64> {
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
                 continue;
             };
-            let Some(rest) = name.strip_prefix("epoch-").and_then(|r| r.strip_suffix(".json")) else {
+            let Some(rest) = name
+                .strip_prefix("epoch-")
+                .and_then(|r| r.strip_suffix(".json"))
+            else {
                 continue;
             };
             if let Ok(epoch) = rest.parse::<u64>() {
@@ -178,7 +179,10 @@ pub fn load_epoch_snapshot(archive_dir: &Path, plan_epoch: u64) -> Option<EpochS
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
-            tracing::warn!("epoch archive unreadable ({}): {e} — skipped", path.display());
+            tracing::warn!(
+                "epoch archive unreadable ({}): {e} — skipped",
+                path.display()
+            );
             None
         }
     }
@@ -267,7 +271,13 @@ pub fn render_section(
             let lines: Vec<String> = edits
                 .iter()
                 .filter(|r| after_since(&r.timestamp))
-                .map(|r| format!("{} {}", r.timestamp, crate::controller::format_edit_record(r)))
+                .map(|r| {
+                    format!(
+                        "{} {}",
+                        r.timestamp,
+                        crate::controller::format_edit_record(r)
+                    )
+                })
                 .collect();
             if lines.is_empty() {
                 "(no edit records)".to_string()
@@ -315,9 +325,9 @@ pub fn render_section(
                 lines.join("\n")
             }
         }
-        other => format!(
-            "unknown blackboard section: {other} (expected plan|edits|tool_actions|exec)"
-        ),
+        other => {
+            format!("unknown blackboard section: {other} (expected plan|edits|tool_actions|exec)")
+        }
     }
 }
 
@@ -353,7 +363,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         let after_sweep = next_plan_epoch_from_archive(&dir);
-        assert!(after_sweep >= next, "reuse after sweep: {after_sweep} < {next}");
+        assert!(
+            after_sweep >= next,
+            "reuse after sweep: {after_sweep} < {next}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

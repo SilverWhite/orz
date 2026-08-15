@@ -591,9 +591,9 @@ mod tests {
             "[ORIENTATION v0.3] 当前任务、位置与下一目标"
         ));
         // §14.16: the checkpoint re-fill feedback is injected text.
-        assert!(is_injected_block_text(&crate::checkpoint::refill_feedback_block(
-            &["next_action 越界".to_string()]
-        )));
+        assert!(is_injected_block_text(
+            &crate::checkpoint::refill_feedback_block(&["next_action 越界".to_string()])
+        ));
         // The closing tag must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/ORIENTATION]"));
         // The retired blocks must NOT match — nothing injects them anymore.
@@ -666,7 +666,9 @@ mod tests {
     fn restore_retained_blocks_identified() {
         assert!(is_restore_retained_block("[前文上下文已压缩 v0.1]\n内容"));
         assert!(is_restore_retained_block("[压缩白名单 v0.1]\n条目"));
-        assert!(!is_restore_retained_block("[ORIENTATION v0.1] 当前任务是什么？"));
+        assert!(!is_restore_retained_block(
+            "[ORIENTATION v0.1] 当前任务是什么？"
+        ));
         assert!(!is_restore_retained_block("普通对话"));
         // Recovery markers share the compaction prefix and therefore count.
         assert!(is_restore_retained_block(&recovery_truncation_marker(

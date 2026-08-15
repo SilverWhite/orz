@@ -104,7 +104,11 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             header_sha256,
         } => {
             let short = header_sha256.chars().take(8).collect::<String>();
-            let label = if reason == "initial" { "初始" } else { "变化" };
+            let label = if reason == "initial" {
+                "初始"
+            } else {
+                "变化"
+            };
             app.content.add_system_message(
                 &format!("请求头{label}: {tool_count} 个工具，摘要 {short}…"),
                 false,
@@ -503,9 +507,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             kind,
         } => {
             app.content.add_system_message(
-                &format!(
-                    "[黑板归档失败] epoch {plan_epoch}（{kind}）未落盘: {archive_dir}"
-                ),
+                &format!("[黑板归档失败] epoch {plan_epoch}（{kind}）未落盘: {archive_dir}"),
                 true,
             );
             vec![format!("黑板归档失败: epoch {plan_epoch}（{kind}）")]
@@ -571,13 +573,15 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("计划已提出: {plan_id}")]
         }
         TuiEvent::PlanApproved {
-            plan_id, plan_epoch, authority, ..
+            plan_id,
+            plan_epoch,
+            authority,
+            ..
         } => {
-            app.content
-                .add_system_message(
-                    &format!("[计划] {plan_id}（epoch {plan_epoch}）已批准（{authority}）"),
-                    false,
-                );
+            app.content.add_system_message(
+                &format!("[计划] {plan_id}（epoch {plan_epoch}）已批准（{authority}）"),
+                false,
+            );
             vec![format!("计划已批准: {plan_id}（epoch {plan_epoch}）")]
         }
         TuiEvent::PlanRejected { plan_id } => {

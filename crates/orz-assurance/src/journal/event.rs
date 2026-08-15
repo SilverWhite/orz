@@ -102,19 +102,19 @@ pub enum EventType {
     // A6 explicit context compaction (2026-08-08 — controller-written;
     // mirrors run-event schema)
     ContextCompressed,
-      // D2-2 (2026-08-14, ADR-0010 v1.10 — CONTEXT_COMPACTION_DESIGN §6):
-      // a restored conversation was mechanically truncated before the first
-      // request (recovery pre-check over the conservative window threshold;
-      // the full sidecar was copied into the run journal for audit).
-      ContextRecoveryTruncated,
-      // F7 (2026-08-15, BACKLOG 6e 复查遗留): a blackboard plan-epoch
-      // archive write failed after bounded retries. The rotation still
-      // committed in memory, but the old epoch's records have no durable
-      // snapshot — this event is the audit trace (`kind` distinguishes the
-      // rotated-old snapshot from the current-epoch persistence).
-      EpochArchiveWriteFailed,
+    // D2-2 (2026-08-14, ADR-0010 v1.10 — CONTEXT_COMPACTION_DESIGN §6):
+    // a restored conversation was mechanically truncated before the first
+    // request (recovery pre-check over the conservative window threshold;
+    // the full sidecar was copied into the run journal for audit).
+    ContextRecoveryTruncated,
+    // F7 (2026-08-15, BACKLOG 6e 复查遗留): a blackboard plan-epoch
+    // archive write failed after bounded retries. The rotation still
+    // committed in memory, but the old epoch's records have no durable
+    // snapshot — this event is the audit trace (`kind` distinguishes the
+    // rotated-old snapshot from the current-epoch persistence).
+    EpochArchiveWriteFailed,
 
-      // IP5 pre-mutation snapshot (Phase 3, slice #4 wiring)
+    // IP5 pre-mutation snapshot (Phase 3, slice #4 wiring)
     SnapshotCreated,
     /// IP5 restore/revert (Phase 3, slice #8 — host restore entry; a restore
     /// is its own run: preflight → snapshot_restored → terminal).

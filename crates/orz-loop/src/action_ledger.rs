@@ -391,9 +391,7 @@ mod tests {
             "the complete older round still collapses: {collapsed:?}"
         );
         assert!(
-            collapsed
-                .iter()
-                .all(|m| m.content != "结果A"),
+            collapsed.iter().all(|m| m.content != "结果A"),
             "the complete round's raw result is collapsed into the ledger: {collapsed:?}"
         );
         assert!(

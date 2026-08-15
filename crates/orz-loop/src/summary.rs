@@ -164,7 +164,12 @@ fn step_status_label(status: &StepStatus) -> &'static str {
 fn render_plan(steps: &[PlanStep]) -> String {
     let mut out = String::new();
     for (i, step) in steps.iter().enumerate() {
-        let line = format!("{}. [{}] {}", i + 1, step_status_label(&step.status), step.description);
+        let line = format!(
+            "{}. [{}] {}",
+            i + 1,
+            step_status_label(&step.status),
+            step.description
+        );
         if out.chars().count() + line.chars().count() + 1 > SUMMARY_SLOT_LIMITS[1] {
             break;
         }
@@ -196,7 +201,8 @@ fn render_paths(
         } else {
             format!("{out}\n{line}")
         };
-        if out.chars().count() < SUMMARY_SLOT_LIMITS[2] && next.chars().count() <= SUMMARY_SLOT_LIMITS[2]
+        if out.chars().count() < SUMMARY_SLOT_LIMITS[2]
+            && next.chars().count() <= SUMMARY_SLOT_LIMITS[2]
         {
             out = next;
         } else {
@@ -263,10 +269,16 @@ pub fn parse_model_output(
         return Err(SummaryError::Degenerate);
     }
     if notes.chars().count() > SUMMARY_SLOT_LIMITS[3] {
-        return Err(SummaryError::SlotTooLong("注意事项", SUMMARY_SLOT_LIMITS[3]));
+        return Err(SummaryError::SlotTooLong(
+            "注意事项",
+            SUMMARY_SLOT_LIMITS[3],
+        ));
     }
     if continuation.chars().count() > SUMMARY_SLOT_LIMITS[4] {
-        return Err(SummaryError::SlotTooLong("后续衔接", SUMMARY_SLOT_LIMITS[4]));
+        return Err(SummaryError::SlotTooLong(
+            "后续衔接",
+            SUMMARY_SLOT_LIMITS[4],
+        ));
     }
     let slots = SummarySlots {
         purpose: mechanical.purpose.clone(),
@@ -295,8 +307,16 @@ pub fn summary_archive_markdown(
          - 被压轮次: {rounds_dropped}\n\
          - 守卫强制: {}\n\n\
          ## 目的\n{}\n\n## 计划\n{}\n\n## 变动文件路径\n{}\n\n## 注意事项\n{}\n\n## 后续衔接\n{}\n",
-        if incomplete { "summary_incomplete" } else { "complete" },
-        if guard_failed { "是（缩减守卫连续不满足，已强制压缩）" } else { "否" },
+        if incomplete {
+            "summary_incomplete"
+        } else {
+            "complete"
+        },
+        if guard_failed {
+            "是（缩减守卫连续不满足，已强制压缩）"
+        } else {
+            "否"
+        },
         slots.purpose,
         slots.plan,
         slots.paths,
@@ -331,7 +351,11 @@ pub fn build_summary_marker(
     archive_write_failed: bool,
     plan_epoch: u64,
 ) -> String {
-    let state = if incomplete { "（summary_incomplete）" } else { "" };
+    let state = if incomplete {
+        "（summary_incomplete）"
+    } else {
+        ""
+    };
     // P0-D S6 (2026-08-14): when no archive was written (termination state)
     // the digest placeholder must be explicit instead of a misleading
     // 64-zero digest — the event already carries `summary_digest: null`.
@@ -394,7 +418,7 @@ pub fn archive_digest(markdown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blackboard::{EditRecord, PlanStep, StepStatus, SharedBlackboard};
+    use crate::blackboard::{EditRecord, PlanStep, SharedBlackboard, StepStatus};
 
     fn slots() -> SummarySlots {
         SummarySlots {
@@ -409,13 +433,12 @@ mod tests {
     #[test]
     fn parse_valid_model_output() {
         let mechanical = slots();
-        let output =
-            format!(
-                "{NOTES_OPEN} 确认由前缀缓存引起；{} [/注意事项]\n\
+        let output = format!(
+            "{NOTES_OPEN} 确认由前缀缓存引起；{} [/注意事项]\n\
                  {CONTINUATION_OPEN} 下一步：跑回归测试；{}{CONTINUATION_CLOSE}",
-                "补充说明。".repeat(60),
-                "继续执行。".repeat(60),
-            );
+            "补充说明。".repeat(60),
+            "继续执行。".repeat(60),
+        );
         let parsed = parse_model_output(&output, &mechanical).unwrap();
         assert!(parsed.notes.starts_with("确认由前缀缓存引起"));
         assert!(parsed.continuation.starts_with("下一步：跑回归测试"));

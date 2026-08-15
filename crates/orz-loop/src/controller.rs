@@ -2017,10 +2017,10 @@ impl AgentLoopController {
             ),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
-        candidate_cap: web_fetch_candidate_cap_override()
-            .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
-        max_inject_tokens_per_round: max_inject_tokens_per_round_override()
-            .unwrap_or(DEFAULT_MAX_INJECT_TOKENS_PER_ROUND),
+            candidate_cap: web_fetch_candidate_cap_override()
+                .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
+            max_inject_tokens_per_round: max_inject_tokens_per_round_override()
+                .unwrap_or(DEFAULT_MAX_INJECT_TOKENS_PER_ROUND),
             snapshot_store: None,
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
@@ -4501,8 +4501,7 @@ impl AgentLoopController {
         // fallback for older sidecars that never ran this path. Grill turns
         // are excluded (they keep their own one-shot history). The summary
         // call is forced (terminal housekeeping, not a mid-task cost gate).
-        if matches!(stagnation_decision, StagnationDecision::Continue) && conversation.is_some()
-        {
+        if matches!(stagnation_decision, StagnationDecision::Continue) && conversation.is_some() {
             let estimate = estimate_messages_tokens(&messages);
             if estimate > self.context_compact.session_end_trigger_tokens {
                 let svc = SharedLoopServices {
@@ -7089,12 +7088,7 @@ impl AgentLoopController {
             if let Some(epoch) = epoch {
                 completed["epoch"] = serde_json::json!(epoch);
             }
-            writer
-                .record(
-                    EventType::ToolCompleted,
-                    completed,
-                )
-                .await?;
+            writer.record(EventType::ToolCompleted, completed).await?;
             self.blackboard.write().tool_actions.push(ToolActionRecord {
                 category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
@@ -9463,10 +9457,7 @@ mod tests {
         // one carries the offset hint).
         let received = fake.received_requests();
         let round2 = &received[1].messages;
-        let tool_replies: Vec<&Message> = round2
-            .iter()
-            .filter(|m| m.role == Role::Tool)
-            .collect();
+        let tool_replies: Vec<&Message> = round2.iter().filter(|m| m.role == Role::Tool).collect();
         assert_eq!(tool_replies.len(), 2, "{round2:?}");
         assert!(
             tool_replies
@@ -9764,10 +9755,9 @@ mod tests {
         // The current epoch snapshot is persisted at approval (the restore
         // entry), even before any rotation.
         assert!(dir.join("epoch-1.json").exists(), "current epoch persisted");
-        let first: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join("epoch-1.json")).unwrap(),
-        )
-        .unwrap();
+        let first: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("epoch-1.json")).unwrap())
+                .unwrap();
         assert_eq!(first["plan_id"], "PLAN-ROT-A");
 
         // New plan_id → epoch 2, old epoch-1 archived, work partitions cleared.
@@ -9806,10 +9796,9 @@ mod tests {
         assert_eq!(r.plan.steps.len(), 2);
         // The revision refreshes the CURRENT epoch snapshot (restore sees
         // the latest approved plan text) without creating a new epoch.
-        let current: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join("epoch-2.json")).unwrap(),
-        )
-        .unwrap();
+        let current: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("epoch-2.json")).unwrap())
+                .unwrap();
         assert_eq!(current["plan_epoch"], 2);
         assert_eq!(current["plan"]["goal"], "任务B（修订）");
 
@@ -9854,16 +9843,7 @@ mod tests {
             vec!["步骤B".to_string()],
         );
         controller
-            .run_turn(
-                &host,
-                "归档失败",
-                "RUN-BAF",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
+            .run_turn(&host, "归档失败", "RUN-BAF", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -9884,7 +9864,10 @@ mod tests {
         let archive_dir_text = archive_dir.display().to_string();
         for payload in failed {
             assert_eq!(payload["attempts"], 3);
-            assert_eq!(payload["archive_dir"].as_str(), Some(archive_dir_text.as_str()));
+            assert_eq!(
+                payload["archive_dir"].as_str(),
+                Some(archive_dir_text.as_str())
+            );
         }
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -9905,11 +9888,11 @@ mod tests {
             );
         // Same plan_id, different epoch → rejected.
         let err = match controller.try_with_plan(
-                "PLAN-INV-A".to_string(),
-                2,
-                "任务A（错误修订）".to_string(),
-                vec!["步骤A".to_string()],
-            ) {
+            "PLAN-INV-A".to_string(),
+            2,
+            "任务A（错误修订）".to_string(),
+            vec!["步骤A".to_string()],
+        ) {
             Err(e) => e,
             Ok(_) => panic!("same plan_id with a different epoch must be rejected"),
         };
@@ -9970,17 +9953,15 @@ mod tests {
     #[tokio::test]
     async fn blackboard_read_cross_epoch_and_restore() {
         let dir = test_dir().join("gsa").join("blackboard");
-        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec![
-            "ok",
-            "ok",
-        ])))
-        .with_blackboard_archive_dir(Some(dir.clone()))
-        .with_plan(
-            "PLAN-RESTORE-A".to_string(),
-            1,
-            "旧任务".to_string(),
-            vec!["旧步骤".to_string()],
-        );
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["ok", "ok"])))
+                .with_blackboard_archive_dir(Some(dir.clone()))
+                .with_plan(
+                    "PLAN-RESTORE-A".to_string(),
+                    1,
+                    "旧任务".to_string(),
+                    vec!["旧步骤".to_string()],
+                );
         {
             let mut bb = controller.blackboard().write();
             bb.edits.push(EditRecord {
@@ -10074,8 +10055,12 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_plan("PLAN-STABLE".to_string(), 1, "任务".to_string(), vec!["步骤一".to_string()]);
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-STABLE".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
         controller
             .run_turn(&host, "开始", "RUN-STABLE", MANIFEST, 0, None, None, None)
             .await
@@ -10574,7 +10559,10 @@ mod tests {
             .collect();
         assert_eq!(archives.len(), 1, "{archives:?}");
         let archive_text = std::fs::read_to_string(archives[0].path()).unwrap();
-        assert!(archive_text.contains("# ORZ 会话压缩摘要"), "{archive_text}");
+        assert!(
+            archive_text.contains("# ORZ 会话压缩摘要"),
+            "{archive_text}"
+        );
         assert!(archive_text.contains("derived_unverified"));
 
         // The MID-TASK gap (request 4, after tool round 3) carries the
@@ -10595,11 +10583,10 @@ mod tests {
              request {marker_idx}"
         );
         assert!(
-            received[..marker_idx]
+            received[..marker_idx].iter().all(|r| r
+                .messages
                 .iter()
-                .all(|r| r.messages.iter().all(|m| !m.content.starts_with(
-                    "[前文上下文已压缩"
-                ))),
+                .all(|m| !m.content.starts_with("[前文上下文已压缩"))),
             "no marker before the summary"
         );
         let round4 = &received[marker_idx].messages;
@@ -10612,18 +10599,12 @@ mod tests {
         // Oldest round dropped; the newest two kept verbatim (pairing
         // intact).
         assert!(
-            round4
-                .iter()
-                .all(|m| !m.content.contains(&"A".repeat(600))),
+            round4.iter().all(|m| !m.content.contains(&"A".repeat(600))),
             "oldest round's output gone: {round4:?}"
         );
         assert!(
-            round4
-                .iter()
-                .any(|m| m.content.contains(&"B".repeat(600)))
-                && round4
-                    .iter()
-                    .any(|m| m.content.contains(&"C".repeat(600))),
+            round4.iter().any(|m| m.content.contains(&"B".repeat(600)))
+                && round4.iter().any(|m| m.content.contains(&"C".repeat(600))),
             "newest rounds kept: {round4:?}"
         );
         let declared: Vec<&str> = round4
@@ -11383,11 +11364,10 @@ mod tests {
         let received = fake.received_requests();
         assert!(received.len() >= 3, "{received:?}");
         assert!(
-            received
+            received.iter().any(|r| r
+                .messages
                 .iter()
-                .any(|r| r.messages.iter().any(|m| m.content.starts_with(
-                    "[前文上下文已压缩"
-                ))),
+                .any(|m| m.content.starts_with("[前文上下文已压缩"))),
             "marker present after fallback summary"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -11618,11 +11598,10 @@ mod tests {
         // The failure report reaches the model in the marker.
         let received = fake.received_requests();
         assert!(
-            received
+            received.iter().any(|r| r
+                .messages
                 .iter()
-                .any(|r| r.messages.iter().any(|m| {
-                    m.content.contains("机制失败：缩减守卫连续不满足")
-                })),
+                .any(|m| { m.content.contains("机制失败：缩减守卫连续不满足") })),
             "guard failure must be explicitly reported: {received:?}"
         );
 
@@ -11816,11 +11795,10 @@ mod tests {
         // and the marker carries the explicit failure note.
         let received = fake.received_requests();
         assert!(
-            received
+            received.iter().any(|r| r
+                .messages
                 .iter()
-                .any(|r| r.messages.iter().any(|m| {
-                    m.content.contains("存档写入失败：摘要未落盘")
-                })),
+                .any(|m| { m.content.contains("存档写入失败：摘要未落盘") })),
             "archive failure must reach the model: {received:?}"
         );
 
@@ -12239,17 +12217,14 @@ mod tests {
         let payloads: Vec<serde_json::Value> = events(&dir)
             .into_iter()
             .filter(|e| e.event_type == EventType::ToolCompleted)
-            .filter(|e| {
-                e.payload
-                    .get("tool")
-                    .and_then(|t| t.as_str())
-                    == Some("blackboard_read")
-            })
+            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("blackboard_read"))
             .map(|e| e.payload)
             .collect();
         let invalid: Vec<_> = payloads
             .iter()
-            .filter(|p| p["call_id"] == "call-b5" || p["call_id"] == "call-b6" || p["call_id"] == "call-b7")
+            .filter(|p| {
+                p["call_id"] == "call-b5" || p["call_id"] == "call-b6" || p["call_id"] == "call-b7"
+            })
             .collect();
         assert_eq!(invalid.len(), 3, "{invalid:?}");
         for payload in invalid {
@@ -12269,7 +12244,11 @@ mod tests {
         for call_id in ["call-b5", "call-b6", "call-b7"] {
             let round = received
                 .iter()
-                .find(|r| r.messages.iter().any(|m| m.tool_call_id.as_deref() == Some(call_id)))
+                .find(|r| {
+                    r.messages
+                        .iter()
+                        .any(|m| m.tool_call_id.as_deref() == Some(call_id))
+                })
                 .unwrap_or_else(|| panic!("{call_id} round"));
             let reply = round
                 .messages
@@ -15400,7 +15379,9 @@ mod tests {
         // fire-and-continue behavior — no forced template round, no
         // `checkpoint_response` event.
         assert!(
-            events.iter().all(|e| e.event_type != EventType::CheckpointResponse),
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::CheckpointResponse),
             "retrieval lanes must not produce checkpoint_response events"
         );
 
@@ -15568,10 +15549,7 @@ mod tests {
                 r.payload.get("outcome").and_then(|v| v.as_str()),
                 Some("accepted")
             );
-            assert_eq!(
-                r.payload.get("attempt").and_then(|v| v.as_u64()),
-                Some(1)
-            );
+            assert_eq!(r.payload.get("attempt").and_then(|v| v.as_u64()), Some(1));
         }
         // The run CONTINUED past the checkpoint rounds and the checkpoint
         // answer rounds counted toward the orientation counter: 7 completed
@@ -15867,20 +15845,14 @@ mod tests {
                 .as_array()
                 .is_some_and(|e| !e.is_empty())
         );
-        assert_eq!(
-            responses[1].payload["outcome"].as_str(),
-            Some("accepted")
-        );
+        assert_eq!(responses[1].payload["outcome"].as_str(), Some("accepted"));
         assert_eq!(responses[1].payload["attempt"].as_u64(), Some(2));
         // The fire was NOT committed after the failed attempt 1 — the
         // checkpoint round count was fed (8) and still pending; after the
         // accepted attempt 2 the commit reset to 0, then the two final
         // rounds fed 2.
         assert_eq!(orientation.main.completed_rounds, 2);
-        assert_eq!(
-            events.last().unwrap().event_type,
-            EventType::RunFinished
-        );
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -15937,10 +15909,7 @@ mod tests {
             responses[0].payload["outcome"].as_str(),
             Some("refill_requested")
         );
-        assert_eq!(
-            responses[1].payload["outcome"].as_str(),
-            Some("degraded")
-        );
+        assert_eq!(responses[1].payload["outcome"].as_str(), Some("degraded"));
         assert_eq!(
             responses[1].payload["degrade_reason"].as_str(),
             Some("validation_failed_after_refill")
@@ -15956,10 +15925,7 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(
-            events.last().unwrap().event_type,
-            EventType::RunFinished
-        );
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -16042,10 +16008,7 @@ mod tests {
                 .any(|e| e.event_type == EventType::ToolStarted),
             "illegal checkpoint tool call must not execute"
         );
-        assert_eq!(
-            events.last().unwrap().event_type,
-            EventType::RunFinished
-        );
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -16090,14 +16053,8 @@ mod tests {
             .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
             .collect();
         assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
-        assert_eq!(
-            checkpoints[0].payload["threshold_stage"].as_u64(),
-            Some(2)
-        );
-        assert_eq!(
-            checkpoints[1].payload["threshold_stage"].as_u64(),
-            Some(3)
-        );
+        assert_eq!(checkpoints[0].payload["threshold_stage"].as_u64(), Some(2));
+        assert_eq!(checkpoints[1].payload["threshold_stage"].as_u64(), Some(3));
         let responses: Vec<_> = events
             .iter()
             .filter(|e| e.event_type == EventType::CheckpointResponse)
@@ -16107,18 +16064,9 @@ mod tests {
             responses[0].payload["outcome"].as_str(),
             Some("refill_requested")
         );
-        assert_eq!(
-            responses[1].payload["outcome"].as_str(),
-            Some("degraded")
-        );
-        assert_eq!(
-            responses[2].payload["outcome"].as_str(),
-            Some("accepted")
-        );
-        assert_eq!(
-            events.last().unwrap().event_type,
-            EventType::RunFinished
-        );
+        assert_eq!(responses[1].payload["outcome"].as_str(), Some("degraded"));
+        assert_eq!(responses[2].payload["outcome"].as_str(), Some("accepted"));
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -18582,14 +18530,12 @@ mod tests {
     /// A valid five-section summary response (mechanical slots are filled
     /// by the controller; only the two model slots matter here).
     fn summary_response() -> ScriptedResponse {
-        ScriptedResponse::text(
-            format!(
-                "[注意事项] 关键事实：前缀缓存导致回归；{}\n[/注意事项]\n\
+        ScriptedResponse::text(format!(
+            "[注意事项] 关键事实：前缀缓存导致回归；{}\n[/注意事项]\n\
                  [后续衔接] 下一步：跑回归测试；{}\n[/后续衔接]",
-                "补充说明。".repeat(60),
-                "继续执行。".repeat(60),
-            ),
-        )
+            "补充说明。".repeat(60),
+            "继续执行。".repeat(60),
+        ))
     }
 
     /// The conversation seeds the model context (prior history + new prompt)
@@ -18714,8 +18660,7 @@ mod tests {
             "marker must survive restore write-back: {kept:?}"
         );
         assert!(
-            kept.iter()
-                .all(|c| !c.starts_with("[ORIENTATION")),
+            kept.iter().all(|c| !c.starts_with("[ORIENTATION")),
             "other injected blocks stay filtered: {kept:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -18778,15 +18723,15 @@ mod tests {
         let reqs = fake.received_requests();
         let first = &reqs[0].messages;
         assert!(
-            first
-                .iter()
-                .any(|m| m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
+            first.iter().any(|m| m
+                .content
+                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
             "recovery marker must reach the first request: {first:?}"
         );
         assert!(
-            conversation
-                .iter()
-                .any(|m| m.content.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
+            conversation.iter().any(|m| m
+                .content
+                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
             "marker must survive write-back: {conversation:?}"
         );
         // No orphaned tool results after truncation: every Tool message's

@@ -80,9 +80,7 @@ impl PendingCheckpoint {
     pub(crate) fn inquiry_kind(&self) -> &'static str {
         match self {
             PendingCheckpoint::Orientation { .. } => "orientation_checkpoint",
-            PendingCheckpoint::DiagnosticCoverage { .. } => {
-                "diagnostic_coverage_checkpoint"
-            }
+            PendingCheckpoint::DiagnosticCoverage { .. } => "diagnostic_coverage_checkpoint",
         }
     }
 
@@ -103,12 +101,10 @@ impl PendingCheckpoint {
 
     pub(crate) fn with_attempt(&self, attempt: u32) -> Self {
         match self {
-            PendingCheckpoint::Orientation { record, .. } => {
-                PendingCheckpoint::Orientation {
-                    record: record.clone(),
-                    attempt,
-                }
-            }
+            PendingCheckpoint::Orientation { record, .. } => PendingCheckpoint::Orientation {
+                record: record.clone(),
+                attempt,
+            },
             PendingCheckpoint::DiagnosticCoverage { payload, .. } => {
                 PendingCheckpoint::DiagnosticCoverage {
                     payload: payload.clone(),
@@ -252,9 +248,7 @@ pub(crate) fn parse_and_validate(text: &str) -> TemplateVerdict {
                         Value::String(s) if !s.trim().is_empty() => {
                             let trimmed = s.trim().to_string();
                             if trimmed.chars().count() > ITEM_MAX_CHARS {
-                                errors.push(format!(
-                                    "{key} item exceeds {ITEM_MAX_CHARS} chars"
-                                ));
+                                errors.push(format!("{key} item exceeds {ITEM_MAX_CHARS} chars"));
                             }
                             out.push(trimmed);
                         }
@@ -294,9 +288,7 @@ pub(crate) fn parse_and_validate(text: &str) -> TemplateVerdict {
     // evidence surface(s) — recorded as a validation error, never silently
     // accepted.
     if response.next_action == "gather_evidence" && response.missing_evidence.is_empty() {
-        errors.push(
-            "next_action=gather_evidence requires non-empty missing_evidence".to_string(),
-        );
+        errors.push("next_action=gather_evidence requires non-empty missing_evidence".to_string());
     }
 
     TemplateVerdict {
@@ -473,7 +465,11 @@ mod tests {
     #[test]
     fn missing_required_fields_and_bad_enum_are_errors() {
         let v = parse_and_validate(r#"{"task_position":"x"}"#);
-        assert!(v.errors.iter().any(|e| e.contains("missing required field")));
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("missing required field"))
+        );
         let v = parse_and_validate(
             r#"{"task_position":"x","progress_evidence":[],"blockers":[],
                 "next_action":"run","changed_direction":false}"#,
@@ -487,9 +483,7 @@ mod tests {
             "next_action":"gather_evidence","changed_direction":false}"#;
         let v = parse_and_validate(text);
         assert!(
-            v.errors
-                .iter()
-                .any(|e| e.contains("missing_evidence")),
+            v.errors.iter().any(|e| e.contains("missing_evidence")),
             "{:?}",
             v.errors
         );
@@ -527,17 +521,17 @@ mod tests {
             v.errors
         );
         let r = v.response.unwrap();
-        assert_eq!(
-            r.progress_evidence,
-            vec!["y".to_string(), "z".repeat(201)]
-        );
+        assert_eq!(r.progress_evidence, vec!["y".to_string(), "z".repeat(201)]);
     }
 
     #[test]
     fn cross_check_splits_found_and_missing() {
         let v = parse_and_validate(valid_json());
         let cross = cross_check(v.response.as_ref(), &known());
-        assert_eq!(cross.evidence_identity_found, vec!["src/cache.rs", "SRC-001"]);
+        assert_eq!(
+            cross.evidence_identity_found,
+            vec!["src/cache.rs", "SRC-001"]
+        );
         assert!(cross.evidence_identity_missing.is_empty());
         assert!(cross.gather_evidence_missing_surface_provided);
     }
@@ -568,8 +562,7 @@ mod tests {
 
     #[test]
     fn pending_tracks_attempt_and_identity() {
-        let mut orientation =
-            OrientationSessionState::new("sess-1");
+        let mut orientation = OrientationSessionState::new("sess-1");
         for _ in 0..7 {
             orientation.feed_round(AgentRole::Main);
         }

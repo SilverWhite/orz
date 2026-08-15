@@ -390,7 +390,11 @@ fn prune_blackboard_epochs(removed: &mut Vec<String>, dir: &Path, cutoff: System
             continue;
         }
         // F4: stale `.claim-<n>` reservations — age-swept, no exception.
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         if let Some(rest) = name.strip_prefix(".claim-")
             && rest.parse::<u64>().is_ok()
         {
@@ -726,7 +730,10 @@ mod tests {
 
         let report = prune_old_records(&gsa, default_cutoff(), None);
 
-        assert_eq!(report.removed_blackboard_epoch_archives, vec!["epoch-1.json"]);
+        assert_eq!(
+            report.removed_blackboard_epoch_archives,
+            vec!["epoch-1.json"]
+        );
         assert!(!old.exists());
         assert!(bb.join("epoch-2.json").exists());
 
@@ -749,10 +756,7 @@ mod tests {
 
         let report = prune_old_records(&gsa, default_cutoff(), None);
 
-        assert_eq!(
-            report.removed_blackboard_epoch_archives,
-            vec![".claim-1"]
-        );
+        assert_eq!(report.removed_blackboard_epoch_archives, vec![".claim-1"]);
         assert!(!old_claim.exists());
         assert!(bb.join(".claim-2").exists());
 
@@ -821,11 +825,7 @@ mod tests {
         let old = archives.join("compaction-RUN-OLD-0001.md");
         std::fs::write(&old, "# 摘要").unwrap();
         backdate(&old, 10);
-        std::fs::write(
-            archives.join("compaction-RUN-FRESH-0002.md"),
-            "# 摘要",
-        )
-        .unwrap();
+        std::fs::write(archives.join("compaction-RUN-FRESH-0002.md"), "# 摘要").unwrap();
 
         let report = prune_old_records(&gsa, default_cutoff(), None);
 
