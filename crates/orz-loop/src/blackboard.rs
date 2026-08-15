@@ -105,6 +105,109 @@ pub struct ToolActionRecord {
     pub timestamp: String,
 }
 
+/// 注册板块（v0.5 操作台模型，P0-C orz 内嵌集成）：助理层机械刷新、模型只读
+/// 的“按钮”投影——动作名 + 最小参数提示。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActionRegistration {
+    pub name: String,
+    pub description: String,
+    /// 输入契约投影（参数提示/枚举；不做完整 schema 复制）。
+    pub parameters: serde_json::Value,
+}
+
+/// 动作栏订单（v0.5 操作台模型）：模型写、写无副作用；发放后单槽清空。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActionOrder {
+    pub order_id: String,
+    pub action: String,
+    pub arguments: serde_json::Value,
+    /// 写单时的模型轮（round 防重放/过期）。
+    pub round: u64,
+    /// 写单时的 plan epoch（跨 epoch 语义隔离）。
+    pub plan_epoch: u64,
+}
+
+/// 结果栏 receipt（v0.5 操作台模型）：助理层写；成功携带 response，
+/// 失败携带 fail-closed 错误信封（step/code/message/upstream）+ trace_id。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActionResult {
+    pub order_id: String,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    pub trace_id: String,
+    pub timestamp: String,
+}
+
+/// 黑板动作栏三板块（v0.5 用户提案，2026-08-13 定为生产协作形态）：
+/// 注册板块（助理层维护）、动作栏（模型写订单，单轮一单）、结果栏
+/// （助理层写 receipt）。本切片只落地数据面与单槽纪律；轮末发放接线下一切片。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ActionBoard {
+    /// 当前轮可用动作投影（机械刷新、常驻按需读）。
+    #[serde(default)]
+    pub registration: Vec<ActionRegistration>,
+    /// 未消费订单（单轮一单：已有 pending 时拒绝新单）。
+    #[serde(default)]
+    pub order: Option<ActionOrder>,
+    /// 发放后的 receipts（有界，保留最近 50 条）。
+    #[serde(default)]
+    pub results: Vec<ActionResult>,
+}
+
+impl ActionBoard {
+    /// 结果栏保留上限（有界，防黑板无限膨胀）。
+    pub const RESULTS_MAX: usize = 50;
+
+    /// 注册板块整块替换（助理层每轮机械刷新）。
+    pub fn set_registration(&mut self, registration: Vec<ActionRegistration>) {
+        self.registration = registration;
+    }
+
+    /// 模型写订单：单轮一单，已有 pending 订单时拒绝（fail-closed）。
+    pub fn write_order(&mut self, order: ActionOrder) -> Result<(), ActionBoardError> {
+        if self.order.is_some() {
+            return Err(ActionBoardError::OrderSlotBusy);
+        }
+        self.order = Some(order);
+        Ok(())
+    }
+
+    /// 机械发放出口：取走唯一 pending 订单并清空单槽（消费一次）。
+    pub fn take_order(&mut self) -> Option<ActionOrder> {
+        self.order.take()
+    }
+
+    /// 结果栏追加 receipt（有界：保留最近 `RESULTS_MAX` 条）。
+    pub fn push_result(&mut self, result: ActionResult) {
+        self.results.push(result);
+        if self.results.len() > Self::RESULTS_MAX {
+            let overflow = self.results.len() - Self::RESULTS_MAX;
+            self.results.drain(..overflow);
+        }
+    }
+}
+
+/// 动作栏单槽纪律错误（v0.5：本轮订单未发放完不进入下一轮写单）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionBoardError {
+    OrderSlotBusy,
+}
+
+impl std::fmt::Display for ActionBoardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActionBoardError::OrderSlotBusy => {
+                write!(f, "action bar already holds a pending order")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ActionBoardError {}
+
 /// The full blackboard with 5 sections + 2 controller-written partitions.
 ///
 /// Read rule: all sections are readable by all agents.
@@ -120,6 +223,9 @@ pub struct Blackboard {
     pub edits: Vec<EditRecord>,
     /// 工具动作区 — controller-written per executed tool call.
     pub tool_actions: Vec<ToolActionRecord>,
+    /// 操作台动作栏三板块（v0.5；P0-C orz 内嵌集成 S1）。
+    #[serde(default)]
+    pub actions: ActionBoard,
 }
 
 impl Blackboard {
@@ -139,6 +245,7 @@ impl Blackboard {
             edits: self.edits.clone(),
             tool_actions: self.tool_actions.clone(),
             exec: self.exec.clone(),
+            actions: self.actions.clone(),
             persisted_at: persisted_at.to_string(),
         }
     }
@@ -150,6 +257,7 @@ impl Blackboard {
         self.edits = snapshot.edits.clone();
         self.tool_actions = snapshot.tool_actions.clone();
         self.exec = snapshot.exec.clone();
+        self.actions = snapshot.actions.clone();
     }
 
     /// Plan-epoch rotation (ADR-0010 §14.15 / BLACKBOARD_PLAN_EPOCH_DESIGN).
@@ -242,6 +350,7 @@ impl Blackboard {
         self.edits.clear();
         self.tool_actions.clear();
         self.exec = ExecSection::default();
+        self.actions = ActionBoard::default();
         Ok(old)
     }
 }
@@ -302,6 +411,9 @@ pub struct EpochSnapshot {
     pub edits: Vec<EditRecord>,
     pub tool_actions: Vec<ToolActionRecord>,
     pub exec: ExecSection,
+    /// 操作台动作栏（v0.5；P0-C S1）——随 epoch 归档/恢复。
+    #[serde(default)]
+    pub actions: ActionBoard,
     /// When this snapshot was PERSISTED (approval/revision refresh or
     /// rotation). F9 (2026-08-15, BACKLOG 6e 复查遗留): the old name
     /// `rotated_at` misleadingly implied rotation-only — the current-epoch
@@ -380,5 +492,116 @@ mod tests {
         let r = bb.read();
         assert_eq!(r.gate_log.gate_decisions.len(), 1);
         assert_eq!(r.gate_log.orientation_checks.len(), 1);
+    }
+
+    #[test]
+    fn action_board_single_order_slot_and_consume_once() {
+        let bb = SharedBlackboard::new();
+        let order = ActionOrder {
+            order_id: "ORD-1".into(),
+            action: "workspace.read_file".into(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+            round: 1,
+            plan_epoch: 1,
+        };
+        {
+            let mut w = bb.write();
+            assert!(w.actions.write_order(order.clone()).is_ok());
+            assert_eq!(
+                w.actions.write_order(order.clone()),
+                Err(ActionBoardError::OrderSlotBusy)
+            );
+        }
+        {
+            let mut w = bb.write();
+            let taken = w.actions.take_order();
+            assert_eq!(taken, Some(order));
+            assert!(w.actions.order.is_none());
+            assert!(
+                w.actions
+                    .write_order(ActionOrder {
+                        order_id: "ORD-2".into(),
+                        action: "workspace.list_dir".into(),
+                        arguments: serde_json::json!({"path": "."}),
+                        round: 2,
+                        plan_epoch: 1,
+                    })
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn action_results_bounded_and_registration_replaceable() {
+        let mut board = ActionBoard::default();
+        board.set_registration(vec![ActionRegistration {
+            name: "workspace.read_file".into(),
+            description: "read a file".into(),
+            parameters: serde_json::json!({"required": ["path"]}),
+        }]);
+        for i in 0..(ActionBoard::RESULTS_MAX + 5) {
+            board.push_result(ActionResult {
+                order_id: format!("ORD-{i}"),
+                ok: true,
+                response: Some(serde_json::json!({})),
+                error: None,
+                trace_id: format!("t{i:06}"),
+                timestamp: "2026-08-15T00:00:00Z".into(),
+            });
+        }
+        assert_eq!(board.results.len(), ActionBoard::RESULTS_MAX);
+        assert!(board.results[0].order_id.starts_with("ORD-5"));
+        board.set_registration(Vec::new());
+        assert!(board.registration.is_empty());
+    }
+
+    #[test]
+    fn action_board_rotates_with_plan_epoch_and_snapshot_round_trips() {
+        let mut bb = Blackboard::new();
+        bb.rotate_to_plan(
+            "PLAN-1".into(),
+            1,
+            "first".into(),
+            vec!["step".into()],
+            "2026-08-15T00:00:00Z",
+        )
+        .unwrap();
+        bb.actions.set_registration(vec![ActionRegistration {
+            name: "workspace.read_file".into(),
+            description: "read a file".into(),
+            parameters: serde_json::json!({}),
+        }]);
+        bb.actions
+            .write_order(ActionOrder {
+                order_id: "ORD-1".into(),
+                action: "workspace.read_file".into(),
+                arguments: serde_json::json!({"path": "a.txt"}),
+                round: 1,
+                plan_epoch: 1,
+            })
+            .unwrap();
+        let snap = bb.epoch_snapshot("2026-08-15T00:00:00Z");
+        assert!(snap.actions.order.is_some());
+
+        let mut restored = Blackboard::new();
+        restored.restore_epoch_snapshot(&snap);
+        assert_eq!(
+            restored.actions.order.unwrap().action,
+            "workspace.read_file"
+        );
+
+        let old = bb
+            .rotate_to_plan(
+                "PLAN-2".into(),
+                2,
+                "next".into(),
+                vec!["step".into()],
+                "2026-08-15T00:00:01Z",
+            )
+            .unwrap();
+        assert!(old.is_some());
+        assert!(bb.actions.order.is_none());
+        assert!(bb.actions.registration.is_empty());
+        assert!(bb.actions.results.is_empty());
     }
 }

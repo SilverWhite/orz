@@ -15,6 +15,7 @@ pub mod agents;
 pub mod blackboard;
 pub(crate) mod checkpoint;
 pub(crate) mod citation_validation;
+pub mod console;
 pub mod controller;
 mod diagnostic_coverage;
 pub mod epoch;
