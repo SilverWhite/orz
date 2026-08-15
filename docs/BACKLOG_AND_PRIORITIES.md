@@ -144,11 +144,21 @@
   20 轮 vs candidate 单脚本 8 轮，成功率均 100%），冒烟 87/87；结果工件
   `prototype/classical_console/sample3_result.json`；**已闭合（2026-08-15 用户
   裁决通过，独立判定一致）**。
+- 进度（2026-08-15）：orz 内嵌集成 S1 已落地——`orz-loop/src/console.rs`
+  操作台核心（ServiceRegistry + ActionSpec 契约 + issue_action 五步路由
+  （注册表/契约/目标/执行/验证）+ fail-closed 信封（step/code/message/
+  upstream/trace_id，execute 附有界 trace 尾部）+ 有界 Trace/TraceStore；
+  执行经 ActionExecutor 抽象委托，生产实现由 controller 复用 run_host_tool
+  的权限/ACAF/事件链，禁止绕过既有门）+ 黑板动作栏数据面
+  （`blackboard::ActionBoard`：注册板块/动作栏单槽（单轮一单）/
+  结果栏有界 50，随 plan epoch 快照归档与轮换）。新增 14 项测试；
+  orz-loop 350 通过 / 0 失败。模型面投影、轮末机械发放、
+  assistant.trace 服务与 PTC 生产化待续（S2-S4）。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S2 模型面投影 + 轮末发放、S3 trace/PTC/Profile、S4 端到端 + 审计待续；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
@@ -369,6 +379,11 @@
 
 ## 变更记录
 
+- 2026-08-15：P0-C 内嵌集成 S1 落地登记——orz-loop 新增 `console` 模块
+  （ServiceRegistry/ActionSpec/issue_action/信封/Trace+TraceStore，执行经
+  ActionExecutor 抽象委托）与黑板动作栏数据面（`blackboard::ActionBoard`
+  注册板块/动作栏单槽/结果栏有界，随 plan epoch 归档轮换）；新增 14 项测试，
+  orz-loop 350 通过；S2 模型面投影 + 轮末发放待续。
 - 2026-08-15：P0-C 小样 2 闭合登记——编辑执行器 `workspace.search_replace` 对照实验实施并测量（固定 10 场景语料；baseline 成功率 100%/平均 1.8 轮 vs candidate 100%/平均 1.0 轮，通过标准两项满足；POC smoke 57/57），用户裁决通过、独立判定一致；DSH B 项（文件观察策略收编为 search_replace 动作契约规则）随之落地；结果工件 `prototype/classical_console/sample2_result.json`，待办路由见 TODO P0-C。
 - 2026-08-15：P0-C 小样 3 闭合登记——机械组合脚本模式 `workspace.run_script`
   （线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）对照实验实施并测量

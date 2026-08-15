@@ -52,6 +52,16 @@
 - [x] 小样 2：编辑执行器 `workspace.search_replace`（2026-08-15 闭合，用户裁决通过 + 独立判定一致；结果工件 `prototype/classical_console/sample2_result.json`）。
 - [x] 小样 3：机械组合脚本模式（线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——已闭合（2026-08-15 用户裁决通过 + 独立判定一致）；结果工件 `prototype/classical_console/sample3_result.json`。
 - [ ] orz 内嵌集成：HA 操作台接线（薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝；POC stdio 仅原型隔离）。
+  - [x] S1：操作台核心与黑板动作栏数据面——`orz-loop/src/console.rs`
+    （ServiceRegistry / ActionSpec 契约 / issue_action 五步路由 /
+    fail-closed 信封 / 有界 Trace+TraceStore，执行经 ActionExecutor 抽象
+    委托，生产复用 run_host_tool 权限/ACAF 链）+ `blackboard::ActionBoard`
+    （注册板块 / 动作栏单槽 / 结果栏有界 50，随 plan epoch 归档/轮换）。
+    2026-08-15 落地；新增 14 项测试，orz-loop 350 通过。
+  - [ ] S2：模型面投影（注册板块读取 + 动作栏写单工具）与轮末机械发放接线。
+  - [ ] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
+    生产化 + Profile/Bundle 按钮组加载。
+  - [ ] S4：端到端测试、实施审计与正式组件决策门材料。
 - [ ] 正式组件决策门：小样全面达标后裁决；不达标即撤。
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。
