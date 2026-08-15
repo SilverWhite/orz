@@ -1,0 +1,12 @@
+{
+  "tool": "project_doc_index",
+  "call_id": "call-pd1",
+  "exit_code": 1,
+  "status": "error",
+  "error": "retrieval_mode_off",
+  "policy_denial": {
+    "source": "policy_engine",
+    "code": "retrieval_mode_off",
+    "reason": "unknown source"
+  }
+}

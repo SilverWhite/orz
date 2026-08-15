@@ -2055,6 +2055,18 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "request-header-change.change-missing-kind.constraint.invalid.json"
     ] = request_header_change_schema
+    # P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial on
+    # tool_completed — schema-valid positive (retrieval-mode refusal shape)
+    # and one schema constraint violation (unknown source enum; the
+    # cross-layer exit_code/tool-family rules live in the Python verifier).
+    tool_completed_schema = ROOT / "runtime/tool-completed-event-payload-v0.1.schema.json"
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "tool-completed.policy-denial.valid.json"
+    ] = tool_completed_schema
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "tool-completed.policy-denial-bad-source.constraint.invalid.json"
+    ] = tool_completed_schema
     # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative fixture for the
     # fixed tier/weight table (authoritative must pair with 1.1; the good
     # fixture carries the full weighting fields).

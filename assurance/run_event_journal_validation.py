@@ -1884,6 +1884,94 @@ def _verify_v02_inject_budget(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+_ACAF_TICKETED_TOOLS = frozenset({"search_replace", "run_tests", "run_terminal_cmd"})
+_RETRIEVAL_MODE_GATED_TOOLS = frozenset({"project_doc_index", "browser_read", "pdf_read"})
+
+
+def _is_retrieval_mode_gated_tool(name: str) -> bool:
+    """P0-C S3 前置 (2026-08-15, P1-2 定案): mirrors the Rust relay family —
+    host-routed retrieval tools (`project_doc_index`/`browser_read`/`pdf_read`)
+    plus the retrieval dispatch names (`retrieve_project_*`, web_search /
+    web_fetch families)."""
+    return (
+        name in _RETRIEVAL_MODE_GATED_TOOLS
+        or name.startswith("retrieve_project_")
+        or name == "web_search"
+        or name.startswith("web_search_")
+        or name == "web_fetch"
+        or name.startswith("web_fetch_")
+    )
+
+
+def _verify_v02_policy_denial(events: list[dict[str, Any]]) -> list[str]:
+    """P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial carried
+    by no-ToolStarted tool_completed events (ACAF ticket gate / retrieval
+    mode gates; permission denials stay event-less by the existing audit
+    contract, so their `ToolResult.policy_denial` never reaches the journal):
+
+    - policy_denial must carry a known source (permission | acaf |
+      retrieval_mode | taint), a non-empty code and a string reason;
+    - a completion carrying policy_denial must have a non-zero exit_code
+      (refusals are `exit_code=Some(1)`);
+    - the tool must belong to the known refusal path of its source:
+      acaf → ticketed tools (search_replace / run_tests / run_terminal_cmd),
+      retrieval_mode → retrieval family, permission/taint → work tools.
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if event.get("event_type") != "tool_completed":
+            continue
+        p = event["payload"]
+        if "policy_denial" not in p:
+            continue
+        denial = p["policy_denial"]
+        source = denial.get("source")
+        tool = p.get("tool")
+        exit_code = p.get("exit_code")
+        if (
+            not isinstance(exit_code, int)
+            or isinstance(exit_code, bool)
+            or exit_code == 0
+        ):
+            errors.append(
+                f"event {index}: policy_denial requires a non-zero exit_code "
+                f"(refusals are exit_code=Some(1)); got {exit_code!r}"
+            )
+        code = denial.get("code")
+        reason = denial.get("reason")
+        if not isinstance(code, str) or not code.strip():
+            errors.append(
+                f"event {index}: policy_denial.code must be a non-empty string"
+            )
+        if not isinstance(reason, str):
+            errors.append(
+                f"event {index}: policy_denial.reason must be a string"
+            )
+        if source == "acaf":
+            if tool not in _ACAF_TICKETED_TOOLS:
+                errors.append(
+                    f"event {index}: source=acaf on non-ticketed tool {tool!r} "
+                    "(ticketed family: search_replace/run_tests/run_terminal_cmd)"
+                )
+        elif source == "retrieval_mode":
+            if tool is None or not _is_retrieval_mode_gated_tool(tool):
+                errors.append(
+                    f"event {index}: source=retrieval_mode on non-retrieval "
+                    f"tool {tool!r}"
+                )
+        elif source in ("permission", "taint"):
+            if tool not in _WORK_TOOLS:
+                errors.append(
+                    f"event {index}: source={source} on non-work tool {tool!r}"
+                )
+        else:
+            errors.append(
+                f"event {index}: policy_denial.source {source!r} not in "
+                "permission/acaf/retrieval_mode/taint"
+            )
+    return errors
+
+
 def _verify_v02_probe_accuracy(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §3.5 条7 (ORZ-CACHE-CONTEXT-COST 2026-08-15): probe flips
     must be accompanied by a real request-header change — a
@@ -2403,6 +2491,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_candidate_prefilter(events))
         errors.extend(_verify_v02_candidate_count(events))
         errors.extend(_verify_v02_inject_budget(events))
+        errors.extend(_verify_v02_policy_denial(events))
         errors.extend(_verify_v02_citation_validation(events))
         errors.extend(_verify_v02_recovery_truncation(events))
         errors.extend(_verify_v02_context_compressed(events))

@@ -1370,6 +1370,37 @@ EXTRA_V02_PAYLOAD_POSITIVES["request-header-change.change.valid"] = {
     "tool_count": 1,
 }
 
+# P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial on
+# tool_completed — schema-valid positive (source=retrieval_mode on a
+# retrieval-mode-gated tool, non-zero exit_code) and one schema constraint
+# violation (unknown source; the cross-layer exit_code/tool-family rules are
+# exercised in runtime/tests/test_run_event_journal_validation.py).
+EXTRA_V02_PAYLOAD_POSITIVES["tool-completed.policy-denial.valid"] = {
+    "tool": "project_doc_index",
+    "call_id": "call-pd1",
+    "exit_code": 1,
+    "status": "error",
+    "error": "retrieval_mode_off",
+    "policy_denial": {
+        "source": "retrieval_mode",
+        "code": "retrieval_mode_off",
+        "reason": "retrieval mode is 'off' for this session (ADR-0010 "
+        "§3.7.1); no retrieval tools are available.",
+    },
+}
+EXTRA_V02_PAYLOAD_BADS["tool-completed.policy-denial-bad-source.constraint.invalid"] = {
+    "tool": "project_doc_index",
+    "call_id": "call-pd1",
+    "exit_code": 1,
+    "status": "error",
+    "error": "retrieval_mode_off",
+    "policy_denial": {
+        "source": "policy_engine",
+        "code": "retrieval_mode_off",
+        "reason": "unknown source",
+    },
+}
+
 # canonical_cli payload shapes (its own `canonical-cli-*` track). Shapes taken
 # from canonical_cli.py event_specs (fake path L900-1009, real path L1322-1360).
 CANONICAL_CLI_GOOD: dict[str, dict] = {
@@ -1632,6 +1663,13 @@ Scope:
   「变化原因」). Extra fixtures cover the `change` shape and the schema rule
   that `reason=change` must carry `change_kind` +
   `previous_header_sha256`.
+- P0-C S3 前置 (2026-08-15, P1-2 定案): `tool_completed` gains the optional
+  structured `policy_denial` object (source ∈ permission | acaf |
+  retrieval_mode | taint; non-zero exit_code; tool must belong to the
+  source's known refusal path). Extra fixtures:
+  `tool-completed.policy-denial.valid` (retrieval-mode refusal shape) and
+  `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
+  source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
   event in the v0.2 enum (47 events). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape

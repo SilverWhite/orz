@@ -10,15 +10,15 @@
 - `[ ]` = 待办；`[x]` = 已完成（保留供核对，不计入开放项）。
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 
-## 未闭合扫描快照（2026-08-15；P0-C 小样 3 闭合后更新）
+## 未闭合扫描快照（2026-08-15；P0-C S3 前置闭合后更新）
 
 > 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态；
-> P0-C S2 落地后更新；P1-2 结构化策略拒绝补登记）。
+> P0-C S3 前置（P1-2 结构化策略拒绝）闭合后更新）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**36 项**
-  - P0-C：6 项（PLAN-FIRST 阶段 A/B/C、S3 前置结构化策略拒绝、orz 内嵌集成 S3/S4、正式组件决策门）
+- 未闭合总数：**35 项**
+  - P0-C：5 项（PLAN-FIRST 阶段 A/B/C、orz 内嵌集成 S3/S4、正式组件决策门）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -70,12 +70,13 @@
     `TraceStore.commit`）。2026-08-15 落地，实施审计见
     `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；
     orz-loop 364 通过 / 0 失败。
-  - [ ] S3 前置：结构化策略拒绝（P1-2 定案，2026-08-15）——拒绝路径统一返回
-    结构化信号（`ToolResult.policy_denial = {source, code, reason}`；source ∈
-    permission/acaf/retrieval_mode/taint），controller 删除字符串前缀判定
-    （`console_policy_refusal` 退役）；ToolCompleted 增可选 `policy_denial`
-    （Schema/verifier/fixtures 先行）；内容碰撞回归测试（成功输出含旧拒绝前缀
-    必须判成功）。
+  - [x] S3 前置：结构化策略拒绝（P1-2 定案，2026-08-15 闭合）——拒绝路径统一
+    返回结构化信号（`ToolResult.policy_denial = {source, code, reason}`；
+    source ∈ permission/acaf/retrieval_mode/taint），controller 删除字符串
+    前缀判定（`console_policy_refusal` 退役）；ToolCompleted 增可选
+    `policy_denial`（Schema/verifier/fixtures 先行）；内容碰撞回归测试
+    （成功输出含旧拒绝前缀必须判成功）。实施审计见
+    `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
   - [ ] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
     生产化 + Profile/Bundle 按钮组加载。
   - [ ] S4：端到端测试、实施审计与正式组件决策门材料。

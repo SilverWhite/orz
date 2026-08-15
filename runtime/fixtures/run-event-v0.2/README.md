@@ -50,6 +50,13 @@ Scope:
   「变化原因」). Extra fixtures cover the `change` shape and the schema rule
   that `reason=change` must carry `change_kind` +
   `previous_header_sha256`.
+- P0-C S3 前置 (2026-08-15, P1-2 定案): `tool_completed` gains the optional
+  structured `policy_denial` object (source ∈ permission | acaf |
+  retrieval_mode | taint; non-zero exit_code; tool must belong to the
+  source's known refusal path). Extra fixtures:
+  `tool-completed.policy-denial.valid` (retrieval-mode refusal shape) and
+  `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
+  source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
   event in the v0.2 enum (47 events). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape

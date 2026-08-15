@@ -27,6 +27,7 @@ from assurance.run_event_journal_validation import (
     _resolve_payload_schema,
     _verify_v02_checkpoint_responses,
     _verify_v02_inject_budget,
+    _verify_v02_policy_denial,
     _verify_v02_probe_accuracy,
     _verify_v02_request_header,
     validate_journal_file,
@@ -4079,6 +4080,90 @@ class InjectBudgetCrossCheckTests(unittest.TestCase):
 
     def test_clean_refusal_passes(self) -> None:
         self.assertEqual(_verify_v02_inject_budget([self._completed()]), [])
+
+
+class PolicyDenialCrossCheckTests(unittest.TestCase):
+    """P0-C S3 前置 (2026-08-15, P1-2 定案): `_verify_v02_policy_denial` —
+    structured policy denial shape (source/code/reason), non-zero exit_code,
+    and tool-family routing per source."""
+
+    def _completed(self, **overrides: object) -> dict:
+        payload: dict[str, object] = {
+            "tool": "project_doc_index",
+            "call_id": "call-1",
+            "exit_code": 1,
+            "status": "error",
+            "error": "retrieval_mode_off",
+            "policy_denial": {
+                "source": "retrieval_mode",
+                "code": "retrieval_mode_off",
+                "reason": "retrieval mode is off",
+            },
+        }
+        payload.update(overrides)
+        return _v02_event("tool_completed", payload)
+
+    def test_clean_retrieval_mode_refusal_passes(self) -> None:
+        self.assertEqual(_verify_v02_policy_denial([self._completed()]), [])
+
+    def test_non_policy_completion_passes(self) -> None:
+        event = self._completed()
+        del event["payload"]["policy_denial"]
+        self.assertEqual(_verify_v02_policy_denial([event]), [])
+
+    def test_successful_exit_code_rejected(self) -> None:
+        errors = _verify_v02_policy_denial([self._completed(exit_code=0)])
+        self.assertTrue(any("non-zero exit_code" in e for e in errors), errors)
+        errors = _verify_v02_policy_denial([self._completed(exit_code=None)])
+        self.assertTrue(any("non-zero exit_code" in e for e in errors), errors)
+
+    def test_unknown_source_rejected(self) -> None:
+        event = self._completed()
+        event["payload"]["policy_denial"] = dict(
+            event["payload"]["policy_denial"], source="policy_engine"
+        )
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("source" in e for e in errors), errors)
+
+    def test_empty_code_rejected(self) -> None:
+        event = self._completed()
+        event["payload"]["policy_denial"] = dict(
+            event["payload"]["policy_denial"], code=""
+        )
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("non-empty string" in e for e in errors), errors)
+
+    def test_acaf_requires_ticketed_tool(self) -> None:
+        event = self._completed(
+            tool="read_file",
+            error="control_ticket_rejected:missing_goal_context",
+        )
+        event["payload"]["policy_denial"] = {
+            "source": "acaf",
+            "code": "control_ticket_rejected:missing_goal_context",
+            "reason": "goal digest not pinned",
+        }
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("non-ticketed tool" in e for e in errors), errors)
+        event["payload"]["tool"] = "search_replace"
+        self.assertEqual(_verify_v02_policy_denial([event]), [])
+
+    def test_retrieval_mode_requires_retrieval_tool(self) -> None:
+        event = self._completed(tool="read_file")
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("non-retrieval tool" in e for e in errors), errors)
+
+    def test_permission_requires_work_tool(self) -> None:
+        event = self._completed(tool="not_a_tool")
+        event["payload"]["policy_denial"] = {
+            "source": "permission",
+            "code": "permission_deny",
+            "reason": "denied",
+        }
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("non-work tool" in e for e in errors), errors)
+        event["payload"]["tool"] = "read_file"
+        self.assertEqual(_verify_v02_policy_denial([event]), [])
 
 
 class ProbeAccuracyCrossCheckTests(unittest.TestCase):

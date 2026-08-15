@@ -177,11 +177,21 @@
   orz-loop 364 通过 / 0 失败；实施审计见
   `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`。
   assistant.trace 服务与 PTC/Profile 生产化待续（S3-S4）。
+- 进度（2026-08-15）：**S3 前置（P1-2 结构化策略拒绝）已闭合**——
+  `ToolResult.policy_denial = {source, code, reason}`（source ∈
+  permission/acaf/retrieval_mode/taint）在 `run_host_tool` 边界五条拒绝
+  路径接线（权限 deny/defer、ACAF 票据门、检索模式门 ×3）；console 适配层
+  只按结构化信号映射 `step=policy`，`console_policy_refusal` 前缀判定退役；
+  ToolCompleted 增可选 `policy_denial`（Schema/verifier/fixtures 先行，
+  verifier 交叉规则=exit_code 非 0 + 工具命中已知拒绝路径）；内容碰撞回归
+  （成功输出含旧前缀判成功）。验证：orz-loop 366 通过 / 0 失败、acaf_e2e
+  21 通过、Python runtime 209 通过、仓库门禁 valid。实施审计见
+  `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；S3 前置结构化策略拒绝（P1-2，2026-08-15 定案）、S3 trace/PTC/Profile、S4 端到端 + 审计待续；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；S3 trace/PTC/Profile、S4 端到端 + 审计待续；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3a. PLAN-FIRST-BLACKBOARD（模型面重构；2026-08-15 用户定案）
@@ -417,6 +427,15 @@
 
 ## 变更记录
 
+- 2026-08-15：P0-C S3 前置（P1-2 结构化策略拒绝）闭合登记——`ToolResult.
+  policy_denial`（source/code/reason）接线五条拒绝路径（权限/ACAF/检索
+  模式门 ×3）、console 适配层退役前缀判定、ToolCompleted 增可选
+  `policy_denial`（Schema/verifier/fixtures 先行 + 交叉规则）、内容碰撞
+  回归；orz-loop 366 / acaf_e2e 21 / Python runtime 209 通过，仓库门禁
+  valid；实施审计见
+  `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；
+  同日本切片工具事故导致 `diagnostic_coverage.rs` 生产实现重建（按测试/
+  调用面契约，非逐字节恢复），详见审计 §5。
 - 2026-08-15：P0-C 内嵌集成 S2 落地登记——模型面投影（`blackboard_read`
   section=actions + `blackboard.action_write` 写单按钮，pending 机械拒绝、
   round/plan_epoch/run_id 机械盖章、主车道专属）与轮末机械发放

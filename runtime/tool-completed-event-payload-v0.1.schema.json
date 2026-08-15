@@ -39,6 +39,20 @@
       "minimum": 1,
       "description": "ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the per-round injection budget in effect (ORZ_MAX_INJECT_TOKENS_PER_ROUND, default 50K). Present together with inject_tokens_used."
     },
+    "policy_denial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "code", "reason"],
+      "properties": {
+        "source": {
+          "enum": ["permission", "acaf", "retrieval_mode", "taint"],
+          "description": "P0-C S3 前置 (2026-08-15, P1-2 定案): the refusing gate family — permission bridge / ACAF ticket gate / retrieval mode gate / taint (reserved)."
+        },
+        "code": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "description": "P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial carried by a no-ToolStarted refusal completion (ACAF / retrieval mode today; permission denials stay event-less by audit contract). Cross-layer rules — exit_code must be non-zero and the tool must belong to the known refusal path for the source — are enforced by the Python verifier (_verify_v02_policy_denial), keeping the schema shape minimal."
+    },
     "section": { "type": "string" },
     "full_output_path": { "type": "string" },
     "workspace_delta": {
