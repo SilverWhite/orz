@@ -4116,6 +4116,10 @@ class PolicyDenialCrossCheckTests(unittest.TestCase):
         self.assertTrue(any("non-zero exit_code" in e for e in errors), errors)
         errors = _verify_v02_policy_denial([self._completed(exit_code=None)])
         self.assertTrue(any("non-zero exit_code" in e for e in errors), errors)
+        event = self._completed()
+        del event["payload"]["exit_code"]
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("non-zero exit_code" in e for e in errors), errors)
 
     def test_unknown_source_rejected(self) -> None:
         event = self._completed()
@@ -4145,7 +4149,26 @@ class PolicyDenialCrossCheckTests(unittest.TestCase):
         }
         errors = _verify_v02_policy_denial([event])
         self.assertTrue(any("non-ticketed tool" in e for e in errors), errors)
-        event["payload"]["tool"] = "search_replace"
+        for tool in (
+            "search_replace",
+            "run_tests",
+            "run_terminal_cmd",
+            "web_fetch",
+            "browser_read",
+        ):
+            event["payload"]["tool"] = tool
+            self.assertEqual(
+                _verify_v02_policy_denial([event]),
+                [],
+                f"source=acaf on ticketed tool {tool} must pass",
+            )
+
+    def test_policy_denial_requires_error_status(self) -> None:
+        event = self._completed()
+        del event["payload"]["status"]
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("status=error" in e for e in errors), errors)
+        event["payload"]["status"] = "error"
         self.assertEqual(_verify_v02_policy_denial([event]), [])
 
     def test_retrieval_mode_requires_retrieval_tool(self) -> None:
@@ -4161,9 +4184,75 @@ class PolicyDenialCrossCheckTests(unittest.TestCase):
             "reason": "denied",
         }
         errors = _verify_v02_policy_denial([event])
-        self.assertTrue(any("non-work tool" in e for e in errors), errors)
+        self.assertTrue(any("non-permission-gated tool" in e for e in errors), errors)
         event["payload"]["tool"] = "read_file"
         self.assertEqual(_verify_v02_policy_denial([event]), [])
+        # P0-C S3 前置审查修复 (F7): host-routed retrieval tools are
+        # permission-gated on the main lane and must validate.
+        event["payload"]["tool"] = "project_doc_index"
+        self.assertEqual(_verify_v02_policy_denial([event]), [])
+        # Web-family tools are not permission-gated today (lane
+        # self-execution skips the bridge) — a permission denial there is
+        # outside the known refusal path.
+        event["payload"]["tool"] = "web_search"
+        errors = _verify_v02_policy_denial([event])
+        self.assertTrue(any("non-permission-gated tool" in e for e in errors), errors)
+
+
+class PolicyDenialProducerParityTests(unittest.TestCase):
+    """P0-C S3 前置审查修复 (F5): parity lock — the exact ToolCompleted
+    shapes the Rust producer emits for policy refusals must pass the Python
+    cross-check (exit_code / status=error / error code / tool family)."""
+
+    def _event(self, payload: dict[str, object]) -> dict:
+        return _v02_event("tool_completed", payload)
+
+    def test_retrieval_mode_off_producer_shape_passes(self) -> None:
+        payload = {
+            "tool": "project_doc_index",
+            "call_id": "call-pd1",
+            "exit_code": 1,
+            "target": "internal_retrieval",
+            "status": "error",
+            "error": "retrieval_mode_off",
+            "policy_denial": {
+                "source": "retrieval_mode",
+                "code": "retrieval_mode_off",
+                "reason": "retrieval mode is 'off' for this session (ADR-0010 "
+                "§3.7.1); no retrieval tools are available.",
+            },
+        }
+        self.assertEqual(_verify_v02_policy_denial([self._event(payload)]), [])
+
+    def test_acaf_browser_read_producer_shape_passes(self) -> None:
+        payload = {
+            "tool": "browser_read",
+            "call_id": "call-s1",
+            "exit_code": 1,
+            "status": "error",
+            "error": "control_ticket_rejected:signer_unreachable",
+            "policy_denial": {
+                "source": "acaf",
+                "code": "control_ticket_rejected:signer_unreachable",
+                "reason": "signer unreachable",
+            },
+        }
+        self.assertEqual(_verify_v02_policy_denial([self._event(payload)]), [])
+
+    def test_host_level_permission_denial_on_retrieval_tool_passes(self) -> None:
+        payload = {
+            "tool": "project_doc_index",
+            "call_id": "call-pd2",
+            "exit_code": 1,
+            "status": "error",
+            "error": "permission_deny",
+            "policy_denial": {
+                "source": "permission",
+                "code": "permission_deny",
+                "reason": "tool 'project_doc_index' — 本次调用未获权限门禁放行",
+            },
+        }
+        self.assertEqual(_verify_v02_policy_denial([self._event(payload)]), [])
 
 
 class ProbeAccuracyCrossCheckTests(unittest.TestCase):

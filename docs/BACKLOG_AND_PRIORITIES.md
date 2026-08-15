@@ -182,16 +182,20 @@
   permission/acaf/retrieval_mode/taint）在 `run_host_tool` 边界五条拒绝
   路径接线（权限 deny/defer、ACAF 票据门、检索模式门 ×3）；console 适配层
   只按结构化信号映射 `step=policy`，`console_policy_refusal` 前缀判定退役；
-  ToolCompleted 增可选 `policy_denial`（Schema/verifier/fixtures 先行，
-  verifier 交叉规则=exit_code 非 0 + 工具命中已知拒绝路径）；内容碰撞回归
-  （成功输出含旧前缀判成功）。验证：orz-loop 366 通过 / 0 失败、acaf_e2e
-  21 通过、Python runtime 209 通过、仓库门禁 valid。实施审计见
-  `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
+    ToolCompleted 增可选 `policy_denial`（Schema/verifier/fixtures 先行，
+    verifier 交叉规则=exit_code 非 0 + 工具命中已知拒绝路径）；内容碰撞回归
+    （成功输出含旧前缀判成功）。**2026-08-15 全面审查修复（F1-F8）闭合**：
+    拒绝事件补 `exit_code=1` + `status=error`（含 host 级拒绝）、verifier
+    ACAF 家族补 `web_fetch`/`browser_read`、新增生产者事件→验证器对拍
+    测试、`orz/` 源码完整性清单接入仓库门禁。验证：orz-loop 367 通过 /
+    0 失败、acaf_e2e 21 通过、Python runtime 213 通过、仓库门禁 valid
+    （含 orz 清单 1406 文件）。实施审计见
+    `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
 - 实施序列：
   1. 槽位表由工作区索引动态生成（POC 已闭合；生产接线复用 orz `project_doc_index` 缓存）；
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
-  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；S3 trace/PTC/Profile、S4 端到端 + 审计待续；
+  4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；S3 trace/PTC/Profile、S4 端到端 + 审计待续；
   5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
 
 ### 3a. PLAN-FIRST-BLACKBOARD（模型面重构；2026-08-15 用户定案）
@@ -427,6 +431,13 @@
 
 ## 变更记录
 
+- 2026-08-15：P0-C S3 前置全面审查修复（F1-F8）闭合登记——拒绝事件补
+  `exit_code=1` + `status=error`（含 host 级拒绝）、verifier ACAF 家族补
+  `web_fetch`/`browser_read`、permission 家族补 host 路由检索工具、新增
+  生产者事件→验证器对拍测试（`PolicyDenialProducerParityTests`）、
+  `orz/` 源码完整性清单（`orz_source_manifest.sha256`，1406 文件）接入
+  仓库门禁；验证：orz-loop 367 / acaf_e2e 21 / Python runtime 213 通过，
+  仓库门禁 valid；详见 S3 前置审计 §7。
 - 2026-08-15：P0-C S3 前置（P1-2 结构化策略拒绝）闭合登记——`ToolResult.
   policy_denial`（source/code/reason）接线五条拒绝路径（权限/ACAF/检索
   模式门 ×3）、console 适配层退役前缀判定、ToolCompleted 增可选

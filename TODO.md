@@ -74,9 +74,13 @@
     返回结构化信号（`ToolResult.policy_denial = {source, code, reason}`；
     source ∈ permission/acaf/retrieval_mode/taint），controller 删除字符串
     前缀判定（`console_policy_refusal` 退役）；ToolCompleted 增可选
-    `policy_denial`（Schema/verifier/fixtures 先行）；内容碰撞回归测试
-    （成功输出含旧拒绝前缀必须判成功）。实施审计见
-    `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
+      `policy_denial`（Schema/verifier/fixtures 先行）；内容碰撞回归测试
+      （成功输出含旧拒绝前缀必须判成功）。实施审计见
+      `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`。
+      2026-08-15 全面审查修复（F1-F8）闭合：拒绝事件补 `exit_code=1` +
+      `status=error`（含 host 级拒绝）、verifier ACAF 家族补
+      `web_fetch`/`browser_read`、新增生产者事件→验证器对拍测试、
+      `orz/` 源码完整性清单（`orz_source_manifest.sha256`）接入仓库门禁。
   - [ ] S3：`assistant.trace` 只读服务接线 + `workspace.run_script`（PTC）
     生产化 + Profile/Bundle 按钮组加载。
   - [ ] S4：端到端测试、实施审计与正式组件决策门材料。

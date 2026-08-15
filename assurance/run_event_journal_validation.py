@@ -1884,8 +1884,23 @@ def _verify_v02_inject_budget(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
-_ACAF_TICKETED_TOOLS = frozenset({"search_replace", "run_tests", "run_terminal_cmd"})
+_ACAF_TICKETED_TOOLS = frozenset(
+    {
+        "search_replace",
+        "run_tests",
+        "run_terminal_cmd",
+        # P0-C S3 前置审查修复 (F2): mirrors Rust `acaf::action_kind_for_tool`
+        # — network tickets cover web_fetch / browser_read as well.
+        "web_fetch",
+        "browser_read",
+    }
+)
 _RETRIEVAL_MODE_GATED_TOOLS = frozenset({"project_doc_index", "browser_read", "pdf_read"})
+# P0-C S3 前置审查修复 (F7): permission-gated host tools include the
+# host-routed retrieval family (project_doc_index / browser_read / pdf_read)
+# on the main lane. Web-family tools are not permission-gated today (lane
+# self-execution skips the bridge), so they stay outside this set.
+_PERMISSION_GATED_TOOLS = _WORK_TOOLS | _RETRIEVAL_MODE_GATED_TOOLS
 
 
 def _is_retrieval_mode_gated_tool(name: str) -> bool:
@@ -1911,11 +1926,16 @@ def _verify_v02_policy_denial(events: list[dict[str, Any]]) -> list[str]:
 
     - policy_denial must carry a known source (permission | acaf |
       retrieval_mode | taint), a non-empty code and a string reason;
-    - a completion carrying policy_denial must have a non-zero exit_code
-      (refusals are `exit_code=Some(1)`);
+    - a completion carrying policy_denial must be a refusal completion:
+      status=error and a non-zero exit_code (refusals are
+      `exit_code=Some(1)`);
     - the tool must belong to the known refusal path of its source:
-      acaf → ticketed tools (search_replace / run_tests / run_terminal_cmd),
-      retrieval_mode → retrieval family, permission/taint → work tools.
+      acaf → ticketed tools (search_replace / run_tests / run_terminal_cmd /
+      web_fetch / browser_read),
+      retrieval_mode → retrieval family,
+      permission → permission-gated host tools (work tools + host-routed
+      retrieval family),
+      taint → work tools (reserved, no runtime wiring).
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -1928,6 +1948,12 @@ def _verify_v02_policy_denial(events: list[dict[str, Any]]) -> list[str]:
         source = denial.get("source")
         tool = p.get("tool")
         exit_code = p.get("exit_code")
+        status = p.get("status")
+        if status != "error":
+            errors.append(
+                f"event {index}: policy_denial requires status=error "
+                f"(refusal completion); got {status!r}"
+            )
         if (
             not isinstance(exit_code, int)
             or isinstance(exit_code, bool)
@@ -1959,10 +1985,16 @@ def _verify_v02_policy_denial(events: list[dict[str, Any]]) -> list[str]:
                     f"event {index}: source=retrieval_mode on non-retrieval "
                     f"tool {tool!r}"
                 )
-        elif source in ("permission", "taint"):
+        elif source == "permission":
+            if tool not in _PERMISSION_GATED_TOOLS:
+                errors.append(
+                    f"event {index}: source=permission on non-permission-gated "
+                    f"tool {tool!r}"
+                )
+        elif source == "taint":
             if tool not in _WORK_TOOLS:
                 errors.append(
-                    f"event {index}: source={source} on non-work tool {tool!r}"
+                    f"event {index}: source=taint on non-work tool {tool!r}"
                 )
         else:
             errors.append(

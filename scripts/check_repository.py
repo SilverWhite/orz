@@ -298,6 +298,58 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _check_orz_source_manifest() -> tuple[list[str], int]:
+    """P0-C S3 前置审查修复 (F6): `orz/` is untracked — the committed
+    integrity manifest (`orz_source_manifest.sha256`) detects
+    corruption / unrecorded modification of the runtime sources."""
+    orz_root = ROOT / "orz"
+    manifest = ROOT / "orz_source_manifest.sha256"
+    excluded_dirs = {"target", ".git", ".pytest_cache", "__pycache__"}
+    errors: list[str] = []
+    if not manifest.is_file():
+        return [
+            "orz source manifest missing: orz_source_manifest.sha256 "
+            "(regenerate with "
+            "python scripts/generate_orz_source_manifest.py)"
+        ], 0
+    expected: dict[str, str] = {}
+    for line_number, raw in enumerate(
+        manifest.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2 or len(parts[0]) != 64:
+            errors.append(
+                f"orz_source_manifest.sha256:{line_number}: "
+                "malformed manifest line"
+            )
+            continue
+        expected[parts[1]] = parts[0]
+    actual: dict[str, Path] = {}
+    if orz_root.is_dir():
+        for path in orz_root.rglob("*"):
+            if not path.is_file():
+                continue
+            relative_parts = path.relative_to(orz_root).parts
+            if any(part in excluded_dirs for part in relative_parts):
+                continue
+            actual[path.relative_to(orz_root).as_posix()] = path
+    for rel, digest in sorted(expected.items()):
+        path = actual.get(rel)
+        if path is None:
+            errors.append(f"orz source missing: {rel}")
+        elif _sha256(path) != digest:
+            errors.append(f"orz source digest mismatch: {rel}")
+    for rel in sorted(set(actual) - set(expected)):
+        errors.append(
+            "orz source not in manifest (regenerate orz_source_manifest.sha256): "
+            f"{rel}"
+        )
+    return errors, len(expected)
+
+
 def _validate_instance(instance: Any, schema_path: Path, label: str) -> list[str]:
     validator = Draft202012Validator(
         _load_json(schema_path), format_checker=FormatChecker()
@@ -2583,6 +2635,9 @@ def check_repository() -> dict[str, Any]:
                     )
     counts["fixture_manifests"] = fixture_count
 
+    orz_errors, orz_count = _check_orz_source_manifest()
+    counts["orz_source_manifest_files"] = orz_count
+    errors.extend(orz_errors)
     errors.extend(_check_markdown_links())
     errors.sort()
     return {
