@@ -10,7 +10,9 @@
 //!      boundary; the trust anchor here is "the launch chain hands us the
 //!      manifest", same trust level as the host binary itself.)
 //!   2. `K_install` is loaded from the installation keystore (Windows
-//!      DPAPI; non-Windows fails closed — the signer refuses to start).
+//!      DPAPI; Linux eval containers use the plain-file store, user-ruled
+//!      2026-08-17 ADR-0010 §14.21; any other store fails closed — the
+//!      signer refuses to start).
 //!      `K_install` never leaves this process.
 //!
 //! Interface: JSON-lines on stdin/stdout, single request single response
@@ -51,12 +53,12 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use orz_assurance::acaf::{IssueContext, TicketKind, derive_session_key, issue_ticket};
 use orz_assurance::journal::sha256_hex;
 use orz_assurance::permit::HmacSha256Signer;
-use orz_host::keystore::{KeystoreError, WindowsDpapiInstallationKeyStore};
+use orz_host::keystore::KeystoreError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -261,8 +263,9 @@ fn load_manifest() -> Result<SignerManifest, SignerError> {
     Ok(manifest)
 }
 
-/// Load `K_install` from the installation keystore (Windows DPAPI; other
-/// platforms fail closed — the signer does not start without an OS keystore).
+/// Load `K_install` from the installation keystore (dispatches on the
+/// keystore's declared storage adapter — Windows DPAPI or the Linux
+/// plain-file store; anything else fails closed).
 fn load_install_key() -> Result<Vec<u8>, SignerError> {
     let root = match std::env::var("ORZ_SIGNER_KEYSTORE_ROOT") {
         Ok(r) => PathBuf::from(r),
@@ -272,8 +275,11 @@ fn load_install_key() -> Result<Vec<u8>, SignerError> {
             ));
         }
     };
-    let store = WindowsDpapiInstallationKeyStore::load(&root)?;
-    Ok(store.secret_bytes()?)
+    load_install_key_from(&root)
+}
+
+fn load_install_key_from(root: &Path) -> Result<Vec<u8>, SignerError> {
+    Ok(orz_host::keystore::load_installation_secret(root)?)
 }
 
 /// Process one JSON request line; returns the response value (never panics on
@@ -1065,5 +1071,24 @@ mod tests {
         );
         assert!(ORIENTATION_TEMPLATE.contains("[ORIENTATION v0.3]"));
         assert!(ORIENTATION_TEMPLATE.contains("[/ORIENTATION]"));
+    }
+
+    #[test]
+    fn file_keystore_loads_across_dispatch() {
+        use orz_host::keystore::FileInstallationKeyStore;
+
+        let dir = std::env::temp_dir().join(format!(
+            "orz-signer-keystore-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = FileInstallationKeyStore::create(&dir).unwrap();
+        let expected = store.secret_bytes().unwrap();
+        let mut loaded = load_install_key_from(&dir).unwrap();
+        assert_eq!(loaded, expected);
+        orz_assurance::credential::zeroize_bytes(&mut loaded);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

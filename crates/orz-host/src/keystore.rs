@@ -14,8 +14,12 @@
 //!   readable by the Python authority and validates against the schema
 //!   (conformance parity, same MAGIC/entropy/blob layout).
 //!
-//! DPAPI is the only OS keystore — non-Windows creation fails closed,
-//! matching the Python store's platform gate. `MemoryInstallationKeyStore`
+//! Windows DPAPI remains the production keystore. A plain-file store
+//! (`file-0600-installation`, 0600 perms) serves Linux eval containers —
+//! user-ruled 2026-08-17 (ADR-0010 §14.21): the harness supply chain
+//! materialises the keystore in the ephemeral container and the signer
+//! loads it once; the same-user exposure matches Windows DPAPI (any process
+//! of the same user can `CryptUnprotectData`). `MemoryInstallationKeyStore`
 //! mirrors Python's test-only adapter ("never accepted as an OS keystore").
 //!
 //! Signing delegates to `orz_assurance::permit::HmacSha256Signer` (ring);
@@ -48,6 +52,13 @@ pub const METADATA_NAME: &str = "installation-key.json";
 
 /// Storage adapter id (schema enum value, Python parity).
 pub const STORAGE_ID: &str = "windows-dpapi-current-user";
+
+/// Storage adapter id for the plain-file keystore (Linux eval containers;
+/// user-ruled 2026-08-17, ADR-0010 §14.21).
+pub const FILE_STORAGE_ID: &str = "file-0600-installation";
+
+/// Raw installation key file name for the plain-file store.
+pub const FILE_KEY_NAME: &str = "installation-key.bin";
 
 /// Errors from the installation key store.
 #[derive(Debug, thiserror::Error)]
@@ -124,6 +135,28 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeystoreError> {
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// Atomically write the plaintext key file with 0600 permissions (Unix).
+/// The temp file is created with the final mode so rename never widens it.
+#[cfg(unix)]
+fn write_secret_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeystoreError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let tmp = path.with_extension("tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true).mode(0o600);
+    let mut f = opts.open(&tmp)?;
+    f.write_all(bytes)?;
+    drop(f);
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_secret_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeystoreError> {
+    write_atomic(path, bytes)
 }
 
 /// Test-only key store; never accepted as an OS keystore (Python parity).
@@ -346,6 +379,181 @@ impl PermitSigner for WindowsDpapiInstallationKeyStore {
     }
 }
 
+/// Plain-file installation key store (Linux eval containers; user-ruled
+/// 2026-08-17, ADR-0010 §14.21).
+///
+/// Same blob layout as the DPAPI store minus OS protection:
+/// `<root>/installation-key.bin` = `MAGIC` ‖ secret, written with 0600
+/// permissions. The trust anchor is the harness supply chain — the launcher
+/// materialises the keystore inside the ephemeral container and the signer
+/// loads it once.
+#[derive(Debug)]
+pub struct FileInstallationKeyStore {
+    root: PathBuf,
+    key_id: String,
+}
+
+impl FileInstallationKeyStore {
+    /// Create a fresh store; refuses to overwrite an existing key.
+    pub fn create(root: &Path) -> Result<Self, KeystoreError> {
+        std::fs::create_dir_all(root)?;
+        let blob_path = root.join(FILE_KEY_NAME);
+        let metadata_path = root.join(METADATA_NAME);
+        // Python parity: refuse to overwrite either keystore file.
+        if blob_path.exists() || metadata_path.exists() {
+            return Err(KeystoreError::AlreadyExists(root.to_path_buf()));
+        }
+        let mut secret = random_secret()?;
+        let key_id = key_id_for(&secret);
+        let result = (|| {
+            let blob = [MAGIC, secret.as_slice()].concat();
+            write_secret_atomic(&blob_path, &blob)?;
+            let metadata = KeyMetadata {
+                schema_version: "0.1.0-draft".to_string(),
+                metadata_kind: "installation_key_metadata".to_string(),
+                key_id: key_id.clone(),
+                created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                key_algorithm: "hmac-sha256".to_string(),
+                key_bytes: KEY_BYTES as u32,
+                storage: FILE_STORAGE_ID.to_string(),
+                protected_blob_sha256: Some(sha256_hex(&blob)),
+                secret_material_persisted_in_metadata: false,
+                limitations: vec![
+                    "Plaintext installation key file (0600) — the trust anchor is the harness supply chain in an ephemeral eval container; same-user exposure matches Windows DPAPI."
+                        .to_string(),
+                ],
+            };
+            write_atomic(&metadata_path, &canonical_json(&metadata)?)?;
+            Ok(())
+        })();
+        // Zeroise the secret copy on every path (DPAPI-store parity: on
+        // failure the partial artifacts are removed).
+        zeroize_bytes(&mut secret);
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&blob_path);
+            let _ = std::fs::remove_file(metadata_path);
+            return Err(e);
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            key_id,
+        })
+    }
+
+    pub fn load(root: &Path) -> Result<Self, KeystoreError> {
+        if !root.is_dir() {
+            return Err(KeystoreError::InvalidRoot(root.to_path_buf()));
+        }
+        let blob_path = root.join(FILE_KEY_NAME);
+        let metadata_path = root.join(METADATA_NAME);
+        for path in [&blob_path, &metadata_path] {
+            if !path.is_file() {
+                return Err(KeystoreError::NotRegularFile(path.clone()));
+            }
+        }
+        let metadata: KeyMetadata = load_json(&metadata_path)?;
+        if metadata.storage != FILE_STORAGE_ID {
+            return Err(KeystoreError::Metadata(format!(
+                "installation key metadata uses the wrong storage adapter: {}",
+                metadata.storage
+            )));
+        }
+        // Schema const parity (installation-key-metadata-v0.1.schema.json) —
+        // fail closed on any drifted field.
+        if metadata.schema_version != "0.1.0-draft"
+            || metadata.metadata_kind != "installation_key_metadata"
+            || metadata.key_algorithm != "hmac-sha256"
+            || metadata.key_bytes != KEY_BYTES as u32
+            || metadata.secret_material_persisted_in_metadata
+        {
+            return Err(KeystoreError::Metadata(
+                "installation key metadata violates schema consts".to_string(),
+            ));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            key_id: metadata.key_id,
+        })
+    }
+
+    /// Load an existing store or create a fresh one.
+    pub fn create_or_load(root: &Path) -> Result<Self, KeystoreError> {
+        std::fs::create_dir_all(root)?;
+        if root.join(FILE_KEY_NAME).exists() {
+            Self::load(root)
+        } else {
+            Self::create(root)
+        }
+    }
+
+    /// Read, validate and return the stored secret. Callers must zeroise
+    /// the returned buffer after use (same contract as the DPAPI store).
+    pub fn secret_bytes(&self) -> Result<Vec<u8>, KeystoreError> {
+        let blob_path = self.root.join(FILE_KEY_NAME);
+        let metadata_path = self.root.join(METADATA_NAME);
+        let metadata: KeyMetadata = load_json(&metadata_path)?;
+        let stored = std::fs::read(&blob_path)?;
+        if metadata.protected_blob_sha256.as_deref() != Some(sha256_hex(&stored).as_str()) {
+            return Err(KeystoreError::BlobDigestMismatch);
+        }
+        // Exact size is deterministic for the plaintext store (MAGIC ‖ 32B).
+        if !stored.starts_with(MAGIC) || stored.len() != MAGIC.len() + KEY_BYTES {
+            return Err(KeystoreError::InvalidBlobHeader);
+        }
+        let mut secret = stored[MAGIC.len()..].to_vec();
+        let valid = secret_ok(&secret) && key_id_for(&secret) == self.key_id;
+        if !valid {
+            zeroize_bytes(&mut secret);
+            return Err(KeystoreError::IdentityMismatch);
+        }
+        Ok(secret)
+    }
+}
+
+impl PermitSigner for FileInstallationKeyStore {
+    fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PermitError> {
+        let mut secret = self
+            .secret_bytes()
+            .map_err(|e| PermitError::Signing(e.to_string()))?;
+        let result = HmacSha256Signer::new(&self.key_id, &secret).sign(payload);
+        zeroize_bytes(&mut secret);
+        result
+    }
+
+    fn verify(&self, payload: &[u8], signature: &[u8]) -> bool {
+        let mut secret = match self.secret_bytes() {
+            Ok(secret) => secret,
+            Err(_) => return false,
+        };
+        let ok = HmacSha256Signer::new(&self.key_id, &secret).verify(payload, signature);
+        zeroize_bytes(&mut secret);
+        ok
+    }
+}
+
+/// Load the installation key secret, dispatching on the keystore's declared
+/// storage adapter (read from the metadata file). Windows DPAPI on
+/// `windows-dpapi-current-user`; the plain-file store on
+/// `file-0600-installation`; anything else fails closed.
+/// Callers must zeroise the returned buffer.
+pub fn load_installation_secret(root: &Path) -> Result<Vec<u8>, KeystoreError> {
+    if !root.is_dir() {
+        return Err(KeystoreError::InvalidRoot(root.to_path_buf()));
+    }
+    let metadata: KeyMetadata = load_json(&root.join(METADATA_NAME))?;
+    match metadata.storage.as_str() {
+        STORAGE_ID => WindowsDpapiInstallationKeyStore::load(root)?.secret_bytes(),
+        FILE_STORAGE_ID => FileInstallationKeyStore::load(root)?.secret_bytes(),
+        other => Err(KeystoreError::Metadata(format!(
+            "unsupported installation key storage adapter: {other}"
+        ))),
+    }
+}
+
 #[cfg(windows)]
 mod dpapi {
     use windows::Win32::Foundation::{HLOCAL, LocalFree};
@@ -497,6 +705,99 @@ mod tests {
             }
             Err(e) => panic!("unexpected error: {e}"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_store_create_load_secret_round_trip() {
+        let dir = test_dir();
+        let store = FileInstallationKeyStore::create(&dir).unwrap();
+        assert!(dir.join(FILE_KEY_NAME).is_file());
+        assert!(dir.join(METADATA_NAME).is_file());
+
+        let mut secret = store.secret_bytes().unwrap();
+        assert_eq!(secret.len(), KEY_BYTES);
+
+        // Reload from disk — identity + blob digest validated, and the
+        // dispatcher resolves the file storage adapter.
+        let loaded = FileInstallationKeyStore::load(&dir).unwrap();
+        assert_eq!(loaded.key_id(), store.key_id());
+        let mut reloaded = load_installation_secret(&dir).unwrap();
+        assert_eq!(reloaded, secret);
+
+        // A second create refuses to overwrite (idempotence guard).
+        assert!(matches!(
+            FileInstallationKeyStore::create(&dir),
+            Err(KeystoreError::AlreadyExists(_))
+        ));
+
+        // Tampered key file → digest mismatch.
+        let blob_path = dir.join(FILE_KEY_NAME);
+        let mut blob = std::fs::read(&blob_path).unwrap();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+        std::fs::write(&blob_path, &blob).unwrap();
+        assert!(matches!(
+            FileInstallationKeyStore::load(&dir).unwrap().secret_bytes(),
+            Err(KeystoreError::BlobDigestMismatch)
+        ));
+
+        zeroize_bytes(&mut secret);
+        zeroize_bytes(&mut reloaded);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_store_rejects_wrong_storage_adapter() {
+        let dir = test_dir();
+        let store = FileInstallationKeyStore::create(&dir).unwrap();
+        // Rewrite the metadata with the DPAPI storage id — the file store
+        // must fail closed (the dispatcher would route to DPAPI, which the
+        // plaintext blob cannot satisfy).
+        let metadata_path = dir.join(METADATA_NAME);
+        let mut metadata: KeyMetadata = load_json(&metadata_path).unwrap();
+        metadata.storage = STORAGE_ID.to_string();
+        std::fs::write(&metadata_path, canonical_json(&metadata).unwrap()).unwrap();
+        assert!(matches!(
+            FileInstallationKeyStore::load(&dir),
+            Err(KeystoreError::Metadata(_))
+        ));
+        // The dispatcher routes by storage id — on Windows it reaches the
+        // DPAPI store, which fails on the missing `.dpapi` blob; either way
+        // it must fail closed.
+        assert!(load_installation_secret(&dir).is_err());
+        let _ = store;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_store_rejects_unknown_storage_adapter() {
+        let dir = test_dir();
+        let store = FileInstallationKeyStore::create(&dir).unwrap();
+        let metadata_path = dir.join(METADATA_NAME);
+        let mut metadata: KeyMetadata = load_json(&metadata_path).unwrap();
+        metadata.storage = "totally-unknown-adapter".to_string();
+        std::fs::write(&metadata_path, canonical_json(&metadata).unwrap()).unwrap();
+        assert!(matches!(
+            load_installation_secret(&dir),
+            Err(KeystoreError::Metadata(_))
+        ));
+        let _ = store;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_store_key_file_is_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir();
+        let _store = FileInstallationKeyStore::create(&dir).unwrap();
+        let mode = std::fs::metadata(dir.join(FILE_KEY_NAME))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "key file mode: {mode:o}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

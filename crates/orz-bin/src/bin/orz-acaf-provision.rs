@@ -8,13 +8,15 @@
 //!
 //! The signer binary is located next to this tool (`<exe_dir>/orz-signer`).
 //! Idempotent: an existing keystore is loaded (never overwritten), and the
-//! manifest is refreshed to match the current signer binary. Non-Windows
-//! fails closed (DPAPI unavailable — same posture as the signer itself).
+//! manifest is refreshed to match the current signer binary. Keystore
+//! adapter: Windows DPAPI (production default) / plain-file
+//! (`file-0600-installation`, Linux eval containers — user-ruled 2026-08-17,
+//! ADR-0010 §14.21).
 
 use std::path::{Path, PathBuf};
 
 use orz_assurance::journal::sha256_hex;
-use orz_host::keystore::WindowsDpapiInstallationKeyStore;
+use orz_host::keystore::{FileInstallationKeyStore, WindowsDpapiInstallationKeyStore};
 
 const MANIFEST_VERSION: u64 = 1;
 const SIGNER_BINARY_NAME: &str = "orz-signer";
@@ -52,6 +54,19 @@ fn write_manifest(manifest_path: &Path, binary_sha256: &str) -> Result<(), Strin
         .map_err(|e| format!("write {}: {e}", manifest_path.display()))
 }
 
+/// Create or load the installation keystore, dispatching on the platform:
+/// Windows DPAPI (production default) / plain-file (Linux eval containers).
+fn create_keystore(root: &Path) -> Result<(), String> {
+    if cfg!(windows) {
+        WindowsDpapiInstallationKeyStore::create_or_load(root)
+            .map_err(|e| format!("keystore create/load: {e}"))?;
+    } else {
+        FileInstallationKeyStore::create_or_load(root)
+            .map_err(|e| format!("keystore create/load: {e}"))?;
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let keystore_root = args
@@ -67,9 +82,7 @@ fn run() -> Result<(), String> {
     let keystore_root = PathBuf::from(keystore_root);
     let manifest_output = PathBuf::from(manifest_output);
 
-    // Idempotent: create once, load on re-runs (never overwrites the key).
-    WindowsDpapiInstallationKeyStore::create_or_load(&keystore_root)
-        .map_err(|e| format!("keystore create/load: {e}"))?;
+    create_keystore(&keystore_root)?;
 
     let signer = signer_binary_path()?;
     let bytes = std::fs::read(&signer).map_err(|e| format!("read {}: {e}", signer.display()))?;
@@ -109,5 +122,24 @@ mod tests {
         assert_eq!(json["signer_revision"], 1);
         assert_eq!(json["binary_name"], SIGNER_BINARY_NAME);
         assert_eq!(json["binary_sha256"].as_str().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn keystore_creation_matches_platform() {
+        use orz_host::keystore::{BLOB_NAME, FILE_KEY_NAME};
+
+        let dir = std::env::temp_dir().join(format!(
+            "orz-acaf-provision-keystore-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        create_keystore(&dir).unwrap();
+        if cfg!(windows) {
+            assert!(dir.join(BLOB_NAME).is_file(), "DPAPI blob expected");
+        } else {
+            assert!(dir.join(FILE_KEY_NAME).is_file(), "plaintext key expected");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
