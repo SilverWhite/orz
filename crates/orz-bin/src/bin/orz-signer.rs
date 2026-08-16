@@ -226,6 +226,11 @@ impl Signer {
 /// at its injection/commit point milliseconds after issuance.
 const TICKET_TTL_SECS: u64 = 5;
 
+/// Max bytes for a single signer request line. Defense-in-depth (2026-08-16
+/// review fix P3-I4): the launcher is trusted, but an oversized or
+/// malformed line must not grow the signer's memory unboundedly.
+const MAX_REQUEST_LINE_BYTES: usize = 1 << 20; // 1 MiB
+
 /// Compute the SHA-256 of our own binary.
 fn self_binary_sha256() -> Result<String, SignerError> {
     let exe = std::env::current_exe()?;
@@ -476,6 +481,60 @@ fn error_response(id: Option<Value>, code: &str, message: &str) -> Value {
     })
 }
 
+/// Read one bounded line from `reader`. `Ok(None)` on EOF; `Ok(Some(line))`
+/// on a newline-terminated (or trailing-EOF) line without the newline; the
+/// line is rejected once it exceeds `MAX_REQUEST_LINE_BYTES` (the rest of the
+/// line is drained so the stream stays aligned, then fail-closed).
+fn read_request_line<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>, SignerError> {
+    let mut line = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then_some(line));
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(pos) => {
+                line.extend_from_slice(&available[..pos]);
+                reader.consume(pos + 1);
+                if line.len() > MAX_REQUEST_LINE_BYTES {
+                    return Err(SignerError::BadRequest(
+                        "request line exceeds the size limit".into(),
+                    ));
+                }
+                return Ok(Some(line));
+            }
+            None => {
+                line.extend_from_slice(available);
+                let n = available.len();
+                reader.consume(n);
+                if line.len() > MAX_REQUEST_LINE_BYTES {
+                    // Drain to the next newline (or EOF) so the stream does
+                    // not misalign, then fail-closed.
+                    loop {
+                        let buf = reader.fill_buf()?;
+                        if buf.is_empty() {
+                            break;
+                        }
+                        match buf.iter().position(|&b| b == b'\n') {
+                            Some(pos) => {
+                                reader.consume(pos + 1);
+                                break;
+                            }
+                            None => {
+                                let m = buf.len();
+                                reader.consume(m);
+                            }
+                        }
+                    }
+                    return Err(SignerError::BadRequest(
+                        "request line exceeds the size limit".into(),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 /// The stdio service loop (separable for tests).
 fn run_service<R: Read, W: Write>(
     signer: &mut Signer,
@@ -484,14 +543,13 @@ fn run_service<R: Read, W: Write>(
 ) -> Result<(), SignerError> {
     let mut reader = BufReader::new(reader);
     let mut writer = BufWriter::new(writer);
-    let mut line = String::new();
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line)?;
-        if n == 0 {
+        let Some(line) = read_request_line(&mut reader)? else {
             break; // stdin closed — clean exit
-        }
-        let trimmed = line.trim();
+        };
+        let text = std::str::from_utf8(&line)
+            .map_err(|_| SignerError::BadRequest("request line is not UTF-8".into()))?;
+        let trimmed = text.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -636,6 +694,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t3["sequence"], 1);
+    }
+
+    #[test]
+    fn request_line_is_bounded_and_utf8_checked() {
+        // Normal short lines (LF terminated; the service loop trims).
+        let mut reader = std::io::Cursor::new(b"{\"id\":1}\nnext\n".to_vec());
+        let line = read_request_line(&mut reader).unwrap().expect("first line");
+        assert_eq!(line, b"{\"id\":1}");
+        let line = read_request_line(&mut reader)
+            .unwrap()
+            .expect("second line");
+        assert_eq!(line, b"next");
+        assert!(read_request_line(&mut reader).unwrap().is_none());
+
+        // An oversized line fails closed and drains the stream so the next
+        // request stays aligned.
+        let mut huge = vec![b'x'; MAX_REQUEST_LINE_BYTES + 1];
+        huge.push(b'\n');
+        huge.extend_from_slice(b"{\"id\":2}\n");
+        let mut reader = std::io::Cursor::new(huge);
+        let err = read_request_line(&mut reader).unwrap_err();
+        assert!(
+            err.to_string().contains("size limit"),
+            "unexpected error: {err}"
+        );
+        let line = read_request_line(&mut reader)
+            .unwrap()
+            .expect("aligned line");
+        assert_eq!(line, b"{\"id\":2}");
+
+        // run_service fails closed on the oversized line (the signer exits).
+        let mut signer = test_signer();
+        let mut input = vec![b'x'; MAX_REQUEST_LINE_BYTES + 1];
+        input.push(b'\n');
+        let err =
+            run_service(&mut signer, std::io::Cursor::new(input), std::io::sink()).unwrap_err();
+        assert!(
+            err.to_string().contains("size limit"),
+            "unexpected error: {err}"
+        );
+
+        // Non-UTF-8 request lines are a structured bad_request, not a crash.
+        let mut reader = std::io::Cursor::new(vec![0xff, 0xfe, b'\n']);
+        let line = read_request_line(&mut reader).unwrap().expect("raw line");
+        let err = std::str::from_utf8(&line).unwrap_err();
+        assert!(err.to_string().contains("invalid utf-8"));
     }
 
     #[test]

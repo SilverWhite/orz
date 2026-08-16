@@ -4288,6 +4288,20 @@ impl AgentLoopController {
         template: Option<&str>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<String, AgentLoopError> {
+        // ACAF fail-closed D-15 (2026-08-16 review fix P2-I1): grill turns
+        // are a full model↔tool round — fail-closed with an unconfigured
+        // fabric refuses loudly here too (the ACP server's comment promises
+        // exactly this). Read-only policy is defense-in-depth, not the
+        // authorization gate; a future policy widening must not open an
+        // unticketed channel.
+        if self.acaf_fail_closed && self.acaf.is_none() {
+            return Err(AgentLoopError::Assurance(
+                "ACAF fail-closed is enabled but no signer client is \
+                 configured (ORZ_ACAF_MANIFEST + ORZ_ACAF_KEYSTORE); \
+                 refusing to start the grill turn"
+                    .to_string(),
+            ));
+        }
         let mut writer = EventWriter::new(None, EventTrack::V02, "grill", "", 0, None, None);
         let mut turn = GrillTurn {
             history,
@@ -22459,6 +22473,33 @@ mod tests {
             "grill turns must not write run-journal events"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Grill turns are a model↔tool round — ACAF fail-closed with an
+    /// unconfigured fabric must refuse loudly here too (2026-08-16 review
+    /// fix P2-I1), matching the `run_turn_with_guards` D-15 startup check
+    /// and the ACP server's documented promise.
+    #[tokio::test]
+    async fn grill_turn_fail_closed_without_fabric_refuses() {
+        let provider = FakeProvider::new(vec![ScriptedResponse::text("不应到达")]);
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(provider)).with_acaf_fail_closed(true);
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let mut history = Vec::new();
+        let err = controller
+            .run_grill_turn(&host, &mut history, "问题", None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("fail-closed"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(history.len(), 0, "no turn may start without a fabric");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

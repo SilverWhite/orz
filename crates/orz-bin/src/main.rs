@@ -253,14 +253,18 @@ fn run_tui() {
     let result = local.block_on(&rt, async {
         // ACAF production flip (2026-08-16): the TUI workbench shares the
         // signer-process client + fail-closed posture of the CLI/ACP paths.
-        let acaf = build_acaf_client().await.map_err(|e| format!("acaf: {e}"))?;
+        let acaf = build_acaf_client()
+            .await
+            .map_err(|e| format!("acaf: {e}"))?;
         let cfg = orz_tui::TuiConfig {
             cwd,
             replay: None,
             acaf,
             acaf_fail_closed: acaf_fail_closed_enabled(),
         };
-        orz_tui::run(cfg, build_gateway()).await.map_err(|e| e.to_string())
+        orz_tui::run(cfg, build_gateway())
+            .await
+            .map_err(|e| e.to_string())
     });
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -319,7 +323,14 @@ async fn build_acaf_client() -> Result<
 /// gate (value semantics preserved from the 2026-08-13 review fix).
 fn acaf_fail_closed_enabled() -> bool {
     match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
-        Ok(v) if matches!(v.to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off") => false,
+        Ok(v)
+            if matches!(
+                v.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            ) =>
+        {
+            false
+        }
         Ok(v) if matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") => true,
         Ok(v) => {
             eprintln!(
@@ -355,7 +366,9 @@ fn run_stdio() {
         // the signer-process client + fail-closed posture of the CLI run
         // path (previously unticketed). Unset `ORZ_ACAF_FAIL_CLOSED` =
         // enforced; an unconfigured fabric then refuses runs (D-15).
-        let acaf = build_acaf_client().await.map_err(|e| format!("acaf: {e}"))?;
+        let acaf = build_acaf_client()
+            .await
+            .map_err(|e| format!("acaf: {e}"))?;
         let server = std::sync::Arc::new(
             orz_host::acp_server::AcpServer::with_gateway(build_gateway())
                 .with_acaf(acaf)

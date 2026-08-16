@@ -16,6 +16,7 @@
 //! client (`None` on the controller) means zero behaviour change — no
 //! ticket events are journaled at all.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -128,7 +129,14 @@ pub struct AcafClient {
     stdout: BufReader<tokio::process::ChildStdout>,
     next_id: u64,
     ledger: TicketLedger,
-    session: Option<ClientSession>,
+    /// Active session id — the lookup key into `sessions`.
+    session: Option<String>,
+    /// Cached per-session state keyed by session id. 2026-08-16 review fix
+    /// (P2-I2): sessions are cached per id so switching between sessions
+    /// does NOT re-derive/reset an already-initialised session's one-shot
+    /// ledger — the ACP server shares one client across sessions and
+    /// interleaves them.
+    sessions: HashMap<String, ClientSession>,
     /// e2e-only seam (2026-08-13 review fix): when set, the next
     /// `verify_and_consume` for the matching kind fails BEFORE any signer
     /// RPC — simulates the signer dying between sign and verify (the
@@ -187,6 +195,7 @@ impl AcafClient {
             next_id: 1,
             ledger: TicketLedger::new(),
             session: None,
+            sessions: HashMap::new(),
             injected_verify_failure: std::sync::Mutex::new(None),
         })
     }
@@ -201,23 +210,47 @@ impl AcafClient {
         *self.injected_verify_failure.lock().unwrap() = Some((kind, detail.to_string()));
     }
 
+    /// e2e-only seam (2026-08-16 review fix): kill the signer child WITHOUT
+    /// closing the session — simulates an external crash so the self-healing
+    /// respawn path is actually exercised by the e2e suite (the previous
+    /// "crash" test never killed anything and never reached the respawn
+    /// branch). Hidden from production docs.
+    #[doc(hidden)]
+    pub async fn crash_for_test(&mut self) {
+        let _ = self.child.kill().await;
+        let _ = self.child.wait().await;
+    }
+
     /// Kill the current signer child and spawn a fresh one, re-initialising
-    /// the cached session on the new process (review P1-1 2026-08-12). The
-    /// session ledger is preserved — a respawn must not replay-reject the
-    /// continuing session's tickets.
+    /// the cached session on the new process (review P1-1 2026-08-12).
+    ///
+    /// 2026-08-16 review fix: the signer process state is gone after a
+    /// crash, so its per-session sequence restarts — the re-initialised
+    /// session's ledger high-water must reset with it (same rationale as the
+    /// D2-1 epoch reset), or every fresh ticket of the restarted sequence
+    /// would be replay-rejected until the old high-water is exceeded. The
+    /// old "ledger preserved" comment promised the opposite of what the
+    /// preserved ledger actually produced. All OTHER cached sessions are
+    /// stale on the new process and are dropped — the next
+    /// `ensure_initialized` for them re-derives and re-initialises (and
+    /// resets their ledgers with the restarted signer sequence).
     async fn respawn(&mut self) -> Result<(), AcafClientError> {
-        // Snapshot the session context BEFORE the child is killed (the
-        // re-initialisation replays the deterministic HKDF on the new
+        // Snapshot the active session context BEFORE the child is killed
+        // (the re-initialisation replays the deterministic HKDF on the new
         // process — same inputs → same K_session).
-        let reinit = self.session.as_ref().map(|s| {
-            (
-                s.session_id.clone(),
-                s.agent_id.clone(),
-                s.goal_version,
-                s.goal_digest.clone(),
-                s.policy_revision,
-            )
-        });
+        let active = self.session.clone();
+        let reinit = active
+            .as_deref()
+            .and_then(|id| self.sessions.get(id))
+            .map(|s| {
+                (
+                    s.session_id.clone(),
+                    s.agent_id.clone(),
+                    s.goal_version,
+                    s.goal_digest.clone(),
+                    s.policy_revision,
+                )
+            });
         let _ = self.child.kill().await;
         let _ = self.child.wait().await;
         let (child, stdin, stdout) = spawn_child(&self.cfg).await?;
@@ -246,7 +279,14 @@ impl AcafClient {
                 policy_revision,
                 &result,
             )?;
+            // Signer process restarted → its sequence restarted → the
+            // session's one-shot high-water resets with it.
+            self.ledger.reset(&session_id);
         }
+        // Drop every cached session that is NOT the freshly re-initialised
+        // one — they no longer exist on the new signer process.
+        self.sessions
+            .retain(|id, _| Some(id.as_str()) == active.as_deref());
         Ok(())
     }
 }
@@ -262,6 +302,12 @@ impl AcafClient {
     /// signer-side sequence, so the ledger's high-water mark for the session
     /// is cleared on re-initialisation (otherwise every fresh ticket of the
     /// new epoch would be rejected as a sequence regression).
+    ///
+    /// 2026-08-16 review fix (P2-I2): sessions are cached per id — switching
+    /// BACK to an already-initialised session with an unchanged epoch does
+    /// NOT re-initialise and does NOT reset that session's ledger, so the
+    /// one-shot guarantee survives interleaving (the ACP server shares one
+    /// client across sessions).
     pub async fn ensure_initialized(
         &mut self,
         session_id: &str,
@@ -270,16 +316,20 @@ impl AcafClient {
         goal_digest: &str,
         policy_revision: u64,
     ) -> Result<(), AcafClientError> {
-        if let Some(s) = &self.session
-            && s.session_id == session_id
-            && s.goal_version == goal_version
-            && s.goal_digest == goal_digest
-            && s.policy_revision == policy_revision
-        {
-            return Ok(());
+        if let Some(s) = self.sessions.get(session_id) {
+            if s.goal_version == goal_version
+                && s.goal_digest == goal_digest
+                && s.policy_revision == policy_revision
+            {
+                // Same epoch already initialised on the live signer — no RPC,
+                // no ledger reset.
+                self.session = Some(session_id.to_string());
+                return Ok(());
+            }
         }
-        // A context change re-derives K_session (new epoch) — the ledger's
-        // per-session sequence resets with it.
+        // A new session or a context change re-derives K_session (new epoch)
+        // — the signer-side sequence restarts, so the ledger's per-session
+        // high-water resets with it.
         self.ledger.reset(session_id);
         let result = self
             .call(
@@ -348,7 +398,8 @@ impl AcafClient {
                 .unwrap_or_default()
                 .to_string(),
         };
-        self.session = Some(session);
+        self.session = Some(session_id.to_string());
+        self.sessions.insert(session_id.to_string(), session);
         Ok(())
     }
 
@@ -369,7 +420,8 @@ impl AcafClient {
     ) -> Result<ControlTicket, AcafClientError> {
         let session = self
             .session
-            .as_ref()
+            .as_deref()
+            .and_then(|id| self.sessions.get(id))
             .ok_or(AcafClientError::SessionNotInitialised)?;
         let mut params = serde_json::json!({
             "session_id": session.session_id,
@@ -432,7 +484,8 @@ impl AcafClient {
         }
         let session = self
             .session
-            .as_ref()
+            .as_deref()
+            .and_then(|id| self.sessions.get(id))
             .ok_or(AcafClientError::SessionNotInitialised)?;
         let vctx = VerifyContext {
             session_id: session.session_id.clone(),
@@ -503,11 +556,11 @@ impl AcafClient {
 
     /// Close the signer session and terminate the child process.
     pub async fn shutdown(&mut self) {
-        if let Some(session) = &self.session {
+        if let Some(session_id) = &self.session {
             let _ = self
                 .call(
                     "close_session",
-                    serde_json::json!({ "session_id": session.session_id }),
+                    serde_json::json!({ "session_id": session_id }),
                 )
                 .await;
         }

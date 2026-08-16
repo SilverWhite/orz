@@ -48,7 +48,8 @@ fn write_manifest(manifest_path: &Path, binary_sha256: &str) -> Result<(), Strin
         "binary_sha256": binary_sha256,
     });
     let bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| format!("manifest json: {e}"))?;
-    std::fs::write(manifest_path, bytes).map_err(|e| format!("write {}: {e}", manifest_path.display()))
+    std::fs::write(manifest_path, bytes)
+        .map_err(|e| format!("write {}: {e}", manifest_path.display()))
 }
 
 fn run() -> Result<(), String> {

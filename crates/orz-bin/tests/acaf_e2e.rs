@@ -520,7 +520,15 @@ async fn signer_crash_respawns_and_recovers() {
     ));
 
     // Crash the signer hard (kill without shutdown — the client must not
-    // know).
+    // know). 2026-08-16 review fix: the old test only CLAIMED to crash the
+    // signer — no kill ever happened, so the respawn branch was never
+    // exercised and the "sequence continues" assertion tested nothing.
+    // `crash_for_test` makes the crash real.
+    client.crash_for_test().await;
+
+    // The FIRST request after the crash hits the dead channel: it fails and
+    // the failure path respawns + re-initialises the session (deterministic
+    // HKDF → same K_session). The original request is NOT retried.
     let outcome = client
         .sign_ticket(
             TicketKind::DispositionV1,
@@ -529,17 +537,16 @@ async fn signer_crash_respawns_and_recovers() {
             None,
         )
         .await;
-    // The FIRST request after the crash races the dying child: it may fail
-    // (closed channel → the failure path respawns) or succeed (the signer
-    // answered before the kill landed). Either way the next call runs on a
-    // healthy process.
-    let _ = outcome;
+    assert!(
+        outcome.is_err(),
+        "the first post-crash request must observe the dead channel"
+    );
 
-    // After the self-heal the channel is clean and the session was
-    // re-initialised with the SAME K_session (deterministic HKDF) — the
-    // ledger was preserved, so the fresh ticket verifies with a fresh
-    // nonce. The sequence strictly increases (crashed request consumed a
-    // sequence when it succeeded — never decreases).
+    // After the self-heal the channel is clean. The signer process restarted,
+    // so its per-session sequence restarted at 1 — the ledger high-water was
+    // reset with it (2026-08-16 review fix), so the fresh ticket verifies
+    // instead of being replay-rejected until the old high-water was
+    // exceeded. A fresh nonce keeps the one-shot guarantee within the epoch.
     let ticket2 = client
         .sign_ticket(
             TicketKind::DispositionV1,
@@ -550,11 +557,11 @@ async fn signer_crash_respawns_and_recovers() {
         .await
         .expect("sign after self-heal");
     assert!(
-        ticket2.sequence > ticket.sequence,
-        "ledger sequence continues after respawn: {} > {}",
-        ticket2.sequence,
-        ticket.sequence
+        ticket2.sequence == 1,
+        "the respawned signer restarts the per-session sequence: {}",
+        ticket2.sequence
     );
+    assert_ne!(ticket2.nonce, ticket.nonce, "fresh nonce after respawn");
     assert!(
         matches!(
             client
@@ -565,6 +572,100 @@ async fn signer_crash_respawns_and_recovers() {
         ),
         "the respawned signer signs with the same K_session — verification passes"
     );
+    client.shutdown().await;
+}
+
+// ── test 4b: multi-session isolation (2026-08-16 review fix P2-I2) ─────────
+
+#[tokio::test]
+async fn sessions_are_isolated_across_switching() {
+    // The ACP server shares ONE signer client across sessions. Switching
+    // back to an already-initialised session must NOT reset its one-shot
+    // ledger — the old single-slot cache re-derived + reset on every switch,
+    // so a session's consumed nonces / sequence high-water were forgotten.
+    let fixture = SignerFixture::new();
+    let mut client = spawn_client(&fixture).await;
+
+    // Session A: init → sign seq 1 → consume.
+    client
+        .ensure_initialized("SESS-A", "main", 0, &"0".repeat(64), 0)
+        .await
+        .expect("init A");
+    let ta = client
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
+        .await
+        .expect("sign A1");
+    assert_eq!(ta.sequence, 1);
+    assert!(matches!(
+        client
+            .verify_and_consume(&ta, &"0".repeat(64), None, None)
+            .await
+            .expect("consume A1"),
+        TicketOutcome::Consumed { .. }
+    ));
+
+    // Session B: independent sequence starting at 1 with its own context.
+    client
+        .ensure_initialized("SESS-B", "main", 0, &"1".repeat(64), 0)
+        .await
+        .expect("init B");
+    let tb = client
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
+        .await
+        .expect("sign B1");
+    assert_eq!(tb.sequence, 1, "B has its own sequence");
+    assert!(matches!(
+        client
+            .verify_and_consume(&tb, &"0".repeat(64), None, None)
+            .await
+            .expect("consume B1"),
+        TicketOutcome::Consumed { .. }
+    ));
+
+    // Switch BACK to A: cached epoch → no re-derivation → sequence continues
+    // at 2 and A's ledger still remembers its consumed nonce.
+    client
+        .ensure_initialized("SESS-A", "main", 0, &"0".repeat(64), 0)
+        .await
+        .expect("re-init A");
+    let ta2 = client
+        .sign_ticket(
+            TicketKind::DispositionV1,
+            Some("ACT-1".into()),
+            &"0".repeat(64),
+            None,
+        )
+        .await
+        .expect("sign A2");
+    assert_eq!(
+        ta2.sequence, 2,
+        "session A's sequence must continue after switching away and back"
+    );
+    assert!(matches!(
+        client
+            .verify_and_consume(&ta2, &"0".repeat(64), Some("ACT-1".into()), None)
+            .await
+            .expect("consume A2"),
+        TicketOutcome::Consumed { .. }
+    ));
+
+    // A's first ticket must STILL be replay-rejected — the ledger was not
+    // reset by the A→B→A switching.
+    let replay = client
+        .verify_and_consume(&ta, &"0".repeat(64), None, None)
+        .await
+        .expect("replay A1");
+    assert!(
+        matches!(
+            replay,
+            TicketOutcome::Rejected {
+                code: RejectCode::ReplayDetected,
+                ..
+            }
+        ),
+        "replay of A's consumed ticket must be rejected after switching: {replay:?}"
+    );
+
     client.shutdown().await;
 }
 
