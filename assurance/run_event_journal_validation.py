@@ -187,6 +187,13 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
           "epoch-archive-write-failed",
           RUNTIME / "epoch-archive-write-failed-event-payload-v0.2.schema.json",
       ),
+      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+      # gate result — plan identity/goal/step count, mechanical validation,
+      # one-refill attempt progression and degrade reason.
+      "plan_write": (
+          "plan-write",
+          RUNTIME / "plan-write-event-payload-v0.2.schema.json",
+      ),
   }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -586,6 +593,89 @@ _RETRIEVAL_TARGETS = frozenset({"internal_retrieval", "external_retrieval"})
 # their events carry target=external_retrieval (covered by the target
 # checks).
 _HOST_LANE_RETRIEVAL_TOOLS = frozenset({"browser_read"})
+
+
+def _verify_v02_plan_write(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §3-§5 cross-checks
+    (2026-08-16 审查收口):
+
+    - `refill_requested` only on attempt 1 and must be followed by a second
+      plan_write event (the single refill);
+    - `degraded` with `validation_failed_after_refill` only on attempt 2;
+    - `accepted` requires `validation.valid=true`;
+    - mechanical degrades (`plan_rotate_failed` / `plan_not_submitted`)
+      carry no structural validation errors (`validation.valid=true`),
+      while `validation_failed`-family degrades require it to be false;
+    - later plan_write events after the gate closes are plan revisions and
+      are not constrained by gate attempt sequencing.
+    """
+    errors: list[str] = []
+    writes = [
+        (index, event)
+        for index, event in enumerate(events)
+        if _is_v02(event) and event.get("event_type") == "plan_write"
+    ]
+    for position, (index, event) in enumerate(writes):
+        payload = event["payload"]
+        attempt = payload["attempt"]
+        outcome = payload["outcome"]
+        degrade_reason = payload.get("degrade_reason")
+        valid = payload.get("validation", {}).get("valid")
+        if outcome == "refill_requested":
+            if attempt != 1:
+                errors.append(
+                    f"event {index}: plan_write refill_requested on attempt "
+                    f"{attempt} (only attempt 1 may request a refill)"
+                )
+            if position + 1 >= len(writes):
+                errors.append(
+                    f"event {index}: plan_write refill_requested without a "
+                    "following refill attempt"
+                )
+            if valid is not False:
+                errors.append(
+                    f"event {index}: plan_write refill_requested but "
+                    "validation.valid is not false"
+                )
+        if outcome == "degraded":
+            if degrade_reason == "validation_failed_after_refill":
+                if attempt != 2:
+                    errors.append(
+                        f"event {index}: plan_write "
+                        "validation_failed_after_refill degrade on attempt "
+                        f"{attempt} (degrade only after the refill attempt)"
+                    )
+                if valid is not False:
+                    errors.append(
+                        f"event {index}: plan_write "
+                        "validation_failed_after_refill but validation.valid "
+                        "is not false"
+                    )
+            elif degrade_reason in ("plan_rotate_failed", "plan_not_submitted"):
+                if valid is not True:
+                    errors.append(
+                        f"event {index}: plan_write {degrade_reason} carries "
+                        "structural validation errors but the failure is "
+                        "mechanical (validation.valid must be true)"
+                    )
+            elif degrade_reason == "validation_failed":
+                if valid is not False:
+                    errors.append(
+                        f"event {index}: plan_write revision validation_failed "
+                        "but validation.valid is not false"
+                    )
+        if outcome == "accepted":
+            if valid is not True:
+                errors.append(
+                    f"event {index}: plan_write accepted but "
+                    "validation.valid is not true"
+                )
+            if attempt not in (1, 2):
+                errors.append(
+                    f"event {index}: plan_write accepted on attempt {attempt} "
+                    "(expected 1 or 2)"
+                )
+    return errors
 
 
 def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
@@ -2515,6 +2605,7 @@ def validate_journal_text(text: str) -> list[str]:
         # they run only on schema-valid input.
         errors.extend(_verify_v02_inquiry_kind(events))
         errors.extend(_verify_v02_checkpoint_responses(events))
+        errors.extend(_verify_v02_plan_write(events))
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))

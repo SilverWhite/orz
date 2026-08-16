@@ -1,0 +1,13 @@
+{
+  "plan_id": "plan-00000000-0000-0000-0000-000000000000",
+  "goal": "修复缓存回归",
+  "step_count": 2,
+  "outcome": "rejected",
+  "attempt": 1,
+  "validation": {
+    "valid": true,
+    "errors": [],
+    "ignored_fields": []
+  },
+  "degrade_reason": null
+}

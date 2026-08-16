@@ -10,16 +10,18 @@
 - `[ ]` = 待办；`[x]` = 已完成（保留供核对，不计入开放项）。
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 
-## 未闭合扫描快照（2026-08-16；P0-C S4 实施闭合后更新）
+## 未闭合扫描快照（2026-08-16；P0-C 转正式组件 + PLAN-FIRST 阶段 A 闭合后更新）
 
 > 来源：2026-08-15 全量扫描（CLI_PROJECT_INDEX → BACKLOG → 本文件勾选状态；
 > P0-C S3 前置（P1-2 结构化策略拒绝）闭合后更新；2026-08-16 S3 全面审查
-> 收口；2026-08-16 S4 实施闭合，未闭合总数 35 → 34）。
+> 收口；2026-08-16 S4 实施闭合，未闭合总数 35 → 34；2026-08-16 用户裁决
+> P0-C 转正式组件（决策门闭合）+ PLAN-FIRST 阶段 A 闭合，未闭合总数
+> 34 → 32）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**34 项**
-  - P0-C：4 项（PLAN-FIRST 阶段 A/B/C、正式组件决策门）
+- 未闭合总数：**32 项**
+  - P0-C：2 项（PLAN-FIRST 阶段 B/C）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -129,18 +131,23 @@
       预算独立约束；预算预检先静态校验（不掩盖内层错误）；小样 1 结果工件
       `sample1_result.json`（90/90 复跑）；max=1 零剩余边界测试；orz-loop
       395 通过 / 0 失败（详见 S4 审计 §8）。
-- [ ] 正式组件决策门：小样全面达标后裁决；不达标即撤。
+- [x] 正式组件决策门：小样全面达标后裁决；不达标即撤（2026-08-16 用户
+  裁决「P0-C 可转正式组件」通过，不达标即撤条款未触发）。
   - 成熟复用评估（2026-08-16，只读）：无——决策门本身；材料已含 HA/hassil 与 DSH 借鉴。
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。
 
 ### P0-C2 PLAN-FIRST-BLACKBOARD（`pending`；模型面重构，2026-08-15 用户定案）
 
-- [ ] PLAN-FIRST 阶段 A：模板去人格（主/子代理/apply-patch 模板 +
+- [x] PLAN-FIRST 阶段 A：模板去人格（主/子代理/apply-patch 模板 +
   `ORCHESTRATOR_PROMPT_BODY`；XOR 加密模板同步重生成；渲染测试锁定无人格关键词）
   + AGENTS.md 计划型机械包裹（用户内容之前；唯一机制）+ 首轮计划轮硬门
   （首轮只暴露黑板读取 + `plan_write`；一次重填 + 机械降级留痕；计划落黑板
-  plan epoch）。
+  plan epoch）。2026-08-16 闭合：`plan_write` v0.2 事件/校验/落板/会话级
+  门（ACP server + CLI run 生产接线）；实施审计见
+  `docs/audits/GAP_PLAN_FIRST_STAGE_A_IMPL_AUDIT_2026-08-16.md`。
+  2026-08-16 审查收口：计划轮不计工具轮预算、whitelist 窗口顺延、结构
+  上限定稿（32/8/16/32K）、包裹无条件注入、P1/P2/P3 修复（详见审计 §7）。
   - 成熟复用评估（2026-08-16，只读）：明确——Grok 模板为改造对象、AGENTS.md 为 Codex 生态成熟约定、首轮硬门复用 checkpoint 机制。
 - [ ] PLAN-FIRST 阶段 B：注册板块=探针投影（移除静态基础集中间态）；工具栏刷新
   绑定黑板模型栏。

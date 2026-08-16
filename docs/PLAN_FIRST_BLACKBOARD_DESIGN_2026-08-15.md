@@ -56,13 +56,20 @@ persona 机制：
 - persona 默认不注入（维持现状）；
 - 内置 personas 目录、`SubagentPersona` 解析与子代理 `<persona>` 模板段退役；
 - roles（能力/工具契约）保留，与 persona 分离。
+- 保留中性角色声明（如 `You are an AI coding agent operating in a workspace`）
+  ——无品牌、无人格语气；「身份宣告全删」指删除品牌/人格化宣告，不含中性
+  机械角色句（2026-08-16 审查收口明确）。
 
 实施注意：模板经 XOR 加密（`prompt_encrypted.rs`），修改模板后必须同步重生成
 （`scripts/encrypt_templates.py`），并保留“模板不含人格关键词”的渲染测试。
 
 ### 2.2 D2 AGENTS.md 计划型机械包裹
 
-- 在 `render_agents_md` 的固定前缀（用户内容之前）注入计划型执行框架（草案见 §7）；
+- 计划型执行框架块（草案见 §7）为 orz-assurance canonical 常量：
+  - orz 生产路径：plan_first 会话在系统提示词层**无条件注入**（主/检索子代理
+    同一入口，不依赖 AGENTS.md 是否存在；2026-08-16 审查收口）；
+  - 外部 AGENTS.md 消费者：仍作为 `render_agents_md` 固定前缀注入
+    （用户内容之前）；
 - 唯一机制：不做规范模板、不做 schema 校验、不要求项目文件改造；
 - 对主代理与子代理统一生效（子代理同样注入 AGENTS.md）；
 - 本框架只约束执行风格，不覆盖项目文件中的事实与约束（构建命令、代码规范、安全红线）。
@@ -159,6 +166,15 @@ persona 机制：
 > 订单（`action_write`）携带 `step_id` 绑定计划步骤：ActionOrder 增 `step_id`
 > （Schema 先行扩展，事件/verifier/fixtures 同步后再接线 producer）。
 
+结构上限（2026-08-16 审查收口定稿；成熟参照：AutoGPT ≤5 子目标、oh-my-loop
+<10 子任务且最多 2 次重规划、joyagent 配置上限 40 步、编排计划工具 2-5 里程碑、
+LangChain「一步≈一次工具调用 + 有界重规划」）——上限是机械兜底而非质量目标：
+
+- 步骤数 ≤ 32；每步动作数 ≤ 8（对齐 P0-C `MAX_SCRIPT_STEPS_PER_ORDER=8`）；
+- 每步证据条数 ≤ 16、单条 ≤ 500 字符；
+- 计划整体序列化 ≤ 32K 字符（`MAX_PLAN_TOTAL_CHARS`，与轮内注入预算同一量纲）；
+- 未提交计划轮上限 3（`plan_not_submitted` 降级，不挂死）。
+
 实施前经 Schema 先行扩展（事件/verifier/fixtures 同步），再接线 producer。
 
 ## 6. 步骤状态机与防惯性幻觉
@@ -247,7 +263,9 @@ persona 机制：
 ## 9. 实施阶段
 
 - 阶段 A（当前）：模板去人格 + AGENTS.md 计划型包裹 + 首轮计划轮硬门（复用 checkpoint
-  无工具机制；计划落黑板 plan epoch）；主车道工具面暂不变。
+  无工具机制；计划落黑板 plan epoch）；主车道工具面暂不变。2026-08-16 审查收口：
+  **计划轮不消耗 tool-round 预算**（用户裁决），compaction whitelist 的
+  `tool_rounds==0` 窗口随之顺延到计划落板后的首个执行轮。
 - 阶段 B（S3+）：注册板块 = 探针投影（移除静态基础集中间态）；工具栏刷新绑定黑板模型栏。
 - 阶段 C（助理层实战验证后）：模型面收敛为 §4（console 默认；黑板读写 + 只读核查）；
   direct 受控降级路径保留（§7），不默认开放、不永久移除。
@@ -263,6 +281,8 @@ persona 机制：
 
 ## 11. 验收要点
 
+> 阶段标注：1、2、4、5、7 属阶段 A；3、6（阶段 C 后生效）、8-11 属阶段 C。
+
 1. 首轮请求 header 工具面 = 计划轮面（无执行工具，含 `blackboard_read`/`plan_write`），
    注册板块渲染可见；
 2. 计划校验失败可重填一次，降级有事件留痕；
@@ -271,12 +291,14 @@ persona 机制：
 5. 模板渲染后不含人格关键词（测试锁定：`released by xAI`/`friendly`/`curious`/
    `expert peers`/`aggressively` 等）；
 6. 阶段 C 后主车道模型面无执行工具（探针 + 投影断言）。
-7. 连续 3 次助理层故障面失败（verify；execute 且无 exit code/host 错误；业务非零退出与
+7. 计划轮不消耗 tool-round 预算（max=1 时计划落板后仍可执行工具）；无 AGENTS.md
+   项目在 plan_first 会话中系统提示词仍含 `<plan_first_framework>`（测试锁定）。
+8. 连续 3 次助理层故障面失败（verify；execute 且无 exit code/host 错误；业务非零退出与
    policy/protocol/contract/order_stale/step_not_done 不计）触发显式询问轮；询问轮为
    无工具轮；模型选择 switch 后写 `console_mode_transition` + gate_log（测试锁定）；
-8. direct 模式直接动作携带 transition_id，且权限/ACAF/模式门照常生效（测试锁定）；
-9. 模型选择 stay 或调用 `console.return_to_console` 后模式复位并留痕，本 run 不再自动询问；
-10. 计划门约束 console 订单（上一步未 done → `step_not_done` 拒绝）；direct 为有记录的
+9. direct 模式直接动作携带 transition_id，且权限/ACAF/模式门照常生效（测试锁定）；
+10. 模型选择 stay 或调用 `console.return_to_console` 后模式复位并留痕，本 run 不再自动询问；
+11. 计划门约束 console 订单（上一步未 done → `step_not_done` 拒绝）；direct 为有记录的
     例外——`console.step_done` 需 transition_id + trace_id 证据才能置 done（测试锁定）。
 
 ## 12. 关联文档与登记

@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（POC 已通）；PLAN-FIRST-BLACKBOARD（模型面重构，2026-08-15 定案） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 B/C 待实施，2026-08-15 定案） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -224,7 +224,8 @@
   2. 编辑执行器 `workspace.search_replace`（小样 2，收益裁决点：编辑应用成功率 + 主模型工具轮数）——**已闭合（2026-08-15）**，测量与结果工件见 `prototype/classical_console/sample2_result.json`；
   3. 机械组合脚本模式（小样 3：线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——**已闭合（2026-08-15）**，用户裁决通过 + 独立判定一致，测量与结果工件见 `prototype/classical_console/sample3_result.json`；
    4. orz 内嵌集成（HA 操作台作为 orz 组件接线；薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝，POC stdio 仅原型隔离）——**S1 已落地（2026-08-15）**：操作台核心 + 黑板动作栏数据面；S1 全面检查修复已闭合（2026-08-15）；**S2 已落地（2026-08-15）**：模型面投影 + 轮末发放（含 round/epoch/run_id 防重放、step=policy 归一化、TraceStore.commit 收口），实施审计见 `docs/audits/GAP_CLASSICAL_EXEC_S2_IMPL_AUDIT_2026-08-15.md`；**S3 前置（P1-2 结构化策略拒绝）已闭合（2026-08-15，全面审查修复 F1-F8 已登记）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_PRELUDE_POLICY_DENIAL_IMPL_AUDIT_2026-08-15.md`；**S3（assistant.trace 接线 + run_script PTC 生产化 + Profile/Bundle 加载）已闭合（2026-08-15）**，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S3_IMPL_AUDIT_2026-08-15.md`（2026-08-16 审查收口 §6）；**S4 已闭合（2026-08-16）**：端到端测试 + 单步超时（host 层进程树收口）+ 脚本 tool-round 预算消耗 + 决策门材料，审计见 `docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`；
-  5. 小样全面达标后裁决正式组件（决策门）；不达标即撤。
+  5. 小样全面达标后裁决正式组件（决策门）；不达标即撤——**已闭合（2026-08-16
+     用户裁决「P0-C 可转正式组件」）**。
 
 ### 3a. PLAN-FIRST-BLACKBOARD（模型面重构；2026-08-15 用户定案）
 
@@ -240,6 +241,21 @@
 - 阶段：A（模板去人格 + AGENTS.md 计划型机械包裹 + 首轮计划轮硬门）；B（注册板块=
   探针投影 + 工具栏刷新绑定黑板模型栏）；C（console 默认 + direct 受控降级）。
   明细与验收见设计 §9/§11；实施勾选见 TODO P0-C。
+- 进度（2026-08-16）：**阶段 A 已闭合**——模板去人格（主/子代理/apply-patch
+  模板 + ORCHESTRATOR_PROMPT_BODY，XOR 加密模板重生成，无人格关键词渲染测试）、
+  AGENTS.md 计划型机械包裹（`<plan_first_framework>` 固定前缀，用户内容之前）、
+  首轮计划轮硬门（`plan_write` v0.2 事件 + 结构化校验/一次重填/降级留痕 +
+  黑板 plan epoch 落板；首轮工具面=blackboard_read+plan_write，其余机械拒绝；
+  会话级门，ACP server/CLI run 生产接线）；实施审计见
+  `docs/audits/GAP_PLAN_FIRST_STAGE_A_IMPL_AUDIT_2026-08-16.md`。
+- 进度（2026-08-16 审查收口）：计划轮不消耗 tool-round 预算（用户裁决）、
+  compaction whitelist 窗口顺延至计划落板后首个执行轮、结构上限定稿
+  （步骤 ≤32/动作 ≤8/证据 ≤16/总量 ≤32K，参照 AutoGPT/oh-my-loop/joyagent/
+  编排工具/LangChain 成熟设计）、AGENTS.md 包裹改为系统提示词层无条件注入
+  （canonical 常量入 orz-assurance，不依赖 AGENTS.md 存在）、P1 工具事件
+  契约形状收敛、plan_write 面随开关收敛（子代理/grill 剔除）、P3 全部闭环
+  （TUI 降级投影/同轮单次/参数 schema/上限/persona 测试）；ADR-0010
+  §14.17⑯、审计 §7 登记。
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
 

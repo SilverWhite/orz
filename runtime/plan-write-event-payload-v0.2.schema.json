@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/plan-write-event-payload-v0.2.schema.json",
+  "title": "Plan-write event payload v0.2 (PLAN-FIRST first-round plan gate)",
+  "description": "ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §3-§5: the first-round plan gate's plan_write result. Carries the plan identity/goal/step count, the mechanical validation verdict, the one-refill attempt progression and the degrade reason. Main lane only — the plan gate is a main-lane mechanism.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_id",
+    "goal",
+    "step_count",
+    "outcome",
+    "attempt",
+    "validation",
+    "degrade_reason"
+  ],
+  "properties": {
+    "plan_id": { "type": "string" },
+    "goal": { "type": "string" },
+    "step_count": { "type": "integer", "minimum": 0 },
+    "outcome": {
+      "type": "string",
+      "enum": ["accepted", "refill_requested", "degraded"]
+    },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 2 },
+    "validation": { "$ref": "#/$defs/validation" },
+    "degrade_reason": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1 }
+      ]
+    }
+  },
+  "$defs": {
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "errors", "ignored_fields"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "errors": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "ignored_fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

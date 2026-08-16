@@ -142,6 +142,10 @@ V02_EVENT_TYPES = [
       # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
       # plan-epoch archive write failure audit trace.
       "epoch_archive_write_failed",
+      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+      # gate result — plan identity/goal/step count, mechanical validation,
+      # one-refill attempt progression and degrade reason.
+      "plan_write",
       "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
@@ -172,6 +176,7 @@ SLUGS_V02 = {
       "control_ticket_rejected": "control-ticket-rejected",
       "context_recovery_truncated": "context-recovery-truncated",
       "epoch_archive_write_failed": "epoch-archive-write-failed",
+      "plan_write": "plan-write",
   }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
@@ -210,6 +215,10 @@ V02_PAYLOAD_EVENTS = [
       # F7 (2026-08-15; ADR-0010 §14.15): blackboard plan-epoch archive
       # write failure (rotated/current + attempts).
       "epoch_archive_write_failed",
+      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+      # gate result — plan identity/goal/step count, mechanical validation,
+      # one-refill attempt progression and degrade reason.
+      "plan_write",
   ]
 
 SLUGS = {
@@ -920,6 +929,22 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
           "kind": "rotated",
           "attempts": 3,
       },
+      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+      # gate result — plan identity/goal/step count, mechanical validation,
+      # one-refill attempt progression and degrade reason.
+      "plan_write": {
+          "plan_id": "plan-00000000-0000-0000-0000-000000000000",
+          "goal": "修复缓存回归",
+          "step_count": 2,
+          "outcome": "accepted",
+          "attempt": 1,
+          "validation": {
+              "valid": True,
+              "errors": [],
+              "ignored_fields": [],
+          },
+          "degrade_reason": None,
+      },
   }
 
 # One constraint violation per v0.2 event (never a bare missing-required when
@@ -1255,6 +1280,21 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
           "kind": "replaced",
           "plan_epoch": 2,
           "attempts": 3,
+      },
+      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): one constraint
+      # violation — outcome outside the closed enum.
+      "plan_write": {
+          "plan_id": "plan-00000000-0000-0000-0000-000000000000",
+          "goal": "修复缓存回归",
+          "step_count": 2,
+          "outcome": "rejected",
+          "attempt": 1,
+          "validation": {
+              "valid": True,
+              "errors": [],
+              "ignored_fields": [],
+          },
+          "degrade_reason": None,
       },
   }
 

@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -1457,5 +1457,73 @@ ADR §3.6 正文修订随实施登记。
       timeout 包装为既有边界；脚本层保留 8 步 / 4MiB / tool-round 预算上限；
       orz-loop 395 通过 / 0 失败。实施审计：
       `docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md` §8。
+   ⑭ P0-C 正式组件决策门（2026-08-16 用户裁决）——小样 1/2/3 与 S1-S4
+      实施审计材料齐备，用户裁决「P0-C 可转正式组件」（不达标即撤条款未
+      触发）；CLASSICAL-EXEC-ASSISTANT 进入生产组件基线，后续模型面重构
+      按 PLAN-FIRST 阶段 B/C 推进。
+   ⑮ PLAN-FIRST 阶段 A 实施登记（2026-08-16）——
+      a) 模板去人格：主/子代理/apply-patch 模板与 `ORCHESTRATOR_PROMPT_BODY`
+         删除身份宣告与语气/人格内容，保留机械契约（action_safety、
+         tool_calling、格式化、项目指令/用户信息、编排职责分工）；XOR 加密
+         模板重生成；渲染测试锁定无人格关键词（`released by xAI`/`friendly`/
+         `curious`/`expert peers`/`aggressively` 等）；子代理 `<persona>`
+         模板段退役，persona 指令不再进入系统提示词（配置解析类型保留为
+         外部 shell 兼容层，审计边界登记）。
+      b) AGENTS.md 计划型机械包裹：`render_agents_md` 固定前缀注入
+         `<plan_first_framework>`（用户内容之前；主/子代理同一入口；唯一
+         机制，不做规范模板/schema 校验，§10 非目标不变）。
+      c) 首轮计划轮硬门：新增 `plan_write` 工具（结构化分步计划，§5 机械
+         校验；一次错误反馈重填，仍失败机械降级并留痕——`plan_write` v0.2
+         事件，Schema/verifier/fixtures/TUI 先行）；首轮模型工具面=
+         `blackboard_read`+`plan_write`，其余工具派发前机械拒绝
+         （`plan_round_tool_denied`）；校验通过后结构化计划落黑板 plan
+         epoch（`rotate_to_structured_plan`，同 plan_id 修订复用 epoch、
+         新 plan_id 单调递增）；连续 3 轮未提交 → `plan_not_submitted`
+         降级放行（不挂死）；计划门为会话级（每会话一次；恢复会话/后续
+         run 不重复触发），生产接线=ACP server + CLI run（控制器开关
+         `with_plan_first_enabled`/`with_plan_first_session_done`）。
+         orz-loop 407 / orz-tui 178 / orz-assurance 151 通过，Python
+         run-event 一致性 14 通过。实施审计：
+         `docs/audits/GAP_PLAN_FIRST_STAGE_A_IMPL_AUDIT_2026-08-16.md`。
+   ⑯ PLAN-FIRST 阶段 A 审查收口登记（2026-08-16；全面审查 + 用户逐项
+      裁决）——
+      a) 计划轮不消耗 tool-round 预算（用户裁决）：批处理前固定「计划轮
+         身份」，计划轮（blackboard_read/plan_write/拒绝轮）不执行
+         `tool_rounds += 1`；compaction whitelist 的 `tool_rounds==0`
+         窗口随之顺延到计划落板后的首个执行轮（P2-2 顺延裁决，测试锁定）。
+      b) 结构上限定稿（成熟参照：AutoGPT ≤5 子目标、oh-my-loop <10 子任务
+         且最多 2 次重规划、joyagent 上限 40 步、编排计划工具 2-5 里程碑、
+         LangChain「一步≈一次工具调用 + 有界重规划」）——步骤 ≤32、每步
+         动作 16→8（对齐 `MAX_SCRIPT_STEPS_PER_ORDER=8`）、每步证据 ≤16
+         条且单条 ≤500、计划整体序列化 ≤32K 字符；上限为机械兜底而非质量
+         目标；未提交计划轮上限 3 保持。
+      c) P1 修复（事件契约）：plan_write ToolStarted/ToolCompleted 收敛到
+         通用契约形状——成功只带 `exit_code`，失败 `status=error`+`error`，
+         计划身份/outcome/epoch 由 PlanWrite 事件承载；主车道拒绝事件不再
+         携带 `target`（通用 schema target 枚举仅检索车道）；Python 校验
+         测试锁定新形状。
+      d) P2-1/P3-4 修复：`plan_write` 加入 subagent 投影剔除与
+         `ToolFilter::Retrieval.write_gate`；声明与调用均随
+         `plan_first_enabled` 收敛（关闭态/grill 拒绝
+         `plan_write_disabled`，不旋转黑板）。
+      e) D2 全覆盖（用户指出 AGENTS.md 为 Codex/Grok 生态契约、orz 生产
+         路径未注入 AGENTS.md 段）：框架块提升为 orz-assurance canonical
+         常量（`plan::framework`），plan_first 会话在系统提示词层无条件
+         注入（主/检索子代理同一入口，不依赖 AGENTS.md 存在）；
+         `render_agents_md` 固定前缀保留给外部 AGENTS.md 消费者。
+      f) P3 修复：TUI 按 outcome+degrade_reason 投影（plan_not_submitted/
+         plan_rotate_failed 不再误显「校验通过」）；同一计划轮最多一次
+         plan_write（`plan_write_already_submitted`）；plan_write ToolDef
+         参数嵌套 schema 与校验常量对齐（8/16/32/32K）；证据条数与计划
+         总量上限；旧 epoch 归档兼容（`PlanStep` serde
+         `alias="description"` + 默认值，升级前快照可读）；Python verifier
+         新增 `_verify_v02_plan_write` 序列规则；orz-agent persona 旧测试
+         改为断言 persona 不注入。
+      g) 测试与证据：orz-loop 416 / orz-tui 178 / orz-assurance 152 通过，
+         Python run-event 一致性 15 通过、runtime 全量 299 通过（P1 形状
+         测试 + PlanWrite 序列规则测试）；orz-agent 除 35 项沙箱 git2
+         环境失败外通过（persona 测试已更新）。实施审计：
+         `docs/audits/GAP_PLAN_FIRST_STAGE_A_IMPL_AUDIT_2026-08-16.md`
+         §7。
    来源：`docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md`；关联：
    CLASSICAL-EXEC-ASSISTANT v0.6。

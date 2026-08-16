@@ -525,6 +525,73 @@ class V02JournalConformanceTests(unittest.TestCase):
                 self.assertEqual(errors, [], f"{name}: {errors}")
 
 
+class PlanWriteSequenceRuleTests(unittest.TestCase):
+    """2026-08-16 审查收口: plan_write outcome↔attempt↔validation
+    cross-checks (ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §3-§5)."""
+
+    def _event(
+        self,
+        outcome: str,
+        attempt: int,
+        valid: bool,
+        degrade_reason: str | None = None,
+    ) -> dict:
+        return {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "plan_write",
+            "payload": {
+                "plan_id": "plan-1",
+                "goal": "g",
+                "step_count": 1,
+                "outcome": outcome,
+                "attempt": attempt,
+                "validation": {
+                    "valid": valid,
+                    "errors": [] if valid else ["x"],
+                    "ignored_fields": [],
+                },
+                "degrade_reason": degrade_reason,
+            },
+        }
+
+    def test_refill_then_accept_sequence_passes(self) -> None:
+        from assurance.run_event_journal_validation import _verify_v02_plan_write
+
+        events = [self._event("refill_requested", 1, False), self._event("accepted", 2, True)]
+        self.assertEqual(_verify_v02_plan_write(events), [])
+
+    def test_refill_without_followup_fails(self) -> None:
+        from assurance.run_event_journal_validation import _verify_v02_plan_write
+
+        errors = _verify_v02_plan_write([self._event("refill_requested", 1, False)])
+        self.assertTrue(any("without a following refill attempt" in e for e in errors))
+
+    def test_degrade_after_refill_on_attempt_two_passes(self) -> None:
+        from assurance.run_event_journal_validation import _verify_v02_plan_write
+
+        events = [
+            self._event("refill_requested", 1, False),
+            self._event("degraded", 2, False, "validation_failed_after_refill"),
+        ]
+        self.assertEqual(_verify_v02_plan_write(events), [])
+
+    def test_mechanical_degrade_keeps_valid_true(self) -> None:
+        from assurance.run_event_journal_validation import _verify_v02_plan_write
+
+        for reason in ("plan_rotate_failed", "plan_not_submitted"):
+            with self.subTest(reason=reason):
+                errors = _verify_v02_plan_write(
+                    [self._event("degraded", 1, True, reason)]
+                )
+                self.assertEqual(errors, [], reason)
+
+    def test_accepted_requires_valid(self) -> None:
+        from assurance.run_event_journal_validation import _verify_v02_plan_write
+
+        errors = _verify_v02_plan_write([self._event("accepted", 1, False)])
+        self.assertTrue(any("accepted but" in e for e in errors))
+
+
 class SyntheticBadJournalTests(unittest.TestCase):
     """Fail-closed behavior on tampered/partial journals (built from the
     captured plain-run.jsonl so the bytes stay realistic)."""

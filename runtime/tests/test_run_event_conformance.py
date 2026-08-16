@@ -274,7 +274,8 @@ class RunEventV02ContractTests(unittest.TestCase):
         ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15): 45 → 46
         (+checkpoint_response).
         ORZ-CACHE-CONTEXT-COST (2026-08-15): 46 → 47
-        (+request_header_change)."""
+        (+request_header_change).
+        PLAN-FIRST 阶段 A (2026-08-16): 47 → 48 (+plan_write)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -283,7 +284,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 47)
+        self.assertEqual(len(enum_events), 48)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
 
@@ -306,6 +307,56 @@ class RunEventV02ContractTests(unittest.TestCase):
                 payload = load_json(payload_path)
                 self.assertEqual(payload["inquiry_family"], "neutral")
                 self.assertEqual(payload["inquiry_kind"], event_type)
+
+    def test_v02_plan_first_tool_event_shapes_validate(self) -> None:
+        """2026-08-16 阶段 A 审查收口 (P1): the plan-first producer's
+        ToolStarted/ToolCompleted shapes must stay inside the generic
+        tool-event payload schemas — main-lane events omit `target` and
+        plan_write success carries only tool/call_id/exit_code."""
+        started_schema = load_json(RUNTIME / "tool-started-event-payload-v0.1.schema.json")
+        completed_schema = load_json(RUNTIME / "tool-completed-event-payload-v0.1.schema.json")
+        validator = Draft202012Validator
+        cases = [
+            (
+                started_schema,
+                {"tool": "read_file", "call_id": "call-denied"},
+                "plan-round denied ToolStarted",
+            ),
+            (
+                completed_schema,
+                {
+                    "tool": "read_file",
+                    "call_id": "call-denied",
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": "plan_round_tool_denied",
+                },
+                "plan-round denied ToolCompleted",
+            ),
+            (
+                completed_schema,
+                {"tool": "plan_write", "call_id": "call-plan", "exit_code": 0},
+                "plan_write accepted ToolCompleted",
+            ),
+            (
+                completed_schema,
+                {
+                    "tool": "plan_write",
+                    "call_id": "call-plan",
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": "refill_requested",
+                },
+                "plan_write refill ToolCompleted",
+            ),
+        ]
+        for schema, instance, label in cases:
+            with self.subTest(shape=label):
+                errors = sorted(
+                    validator(schema, format_checker=FormatChecker()).iter_errors(instance),
+                    key=repr,
+                )
+                self.assertEqual(errors, [], f"{label} must be schema-valid")
 
 
 class CanonicalCliPayloadContractTests(unittest.TestCase):
