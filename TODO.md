@@ -24,6 +24,7 @@
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
   - 条件触发/审计登记边界：6 项（不占当前优先级）
+  - 成熟复用调研（2026-08-16，只读）：明确可复用 8 项、部分可参考 15 项、无可复用 11 项；逐项注记见各分组条目后。
 - 备注：ACAF fail-closed 生产启用已获用户裁决放行（2026-08-15），翻转执行未完成，
   仍计入未闭合；其余用户裁决门为 OPS 生产接线与 P0-C 正式组件决策门。
 
@@ -129,6 +130,7 @@
       `sample1_result.json`（90/90 复跑）；max=1 零剩余边界测试；orz-loop
       395 通过 / 0 失败（详见 S4 审计 §8）。
 - [ ] 正式组件决策门：小样全面达标后裁决；不达标即撤。
+  - 成熟复用评估（2026-08-16，只读）：无——决策门本身；材料已含 HA/hassil 与 DSH 借鉴。
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。
 
@@ -139,12 +141,15 @@
   + AGENTS.md 计划型机械包裹（用户内容之前；唯一机制）+ 首轮计划轮硬门
   （首轮只暴露黑板读取 + `plan_write`；一次重填 + 机械降级留痕；计划落黑板
   plan epoch）。
+  - 成熟复用评估（2026-08-16，只读）：明确——Grok 模板为改造对象、AGENTS.md 为 Codex 生态成熟约定、首轮硬门复用 checkpoint 机制。
 - [ ] PLAN-FIRST 阶段 B：注册板块=探针投影（移除静态基础集中间态）；工具栏刷新
   绑定黑板模型栏。
+  - 成熟复用评估（2026-08-16，只读）：部分——复用已闭合的 FUS-TOOL-PROBE 单一探针面（自研成熟机制）。
 - [ ] PLAN-FIRST 阶段 C：双模式（console 默认 + direct 受控降级）——投影切换、
   3 连败助理层故障面计数、无工具询问轮、`console_mode_transition` + gate_log、
   `console.step_done` 证据门、`console.return_to_console`、plan_write/分步计划
   状态机、ActionOrder 增 `step_id`。
+  - 成熟复用评估（2026-08-16，只读）：部分——Codex plan/approval 与 ACP 模式切换可参考，主体自研。
 
 入口：[设计](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [ADR-0010 §14.17](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
 
@@ -174,21 +179,27 @@
 ### FUS-COMPONENT-REGISTER（`partial`）
 
 - [ ] 逐 crate/component 采用审计——65 组件全 `audit_required`；从当前代码可达性与 local diff 出发，不得由 crate 名/编译推断采用档位（V11-IMPL-008）。
+  - 成熟复用评估（2026-08-16，只读）：部分——审计对象即 65 个 Grok Build/Rust 生态成熟组件，产出即复用裁决（直接复用/薄适配/fork）。
 
 入口：[register yaml](upstream/fusion-component-register-v0.1.yaml) / [register schema](upstream/fusion-component-register-v0.1.schema.json)。
 
 ### GAP-WINDOWS-EVIDENCE（`partial`）
 
 - [ ] ORZ-WIN-PROC-001/002/003 案例晋级——真实 provenance、脱敏、分类与回归门槛（FUS-DOC-001）。
+  - 成熟复用评估（2026-08-16，只读）：明确——可复用 Grok child-tree probe 证据与 GAK AppContainer/Job Object 审计。
 - [ ] 建立 Windows 平台兼容性设计文档（ADR-0010 §6/§11.7 目标：`architecture/WINDOWS_PLATFORM_COMPATIBILITY_DESIGN_v0.1.md`）。
+  - 成熟复用评估（2026-08-16，只读）：明确——设计输入含既有 Windows 审计/事故材料与 Codex/Grok Windows 行为对照。
 - [ ] 建立 `regression/windows/` 与 `.observed-runs/windows/` 路由（自动回归/人工复核入口与 git-ignored 原始运行目录）。
+  - 成熟复用评估（2026-08-16，只读）：明确——路由可承接既有 observed runs/探针矩阵先例（Grok probe）。
 
 入口：[incidents](docs/incidents/windows/README.md) / [cases](docs/cases/windows/README.md)。
 
 ### IMPL-DEEPSEEK-TRANSPORT + SEC-CREDENTIALS（`partial`）
 
 - [ ] transport/retry/thinking 按主/子代理同构约束复核（ADR-0007 / DEEPSEEK_ADAPTER_CONTRACT）。
+  - 成熟复用评估（2026-08-16，只读）：部分——DeepSeek API 契约与 ADR-0007 传输/重试策略为成熟参照。
 - [ ] DeepSeek live 通道与 Windows 实机晋级证据（ADR-0010 §11.7；当前仍为 offline / 构建时 evidence）。
+  - 成熟复用评估（2026-08-16，只读）：部分——DeepSeek 官方 API/文档为成熟参照；主要工作是证据收集而非实现复用。
 
 入口：[ADR-0007](adr/ADR-0007-transport-retry-policy.md) / [DEEPSEEK_ADAPTER_CONTRACT](architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md)。
 
@@ -223,10 +234,15 @@
 
 - [ ] 压缩恢复预检估算校准：chars/2 对中文可能低估（P0-D 二次复查登记，2026-08-14），
   随本项度量接线一并校准估算口径。
+  - 成熟复用评估（2026-08-16，只读）：无——自有估算口径校准。
 - [ ] 度量接线：模型完成轮后累加 usage 输入 token（transport/loop 完成点）；usage 缺失时 journal 估算兜底。
+  - 成熟复用评估（2026-08-16，只读）：部分——复用 DeepSeek 契约既有 usage 字段（reasoning_tokens 可得）。
 - [ ] 阈值配置（env/TOML，默认 384K 提醒 / 500K 总结推荐）；同一阈值只触发一次。
+  - 成熟复用评估（2026-08-16，只读）：部分——384K 已有实测口径，可参考成熟产品上下文窗口管理。
 - [ ] 最简实现：阈值到达的最后一轮模型输出末尾机械附提醒；headless/自动化仅写日志；500K 附五段模板 + 新窗口开场提示骨架。
+  - 成熟复用评估（2026-08-16，只读）：部分——500K 推荐复用压缩五段模板（Grok compaction 血统）。
 - [ ] 测试（到达/未到达、usage 缺失兜底、headless 分支、幂等）+ 实施审计 + BACKLOG/TODO/索引状态同步。
+  - 成熟复用评估（2026-08-16，只读）：无——自有测试/审计工作。
 
 入口：[设计](docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6d](docs/BACKLOG_AND_PRIORITIES.md)。
 
@@ -248,38 +264,57 @@
 
 - [ ] fail-closed 生产启用（2026-08-15 用户已裁决放行；待实施：生产翻转 +
   核查清单 ⑦⑨⑩⑪ 收口/边界登记 + 审计与 BACKLOG/TODO/索引同步）。
+  - 成熟复用评估（2026-08-16，只读）：无——机制已自研完成，剩翻转+核查清单+审计。
 - [ ] Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 + policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）。
+  - 成熟复用评估（2026-08-16，只读）：部分——HKDF-SHA256/HMAC 与单调计数器为成熟标准原语；ACP 模式切换为成熟先例。
 - [ ] Slice 4：Windows Sandbox backend（D-11）。
+  - 成熟复用评估（2026-08-16，只读）：明确——Windows Sandbox（Hyper-V）、AppContainer、Job Object 为成熟 OS 能力；GAK/P2 审计可直接支撑。
 - [ ] 可选：检索车道 web_fetch activation 绑定接线；conformance capture 票据场景；normalize_lexical 单源化；ACP 会话路径接 ACAF。
+  - 成熟复用评估（2026-08-16，只读）：部分——ACP 规范/xai-acp-lib、orz-paths、既有 D-13 机制与 fixture 体系可复用。
 
 入口：[ADR-0011](adr/ADR-0011-authenticated-control-and-action-fabric.md) / [ACAF 设计](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md) / [fail-closed 审计](docs/audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)。
 
 ### OPS-PROTOCOL（`pending`；裁剪方向已定）
 
 - [ ] 产出裁剪设计：删除安全保留为 host-owned 工具、跨环境桥接内部化、双执行器收敛单一参考（生产走 Rust 工具面）。
+  - 成熟复用评估（2026-08-16，只读）：部分——Windows 回收站（BitBucket）与 XDG trash 为成熟 OS 约定；既有执行器作参考。
 - [ ] 生产接线裁决（先验票，再由协议执行器执行）。
+  - 成熟复用评估（2026-08-16，只读）：无——用户决策门。
 
 入口：[协议](protocol/structured-operation-protocol-v0.1.md) / [Schema](protocol/structured-operation-protocol-v0.1.schema.json)。
 
 ## P3 — 收尾 / 清理
 
 - [ ] EVIDENCE-LOCAL-BROWSER：Python 路径（retrieval_workflow / evidence_store / pdf_evidence）按 ADR-0010 重新符合性审查或退役。
+  - 成熟复用评估（2026-08-16，只读）：明确——生产 Rust 已复用 CDP（Chrome）与 pdf_oxide；Python 路径按此审查/退役。
 - [ ] GATE-CHAIN：分层 gate 链与融合 runtime 的最终接线随切片审计复核。
+  - 成熟复用评估（2026-08-16，只读）：无——复核既有 assurance 链接线。
 - [ ] （可选）提示词补列 observed scope 合法枚举（`full_text_observed` / `partial_text_observed` / `metadata_only`）——P0-B 步骤 6 复核观察登记，verifier 已机械兜底，暂不实施。
+  - 成熟复用评估（2026-08-16，只读）：无——提示词枚举补列。
 - [ ] V11-IMPL-003：Global Review receipt 与真正审查结论严格分离——复核并登记闭合或转 gap。
+  - 成熟复用评估（2026-08-16，只读）：无——复核登记。
 - [ ] V11-IMPL-007：Toolbar/run-history 数据源统一到 ORZ session ownership、旧路径残留——复核并登记闭合或转 gap。
+  - 成熟复用评估（2026-08-16，只读）：部分——orz 即 Grok Build fork，原 toolbar/session 代码在仓库内；Codex app-server 投影为成熟参考。
 - [ ] orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`）——复核并登记闭合或转 gap。
+  - 成熟复用评估（2026-08-16，只读）：无——测试修复。
 - [ ] DC 硬信号 4/6：`same_module_no_evidence` / `key_surface_unexamined` 接线（原建议并入 P0-B，批次已闭合，独立待办）。
+  - 成熟复用评估（2026-08-16，只读）：无——自有机械接线。
 - [x] 前置收尾：提交当前未提交登记（995a384，2026-08-13）。
 
 ## 审计登记边界（条件触发，不占当前优先级）
 
 - [ ] orz-host 可选后端接线（lsp / memory / 图像 / 视频 / MCP）：接线时翻转能力访问器并补翻转测试（FUS-TOOL-PROBE 边界）。
+  - 成熟复用评估（2026-08-16，只读）：明确——LSP/MCP 为成熟开放标准，仓库内已有 orz-mcp；图像/视频走成熟服务 API。
 - [ ] headless 计划模式能力信号（plan 模式探针当前以交互用户信号代理，未来 headless 计划模式需独立信号）。
+  - 成熟复用评估（2026-08-16，只读）：部分——Codex headless/plan 模式可参考。
 - [ ] 下一次真实运行捕获自然携带 23 工具分区 journals（当前 12 个为已提交 fixtures 重建）。
+  - 成熟复用评估（2026-08-16，只读）：无——纯运行收集。
 - [ ] B-1 后续：canonical URL/host 级去重留待预筛步骤 3；若 host/loop 拆为跨进程边界，补 `ToolResult.structured` 序列化契约。
+  - 成熟复用评估（2026-08-16，只读）：部分——成熟 url 库/PSL 与 serde/JSON Schema。
 - [ ] ORZ-RECOVERY-TOOL-OUTCOME：崩溃恢复工具结果词汇（`TOOL_NOT_STARTED` / `TOOL_OUTCOME_UNKNOWN` 合成 Tool 消息 + 只重试只读/幂等指引）——出现恢复面 400 或副作用未知证据时实施（单点修复）。
+  - 成熟复用评估（2026-08-16，只读）：部分——Codex/Grok 工具生命周期与句柄化控制可参考。
 - [ ] ORZ-STAGNATION-TOOL-SIGNAL：停滞守卫「同工具同参数」信号——出现「同参循环且输出持续变化」证据时在 stagnation guard 内加最小计数信号。
+  - 成熟复用评估（2026-08-16，只读）：明确——仓库内已有 Grok 血统 stagnation 模块（orz-assurance/orientation/stagnation.rs）可直接扩展。
 
 ## 近期已闭合（供核对，不计入开放项）
 
