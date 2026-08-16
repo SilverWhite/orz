@@ -53,7 +53,7 @@
   先加消耗再加当前轮 1；下一轮 remaining 块机械反映；耗尽后进入最后
   无工具轮（D-8 语义不变，tool_rounds_limit 门事件携带合计值）。
 
-### 2.3 测试补充（S4 新增 9 项）
+### 2.3 测试补充（S4 新增 9 项：orz-loop +8、orz-host +1）
 
 - orz-loop 单元：`script_host_timeout_maps_to_script_timeout_with_script_step`、
   `script_consumes_only_actually_executed_steps`、
@@ -79,13 +79,15 @@
 ## 4. 验证证据
 
 - `cargo test -p orz-loop --lib`：**392 通过 / 0 失败 / 3 ignored**（S3 收口
-  384 + S4 新增 9 − 1 项新增计数修正后 392）。
-- `cargo test -p orz-host --lib tests::call_tool_with_timeout_override_is_honored`
-  通过；`cargo test -p orz-host --lib` 全量：209 通过 + 本切片新增 1 通过，
-  2 项既有失败（`acp_server::tests::second_prompt_continues_hash_chain` /
-  `session_prompt_produces_valid_journal_chain`——HEAD 基线上已失败，与 S4
-  无关，未在本切片处理）；`call_tool_timeout_kills_process_tree` 在并行全量
-  下偶发失败、单测通过（既有计时敏感波动）。
+  384 + S4 新增 8；另 orz-host 新增 1，合计新增 9 项）。2026-08-16 二次
+  审查收口（§8）后 orz-loop **396 通过 / 0 失败 / 3 ignored**。
+- `cargo test -p orz-host --lib call_tool_with_timeout_override_is_honored`
+  单独运行通过；`cargo test -p orz-host --lib` 全量（216 项）：209 通过
+  （含本切片新增 1 项）/ 3 失败 / 4 ignored——3 项失败为既有
+  `acp_server::tests::second_prompt_continues_hash_chain`、
+  `session_prompt_produces_valid_journal_chain`（HEAD 基线上已失败，与 S4
+  无关）与 `call_tool_timeout_kills_process_tree`（并行全量下偶发、单测
+  通过，既有计时敏感波动）。
 - `cargo fmt --check` 通过；`cargo clippy -p orz-loop --all-targets` 与 HEAD
   基线告警数一致（17 lib / 22 test），无新增告警。orz-host 的 clippy 受
   `orz-tools-api` 构建脚本缺 `protoc` 的环境限制阻塞（与本次改动无关）。
@@ -94,7 +96,12 @@
 ## 5. 已知边界
 
 - 脚本截止时间为步骤级 host 调用覆盖：权限/ACAF 等 controller 侧等待不计
-  入单步覆盖（总 30s 由步骤间检查兜底）；host 配置预算仍为任何调用的硬上限。
+  入单步覆盖；host 配置预算为**经注册表执行的调用**的硬上限——host-owned
+  同步工具（`project_doc_index`/`browser_read`/`pdf_read`/PDF 路由
+  `web_fetch`）不经 timeout 包装（既有行为，无法中断在途同步工作）。脚本层
+  在每步完成后核对总截止，此类步骤超时按 `script_timeout`+`script_step`
+  事后 fail-closed（不产出成功结果），30s 总墙钟对全部步骤生效
+  （2026-08-16 审查收口补强，见 §8）。
 - 预算预检把当前模型轮计为 1 单位（该轮结束后 `tool_rounds += 1` 必然发生），
   因此 max=1 时该轮写单会被零执行拒绝——与「预算耗尽后进入最后无工具轮」
   语义一致，测试已锁定。
@@ -108,7 +115,8 @@
 正式组件决策门（「小样全面达标后裁决；不达标即撤」）材料清单：
 
 1. 小样 1：`prototype/classical_console/sample1_result.json`（控制台路由
-   POC，28/28 检查通过，2026-08-13）。
+   POC；2026-08-13 28/28 检查通过；2026-08-16 复跑 `smoke_test.py`
+   90/90 通过并落盘结果工件，见 §8 M2）。
 2. 小样 2：`prototype/classical_console/sample2_result.json`（编辑执行器
    `workspace.search_replace`，2026-08-15 用户裁决通过 + 独立判定一致）。
 3. 小样 3：`prototype/classical_console/sample3_result.json`（机械组合脚本
@@ -128,3 +136,38 @@
 测试补齐）全部有实现入口与测试证据；设计-实现符合（用户裁决逐项落地）；
 未发现绕过既有门的执行路径。S4 闭合后，P0-C CLASSICAL-EXEC-ASSISTANT 的
 剩余未闭合项为：正式组件决策门（材料已齐备，待用户裁决）。
+
+2026-08-16 二次全面审查收口（§8）后上述结论维持：测试 392→396、决策门
+材料补齐、超时/预算边界语义收紧。
+
+## 8. 全面审查收口（2026-08-16 二次）
+
+基于 S4 全面审查（设计/实现/符合性三路）与用户指示，对全部发现处理如下：
+
+- **M1（host 硬上限表述与早退路径）**：审计 §5 措辞修正——配置预算为
+  「经注册表执行的调用」的硬上限；host-owned 同步工具（`project_doc_index`
+  /`browser_read`/`pdf_read`/PDF 路由 `web_fetch`）不经 timeout 包装为
+  既有行为。代码补强：`run_script_with_limits` 每步完成后核对总截止，超时
+  按 `script_timeout`+`script_step` 事后 fail-closed（不中断在途同步工作）；
+  新增单测 `script_step_overrunning_wallclock_fails_after_step`。
+- **M2（决策门材料缺失）**：小样 1 原无结果工件。2026-08-16 复跑
+  `prototype/classical_console/smoke_test.py`（90/90 通过）并落盘
+  `sample1_result.json`（含运行溯源/检查清单），审计 §6 材料清单第 1 项
+  指向真实文件。
+- **L1（30s 总墙钟边界）**：上述事后核对使总墙钟对全部步骤生效；controller
+  侧 gate 等待（权限/ACAF）不中断的边界保留并在审计 §5 显式登记。
+- **L2（预算预检掩盖内层错误）**：`issue_pending_console_order` 预检改为
+  先对脚本做静态校验（无执行）——校验失败或超上限（>8 步）不预检，交
+  注册表/契约校验产生真实错误码（`unknown_service`/`invalid_arguments` 等）；
+  新增 e2e 两项（未知动作、9 步超上限）。
+- **L3（测试计数表述）**：§2.3/§4 改写为「orz-loop +8、orz-host +1，合计
+  新增 9 项」；orz-host 全量按 216 总数（209 通过/3 失败/4 ignored）写明。
+- **L4（max=1 边界测试）**：新增 e2e
+  `console_s4_max_one_round_rejects_order_with_zero_remaining`
+  （remaining=0 零执行拒绝，显式锁定审计 §5 语义）。
+- **L5（trait 默认实现退化面）**：`LoopHost::call_tool_with_timeout` 文档
+  明示默认实现忽略覆盖、未覆盖 host 不保证单步受控（生产 `OrzHost` 已
+  实现，无实际风险）。
+
+验证：orz-loop **396 通过 / 0 失败 / 3 ignored**；`cargo fmt --check` 通过；
+clippy 告警数与基线一致（17 lib / 22 test，无新增）；仓库门禁 valid、0 错误。

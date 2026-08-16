@@ -351,6 +351,14 @@
     - 端到端测试：FakeProvider 完整任务会话（写 run_script/trace 订单 →
       发放 → trace 读取 → 结果栏反馈 → 下一订单）、checkpoint 轮板块保留
       e2e、超时/预算边界；orz-loop 392 通过 / 0 失败。
+    - S4 审查收口（2026-08-16 二次）：host-owned 同步工具
+      （`project_doc_index`/`browser_read`/`pdf_read`/PDF 路由 `web_fetch`）
+      不经 host timeout 包装（既有行为，无法中断在途同步工作）——脚本层
+      每步完成后核对总截止，超时按 `script_timeout`+`script_step` 事后
+      fail-closed，30s 总墙钟对全部步骤生效；预算预检先做脚本静态校验，
+      失败/超上限不预检、交注册表/契约校验产生真实错误码；决策门材料
+      补齐小样 1 结果工件（`sample1_result.json`，90/90 复跑）；orz-loop
+      396 通过 / 0 失败。
 - 控制原理：写订单无副作用，副作用只发生在单一发放出口——执行幻觉最多
     污染订单，被机械校验拦下，不会直接产生执行。
   - 单轮一单（用户确认，先定）：本轮订单未发放完不进入下一轮写单，反馈闭环驱动。

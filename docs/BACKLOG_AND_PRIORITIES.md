@@ -482,6 +482,14 @@
   （FakeProvider 完整任务会话、checkpoint 轮板块保留、超时/预算边界）；
   orz-loop 392 通过 / 0 失败；决策门材料清单齐备；详见
   `docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`。
+- 2026-08-16：P0-C S4 全面审查收口登记（二次）——host-owned 同步工具
+  （`project_doc_index`/`browser_read`/`pdf_read`/PDF 路由 `web_fetch`）
+  不经 host timeout 包装为既有边界（配置预算=经注册表执行调用的硬上限）；
+  脚本层每步完成后核对 30s 总截止（超时 `script_timeout`+`script_step`
+  事后 fail-closed）；预算预检先静态校验脚本（不掩盖 `unknown_service`/
+  契约错误）；小样 1 结果工件补齐（`sample1_result.json`，`smoke_test.py`
+  90/90 复跑）；max=1 零剩余边界测试锁定；orz-loop 396 通过 / 0 失败；
+  详见 S4 审计 §8。
 - 2026-08-15：P0-C S3 前置全面审查修复（F1-F8）闭合登记——拒绝事件补
   `exit_code=1` + `status=error`（含 host 级拒绝）、verifier ACAF 家族补
   `web_fetch`/`browser_read`、permission 家族补 host 路由检索工具、新增
