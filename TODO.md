@@ -123,10 +123,11 @@
       板块保留断言与超时/预算边界）。orz-loop 392 通过 / 0 失败。
     - [x] 实施审计（`docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md`）、
       正式组件决策门材料（小样 1/2/3 + S1-S4 审计汇总）与文档同步。
-    - [x] 二次审查收口（2026-08-16）：脚本事后总墙钟核对（host-owned 同步
-      工具不经 timeout 包装的边界登记）、预算预检先静态校验（不掩盖内层
-      错误）、小样 1 结果工件 `sample1_result.json`（90/90 复跑）、max=1
-      零剩余边界测试；orz-loop 396 通过 / 0 失败（详见 S4 审计 §8）。
+    - [x] 二次审查收口与超时语义复核（2026-08-16）：撤销「30s 总墙钟含
+      进程时间」语义（对照 Codex/Grok 成熟设计）——脚本每步由 host 配置
+      预算独立约束；预算预检先静态校验（不掩盖内层错误）；小样 1 结果工件
+      `sample1_result.json`（90/90 复跑）；max=1 零剩余边界测试；orz-loop
+      395 通过 / 0 失败（详见 S4 审计 §8）。
 - [ ] 正式组件决策门：小样全面达标后裁决；不达标即撤。
 
 入口：[设计](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [POC](prototype/classical_console/README.md)。

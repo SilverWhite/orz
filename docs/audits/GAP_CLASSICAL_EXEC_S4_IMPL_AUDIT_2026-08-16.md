@@ -12,7 +12,7 @@
 
 | S4 验收点 | 实现位置 | 证据 |
 |---|---|---|
-| 30s = 总墙钟 + 单步受控；截止时间下沉 host 层，host 负责进程树收口 | `host.rs`：`LoopHost::call_tool_with_timeout`（显式覆盖；默认实现委托 `call_tool`）；`orz-host/src/lib.rs`：`call_tool_inner(timeout_override)`——`effective_timeout = min(覆盖, 配置预算)`，到期 `kill_active` 进程树收口（Windows Job Object/TaskKill 路径不变）；`console.rs`：`run_script_with_limits` 每步传「总截止 − 已用」为覆盖；`controller.rs`：`run_host_tool_with_timeout` 透传覆盖 | `orz-host tests::call_tool_with_timeout_override_is_honored`（10s 配置 + 1.2s 覆盖 → 按覆盖截止、会话存活）；`console::tests::script_host_timeout_maps_to_script_timeout_with_script_step`（`timed_out` 结构化信号 → `script_timeout` + `script_step`、剩余截止时间传入执行器） |
+| 单步超时下沉 host 层、host 负责进程树收口；脚本无总墙钟（复核裁决撤销 30s 含进程时间语义，见 §8） | `host.rs`：`LoopHost::call_tool_with_timeout`（显式覆盖；默认实现委托 `call_tool`）；`orz-host/src/lib.rs`：`call_tool_inner(timeout_override)`——`effective_timeout = min(覆盖, 配置预算)`，到期 `kill_active` 进程树收口（Windows Job Object/TaskKill 路径不变）；`console.rs`：`run_script_with_limits` 每步传 `None`（host 配置预算独立约束，不传收缩剩余）；`controller.rs`：`run_host_tool_with_timeout` 透传覆盖 | `orz-host tests::call_tool_with_timeout_override_is_honored`（10s 配置 + 1.2s 覆盖 → 按覆盖截止、会话存活）；`console::tests::script_host_timeout_maps_to_script_timeout_with_script_step`（`timed_out` 结构化信号 → `script_timeout` + `script_step`、每步覆盖为 `None`=host 默认超时） |
 | 脚本消耗 tool-round 预算：直接订单 1 / 脚本每步 1；发放前预检；按实际步数减计；下一轮预算块机械反映 | `console.rs`：`issue_action_inner(..., timeout, consumed)`——Host 越过执行边界 +1、TraceRead 执行/查无 +1、脚本每步经 `consumed` 累计；`controller.rs`：`issue_pending_console_order` 发放前预检（剩余 = max − (当前轮 1 + 已用)；脚本长度 > 剩余 → `step=protocol` + `code=budget_insufficient` 零执行拒绝、不消耗）；`agent_loop.rs`：`tool_rounds = tool_rounds + consumed + 1`，下一轮 remaining 块机械反映、耗尽同走最后无工具轮 | `console::tests::script_consumes_only_actually_executed_steps`；`script_policy_denied_step_consumes_nothing`；`direct_order_host_timeout_maps_to_tool_timeout`；`controller::tests::console_s4_budget_precheck_rejects_over_budget_script`（required=2/remaining=1 拒绝、零执行、下一轮 REMAINING: 1）；`console_s4_script_consumes_budget_and_next_block_reflects`（2 步 → 下一轮 REMAINING: 1） |
 | 端到端测试（FakeProvider 完整任务会话；checkpoint 轮板块保留；超时/预算边界） | `controller::tests`：`console_s4_full_session_script_trace_feedback_next_order`（写 run_script → 发放 → trace 读取 → 结果栏反馈 → 下一订单）、`console_s4_checkpoint_round_retains_probe_filtered_registration`（取消落在 checkpoint 轮结束后、下一轮刷新前，断言保留探针过滤内容）、`console_s4_budget_precheck_*` / `console_s4_script_consumes_*` | 见各测试；orz-loop 392 通过 / 0 失败 / 3 ignored |
 | 实施审计与正式组件决策门材料 | 本文档 + [决策门材料清单](#6-正式组件决策门材料) | TODO/BACKLOG/索引/ADR 同步 |
@@ -33,9 +33,10 @@
   适配层据此映射（不解析文案前缀）——直接订单失败信封
   `step=execute`+`code=tool_timeout`；脚本 runner 归一化为
   `step=execute`+`code=script_timeout` 并携带 `script_step`/`action`。
-- 脚本层持有总截止 `deadline = now + 30s`，每步先算 `remaining =
-  deadline.saturating_duration_since(now)`，`remaining == 0` 时步骤间检查
-  立即拒绝（原有行为），否则把 `Some(remaining)` 传给该步执行（单步受控）。
+- 脚本层不再持有总截止（2026-08-16 二次审查收口后的复核裁决，见 §8）：
+  撤销「30s 总墙钟含进程时间」语义——每步不传收缩剩余（`None`），由 host
+  每调用超时独立约束（配置预算，默认 5 分钟，进程树收口不变）；脚本层保留
+  8 步 / 4MiB / tool-round 预算上限。
 
 ### 2.2 tool-round 预算
 
@@ -64,6 +65,10 @@
   `console_s4_script_consumes_budget_and_next_block_reflects`、
   `console_s4_checkpoint_round_retains_probe_filtered_registration`。
 - orz-host：`call_tool_with_timeout_override_is_honored`。
+- 二次审查收口增量：新增 4 项（L2 e2e ×2、L4 e2e、事后截止单测）；用户
+  复核裁决撤销 30s 总墙钟后移除事后截止单测，并将墙钟+字节测试更名
+  `run_script_enforces_byte_limits`——orz-loop 392 → 395（净 +3，另
+  orz-host +1 不变）。
 
 ## 3. 设计-实现符合性
 
@@ -79,8 +84,9 @@
 ## 4. 验证证据
 
 - `cargo test -p orz-loop --lib`：**392 通过 / 0 失败 / 3 ignored**（S3 收口
-  384 + S4 新增 8；另 orz-host 新增 1，合计新增 9 项）。2026-08-16 二次
-  审查收口（§8）后 orz-loop **396 通过 / 0 失败 / 3 ignored**。
+  384 + S4 新增 8；另 orz-host 新增 1，合计新增 9 项）。二次审查收口与
+  超时语义复核（§8）后 orz-loop **395 通过 / 0 失败 / 3 ignored**
+  （392 + 新增 4 − 撤销 1）。
 - `cargo test -p orz-host --lib call_tool_with_timeout_override_is_honored`
   单独运行通过；`cargo test -p orz-host --lib` 全量（216 项）：209 通过
   （含本切片新增 1 项）/ 3 失败 / 4 ignored——3 项失败为既有
@@ -95,13 +101,12 @@
 
 ## 5. 已知边界
 
-- 脚本截止时间为步骤级 host 调用覆盖：权限/ACAF 等 controller 侧等待不计
-  入单步覆盖；host 配置预算为**经注册表执行的调用**的硬上限——host-owned
-  同步工具（`project_doc_index`/`browser_read`/`pdf_read`/PDF 路由
-  `web_fetch`）不经 timeout 包装（既有行为，无法中断在途同步工作）。脚本层
-  在每步完成后核对总截止，此类步骤超时按 `script_timeout`+`script_step`
-  事后 fail-closed（不产出成功结果），30s 总墙钟对全部步骤生效
-  （2026-08-16 审查收口补强，见 §8）。
+- 脚本无总墙钟（2026-08-16 超时语义复核裁决，见 §8）：每步由 host 每调用
+  超时独立约束（配置预算，默认 5 分钟）；权限/ACAF 等 controller 侧等待不
+  计入任何单步覆盖。host 配置预算为**经注册表执行的调用**的硬上限——
+  host-owned 同步工具（`project_doc_index`/`browser_read`/`pdf_read`/PDF
+  路由 `web_fetch`）不经 timeout 包装（既有行为，无法中断在途同步工作），
+  与直接订单语义一致，不由脚本层事后判失败。
 - 预算预检把当前模型轮计为 1 单位（该轮结束后 `tool_rounds += 1` 必然发生），
   因此 max=1 时该轮写单会被零执行拒绝——与「预算耗尽后进入最后无工具轮」
   语义一致，测试已锁定。
@@ -137,25 +142,32 @@
 未发现绕过既有门的执行路径。S4 闭合后，P0-C CLASSICAL-EXEC-ASSISTANT 的
 剩余未闭合项为：正式组件决策门（材料已齐备，待用户裁决）。
 
-2026-08-16 二次全面审查收口（§8）后上述结论维持：测试 392→396、决策门
-材料补齐、超时/预算边界语义收紧。
+2026-08-16 二次全面审查收口与超时语义复核（§8）后上述结论维持：测试
+392→395、决策门材料补齐、超时语义对齐成熟设计（Codex/Grok 对照）。
 
 ## 8. 全面审查收口（2026-08-16 二次）
 
 基于 S4 全面审查（设计/实现/符合性三路）与用户指示，对全部发现处理如下：
 
+- **超时语义复核（用户复核裁决，2026-08-16 二次之后）**：撤销「30s 总墙钟
+  含进程时间」语义——脚本每步不传收缩剩余（`None`），由 host 每调用超时
+  独立约束（配置预算，默认 5 分钟，进程树收口不变）；依据 Codex
+  `command/exec timeoutMs` 与 Grok Build `toolset.*.timeout_secs`/
+  `ProcessScope` 成熟设计对照。删除 `MAX_SCRIPT_WALLCLOCK_SECONDS`/
+  deadline/事后核对；`run_script_enforces_wallclock_and_byte_limits` 更名
+  `run_script_enforces_byte_limits`；移除
+  `script_step_overrunning_wallclock_fails_after_step`。
 - **M1（host 硬上限表述与早退路径）**：审计 §5 措辞修正——配置预算为
   「经注册表执行的调用」的硬上限；host-owned 同步工具（`project_doc_index`
   /`browser_read`/`pdf_read`/PDF 路由 `web_fetch`）不经 timeout 包装为
-  既有行为。代码补强：`run_script_with_limits` 每步完成后核对总截止，超时
-  按 `script_timeout`+`script_step` 事后 fail-closed（不中断在途同步工作）；
-  新增单测 `script_step_overrunning_wallclock_fails_after_step`。
+  既有行为，与直接订单语义一致（不由脚本层事后判失败）。
 - **M2（决策门材料缺失）**：小样 1 原无结果工件。2026-08-16 复跑
   `prototype/classical_console/smoke_test.py`（90/90 通过）并落盘
   `sample1_result.json`（含运行溯源/检查清单），审计 §6 材料清单第 1 项
   指向真实文件。
-- **L1（30s 总墙钟边界）**：上述事后核对使总墙钟对全部步骤生效；controller
-  侧 gate 等待（权限/ACAF）不中断的边界保留并在审计 §5 显式登记。
+- **L1（30s 总墙钟边界）**：由超时语义复核裁决解决——总墙钟含进程时间的
+  语义撤销，每步与直接订单同界；controller 侧 gate 等待边界在审计 §5
+  显式登记。
 - **L2（预算预检掩盖内层错误）**：`issue_pending_console_order` 预检改为
   先对脚本做静态校验（无执行）——校验失败或超上限（>8 步）不预检，交
   注册表/契约校验产生真实错误码（`unknown_service`/`invalid_arguments` 等）；
@@ -169,5 +181,5 @@
   明示默认实现忽略覆盖、未覆盖 host 不保证单步受控（生产 `OrzHost` 已
   实现，无实际风险）。
 
-验证：orz-loop **396 通过 / 0 失败 / 3 ignored**；`cargo fmt --check` 通过；
+验证：orz-loop **395 通过 / 0 失败 / 3 ignored**；`cargo fmt --check` 通过；
 clippy 告警数与基线一致（17 lib / 22 test，无新增）；仓库门禁 valid、0 错误。

@@ -338,7 +338,8 @@
     - 单步超时下沉 host 层（用户裁决）：`LoopHost::call_tool_with_timeout`
       为每调用携带显式 wall-clock 覆盖；host 按 `min(覆盖, 配置预算)` 截止，
       到期仍走既有进程树收口（`kill_active`，Windows Job Object/TaskKill）。
-      脚本每步把「总 30s 截止 - 已用时间」作为覆盖传入（单步受控），host
+      脚本每步不传收缩剩余（`None`），由 host 每调用超时独立约束（配置
+      预算；单步受控——〔复核裁决撤销 30s 总墙钟，见下方审查收口〕），host
       截止以结构化信号 `ToolResult.timed_out` 上浮——直接订单失败信封
       `step=execute`+`code=tool_timeout`，脚本 runner 归一化为
       `script_timeout` 并携带 `script_step`（不用文案前缀判定）。
@@ -351,14 +352,15 @@
     - 端到端测试：FakeProvider 完整任务会话（写 run_script/trace 订单 →
       发放 → trace 读取 → 结果栏反馈 → 下一订单）、checkpoint 轮板块保留
       e2e、超时/预算边界；orz-loop 392 通过 / 0 失败。
-    - S4 审查收口（2026-08-16 二次）：host-owned 同步工具
-      （`project_doc_index`/`browser_read`/`pdf_read`/PDF 路由 `web_fetch`）
-      不经 host timeout 包装（既有行为，无法中断在途同步工作）——脚本层
-      每步完成后核对总截止，超时按 `script_timeout`+`script_step` 事后
-      fail-closed，30s 总墙钟对全部步骤生效；预算预检先做脚本静态校验，
-      失败/超上限不预检、交注册表/契约校验产生真实错误码；决策门材料
-      补齐小样 1 结果工件（`sample1_result.json`，90/90 复跑）；orz-loop
-      396 通过 / 0 失败。
+    - S4 审查收口（2026-08-16 二次）与超时语义复核裁决：撤销「30s 总墙钟
+      含进程时间」语义（对照 Codex `command/exec timeoutMs` 与 Grok Build
+      `toolset.*.timeout_secs`/`ProcessScope` 成熟设计）——脚本每步由 host
+      每调用超时独立约束（配置预算，默认 5 分钟，进程树收口不变）；host-owned
+      同步工具（`project_doc_index`/`browser_read`/`pdf_read`/PDF 路由
+      `web_fetch`）不经 host timeout 包装为既有边界，与直接订单一致（不由
+      脚本层事后判失败）；预算预检先做脚本静态校验，失败/超上限不预检、交
+      注册表/契约校验产生真实错误码；决策门材料补齐小样 1 结果工件
+      （`sample1_result.json`，90/90 复跑）；orz-loop 395 通过 / 0 失败。
 - 控制原理：写订单无副作用，副作用只发生在单一发放出口——执行幻觉最多
     污染订单，被机械校验拦下，不会直接产生执行。
   - 单轮一单（用户确认，先定）：本轮订单未发放完不进入下一轮写单，反馈闭环驱动。

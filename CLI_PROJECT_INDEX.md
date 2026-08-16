@@ -18,6 +18,7 @@
 > 2026-08-16 P0-C S3 全面审查收口登记（用户逐项裁决）——单订单步数上限 20→8（`MAX_SCRIPT_STEPS_PER_ORDER`）、`assistant.trace` 查无 id 定案 `step=execute`+`not_found`、checkpoint 轮跳过注册板块刷新、注册不变式补齐（内部动作带 target 拒绝/内部动作类唯一/bundle 非空/嵌套按 kind 拒绝）、最终超限信封补 `script_step`；orz-loop 384 / 0 失败；S4 登记=单步超时（host 层进程树收口）+ 脚本 tool-round 预算消耗；详见 S3 审计 §6。
 > 2026-08-16 P0-C S4 实施闭合登记——单步超时下沉 host 层（`LoopHost::call_tool_with_timeout` 显式覆盖 = min(覆盖, 配置预算)、到期进程树收口；`ToolResult.timed_out` 结构化信号 → 直接订单 `tool_timeout`、脚本归一化 `script_timeout`+`script_step`）；脚本 tool-round 预算（发放前预检 `budget_insufficient` 零执行拒绝、实际执行步数减计、下一轮预算块机械反映）；端到端测试（FakeProvider 完整任务会话、checkpoint 轮板块保留、超时/预算边界）；orz-loop 392 / 0 失败；决策门材料清单齐备；实施审计见 [GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT](docs/audits/GAP_CLASSICAL_EXEC_S4_IMPL_AUDIT_2026-08-16.md)。
 > 2026-08-16 P0-C S4 全面审查收口登记（二次）——host-owned 同步工具（`project_doc_index`/`browser_read`/`pdf_read`/PDF 路由 `web_fetch`）不经 timeout 包装为既有边界（配置预算=经注册表执行调用的硬上限）；脚本层每步后核对 30s 总截止（`script_timeout` 事后 fail-closed）；预算预检先静态校验脚本（不掩盖内层错误）；小样 1 结果工件补齐（`sample1_result.json` 90/90 复跑）；orz-loop 396 / 0 失败；详见 S4 审计 §8。
+> 2026-08-16 P0-C S4 超时语义复核登记（用户复核 + Codex/Grok 成熟设计对照）——撤销 30s 总墙钟含进程时间语义：脚本每步由 host 配置预算独立约束（不传收缩剩余）；`MAX_SCRIPT_WALLCLOCK_SECONDS`/事后核对删除；orz-loop 395 / 0 失败；详见 S4 审计 §8。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

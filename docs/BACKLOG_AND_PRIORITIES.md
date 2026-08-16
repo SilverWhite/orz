@@ -490,6 +490,12 @@
   契约错误）；小样 1 结果工件补齐（`sample1_result.json`，`smoke_test.py`
   90/90 复跑）；max=1 零剩余边界测试锁定；orz-loop 396 通过 / 0 失败；
   详见 S4 审计 §8。
+- 2026-08-16：P0-C S4 超时语义复核裁决（用户复核 + Codex/Grok 成熟设计
+  对照）——撤销上条「30s 总墙钟含进程时间」语义：脚本每步不传收缩剩余，
+  由 host 每调用超时独立约束（配置预算，默认 5 分钟，进程树收口不变）；
+  `MAX_SCRIPT_WALLCLOCK_SECONDS`/deadline/事后核对删除，墙钟+字节测试更名
+  `run_script_enforces_byte_limits`；orz-loop 395 通过 / 0 失败；详见 S4
+  审计 §8。
 - 2026-08-15：P0-C S3 前置全面审查修复（F1-F8）闭合登记——拒绝事件补
   `exit_code=1` + `status=error`（含 host 级拒绝）、verifier ACAF 家族补
   `web_fetch`/`browser_read`、permission 家族补 host 路由检索工具、新增
