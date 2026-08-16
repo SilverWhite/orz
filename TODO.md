@@ -26,13 +26,14 @@
 > 27 → 31；2026-08-17 GAP-CONSOLE-TOOLNAME-PATTERN 闭合（改名下划线 +
 > verifier/schema/文档同步 + Linux 重建 + 冒烟重跑验证，未闭合 31 → 30；
 > 2026-08-17 ACAF 跑分决策 + 下一步实施项对齐（两项 P1 观察升 P0-E；冒烟重跑定位
-> 新增计划视图步骤 ID 渲染项，未闭合 30 → 31）。
+> 新增计划视图步骤 ID 渲染项，未闭合 30 → 31；2026-08-17 grep 侦查纪律项登记
+> （用户确认一并处理，未闭合 31 → 32）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**31 项**
+- 未闭合总数：**32 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：4 项（GAP-ACAF-HARNESS-PASSTHROUGH 实施、plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染）
+  - P0 评测冒烟暴露：5 项（GAP-ACAF-HARNESS-PASSTHROUGH 实施、plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染、grep 侦查纪律）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -75,6 +76,11 @@
   仅渲染 `[status] goal (actions: N; evidence: M)`，不渲染 `step.id`；步骤门要求订单
   `step_id` 精确绑定 → 模型靠猜测大量空转（轨迹 13/18/23 步、4 次 plan_write）。补渲染
   `step.id`（含归档 epoch 读）+ 测试；ADR-0010 §14.21 登记。
+- [ ] （新观察，用户确认一并处理）grep 侦查纪律与空结果解读：冒烟重跑中模型用不存在的
+  目标字符串（`doomgeneric_mips|frame\.bmp`）grep 全树，空结果（exit_code=1，工具行为
+  正确）被过度泛化为「/app 无 C 源码」，一度错误转向。强化方向=提示词/计划框架补侦查
+  纪律（先 list_dir 建立文件清单、pattern 用实际存在的字符串、空结果≠无文件）+ 注册
+  板块 grep 动作最小参数提示补空结果语义 + 回归验证（重跑 round 数/计划重写次数下降）。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

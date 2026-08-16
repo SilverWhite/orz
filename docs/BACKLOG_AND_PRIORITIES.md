@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 四项：ACAF 容器供应实施、plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染；2026-08-17 最优先，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 五项：ACAF 容器供应实施、plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染、grep 侦查纪律；2026-08-17 最优先，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -66,7 +66,11 @@
      `missing_required_field: plan` → refill，重填对象后通过）；
   3. `steps[].actions` 形状校验收紧（P1 观察②：实证审计空/宽松形状并补探针测试）；
   4. **计划视图渲染步骤 ID**（新发现，步骤门模型面闭环：`section=plan` 补 `step.id`，
-     模型无需猜测；ADR-0010 §14.21 登记）。
+     模型无需猜测；ADR-0010 §14.21 登记）；
+  5. **grep 侦查纪律与空结果解读**（新观察，用户 2026-08-17 确认一并处理）：提示词/
+     计划框架补侦查纪律（先 list_dir 建清单、pattern 用实际存在的字符串、空结果≠无
+     文件）+ 注册板块 grep 参数提示补空结果语义 + 回归验证（重跑 round 数/计划重写
+     次数下降）。
 
 ### 0. 前置收尾（提交前需用户确认）
 
@@ -551,6 +555,10 @@
 
 ## 变更记录
 
+- 2026-08-17：grep 侦查纪律项登记（用户确认一并处理）——冒烟重跑中模型用不存在的
+  目标字符串 grep 全树、空结果被过度泛化为「/app 无 C 源码」；工具行为正确（无匹配
+  exit_code=1），属侦查策略/反馈解读问题。实施方向：提示词/计划框架侦查纪律 + 注册
+  板块 grep 参数提示空结果语义 + 回归验证。P0-E 5 项、未闭合 32 项。
 - 2026-08-17：ACAF 跑分决策登记（用户裁决）+ P0-E 下一步实施项对齐——① GAP-ACAF-
   HARNESS-PASSTHROUGH：跑分保持 ACAF 强制开启（容器内供应 manifest/keystore/signer，
   不接受影子模式），实施=适配器透传 + 容器供应 + 移除临时 `ORZ_ACAF_FAIL_CLOSED=0`

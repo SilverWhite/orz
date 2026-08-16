@@ -32,6 +32,7 @@
 > 2026-08-17 评测冒烟暴露问题登记（最优先）——GAP-ACAF-HARNESS-PASSTHROUGH（ACAF fail-closed 默认强制后 TB2 适配器不转发签发器配置，`orz --real` 拒启；临时影子模式解阻，正式决策待定）+ GAP-CONSOLE-TOOLNAME-PATTERN（console 面工具名点号违反 OpenAI 兼容工具名模式，真实 API 计划落板后 400；修复=改名下划线 + verifier/schema/文档同步 + 重建重跑）；顺带观察 2 项（plan_write 提示词、actions 校验）；处理窗口=新 Codex 窗口；详见 BACKLOG 0a / TODO P0-E。
 > 2026-08-17 GAP-CONSOLE-TOOLNAME-PATTERN 闭合登记（本窗口处理）——三个 console 面工具名点号改下划线（`blackboard_action_write`/`console_step_done`/`console_return_to_console`），同步 11 Rust 文件 91 处 + Python verifier/schema/测试 + ADR-0010 §14.20 与设计文档（orz 子模块 0304b23）；orz-loop 434 / orz-tui 178 / orz-assurance / orz-bin acaf_e2e 23 + real_flag 2 通过、clippy 无新增告警；manifest 重生成 1401 条目、仓库门禁 valid；Linux musl 重建后冒烟重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`（30m21s 跑满 1740s 预算、`run_invalidated{wallclock}` 正常收尾，对比旧运行 400 即死）。GAP-ACAF-HARNESS-PASSTHROUGH 保持开放（正式跑分决策待定）。详见 BACKLOG 0a / TODO P0-E。
 > 2026-08-17 ACAF 跑分决策 + P0-E 下一步实施项登记（用户裁决 + 冒烟重跑定位）——GAP-ACAF-HARNESS-PASSTHROUGH 用户裁决「跑分保持 ACAF 强制开启」（容器内供应 manifest/keystore/signer，不接受影子模式；实施待做）；两项 P1 观察升为实施项（plan_write 提示词/示例强化、steps[].actions 形状校验收紧）；冒烟重跑（`D:\tb-eval\jobs\2026-08-17__03-48-57`，reward 0.0）定位新增步骤门模型面缺口——`blackboard_read section=plan` 不渲染步骤 id（epoch.rs 仅 `[status] goal (actions; evidence)`），步骤门要求订单 step_id 精确绑定致模型猜测空转（4 次 plan_write）；另记 grep 侦查低效（目标字符串不存在→空结果被泛化为无源码）。详见 BACKLOG 0a / TODO P0-E / ADR-0010 §14.21。
+> 2026-08-17 grep 侦查纪律项登记（用户确认一并处理）——冒烟重跑中模型用不存在的目标字符串 grep 全树、空结果被过度泛化为「无 C 源码」（工具行为正确，exit_code=1 无匹配）；实施方向=提示词/计划框架侦查纪律 + 注册板块 grep 参数提示空结果语义 + 回归验证；P0-E 5 项、未闭合 32 项。详见 BACKLOG 0a / TODO P0-E。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >
@@ -249,5 +250,6 @@
 - 不得把一次跑分、测试全绿、提交完成或阶段关闭写成架构符合性结论。
 - 不得为同一概念创建第二条长说明；补充关键词和入口应修改原 canonical entry。
 - 不得在状态速查、ADR 表或源码速查中复制主题定义。
+
 
 
