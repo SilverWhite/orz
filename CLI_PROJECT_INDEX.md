@@ -37,6 +37,15 @@
 > 2026-08-17 GAP-ACAF-HARNESS-PASSTHROUGH 实施登记——前置设计变更（用户裁决）：新增 `file-0600-installation` 文件型安装密钥库（Linux 下 DPAPI 不可用，原 fail-closed 边界解除；ADR-0010 §14.21 项 4 / ADR-0011 §5），orz 子模块 e8274e1（keystore 文件型后端 + storage 分派 + provision/signer 非 Windows 分支 + 0600 测试），orz-bin 全量通过（acaf_e2e 23 / signer 14 / provision 2）；schema/fixture 同步、仓库门禁 valid；适配器容器内落 manifest+keystore、run 设 ACAF env=1；`.env` 影子覆盖已移除；冒烟待 Linux 重建后执行。
 > 2026-08-17 GAP-ACAF-HARNESS-PASSTHROUGH 闭合登记——Linux musl 重建（父仓库挂载 `/orz`、工作目录 `/orz/orz`，15m45s）后容器冒烟通过：provision 落 0600 keystore + manifest 真哈希、signer stdio initialize_session 应答（文件密钥库加载成功）、`orz --real` 带签发器启动 3 次成功（启动期 fail-closed 不变量通过、wallclock 正常收尾、退出码 0）；冒烟 journal 见 `D:\tb-eval\jobs\2026-08-17__05-45-ACAF-SMOKE`；P0-E 剩 5 项、未闭合 32 项。
 > 2026-08-17 ORZ-BUILD-MOUNT-001 事故/案例登记——容器构建挂载契约（构建须挂父仓库为 `/orz`、工作目录 `/orz/orz`，否则 orz-assurance include_str 编译期失败；用户确认此前已出现过一次）；预防=构建脚本前置守卫（秒级失败）+ 两份评测文档命令修正 + orz 源码注释契约；案例库新增 `harness_environment` 分类。
+> 2026-08-17 计划视图渲染步骤 ID 实施闭合登记（P0-E 第 4 项，用户指示处理）——
+> `blackboard_read section=plan` 每步行首渲染 `step.id`
+> （`- [状态] <step_id>: <目标> (actions: N; evidence: M)`，epoch.rs 渲染 live
+> 视图与归档 epoch 读同源）+ 系统提示词状态行当前步补 `[step_id]` +
+> `blackboard_read`/`blackboard_action_write` 工具描述补取 id 提示；测试三层
+> （epoch 渲染单测、工具级 `section=plan` 回达、跨 epoch 归档读）；orz-loop
+> 436 / orz-tui 178 / orz-assurance 152 / orz-bin 全量通过、clippy 无新增告警、
+> manifest 1401、仓库门禁 valid。P0-E 剩 4 项、未闭合 31 项。
+> 详见 BACKLOG 0a / TODO P0-E / ADR-0010 §14.21。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

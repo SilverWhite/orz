@@ -29,13 +29,15 @@
 > 新增计划视图步骤 ID 渲染项，未闭合 30 → 31；2026-08-17 grep 侦查纪律项登记
 > （用户确认一并处理，未闭合 31 → 32）；2026-08-17 订单发放前拒绝入事件面项登记
 > （用户指示，未闭合 32 → 33）；2026-08-17 GAP-ACAF-HARNESS-PASSTHROUGH 闭合
-> （文件型密钥库 + 适配器容器供应 + Linux 重建 + 冒烟通过，未闭合 33 → 32）。
+> （文件型密钥库 + 适配器容器供应 + Linux 重建 + 冒烟通过，未闭合 33 → 32）；
+> 2026-08-17 计划视图渲染步骤 ID 闭合（渲染 step.id + 状态行 + 工具描述提示
+> + 测试，未闭合 32 → 31）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**32 项**
+- 未闭合总数：**31 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：5 项（plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染、grep 侦查纪律、发放前拒绝入事件面；GAP-ACAF-HARNESS-PASSTHROUGH 已闭合 2026-08-17）
+  - P0 评测冒烟暴露：4 项（plan_write 提示词强化、actions 形状校验、grep 侦查纪律、发放前拒绝入事件面；GAP-ACAF-HARNESS-PASSTHROUGH 与计划视图步骤 ID 渲染已闭合 2026-08-17）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -80,10 +82,17 @@
   （`missing_required_field: plan` → refill_requested），重填对象后通过。提示词/示例
   强化，并补回归测试（字符串计划 → 机械拒绝 → 对象重填）。
 - [ ] （P1 观察）`steps[].actions` 形状校验收紧：空字符串当前仍通过校验，动作形状校验偏宽。
-- [ ] （新发现，冒烟重跑定位）计划视图渲染步骤 ID：`blackboard_read section=plan` 当前
-  仅渲染 `[status] goal (actions: N; evidence: M)`，不渲染 `step.id`；步骤门要求订单
-  `step_id` 精确绑定 → 模型靠猜测大量空转（轨迹 13/18/23 步、4 次 plan_write）。补渲染
-  `step.id`（含归档 epoch 读）+ 测试；ADR-0010 §14.21 登记。
+- [x] （新发现，冒烟重跑定位）计划视图渲染步骤 ID：`blackboard_read section=plan` 当前
+    仅渲染 `[status] goal (actions: N; evidence: M)`，不渲染 `step.id`；步骤门要求订单
+    `step_id` 精确绑定 → 模型靠猜测大量空转（轨迹 13/18/23 步、4 次 plan_write）。补渲染
+    `step.id`（含归档 epoch 读）+ 测试；ADR-0010 §14.21 登记。
+    **2026-08-17 闭合**：`epoch.rs` plan 段每步行首渲染 `step.id`
+    （`- [状态] <step_id>: <目标> (actions: N; evidence: M)`，live 视图与
+    归档 epoch 读同源）+ 系统提示词状态行当前步补 `[step_id]` +
+    `blackboard_read`/`blackboard_action_write` 描述补取 id 提示；测试三层
+    （epoch 渲染单测、工具级 `blackboard_read section=plan` 回达、跨 epoch
+    归档读）；orz 子模块 0d1e01b；orz-loop 436 / orz-tui 178 / orz-assurance
+    152 / orz-bin 全量通过、clippy 无新增告警、manifest 1401、仓库门禁 valid。
 - [ ] （新观察，用户确认一并处理）grep 侦查纪律与空结果解读：冒烟重跑中模型用不存在的
   目标字符串（`doomgeneric_mips|frame\.bmp`）grep 全树，空结果（exit_code=1，工具行为
   正确）被过度泛化为「/app 无 C 源码」，一度错误转向。强化方向=提示词/计划框架补侦查
