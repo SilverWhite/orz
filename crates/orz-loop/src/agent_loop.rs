@@ -1031,6 +1031,12 @@ pub(crate) async fn run_agent_loop(
                         )
                         .await?;
                 }
+                // PLAN-FIRST 阶段 B (2026-08-16): 记录主车道本轮探针源——
+                // 工具栏投影与注册板块（黑板模型栏）共用的单一事实源；
+                // 检索车道无操作台，不记录。
+                if profile.role == AgentRole::Main {
+                    controller.set_console_probe_source(host.tool_policy(), snapshot.clone());
+                }
                 Some(snapshot)
             } else {
                 None
@@ -1056,16 +1062,12 @@ pub(crate) async fn run_agent_loop(
         // 检索车道无操作台）。内容 = 动作名 + 最小参数提示（最小提示由
         // `console::ServiceRegistry` 生成，不复制完整 schema）；板块常驻、
         // 内容按需读（模型用 blackboard_read section=actions 取回）。
-        // P0-C S3 审查收口（2026-08-16）：checkpoint 轮为无探针间隙——
-        // 跳过刷新，保留上一轮探针过滤后的板块；其他无探针轮次
-        // （probe_work_tools=false 等）仍按 bundle-only 刷新。
+        // PLAN-FIRST 阶段 B (2026-08-16): 刷新收敛为「记录探针源 → 派生
+        // 注册板块」单一路径——与模型可见工具投影共用同一探针源（工具栏
+        // 绑定黑板模型栏）；checkpoint 轮/无探针轮次不改写板块，保留上
+        // 一轮探针过滤后的内容（替代 bundle-only 静态刷新中间态）。
         if profile.role == AgentRole::Main && pending_checkpoint.is_none() {
-            let registrations =
-                controller.console_registrations(host.tool_policy(), probe_snapshot.as_ref());
-            svc.blackboard
-                .write()
-                .actions
-                .set_registration(registrations);
+            controller.sync_console_registrations();
         }
 
         // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：AVAILABLE 块不再注入——

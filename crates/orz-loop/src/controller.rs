@@ -495,6 +495,17 @@ pub struct AgentLoopController {
     console_traces: Mutex<TraceStore>,
     /// P0-C S2: 动作栏订单号机械分配（`ORD-<seq>`，单调）。
     console_order_seq: std::sync::atomic::AtomicU64,
+    /// PLAN-FIRST 阶段 B (2026-08-16): 主车道最近一轮探针源（ToolPolicy +
+    /// ToolProbeSnapshot）——工具栏投影与注册板块（黑板模型栏）共用的单一
+    /// 事实源；`blackboard_read section=actions` 读取时据此派生注册板块。
+    /// 仅内存、随轮覆盖、run 起始复位、不持久化（沿用探针快照生命周期
+    /// 纪律）。
+    console_probe_source: Mutex<
+        Option<(
+            crate::host::ToolPolicy,
+            crate::tool_probe::ToolProbeSnapshot,
+        )>,
+    >,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -2085,6 +2096,7 @@ impl AgentLoopController {
             console_registry: crate::console::default_service_registry(),
             console_traces: Mutex::new(TraceStore::new()),
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
+            console_probe_source: Mutex::new(None),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -3801,6 +3813,7 @@ impl AgentLoopController {
             console_registry: crate::console::default_service_registry(),
             console_traces: Mutex::new(TraceStore::new()),
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
+            console_probe_source: Mutex::new(None),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -3808,6 +3821,38 @@ impl AgentLoopController {
 
     pub fn blackboard(&self) -> &Arc<SharedBlackboard> {
         &self.blackboard
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 记录主车道本轮探针源——工具栏投影
+    /// 与注册板块（黑板模型栏）共用的单一事实源。仅内存、随轮覆盖。
+    pub(crate) fn set_console_probe_source(
+        &self,
+        policy: crate::host::ToolPolicy,
+        snapshot: crate::tool_probe::ToolProbeSnapshot,
+    ) {
+        *self.console_probe_source.lock().unwrap() = Some((policy, snapshot));
+    }
+
+    /// PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 探针源随 run 复位——与
+    /// `probe_state` 同纪律（run 起始清空，本 run 首个有探针轮重新记录；
+    /// 不跨 run 沿用）。复位后无探针源时，注册板块沿用既有内容、不派生。
+    pub(crate) fn reset_console_probe_source(&self) {
+        *self.console_probe_source.lock().unwrap() = None;
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 注册板块派生并持久化——由最近探针源
+    /// 派生 Profile/Bundle ∩ 探针完整集投影并写入黑板 actions 板块；无探针
+    /// 源时不改写（checkpoint 轮/无探针轮次沿用既有内容，替代 bundle-only
+    /// 静态刷新中间态）。
+    pub(crate) fn sync_console_registrations(&self) {
+        let Some((policy, probe)) = self.console_probe_source.lock().unwrap().clone() else {
+            return;
+        };
+        let registrations = self.console_registrations(policy, Some(&probe));
+        self.blackboard
+            .write()
+            .actions
+            .set_registration(registrations);
     }
 
     /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): enable the
@@ -3876,6 +3921,13 @@ impl AgentLoopController {
                     dir.display()
                 ),
             };
+        }
+        // PLAN-FIRST 阶段 B (2026-08-16): 注册板块绑定黑板模型栏——读取
+        // actions 分区时由最近探针源派生（并持久化回板块），替代仅依赖
+        // loop-top 静态刷新的陈旧内容；无探针源时沿用既有内容。归档
+        // epoch 读保持快照原样，不派生。
+        if section == "actions" {
+            self.sync_console_registrations();
         }
         let bb = self.blackboard.read();
         crate::epoch::render_section(
@@ -4161,6 +4213,10 @@ impl AgentLoopController {
         // pre-run_started probe below seeds it; never persisted across
         // runs, design §8).
         *self.probe_state.lock().unwrap() = crate::tool_probe::MinimalProbeMap::default();
+        // PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 注册板块探针源同样随
+        // run 复位——与 `probe_state` 同纪律，本 run 首个有探针轮重新记录，
+        // 不跨 run 沿用（此前依赖「首个有探针轮必先覆盖」才能保证无泄漏）。
+        self.reset_console_probe_source();
         // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer
         // citation verifier's evidence is per-run — the main lane's read
         // evidence and the committed retrieval ledgers start empty.
@@ -6591,10 +6647,12 @@ impl AgentLoopController {
         ))
     }
 
-    /// P0-C S2/S3 (2026-08-15): 注册板块投影——每轮机械刷新用（最小参数提示，
-    /// 不复制完整 schema）。S3 起 = Profile/Bundle 加载集 ∩ 探针完整集：
-    /// 会话场景键取 `host.tool_policy()`，探针快照取本轮主车道工作工具
-    /// 探针；`probe=None`（无探针间隙）时只做 bundle 过滤。
+    /// P0-C S2/S3 (2026-08-15)；PLAN-FIRST 阶段 B 审查收口 (2026-08-16):
+    /// 注册板块投影 = Profile/Bundle 加载集 ∩ 探针完整集（最小参数提示，
+    /// 不复制完整 schema）。会话场景键取 `host.tool_policy()`，探针快照取
+    /// 本轮主车道工作工具探针。生产路径仅由 `sync_console_registrations`
+    /// 以 `Some(probe)` 调用；`probe=None` 仅保留给既有单元测试，不再作为
+    /// 生产刷新语义（无探针源时板块不改写、沿用上一轮内容）。
     pub(crate) fn console_registrations(
         &self,
         profile: crate::host::ToolPolicy,
@@ -14586,6 +14644,217 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 注册板块绑定黑板模型栏——读取
+    /// actions 分区时由最近探针源派生并持久化，替代 loop-top 静态刷新
+    /// 的陈旧内容（含 S2 静态基础集残留）。
+    #[test]
+    fn console_stage_b_actions_read_derives_registration_from_probe_source() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])));
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        // 陈旧板块：静态基础集残留——派生读取后不得再出现。
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "workspace.run_tests".to_string(),
+                description: "stale static base set".to_string(),
+                parameters: serde_json::json!({}),
+            }]);
+        controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
+        let text = controller.render_blackboard_section("actions", None, None);
+        assert!(text.contains("workspace.read_file"), "{text}");
+        assert!(text.contains("workspace.run_script"), "{text}");
+        assert!(text.contains("assistant.trace"), "{text}");
+        assert!(!text.contains("workspace.run_tests"), "{text}");
+        // 派生结果持久化回板块（checkpoint/归档沿用）。
+        let board = controller.blackboard().read();
+        let names: Vec<&str> = board
+            .actions
+            .registration
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        assert!(names.contains(&"workspace.read_file"), "{names:?}");
+        assert!(!names.contains(&"workspace.run_tests"), "{names:?}");
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 无探针源时读取沿用既有板块内容
+    /// （checkpoint 轮/归档语义），不改写、不静默清空。
+    #[test]
+    fn console_stage_b_actions_read_retains_stored_registration_without_probe_source() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])));
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "assistant.trace".to_string(),
+                description: "retained".to_string(),
+                parameters: serde_json::json!({}),
+            }]);
+        let text = controller.render_blackboard_section("actions", None, None);
+        assert!(text.contains("assistant.trace"), "{text}");
+        assert!(text.contains("(no pending order)"), "{text}");
+        let board = controller.blackboard().read();
+        assert_eq!(
+            board.actions.registration.len(),
+            1,
+            "{:?}",
+            board.actions.registration
+        );
+        assert_eq!(board.actions.registration[0].name, "assistant.trace");
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 工具栏与注册板块同源一致性——同一
+    /// 探针源下，注册板块中工作工具目标（Host 动作）必须同时出现在模型
+    /// 可见工具投影中；探针移除的工作工具不得出现在注册板块。
+    #[test]
+    fn console_stage_b_registration_matches_tool_projection() {
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        let registry = crate::console::default_service_registry();
+        let regs =
+            registry.registrations_for(crate::host::ToolPolicy::Interactive, Some(&snapshot));
+        let base = crate::tool_probe::WORK_TOOLS
+            .iter()
+            .map(|name| ToolDef {
+                name: (*name).to_string(),
+                description: format!("tool {name}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect::<Vec<_>>();
+        let projected = AgentLoopController::project_main_agent_tool_defs(&base, &snapshot);
+        let projected_names: std::collections::HashSet<&str> =
+            projected.iter().map(|t| t.name.as_str()).collect();
+        for reg in &regs {
+            let target = reg.name.trim_start_matches("workspace.");
+            // Host 动作目标若是工作工具，必须在工具栏投影内；内部动作
+            // （assistant.trace/workspace.run_script）与非工作工具目标
+            // （project_doc_index）不要求同名。
+            if crate::tool_probe::is_main_agent_work_tool(target) {
+                assert!(
+                    projected_names.contains(target),
+                    "registration {} missing from toolbar projection",
+                    reg.name
+                );
+            }
+        }
+        assert!(
+            regs.iter().all(|r| r.name != "workspace.run_tests"),
+            "probe-incomplete tool must not be registered: {regs:?}"
+        );
+    }
+
+    /// PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 归档 epoch 读保持快照——
+    /// 即使存在探针源，`render_blackboard_section("actions", None, Some(n))`
+    /// 也不按探针源派生、不改写当前板块；live 读仍正常派生（对照）。
+    #[test]
+    fn console_stage_b_actions_read_archived_epoch_keeps_snapshot() {
+        let dir = test_dir().join("gsa").join("stage_b_archive");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])))
+            .with_blackboard_archive_dir(Some(dir.clone()))
+            .with_plan(
+                "PLAN-B-1".to_string(),
+                1,
+                "old".to_string(),
+                vec!["旧步骤".to_string()],
+            );
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "workspace.archived_legacy".to_string(),
+                description: "archived registration".to_string(),
+                parameters: serde_json::json!({}),
+            }]);
+        // 轮换：epoch 1（含旧注册板块）归档，当前板块重置。
+        let controller = controller.with_plan(
+            "PLAN-B-2".to_string(),
+            2,
+            "new".to_string(),
+            vec!["新步骤".to_string()],
+        );
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
+        let archived = controller.render_blackboard_section("actions", None, Some(1));
+        assert!(archived.contains("workspace.archived_legacy"), "{archived}");
+        assert!(!archived.contains("workspace.read_file"), "{archived}");
+        let live = controller.render_blackboard_section("actions", None, None);
+        assert!(live.contains("workspace.read_file"), "{live}");
+        assert!(!live.contains("workspace.archived_legacy"), "{live}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 探针源随 run 复位——复位后
+    /// 无探针源，读取沿用既有板块内容、不按源派生（不跨 run 沿用）。
+    #[test]
+    fn console_stage_b_probe_source_resets_across_runs() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])));
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "assistant.trace".to_string(),
+                description: "retained across reset".to_string(),
+                parameters: serde_json::json!({}),
+            }]);
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
+        controller.reset_console_probe_source();
+        let text = controller.render_blackboard_section("actions", None, None);
+        assert!(text.contains("assistant.trace"), "{text}");
+        assert!(!text.contains("workspace.read_file"), "{text}");
+        let board = controller.blackboard().read();
+        assert_eq!(board.actions.registration.len(), 1);
+        assert_eq!(board.actions.registration[0].name, "assistant.trace");
     }
 
     /// P0-C S2 (2026-08-15): 单轮一单——同批第二次 `blackboard.action_write`
