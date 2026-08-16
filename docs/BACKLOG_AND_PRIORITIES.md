@@ -453,7 +453,9 @@
   [`GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md`](audits/GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md)。
 - Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 + policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）。
 - Slice 4：Windows Sandbox backend（D-11）。
-- 可选：检索车道 web_fetch activation 绑定接线；conformance capture 票据场景；normalize_lexical 单源化；ACP 会话路径接 ACAF。
+- 可选：conformance capture 票据场景；normalize_lexical 单源化（检索车道
+  activation 绑定与 ACP 会话接线已随 Slice 2 / fail-closed 翻转完成，
+  2026-08-16 收口）。
 - 入口：[ADR-0011](../adr/ADR-0011-authenticated-control-and-action-fabric.md)；[fail-closed 审计](audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)。
 
 ### 8. OPS-PROTOCOL（`pending`）

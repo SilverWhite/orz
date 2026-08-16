@@ -31,7 +31,18 @@
   [`GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)
   与
   [`GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT`](../docs/audits/GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md)；
-  Slice 3/4 待实施）
+  Slice 3/4 待实施）；**2026-08-16 全面审查处理登记**——P2-I1 grill 路径补
+  D-15 启动期拒绝（与 `run_turn_with_guards` 同语义）；P2-I2 AcafClient 改
+  per-session 缓存（多会话交错不再重置一次性账本）；respawn 活性修复（原
+  e2e 从未真正杀签名器；respawn 后序列重启、账本随 epoch 重置，更正 Slice 1
+  审计"序列单调延续"表述）；P3-I4 签发器请求行 1 MiB 上限。登记四项权威
+  文本边界：① `policy_digest` 未实现前以 8 字节 LE `policy_revision` 占位
+  （Slice 3 切换真摘要，用户 2026-08-12 裁决）；② `previous_receipt_sha256`
+  由 journal 哈希链 + verifier 配对规则承担（v2 升级路径）；③ web_search
+  例外（决策 1 网络持票的显式排除，D-12 / ADR-0010 §3.7 条 10）；④ 决策 11
+  影子台账前置由用户 2026-08-15 裁决显式豁免，真实运行台账观察保留为
+  运营项。详见 [`GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT`](../docs/audits/GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md)
+  §8。）
 - 决策范围：跨信任边界控制事件与外部效果动作的票据授权面；独立签发器；三运行模式；
   威胁模型边界；实施切片的独立性
 - 详细设计权威：[`AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](../docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)

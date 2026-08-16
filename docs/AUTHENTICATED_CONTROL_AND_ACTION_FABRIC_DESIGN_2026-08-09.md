@@ -152,6 +152,11 @@ ControlTicket:
   hmac = HMAC-SHA256(K_session, canonical_payload)
 ```
 
+> v1 实施登记（2026-08-16）：`previous_receipt_sha256` 字段在 Slice 1/2
+> 实施中省略——链式语义由 journal 哈希链（previous_event_sha256）+ verifier
+> 的 issued→consumed/rejected 配对规则承担；票级 receipt 链保留为 v2 升级
+> 路径（ADR-0011 状态行登记）。
+
 验票方检查（任一失败即拒绝 + 写安全事件 + 暂停高风险工具）：
 
 1. 签名有效（用当前 `K_session`）；
@@ -168,6 +173,10 @@ ControlTicket:
 K_install = DPAPI 保护的主密钥（现有 keystore，安装级）
 K_session = HKDF-SHA256(K_install, session_id || goal_digest || policy_digest || signer_revision)
 ```
+
+> Slice 1/2 实施以 8 字节 LE `policy_revision` 占位 `policy_digest`（用户
+> 2026-08-12 裁决，2026-08-16 全面审查登记）；Slice 3 ModeChangeTicket 提供
+> 首个生产递增来源后，切换真 `policy_digest` 时全量重派生 K_session。
 
 - `K_install` 只存在于**签发器进程**；Agent 进程不可读（签发器独立进程，见 §4.4）；
 - `K_session` 由签发器派生，通过窄 IPC 下发给 host 的**验票模块**（机械代码）；验票用 `K_session`，

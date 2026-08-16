@@ -135,8 +135,66 @@ ACAF Slice 2 fail-closed 机制（D-12~D-16）此前已实施但默认影子模�
 - Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 +
   policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）；
 - Slice 4：Windows Sandbox backend（D-11）；
-- ACAF 可选工程项：检索车道 web_fetch activation 绑定接线、conformance
-  capture 票据场景、normalize_lexical 单源化、ACP 会话路径接 ACAF（已随
-  翻转完成）；
+- ACAF 可选工程项：conformance capture 票据场景、normalize_lexical
+  单源化（检索车道 activation 绑定与 ACP 会话接线已随翻转完成，
+  2026-08-16 收口）；
 - 实际操作项：通过 `scripts/orz_acaf_run.ps1` 建立生产启动链（供应 + 启动），
   观察真实运行影子台账/拒绝事件。
+
+## 8. 全面审查处理登记（2026-08-16）
+
+> 承接 2026-08-16 全面审查（设计/实现/符合性三线，用户发起）。处理全部
+> 审查发现，均为低风险收口，不改变核心机制与 fail-closed 姿态。
+
+### 8.1 实现修复
+
+- **P2-I1（grill D-15）**：`run_grill_turn` 补 fail-closed + 未配置 fabric
+  的启动期拒绝（orz-loop controller.rs，与 `run_turn_with_guards` 同语义）；
+  新增单测 `grill_turn_fail_closed_without_fabric_refuses`；acp_server.rs
+  grill 接线注释由"声称"变为事实（§3.2 完整成立）。
+- **P2-I2（多会话隔离）**：`AcafClient` 由单会话槽改为 per-session 缓存
+  （`sessions: HashMap<session_id, ClientSession>` + 活动指针）；同一 epoch
+  切回已初始化会话不再 re-initialize / 重置账本，一次性语义跨 ACP 会话
+  交错保留。新增 e2e `sessions_are_isolated_across_switching`
+  （A→B→A 序列延续 2 + 旧票 replay 仍拒）。
+- **respawn 活性修复**（实现 P2-I2 时发现的既有缺陷）：原
+  `signer_crash_respawns_and_recovers` 从未真正杀过签名器（无 kill 调用），
+  respawn 分支从未执行；且 respawn 后签名器序列归零、host 账本高水位未
+  重置 → 新票被 replay 拒绝直到序列追平，与 P1-1"透明自愈"承诺相反。
+  修复：respawn 重初始化后重置该会话账本（与 D2-1 epoch 重置同理由）、
+  丢弃其余陈旧会话缓存；新增 `crash_for_test`（doc hidden）e2e 探针真正
+  触发崩溃，断言序列重启=1 + 新 nonce + 验票通过。**更正 Slice 1 审计
+  §8 P1-1 的"序列单调延续"表述**：respawn 是进程重启，序列必然归零重启，
+  不是延续。
+- **P3-I4（签发器输入上限）**：请求行 1 MiB 上限 + 流对齐 + fail-closed
+  （超限退出）；新增 `request_line_is_bounded_and_utf8_checked` 单测。
+
+### 8.2 权威文本登记（P2-1/P2-2/P3-1/P2-3）
+
+- **P2-1**：`derive_session_key` 以 8 字节 LE `policy_revision` 占位
+  `policy_digest`（用户 2026-08-12 裁决，Slice 3 切换真摘要）；生产无递增
+  来源前，不得引入会改策略表的机制。
+- **P2-2**：票结构省略 `previous_receipt_sha256`（journal 哈希链 + verifier
+  配对规则承担，v2 升级路径）；ADR-0011 状态行与设计文档 §4.2 已登记。
+- **P3-1**：web_search 显式排除已衔接 ADR-0011 决策 1（provider 原生搜索、
+  无模型可见 URL 目标，ADR-0010 §3.7 条 10 冻结）。
+- **P2-3**：决策 11"影子台账零误阻断后再 fail-closed"前置由用户
+  2026-08-15 裁决显式豁免；替代证据 = 探针矩阵 + 23 项 e2e + 单测；真实
+  运行台账观察保留为持续运营项（§7 最后一条不变）。
+- **P3-I3**：显式 shadow（`ORZ_ACAF_FAIL_CLOSED=0`）+ fabric 配置损坏时
+  `build_acaf_client` 先于 env 解析执行 → 启动失败。方向安全（配置错误不
+  静默降级），登记为边界，不改执行顺序。
+
+### 8.3 登记收口
+
+- BACKLOG §7 ACAF 可选项删除两项已完成条目（检索车道 activation 绑定、
+  ACP 会话接 ACAF）。
+- 索引与 ADR-0011 状态行同步（见 §8.2）。
+
+### 8.4 验证证据（修复后）
+
+- orz-loop **434/0/3**（+1 grill D-15）；orz-signer **13/0**（+1 有界读取）；
+  orz-bin main **7/0/14**；orz-acaf-provision **1/0**；
+- orz-host acp_server D-15 回归 **1/0**（既有测试，行为不变）；
+- acaf_e2e **23/0**（+1 多会话隔离；respawn 测试改为真实崩溃语义）；
+- 未跑 orz-host 全量（既有长时挂起用例，按受影响子集跑）。
