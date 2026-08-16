@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import sys
 import tomllib
 from typing import Any
@@ -298,11 +300,72 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _tracked_orz_files() -> list[str]:
+    """Posix-relative paths of files tracked in the `orz` submodule."""
+    proc = subprocess.run(
+        ["git", "-C", str(ROOT / "orz"), "ls-files", "-z"],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "cannot list orz submodule files (is `orz/` checked out?): "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    return [
+        path
+        for path in proc.stdout.decode("utf-8", "surrogateescape").split("\0")
+        if path
+    ]
+
+
+def _canonical_orz_sha256s(paths: list[str]) -> dict[str, str]:
+    """SHA-256 of each tracked orz path at the submodule HEAD commit.
+
+    Hashing canonical git blob bytes keeps the manifest independent of local
+    line-ending settings (core.autocrlf) and of untracked local artifacts.
+    """
+    if not paths:
+        return {}
+    requests = "".join(f"HEAD:{path}\n" for path in paths).encode(
+        "utf-8", "surrogateescape"
+    )
+    proc = subprocess.run(
+        ["git", "-C", str(ROOT / "orz"), "cat-file", "--batch"],
+        input=requests,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "git cat-file --batch failed for the orz submodule: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    stream = io.BytesIO(proc.stdout)
+    digests: dict[str, str] = {}
+    for path in paths:
+        header = stream.readline()
+        parts = header.decode("ascii", "replace").split()
+        if len(parts) != 3 or parts[1] != "blob":
+            raise RuntimeError(
+                f"cannot read canonical content for orz/{path}"
+            )
+        size = int(parts[2])
+        content = stream.read(size)
+        trailing = stream.read(1)
+        if trailing != b"\n":
+            raise RuntimeError(
+                f"malformed cat-file output for orz/{path}"
+            )
+        digests[path] = hashlib.sha256(content).hexdigest()
+    return digests
+
+
 def _check_orz_source_manifest() -> tuple[list[str], int]:
-    """P0-C S3 前置审查修复 (F6): `orz/` is untracked — the committed
-    integrity manifest (`orz_source_manifest.sha256`) detects
-    corruption / unrecorded modification of the runtime sources."""
-    orz_root = ROOT / "orz"
+    """P0-C S3 前置审查修复 (F6): `orz/` is now a git submodule; the
+    committed integrity manifest (`orz_source_manifest.sha256`) detects
+    divergence between the pinned submodule content and the ledger, plus a
+    dirty submodule working tree."""
     manifest = ROOT / "orz_source_manifest.sha256"
     excluded_dirs = {"target", ".git", ".pytest_cache", "__pycache__"}
     errors: list[str] = []
@@ -327,26 +390,36 @@ def _check_orz_source_manifest() -> tuple[list[str], int]:
             )
             continue
         expected[parts[1]] = parts[0]
-    actual: dict[str, Path] = {}
-    if orz_root.is_dir():
-        for path in orz_root.rglob("*"):
-            if not path.is_file():
-                continue
-            relative_parts = path.relative_to(orz_root).parts
-            if any(part in excluded_dirs for part in relative_parts):
-                continue
-            actual[path.relative_to(orz_root).as_posix()] = path
+    try:
+        tracked = [
+            path
+            for path in _tracked_orz_files()
+            if not any(
+                part in excluded_dirs for part in PurePosixPath(path).parts
+            )
+        ]
+        digests = _canonical_orz_sha256s(tracked)
+    except RuntimeError as exc:
+        return [str(exc)], len(expected)
     for rel, digest in sorted(expected.items()):
-        path = actual.get(rel)
-        if path is None:
+        actual_digest = digests.get(rel)
+        if actual_digest is None:
             errors.append(f"orz source missing: {rel}")
-        elif _sha256(path) != digest:
+        elif actual_digest != digest:
             errors.append(f"orz source digest mismatch: {rel}")
-    for rel in sorted(set(actual) - set(expected)):
+    for rel in sorted(set(digests) - set(expected)):
         errors.append(
-            "orz source not in manifest (regenerate orz_source_manifest.sha256): "
+            "orz source not in manifest "
+            "(regenerate orz_source_manifest.sha256): "
             f"{rel}"
         )
+    status = subprocess.run(
+        ["git", "-C", str(ROOT / "orz"), "status", "--porcelain"],
+        capture_output=True,
+        check=False,
+    )
+    if status.returncode == 0 and status.stdout.strip():
+        errors.append("orz submodule working tree is dirty")
     return errors, len(expected)
 
 
