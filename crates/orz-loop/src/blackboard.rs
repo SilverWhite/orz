@@ -62,7 +62,7 @@ pub enum StepStatus {
 }
 
 /// done 证据：订单 receipt（console 订单发放成功）或 direct 有记录例外
-/// （`console.step_done` 的 transition_id + trace_id 交叉校验通过）。
+/// （`console_step_done` 的 transition_id + trace_id 交叉校验通过）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DoneEvidence {
     pub receipt_id: String,

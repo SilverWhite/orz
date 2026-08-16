@@ -3,7 +3,7 @@
 //!
 //! - console（每 run 起始）→ direct：唯一入口 = 3 连败助理层故障面后的显式
 //!   询问轮，模型选择 switch（§7.2/§7.3）。
-//! - direct → console：`console.return_to_console` 单向返回或 run 结束复位。
+//! - direct → console：`console_return_to_console` 单向返回或 run 结束复位。
 //! - 故障面计数：receipt ok=false 且 step=verify；或 step=execute 且无业务
 //!   exit_code（host 机械故障）。业务非零退出、policy、protocol/registry/
 //!   contract、order_stale、step_not_done 不计（§7.2 机械定义）。
@@ -150,7 +150,7 @@ pub(crate) struct ConsoleModeState {
     pub transition_id: Option<String>,
     /// 构成故障面连败的订单 id（随询问轮/切换事件承载）。
     pub streak_order_ids: Vec<String>,
-    /// direct 态已发生的直接动作 trace_id（`console.step_done` 证据面）。
+    /// direct 态已发生的直接动作 trace_id（`console_step_done` 证据面）。
     pub direct_trace_ids: Vec<String>,
     pub threshold: u32,
 }
@@ -230,7 +230,7 @@ impl ConsoleModeState {
 
     /// 登记 direct 直接动作的 trace_id（step_done 证据面）。
     /// 边界（2026-08-16 审查登记）：证据面有界保留最近 100 条 trace；
-    /// 超出后最旧 trace 不再可作 `console.step_done` 证据（防证据面
+    /// 超出后最旧 trace 不再可作 `console_step_done` 证据（防证据面
     /// 无界增长；step_done 应紧跟 direct 动作提交）。
     pub(crate) fn record_direct_trace(&mut self, trace_id: &str) {
         if self.direct_trace_ids.len() >= 100 {

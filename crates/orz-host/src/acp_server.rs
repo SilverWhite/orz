@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
-use orz_loop::acaf::AcafClient;
 use orz_loop::AgentLoopController;
+use orz_loop::acaf::AcafClient;
 use orz_loop::controller::{RetrievalCapability, RetrievalMode};
 use orz_loop::gateway::model::{Message, Role};
 use orz_loop::orientation::OrientationSessionState;
@@ -1719,7 +1719,7 @@ mod tests {
         }
         args.insert("arguments".to_string(), arguments);
         ToolCall {
-            name: "blackboard.action_write".to_string(),
+            name: "blackboard_action_write".to_string(),
             arguments: serde_json::Value::Object(args),
             call_id: call_id.to_string(),
         }
@@ -2061,7 +2061,7 @@ mod tests {
                         }]
                     })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard.action_write".to_string(),
+                        name: "blackboard_action_write".to_string(),
                         arguments: serde_json::json!({
                             "action": "workspace.read_file",
                             "step_id": "s1",
@@ -2139,7 +2139,7 @@ mod tests {
                         }]
                     })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard.action_write".to_string(),
+                        name: "blackboard_action_write".to_string(),
                         arguments: serde_json::json!({
                             "action": "workspace.search_replace",
                             "step_id": "s1",
@@ -2250,7 +2250,7 @@ mod tests {
                         }]
                     })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard.action_write".to_string(),
+                        name: "blackboard_action_write".to_string(),
                         arguments: serde_json::json!({
                             "action": "workspace.search_replace",
                             "step_id": "s1",
@@ -2278,7 +2278,7 @@ mod tests {
                         }]
                     })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard.action_write".to_string(),
+                        name: "blackboard_action_write".to_string(),
                         arguments: serde_json::json!({
                             "action": "workspace.search_replace",
                             "step_id": "s1",
@@ -2374,7 +2374,7 @@ mod tests {
                         }]
                     })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard.action_write".to_string(),
+                        name: "blackboard_action_write".to_string(),
                         arguments: serde_json::json!({
                             "action": "workspace.search_replace",
                             "step_id": "s1",

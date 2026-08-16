@@ -2297,9 +2297,9 @@ impl AgentLoopController {
             name,
             "blackboard_read"
                 | "plan_write"
-                | "blackboard.action_write"
-                | "console.step_done"
-                | "console.return_to_console"
+                | "blackboard_action_write"
+                | "console_step_done"
+                | "console_return_to_console"
                 | "read_file"
                 | "list_dir"
                 | "grep"
@@ -2339,7 +2339,7 @@ impl AgentLoopController {
                     && t.name != "retrieval_disposition"
                     // P0-C S2 (2026-08-15): the console write button is
                     // main-lane only — subagents never write action orders.
-                    && t.name != "blackboard.action_write"
+                    && t.name != "blackboard_action_write"
                     // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the
                     // plan-gate write surface is main-lane only — subagents
                     // never write plans (P2-1 审查收口).
@@ -2347,8 +2347,8 @@ impl AgentLoopController {
                     // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱):
                     // console 双模式控制工具 main-lane only — subagents 无
                     // 操作台、不参与 direct 证据门。
-                    && t.name != "console.step_done"
-                    && t.name != "console.return_to_console"
+                    && t.name != "console_step_done"
+                    && t.name != "console_return_to_console"
             })
             .cloned()
             .collect();
@@ -3983,7 +3983,7 @@ impl AgentLoopController {
     }
 
     /// direct 模式直接动作开始：创建 console trace（trace_id 供事件盖章
-    /// 与 `console.step_done` 证据），返回盖章 + 工作 trace。非 direct
+    /// 与 `console_step_done` 证据），返回盖章 + 工作 trace。非 direct
     /// 态返回 None。
     pub(crate) fn console_direct_begin(
         &self,
@@ -4500,7 +4500,7 @@ impl AgentLoopController {
                 }),
             });
         }
-        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard.action_write` —
+        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard_action_write` —
         // 模型面唯一的写单按钮（写无副作用；副作用只在轮末单一发放出口）。
         // 主车道专属（子代理投影剥除 + ToolFilter 车道门 + run_host_tool
         // activation 守卫）；ReadOnly 类（仅写内存黑板单槽，auto-allowed
@@ -4508,10 +4508,10 @@ impl AgentLoopController {
         // `action` + `arguments`。
         if !tool_defs
             .iter()
-            .any(|t| t.name == "blackboard.action_write")
+            .any(|t| t.name == "blackboard_action_write")
         {
             tool_defs.push(ToolDef {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 description: "Write ONE action-bar order for the console \
                      (P0-C classical execution assistant). `action` is a \
                      registered action name from the registration board \
@@ -4655,15 +4655,15 @@ impl AgentLoopController {
             });
         }
         // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.5):
-        // `console.step_done` —— direct 模式的有记录例外收口：提交
+        // `console_step_done` —— direct 模式的有记录例外收口：提交
         // {step_id, transition_id, trace_id} 证据置步骤 done；机械层校验
         // （transition_id 属本 run direct 切换、trace_id 对应已发生的
         // ToolCompleted），证据不匹配拒绝（不自我认证）。声明面随
         // console_default_enabled 收敛；调用面另有模式守卫。
-        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "console.step_done")
+        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "console_step_done")
         {
             tool_defs.push(ToolDef {
-                name: "console.step_done".to_string(),
+                name: "console_step_done".to_string(),
                 description: "Mark the current plan step done with direct-mode \
                      evidence (audited exception). `step_id` is the current \
                      in-progress step; `transition_id` is the direct \
@@ -4694,14 +4694,14 @@ impl AgentLoopController {
             });
         }
         // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.1):
-        // `console.return_to_console` —— direct → console 单向返回工具。
+        // `console_return_to_console` —— direct → console 单向返回工具。
         if self.console_default_enabled
             && !tool_defs
                 .iter()
-                .any(|t| t.name == "console.return_to_console")
+                .any(|t| t.name == "console_return_to_console")
         {
             tool_defs.push(ToolDef {
-                name: "console.return_to_console".to_string(),
+                name: "console_return_to_console".to_string(),
                 description: "Return from direct (audited fallback) to console \
                      mode — one-way; records a console_mode_transition event \
                      and gate_log entry. After the return the step gate \
@@ -7407,7 +7407,7 @@ impl AgentLoopController {
         Ok(())
     }
 
-    /// `console.return_to_console`（§7.1/§7.5）：单向返回——写
+    /// `console_return_to_console`（§7.1/§7.5）：单向返回——写
     /// `console_mode_transition`（from=direct, to=console,
     /// trigger=model_return, related=当前 direct transition）+ gate_log；
     /// 模式复位、本 run 不再询问。
@@ -8489,13 +8489,13 @@ impl AgentLoopController {
             });
             return Ok((result, None));
         }
-        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard.action_write` —
+        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard_action_write` —
         // 模型写订单（写无副作用；副作用只在轮末单一发放出口）。单轮一单：
         // 已有 pending 订单机械拒绝（`order_slot_busy`）。round/plan_epoch
         // 由机械层盖章（模型不提供——防重放信任锚）；动作名/参数合法性由
         // 发放链的注册表/契约校验负责。main lane only（检索车道由投影 +
         // ToolFilter write gate + 此处 activation 守卫三重拒绝）。
-        if tc.name == "blackboard.action_write" {
+        if tc.name == "blackboard_action_write" {
             if activation_id.is_some() {
                 let msg = "console action write refused — the action board is main-lane only";
                 writer
@@ -8553,7 +8553,7 @@ impl AgentLoopController {
                 .unwrap_or_else(|| serde_json::json!({}));
             let Some(action) = action else {
                 let content =
-                    "invalid blackboard.action_write call: `action` must be a non-empty string"
+                    "invalid blackboard_action_write call: `action` must be a non-empty string"
                         .to_string();
                 writer
                     .record(
@@ -8897,12 +8897,12 @@ impl AgentLoopController {
         // not trip the stall watchdog (the tool itself is bounded by the
         // P0-1 per-call timeout).
         // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.5):
-        // `console.step_done` —— direct 模式的有记录例外收口：模型提交
+        // `console_step_done` —— direct 模式的有记录例外收口：模型提交
         // {step_id, transition_id, trace_id}，机械层校验（步骤为当前
         // in_progress、transition_id 属于本 run 的 direct 切换、trace_id
         // 对应已发生的 direct ToolCompleted）后置步骤 done(direct 证据)；
         // 证据不匹配拒绝（不自我认证）。
-        if tc.name == "console.step_done" {
+        if tc.name == "console_step_done" {
             if !self.console_default_enabled {
                 return Ok((
                     self.refuse_console_tool(
@@ -8911,7 +8911,7 @@ impl AgentLoopController {
                         &tc.name,
                         &tc.call_id,
                         "console_step_done_disabled",
-                        "console.step_done refused — the console dual-mode is disabled",
+                        "console_step_done refused — the console dual-mode is disabled",
                     )
                     .await?,
                     None,
@@ -8925,7 +8925,7 @@ impl AgentLoopController {
                         &tc.name,
                         &tc.call_id,
                         "console_step_done_lane_denied",
-                        "console.step_done refused — main-lane only",
+                        "console_step_done refused — main-lane only",
                     )
                     .await?,
                     None,
@@ -8958,7 +8958,7 @@ impl AgentLoopController {
                         &tc.name,
                         &tc.call_id,
                         "console_step_done_missing_arguments",
-                        "invalid console.step_done call: step_id / transition_id / \
+                        "invalid console_step_done call: step_id / transition_id / \
                          trace_id must be non-empty strings",
                     )
                     .await?,
@@ -8995,7 +8995,7 @@ impl AgentLoopController {
                         &tc.name,
                         &tc.call_id,
                         "console_step_done_not_direct",
-                        "console.step_done refused — the run is not in direct mode",
+                        "console_step_done refused — the run is not in direct mode",
                     )
                     .await?,
                     None,
@@ -9010,7 +9010,7 @@ impl AgentLoopController {
                         &tc.call_id,
                         "console_step_done_bad_transition",
                         &format!(
-                            "console.step_done refused — transition_id {transition_id} \
+                            "console_step_done refused — transition_id {transition_id} \
                              does not match the current direct transition {current:?}",
                             current = current_transition,
                         ),
@@ -9028,7 +9028,7 @@ impl AgentLoopController {
                         &tc.call_id,
                         "console_step_done_not_in_progress",
                         &format!(
-                            "console.step_done refused — step {step_id} is not the current \
+                            "console_step_done refused — step {step_id} is not the current \
                              in-progress step (evidence cannot self-certify)"
                         ),
                     )
@@ -9045,7 +9045,7 @@ impl AgentLoopController {
                         &tc.call_id,
                         "console_step_done_bad_trace",
                         &format!(
-                            "console.step_done refused — trace_id {trace_id} does not \
+                            "console_step_done refused — trace_id {trace_id} does not \
                              correspond to an already-occurred direct-mode ToolCompleted"
                         ),
                     )
@@ -9098,9 +9098,9 @@ impl AgentLoopController {
             ));
         }
         // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.1):
-        // `console.return_to_console` —— direct → console 单向返回
+        // `console_return_to_console` —— direct → console 单向返回
         // （写 transition 事件 + gate_log，模式复位，本 run 不再询问）。
-        if tc.name == "console.return_to_console" {
+        if tc.name == "console_return_to_console" {
             if !self.console_default_enabled || activation_id.is_some() {
                 return Ok((
                     self.refuse_console_tool(
@@ -9109,7 +9109,7 @@ impl AgentLoopController {
                         &tc.name,
                         &tc.call_id,
                         "console_return_lane_denied",
-                        "console.return_to_console refused — main lane / dual-mode only",
+                        "console_return_to_console refused — main lane / dual-mode only",
                     )
                     .await?,
                     None,
@@ -9117,7 +9117,7 @@ impl AgentLoopController {
             }
             let is_direct = self.console_mode_state.lock().unwrap().is_direct();
             if !is_direct {
-                let msg = "console.return_to_console ignored — the run is already in console mode"
+                let msg = "console_return_to_console ignored — the run is already in console mode"
                     .to_string();
                 writer
                     .record(
@@ -14593,7 +14593,7 @@ mod tests {
     }
 
     /// P0-C S2 (2026-08-15): the console write→issue→receipt flow — the
-    /// model writes ONE order via `blackboard.action_write` (round/epoch
+    /// model writes ONE order via `blackboard_action_write` (round/epoch
     /// stamped mechanically), the post-tool-batch gap issues it through
     /// `run_host_tool`, and the receipt (ok + trace_id) lands in the
     /// action-board results. The registration board is refreshed per round.
@@ -14613,7 +14613,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.read_file",
                     "arguments": {"target_file": "a.txt"},
@@ -14760,7 +14760,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.run_script",
                     "arguments": {
@@ -14879,7 +14879,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "assistant.trace",
                     "arguments": {
@@ -14945,7 +14945,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.run_script",
                     "arguments": {
@@ -14966,7 +14966,7 @@ mod tests {
                 call_id: "call-w1".to_string(),
             }]),
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "assistant.trace",
                     "arguments": {
@@ -14982,7 +14982,7 @@ mod tests {
                 call_id: "call-a1".to_string(),
             }]),
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.read_file",
                     "arguments": {"target_file": "c.txt"},
@@ -15072,7 +15072,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.run_script",
                     "arguments": {
@@ -15154,7 +15154,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.run_script",
                     "arguments": {
@@ -15229,7 +15229,7 @@ mod tests {
             .collect();
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.run_script",
                     "arguments": {"script": script},
@@ -15290,7 +15290,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.read_file",
                     "arguments": {"target_file": "a.txt"},
@@ -15366,7 +15366,7 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.run_script",
                     "arguments": {
@@ -15756,7 +15756,7 @@ mod tests {
         assert_eq!(board.actions.registration[0].name, "assistant.trace");
     }
 
-    /// P0-C S2 (2026-08-15): 单轮一单——同批第二次 `blackboard.action_write`
+    /// P0-C S2 (2026-08-15): 单轮一单——同批第二次 `blackboard_action_write`
     /// 被机械拒绝（order_slot_busy），首单仍正常发放。
     #[tokio::test]
     async fn console_s2_action_write_slot_busy_refuses_second_order() {
@@ -15775,7 +15775,7 @@ mod tests {
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![
                 ToolCall {
-                    name: "blackboard.action_write".to_string(),
+                    name: "blackboard_action_write".to_string(),
                     arguments: serde_json::json!({
                         "action": "workspace.list_dir",
                         "arguments": {"target_directory": "."},
@@ -15783,7 +15783,7 @@ mod tests {
                     call_id: "call-w1".to_string(),
                 },
                 ToolCall {
-                    name: "blackboard.action_write".to_string(),
+                    name: "blackboard_action_write".to_string(),
                     arguments: serde_json::json!({
                         "action": "workspace.read_file",
                         "arguments": {"target_file": "b.txt"},
@@ -15818,7 +15818,7 @@ mod tests {
             .into_iter()
             .filter(|e| e.event_type == EventType::ToolCompleted)
             .filter(|e| {
-                e.payload.get("tool").and_then(|t| t.as_str()) == Some("blackboard.action_write")
+                e.payload.get("tool").and_then(|t| t.as_str()) == Some("blackboard_action_write")
             })
             .filter(|e| e.payload.get("call_id").and_then(|c| c.as_str()) == Some("call-w2"))
             .map(|e| e.payload)
@@ -15973,7 +15973,7 @@ mod tests {
         let host = DenyHost { journal };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.search_replace",
                     "arguments": {
@@ -16394,7 +16394,7 @@ mod tests {
             declared,
             vec![
                 "bash",
-                "blackboard.action_write",
+                "blackboard_action_write",
                 "blackboard_read",
                 "compaction_whitelist_add",
                 "grep",
@@ -16445,7 +16445,7 @@ mod tests {
             declared,
             vec![
                 "bash",
-                "blackboard.action_write",
+                "blackboard_action_write",
                 "blackboard_read",
                 "compaction_whitelist_add",
                 "grep",
@@ -20317,7 +20317,7 @@ mod tests {
             declared,
             vec![
                 "bash",                     // non-work tool — untouched
-                "blackboard.action_write",  // console button — always declared
+                "blackboard_action_write",  // console button — always declared
                 "blackboard_read",          // storage chain complete
                 "compaction_whitelist_add", // storage chain complete
                 "read_file",                // read chain complete
@@ -20366,7 +20366,7 @@ mod tests {
             "web_search",
             "compaction_whitelist_add",
             "retrieval_disposition",
-            "blackboard.action_write",
+            "blackboard_action_write",
             "plan_write",
         ]
         .iter()
@@ -20553,7 +20553,7 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec!["bash", "blackboard.action_write"],
+            vec!["bash", "blackboard_action_write"],
             "unreadable workspace removes every work tool: {declared:?}"
         );
         let all_events = events(&dir);
@@ -23716,7 +23716,7 @@ mod tests {
         }
         args.insert("arguments".to_string(), arguments);
         ToolCall {
-            name: "blackboard.action_write".to_string(),
+            name: "blackboard_action_write".to_string(),
             arguments: serde_json::Value::Object(args),
             call_id: call_id.to_string(),
         }
@@ -23769,9 +23769,9 @@ mod tests {
         let allowed: Vec<&str> = vec![
             "blackboard_read",
             "plan_write",
-            "blackboard.action_write",
-            "console.step_done",
-            "console.return_to_console",
+            "blackboard_action_write",
+            "console_step_done",
+            "console_return_to_console",
         ];
         assert!(
             console_tools.iter().all(|t| allowed.contains(&t.as_str())),
@@ -24081,8 +24081,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 验收点 10/11：console.step_done 证据门——坏证据拒绝；direct →
-    /// console.return_to_console 单向返回（事件 + gate_log）。
+    /// 验收点 10/11：console_step_done 证据门——坏证据拒绝；direct →
+    /// console_return_to_console 单向返回（事件 + gate_log）。
     #[tokio::test]
     async fn console_step_done_evidence_gate_and_return() {
         let dir = test_dir();
@@ -24127,7 +24127,7 @@ mod tests {
                 call_id: "call-direct-1".to_string(),
             }]),
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "console.step_done".to_string(),
+                name: "console_step_done".to_string(),
                 arguments: serde_json::json!({
                     "step_id": "s1",
                     "transition_id": "WRONG",
@@ -24136,7 +24136,7 @@ mod tests {
                 call_id: "call-sd-bad".to_string(),
             }]),
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "console.return_to_console".to_string(),
+                name: "console_return_to_console".to_string(),
                 arguments: serde_json::json!({}),
                 call_id: "call-return-1".to_string(),
             }]),
@@ -24180,7 +24180,7 @@ mod tests {
             .filter(|e| e.event_type == EventType::ToolCompleted)
             .filter(|e| {
                 e.payload.get("tool").and_then(serde_json::Value::as_str)
-                    == Some("console.step_done")
+                    == Some("console_step_done")
             })
             .collect::<Vec<_>>();
         assert_eq!(step_done_completed.len(), 1);
@@ -24196,7 +24196,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 验收点 11（正向）：console.step_done 证据全部匹配（transition_id 属
+    /// 验收点 11（正向）：console_step_done 证据全部匹配（transition_id 属
     /// 本 run direct 切换、trace_id 对应已发生的 direct ToolCompleted）→
     /// 步骤置 done(direct evidence)。
     #[tokio::test]
@@ -24228,7 +24228,7 @@ mod tests {
             tool_result: None,
         };
         let tc = ToolCall {
-            name: "console.step_done".to_string(),
+            name: "console_step_done".to_string(),
             arguments: serde_json::json!({
                 "step_id": "s1",
                 "transition_id": transition_id,

@@ -136,11 +136,11 @@ pub enum EventType {
     // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / PLAN_FIRST
     // _BLACKBOARD_DESIGN §7): the console/direct dual-mode transition
     // decision record — console→direct (assistant-failure-streak switch),
-    // the stay decision, and direct→console (console.return_to_console).
+    // the stay decision, and direct→console (console_return_to_console).
     // Main lane only; run-level mode state.
     ConsoleModeTransition,
     // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / PLAN_FIRST
-    // _BLACKBOARD_DESIGN §5-§6): the blackboard.action_write order record —
+    // _BLACKBOARD_DESIGN §5-§6): the blackboard_action_write order record —
     // order identity, action, step binding (ActionOrder.step_id) and the
     // mechanical round/plan_epoch/run_id stamps. Carries the identity that
     // used to ride the action_write ToolCompleted (S2 payload-shape debt,

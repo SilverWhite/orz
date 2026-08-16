@@ -118,7 +118,7 @@ impl ToolFilter {
             ToolFilter::Retrieval => {
                 if tool == "run_tests" {
                     Some("retrieval_role_execution_denied")
-                } else if tool == "blackboard.action_write" {
+                } else if tool == "blackboard_action_write" {
                     // P0-C S2 (2026-08-15): the console write button is
                     // main-lane only — subagents never write action orders.
                     Some("console_action_write_lane_denied")

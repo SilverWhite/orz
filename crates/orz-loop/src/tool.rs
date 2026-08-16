@@ -67,13 +67,13 @@ impl ToolDispatcher {
             // triggering. (Its .gsa archive write is a mechanical best-
             // effort audit append, not a worktree mutation.)
             || tool_name == "compaction_whitelist_add"
-            // P0-C S2 (2026-08-15): `blackboard.action_write` writes ONLY
+            // P0-C S2 (2026-08-15): `blackboard_action_write` writes ONLY
             // the in-memory blackboard action-bar slot (the order) — no
             // file, no network, no external side effect — so it is
             // ReadOnly-classed like the whitelist write (declared and
             // auto-allowed under every policy; side effects happen only at
             // the mechanical issuance exit).
-            || tool_name == "blackboard.action_write"
+            || tool_name == "blackboard_action_write"
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): `plan_write`
             // writes ONLY the in-memory blackboard plan section — no file,
             // no network, no external side effect — so it is ReadOnly-classed
@@ -136,7 +136,7 @@ impl ToolDispatcher {
             // would fold them under "read") — they are session-state
             // bookkeeping; "other" is the honest fold.
             "other"
-        } else if tool_name == "blackboard.action_write" {
+        } else if tool_name == "blackboard_action_write" {
             // P0-C S2: the action-bar order write is session bookkeeping
             // (same honest fold as the whitelist — in-memory only).
             "other"
@@ -297,13 +297,13 @@ mod tests {
             RiskClass::ReadOnly
         );
         assert!(!ToolDispatcher::modifies_files("browser_read"));
-        // P0-C S2 (2026-08-15): `blackboard.action_write` writes only the
+        // P0-C S2 (2026-08-15): `blackboard_action_write` writes only the
         // in-memory action-bar slot — ReadOnly class (auto-allowed).
         assert_eq!(
-            ToolDispatcher::risk_class("blackboard.action_write"),
+            ToolDispatcher::risk_class("blackboard_action_write"),
             RiskClass::ReadOnly
         );
-        assert!(!ToolDispatcher::modifies_files("blackboard.action_write"));
+        assert!(!ToolDispatcher::modifies_files("blackboard_action_write"));
         // PLAN-FIRST 阶段 A (2026-08-16): `plan_write` writes only the
         // in-memory blackboard plan section — ReadOnly class (auto-allowed).
         assert_eq!(
@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(ToolDispatcher::action_category("list_dir"), "read");
         // P0-C S2: the action-bar order write is session bookkeeping.
         assert_eq!(
-            ToolDispatcher::action_category("blackboard.action_write"),
+            ToolDispatcher::action_category("blackboard_action_write"),
             "other"
         );
         // blackboard_read is read-class (2026-08-08 review closure — the

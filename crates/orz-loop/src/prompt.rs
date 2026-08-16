@@ -47,7 +47,7 @@ compaction_whitelist_add 写入压缩白名单——该内容不被上下文压�
 不写计划/步骤/推测/临时状态（计划由 plan mode 承载）。\
 \n操作台（P0-C v0.5）：需要执行动作时不要直接调用执行/发送类工具——先读注册板块 \
 （blackboard_read section=actions，常驻按需读；内容=动作名+最小参数提示），\
-再写动作栏订单（blackboard.action_write：action + arguments）；写订单无副作用，\
+再写动作栏订单（blackboard_action_write：action + arguments）；写订单无副作用，\
 订单在轮末由机械层单一出口发放（注册表/契约/目标/ACAF/策略门），\
 结果写回结果栏 receipt（含 trace_id；失败含 step/code/upstream）。\
 单轮一单：本轮订单未发放完不进入下一轮写单，先看结果栏反馈再调整。";

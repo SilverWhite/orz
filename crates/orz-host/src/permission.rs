@@ -426,11 +426,11 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         AccessKind::Read(None)
     } else if tool == "compaction_whitelist_add"
         || tool == "blackboard_read"
-        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard.action_write`
+        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard_action_write`
         // writes ONLY the in-memory action-bar slot — no external side
         // effect (side effects happen at the mechanical issuance exit) —
         // so the permission gate auto-allows it like the whitelist write.
-        || tool == "blackboard.action_write"
+        || tool == "blackboard_action_write"
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): `plan_write`
         // writes ONLY the in-memory blackboard plan section — the same
         // controller-owned in-memory class as the action-bar write.

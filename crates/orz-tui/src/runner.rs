@@ -1348,7 +1348,7 @@ mod tests {
                         call_id: "call-plan".to_string(),
                     }]),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard.action_write".to_string(),
+                        name: "blackboard_action_write".to_string(),
                         arguments: serde_json::json!({
                             "action": "workspace.search_replace",
                             "step_id": "s1",

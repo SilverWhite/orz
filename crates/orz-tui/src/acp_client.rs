@@ -269,7 +269,7 @@ mod tests {
             // 隐藏，模型经 action_write 写订单；权限请求在轮末机械发放时
             // 到达（目标工具 search_replace）。
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard.action_write".to_string(),
+                name: "blackboard_action_write".to_string(),
                 arguments: serde_json::json!({
                     "action": "workspace.search_replace",
                     "step_id": "s1",
