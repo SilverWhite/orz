@@ -3,7 +3,7 @@
 > 状态：**定案**（2026-08-15 用户裁决；按审查建议定稿，进入实施路由）。
 > 2026-08-15 用户裁决：放弃「一条路走到黑 / 直接执行面永久移除」，定案双模式
 > （console 默认 + direct 受控降级，见 §7）；同日定稿复核项——计划门约束 console
-> 订单、direct 为有记录的例外（`console.step_done` 证据门）、3 连败助理层故障面
+> 订单、direct 为有记录的例外（`console_step_done` 证据门）、3 连败助理层故障面
 > 计数、无工具询问轮、只读豁免清单、术语与 Profile/Bundle 对齐。
 > 权威登记：ADR-0010 §14.17（v1.17 补写登记，2026-08-15）。
 > 说明：本文件为当前设计要求；实施阶段见 §9，实施勾选见 TODO P0-C，
@@ -195,7 +195,7 @@ LangChain「一步≈一次工具调用 + 有界重规划」）——上限是�
 ### 7.1 状态机
 
 - console（每 run 起始）→ direct：唯一入口=显式询问后模型选择 switch。
-- direct → console：模型调用 `console.return_to_console`（单向返回，记录事件）；
+- direct → console：模型调用 `console_return_to_console`（单向返回，记录事件）；
   或 run 结束自动复位。
 - 检索子代理车道不受影响（无操作台，投影恢复逻辑不变）。
 - 模式为 run 级状态：plan epoch 轮换/黑板旋转不清除模式；gate_log 中的 transition
@@ -241,7 +241,7 @@ LangChain「一步≈一次工具调用 + 有界重规划」）——上限是�
   （否则依赖助理层 receipt 的门在助理层不可用时必然卡死）；但每个直接动作带
   `transition_id` 审计，且权限桥/ACAF/模式门/IPG/预算/探针照常生效——豁免的是步骤门，
   不是安全门。
-- direct 完成 → 步骤 done：direct 模式提供 `console.step_done {step_id, transition_id,
+- direct 完成 → 步骤 done：direct 模式提供 `console_step_done {step_id, transition_id,
   trace_id}` 控制工具；机械层校验：步骤为当前 in_progress、transition_id 属于本 run
   的 direct 切换、trace_id 对应已发生的 ToolCompleted；通过后记
   `done(direct, transition_id, trace_id)`，证据不匹配则拒绝（不自我认证）。
@@ -304,9 +304,9 @@ LangChain「一步≈一次工具调用 + 有界重规划」）——上限是�
    policy/protocol/contract/order_stale/step_not_done 不计）触发显式询问轮；询问轮为
    无工具轮；模型选择 switch 后写 `console_mode_transition` + gate_log（测试锁定）；
 9. direct 模式直接动作携带 transition_id，且权限/ACAF/模式门照常生效（测试锁定）；
-10. 模型选择 stay 或调用 `console.return_to_console` 后模式复位并留痕，本 run 不再自动询问；
+10. 模型选择 stay 或调用 `console_return_to_console` 后模式复位并留痕，本 run 不再自动询问；
 11. 计划门约束 console 订单（上一步未 done → `step_not_done` 拒绝）；direct 为有记录的
-    例外——`console.step_done` 需 transition_id + trace_id 证据才能置 done（测试锁定）。
+    例外——`console_step_done` 需 transition_id + trace_id 证据才能置 done（测试锁定）。
 
 ## 12. 关联文档与登记
 

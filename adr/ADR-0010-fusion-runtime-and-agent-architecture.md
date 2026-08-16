@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱；2026-08-16 追加 v1.18 补写，见 §14.18；2026-08-17 追加 v1.19 补写，见 §14.19）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -274,7 +274,9 @@ active -> failed/cancelled -> closing -> closed_resumable
    服务端模板前置渲染，变化即全量 miss）属接受代价，第二轮同前缀请求自动恢复命中。禁止为缓存
    牺牲机械化保障：per-window 探测、预热轮、工具层后置渲染、工具层压缩均否决。每个模型请求的
    header（system+tools 摘要 + config + 变化原因）变化时在 journal 留痕，用于审计翻转、归属
-   miss 与核对探针准确性。
+   miss 与核对探针准确性。（v1.19，2026-08-17：console 默认面下注册板块/工具栏为黑板数据、
+   经 `blackboard_read` 取回，不参与 tools 摘要，工具栏刷新不构成前缀 miss 源；header 变化
+   仅剩 console↔direct 模式切换与只读工具探针翻转等真实状态变化，见 §14.19。）
 7. **探针准确性与稳定性优先（v1.9，2026-08-14）**：探针目标是“真实变化才翻转、误判最少”；
    翻转事件与 header 留痕配合，可事后核对每次翻转是否真实合理；可选后端接线时须同步补翻转
    测试（既有边界）；不为缓存调整探针语义或降低 fail-closed 程度。
@@ -1393,8 +1395,8 @@ ADR §3.6 正文修订随实施登记。
       policy/protocol/registry/contract/order_stale/step_not_done 不计）→ 机械询问
       （无工具轮、一次重填、降级 stay、每 run 至多一次）→ 模型选择 switch 后写
       `console_mode_transition` + gate_log；direct 动作带 transition_id；权限/ACAF/模式门
-      不变；计划门约束 console 订单，direct 为有记录的例外（`console.step_done` 需
-      transition_id + trace_id 证据置 done）；`console.return_to_console` 单向返回或 run
+      不变；计划门约束 console 订单，direct 为有记录的例外（`console_step_done` 需
+      transition_id + trace_id 证据置 done）；`console_return_to_console` 单向返回或 run
       结束复位；模式为 run 级状态，plan epoch 轮换不清；ActionOrder 增 `step_id`
       （Schema 先行）。
    ⑧ 结构化策略拒绝（P1-2 定案，2026-08-15）——拒绝路径（权限/ACAF/模式门；
@@ -1547,7 +1549,7 @@ ADR §3.6 正文修订随实施登记。
          from/to/trigger/streak/order_ids/model_decision/model_reason/run_id/
          round/plan_epoch/related_transition_id；覆盖 switch/stay/return）与
          `console_order_written`（order_id/write_call_id/action/step_id/
-         round/plan_epoch/run_id；`blackboard.action_write` ToolCompleted
+         round/plan_epoch/run_id；`blackboard_action_write` ToolCompleted
          收敛到通用形状，阶段 A 审计 §7.4 的 S2 payload-shape 债务随本次
          收口）；run-event v0.2 枚举 48→50；tool-started/tool-completed 增
          可选 console_mode/transition_id/trace_id（direct 事件链盖章）；
@@ -1562,14 +1564,14 @@ ADR §3.6 正文修订随实施登记。
          step_not_done 不计；`ORZ_CONSOLE_DIRECT_FALLBACK_THRESHOLD` 默认 3）；
          无工具询问轮（复用强制模板轮语义，一次重填、降级默认 stay、
          每 run 至多一次）；switch 写 `console_mode_transition` + gate_log、
-         当前步骤置 in_progress；stay/`console.return_to_console` 复位留痕。
+         当前步骤置 in_progress；stay/`console_return_to_console` 复位留痕。
       c) 步骤状态机（§5/§6）：`StepStatus` 状态机化
          `pending → in_progress → done(receipt_id[, direct 证据]) |
          failed(receipt_id)`（自定义 serde 兼容旧归档单位变体与
          description-only 快照）；`ActionOrder.step_id`（Schema 先行）；
          步骤门=console 订单必须绑定当前可执行步骤，否则 `step_not_done`
          显式拒绝；发放时 in_progress、receipt 置 done/failed；direct 为
-         有记录例外——`console.step_done` 需 transition_id（本 run direct
+         有记录例外——`console_step_done` 需 transition_id（本 run direct
          切换）+ trace_id（对应已发生 ToolCompleted）双重证据，不匹配拒绝。
       d) 模型面收敛（§4/§9）：console 默认面=黑板读写（plan_write +
          action_write）+ 只读核查（read/list/grep 类），执行/变更/shell/
@@ -1586,3 +1588,69 @@ ADR §3.6 正文修订随实施登记。
          `docs/audits/GAP_PLAN_FIRST_STAGE_C_IMPL_AUDIT_2026-08-16.md`。
    来源：`docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md`；关联：
    CLASSICAL-EXEC-ASSISTANT v0.6。
+
+### 14.18 v1.18 补写裁决索引（2026-08-16）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
+
+1. **会话累计上下文监测度量重定（2026-08-16，用户裁决，§14.13 条目 2 修订）**：
+   ① 度量由「会话累计模型可见输入 token（usage 实报优先、journal 估算兜底）」改为
+      「会话内压缩次数」——以 `context_compressed` 事件为准，仅计 reason∈{rhythm,fallback}
+      的会话内压缩；`session_end` 不计（run 结束存档动作，计入会稀释会话寿命信号）；
+      一次压缩只计一次（重试/守卫失败/存档失败不重复计数）。
+   ② 阈值由 token 制改为次数制——≥2 次机械提醒、≥3 次机械总结推荐（可配，默认待校准；
+      语义对应旧 384K/500K：每次压缩约代表一个窗口 160K–200K 累积）。
+   ③ 理由：压缩机制已把请求窗口钉在 384K 内，累计 token 对模型不可见、阈值无对应质量
+      边界；压缩次数是会话寿命与摘要链损耗的更直接代理；原 chars/2 中文估算校准项
+      随 token 度量废止。
+   ④ 其余不变：与压缩独立；非目标（不做窗口预测、不自动调整压缩触发、不自动开新窗口、
+      不打断 headless/自动化）；最简实现=阈值到达的最后一轮模型输出末尾机械附言
+      （附当前压缩次数）、headless 仅日志；TUI 横幅/面板（含压缩次数显示）与 journal
+      事件为进入用户侧 beta 前的后续可选。
+   来源：2026-08-16 用户裁决；设计入口
+   `docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md`（2026-08-16 度量重定版）。
+
+### 14.19 v1.19 补写裁决索引（2026-08-17）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
+
+1. **console 面工具栏缓存注记（2026-08-17，用户指示补记，§3.5 条 6 注记）**：
+   ① 界定：console 默认面（§14.17⑱）下，注册板块/工具栏为黑板数据、经
+      `blackboard_read section=actions`（live 读取时由最近探针源派生）取回，不参与
+      请求 header 指纹（tools 摘要 = 模型可见工具列表 schema）；注册板块内容变化
+      不改变 console 面工具列表，不再计入 v1.9「工具集变化即前缀缓存全量 miss」
+      的接受代价。
+   ② 保留边界：header 仍随真实状态变化而变——console↔direct 模式切换（整块工具
+      面替换）与 console 面只读工具（read/list/grep 类）探针翻转各产生一次全量
+      miss，第二轮同前缀恢复命中，v1.9 语义不变；direct 模式工作工具探针翻转照旧。
+   ③ 性质：纯澄清注记，无行为变更、无代码调整；实施事实依据=阶段 B
+      （`sync_console_registrations` / `render_blackboard_section("actions")` live
+      派生）与阶段 C（`project_console_default_tool_defs` console 固定小工具面）。
+   来源：2026-08-17 用户指示补记（承接 2026-08-16 审查结论）。
+
+### 14.20 v1.20 补写裁决索引（2026-08-17）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
+
+1. **console 面工具名去点号（2026-08-17，GAP-CONSOLE-TOOLNAME-PATTERN 闭合，§14.17
+   工具面定名修正）**：console 默认面三个模型工具名由点号改下划线——
+   `blackboard.action_write`→`blackboard_action_write`、
+   `console.step_done`→`console_step_done`、
+   `console.return_to_console`→`console_return_to_console`。
+   ① 原因：OpenAI 兼容工具名模式 `^[a-zA-Z0-9_-]+$`；真实 DeepSeek API 在计划落板
+      后下一轮请求 400（`invalid_request_error`，2026-08-17 评测冒烟
+      `D:\tb-eval\jobs\2026-08-17__01-09-43`），FakeProvider 不校验故单测未暴露。
+   ② 范围：Rust 生产/测试 11 文件 91 处 + Python verifier 交叉校验
+      （`run_event_journal_validation.py` 4 处）+ 4 个 runtime schema 描述 +
+      verifier 测试 + 本 ADR 与两份设计文档；注册板块/console 注册表动作名
+      （`workspace.read_file`/`workspace.run_script`/`assistant.trace` 等）为
+      订单数据而非 API 工具名，不在本改名范围。
+   ③ 验证：orz-loop 434 / orz-tui 178 / orz-assurance / orz-bin acaf_e2e 23 +
+      real_flag 2 通过（orz-host 5 项 codex_app 审批流失败与 1 项挂起为既有
+      环境问题，HEAD 基线复现）；clippy 无新增告警、cargo fmt 收口；
+      仓库门禁 valid（`orz_source_manifest.sha256` 重生成 1401 条目）。
+   ④ 冒烟重跑：Linux musl 二进制重建（`rust:latest` + aliyun 镜像，39m33s）后
+      make-doom-for-mips 试跑 30m21s 跑满 1740s 预算，`run_invalidated{wallclock}`
+      正常收尾（对比旧运行 400 即死）；console 全链路（计划落板/修订/订单发放/
+      上下文压缩）无 400。
+   来源：2026-08-17 评测冒烟暴露；BACKLOG 0a / TODO P0-E。

@@ -859,9 +859,9 @@ def _verify_v02_console_order_written(events: list[dict[str, Any]]) -> list[str]
 
     - every console_order_written carries the mechanical
       round/plan_epoch/run_id stamps and the write_call_id of the
-      blackboard.action_write completion it closes;
+      blackboard_action_write completion it closes;
     - order ids are unique per run;
-    - a console_order_written must be preceded by a blackboard.action_write
+    - a console_order_written must be preceded by a blackboard_action_write
       tool_completed success of the same run whose call_id matches the
       write_call_id (the producer ordering: write completion, then the
       order record); each write completion backs at most one order record.
@@ -904,7 +904,7 @@ def _verify_v02_console_order_written(events: list[dict[str, Any]]) -> list[str]
         if not _is_v02(event) or event.get("event_type") != "tool_completed":
             continue
         payload = event.get("payload", {})
-        if payload.get("tool") == "blackboard.action_write" and payload.get(
+        if payload.get("tool") == "blackboard_action_write" and payload.get(
             "exit_code"
         ) == 0:
             writes_per_run.setdefault(event.get("run_id", ""), []).append(
@@ -927,7 +927,7 @@ def _verify_v02_console_order_written(events: list[dict[str, Any]]) -> list[str]
         if matched is None:
             errors.append(
                 f"event {index}: console_order_written {payload['order_id']!r} "
-                "without a prior blackboard.action_write success in its run"
+                "without a prior blackboard_action_write success in its run"
             )
         else:
             consumed[run_id].add(matched)

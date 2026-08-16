@@ -65,7 +65,7 @@
     "trace_id": {
       "type": "string",
       "minLength": 1,
-      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console trace id of the direct action (call_id) — console.step_done evidence requires a trace_id corresponding to an already-occurred ToolCompleted."
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console trace id of the direct action (call_id) — console_step_done evidence requires a trace_id corresponding to an already-occurred ToolCompleted."
     },
     "section": { "type": "string" },
     "full_output_path": { "type": "string" },

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/console-order-written-event-payload-v0.2.schema.json",
   "title": "console_order_written event payload v0.2 (PLAN-FIRST stage C action bar)",
-  "description": "ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §5-§6: the blackboard.action_write order record. The order identity, action, step binding, and the mechanical round/plan_epoch/run_id stamps live HERE (Schema-first, 2026-08-16); the action_write ToolCompleted converges to the generic contract shape (success = exit_code only) — resolving the S2 payload-shape debt registered in the stage-A audit §7.4. step_id binds the order to a plan step (ActionOrder.step_id); the issuance-time step gate enforces pending → in_progress → done/failed.",
+  "description": "ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §5-§6: the blackboard_action_write order record. The order identity, action, step binding, and the mechanical round/plan_epoch/run_id stamps live HERE (Schema-first, 2026-08-16); the action_write ToolCompleted converges to the generic contract shape (success = exit_code only) — resolving the S2 payload-shape debt registered in the stage-A audit §7.4. step_id binds the order to a plan step (ActionOrder.step_id); the issuance-time step gate enforces pending → in_progress → done/failed.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
     "write_call_id": {
       "type": "string",
       "minLength": 1,
-      "description": "The blackboard.action_write ToolCompleted call_id this order record closes — the producer emits the write completion first, then this order record carrying the same call_id (verifier cross-check; 2026-08-16 review closure F1)."
+      "description": "The blackboard_action_write ToolCompleted call_id this order record closes — the producer emits the write completion first, then this order record carrying the same call_id (verifier cross-check; 2026-08-16 review closure F1)."
     },
     "action": { "type": "string", "minLength": 1 },
     "step_id": {

@@ -796,7 +796,7 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
             "event_type": "tool_completed",
             "run_id": "RUN-T",
             "payload": {
-                "tool": "blackboard.action_write",
+                "tool": "blackboard_action_write",
                 "call_id": "call-write-1",
                 "exit_code": 0,
             },
@@ -822,7 +822,7 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
                 "event_type": "tool_completed",
                 "run_id": "RUN-T",
                 "payload": {
-                    "tool": "blackboard.action_write",
+                    "tool": "blackboard_action_write",
                     "call_id": call_id,
                     "exit_code": 0,
                 },
@@ -856,7 +856,7 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
         bad = [write("call-f1"), order("ORD-1", "call-other", "s1", 2)]
         errors = _verify_v02_console_order_written(bad)
         self.assertTrue(
-            any("without a prior blackboard.action_write success" in e for e in errors),
+            any("without a prior blackboard_action_write success" in e for e in errors),
             errors,
         )
 

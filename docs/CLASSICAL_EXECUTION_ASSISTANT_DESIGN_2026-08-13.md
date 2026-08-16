@@ -287,7 +287,7 @@
     `step=policy`；发放收口执行 `TraceStore.commit`。
   - S2 落地（2026-08-15）：模型面=扩展 `blackboard_read.section` 枚举至
     `actions`（注册板块/动作栏单槽/结果栏有界渲染，随 plan epoch 归档可读）
-    + 新增 `blackboard.action_write` 写单按钮（ReadOnly 类、主车道专属——
+    + 新增 `blackboard_action_write` 写单按钮（ReadOnly 类、主车道专属——
     子代理投影剥除 + ToolFilter 车道门 + run_host_tool activation 守卫三重
     拒绝；round/plan_epoch/run_id 由机械层盖章，模型只给 action+arguments；
     已有 pending 订单机械拒绝 `order_slot_busy`）；轮末发放=post-tool-batch
@@ -384,10 +384,10 @@
   （2026-08-15 定案：注册板块投影=最小参数提示，type/required/属性枚举/
   默认值；完整 schema 不进模型面）。
 - 黑板分区与既有 blackboard_read/todo 机制的关系：复用黑板本体 + 新增分区，
-  还是独立动作队列；动作栏写工具命名（v0.5 建议 `blackboard.action_write`，
+  还是独立动作队列；动作栏写工具命名（v0.5 建议 `blackboard_action_write`，
   语义独立于 todo）（2026-08-15 定案：复用黑板本体，新增 `actions` 分区并
   随 plan epoch 快照归档/轮换；写工具命名已定案并在 S2 落地——
-  `blackboard.action_write`）。
+  `blackboard_action_write`）。
 - 与单一探针面的事件/列表投影如何交互（2026-08-15 S3 已定案：注册板块 =
   Profile/Bundle ∩ 探针完整集，与模型可见工具投影共用同轮探针快照；
   非工作工具目标不探不标、按注册表声明保留）。
@@ -411,8 +411,8 @@
   `assistant.trace` + 工作区只读；禁止直接执行/变更/shell/子代理 spawn/检索。
 - 双模式：console 默认 + direct 受控降级（3 连败助理层故障面 → 无工具询问轮 → 模型选择
   switch 后写 `console_mode_transition` + gate_log；direct 动作带 transition_id；计划门
-  约束 console 订单，direct 为有记录的例外（`console.step_done` 需证据置 done）；
-  `console.return_to_console` 单向返回或 run 结束复位）。
+  约束 console 订单，direct 为有记录的例外（`console_step_done` 需证据置 done）；
+  `console_return_to_console` 单向返回或 run 结束复位）。
 - 首轮计划轮（硬门）：首轮只暴露黑板读取 + `plan_write`，不派发执行工具；注册板块
   = 探针投影唯一事实源（S2 静态基础集为接线前中间态）。
 - 分步计划硬契约：有序步骤 + 步骤状态机 `pending → in_progress → done(receipt_id)`；

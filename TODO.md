@@ -19,13 +19,19 @@
 > 34 → 32；2026-08-16 PLAN-FIRST 阶段 B 实施闭合，未闭合总数
 > 32 → 31；2026-08-16 PLAN-FIRST 阶段 C 实施闭合，未闭合总数
 > 31 → 30；2026-08-16 ACAF fail-closed 生产启用翻转闭合，未闭合总数
-> 30 → 29）。
+> 30 → 29；2026-08-16 会话监测度量重定（chars/2 校准项废止，29 → 28）；
+> 2026-08-16 DeepSeek 主/子代理 transport/retry/thinking 同构复核闭合，
+> 未闭合总数 28 → 27；2026-08-17 评测冒烟暴露问题登记（P0 +2：ACAF 评测链路 /
+> console 工具名点号；P1 +2：plan_write 提示词、actions 校验），未闭合总数
+> 27 → 31；2026-08-17 GAP-CONSOLE-TOOLNAME-PATTERN 闭合（改名下划线 +
+> verifier/schema/文档同步 + Linux 重建 + 冒烟重跑验证，未闭合 31 → 30）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**29 项**
+- 未闭合总数：**31 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
+  - P0 评测冒烟暴露：1 项（GAP-ACAF-HARNESS-PASSTHROUGH；GAP-CONSOLE-TOOLNAME-PATTERN 已闭合 2026-08-17）
+  - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4、plan_write 提示词 1、actions 校验 1）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
   - 条件触发/审计登记边界：6 项（不占当前优先级）
@@ -36,6 +42,30 @@
   其余用户裁决门为 OPS 生产接线与 P0-C 正式组件决策门（已闭合）。
 
 ## P0 — 当前工作集
+
+### P0-E 评测冒烟暴露问题（最优先；2026-08-17；用户将在新窗口处理）
+
+- [ ] GAP-ACAF-HARNESS-PASSTHROUGH：TB2 适配器 ACAF 配置透传 / 容器内供应——正式跑分
+  强制模式决策（容器内 manifest/keystore/signer，参考 `scripts/orz_acaf_run.ps1`）或定案
+  影子模式。本轮临时解阻：`D:\tb-eval\.env` 加 `ORZ_ACAF_FAIL_CLOSED=0` +
+  `tb_agents/orz.py` 增该变量透传。
+  - 证据：`D:\tb-eval\jobs\2026-08-17__01-05-31`、`2026-08-17__01-07-59`；
+    错误 `ACAF fail-closed is enabled but no signer client is configured`。
+- [x] GAP-CONSOLE-TOOLNAME-PATTERN：console 面工具名点号→下划线改名
+  （`blackboard.action_write`→`blackboard_action_write`、`console.step_done`→
+  `console_step_done`、`console.return_to_console`→`console_return_to_console`），
+  同步约 91 处 Rust、Python verifier 交叉校验、schema 注释、设计文档；重建 Linux
+  二进制并重跑。**2026-08-17 闭合**：orz 子模块 11 文件 91 处 + Python
+  verifier/schema/测试 + ADR/设计文档同步（orz commit 0304b23）；orz-loop 434 /
+  orz-tui 178 / orz-assurance / orz-bin acaf_e2e 23 + real_flag 2 通过；clippy 无新增
+  告警；manifest 重生成 1401 条目；Linux musl 重建后冒烟重跑
+  （`D:\tb-eval\jobs\2026-08-17__03-48-57`）30m21s 跑满 1740s 预算、
+  `run_invalidated{wallclock}` 正常收尾（对比旧运行 400 即死）。
+  - 证据：`D:\tb-eval\jobs\2026-08-17__01-09-43`；journal events 1-18（plan-first
+    全链后 run_failed）；错误 `Invalid 'tools[5].function.name' ... '^[a-zA-Z0-9_-]+$'`。
+- [ ] （P1 观察）plan_write 提示词/示例强化：首次模型把计划序列化为 JSON 字符串被拒
+  （refill_requested），重填对象后通过。
+- [ ] （P1 观察）`steps[].actions` 形状校验收紧：空字符串当前仍通过校验，动作形状校验偏宽。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
@@ -72,7 +102,7 @@
     commit + 失败事件滚动保底、注册板块最小提示投影）；新增 18 项测试
     （console 15 + blackboard 3），orz-loop 356 通过。
   - [x] S2：模型面投影（`blackboard_read` section=actions 读取最小参数提示
-    + `blackboard.action_write` 写单，pending 机械拒绝）与轮末机械发放
+    + `blackboard_action_write` 写单，pending 机械拒绝）与轮末机械发放
     （round/plan_epoch/run_id 防重放与过期 → 注册表/契约 → 真实目标解析 →
     ACAF 票据 → 策略表/模式门 → 经 `run_host_tool` 执行 → 响应 schema
     验证 → 结果栏 receipt+trace_id；策略拒绝映射 `step=policy`；发放收口
@@ -168,7 +198,7 @@
   - 成熟复用评估（2026-08-16，只读）：部分——复用已闭合的 FUS-TOOL-PROBE 单一探针面（自研成熟机制）。
 - [x] PLAN-FIRST 阶段 C：双模式（console 默认 + direct 受控降级）——投影切换、
   3 连败助理层故障面计数、无工具询问轮、`console_mode_transition` + gate_log、
-  `console.step_done` 证据门、`console.return_to_console`、plan_write/分步计划
+  `console_step_done` 证据门、`console_return_to_console`、plan_write/分步计划
   状态机、ActionOrder 增 `step_id`。2026-08-16 闭合：
   - [x] 契约层：v0.2 `console_mode_transition` / `console_order_written` 事件
     （Schema/verifier/fixtures 先行；action_write ToolCompleted 收敛通用形状，
@@ -179,7 +209,7 @@
     可调）；无工具询问轮（一次重填、降级默认 stay、每 run 至多一次）；
     switch/stay/return 写 `console_mode_transition` + gate_log。
   - [x] 步骤门：console 订单必须绑定当前可执行步骤，`step_not_done` 显式拒绝；
-    发放时 in_progress、receipt 置 done/failed；`console.step_done` 证据门
+    发放时 in_progress、receipt 置 done/failed；`console_step_done` 证据门
     （transition_id + trace_id 交叉，不匹配拒绝）。
   - [x] 模型面收敛：console 默认面（黑板读写 + 只读核查，无执行工具）+ 调用面
     门禁 `console_mode_tool_denied`；direct 恢复工作工具投影、直接动作事件
@@ -235,7 +265,11 @@
 
 ### IMPL-DEEPSEEK-TRANSPORT + SEC-CREDENTIALS（`partial`）
 
-- [ ] transport/retry/thinking 按主/子代理同构约束复核（ADR-0007 / DEEPSEEK_ADAPTER_CONTRACT）。
+- [x] transport/retry/thinking 按主/子代理同构约束复核（ADR-0007 / DEEPSEEK_ADAPTER_CONTRACT）——
+  2026-08-16 闭合：三实例共享单一 `DeepSeekTransport`（ModelConfig/RetryPolicy/
+  ThinkingMode::EnabledMax 单一来源）、`REQUEST_MAX_TOKENS=160_000` 单一常量、
+  请求级 thinking 覆盖仅 `-p` 预检轮（F-07 文档化例外）；边界=压缩摘要/预检轮为
+  loop 外辅助请求（非同构范畴）、契约 §2.1 旧别名拒绝与 /models 预检未实现（另行跟踪）。
   - 成熟复用评估（2026-08-16，只读）：部分——DeepSeek API 契约与 ADR-0007 传输/重试策略为成熟参照。
 - [ ] DeepSeek live 通道与 Windows 实机晋级证据（ADR-0010 §11.7；当前仍为 offline / 构建时 evidence）。
   - 成熟复用评估（2026-08-16，只读）：部分——DeepSeek 官方 API/文档为成熟参照；主要工作是证据收集而非实现复用。
@@ -269,21 +303,21 @@
 
 入口：[设计](docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6c](docs/BACKLOG_AND_PRIORITIES.md)。
 
-### ORZ-SESSION-CONTEXT-MONITOR（`approved`；P1，2026-08-14 登记）
+### ORZ-SESSION-CONTEXT-MONITOR（`approved`；P1，2026-08-14 登记；2026-08-16 度量重定）
 
-- [ ] 压缩恢复预检估算校准：chars/2 对中文可能低估（P0-D 二次复查登记，2026-08-14），
-  随本项度量接线一并校准估算口径。
-  - 成熟复用评估（2026-08-16，只读）：无——自有估算口径校准。
-- [ ] 度量接线：模型完成轮后累加 usage 输入 token（transport/loop 完成点）；usage 缺失时 journal 估算兜底。
-  - 成熟复用评估（2026-08-16，只读）：部分——复用 DeepSeek 契约既有 usage 字段（reasoning_tokens 可得）。
-- [ ] 阈值配置（env/TOML，默认 384K 提醒 / 500K 总结推荐）；同一阈值只触发一次。
-  - 成熟复用评估（2026-08-16，只读）：部分——384K 已有实测口径，可参考成熟产品上下文窗口管理。
-- [ ] 最简实现：阈值到达的最后一轮模型输出末尾机械附提醒；headless/自动化仅写日志；500K 附五段模板 + 新窗口开场提示骨架。
-  - 成熟复用评估（2026-08-16，只读）：部分——500K 推荐复用压缩五段模板（Grok compaction 血统）。
-- [ ] 测试（到达/未到达、usage 缺失兜底、headless 分支、幂等）+ 实施审计 + BACKLOG/TODO/索引状态同步。
+- [x] 压缩恢复预检估算校准（chars/2 中文低估）：2026-08-16 用户裁决度量改次数制后废止，
+  不再依赖 token 估算口径。
+- [ ] 度量接线：监听 `context_compressed` 事件（reason=rhythm/fallback）累计会话内压缩次数；
+  `session_end` 不计；同一次压缩只计一次。
+  - 成熟复用评估（2026-08-16，只读）：有——复用既有 `context_compressed` v0.2 事件面，无新 Schema。
+- [ ] 阈值配置（env/TOML，默认 2 次提醒 / 3 次总结推荐）；同一阈值只触发一次。
+  - 成熟复用评估（2026-08-16，只读）：部分——2/3 为旧 384K/500K 语义对应，默认待校准。
+- [ ] 最简实现：阈值到达的最后一轮模型输出末尾机械附言（附压缩次数）；headless/自动化仅写日志；3 次附五段模板 + 新窗口开场提示骨架。
+  - 成熟复用评估（2026-08-16，只读）：部分——3 次推荐复用压缩五段模板（Grok compaction 血统）。
+- [ ] 测试（到达/未到达、session_end 不计、一次一计、headless 分支、幂等）+ 实施审计 + BACKLOG/TODO/索引状态同步。
   - 成熟复用评估（2026-08-16，只读）：无——自有测试/审计工作。
 
-入口：[设计](docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6d](docs/BACKLOG_AND_PRIORITIES.md)。
+入口：[设计](docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md) / [ADR-0010 §14.13](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [ADR-0010 §14.18](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [BACKLOG 6d](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ### ORZ-BLACKBOARD-PLAN-EPOCH（`implemented`；P1，S1-S5 已闭合，2026-08-14，保留供核对）
 

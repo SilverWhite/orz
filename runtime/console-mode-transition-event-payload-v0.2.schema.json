@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/console-mode-transition-event-payload-v0.2.schema.json",
   "title": "console_mode_transition event payload v0.2 (PLAN-FIRST stage C dual-mode)",
-  "description": "ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §7: the console/direct dual-mode transition record. console → direct is the audited fallback after an assistant-layer failure streak (model decision switch); direct → console is the single-direction return via console.return_to_console (trigger model_return); the stay decision (assistant_failure_streak with to=console) journals that the run keeps console mode and will not be asked again. Semantic direction/trigger/decision rules are enforced by the Python verifier (_verify_v02_console_mode_transition); this schema only fixes the closed shape.",
+  "description": "ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §7: the console/direct dual-mode transition record. console → direct is the audited fallback after an assistant-layer failure streak (model decision switch); direct → console is the single-direction return via console_return_to_console (trigger model_return); the stay decision (assistant_failure_streak with to=console) journals that the run keeps console mode and will not be asked again. Semantic direction/trigger/decision rules are enforced by the Python verifier (_verify_v02_console_mode_transition); this schema only fixes the closed shape.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -35,7 +35,7 @@
     },
     "trigger": {
       "enum": ["assistant_failure_streak", "model_return"],
-      "description": "Mechanical trigger: the 3-failure assistant-layer fault streak (console → direct, or the stay decision), or the explicit console.return_to_console call (direct → console)."
+      "description": "Mechanical trigger: the 3-failure assistant-layer fault streak (console → direct, or the stay decision), or the explicit console_return_to_console call (direct → console)."
     },
     "streak": {
       "oneOf": [

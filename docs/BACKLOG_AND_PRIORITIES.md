@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16；P0 当前无开放项） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（ACAF 评测链路 + console 工具名点号，2026-08-17 最优先，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -20,6 +20,39 @@
 ## P0 — 当前工作集
 
 > 2026-08-13：P0 决策登记——FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH 经用户裁决放行实施；执行顺序 P0-A（工具探针）优先，P0-B（检索机械控制）紧随，P0-C（经典操作台）POC 已通后进入实施序列。
+
+### 0a. 评测冒烟暴露问题（最优先；2026-08-17 登记，用户将在新窗口处理）
+
+> 来源：正式跑分前最难错题试跑——make-doom-for-mips（TB2 2.0，deepseek-v4-flash，
+> plan-first + console 默认 + headless，2026-08-17 01:05–01:12）。证据：
+> `D:\tb-eval\jobs\2026-08-17__01-05-31` / `2026-08-17__01-07-59`（ACAF 拒启）、
+> `D:\tb-eval\jobs\2026-08-17__01-09-43`（工具名 400）；journal
+> `D:\tb-eval\gsa-volumes\b4-900s\a5da4937-2775-47ff-8202-98bf03a74780\runs\RUN-CLI-6a81eeed\events.jsonl`
+> （plan-first 首轮→计划接受→console 面→run_failed 全链）。处理窗口=新 Codex 窗口。
+
+- **GAP-ACAF-HARNESS-PASSTHROUGH**（P0，2026-08-17）：ACAF fail-closed 生产默认强制后，
+  TB2 harbor 适配器（`tb_agents/orz.py`）只向任务容器转发固定环境变量集合，签发器配置
+  （`ORZ_ACAF_MANIFEST`/`ORZ_ACAF_KEYSTORE`/`ORZ_ACAF_FAIL_CLOSED`）无法进入容器，
+  `orz --real` 启动即拒（`assurance invariant: ACAF fail-closed is enabled but no signer
+  client is configured`）。本轮已做临时解阻：`D:\tb-eval\.env` 加 `ORZ_ACAF_FAIL_CLOSED=0`
+  （影子模式）+ 适配器增该变量透传。正式跑分需裁决：容器内供应 manifest/keystore/signer
+  （保持强制，参考 [`scripts/orz_acaf_run.ps1`](../scripts/orz_acaf_run.ps1)）或明确接受
+  影子模式。
+- **GAP-CONSOLE-TOOLNAME-PATTERN**（P0，2026-08-17；**已闭合 2026-08-17**）：console 默认面三个工具名含点号
+  （`blackboard.action_write`/`console.step_done`/`console.return_to_console`），违反
+  OpenAI 兼容工具名模式 `^[a-zA-Z0-9_-]+$`；计划落板后下一轮请求 400（`invalid_request_error`）
+  → `run_failed`。FakeProvider 不校验工具名，orz-loop 433 单测未暴露。修复=改名下划线
+  （`blackboard_action_write`/`console_step_done`/`console_return_to_console`），同步约
+  91 处 Rust、Python verifier 交叉校验（`run_event_journal_validation.py` 中
+  `payload.get("tool") == "blackboard.action_write"` 等）、schema 注释、设计文档；改后
+  重建 Linux 二进制并重跑。闭合证据：orz 子模块 0304b23（11 文件 91 处 + fmt 收口）；
+  orz-loop 434 / orz-tui 178 / orz-assurance / orz-bin acaf_e2e 23 + real_flag 2 通过；
+  clippy 无新增告警；manifest 重生成 1401 条目、仓库门禁 valid；Linux musl 重建后冒烟
+  重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`（30m21s 跑满 1740s 预算、
+  `run_invalidated{wallclock}` 正常收尾，对比旧运行 400 即死）。
+- 顺带观察（P1，修复时一并确认）：① 首次 `plan_write` 模型把计划序列化为 JSON 字符串被拒
+  （`refill_requested`），重填对象后通过——提示词/示例可强化；② `steps[].actions` 传空字符串
+  仍通过校验——动作形状校验偏宽。
 
 ### 0. 前置收尾（提交前需用户确认）
 
@@ -166,8 +199,8 @@
   S2 验收点显式登记（round/epoch 防重放、目标解析、ACAF 票据、策略表、
   step=policy）。新增 18 项测试（console 15 + blackboard 3）；orz-loop
   356 通过 / 0 失败。**2026-08-15 S2 已落地**——模型面投影（
-  `blackboard_read` section=actions：注册板块/动作栏单槽/结果栏有界渲染，
-  随 plan epoch 归档可读 + `blackboard.action_write` 写单按钮，pending 机械
+   `blackboard_read` section=actions：注册板块/动作栏单槽/结果栏有界渲染，
+   随 plan epoch 归档可读 + `blackboard_action_write` 写单按钮，pending 机械
   拒绝，round/plan_epoch/run_id 机械盖章，主车道专属三重守卫）+ 轮末机械
   发放（post-tool-batch 安全间隙、pending checkpoint 优先；round/plan_epoch/
   run_id 防重放与过期 → 注册表/契约 → 经 ControllerConsoleExecutor 委托
@@ -236,7 +269,7 @@
   权威：ADR-0010 §14.17（v1.17）。
 - 定案（2026-08-15 用户裁决）：放弃「直接执行面永久移除」；双模式 console 默认 +
   direct 受控降级（3 连败助理层故障面 → 无工具询问轮 → 切换留痕；计划门约束
-  console 订单，direct 为有记录的例外，`console.step_done` 需证据置 done）；
+   console 订单，direct 为有记录的例外，`console_step_done` 需证据置 done）；
   结构化策略拒绝（P1-2）为 S3 前置。
 - 阶段：A（模板去人格 + AGENTS.md 计划型机械包裹 + 首轮计划轮硬门）；B（注册板块=
   探针投影 + 工具栏刷新绑定黑板模型栏）；C（console 默认 + direct 受控降级）。
@@ -269,7 +302,7 @@
   双模式：v0.2 事件 +2（`console_mode_transition` / `console_order_written`，
   action_write ToolCompleted 收敛通用形状）、双模式状态机（故障连败/询问轮/
   switch/stay/return）、步骤状态机（`pending → in_progress → done|failed`、
-  步骤门 step_not_done、`console.step_done` 证据门）、模型面收敛（console 面=
+   步骤门 step_not_done、`console_step_done` 证据门）、模型面收敛（console 面=
   黑板读写+只读核查；direct 恢复工作工具投影并全链路盖章）；实施审计见
   `docs/audits/GAP_PLAN_FIRST_STAGE_C_IMPL_AUDIT_2026-08-16.md`。
 
@@ -316,7 +349,11 @@
 
 ### 6. IMPL-DEEPSEEK-TRANSPORT + SEC-CREDENTIALS（`partial`）
 
-- 开放内容：transport/retry/thinking 按主/子代理同构约束复核；DeepSeek live 通道与 Windows 实机晋级证据（ADR-0010 §11.7）。
+- 开放内容：transport/retry/thinking 按主/子代理同构约束复核——**已闭合（2026-08-16）**：
+  三实例共享同一 `DeepSeekTransport`（ModelConfig/RetryPolicy/thinking 单一来源、
+  `REQUEST_MAX_TOKENS=160_000` 单一常量；请求级覆盖仅 `-p` 预检轮，文档化 F-07），
+  证据与边界见变更记录。仍开放：DeepSeek live 通道与 Windows 实机晋级证据
+  （ADR-0010 §11.7；当前仍为 offline / 构建时 evidence）。
 - 入口：[DEEPSEEK_ADAPTER_CONTRACT](../architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md)；[ADR-0007](../adr/ADR-0007-transport-retry-policy.md)；[ADR-0006](../adr/ADR-0006-credential-target-registry.md)。
 
 ### 6b. ORZ-CACHE-CONTEXT-COST（`approved`；P1，2026-08-14 登记）
@@ -372,16 +409,19 @@
   [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [TODO](../TODO.md)。
 
-### 6d. ORZ-SESSION-CONTEXT-MONITOR（`approved`；P1，2026-08-14 登记）
+### 6d. ORZ-SESSION-CONTEXT-MONITOR（`approved`；P1，2026-08-14 登记；2026-08-16 度量重定）
 
-- 定位：会话累计上下文监测——度量=会话累计模型可见输入 token（usage 优先、journal
-  估算兜底）；384K 机械提醒、500K 机械总结推荐（可配）；最简实现=阈值到达的最后一轮
-  模型输出末尾机械附提醒；headless 仅日志；TUI/journal 事件为 beta 前可选；与压缩独立。
-- 实施前置：度量接线、阈值配置、机械附言注入点、测试、实施审计与索引同步；
-  压缩恢复预检估算校准（chars/2 对中文可能低估，P0-D 二次复查登记 2026-08-14）
-  随度量接线一并校准估算口径。
+- 定位：会话压缩次数监测——度量=会话内压缩次数（`context_compressed`
+  reason∈rhythm/fallback 计数、session_end 不计、一次一计）；≥2 次机械提醒、
+  ≥3 次机械总结推荐（可配，默认待校准；2≈旧 384K、3≈旧 500K）；最简实现=阈值到达的
+  最后一轮模型输出末尾机械附言（附次数）；headless 仅日志；TUI/journal 事件为
+  beta 前可选；与压缩独立。
+- 实施前置：压缩事件计数接线、阈值配置、机械附言注入点、测试、实施审计与索引同步；
+  原 token 度量与 chars/2 中文估算校准项随 2026-08-16 用户裁决废止（理由：累计 token
+  对模型不可见、阈值无质量边界，压缩次数为更直接的会话寿命代理）。
 - 入口：[设计](SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md)；
   [ADR-0010 §14.13](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
+  [ADR-0010 §14.18](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；
   [TODO](../TODO.md)。
 
 ### 6e. ORZ-BLACKBOARD-PLAN-EPOCH（`implemented`；P1，2026-08-14 实施闭合）
@@ -497,6 +537,50 @@
 
 ## 变更记录
 
+- 2026-08-17：GAP-CONSOLE-TOOLNAME-PATTERN 闭合——三个 console 面工具名点号改下划线
+  （`blackboard.action_write`→`blackboard_action_write`、
+  `console.step_done`→`console_step_done`、
+  `console.return_to_console`→`console_return_to_console`）；同步 11 个 Rust 文件
+  （91 处）+ Python verifier/schema/测试 + ADR-0010 §14.20 与设计文档；orz 子模块
+  commit 0304b23、`orz_source_manifest.sha256` 重生成 1401 条目、仓库门禁 valid；
+  orz-loop 434 / orz-tui 178 / orz-assurance / orz-bin acaf_e2e 23 + real_flag 2
+  通过，clippy 无新增告警；Linux musl 二进制重建（rust:latest + aliyun 镜像）后
+  make-doom-for-mips 冒烟重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`——30m21s 跑满
+  1740s 预算、`run_invalidated{wallclock}` 正常收尾，console 全链路（计划落板/修订/
+  订单发放/上下文压缩）无 400（对比旧运行 `01-09-43` 400 即死）。GAP-ACAF-HARNESS-
+  PASSTHROUGH 保持开放（正式跑分决策待定）。
+- 2026-08-17：评测冒烟暴露问题登记（最优先）——正式跑分前最难错题试跑
+  （make-doom-for-mips，flash + plan-first + console 默认 + headless）暴露两项阻断：
+  ① GAP-ACAF-HARNESS-PASSTHROUGH：ACAF fail-closed 默认强制后 TB2 适配器不转发
+  签发器配置，`orz --real` 拒启（`no signer client is configured`）；已临时以
+  `ORZ_ACAF_FAIL_CLOSED=0`（影子模式）+ 适配器透传解阻，正式跑分决策待定。
+  ② GAP-CONSOLE-TOOLNAME-PATTERN：console 面工具名点号违反 OpenAI 兼容工具名模式
+  `^[a-zA-Z0-9_-]+$`，计划落板后下一轮 400 → run_failed（FakeProvider 不校验故单测
+  未暴露）；修复=改名下划线 + 同步 verifier/schema/文档 + 重建重跑。另记录两项 P1
+  观察（plan_write 字符串序列化→提示词强化；actions 空串→校验偏宽）。证据：
+  `D:\tb-eval\jobs\2026-08-17__01-05-31` / `01-07-59` / `01-09-43`、
+  `D:\tb-eval\gsa-volumes\b4-900s\a5da4937-2775-47ff-8202-98bf03a74780\runs\RUN-CLI-6a81eeed\events.jsonl`；
+  本轮已重建 Linux 评测二进制（旧版备份 `orz-20260812.bak`）。处理窗口=新 Codex 窗口，
+  详见 P0 0a。
+- 2026-08-16：IMPL-DEEPSEEK-TRANSPORT 主/子代理同构复核闭合登记——
+  transport/retry/thinking 三实例同构成立（`AgentLoopController::with_gateway`
+  单 gateway 三实例克隆，controller.rs 2056-2064；`DeepSeekTransport::deepseek_v4`
+  单 ModelConfig，transport.rs 92-107；`RetryPolicy::default()`，model.rs 47-70；
+  `REQUEST_MAX_TOKENS=160_000` 单一常量，agent_loop.rs 49/1146-1148；主/子代理请求
+  均 `thinking: None` → transport 默认 EnabledMax，agents/main.rs 50、
+  agents/retrieval.rs 84；唯一请求级覆盖=`-p` plan gate，main.rs 630，F-07
+  文档化例外；全仓无 per-agent 模型/重试 env）。边界登记：① 压缩摘要轮
+  （SUMMARY_MAX_TOKENS=12_000）与 `-p` 预检轮为 loop 外辅助请求，header 留痕
+  明确排除，非同构范畴；② DEEPSEEK_ADAPTER_CONTRACT §2.1 旧别名拒绝与 /models
+  能力预检、§2.5 首事件语义未在 production transport 实现，属契约符合性另行
+  跟踪。跑分决定（用户）：启用 plan-first（用作该设计的可使用性验证）；
+  模型使用 `deepseek-v4-flash`（= 生产默认 `MAIN_AGENT_MODEL`，无需
+  `ORZ_MAIN_AGENT_MODEL` 覆盖）。
+- 2026-08-16：FUS-SESSION-CONTEXT-MONITOR 度量重定（用户裁决）——度量由会话累计
+  模型可见输入 token（384K/500K）改为会话内压缩次数（`context_compressed`
+  reason∈rhythm/fallback 计数、session_end 不计、一次一计）；阈值改次数制
+  （≥2 提醒 / ≥3 推荐，可配、默认待校准）；chars/2 中文估算校准项废止；设计文档、
+  ADR-0010 §14.18、索引、TODO 同步；实施未动（仍 pending）。
 - 2026-08-15：推送惯例恢复登记——用户说明此前「Rust 修复不入 git、
   用户手动推送」惯例源于分类器类故障（已修复），恢复正常推送；父仓库
   main（`2ef2aa7`）与 orz 子模块分支 `feat/fusion-architecture`
@@ -553,7 +637,7 @@
   同日本切片工具事故导致 `diagnostic_coverage.rs` 生产实现重建（按测试/
   调用面契约，非逐字节恢复），详见审计 §5。
 - 2026-08-15：P0-C 内嵌集成 S2 落地登记——模型面投影（`blackboard_read`
-  section=actions + `blackboard.action_write` 写单按钮，pending 机械拒绝、
+  section=actions + `blackboard_action_write` 写单按钮，pending 机械拒绝、
   round/plan_epoch/run_id 机械盖章、主车道专属）与轮末机械发放
   （post-tool-batch 安全间隙、checkpoint 优先；round/plan_epoch/run_id
   防重放与过期（`order_stale`）→ 注册表/契约 → 经 ControllerConsoleExecutor
