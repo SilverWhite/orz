@@ -52,9 +52,12 @@
 - [ ] GAP-ACAF-HARNESS-PASSTHROUGH：TB2 适配器 ACAF 配置透传 / 容器内供应——正式跑分
   强制模式决策（容器内 manifest/keystore/signer，参考 `scripts/orz_acaf_run.ps1`）。
   **2026-08-17 用户裁决：跑分保持 ACAF 强制开启**（容器内供应，不接受影子模式）。
-  实施：`tb_agents/orz.py` 透传签发器配置 + 任务容器挂载/供应 manifest/keystore/signer
-  + 移除 `D:\tb-eval\.env` 的 `ORZ_ACAF_FAIL_CLOSED=0` 覆盖 + 冒烟验证 `orz --real`
-  带签发器启动。本轮临时解阻保留至实施完成。
+  **2026-08-17 实施完成（待冒烟）**：前置设计变更——Linux 下 DPAPI 不可用，用户裁决
+  新增 `file-0600-installation` 文件型安装密钥库（ADR-0010 §14.21 项 4）；orz 子模块
+  e8274e1（keystore 文件型后端 + storage 分派 + provision/signer 非 Windows 分支），
+  orz-bin 全量通过、仓库门禁 valid；适配器 install 容器内落 manifest+keystore、run 设
+  ORZ_ACAF_MANIFEST/KEYSTORE/BINARY/FAIL_CLOSED=1；`.env` 已移除 FAIL_CLOSED=0 覆盖。
+  剩余=Linux musl 重建 + 冒烟验证 `orz --real` 带签发器启动。
   - 证据：`D:\tb-eval\jobs\2026-08-17__01-05-31`、`2026-08-17__01-07-59`；
     错误 `ACAF fail-closed is enabled but no signer client is configured`。
 - [x] GAP-CONSOLE-TOOLNAME-PATTERN：console 面工具名点号→下划线改名

@@ -842,6 +842,9 @@ def check_repository() -> dict[str, Any]:
         assurance_p1_fixture_root / "installation-key-metadata.valid.json": (
             assurance_root / "installation-key-metadata-v0.1.schema.json"
         ),
+        assurance_p1_fixture_root / "installation-key-metadata.file-storage.valid.json": (
+            assurance_root / "installation-key-metadata-v0.1.schema.json"
+        ),
         assurance_p1_fixture_root / "conversation-state.active.valid.json": (
             assurance_root / "conversation-state-v0.1.schema.json"
         ),

@@ -1,0 +1,14 @@
+{
+  "schema_version": "0.1.0-draft",
+  "metadata_kind": "installation_key_metadata",
+  "key_id": "KEY-SYNTHETIC-FILE-001",
+  "created_at": "2026-08-17T00:00:00Z",
+  "key_algorithm": "hmac-sha256",
+  "key_bytes": 32,
+  "storage": "file-0600-installation",
+  "protected_blob_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "secret_material_persisted_in_metadata": false,
+  "limitations": [
+    "Schema-only synthetic fixture; no key material is present."
+  ]
+}

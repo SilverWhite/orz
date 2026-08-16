@@ -1687,3 +1687,15 @@ ADR §3.6 正文修订随实施登记。
    （order_id / step / phase / code / reason / round / plan_epoch / run_id），
    Schema/verifier/fixtures 先行，结果栏 receipt 保留为人类可读视图。
    实施登记 BACKLOG 0a / TODO P0-E。
+4. **Linux 文件型安装密钥库后端（2026-08-17 用户裁决，GAP-ACAF-HARNESS-PASSTHROUGH
+   前置）**：签发器与 provision 在非 Windows 下原 fail-closed（DPAPI 不可用，
+   Slice1 审计 §6 登记为设计边界——评测容器内签发器不可用）。用户裁决放行新增
+   `file-0600-installation` 文件型安装密钥库：`<root>/installation-key.bin` =
+   `MAGIC` ‖ 32B 密钥，0600 权限，元数据沿用 `installation-key-metadata-v0.1` schema
+   （`storage` 枚举新增该值，`protected_blob_sha256` 为明文 blob 摘要）；`K_install`
+   只被签发器进程读入并在使用后清零；信任锚=harness 供应链（容器内供应、临时容器），
+   同用户暴露与 Windows DPAPI 同级（同用户进程均可 `CryptUnprotectData`）。
+   `orz-acaf-provision` 非 Windows 分支创建文件型密钥库（Windows 分支行为不变）；
+   `orz-signer` 按元数据 `storage` 分派后端（`windows-dpapi-current-user` /
+   `file-0600-installation`，其余 fail-closed）；`AcafClient` 启动契约不变。
+   性质：ACAF 密钥库边界变更（ADR-0011 §5 补充），实施登记 BACKLOG 0a / TODO P0-E。

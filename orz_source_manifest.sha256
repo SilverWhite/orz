@@ -1050,8 +1050,8 @@ de4697af70417d27f3459f5c6e5d852e62ed1b2730913972a7e8ed9191270b31  crates/orz-ass
 7a601e74f331ee6f59db8ee7216c625edcfbfc6eff554eebc9f06a08bc6e8c39  crates/orz-assurance/src/session/snapshot.rs
 eaecb9bbdd3c2e2cc606b0a263bea28d332d9633e8acea704ad3029ab419f5e8  crates/orz-assurance/src/source_weighting.rs
 b103d678d735f773f65236e7c6f4aff7ec61b46f1bcad7b5b1f5b65d60ecc376  crates/orz-bin/Cargo.toml
-bee3be0d4fceccd624b26422ea4bdbd24460e2b55449e186ef193e72969d3921  crates/orz-bin/src/bin/orz-acaf-provision.rs
-af35a948d8f129cd70a815dc9593535395b28c4a2907198efec63d06bce4bb82  crates/orz-bin/src/bin/orz-signer.rs
+50e51395637bddff242f316ea72fc32702ba38720f68afc5def3b7e694856465  crates/orz-bin/src/bin/orz-acaf-provision.rs
+bba51f7717c2223e2855ea8d749c8dac2577b889f140d41d31e04fe1679289b4  crates/orz-bin/src/bin/orz-signer.rs
 361823db4ec33102fb776830eef4635a59dff67482bff986bfa459debe4288fb  crates/orz-bin/src/main.rs
 a692140823e04acad9934780e769838328022731fb23d72eae2ade4a58704c87  crates/orz-bin/tests/acaf_e2e.rs
 47107b94443dbc5f39a81593a11c641f58311a40bd31808f4e24cd2afbe0b72a  crates/orz-bin/tests/real_flag.rs
@@ -1072,7 +1072,7 @@ d6a0241de831914906652c82d20ddd6ecb4cf48a223b9d745d251ca7e0988ac9  crates/orz-hos
 dc0a715009ab9948162604d9bb2897fe7fdbe92e80bb8f50cc12188f11a0eab8  crates/orz-host/src/codex_permission.rs
 2b6a3e189e6d8e68d14cecc43495eb6e101f6bb64feb874873901c8996378ef8  crates/orz-host/src/credentials.rs
 70ca612cb499513f7f579cf8b4f1a1e0f552eb78ea22676388eeed578767a2c5  crates/orz-host/src/grok_home.rs
-6e0277904cc8f044f6910dc474f6c3ac11fc86148e622e3ae30beae74a08dfbb  crates/orz-host/src/keystore.rs
+c591145c0b308439dd48b825fe32c73d313b1df84e0f13f8e5891ebb7df776cc  crates/orz-host/src/keystore.rs
 c12781b1e3c51f4b685a36af7064a404f2ba3a6d35332df9a5d3638c895487cb  crates/orz-host/src/lib.rs
 d4a835fc1528cb43f6d4cd6884e3475ad1f45815997c340e3e3a3a8b508cba44  crates/orz-host/src/local_browser/cdp.rs
 7553bd5e80f04640f9eb2f04524b8c8f9c587856498e442d646af7fb03c9d52e  crates/orz-host/src/local_browser/discovery.rs

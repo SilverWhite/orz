@@ -24,7 +24,7 @@
     "key_algorithm": { "const": "hmac-sha256" },
     "key_bytes": { "const": 32 },
     "storage": {
-      "enum": ["windows-dpapi-current-user", "memory-test-only"]
+      "enum": ["windows-dpapi-current-user", "file-0600-installation", "memory-test-only"]
     },
     "protected_blob_sha256": {
       "oneOf": [
@@ -42,7 +42,11 @@
   "allOf": [
     {
       "if": {
-        "properties": { "storage": { "const": "windows-dpapi-current-user" } },
+        "properties": {
+          "storage": {
+            "enum": ["windows-dpapi-current-user", "file-0600-installation"]
+          }
+        },
         "required": ["storage"]
       },
       "then": {

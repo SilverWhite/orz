@@ -79,6 +79,9 @@
    验证签名 manifest 与二进制哈希；接口只接受枚举化动作；更新采用签名 manifest + 单调
    `signer_revision` + 回滚保护，**否决"永远固定单一哈希"**（会阻断安全升级）。
 5. **密钥体系**：`K_install`（DPAPI 静态，现有 keystore）只存于签发器进程；
+   2026-08-17 用户裁决（ADR-0010 §14.21）：Linux 评测容器使用
+   `file-0600-installation` 文件型安装密钥库（0600 权限、明文 blob、信任锚=harness
+   供应链；同用户暴露与 Windows DPAPI 同级），Windows 生产路径行为不变；
    `K_session = HKDF(K_install, session_id || goal_digest || policy_digest || signer_revision)`
    下发给 host 验票模块；goal 或 policy 变化 → 新 `K_session`，旧票立即失效。
 6. **原子消费与恢复**：验票通过→执行→receipt 与结果一个 commit 落盘；崩溃恢复不重放；

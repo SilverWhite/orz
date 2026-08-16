@@ -39,6 +39,16 @@
   容器内供应 manifest/keystore/signer（参考 [`scripts/orz_acaf_run.ps1`](../scripts/orz_acaf_run.ps1)
   供应链），不接受影子模式；实施=适配器透传签发器配置 + 任务容器挂载/供应 + 移除
   `D:\tb-eval\.env` 的 `ORZ_ACAF_FAIL_CLOSED=0` 覆盖 + 冒烟验证 `orz --real` 带签发器启动。
+  **2026-08-17 实施（本窗口）**：前置设计变更——Linux 下 DPAPI 不可用、signer/provision
+  原 fail-closed（Slice1 审计 §6 登记边界），用户裁决新增 `file-0600-installation` 文件型
+  安装密钥库（ADR-0010 §14.21 项 4 / ADR-0011 §5）。orz 子模块 e8274e1：keystore.rs
+  文件型后端（0600、MAGIC‖secret、schema 同构）+ storage 分派 `load_installation_secret`
+  + provision 非 Windows 分支 + signer 分派加载；orz-bin 全量通过（acaf_e2e 23 /
+  signer 14 / provision 2 / stdio_e2e 1 / real_flag 2）；schema 枚举与正向 fixture 同步、
+  仓库门禁 valid（1401 条目）。适配器 `tb_agents/orz.py`：install 上传 orz-signer /
+  orz-acaf-provision 并在容器内 `/etc/orz-acaf` 落 manifest+keystore，run 设
+  ORZ_ACAF_MANIFEST / ORZ_ACAF_KEYSTORE / ORZ_ACAF_BINARY / ORZ_ACAF_FAIL_CLOSED=1；
+  `D:\tb-eval\.env` 已移除 `ORZ_ACAF_FAIL_CLOSED=0`。冒烟验证待 Linux musl 重建后执行。
 - **GAP-CONSOLE-TOOLNAME-PATTERN**（P0，2026-08-17；**已闭合 2026-08-17**）：console 默认面三个工具名含点号
   （`blackboard.action_write`/`console.step_done`/`console.return_to_console`），违反
   OpenAI 兼容工具名模式 `^[a-zA-Z0-9_-]+$`；计划落板后下一轮请求 400（`invalid_request_error`）
