@@ -29,7 +29,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -52,7 +52,6 @@ pub const TRACE_SERVICE_NAME: &str = "assistant.trace";
 /// PTC 脚本单订单上限（小样 3 定档 20 步；2026-08-16 审查收口改为 8——
 /// 单轮动作受控、每步计 1 个 tool-round 预算单位；30s / 4MiB 不变）。
 pub const MAX_SCRIPT_STEPS_PER_ORDER: usize = 8;
-pub const MAX_SCRIPT_WALLCLOCK_SECONDS: f64 = 30.0;
 pub const MAX_SCRIPT_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 /// 错误信封 step 枚举（POC fail-closed 返回契约）。
@@ -790,8 +789,9 @@ pub trait ActionExecutor: Send + Sync {
         target_tool: &str,
         arguments: &Value,
         call_id: &str,
-        // P0-C S4 (2026-08-16): per-call host timeout override (script
-        // step remaining deadline). `None` = host default.
+        // P0-C S4 (2026-08-16): per-call host timeout override. Script steps
+        // pass `None` (host config budget, 审查收口 2026-08-16 二次) — the
+        // override remains available for future per-tool caps.
         timeout: Option<Duration>,
     ) -> Result<ToolResult, ExecuteError>;
 }
@@ -1454,7 +1454,6 @@ pub async fn run_script<E: ActionExecutor + ?Sized>(
         trace,
         call_id,
         MAX_SCRIPT_STEPS_PER_ORDER,
-        MAX_SCRIPT_WALLCLOCK_SECONDS,
         MAX_SCRIPT_RESPONSE_BYTES,
         consumed,
     )
@@ -1471,7 +1470,6 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
     trace: &mut Trace,
     call_id: &str,
     max_steps: usize,
-    max_wallclock: f64,
     max_bytes: usize,
     consumed: &mut u32,
 ) -> Result<Value, ConsoleError> {
@@ -1496,28 +1494,16 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
         });
     }
     let metas = static_validate_script(script, registry)?;
-    // P0-C S4 (2026-08-16)：总墙钟截止时间在脚本层持有，每步把「剩余
-    // 截止时间」作为 host 调用覆盖下沉；单步在 host 层被截止并收口进程树
-    // （不得用脚本层 timeout 替代进程收口）。
-    let deadline = Instant::now() + Duration::from_secs_f64(max_wallclock);
+    // P0-C S4 审查收口（2026-08-16 二次，用户复核裁决）：撤销「30s 总墙钟
+    // 含进程时间」语义（与 Codex/Grok 成熟设计一致）——脚本每步不传收缩
+    // 剩余，由 host 每调用超时独立约束（配置预算，进程树收口不变）；脚本层
+    // 只保留 8 步 / 4MiB / tool-round 预算上限。
     let mut outputs: BTreeMap<String, Value> = BTreeMap::new();
     let mut executed: Vec<Value> = Vec::with_capacity(metas.len());
     let mut response_bytes = 0usize;
     let mut final_response: Option<Value> = None;
 
     for meta in &metas {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(ConsoleError {
-                step: STEP_EXECUTE,
-                code: CODE_SCRIPT_TIMEOUT,
-                message: format!("script exceeded {max_wallclock:.0}s wall clock"),
-                upstream: Some(json!({
-                    "script_step": meta.index,
-                    "action": meta.action,
-                })),
-            });
-        }
         let arguments = substitute(&meta.arguments, &outputs)?;
         let step_call_id = format!("{call_id}.s{}", meta.index);
         let step_order = ActionOrder {
@@ -1537,7 +1523,7 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
             &step_order,
             trace,
             &step_call_id,
-            Some(remaining),
+            None,
             consumed,
         ))
         .await
@@ -1589,24 +1575,6 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
                 });
             }
         };
-        // P0-C S4 审查收口（2026-08-16）：步骤完成后核对总截止。host-owned
-        // 同步工具（如 project_doc_index）不经 host timeout 包装，无法中断
-        // 在途工作；事后核对保证「30s 总墙钟」对这类步骤也 fail-closed——
-        // 步骤已计 1 单位，脚本整体返回 `script_timeout`，不产出成功结果。
-        if Instant::now() > deadline {
-            return Err(ConsoleError {
-                step: STEP_EXECUTE,
-                code: CODE_SCRIPT_TIMEOUT,
-                message: format!(
-                    "script step {} ({}) exceeded the {max_wallclock:.0}s total wall clock",
-                    meta.index, meta.action
-                ),
-                upstream: Some(json!({
-                    "script_step": meta.index,
-                    "action": meta.action,
-                })),
-            });
-        }
         let entry = json!({
             "index": meta.index,
             "do": meta.action,
@@ -2956,7 +2924,6 @@ mod tests {
             &mut trace,
             "call-s",
             MAX_SCRIPT_STEPS_PER_ORDER,
-            MAX_SCRIPT_WALLCLOCK_SECONDS,
             usize::MAX,
             &mut 0,
         )
@@ -2978,7 +2945,6 @@ mod tests {
             &mut trace,
             "call-s",
             MAX_SCRIPT_STEPS_PER_ORDER,
-            MAX_SCRIPT_WALLCLOCK_SECONDS,
             success_len - 1,
             &mut 0,
         )
@@ -3072,9 +3038,11 @@ mod tests {
         assert_eq!(failed[0].upstream.as_ref().unwrap()["script_step"], 2);
     }
 
-    /// P0-C S3：墙钟与累计响应字节上限（测试用小上限注入）。
+    /// P0-C S3：累计响应字节上限（测试用小上限注入）。P0-C S4 审查收口
+    /// （2026-08-16 二次）撤销脚本级总墙钟——每步超时由 host 配置预算
+    /// 独立约束，本测试只保留字节上限语义。
     #[tokio::test]
-    async fn run_script_enforces_wallclock_and_byte_limits() {
+    async fn run_script_enforces_byte_limits() {
         let mut registry = ServiceRegistry::new();
         registry
             .register(ActionSpec {
@@ -3105,29 +3073,6 @@ mod tests {
             {"do": "workspace.read_file", "with": {"path": "a.txt"}},
         ]});
         let mut trace = Trace {
-            trace_id: "t000094".to_string(),
-            request_id: None,
-            events: Vec::new(),
-        };
-        let err = run_script_with_limits(
-            &registry,
-            &executor,
-            None,
-            &arguments,
-            &mut trace,
-            "call-s",
-            MAX_SCRIPT_STEPS_PER_ORDER,
-            0.0,
-            MAX_SCRIPT_RESPONSE_BYTES,
-            &mut 0,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(err.step, STEP_EXECUTE);
-        assert_eq!(err.code, CODE_SCRIPT_TIMEOUT);
-        assert!(executor.seen.lock().unwrap().is_empty());
-
-        let mut trace = Trace {
             trace_id: "t000093".to_string(),
             request_id: None,
             events: Vec::new(),
@@ -3140,7 +3085,6 @@ mod tests {
             &mut trace,
             "call-s",
             MAX_SCRIPT_STEPS_PER_ORDER,
-            MAX_SCRIPT_WALLCLOCK_SECONDS,
             1,
             &mut 0,
         )
@@ -3214,81 +3158,13 @@ mod tests {
         assert_eq!(upstream["script_step"], 1);
         assert_eq!(upstream["code"], "tool_timeout");
         assert_eq!(upstream["action"], "workspace.read_file");
-        // 步骤已下沉 host 层执行（剩余截止时间 > 0 且 ≤ 30s 覆盖）。
+        // P0-C S4 审查收口（2026-08-16 二次）：脚本不再传收缩剩余——
+        // 每步由 host 配置预算独立约束（None = host 默认超时）。
         let timeouts = executor.timeouts.lock().unwrap();
         assert_eq!(timeouts.len(), 1);
-        let step_budget = timeouts[0].expect("per-step remaining deadline passed");
-        assert!(step_budget > Duration::ZERO);
-        assert!(step_budget <= Duration::from_secs_f64(MAX_SCRIPT_WALLCLOCK_SECONDS));
+        assert!(timeouts[0].is_none());
         drop(timeouts);
         // 第二步未执行。
-        assert_eq!(executor.seen.lock().unwrap().len(), 1);
-        assert_eq!(consumed, 1);
-    }
-
-    /// P0-C S4 审查收口（2026-08-16）：host-owned 同步工具（不经 host
-    /// timeout 包装）使单步实际耗时超过剩余截止时，脚本在步骤完成后按
-    /// 总墙钟事后 fail-closed——`script_timeout` + `script_step`，该步已
-    /// 执行计 1 单位。
-    #[tokio::test]
-    async fn script_step_overrunning_wallclock_fails_after_step() {
-        let mut registry = ServiceRegistry::new();
-        registry
-            .register(ActionSpec {
-                name: "workspace.read_file".to_string(),
-                description: "ref test action".to_string(),
-                target_tool: Some("read_file".to_string()),
-                kind: ActionKind::Host,
-                bundle: ActionBundle::ALL,
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                    "additionalProperties": false,
-                }),
-                response_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "content": {"type": "string"},
-                    },
-                    "required": ["path", "content"],
-                    "additionalProperties": false,
-                }),
-            })
-            .unwrap();
-        let executor = OverrunExecutor {
-            sleep: Duration::from_millis(60),
-            seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
-        let mut trace = Trace {
-            trace_id: "t000111".to_string(),
-            request_id: None,
-            events: Vec::new(),
-        };
-        let mut consumed = 0u32;
-        let err = run_script_with_limits(
-            &registry,
-            &executor,
-            None,
-            &json!({"script": [
-                {"do": "workspace.read_file", "with": {"path": "a.txt"}},
-            ]}),
-            &mut trace,
-            "call-s",
-            MAX_SCRIPT_STEPS_PER_ORDER,
-            0.01,
-            MAX_SCRIPT_RESPONSE_BYTES,
-            &mut consumed,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(err.step, STEP_EXECUTE);
-        assert_eq!(err.code, CODE_SCRIPT_TIMEOUT);
-        let upstream = err.upstream.as_ref().unwrap();
-        assert_eq!(upstream["script_step"], 1);
-        assert_eq!(upstream["action"], "workspace.read_file");
-        // 步骤已越过执行边界（模拟同步工具不可中断）：执行 1 次、计 1 单位。
         assert_eq!(executor.seen.lock().unwrap().len(), 1);
         assert_eq!(consumed, 1);
     }
@@ -3519,28 +3395,6 @@ mod tests {
             output_encoding: None,
             structured: Some(json!({"path": "a.txt", "content": "hello"})),
             ..Default::default()
-        }
-    }
-
-    /// 模拟 host-owned 同步工具：忽略单步覆盖、直接睡满时长后成功返回
-    /// （project_doc_index 等不经 host timeout 包装的工具语义）。
-    struct OverrunExecutor {
-        sleep: Duration,
-        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    #[async_trait]
-    impl ActionExecutor for OverrunExecutor {
-        async fn execute(
-            &self,
-            target_tool: &str,
-            _arguments: &Value,
-            _call_id: &str,
-            _timeout: Option<Duration>,
-        ) -> Result<ToolResult, ExecuteError> {
-            self.seen.lock().unwrap().push(target_tool.to_string());
-            tokio::time::sleep(self.sleep).await;
-            Ok(ref_result())
         }
     }
 
