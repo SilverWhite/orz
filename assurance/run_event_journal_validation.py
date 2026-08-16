@@ -194,6 +194,19 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
           "plan-write",
           RUNTIME / "plan-write-event-payload-v0.2.schema.json",
       ),
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
+      # dual-mode transition decision record (PLAN_FIRST_BLACKBOARD_DESIGN §7).
+      "console_mode_transition": (
+          "console-mode-transition",
+          RUNTIME / "console-mode-transition-event-payload-v0.2.schema.json",
+      ),
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the action-bar
+      # order record — order identity, step binding and mechanical stamps
+      # (PLAN_FIRST_BLACKBOARD_DESIGN §5-§6).
+      "console_order_written": (
+          "console-order-written",
+          RUNTIME / "console-order-written-event-payload-v0.2.schema.json",
+      ),
   }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -675,6 +688,249 @@ def _verify_v02_plan_write(events: list[dict[str, Any]]) -> list[str]:
                     f"event {index}: plan_write accepted on attempt {attempt} "
                     "(expected 1 or 2)"
                 )
+    return errors
+
+
+def _verify_v02_console_mode_transition(
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """ADR-0010 §14.17⑱ / PLAN_FIRST_BLACKBOARD_DESIGN §7 cross-checks
+    (PLAN-FIRST 阶段 C, 2026-08-16):
+
+    - console→direct requires trigger=assistant_failure_streak and
+      model_decision=switch (streak ≥ 1, order_ids present);
+    - direct→console requires trigger=model_return,
+      model_decision=return_to_console and related_transition_id matching an
+      earlier console→direct transition of the same run;
+    - the stay decision (to=console, from=console) requires
+      trigger=assistant_failure_streak and model_decision=stay;
+    - at most one assistant_failure_streak decision per run (the design's
+      '每 run 至多询问一次' — switch or stay);
+    - a direct-mode tool event (console_mode=direct) must be preceded by a
+      console→direct transition of the same run and carry the transition_id
+      of that transition.
+    """
+    errors: list[str] = []
+    transitions = [
+        (index, event)
+        for index, event in enumerate(events)
+        if _is_v02(event) and event.get("event_type") == "console_mode_transition"
+    ]
+    per_run_streak_decisions: dict[str, int] = {}
+    direct_transitions_by_run: dict[str, dict[str, int]] = {}
+    seen_transition_ids: dict[str, set[str]] = {}
+    for index, event in transitions:
+        payload = event["payload"]
+        run_id = payload["run_id"]
+        t_from = payload["from"]
+        t_to = payload["to"]
+        trigger = payload["trigger"]
+        decision = payload["model_decision"]
+        transition_id = payload["transition_id"]
+        seen = seen_transition_ids.setdefault(run_id, set())
+        if transition_id in seen:
+            errors.append(
+                f"event {index}: duplicate console_mode_transition "
+                f"transition_id {transition_id!r} in run {run_id}"
+            )
+        seen.add(transition_id)
+        if t_from == "console" and t_to == "direct":
+            if trigger != "assistant_failure_streak":
+                errors.append(
+                    f"event {index}: console→direct transition requires "
+                    f"trigger=assistant_failure_streak, got {trigger!r}"
+                )
+            if decision != "switch":
+                errors.append(
+                    f"event {index}: console→direct transition requires "
+                    f"model_decision=switch, got {decision!r}"
+                )
+            if not isinstance(payload.get("streak"), int) or payload["streak"] < 1:
+                errors.append(
+                    f"event {index}: console→direct transition requires "
+                    "streak ≥ 1"
+                )
+            if not isinstance(payload.get("order_ids"), list) or not payload[
+                "order_ids"
+            ]:
+                errors.append(
+                    f"event {index}: console→direct transition requires "
+                    "non-empty order_ids"
+                )
+            if payload.get("related_transition_id") is not None:
+                errors.append(
+                    f"event {index}: console→direct transition requires "
+                    "related_transition_id=null"
+                )
+            direct_transitions_by_run.setdefault(run_id, {})[transition_id] = index
+        elif t_from == "direct" and t_to == "console":
+            if trigger != "model_return":
+                errors.append(
+                    f"event {index}: direct→console transition requires "
+                    f"trigger=model_return, got {trigger!r}"
+                )
+            if decision != "return_to_console":
+                errors.append(
+                    f"event {index}: direct→console transition requires "
+                    f"model_decision=return_to_console, got {decision!r}"
+                )
+            related = payload.get("related_transition_id")
+            if not related:
+                errors.append(
+                    f"event {index}: direct→console transition requires "
+                    "related_transition_id"
+                )
+            elif run_id not in direct_transitions_by_run or related not in (
+                direct_transitions_by_run[run_id]
+            ):
+                errors.append(
+                    f"event {index}: direct→console related_transition_id "
+                    f"{related!r} does not match an earlier console→direct "
+                    "transition of the same run"
+                )
+        elif t_from == "console" and t_to == "console":
+            if trigger != "assistant_failure_streak":
+                errors.append(
+                    f"event {index}: stay decision requires "
+                    f"trigger=assistant_failure_streak, got {trigger!r}"
+                )
+            if decision != "stay":
+                errors.append(
+                    f"event {index}: stay decision requires "
+                    f"model_decision=stay, got {decision!r}"
+                )
+            if payload.get("related_transition_id") is not None:
+                errors.append(
+                    f"event {index}: stay decision requires "
+                    "related_transition_id=null"
+                )
+        else:
+            errors.append(
+                f"event {index}: invalid console mode direction "
+                f"{t_from!r} → {t_to!r}"
+            )
+        if trigger == "assistant_failure_streak":
+            per_run_streak_decisions[run_id] = (
+                per_run_streak_decisions.get(run_id, 0) + 1
+            )
+    for run_id, count in per_run_streak_decisions.items():
+        if count > 1:
+            errors.append(
+                f"run {run_id}: {count} assistant_failure_streak console mode "
+                "decisions (at most one inquiry per run)"
+            )
+
+    # Direct-mode tool events must carry the current direct transition id.
+    current_direct: dict[str, str] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        if event.get("event_type") == "console_mode_transition":
+            payload = event["payload"]
+            run_id = payload["run_id"]
+            if payload["from"] == "console" and payload["to"] == "direct":
+                current_direct[run_id] = payload["transition_id"]
+            elif payload["from"] == "direct" and payload["to"] == "console":
+                current_direct.pop(run_id, None)
+            continue
+        if event.get("event_type") not in ("tool_started", "tool_completed"):
+            continue
+        payload = event.get("payload", {})
+        if payload.get("console_mode") == "direct":
+            run_id = event.get("run_id", "")
+            tid = payload.get("transition_id")
+            expected = current_direct.get(run_id)
+            if expected is None:
+                errors.append(
+                    f"event {index}: direct-mode tool event without a "
+                    "preceding console→direct transition in its run"
+                )
+            elif tid != expected:
+                errors.append(
+                    f"event {index}: direct-mode tool event transition_id "
+                    f"{tid!r} != current direct transition {expected!r}"
+                )
+    return errors
+
+
+def _verify_v02_console_order_written(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §14.17⑱ / PLAN_FIRST_BLACKBOARD_DESIGN §5-§6 cross-checks
+    (PLAN-FIRST 阶段 C, 2026-08-16):
+
+    - every console_order_written carries the mechanical
+      round/plan_epoch/run_id stamps and the write_call_id of the
+      blackboard.action_write completion it closes;
+    - order ids are unique per run;
+    - a console_order_written must be preceded by a blackboard.action_write
+      tool_completed success of the same run whose call_id matches the
+      write_call_id (the producer ordering: write completion, then the
+      order record); each write completion backs at most one order record.
+    """
+    errors: list[str] = []
+    order_ids_per_run: dict[str, set[str]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "console_order_written":
+            continue
+        payload = event["payload"]
+        run_id = event.get("run_id", "")
+        order_id = payload["order_id"]
+        seen = order_ids_per_run.setdefault(run_id, set())
+        if order_id in seen:
+            errors.append(
+                f"event {index}: duplicate console_order_written order_id "
+                f"{order_id!r} in run {run_id}"
+            )
+        seen.add(order_id)
+        action = payload.get("action")
+        if not isinstance(action, str) or not action:
+            errors.append(
+                f"event {index}: console_order_written action must be a "
+                "non-empty string"
+            )
+        step_id = payload.get("step_id")
+        if step_id is not None and (not isinstance(step_id, str) or not step_id):
+            errors.append(
+                f"event {index}: console_order_written step_id must be null "
+                "or a non-empty string"
+            )
+    # Producer ordering: the action_write success completion precedes the
+    # order record in the same run; the order record carries the write's
+    # call_id (write_call_id), and one write backs at most one order record.
+    # (2026-08-16 review closure F1: match against write_call_id instead of
+    # order_id — the producer stamps the model's real call_id on the write
+    # completion while order_id is the internal ORD-xxxxx identity.)
+    writes_per_run: dict[str, list[tuple[int, str]]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "tool_completed":
+            continue
+        payload = event.get("payload", {})
+        if payload.get("tool") == "blackboard.action_write" and payload.get(
+            "exit_code"
+        ) == 0:
+            writes_per_run.setdefault(event.get("run_id", ""), []).append(
+                (index, str(payload.get("call_id", "")))
+            )
+    consumed: dict[str, set[int]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "console_order_written":
+            continue
+        payload = event["payload"]
+        run_id = event.get("run_id", "")
+        write_call_id = payload.get("write_call_id")
+        matched: int | None = None
+        for wi, (w_index, w_call) in enumerate(writes_per_run.get(run_id, [])):
+            if wi in consumed.setdefault(run_id, set()):
+                continue
+            if w_index < index and w_call == write_call_id:
+                matched = wi
+                break
+        if matched is None:
+            errors.append(
+                f"event {index}: console_order_written {payload['order_id']!r} "
+                "without a prior blackboard.action_write success in its run"
+            )
+        else:
+            consumed[run_id].add(matched)
     return errors
 
 
@@ -2606,6 +2862,8 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_inquiry_kind(events))
         errors.extend(_verify_v02_checkpoint_responses(events))
         errors.extend(_verify_v02_plan_write(events))
+        errors.extend(_verify_v02_console_mode_transition(events))
+        errors.extend(_verify_v02_console_order_written(events))
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))

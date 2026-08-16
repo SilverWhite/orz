@@ -1,0 +1,28 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-CMODE",
+  "event_id": "EVT-CONF-CMODE-000",
+  "sequence": 0,
+  "timestamp": "2026-08-16T00:00:00Z",
+  "event_type": "console_mode_transition",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "transition_id": "TRANS-00000000-0000-0000-0000-000000000000",
+    "from": "console",
+    "to": "direct",
+    "trigger": "assistant_failure_streak",
+    "streak": 3,
+    "order_ids": ["ORD-000001", "ORD-000002", "ORD-000003"],
+    "model_decision": "switch",
+    "model_reason": "assistant layer failed three consecutive orders",
+    "run_id": "RUN-CONF-CMODE",
+    "round": 4,
+    "plan_epoch": 1,
+    "related_transition_id": null
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

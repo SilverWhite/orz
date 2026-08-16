@@ -592,6 +592,284 @@ class PlanWriteSequenceRuleTests(unittest.TestCase):
         self.assertTrue(any("accepted but" in e for e in errors))
 
 
+class ConsoleModeTransitionRuleTests(unittest.TestCase):
+    """PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
+    dual-mode transition + console_order_written cross-checks."""
+
+    def _transition(
+        self,
+        *,
+        transition_id: str,
+        from_mode: str,
+        to_mode: str,
+        trigger: str,
+        streak: int | None,
+        order_ids: list[str],
+        decision: str,
+        reason: str | None,
+        run_id: str = "RUN-T",
+        related: str | None = None,
+    ) -> dict:
+        return {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "console_mode_transition",
+            "run_id": run_id,
+            "payload": {
+                "transition_id": transition_id,
+                "from": from_mode,
+                "to": to_mode,
+                "trigger": trigger,
+                "streak": streak,
+                "order_ids": order_ids,
+                "model_decision": decision,
+                "model_reason": reason,
+                "run_id": run_id,
+                "round": 4,
+                "plan_epoch": 1,
+                "related_transition_id": related,
+            },
+        }
+
+    def test_switch_then_return_passes(self) -> None:
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_mode_transition,
+        )
+
+        events = [
+            self._transition(
+                transition_id="T1",
+                from_mode="console",
+                to_mode="direct",
+                trigger="assistant_failure_streak",
+                streak=3,
+                order_ids=["ORD-1", "ORD-2", "ORD-3"],
+                decision="switch",
+                reason="assistant failed",
+            ),
+            self._transition(
+                transition_id="T2",
+                from_mode="direct",
+                to_mode="console",
+                trigger="model_return",
+                streak=None,
+                order_ids=[],
+                decision="return_to_console",
+                reason="fixed",
+                related="T1",
+            ),
+        ]
+        self.assertEqual(_verify_v02_console_mode_transition(events), [])
+
+    def test_switch_requires_streak_and_order_ids(self) -> None:
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_mode_transition,
+        )
+
+        events = [
+            self._transition(
+                transition_id="T1",
+                from_mode="console",
+                to_mode="direct",
+                trigger="assistant_failure_streak",
+                streak=0,
+                order_ids=[],
+                decision="switch",
+                reason=None,
+            )
+        ]
+        errors = _verify_v02_console_mode_transition(events)
+        self.assertTrue(any("streak ≥ 1" in e for e in errors), errors)
+        self.assertTrue(any("non-empty order_ids" in e for e in errors), errors)
+
+    def test_return_without_prior_switch_fails(self) -> None:
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_mode_transition,
+        )
+
+        events = [
+            self._transition(
+                transition_id="T2",
+                from_mode="direct",
+                to_mode="console",
+                trigger="model_return",
+                streak=None,
+                order_ids=[],
+                decision="return_to_console",
+                reason=None,
+                related="T1",
+            )
+        ]
+        errors = _verify_v02_console_mode_transition(events)
+        self.assertTrue(
+            any("does not match an earlier console→direct" in e for e in errors),
+            errors,
+        )
+
+    def test_two_streak_decisions_per_run_fail(self) -> None:
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_mode_transition,
+        )
+
+        events = [
+            self._transition(
+                transition_id="T1",
+                from_mode="console",
+                to_mode="console",
+                trigger="assistant_failure_streak",
+                streak=3,
+                order_ids=["ORD-1"],
+                decision="stay",
+                reason="keep console",
+            ),
+            self._transition(
+                transition_id="T2",
+                from_mode="console",
+                to_mode="console",
+                trigger="assistant_failure_streak",
+                streak=3,
+                order_ids=["ORD-2"],
+                decision="stay",
+                reason="again",
+            ),
+        ]
+        errors = _verify_v02_console_mode_transition(events)
+        self.assertTrue(any("at most one inquiry per run" in e for e in errors), errors)
+
+    def test_direct_tool_event_requires_matching_transition(self) -> None:
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_mode_transition,
+        )
+
+        base = self._transition(
+            transition_id="T1",
+            from_mode="console",
+            to_mode="direct",
+            trigger="assistant_failure_streak",
+            streak=3,
+            order_ids=["ORD-1"],
+            decision="switch",
+            reason=None,
+        )
+        tool = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "tool_completed",
+            "run_id": "RUN-T",
+            "payload": {
+                "tool": "read_file",
+                "call_id": "call-1",
+                "exit_code": 0,
+                "console_mode": "direct",
+                "transition_id": "T1",
+                "trace_id": "call-1",
+            },
+        }
+        self.assertEqual(_verify_v02_console_mode_transition([base, tool]), [])
+        bad = dict(tool)
+        bad["payload"] = {**tool["payload"], "transition_id": "T9"}
+        errors = _verify_v02_console_mode_transition([base, bad])
+        self.assertTrue(any("transition_id" in e for e in errors), errors)
+
+    def test_order_written_requires_prior_action_write(self) -> None:
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_order_written,
+        )
+
+        order = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "console_order_written",
+            "run_id": "RUN-T",
+            "payload": {
+                "order_id": "ORD-1",
+                "write_call_id": "call-write-1",
+                "action": "workspace.read_file",
+                "step_id": "s1",
+                "round": 2,
+                "plan_epoch": 1,
+                "run_id": "RUN-T",
+            },
+        }
+        errors = _verify_v02_console_order_written([order])
+        self.assertTrue(any("without a prior" in e for e in errors), errors)
+
+        write = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "tool_completed",
+            "run_id": "RUN-T",
+            "payload": {
+                "tool": "blackboard.action_write",
+                "call_id": "call-write-1",
+                "exit_code": 0,
+            },
+        }
+        self.assertEqual(_verify_v02_console_order_written([write, order]), [])
+        dup = dict(order)
+        dup["event_type"] = "console_order_written"
+        errors = _verify_v02_console_order_written([write, order, dup])
+        self.assertTrue(any("duplicate" in e for e in errors), errors)
+
+    def test_order_written_write_call_id_matches_producer_shape(self) -> None:
+        """F1 review closure (2026-08-16): the producer emits the action_write
+        completion with the model's real call_id (never ORD-xxxxx) and the
+        order record carries that same call_id as write_call_id; multiple
+        orders in one run must all validate (no last-write overwrite)."""
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_order_written,
+        )
+
+        def write(call_id: str) -> dict:
+            return {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "tool_completed",
+                "run_id": "RUN-T",
+                "payload": {
+                    "tool": "blackboard.action_write",
+                    "call_id": call_id,
+                    "exit_code": 0,
+                },
+            }
+
+        def order(order_id: str, write_call_id: str, step_id: str, round_: int) -> dict:
+            return {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "console_order_written",
+                "run_id": "RUN-T",
+                "payload": {
+                    "order_id": order_id,
+                    "write_call_id": write_call_id,
+                    "action": "workspace.read_file",
+                    "step_id": step_id,
+                    "round": round_,
+                    "plan_epoch": 1,
+                    "run_id": "RUN-T",
+                },
+            }
+
+        events = [
+            write("call-f1"),
+            order("ORD-1", "call-f1", "s1", 2),
+            write("call-f2"),
+            order("ORD-2", "call-f2", "s2", 3),
+        ]
+        self.assertEqual(_verify_v02_console_order_written(events), [])
+
+        # Mismatched write_call_id must be rejected (no cross-order matching).
+        bad = [write("call-f1"), order("ORD-1", "call-other", "s1", 2)]
+        errors = _verify_v02_console_order_written(bad)
+        self.assertTrue(
+            any("without a prior blackboard.action_write success" in e for e in errors),
+            errors,
+        )
+
+        # One write cannot back two order records.
+        reused = [
+            write("call-f1"),
+            order("ORD-1", "call-f1", "s1", 2),
+            order("ORD-2", "call-f1", "s2", 3),
+        ]
+        errors = _verify_v02_console_order_written(reused)
+        self.assertEqual(len(errors), 1, errors)
+
+
 class SyntheticBadJournalTests(unittest.TestCase):
     """Fail-closed behavior on tampered/partial journals (built from the
     captured plain-run.jsonl so the bytes stay realistic)."""

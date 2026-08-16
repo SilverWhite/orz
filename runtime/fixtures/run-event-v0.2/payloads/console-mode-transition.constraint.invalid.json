@@ -1,0 +1,14 @@
+{
+  "transition_id": "TRANS-BAD",
+  "from": "console",
+  "to": "direct",
+  "trigger": "assistant_failure_streak",
+  "streak": 0,
+  "order_ids": [],
+  "model_decision": "stay",
+  "model_reason": null,
+  "run_id": "RUN-CONF-CMODE",
+  "round": 4,
+  "plan_epoch": 1,
+  "related_transition_id": "not-null"
+}

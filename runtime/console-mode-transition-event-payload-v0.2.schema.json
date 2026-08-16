@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/console-mode-transition-event-payload-v0.2.schema.json",
+  "title": "console_mode_transition event payload v0.2 (PLAN-FIRST stage C dual-mode)",
+  "description": "ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD_DESIGN §7: the console/direct dual-mode transition record. console → direct is the audited fallback after an assistant-layer failure streak (model decision switch); direct → console is the single-direction return via console.return_to_console (trigger model_return); the stay decision (assistant_failure_streak with to=console) journals that the run keeps console mode and will not be asked again. Semantic direction/trigger/decision rules are enforced by the Python verifier (_verify_v02_console_mode_transition); this schema only fixes the closed shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "transition_id",
+    "from",
+    "to",
+    "trigger",
+    "streak",
+    "order_ids",
+    "model_decision",
+    "model_reason",
+    "run_id",
+    "round",
+    "plan_epoch",
+    "related_transition_id"
+  ],
+  "properties": {
+    "transition_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique transition/decision record id for this event."
+    },
+    "from": {
+      "enum": ["console", "direct"],
+      "description": "The mode the run was in before this event."
+    },
+    "to": {
+      "enum": ["console", "direct"],
+      "description": "The mode the run is in after this event."
+    },
+    "trigger": {
+      "enum": ["assistant_failure_streak", "model_return"],
+      "description": "Mechanical trigger: the 3-failure assistant-layer fault streak (console → direct, or the stay decision), or the explicit console.return_to_console call (direct → console)."
+    },
+    "streak": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 1 }
+      ],
+      "description": "The consecutive assistant-layer fault count at the decision; null for model_return."
+    },
+    "order_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "The order ids that formed the failure streak (empty for model_return)."
+    },
+    "model_decision": {
+      "enum": ["switch", "stay", "return_to_console"],
+      "description": "The model's recorded decision: switch to direct, stay in console, or return to console."
+    },
+    "model_reason": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1 }
+      ],
+      "description": "The model's stated reason for the decision (null on mechanical degrade fallback to stay)."
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "round": { "type": "integer", "minimum": 0 },
+    "plan_epoch": { "type": "integer", "minimum": 0 },
+    "related_transition_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1 }
+      ],
+      "description": "For return_to_console: the console → direct transition this return closes. Null otherwise."
+    }
+  }
+}

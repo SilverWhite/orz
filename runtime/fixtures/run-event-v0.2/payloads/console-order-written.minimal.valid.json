@@ -1,0 +1,9 @@
+{
+  "order_id": "ORD-000001",
+  "write_call_id": "call-write-1",
+  "action": "workspace.read_file",
+  "step_id": "s1",
+  "round": 2,
+  "plan_epoch": 1,
+  "run_id": "RUN-CONF-CORDER"
+}

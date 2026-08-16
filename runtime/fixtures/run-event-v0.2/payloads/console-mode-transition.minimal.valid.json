@@ -1,0 +1,14 @@
+{
+  "transition_id": "TRANS-00000000-0000-0000-0000-000000000000",
+  "from": "console",
+  "to": "direct",
+  "trigger": "assistant_failure_streak",
+  "streak": 3,
+  "order_ids": ["ORD-000001", "ORD-000002", "ORD-000003"],
+  "model_decision": "switch",
+  "model_reason": "assistant layer failed three consecutive orders",
+  "run_id": "RUN-CONF-CMODE",
+  "round": 4,
+  "plan_epoch": 1,
+  "related_transition_id": null
+}

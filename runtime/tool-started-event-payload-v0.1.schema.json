@@ -11,6 +11,20 @@
   "properties": {
     "tool": { "type": "string" },
     "call_id": { "type": "string" },
-    "target": { "enum": ["internal_retrieval", "external_retrieval"] }
+    "target": { "enum": ["internal_retrieval", "external_retrieval"] },
+    "console_mode": {
+      "const": "direct",
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): present exactly when the start belongs to a direct-mode model action (audited fallback) — correlated to the console_mode_transition via transition_id."
+    },
+    "transition_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console → direct transition this start belongs to (present together with console_mode)."
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console trace id of the direct action (call_id)."
+    }
   }
 }

@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-CORDER",
+  "event_id": "EVT-CONF-CORDER-000",
+  "sequence": 0,
+  "timestamp": "2026-08-16T00:00:00Z",
+  "event_type": "console_order_written",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "order_id": "ORD-000001",
+    "write_call_id": "call-write-1",
+    "action": "workspace.read_file",
+    "step_id": "s1",
+    "round": 2,
+    "plan_epoch": 1,
+    "run_id": "RUN-CONF-CORDER"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
