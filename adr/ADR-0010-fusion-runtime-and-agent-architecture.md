@@ -1678,3 +1678,12 @@ ADR §3.6 正文修订随实施登记。
    参数提示补空结果语义 + 回归验证（重跑 round 数/计划重写次数下降）。实施登记
    BACKLOG 0a / TODO P0-E。
    来源：2026-08-17 冒烟重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`。
+3. **订单发放前拒绝事件面缺口登记（2026-08-17 用户指示处理，§14.17⑱ 补充）**：
+   冒烟重跑中 ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，
+   失败只进结果栏 receipt + TraceStore（`consume_console_order` 不写 journal 事件），
+   runtime journal 无结构化拒绝记录，事后核对看不到拒绝码。目标=发放前拒绝
+   （order_stale / step_not_done / budget_insufficient / registry / contract / target /
+   ACAF / policy / mode 门）统一入 v0.2 事件面——新增 `console_order_rejected`
+   （order_id / step / phase / code / reason / round / plan_epoch / run_id），
+   Schema/verifier/fixtures 先行，结果栏 receipt 保留为人类可读视图。
+   实施登记 BACKLOG 0a / TODO P0-E。
