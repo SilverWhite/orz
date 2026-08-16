@@ -16,12 +16,13 @@
 > P0-C S3 前置（P1-2 结构化策略拒绝）闭合后更新；2026-08-16 S3 全面审查
 > 收口；2026-08-16 S4 实施闭合，未闭合总数 35 → 34；2026-08-16 用户裁决
 > P0-C 转正式组件（决策门闭合）+ PLAN-FIRST 阶段 A 闭合，未闭合总数
-> 34 → 32）。
+> 34 → 32；2026-08-16 PLAN-FIRST 阶段 B 实施闭合，未闭合总数
+> 32 → 31）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**32 项**
-  - P0-C：2 项（PLAN-FIRST 阶段 B/C）
+- 未闭合总数：**31 项**
+  - P0-C：1 项（PLAN-FIRST 阶段 C）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -149,8 +150,17 @@
   2026-08-16 审查收口：计划轮不计工具轮预算、whitelist 窗口顺延、结构
   上限定稿（32/8/16/32K）、包裹无条件注入、P1/P2/P3 修复（详见审计 §7）。
   - 成熟复用评估（2026-08-16，只读）：明确——Grok 模板为改造对象、AGENTS.md 为 Codex 生态成熟约定、首轮硬门复用 checkpoint 机制。
-- [ ] PLAN-FIRST 阶段 B：注册板块=探针投影（移除静态基础集中间态）；工具栏刷新
-  绑定黑板模型栏。
+- [x] PLAN-FIRST 阶段 B：注册板块=探针投影（移除静态基础集中间态）；工具栏刷新
+  绑定黑板模型栏。2026-08-16 闭合：controller 单一探针源
+  （`console_probe_source`，仅内存/随轮覆盖、run 起始复位）→
+  `sync_console_registrations`
+  为派生唯一路径（Profile/Bundle ∩ 探针完整集）；无探针轮次不再 bundle-only
+  刷新、沿用上一轮内容（移除静态基础集中间态）；`blackboard_read
+  section=actions` 读取时由最近探针源派生并持久化（live 视图），归档 epoch
+  读保持快照（测试锁定）；工具投影与注册板块共用同一探针源（同源一致性
+  测试锁定；审查收口：归档读不派生与 run 起始复位单测）。
+  实施审计见
+  `docs/audits/GAP_PLAN_FIRST_STAGE_B_IMPL_AUDIT_2026-08-16.md`。
   - 成熟复用评估（2026-08-16，只读）：部分——复用已闭合的 FUS-TOOL-PROBE 单一探针面（自研成熟机制）。
 - [ ] PLAN-FIRST 阶段 C：双模式（console 默认 + direct 受控降级）——投影切换、
   3 连败助理层故障面计数、无工具询问轮、`console_mode_transition` + gate_log、

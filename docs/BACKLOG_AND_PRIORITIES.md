@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 B/C 待实施，2026-08-15 定案） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 C 待实施，2026-08-15 定案；阶段 B 已闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -256,6 +256,15 @@
   契约形状收敛、plan_write 面随开关收敛（子代理/grill 剔除）、P3 全部闭环
   （TUI 降级投影/同轮单次/参数 schema/上限/persona 测试）；ADR-0010
   §14.17⑯、审计 §7 登记。
+- 进度（2026-08-16）：**阶段 B 已闭合**——注册板块=探针投影收口：controller
+  单一探针源（`console_probe_source`，仅内存/随轮覆盖、run 起始复位）→
+  `sync_console_registrations` 为派生唯一路径（Profile/Bundle ∩ 探针完整集），
+  无探针轮次不再 bundle-only 刷新、沿用上一轮内容（移除静态基础集中间态）；
+  工具栏刷新绑定黑板模型栏：`blackboard_read section=actions` 读取时由最近
+  探针源派生并持久化（live 视图），归档 epoch 读保持快照（测试锁定）；工具
+  投影与注册板块共用同一探针源（同源一致性测试锁定；审查收口：run 起始复位
+  与归档读不派生单测）。实施审计见
+  `docs/audits/GAP_PLAN_FIRST_STAGE_B_IMPL_AUDIT_2026-08-16.md`。
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
 

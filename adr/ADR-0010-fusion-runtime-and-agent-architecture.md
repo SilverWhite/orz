@@ -1525,5 +1525,21 @@ ADR §3.6 正文修订随实施登记。
          环境失败外通过（persona 测试已更新）。实施审计：
          `docs/audits/GAP_PLAN_FIRST_STAGE_A_IMPL_AUDIT_2026-08-16.md`
          §7。
+   ⑰ PLAN-FIRST 阶段 B 实施登记（2026-08-16）——
+      a) 注册板块=探针投影收口：controller 新增单一探针源
+         （`console_probe_source`，仅内存/随轮覆盖、run 起始复位、不持久化），
+         `sync_console_registrations` 为派生唯一路径（Profile/Bundle ∩
+         探针完整集并持久化回黑板 actions 板块）；无探针轮次不再
+         bundle-only 刷新、沿用上一轮内容（移除静态基础集中间态）。
+      b) 工具栏刷新绑定黑板模型栏：`blackboard_read section=actions`
+         （live 视图）读取时由最近探针源派生再渲染；归档 epoch 读保持
+         快照不派生；工具投影与注册板块共用同一探针源，同源一致性测试
+         锁定（注册板块中工作工具目标 ⊆ 工具栏投影；探针移除的工作工具
+         不入注册板块；绑定=同源一致性，非工具栏反向读板块）。
+      c) 验证：orz-loop 421 通过 / 0 失败 / 3 ignored（新增 3 项阶段 B
+         单测 + 2 项审查收口单测：归档读不派生、探针源 run 起始复位）；
+         clippy 无新增告警；仓库门禁仅剩「orz submodule working tree is
+         dirty」（本阶段代码未提交）。实施审计：
+         `docs/audits/GAP_PLAN_FIRST_STAGE_B_IMPL_AUDIT_2026-08-16.md`。
    来源：`docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md`；关联：
    CLASSICAL-EXEC-ASSISTANT v0.6。
