@@ -506,6 +506,14 @@ pub struct AgentLoopController {
             crate::tool_probe::ToolProbeSnapshot,
         )>,
     >,
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 双模式（console
+    /// 默认 + direct 受控降级）的模型面开关。生产接线（ACP server / CLI
+    /// run）随 plan_first 一并开启；测试保持既有工具面。
+    console_default_enabled: bool,
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): run 级双模式
+    /// 状态（模式/故障连败/询问标记/transition_id/direct 证据面）。run
+    /// 起始复位；plan epoch 轮换/黑板旋转不清除。
+    console_mode_state: Mutex<crate::console_mode::ConsoleModeState>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -2097,6 +2105,10 @@ impl AgentLoopController {
             console_traces: Mutex::new(TraceStore::new()),
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
             console_probe_source: Mutex::new(None),
+            console_default_enabled: false,
+            console_mode_state: Mutex::new(crate::console_mode::ConsoleModeState::start(
+                crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
+            )),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -2275,6 +2287,42 @@ impl AgentLoopController {
         tool_defs
     }
 
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §4):
+    /// console 默认面的模型可见工具集——写面 = plan_write + action_write；
+    /// 读面 = blackboard_read + 只读核查（read/list/grep 类）+ direct
+    /// 控制工具（step_done / return_to_console，调用时另有模式守卫）；
+    /// 执行/变更/shell/子代理/检索全部隐藏（经订单下发）。
+    pub(crate) fn is_console_surface_tool(name: &str) -> bool {
+        matches!(
+            name,
+            "blackboard_read"
+                | "plan_write"
+                | "blackboard.action_write"
+                | "console.step_done"
+                | "console.return_to_console"
+                | "read_file"
+                | "list_dir"
+                | "grep"
+                | "search_tool"
+        )
+    }
+
+    /// console 默认面投影：console 表面工具 + 探针完整集过滤（只读工作
+    /// 工具仍按探针面收敛；console 控制工具恒在）。
+    pub(crate) fn project_console_default_tool_defs(
+        base: &[ToolDef],
+        snapshot: &crate::tool_probe::ToolProbeSnapshot,
+    ) -> Vec<ToolDef> {
+        base.iter()
+            .filter(|t| {
+                Self::is_console_surface_tool(&t.name)
+                    && (!crate::tool_probe::is_main_agent_work_tool(&t.name)
+                        || snapshot.complete.iter().any(|c| c == &t.name))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
     /// 子代理工具投影 = 父侧 registry 投影去掉主车道专属控制工具
     /// （`compaction_whitelist_add` / `retrieval_disposition`），并恢复主车道
@@ -2296,6 +2344,11 @@ impl AgentLoopController {
                     // plan-gate write surface is main-lane only — subagents
                     // never write plans (P2-1 审查收口).
                     && t.name != "plan_write"
+                    // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱):
+                    // console 双模式控制工具 main-lane only — subagents 无
+                    // 操作台、不参与 direct 证据门。
+                    && t.name != "console.step_done"
+                    && t.name != "console.return_to_console"
             })
             .cloned()
             .collect();
@@ -3814,6 +3867,10 @@ impl AgentLoopController {
             console_traces: Mutex::new(TraceStore::new()),
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
             console_probe_source: Mutex::new(None),
+            console_default_enabled: false,
+            console_mode_state: Mutex::new(crate::console_mode::ConsoleModeState::start(
+                crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
+            )),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -3877,6 +3934,101 @@ impl AgentLoopController {
 
     pub(crate) fn plan_first_session_done(&self) -> bool {
         self.plan_first_session_done
+    }
+
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): enable the
+    /// console-default model surface (dual-mode: console default + direct
+    /// audited fallback). Production wiring (ACP server / CLI run) calls
+    /// this together with `with_plan_first_enabled`; tests keep the legacy
+    /// surface by default.
+    pub fn with_console_default_enabled(mut self, enabled: bool) -> Self {
+        self.console_default_enabled = enabled;
+        self
+    }
+
+    pub(crate) fn console_default_enabled(&self) -> bool {
+        self.console_default_enabled
+    }
+
+    /// PLAN-FIRST 阶段 C: 故障面阈值（§7.2）——`ORZ_CONSOLE_DIRECT_
+    /// FALLBACK_THRESHOLD` 环境变量覆盖，默认 3。
+    pub(crate) fn console_fallback_threshold() -> u32 {
+        std::env::var(crate::console_mode::FALLBACK_THRESHOLD_ENV)
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or(crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD)
+    }
+
+    pub(crate) fn console_mode(&self) -> crate::console_mode::ConsoleMode {
+        self.console_mode_state.lock().unwrap().mode
+    }
+
+    /// run 起始复位（与 `reset_console_probe_source` 同一点调用）：
+    /// 模式回 console、连败清零、询问标记清空、direct 证据面清空。
+    pub(crate) fn reset_console_mode(&self) {
+        *self.console_mode_state.lock().unwrap() =
+            crate::console_mode::ConsoleModeState::start(Self::console_fallback_threshold());
+    }
+
+    /// 询问触发检查（§7.2/§7.3）：console 态 + 连续故障 ≥ 阈值 + 未问。
+    pub(crate) fn console_inquiry_due(&self) -> bool {
+        self.console_default_enabled && self.console_mode_state.lock().unwrap().inquiry_due()
+    }
+
+    /// 询问轮触发的快照：当前连败计数 + 构成连败的订单 id。
+    pub(crate) fn console_streak_snapshot(&self) -> (u32, Vec<String>) {
+        let state = self.console_mode_state.lock().unwrap();
+        (state.streak, state.streak_order_ids.clone())
+    }
+
+    /// direct 模式直接动作开始：创建 console trace（trace_id 供事件盖章
+    /// 与 `console.step_done` 证据），返回盖章 + 工作 trace。非 direct
+    /// 态返回 None。
+    pub(crate) fn console_direct_begin(
+        &self,
+        call_id: &str,
+    ) -> Option<(crate::console_mode::DirectStamp, crate::console::Trace)> {
+        let state = self.console_mode_state.lock().unwrap();
+        if !state.is_direct() {
+            return None;
+        }
+        let transition_id = state.transition_id.clone()?;
+        let trace = self
+            .console_traces
+            .lock()
+            .unwrap()
+            .new_trace(Some(call_id.to_string()));
+        let stamp = crate::console_mode::DirectStamp {
+            transition_id,
+            trace_id: trace.trace_id.clone(),
+        };
+        Some((stamp, trace))
+    }
+
+    /// direct 模式直接动作收口：trace 事件提交 + 证据面登记（§7.5
+    /// step_done 的 trace_id ↔ ToolCompleted 对应关系由此建立）。
+    pub(crate) fn console_direct_end(
+        &self,
+        stamp: &crate::console_mode::DirectStamp,
+        mut trace: crate::console::Trace,
+        tool: &str,
+        ok: bool,
+        detail: Option<&str>,
+    ) {
+        trace.add(
+            "execute",
+            Some(tool),
+            ok,
+            if ok { None } else { Some("error") },
+            Some(detail.unwrap_or_default().to_string()),
+            None,
+        );
+        self.console_traces.lock().unwrap().commit(&trace);
+        self.console_mode_state
+            .lock()
+            .unwrap()
+            .record_direct_trace(&stamp.trace_id);
     }
 
     /// 2026-08-08 blackboard partition (A3) + v1.15 (2026-08-14): render one
@@ -4217,6 +4369,10 @@ impl AgentLoopController {
         // run 复位——与 `probe_state` 同纪律，本 run 首个有探针轮重新记录，
         // 不跨 run 沿用（此前依赖「首个有探针轮必先覆盖」才能保证无泄漏）。
         self.reset_console_probe_source();
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 双模式状态随
+        // run 复位——每 run 起始 console 默认、连败清零、询问标记清空、
+        // direct 证据面清空（模式为 run 级状态，§7.1）。
+        self.reset_console_mode();
         // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer
         // citation verifier's evidence is per-run — the main lane's read
         // evidence and the committed retrieval ledgers start empty.
@@ -4363,6 +4519,11 @@ impl AgentLoopController {
                             "type": "string",
                             "description": "Registered action name (see blackboard_read section=actions).",
                         },
+                        "step_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "PLAN-FIRST 阶段 C (2026-08-16): optional plan step binding — the order is issued only when the step gate passes (pending → in_progress → done/failed; a non-current step is refused with step_not_done). Required in console default mode when a structured plan is in force.",
+                        },
                         "arguments": {
                             "type": "object",
                             "description": "Action parameters per the registration board's minimal hints.",
@@ -4476,6 +4637,66 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["plan"],
+                }),
+            });
+        }
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.5):
+        // `console.step_done` —— direct 模式的有记录例外收口：提交
+        // {step_id, transition_id, trace_id} 证据置步骤 done；机械层校验
+        // （transition_id 属本 run direct 切换、trace_id 对应已发生的
+        // ToolCompleted），证据不匹配拒绝（不自我认证）。声明面随
+        // console_default_enabled 收敛；调用面另有模式守卫。
+        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "console.step_done")
+        {
+            tool_defs.push(ToolDef {
+                name: "console.step_done".to_string(),
+                description: "Mark the current plan step done with direct-mode \
+                     evidence (audited exception). `step_id` is the current \
+                     in-progress step; `transition_id` is the direct \
+                     transition id (from console_mode_transition); `trace_id` \
+                     must correspond to an already-occurred direct-mode \
+                     ToolCompleted. The mechanical layer cross-checks all \
+                     three — evidence cannot self-certify. Direct mode only."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "step_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                        },
+                        "transition_id": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                        "trace_id": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                    },
+                    "required": ["step_id", "transition_id", "trace_id"],
+                }),
+            });
+        }
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.1):
+        // `console.return_to_console` —— direct → console 单向返回工具。
+        if self.console_default_enabled
+            && !tool_defs
+                .iter()
+                .any(|t| t.name == "console.return_to_console")
+        {
+            tool_defs.push(ToolDef {
+                name: "console.return_to_console".to_string(),
+                description: "Return from direct (audited fallback) to console \
+                     mode — one-way; records a console_mode_transition event \
+                     and gate_log entry. After the return the step gate \
+                     re-engages for console orders and this run is not asked \
+                     about the fallback again."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
                 }),
             });
         }
@@ -6720,6 +6941,39 @@ impl AgentLoopController {
             self.consume_console_order(order, err);
             return Ok(0);
         }
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §6):
+        // 步骤门（console 默认态 + 计划在案时）——订单必须绑定当前可执行
+        // 步骤（第一个非 done），否则 `step_not_done` 显式拒绝、不执行。
+        // direct 为有记录的例外：direct 直接调用不经过订单/计划门（§7.5）。
+        if self.console_default_enabled
+            && self.console_mode() == crate::console_mode::ConsoleMode::Console
+        {
+            let gate_result = {
+                let guard = self.blackboard.read();
+                if guard.plan.steps.is_empty() {
+                    None
+                } else {
+                    Some(crate::planning::order_step_gate(
+                        &guard.plan.steps,
+                        order.step_id.as_deref(),
+                    ))
+                }
+            };
+            if let Some(Err(gate_err)) = gate_result {
+                let err = ConsoleError {
+                    step: STEP_PROTOCOL,
+                    code: gate_err.code(),
+                    message: gate_err.message(),
+                    upstream: Some(serde_json::json!({
+                        "order_id": order.order_id,
+                        "step_id": order.step_id,
+                    })),
+                };
+                self.blackboard.write().actions.take_order();
+                self.consume_console_order(order, err);
+                return Ok(0);
+            }
+        }
         // P0-C S4 (2026-08-16)：发放前预算预检——当前模型轮已消耗 1 单位
         // （本轮结束后 `tool_rounds += 1`），剩余 = max − (tool_rounds + 1)。
         // 脚本订单要求长度 ≤ 剩余（直接订单恒 1 单位）；不足零执行拒绝、
@@ -6770,6 +7024,14 @@ impl AgentLoopController {
         let Some(order) = self.blackboard.write().actions.take_order() else {
             return Ok(0);
         };
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §6):
+        // 发放时迁移 pending/failed → in_progress（订单绑定步骤）。
+        if let Some(step_id) = order.step_id.as_deref() {
+            let mut w = self.blackboard.write();
+            if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
+                crate::planning::mark_step_in_progress(&mut w.plan.steps, idx);
+            }
+        }
         let mut trace = self
             .console_traces
             .lock()
@@ -6842,6 +7104,7 @@ impl AgentLoopController {
         }
         match result {
             Ok(response) => {
+                self.record_console_receipt(&order, true, "ok", None);
                 self.push_console_result(
                     order.order_id.clone(),
                     true,
@@ -6852,6 +7115,12 @@ impl AgentLoopController {
             }
             Err(err) => {
                 let envelope = failure_envelope(&mut trace, Some(&order.action), &err, 10);
+                self.record_console_receipt(
+                    &order,
+                    false,
+                    &envelope.error.step,
+                    envelope.error.upstream.as_ref(),
+                );
                 let error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
                     serde_json::json!({
                         "step": err.step,
@@ -6875,6 +7144,14 @@ impl AgentLoopController {
     /// 过期/失败订单收口：追加失败事件 → 构造信封 → 结果栏 receipt →
     /// commit（`assistant.trace` 立即可见）。
     fn consume_console_order(&self, order: ActionOrder, err: ConsoleError) {
+        // F4 (2026-08-16 审查收口): 拒绝路径（order_stale / step_not_done /
+        // budget_insufficient）只做连败记账——这些步均非故障面（不递增、
+        // 不清零），且未执行的订单不得把目标步骤置 failed；步骤状态只随
+        // 执行 receipt 迁移（设计 §6：done/failed 来自发放后执行结果）。
+        {
+            let mut state = self.console_mode_state.lock().unwrap();
+            state.record_receipt(false, err.step, err.upstream.as_ref());
+        }
         let mut trace = self
             .console_traces
             .lock()
@@ -6918,6 +7195,238 @@ impl AgentLoopController {
 
     fn commit_console_trace(&self, trace: &crate::console::Trace) {
         self.console_traces.lock().unwrap().commit(trace);
+    }
+
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §6/§7.2):
+    /// 订单 receipt 统一记账——① 双模式故障连败计数（ok=true 重置；
+    /// 故障面递增；业务/policy/protocol 等不计）；② 步骤状态迁移
+    /// （订单绑定步骤时：成功 → done(receipt_id)；失败 → failed(receipt_id)）。
+    fn record_console_receipt(
+        &self,
+        order: &ActionOrder,
+        ok: bool,
+        step: &str,
+        upstream: Option<&serde_json::Value>,
+    ) {
+        let fault = !ok && crate::console_mode::counts_as_assistant_fault(step, upstream);
+        {
+            let mut state = self.console_mode_state.lock().unwrap();
+            state.record_receipt(ok, step, upstream);
+            if fault {
+                state.push_streak_order(&order.order_id);
+            }
+        }
+        if let Some(step_id) = order.step_id.as_deref() {
+            let mut w = self.blackboard.write();
+            if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
+                if ok {
+                    crate::planning::mark_step_done(&mut w.plan.steps, idx, &order.order_id, None);
+                } else {
+                    crate::planning::mark_step_failed(&mut w.plan.steps, idx, &order.order_id);
+                }
+            }
+        }
+    }
+
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.4):
+    /// `console_mode_transition` 事件 + 黑板 gate_log 同步（模型可读）。
+    async fn refuse_console_tool(
+        &self,
+        writer: &mut EventWriter<'_>,
+        messages: &mut Vec<Message>,
+        tool: &str,
+        call_id: &str,
+        code: &str,
+        msg: &str,
+    ) -> Result<ToolResult, AgentLoopError> {
+        writer
+            .record(
+                EventType::ToolCompleted,
+                serde_json::json!({
+                    "tool": tool,
+                    "call_id": call_id,
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": code,
+                }),
+            )
+            .await?;
+        messages.push(Message {
+            role: Role::Tool,
+            content: msg.to_string(),
+            tool_call_id: Some(call_id.to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        Ok(ToolResult {
+            output: msg.to_string(),
+            exit_code: Some(1),
+            output_encoding: None,
+            structured: None,
+            ..Default::default()
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)] // mirrors the v0.2 payload's closed field set
+    async fn record_console_transition(
+        &self,
+        writer: &mut EventWriter<'_>,
+        transition_id: &str,
+        from: crate::console_mode::ConsoleMode,
+        to: crate::console_mode::ConsoleMode,
+        trigger: &str,
+        streak: Option<u32>,
+        order_ids: &[String],
+        model_decision: &str,
+        model_reason: Option<&str>,
+        round: u32,
+        plan_epoch: u64,
+        related_transition_id: Option<&str>,
+    ) -> Result<(), AgentLoopError> {
+        writer
+            .record(
+                EventType::ConsoleModeTransition,
+                crate::console_mode::transition_payload(
+                    transition_id,
+                    from,
+                    to,
+                    trigger,
+                    streak,
+                    order_ids,
+                    model_decision,
+                    model_reason,
+                    writer.run_id(),
+                    round,
+                    plan_epoch,
+                    related_transition_id,
+                ),
+            )
+            .await?;
+        self.blackboard
+            .write()
+            .gate_log
+            .gate_decisions
+            .push(format!(
+                "console_mode: {} → {} (transition {transition_id}, decision {model_decision})",
+                from.as_str(),
+                to.as_str(),
+            ));
+        Ok(())
+    }
+
+    /// 询问轮模型选择 switch（§7.3/§7.4）：写 `console_mode_transition`
+    /// （from=console, to=direct, trigger=assistant_failure_streak）+
+    /// gate_log，进入 direct（transition_id 生成），并将当前步骤（第一个
+    /// 非 done）标记 in_progress——direct 为有记录的例外：执行不再经订单/
+    /// 计划门，但每个直接动作带 transition_id 审计。
+    pub(crate) async fn switch_console_to_direct(
+        &self,
+        writer: &mut EventWriter<'_>,
+        round: u32,
+        model_reason: Option<&str>,
+    ) -> Result<String, AgentLoopError> {
+        let plan_epoch = self.blackboard.read().plan.plan_epoch;
+        let transition_id = format!("CONSMODE-{}-{:04}", writer.run_id(), writer.seq());
+        let (streak, order_ids) = {
+            let state = self.console_mode_state.lock().unwrap();
+            (state.streak, state.streak_order_ids.clone())
+        };
+        self.record_console_transition(
+            writer,
+            &transition_id,
+            crate::console_mode::ConsoleMode::Console,
+            crate::console_mode::ConsoleMode::Direct,
+            "assistant_failure_streak",
+            Some(streak),
+            &order_ids,
+            "switch",
+            model_reason,
+            round,
+            plan_epoch,
+            None,
+        )
+        .await?;
+        {
+            let mut w = self.blackboard.write();
+            if let Some(idx) = crate::planning::current_step_index(&w.plan.steps) {
+                crate::planning::mark_step_in_progress(&mut w.plan.steps, idx);
+            }
+        }
+        self.console_mode_state
+            .lock()
+            .unwrap()
+            .switch_to_direct(transition_id.clone());
+        Ok(transition_id)
+    }
+
+    /// 询问轮模型选择 stay（§7.3）：写 `console_mode_transition`
+    /// （from=console, to=console, trigger=assistant_failure_streak）+
+    /// gate_log；连败清零、本 run 不再询问。
+    pub(crate) async fn record_console_stay(
+        &self,
+        writer: &mut EventWriter<'_>,
+        round: u32,
+        model_reason: Option<&str>,
+    ) -> Result<(), AgentLoopError> {
+        let plan_epoch = self.blackboard.read().plan.plan_epoch;
+        let transition_id = format!("CONSMODE-{}-{:04}", writer.run_id(), writer.seq());
+        let (streak, order_ids) = {
+            let state = self.console_mode_state.lock().unwrap();
+            (state.streak, state.streak_order_ids.clone())
+        };
+        self.record_console_transition(
+            writer,
+            &transition_id,
+            crate::console_mode::ConsoleMode::Console,
+            crate::console_mode::ConsoleMode::Console,
+            "assistant_failure_streak",
+            Some(streak),
+            &order_ids,
+            "stay",
+            model_reason,
+            round,
+            plan_epoch,
+            None,
+        )
+        .await?;
+        self.console_mode_state.lock().unwrap().stay_in_console();
+        Ok(())
+    }
+
+    /// `console.return_to_console`（§7.1/§7.5）：单向返回——写
+    /// `console_mode_transition`（from=direct, to=console,
+    /// trigger=model_return, related=当前 direct transition）+ gate_log；
+    /// 模式复位、本 run 不再询问。
+    async fn return_console_to_console(
+        &self,
+        writer: &mut EventWriter<'_>,
+        round: u32,
+    ) -> Result<(), AgentLoopError> {
+        let plan_epoch = self.blackboard.read().plan.plan_epoch;
+        let (transition_id, direct_transition) = {
+            let state = self.console_mode_state.lock().unwrap();
+            (
+                format!("CONSMODE-{}-{:04}", writer.run_id(), writer.seq()),
+                state.transition_id.clone(),
+            )
+        };
+        self.record_console_transition(
+            writer,
+            &transition_id,
+            crate::console_mode::ConsoleMode::Direct,
+            crate::console_mode::ConsoleMode::Console,
+            "model_return",
+            None,
+            &[],
+            "return_to_console",
+            None,
+            round,
+            plan_epoch,
+            direct_transition.as_deref(),
+        )
+        .await?;
+        self.console_mode_state.lock().unwrap().return_to_console();
+        Ok(())
     }
 
     /// P0-C S2 (2026-08-15): 生产执行器适配——`console::issue_action` 的
@@ -6965,6 +7474,9 @@ impl AgentLoopController {
                 true,
                 // PLAN-FIRST 阶段 A (2026-08-16): console issuance runs
                 // outside the first-round plan gate — never a gate attempt.
+                None,
+                // PLAN-FIRST 阶段 C (2026-08-16): console issuance is
+                // assistant-layer execution — never a direct-mode stamp.
                 None,
                 timeout,
             )
@@ -7051,6 +7563,7 @@ impl AgentLoopController {
             permission_gated,
             probe_writeback,
             None,
+            None,
         )
         .await
     }
@@ -7077,6 +7590,7 @@ impl AgentLoopController {
         permission_gated: bool,
         probe_writeback: bool,
         plan_gate_attempt: Option<u32>,
+        console_direct: Option<&crate::console_mode::DirectStamp>,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         self.run_host_tool_with_timeout(
             host,
@@ -7092,6 +7606,7 @@ impl AgentLoopController {
             permission_gated,
             probe_writeback,
             plan_gate_attempt,
+            console_direct,
             None,
         )
         .await
@@ -7119,8 +7634,21 @@ impl AgentLoopController {
         // plan gate's current submission attempt (1 = first, 2 = refill);
         // `None` = plan revision outside the gate.
         plan_gate_attempt: Option<u32>,
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): direct 模式
+        // 直接动作盖章——ToolStarted/ToolCompleted 携带 console_mode:
+        // "direct" + transition_id + trace_id（事件链关联；§7.4）。
+        // console 发放链（assistant 层）与普通路径传 None。
+        console_direct: Option<&crate::console_mode::DirectStamp>,
         timeout: Option<std::time::Duration>,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): direct 模式
+        // 直接动作事件盖章——所有 ToolStarted/ToolCompleted 携带
+        // console_mode:"direct" + transition_id + trace_id（§7.4）。
+        let stamp_direct = |payload: &mut Value| {
+            if let Some(direct) = console_direct {
+                direct.apply(payload);
+            }
+        };
         // The second tuple element is a pending policy feedback (a denial
         // key) that the caller aggregates at the END of the whole tool round
         // — the breaker user message must be injected after the tool batch
@@ -7157,24 +7685,21 @@ impl AgentLoopController {
                 code: code.to_string(),
                 reason: msg.clone(),
             };
-            writer
-                .record(
-                    EventType::ToolCompleted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "exit_code": 1,
-                        "target": target,
-                        "status": "error",
-                        "error": code,
-                        "policy_denial": {
-                            "source": "retrieval_mode",
-                            "code": code,
-                            "reason": msg,
-                        },
-                    }),
-                )
-                .await?;
+            let mut payload = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "target": target,
+                "status": "error",
+                "error": code,
+                "policy_denial": {
+                    "source": "retrieval_mode",
+                    "code": code,
+                    "reason": msg,
+                },
+            });
+            stamp_direct(&mut payload);
+            writer.record(EventType::ToolCompleted, payload).await?;
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -7216,24 +7741,21 @@ impl AgentLoopController {
                 code: code.to_string(),
                 reason: msg.clone(),
             };
-            writer
-                .record(
-                    EventType::ToolCompleted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "exit_code": 1,
-                        "target": "external_retrieval",
-                        "status": "error",
-                        "error": code,
-                        "policy_denial": {
-                            "source": "retrieval_mode",
-                            "code": code,
-                            "reason": msg,
-                        },
-                    }),
-                )
-                .await?;
+            let mut payload = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "target": "external_retrieval",
+                "status": "error",
+                "error": code,
+                "policy_denial": {
+                    "source": "retrieval_mode",
+                    "code": code,
+                    "reason": msg,
+                },
+            });
+            stamp_direct(&mut payload);
+            writer.record(EventType::ToolCompleted, payload).await?;
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -7272,24 +7794,21 @@ impl AgentLoopController {
                 code: code.to_string(),
                 reason: msg.clone(),
             };
-            writer
-                .record(
-                    EventType::ToolCompleted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "exit_code": 1,
-                        "target": "external_retrieval",
-                        "status": "error",
-                        "error": code,
-                        "policy_denial": {
-                            "source": "retrieval_mode",
-                            "code": code,
-                            "reason": msg,
-                        },
-                    }),
-                )
-                .await?;
+            let mut payload = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "target": "external_retrieval",
+                "status": "error",
+                "error": code,
+                "policy_denial": {
+                    "source": "retrieval_mode",
+                    "code": code,
+                    "reason": msg,
+                },
+            });
+            stamp_direct(&mut payload);
+            writer.record(EventType::ToolCompleted, payload).await?;
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -7481,17 +8000,16 @@ impl AgentLoopController {
             // after a ToolStarted.
             let Some(runner) = host.test_runner() else {
                 let msg = "tool 'run_tests' — 缺少测试运行器".to_string();
-                writer
-                    .record(
-                        EventType::ToolCompleted,
-                        serde_json::json!({
-                            "tool": tc.name,
-                            "call_id": tc.call_id,
-                            "status": "error",
-                            "error": "missing_test_runner",
-                        }),
-                    )
-                    .await?;
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "status": "error",
+                    "error": "missing_test_runner",
+                });
+                // F3 (2026-08-16 审查收口): run_tests 拒绝路径同样盖章
+                // （direct 模式事件链关联，§7.4）。
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
                 messages.push(Message {
                     role: Role::Tool,
                     content: msg.clone(),
@@ -7533,16 +8051,13 @@ impl AgentLoopController {
                     .await;
             }
             let fixed_command: Option<String> = Some(runner.command.join(" "));
-            writer
-                .record(
-                    EventType::ToolStarted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "fixed_command": fixed_command,
-                    }),
-                )
-                .await?;
+            let mut started = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "fixed_command": fixed_command,
+            });
+            stamp_direct(&mut started);
+            writer.record(EventType::ToolStarted, started).await?;
             // P1-1 (2026-08-08 stall guards): a legit long test run (up to
             // the 30min F-09 cap) journals nothing between ToolStarted and
             // ToolCompleted — without periodic stamps the stall watchdog
@@ -7577,17 +8092,14 @@ impl AgentLoopController {
                     Ok(r) => r,
                     Err(e) => {
                         let msg = format!("run_tests failed: {e}");
-                        writer
-                            .record(
-                                EventType::ToolCompleted,
-                                serde_json::json!({
-                                    "tool": tc.name,
-                                    "call_id": tc.call_id,
-                                    "status": "error",
-                                    "error": msg,
-                                }),
-                            )
-                            .await?;
+                        let mut payload = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "status": "error",
+                            "error": msg,
+                        });
+                        stamp_direct(&mut payload);
+                        writer.record(EventType::ToolCompleted, payload).await?;
                         messages.push(Message {
                             role: Role::Tool,
                             content: msg.clone(),
@@ -7633,6 +8145,7 @@ impl AgentLoopController {
             if let Some(enc) = &result.output_encoding {
                 completed_payload["output_encoding"] = serde_json::json!(enc);
             }
+            stamp_direct(&mut completed_payload);
             writer
                 .record(EventType::ToolCompleted, completed_payload)
                 .await?;
@@ -7748,15 +8261,12 @@ impl AgentLoopController {
         }
 
         // Execute.
-        writer
-            .record(
-                EventType::ToolStarted,
-                serde_json::json!({
-                    "tool": tc.name,
-                    "call_id": tc.call_id,
-                }),
-            )
-            .await?;
+        let mut started = serde_json::json!({
+            "tool": tc.name,
+            "call_id": tc.call_id,
+        });
+        stamp_direct(&mut started);
+        writer.record(EventType::ToolStarted, started).await?;
         // A6 §8 C.2 (2026-08-08): `compaction_whitelist_add` — served from
         // the controller's own whitelist (in-memory + .gsa archive), no
         // host dispatch. The permission gate already ran (ReadOnly class
@@ -7789,17 +8299,16 @@ impl AgentLoopController {
                 None
             };
             if let Some(reason) = refused {
-                writer
-                    .record(
-                        EventType::ToolCompleted,
-                        serde_json::json!({
-                            "tool": tc.name,
-                            "call_id": tc.call_id,
-                            "status": "error",
-                            "error": reason,
-                        }),
-                    )
-                    .await?;
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "status": "error",
+                    "error": reason,
+                });
+                // F3 (2026-08-16 审查收口): controller 内建工具在 direct 模式
+                // 的 ToolCompleted 同样盖章（与 ToolStarted 对称，§7.4）。
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
                 let output = format!("whitelist write refused: {reason}");
                 messages.push(Message {
                     role: Role::Tool,
@@ -7836,16 +8345,14 @@ impl AgentLoopController {
             // skips the preamble, so the whitelist survives compaction.
             self.archive_whitelist_entry(host, &content);
             self.upsert_whitelist_message(messages);
-            writer
-                .record(
-                    EventType::ToolCompleted,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "call_id": tc.call_id,
-                        "exit_code": 0,
-                    }),
-                )
-                .await?;
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 0,
+            });
+            // F3 (2026-08-16 审查收口): direct 盖章对称。
+            stamp_direct(&mut completed);
+            writer.record(EventType::ToolCompleted, completed).await?;
             self.blackboard.write().tool_actions.push(ToolActionRecord {
                 category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
@@ -7899,13 +8406,15 @@ impl AgentLoopController {
                              positive integer (≥1); omit the parameter to read the \
                              live view"
                         );
-                        let completed = serde_json::json!({
+                        let mut completed = serde_json::json!({
                             "tool": tc.name,
                             "call_id": tc.call_id,
                             "exit_code": 1,
                             "section": section,
                             "error": content,
                         });
+                        // F3 (2026-08-16 审查收口): direct 盖章对称。
+                        stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
                         self.blackboard.write().tool_actions.push(ToolActionRecord {
                             category: ToolDispatcher::action_category(&tc.name).to_string(),
@@ -7941,6 +8450,9 @@ impl AgentLoopController {
             if let Some(epoch) = epoch {
                 completed["epoch"] = serde_json::json!(epoch);
             }
+            // F3 (2026-08-16 审查收口): direct 盖章对称（ToolStarted 已在
+            // 上方盖章，ToolCompleted 必须一致，§7.4）。
+            stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
             self.blackboard.write().tool_actions.push(ToolActionRecord {
                 category: ToolDispatcher::action_category(&tc.name).to_string(),
@@ -8009,6 +8521,17 @@ impl AgentLoopController {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
+            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 可选
+            // step_id —— 绑定计划步骤（ActionOrder.step_id）。步骤门在
+            // 发放时机械校验（§6）：console 默认态下订单必须绑定当前步骤，
+            // 否则 step_not_done 拒绝。
+            let step_id = tc
+                .arguments
+                .get("step_id")
+                .and_then(|s| s.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
             let arguments = tc
                 .arguments
                 .get("arguments")
@@ -8056,6 +8579,7 @@ impl AgentLoopController {
                 order_id: format!("ORD-{seq:06}"),
                 action,
                 arguments,
+                step_id,
                 round: tool_rounds,
                 plan_epoch: self.blackboard.read().plan.plan_epoch,
                 run_id: writer.run_id().to_string(),
@@ -8066,6 +8590,11 @@ impl AgentLoopController {
             };
             match write_result {
                 Ok(()) => {
+                    // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱):
+                    // action_write ToolCompleted 收敛到通用契约形状
+                    // （成功只带 exit_code）；订单身份/step 绑定/机械盖章
+                    // 由 `console_order_written` 事件承载（阶段 A 审计 §7.4
+                    // 的 S2 payload-shape 债务随本次收口）。
                     writer
                         .record(
                             EventType::ToolCompleted,
@@ -8073,10 +8602,24 @@ impl AgentLoopController {
                                 "tool": tc.name,
                                 "call_id": tc.call_id,
                                 "exit_code": 0,
+                            }),
+                        )
+                        .await?;
+                    writer
+                        .record(
+                            EventType::ConsoleOrderWritten,
+                            serde_json::json!({
+                                // F1 (2026-08-16 审查收口): verifier 按
+                                // write_call_id 与 action_write ToolCompleted
+                                // 对拍——order_id 是内部 ORD-xxxxx，与模型
+                                // 工具调用 id 不同。
                                 "order_id": order.order_id,
+                                "write_call_id": tc.call_id.clone(),
                                 "action": order.action,
+                                "step_id": order.step_id,
                                 "round": order.round,
                                 "plan_epoch": order.plan_epoch,
+                                "run_id": order.run_id,
                             }),
                         )
                         .await?;
@@ -8231,9 +8774,7 @@ impl AgentLoopController {
             };
             let (outcome_str, degrade_reason) = match outcome {
                 crate::planning::PlanWriteOutcome::Accepted => ("accepted", None),
-                crate::planning::PlanWriteOutcome::RefillRequested => {
-                    ("refill_requested", None)
-                }
+                crate::planning::PlanWriteOutcome::RefillRequested => ("refill_requested", None),
                 crate::planning::PlanWriteOutcome::Degraded { reason } => {
                     ("degraded", Some(reason))
                 }
@@ -8311,8 +8852,7 @@ impl AgentLoopController {
             });
             if exit_code != 0 {
                 completed["status"] = serde_json::json!("error");
-                completed["error"] =
-                    serde_json::json!(final_degrade.unwrap_or(final_outcome));
+                completed["error"] = serde_json::json!(final_degrade.unwrap_or(final_outcome));
             }
             writer.record(EventType::ToolCompleted, completed).await?;
             messages.push(Message {
@@ -8342,6 +8882,288 @@ impl AgentLoopController {
         // tool that journals nothing between ToolStarted/ToolCompleted must
         // not trip the stall watchdog (the tool itself is bounded by the
         // P0-1 per-call timeout).
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.5):
+        // `console.step_done` —— direct 模式的有记录例外收口：模型提交
+        // {step_id, transition_id, trace_id}，机械层校验（步骤为当前
+        // in_progress、transition_id 属于本 run 的 direct 切换、trace_id
+        // 对应已发生的 direct ToolCompleted）后置步骤 done(direct 证据)；
+        // 证据不匹配拒绝（不自我认证）。
+        if tc.name == "console.step_done" {
+            if !self.console_default_enabled {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_disabled",
+                        "console.step_done refused — the console dual-mode is disabled",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            if activation_id.is_some() {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_lane_denied",
+                        "console.step_done refused — main-lane only",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            let step_id = tc
+                .arguments
+                .get("step_id")
+                .and_then(|s| s.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let transition_id = tc
+                .arguments
+                .get("transition_id")
+                .and_then(|s| s.as_str())
+                .map(str::to_string);
+            let trace_id = tc
+                .arguments
+                .get("trace_id")
+                .and_then(|s| s.as_str())
+                .map(str::to_string);
+            let (Some(step_id), Some(transition_id), Some(trace_id)) =
+                (step_id, transition_id, trace_id)
+            else {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_missing_arguments",
+                        "invalid console.step_done call: step_id / transition_id / \
+                         trace_id must be non-empty strings",
+                    )
+                    .await?,
+                    None,
+                ));
+            };
+            let (mode_ok, current_transition, trace_ok) = {
+                let state = self.console_mode_state.lock().unwrap();
+                (
+                    state.is_direct(),
+                    state.transition_id.clone(),
+                    state.has_direct_trace(&trace_id),
+                )
+            };
+            let step_in_progress = {
+                let w = self.blackboard.read();
+                w.plan
+                    .steps
+                    .iter()
+                    .position(|s| s.id == step_id)
+                    .map(|idx| {
+                        matches!(
+                            w.plan.steps[idx].status,
+                            crate::blackboard::StepStatus::InProgress
+                        )
+                    })
+                    .unwrap_or(false)
+            };
+            if !mode_ok {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_not_direct",
+                        "console.step_done refused — the run is not in direct mode",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            if current_transition.as_deref() != Some(transition_id.as_str()) {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_bad_transition",
+                        &format!(
+                            "console.step_done refused — transition_id {transition_id} \
+                             does not match the current direct transition {current:?}",
+                            current = current_transition,
+                        ),
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            if !step_in_progress {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_not_in_progress",
+                        &format!(
+                            "console.step_done refused — step {step_id} is not the current \
+                             in-progress step (evidence cannot self-certify)"
+                        ),
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            if !trace_ok {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_bad_trace",
+                        &format!(
+                            "console.step_done refused — trace_id {trace_id} does not \
+                             correspond to an already-occurred direct-mode ToolCompleted"
+                        ),
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            // 证据通过：步骤 → done(direct, transition_id, trace_id)。
+            {
+                let mut w = self.blackboard.write();
+                if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
+                    crate::planning::mark_step_done(
+                        &mut w.plan.steps,
+                        idx,
+                        &transition_id,
+                        Some(crate::blackboard::DirectStepEvidence {
+                            transition_id: transition_id.clone(),
+                            trace_id,
+                        }),
+                    );
+                }
+            }
+            let msg = format!("step {step_id} marked done (direct evidence)");
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.1):
+        // `console.return_to_console` —— direct → console 单向返回
+        // （写 transition 事件 + gate_log，模式复位，本 run 不再询问）。
+        if tc.name == "console.return_to_console" {
+            if !self.console_default_enabled || activation_id.is_some() {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_return_lane_denied",
+                        "console.return_to_console refused — main lane / dual-mode only",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            let is_direct = self.console_mode_state.lock().unwrap().is_direct();
+            if !is_direct {
+                let msg = "console.return_to_console ignored — the run is already in console mode"
+                    .to_string();
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 0,
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output: msg,
+                        exit_code: Some(0),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
+            self.return_console_to_console(writer, tool_rounds).await?;
+            let msg =
+                "returned to console mode — plan gate re-engages for console orders".to_string();
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
         if let Some(h) = heartbeat {
             h.stamp();
         }
@@ -8439,6 +9261,7 @@ impl AgentLoopController {
                         "reason": pd.reason,
                     });
                 }
+                stamp_direct(&mut completed_payload);
                 writer
                     .record(EventType::ToolCompleted, completed_payload)
                     .await?;
@@ -8484,24 +9307,24 @@ impl AgentLoopController {
                 )
             }
             Err(e) => {
-                writer
-                    .record(EventType::ToolCompleted, {
-                        let mut payload = serde_json::json!({
-                            "tool": tc.name,
-                            "call_id": tc.call_id,
-                            "status": "error",
-                            "error": e.to_string(),
-                        });
-                        // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14):
-                        // a candidate-counted host error still consumed
-                        // its candidate — carry the count/cap for audit.
-                        if let Some((count, cap)) = &candidate_counts {
-                            payload["candidate_count"] = serde_json::json!(count);
-                            payload["candidate_cap"] = serde_json::json!(cap);
-                        }
-                        payload
-                    })
-                    .await?;
+                let mut err_payload = {
+                    let mut payload = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "status": "error",
+                        "error": e.to_string(),
+                    });
+                    // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14):
+                    // a candidate-counted host error still consumed
+                    // its candidate — carry the count/cap for audit.
+                    if let Some((count, cap)) = &candidate_counts {
+                        payload["candidate_count"] = serde_json::json!(count);
+                        payload["candidate_cap"] = serde_json::json!(cap);
+                    }
+                    payload
+                };
+                stamp_direct(&mut err_payload);
+                writer.record(EventType::ToolCompleted, err_payload).await?;
                 // P0-A step 5 (design §5): 调用即探针 — a real work-tool call
                 // failure (ToolCompleted status=error) corrects the minimal
                 // previous-round map; the next probe compares against it.
@@ -8922,6 +9745,7 @@ mod tests {
     use crate::host::{LoopHost, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
+    use std::collections::VecDeque;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -9016,6 +9840,67 @@ mod tests {
             _call_id: &str,
         ) -> Result<ToolResult, ToolError> {
             Err(ToolError::NotFound("deny host never executes".into()))
+        }
+    }
+
+    /// PLAN-FIRST 阶段 C (2026-08-16): per-call scripted host — a queue of
+    /// results so a single run can mix failing orders and succeeding direct
+    /// calls (the plain TestHost returns one result for every call).
+    struct QueueHost {
+        journal: JournalRecorder,
+        results: Mutex<VecDeque<Result<ToolResult, ToolError>>>,
+    }
+
+    #[async_trait]
+    impl LoopHost for QueueHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            self.results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(ToolError::NotFound("queue host exhausted".into())))
+        }
+    }
+
+    fn fail_result() -> ToolResult {
+        ToolResult {
+            output: "host failed".to_string(),
+            exit_code: None,
+            output_encoding: None,
+            structured: None,
+            ..Default::default()
+        }
+    }
+
+    fn ok_result() -> ToolResult {
+        ToolResult {
+            output: "ok".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: None,
+            ..Default::default()
         }
     }
 
@@ -14956,6 +15841,7 @@ mod tests {
                     order_id: "ORD-000009".to_string(),
                     action: "workspace.read_file".to_string(),
                     arguments: serde_json::json!({"target_file": "a.txt"}),
+                    step_id: None,
                     round: 0,
                     plan_epoch: 1,
                     run_id: "RUN-OLD".to_string(),
@@ -15027,6 +15913,7 @@ mod tests {
                     order_id: "ORD-000010".to_string(),
                     action: "workspace.read_file".to_string(),
                     arguments: serde_json::json!({"target_file": "a.txt"}),
+                    step_id: None,
                     round: 1,
                     plan_epoch: 1,
                     run_id: "RUN-PREVIOUS".to_string(),
@@ -22140,7 +23027,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF1", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22216,7 +23112,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF2", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF2",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22255,7 +23160,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF3", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF3",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22304,7 +23218,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF4", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF4",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22357,7 +23280,16 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF5", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF5",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22409,9 +23341,7 @@ mod tests {
 
         let events = events(&dir);
         assert!(
-            !events
-                .iter()
-                .any(|e| e.event_type == EventType::PlanWrite),
+            !events.iter().any(|e| e.event_type == EventType::PlanWrite),
             "no plan gate for a session that already has an approved plan"
         );
         let initial = events
@@ -22464,7 +23394,16 @@ mod tests {
             .with_plan_first_enabled(true)
             .with_max_tool_rounds(1);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF-BUDGET", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF-BUDGET",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22477,10 +23416,7 @@ mod tests {
             })
             .expect("read_file must execute after the plan round (budget preserved)");
         assert_eq!(read_completed.payload["exit_code"].as_u64(), Some(0));
-        assert_eq!(
-            events.last().unwrap().event_type,
-            EventType::RunFinished
-        );
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -22510,10 +23446,18 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller =
-            AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF-WL", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF-WL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22554,10 +23498,18 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller =
-            AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF-DUP", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF-DUP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -22601,15 +23553,22 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "修复缓存回归", "RUN-PF-OFF", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF-OFF",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
         let events = events(&dir);
         assert!(
-            !events
-                .iter()
-                .any(|e| e.event_type == EventType::PlanWrite),
+            !events.iter().any(|e| e.event_type == EventType::PlanWrite),
             "no PlanWrite event when the gate is disabled"
         );
         let denied = events
@@ -22636,10 +23595,9 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let enabled_gateway: Arc<dyn ModelGateway> = enabled_fake.clone();
-        let enabled_controller =
-            AgentLoopController::with_gateway(enabled_gateway)
-                .with_plan_first_enabled(true)
-                .with_max_tool_rounds(1);
+        let enabled_controller = AgentLoopController::with_gateway(enabled_gateway)
+            .with_plan_first_enabled(true)
+            .with_max_tool_rounds(1);
         enabled_controller
             .run_turn(
                 &TestHost {
@@ -22669,8 +23627,7 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let off_gateway: Arc<dyn ModelGateway> = off_fake.clone();
-        let off_controller =
-            AgentLoopController::with_gateway(off_gateway).with_max_tool_rounds(1);
+        let off_controller = AgentLoopController::with_gateway(off_gateway).with_max_tool_rounds(1);
         off_controller
             .run_turn(
                 &TestHost {
@@ -22693,5 +23650,579 @@ mod tests {
             "legacy (gate-off) system prompt must not carry the framework block"
         );
         let _ = std::fs::remove_dir_all(&off_dir);
+    }
+
+    // ── PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱) ─────────────
+
+    /// 双模式开关 + 计划门 + 订单步骤绑定辅助：生产形态控制器。
+    fn stage_c_controller(gateway: Arc<dyn ModelGateway>) -> AgentLoopController {
+        AgentLoopController::with_gateway(gateway)
+            .with_plan_first_enabled(true)
+            .with_console_default_enabled(true)
+    }
+
+    /// 订单写单调用（可选 step_id 绑定计划步骤）。
+    fn action_write_call(
+        call_id: &str,
+        action: &str,
+        step_id: Option<&str>,
+        arguments: serde_json::Value,
+    ) -> ToolCall {
+        let mut args = serde_json::Map::new();
+        args.insert("action".to_string(), serde_json::json!(action));
+        if let Some(step_id) = step_id {
+            args.insert("step_id".to_string(), serde_json::json!(step_id));
+        }
+        args.insert("arguments".to_string(), arguments);
+        ToolCall {
+            name: "blackboard.action_write".to_string(),
+            arguments: serde_json::Value::Object(args),
+            call_id: call_id.to_string(),
+        }
+    }
+
+    /// 验收点 6：console 默认面——主车道模型面无执行工具（探针 + 投影
+    /// 断言）；写面=plan_write+action_write，读面=黑板+只读核查。
+    #[tokio::test]
+    async fn console_default_surface_hides_execution_tools() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-CSD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let first_tools: Vec<String> = received[0].tools.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(
+            first_tools,
+            vec!["blackboard_read", "plan_write"],
+            "first round must expose only the plan-round surface"
+        );
+        let console_tools: Vec<String> = received[1].tools.iter().map(|t| t.name.clone()).collect();
+        let allowed: Vec<&str> = vec![
+            "blackboard_read",
+            "plan_write",
+            "blackboard.action_write",
+            "console.step_done",
+            "console.return_to_console",
+        ];
+        assert!(
+            console_tools.iter().all(|t| allowed.contains(&t.as_str())),
+            "console surface must not leak execution tools: {console_tools:?}"
+        );
+        for tool in [
+            "run_terminal_cmd",
+            "search_replace",
+            "run_tests",
+            "todo_write",
+            "use_tool",
+        ] {
+            assert!(
+                !console_tools.iter().any(|t| t == tool),
+                "execution tool {tool} must be hidden in console mode: {console_tools:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 验收点 3/11：步骤门——上一步未 done 时下一步订单机械拒绝
+    /// （step_not_done）；绑定当前步骤的订单发放、成功置 done 后放行
+    /// 下一步。
+    #[tokio::test]
+    async fn console_step_gate_refuses_wrong_step_then_progresses() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-w-s2",
+                "workspace.read_file",
+                Some("s2"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-w-s1",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-w-s2b",
+                "workspace.read_file",
+                Some("s2"),
+                serde_json::json!({"target_file": "b.txt"}),
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-SG",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        {
+            let r = controller.blackboard().read();
+            assert_eq!(r.plan.steps.len(), 2);
+            assert!(
+                r.plan.steps[0].status.is_done(),
+                "s1 must be done: {:?}",
+                r.plan.steps[0].status
+            );
+            assert!(
+                r.plan.steps[1].status.is_done(),
+                "s2 must be done: {:?}",
+                r.plan.steps[1].status
+            );
+            let refused = r
+                .actions
+                .results
+                .iter()
+                .filter(|res| !res.ok)
+                .filter(|res| {
+                    res.error
+                        .as_ref()
+                        .and_then(|e| e.get("code"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("step_not_done")
+                })
+                .count();
+            assert_eq!(refused, 1, "the out-of-order order must be refused once");
+        }
+        let order_written = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderWritten)
+            .collect::<Vec<_>>();
+        assert_eq!(order_written.len(), 3, "three orders written");
+        assert_eq!(
+            order_written[0].payload["step_id"].as_str(),
+            Some("s2"),
+            "order identity + step binding ride the console_order_written event"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 验收点 8/9：3 连败助理层故障面 → 显式询问轮（无工具）→ switch →
+    /// console_mode_transition + gate_log；direct 直接动作事件携带
+    /// transition_id，权限/ACAF/模式门照常生效。
+    #[tokio::test]
+    async fn console_fault_streak_inquiry_switch_and_direct_stamp() {
+        let dir = test_dir();
+        // exit_code=None → 机械故障（无业务结果）→ 故障面递增。
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "host failed".to_string(),
+                exit_code: None,
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f1",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f2",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f3",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::text(r#"{"decision":"switch","reason":"assistant broken"}"#),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": "a.txt"}),
+                call_id: "call-direct-1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-CSTR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let transitions: Vec<RunEvent> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleModeTransition)
+            .collect();
+        assert_eq!(transitions.len(), 1, "one switch transition");
+        let payload = &transitions[0].payload;
+        assert_eq!(payload["from"].as_str(), Some("console"));
+        assert_eq!(payload["to"].as_str(), Some("direct"));
+        assert_eq!(payload["model_decision"].as_str(), Some("switch"));
+        assert_eq!(payload["streak"].as_u64(), Some(3));
+        assert_eq!(payload["order_ids"].as_array().map(|a| a.len()), Some(3));
+        let transition_id = payload["transition_id"].as_str().unwrap().to_string();
+        {
+            let r = controller.blackboard().read();
+            assert!(
+                r.gate_log
+                    .gate_decisions
+                    .iter()
+                    .any(|g| g.contains("console_mode: console → direct")),
+                "gate_log must carry the transition: {:?}",
+                r.gate_log.gate_decisions
+            );
+        }
+        assert_eq!(
+            controller.console_mode(),
+            crate::console_mode::ConsoleMode::Direct,
+            "run-level mode must be direct after the switch"
+        );
+        let direct_completed = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .find(|e| {
+                e.payload.get("tool").and_then(serde_json::Value::as_str) == Some("read_file")
+                    && e.payload.get("call_id").and_then(serde_json::Value::as_str)
+                        == Some("call-direct-1")
+            })
+            .expect("direct read_file completion");
+        assert_eq!(
+            direct_completed.payload["console_mode"].as_str(),
+            Some("direct")
+        );
+        assert_eq!(
+            direct_completed.payload["transition_id"].as_str(),
+            Some(transition_id.as_str())
+        );
+        assert!(
+            direct_completed.payload["trace_id"].is_string(),
+            "direct ToolCompleted must carry the console trace id"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 验收点 10：stay 后模式复位留痕，本 run 不再自动询问；后续失败
+    /// 不重复触发询问轮。
+    #[tokio::test]
+    async fn console_stay_resets_and_never_reasks() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "host failed".to_string(),
+                exit_code: None,
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f1",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f2",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f3",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::text(r#"{"decision":"stay","reason":"keep console"}"#),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f4",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-CSTAY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let transitions: Vec<RunEvent> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleModeTransition)
+            .collect();
+        assert_eq!(transitions.len(), 1, "only the stay decision");
+        assert_eq!(transitions[0].payload["to"].as_str(), Some("console"));
+        assert_eq!(
+            transitions[0].payload["model_decision"].as_str(),
+            Some("stay")
+        );
+        assert_eq!(
+            controller.console_mode(),
+            crate::console_mode::ConsoleMode::Console,
+            "stay keeps console mode"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 验收点 10/11：console.step_done 证据门——坏证据拒绝；direct →
+    /// console.return_to_console 单向返回（事件 + gate_log）。
+    #[tokio::test]
+    async fn console_step_done_evidence_gate_and_return() {
+        let dir = test_dir();
+        // 三个订单失败（exit_code=None → 故障面），direct read_file 成功。
+        let host = QueueHost {
+            journal: JournalRecorder::new(dir.clone()),
+            results: Mutex::new(
+                vec![
+                    // exit_code=None（Ok）→ 机械故障面（无业务结果）。
+                    Ok(fail_result()),
+                    Ok(fail_result()),
+                    Ok(fail_result()),
+                    Ok(ok_result()),
+                ]
+                .into(),
+            ),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f1",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f2",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-f3",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::text(r#"{"decision":"switch","reason":"broken"}"#),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": "a.txt"}),
+                call_id: "call-direct-1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "console.step_done".to_string(),
+                arguments: serde_json::json!({
+                    "step_id": "s1",
+                    "transition_id": "WRONG",
+                    "trace_id": "t999999",
+                }),
+                call_id: "call-sd-bad".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "console.return_to_console".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-return-1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-CSDG",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let transitions: Vec<RunEvent> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleModeTransition)
+            .collect();
+        assert_eq!(transitions.len(), 2, "switch + return");
+        assert_eq!(transitions[1].payload["from"].as_str(), Some("direct"));
+        assert_eq!(transitions[1].payload["to"].as_str(), Some("console"));
+        assert_eq!(
+            transitions[1].payload["model_decision"].as_str(),
+            Some("return_to_console")
+        );
+        assert_eq!(
+            controller.console_mode(),
+            crate::console_mode::ConsoleMode::Console,
+            "return resets the mode"
+        );
+        let step_done_completed = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| {
+                e.payload.get("tool").and_then(serde_json::Value::as_str)
+                    == Some("console.step_done")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(step_done_completed.len(), 1);
+        assert_eq!(
+            step_done_completed[0].payload["exit_code"].as_u64(),
+            Some(1),
+            "bad evidence must be refused"
+        );
+        assert_eq!(
+            step_done_completed[0].payload["error"].as_str(),
+            Some("console_step_done_bad_transition")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 验收点 11（正向）：console.step_done 证据全部匹配（transition_id 属
+    /// 本 run direct 切换、trace_id 对应已发生的 direct ToolCompleted）→
+    /// 步骤置 done(direct evidence)。
+    #[tokio::test]
+    async fn console_step_done_positive_evidence_marks_done() {
+        let dir = test_dir();
+        let controller = stage_c_controller(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_id = Some("plan-1".to_string());
+            w.plan.plan_epoch = 1;
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s1".to_string(),
+                goal: "g".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::InProgress,
+            });
+        }
+        let mut writer = discard_event_writer("RUN-SDP");
+        let transition_id = controller
+            .switch_console_to_direct(&mut writer, 0, None)
+            .await
+            .unwrap();
+        let (stamp, trace) = controller.console_direct_begin("call-d1").unwrap();
+        controller.console_direct_end(&stamp, trace, "read_file", true, None);
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let tc = ToolCall {
+            name: "console.step_done".to_string(),
+            arguments: serde_json::json!({
+                "step_id": "s1",
+                "transition_id": transition_id,
+                "trace_id": stamp.trace_id,
+            }),
+            call_id: "sd-ok".to_string(),
+        };
+        let mut messages = Vec::new();
+        let mut writer2 = discard_event_writer("RUN-SDP2");
+        let (result, _) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer2,
+                &tc,
+                "prompt",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                &mut messages,
+                1,
+                None,
+                None,
+                None,
+                true,
+                true,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        let r = controller.blackboard().read();
+        assert!(
+            r.plan.steps[0].status.is_done(),
+            "step must be done after valid evidence: {:?}",
+            r.plan.steps[0].status
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

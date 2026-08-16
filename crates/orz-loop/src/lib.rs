@@ -16,6 +16,7 @@ pub mod blackboard;
 pub(crate) mod checkpoint;
 pub(crate) mod citation_validation;
 pub mod console;
+pub(crate) mod console_mode;
 pub mod controller;
 mod diagnostic_coverage;
 pub mod epoch;

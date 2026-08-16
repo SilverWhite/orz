@@ -277,13 +277,14 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
         // first pending one when nothing is marked in-progress yet.
         let current = steps
             .iter()
-            .position(|s| s.status == StepStatus::InProgress)
-            .or_else(|| steps.iter().position(|s| s.status == StepStatus::Pending))
+            .position(|s| matches!(s.status, StepStatus::InProgress))
+            .or_else(|| {
+                steps
+                    .iter()
+                    .position(|s| matches!(s.status, StepStatus::Pending))
+            })
             .map(|i| i + 1);
-        let done = steps
-            .iter()
-            .filter(|s| s.status == StepStatus::Completed)
-            .count();
+        let done = steps.iter().filter(|s| s.status.is_done()).count();
         let middle = match current {
             Some(i) => format!("当前第 {i} 步「{}」", steps[i - 1].goal,),
             None => "当前步骤: (无)".to_string(),
@@ -730,7 +731,10 @@ mod tests {
                 actions: Vec::new(),
                 acceptance: String::new(),
                 evidence: Vec::new(),
-                status: StepStatus::Completed,
+                status: StepStatus::Done(crate::blackboard::DoneEvidence {
+                    receipt_id: "ORD-1".into(),
+                    direct: None,
+                }),
             },
             PlanStep {
                 id: "step-2".into(),

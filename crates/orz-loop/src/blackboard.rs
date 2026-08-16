@@ -46,12 +46,129 @@ pub struct PlanStep {
     pub status: StepStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// 步骤状态机（PLAN-FIRST 阶段 C，2026-08-16；设计 §2.5/§6）：
+/// `pending → in_progress → done(receipt_id) | failed(receipt_id)`。
+/// 旧（阶段 A 前）归档中的单位变体字符串（`Pending` / `InProgress` /
+/// `Completed` / `Blocked`）经自定义反序列化兼容读取——升级前 epoch
+/// 快照不静默丢弃（与 `description` alias 同一纪律）。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepStatus {
     Pending,
     InProgress,
-    Completed,
+    /// done(receipt_id) — 由订单 receipt 或 direct 证据门（§7.5）置位。
+    Done(DoneEvidence),
+    Failed(FailedEvidence),
     Blocked,
+}
+
+/// done 证据：订单 receipt（console 订单发放成功）或 direct 有记录例外
+/// （`console.step_done` 的 transition_id + trace_id 交叉校验通过）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoneEvidence {
+    pub receipt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct: Option<DirectStepEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectStepEvidence {
+    pub transition_id: String,
+    pub trace_id: String,
+}
+
+/// failed(receipt_id) — 订单发放失败（fail-closed 信封 receipt）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedEvidence {
+    pub receipt_id: String,
+}
+
+impl StepStatus {
+    /// 是否已完成（done 计为完成；旧归档兼容的 `Completed` 映射为
+    /// 空证据 Done）。
+    pub fn is_done(&self) -> bool {
+        matches!(self, StepStatus::Done(_))
+    }
+}
+
+impl serde::Serialize for StepStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        match self {
+            StepStatus::Pending => serializer.serialize_str("pending"),
+            StepStatus::InProgress => serializer.serialize_str("in_progress"),
+            StepStatus::Blocked => serializer.serialize_str("blocked"),
+            StepStatus::Done(evidence) => {
+                let mut s = serializer.serialize_struct("StepStatus", 3)?;
+                s.serialize_field("status", "done")?;
+                s.serialize_field("receipt_id", &evidence.receipt_id)?;
+                s.serialize_field("direct", &evidence.direct)?;
+                s.end()
+            }
+            StepStatus::Failed(evidence) => {
+                let mut s = serializer.serialize_struct("StepStatus", 2)?;
+                s.serialize_field("status", "failed")?;
+                s.serialize_field("receipt_id", &evidence.receipt_id)?;
+                s.end()
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for StepStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum StepStatusRepr {
+            String(String),
+            Object {
+                status: String,
+                #[serde(default)]
+                receipt_id: Option<String>,
+                #[serde(default)]
+                direct: Option<DirectStepEvidence>,
+            },
+        }
+        match StepStatusRepr::deserialize(deserializer)? {
+            StepStatusRepr::String(s) => match s.as_str() {
+                "Pending" | "pending" => Ok(StepStatus::Pending),
+                "InProgress" | "in_progress" => Ok(StepStatus::InProgress),
+                // 旧归档单位变体：Completed → 空证据 Done（完成事实保留）。
+                "Completed" => Ok(StepStatus::Done(DoneEvidence {
+                    receipt_id: String::new(),
+                    direct: None,
+                })),
+                "Blocked" | "blocked" => Ok(StepStatus::Blocked),
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown StepStatus variant {other:?}"
+                ))),
+            },
+            StepStatusRepr::Object {
+                status,
+                receipt_id,
+                direct,
+            } => match status.as_str() {
+                "pending" => Ok(StepStatus::Pending),
+                "in_progress" => Ok(StepStatus::InProgress),
+                "blocked" => Ok(StepStatus::Blocked),
+                "done" => Ok(StepStatus::Done(DoneEvidence {
+                    receipt_id: receipt_id.unwrap_or_default(),
+                    direct,
+                })),
+                "failed" => Ok(StepStatus::Failed(FailedEvidence {
+                    receipt_id: receipt_id.unwrap_or_default(),
+                })),
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown StepStatus object status {other:?}"
+                ))),
+            },
+        }
+    }
 }
 
 /// Main agent writes: goal, steps, analysis, decisions, auth_grants.
@@ -149,6 +266,11 @@ pub struct ActionOrder {
     pub order_id: String,
     pub action: String,
     pub arguments: serde_json::Value,
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 订单绑定的计划
+    /// 步骤 id（设计 §5：ActionOrder 增 step_id；Schema/事件/verifier 先行，
+    /// 再接线 producer）。None = 无计划在案（直接订单不绑步骤）。
+    #[serde(default)]
+    pub step_id: Option<String>,
     /// 写单时的模型轮（round 防重放/过期）。
     pub round: u32,
     /// 写单时的 plan epoch（跨 epoch 语义隔离）。
@@ -320,7 +442,13 @@ impl Blackboard {
         steps: Vec<String>,
         persisted_at: &str,
     ) -> Result<Option<EpochSnapshot>, PlanEpochError> {
-        self.rotate_impl(plan_id, plan_epoch, goal, Self::steps_from_descriptions(steps), persisted_at)
+        self.rotate_impl(
+            plan_id,
+            plan_epoch,
+            goal,
+            Self::steps_from_descriptions(steps),
+            persisted_at,
+        )
     }
 
     /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): same plan-epoch
@@ -550,10 +678,9 @@ mod tests {
     /// 快照不静默丢弃）。
     #[test]
     fn legacy_description_plan_step_deserializes_with_compat() {
-        let old: PlanStep = serde_json::from_str(
-            r#"{"id":"step-1","description":"旧步骤","status":"InProgress"}"#,
-        )
-        .expect("legacy plan step must deserialize");
+        let old: PlanStep =
+            serde_json::from_str(r#"{"id":"step-1","description":"旧步骤","status":"InProgress"}"#)
+                .expect("legacy plan step must deserialize");
         assert_eq!(old.id, "step-1");
         assert_eq!(old.goal, "旧步骤");
         assert!(old.actions.is_empty());
@@ -584,6 +711,7 @@ mod tests {
             order_id: "ORD-1".into(),
             action: "workspace.read_file".into(),
             arguments: serde_json::json!({"path": "a.txt"}),
+            step_id: None,
             round: 1,
             plan_epoch: 1,
             run_id: "RUN-1".into(),
@@ -607,6 +735,7 @@ mod tests {
                         order_id: "ORD-2".into(),
                         action: "workspace.list_dir".into(),
                         arguments: serde_json::json!({"path": "."}),
+                        step_id: None,
                         round: 2,
                         plan_epoch: 1,
                         run_id: "RUN-1".into(),
@@ -661,6 +790,7 @@ mod tests {
                 order_id: "ORD-1".into(),
                 action: "workspace.read_file".into(),
                 arguments: serde_json::json!({"path": "a.txt"}),
+                step_id: None,
                 round: 1,
                 plan_epoch: 1,
                 run_id: "RUN-1".into(),

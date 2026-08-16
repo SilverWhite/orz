@@ -1323,13 +1323,17 @@ mod tests {
                         call_id: "call-plan".to_string(),
                     }]),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "search_replace".to_string(),
+                        name: "blackboard.action_write".to_string(),
                         arguments: serde_json::json!({
-                            "file_path": "a.txt",
-                            "old_string": "v1",
-                            "new_string": "v2",
+                            "action": "workspace.search_replace",
+                            "step_id": "s1",
+                            "arguments": {
+                                "file_path": "a.txt",
+                                "old_string": "v1",
+                                "new_string": "v2",
+                            },
                         }),
-                        call_id: "call-1".to_string(),
+                        call_id: "call-order-1".to_string(),
                     }]),
                     // The counterexample gate consumes two identical texts
                     // per round (acp_client.rs quirk).

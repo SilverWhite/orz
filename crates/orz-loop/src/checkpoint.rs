@@ -64,6 +64,15 @@ pub(crate) enum PendingCheckpoint {
         payload: Value,
         attempt: u32,
     },
+    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.3):
+    /// console 双模式显式询问轮——3 连败助理层故障面触发后的无工具轮；
+    /// 模型只回答 `{"decision": "switch"|"stay", "reason": "…"}` 模板。
+    /// 优先级低于 orientation/DC（触发点同 gap，orientation > DC > 本项）。
+    ConsoleModeInquiry {
+        attempt: u32,
+        streak: u32,
+        order_ids: Vec<String>,
+    },
 }
 
 impl PendingCheckpoint {
@@ -74,6 +83,7 @@ impl PendingCheckpoint {
                 .get("checkpoint_id")
                 .and_then(Value::as_str)
                 .unwrap_or("DIAG-COV-UNKNOWN"),
+            PendingCheckpoint::ConsoleModeInquiry { .. } => "CONSOLE-INQUIRY",
         }
     }
 
@@ -81,6 +91,7 @@ impl PendingCheckpoint {
         match self {
             PendingCheckpoint::Orientation { .. } => "orientation_checkpoint",
             PendingCheckpoint::DiagnosticCoverage { .. } => "diagnostic_coverage_checkpoint",
+            PendingCheckpoint::ConsoleModeInquiry { .. } => "console_mode_inquiry",
         }
     }
 
@@ -89,13 +100,16 @@ impl PendingCheckpoint {
             PendingCheckpoint::Orientation { record, .. } => record.agent_role,
             // DC is a main-lane mechanism (§4.6 scope).
             PendingCheckpoint::DiagnosticCoverage { .. } => AgentRole::Main,
+            // Console dual-mode inquiry is a main-lane mechanism (§7.3).
+            PendingCheckpoint::ConsoleModeInquiry { .. } => AgentRole::Main,
         }
     }
 
     pub(crate) fn attempt(&self) -> u32 {
         match self {
             PendingCheckpoint::Orientation { attempt, .. }
-            | PendingCheckpoint::DiagnosticCoverage { attempt, .. } => *attempt,
+            | PendingCheckpoint::DiagnosticCoverage { attempt, .. }
+            | PendingCheckpoint::ConsoleModeInquiry { attempt, .. } => *attempt,
         }
     }
 
@@ -111,6 +125,13 @@ impl PendingCheckpoint {
                     attempt,
                 }
             }
+            PendingCheckpoint::ConsoleModeInquiry {
+                streak, order_ids, ..
+            } => PendingCheckpoint::ConsoleModeInquiry {
+                attempt,
+                streak: *streak,
+                order_ids: order_ids.clone(),
+            },
         }
     }
 }
@@ -405,6 +426,10 @@ pub(crate) fn commit_pending(
         PendingCheckpoint::DiagnosticCoverage { payload, .. } => {
             crate::diagnostic_coverage::commit_dc_fire(dc_state, &payload);
         }
+        // Console inquiry commits nothing to orientation/DC state — the
+        // decision is journaled by the transition event (switch/stay) and
+        // the mode state is updated by the caller (agent_loop).
+        PendingCheckpoint::ConsoleModeInquiry { .. } => {}
     }
 }
 

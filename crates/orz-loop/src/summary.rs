@@ -156,7 +156,8 @@ fn step_status_label(status: &StepStatus) -> &'static str {
     match status {
         StepStatus::Pending => "待办",
         StepStatus::InProgress => "进行中",
-        StepStatus::Completed => "已完成",
+        StepStatus::Done(_) => "已完成",
+        StepStatus::Failed(_) => "失败",
         StepStatus::Blocked => "受阻",
     }
 }

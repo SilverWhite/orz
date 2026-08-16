@@ -1015,6 +1015,9 @@ async fn run(
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): production
             // CLI runs start with the first-round plan gate.
             .with_plan_first_enabled(true)
+            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console
+            // default + direct 受控降级（双模式）随生产路径启用。
+            .with_console_default_enabled(true)
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client
             // (env-gated; unconfigured → unticketed control events, zero

@@ -1054,7 +1054,19 @@ pub(crate) async fn run_agent_loop(
                 .cloned()
                 .collect()
         } else if let Some(snapshot) = probe_snapshot.as_ref() {
-            AgentLoopController::project_main_agent_tool_defs(tool_defs, snapshot)
+            let projected = AgentLoopController::project_main_agent_tool_defs(tool_defs, snapshot);
+            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §4):
+            // console 默认面收敛——主车道无执行工具（读面=黑板+只读核查，
+            // 写面=plan_write+action_write；执行/变更/shell/子代理/检索
+            // 全部隐藏，经订单下发）。direct 模式恢复探针过滤后的工作
+            // 工具投影（§7 双模式）。
+            if controller.console_default_enabled()
+                && controller.console_mode() == crate::console_mode::ConsoleMode::Console
+            {
+                AgentLoopController::project_console_default_tool_defs(&projected, snapshot)
+            } else {
+                projected
+            }
         } else {
             tool_defs.to_vec()
         };
@@ -1320,6 +1332,64 @@ pub(crate) async fn run_agent_loop(
         // one completed logical model round (feed above) and stays in the
         // conversation; the loop always continues after the branch.
         if let Some(pending) = pending_checkpoint.take() {
+            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.3):
+            // console 双模式询问轮——模板不同（decision/reason），无工具轮
+            // 语义同 checkpoint；一次重填、仍失败默认 stay；每 run 至多一次。
+            if let PendingCheckpoint::ConsoleModeInquiry {
+                attempt,
+                streak: _,
+                order_ids: _,
+            } = &pending
+            {
+                let text = response.text.as_deref().unwrap_or_default();
+                let parsed = crate::console_mode::parse_and_validate_inquiry(text);
+                let answer = match parsed {
+                    Ok(answer) => Some(answer),
+                    Err(errors) if *attempt < crate::console_mode::MAX_INQUIRY_ATTEMPTS => {
+                        messages.push(Message {
+                            role: Role::User,
+                            content: crate::console_mode::inquiry_refill_feedback(&errors),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        pending_checkpoint = Some(pending.with_attempt(*attempt + 1));
+                        continue;
+                    }
+                    Err(_) => None,
+                };
+                match answer {
+                    Some(answer) if answer.decision == "switch" => {
+                        controller
+                            .switch_console_to_direct(writer, tool_rounds, answer.reason.as_deref())
+                            .await?;
+                    }
+                    _ => {
+                        // stay（含降级默认 stay）：写 transition 事件 + gate_log。
+                        controller
+                            .record_console_stay(
+                                writer,
+                                tool_rounds,
+                                answer
+                                    .as_ref()
+                                    .and_then(|a| a.reason.as_deref())
+                                    .or(Some("degraded: invalid template after refill")),
+                            )
+                            .await?;
+                    }
+                }
+                // 询问轮的回答是模型输出——保留在会话中。
+                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: text,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                }
+                continue;
+            }
             let attempt = pending.attempt();
             let mut verdict =
                 checkpoint::parse_and_validate(response.text.as_deref().unwrap_or_default());
@@ -1410,8 +1480,7 @@ pub(crate) async fn run_agent_loop(
         if plan_gate.is_some() && response.tool_calls.is_empty() {
             let gate = plan_gate.as_mut().expect("checked above");
             gate.rounds_without_submission += 1;
-            if gate.rounds_without_submission
-                >= crate::planning::MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION
+            if gate.rounds_without_submission >= crate::planning::MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION
             {
                 let g = plan_gate.take().expect("checked above");
                 writer
@@ -1672,9 +1741,7 @@ pub(crate) async fn run_agent_loop(
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划轮只允许
             // blackboard_read + plan_write；其余工具即使被声明也机械拒绝
             // （首轮禁止 执行/变更/shell/子代理/检索/action_write）。
-            if plan_round_active
-                && tc.name == crate::planning::PLAN_WRITE_TOOL
-                && plan_write_called
+            if plan_round_active && tc.name == crate::planning::PLAN_WRITE_TOOL && plan_write_called
             {
                 // P3-5 (2026-08-16): 同一计划轮最多一次 plan_write ——
                 // 重填反馈在下一轮注入，同轮第二次提交无意义且会绕过
@@ -1704,6 +1771,31 @@ pub(crate) async fn run_agent_loop(
                     messages,
                     tc,
                     "plan_round_tool_denied",
+                    svc.policy_revision
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                )
+                .await?;
+                match f {
+                    PolicyFeedback::Denied(key) => round_denials.push(key),
+                    PolicyFeedback::Succeeded => round_had_success = true,
+                }
+                assistant_parts.push(format!("[{}] {}", tc.name, r.output));
+                continue;
+            }
+            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §4):
+            // console 默认态调用面门禁——声明面已收敛（投影无执行工具），
+            // 调用面 belt-and-braces 拒绝隐藏工具（防幻觉直接调用执行/
+            // 变更/shell/子代理/检索面）。direct 模式不适用（恢复工作工具）。
+            if controller.console_default_enabled()
+                && controller.console_mode() == crate::console_mode::ConsoleMode::Console
+                && profile.role == AgentRole::Main
+                && !AgentLoopController::is_console_surface_tool(&tc.name)
+            {
+                let (r, f) = plan_round_denied(
+                    writer,
+                    messages,
+                    tc,
+                    "console_mode_tool_denied",
                     svc.policy_revision
                         .load(std::sync::atomic::Ordering::SeqCst),
                 )
@@ -1812,6 +1904,16 @@ pub(crate) async fn run_agent_loop(
                         round_feedback = Some(f);
                         r
                     } else {
+                        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱):
+                        // direct 模式直接动作——创建 console trace（trace_id
+                        // 供事件盖章与 step_done 证据），盖章传入事件链。
+                        let direct_ctx = if controller.console_default_enabled()
+                            && profile.role == AgentRole::Main
+                        {
+                            controller.console_direct_begin(&tc.call_id)
+                        } else {
+                            None
+                        };
                         let (result, feedback) = controller
                             .run_host_tool_with_plan_gate(
                                 host,
@@ -1843,8 +1945,24 @@ pub(crate) async fn run_agent_loop(
                                 // plan_write handler decides refill vs
                                 // degrade from it.
                                 plan_gate.as_ref().map(|g| g.attempt),
+                                direct_ctx.as_ref().map(|(stamp, _)| stamp),
                             )
                             .await?;
+                        // direct 动作 trace 收口（commit + 证据面登记）。
+                        if let Some((stamp, trace)) = direct_ctx {
+                            let detail = if result.exit_code == Some(0) {
+                                None
+                            } else {
+                                Some(result.output.as_str())
+                            };
+                            controller.console_direct_end(
+                                &stamp,
+                                trace,
+                                &tc.name,
+                                result.exit_code == Some(0),
+                                detail,
+                            );
+                        }
                         // GAP-RETRIEVAL-TOOLS (2026-08-10): evidence
                         // collection for the retrieval lanes — the
                         // mechanical source of the structured result's
@@ -1933,8 +2051,7 @@ pub(crate) async fn run_agent_loop(
             && !plan_write_called
         {
             gate.rounds_without_submission += 1;
-            if gate.rounds_without_submission
-                >= crate::planning::MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION
+            if gate.rounds_without_submission >= crate::planning::MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION
             {
                 let g = plan_gate.take().expect("checked above");
                 writer
@@ -2062,6 +2179,30 @@ pub(crate) async fn run_agent_loop(
         } else {
             0
         };
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.3):
+        // 双模式显式询问轮触发——发放后若 console 态连续故障 ≥ 阈值且本
+        // run 未问过，设置询问 checkpoint（无工具轮；优先级低于
+        // orientation/DC——上方 fire 先占位）。询问回答（switch/stay）在
+        // 下一轮 checkpoint 分支处理。
+        if pending_checkpoint.is_none()
+            && profile.role == AgentRole::Main
+            && controller.console_inquiry_due()
+        {
+            let (streak, order_ids) = controller.console_streak_snapshot();
+            pending_checkpoint = Some(PendingCheckpoint::ConsoleModeInquiry {
+                attempt: 1,
+                streak,
+                order_ids,
+            });
+            // 询问轮为无工具轮——注入模板块（模型只回答 decision/reason）。
+            messages.push(Message {
+                role: Role::User,
+                content: crate::console_mode::inquiry_template_block(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+        }
 
         // P0-C S4 (2026-08-16): 发放的 console 动作按实际执行单位计入同一
         // tool-round 预算（直接订单 1、脚本每步 1）——下一轮 remaining 块

@@ -697,11 +697,34 @@ impl Drop for RestoreInflightGuard {
 
 impl AcpServer {
     pub fn new() -> Self {
-        // Two scripted texts per turn — the counterexample gate (§4.6) adds
-        // one model round before the final answer.
-        Self::with_gateway(Arc::new(FakeProvider::from_texts(vec![
-            "(fake) 已收到请求。",
-            "(fake) 已收到请求。",
+        // PLAN-FIRST 阶段 A/C (2026-08-16): production sessions run the
+        // plan gate first — the canned provider answers it with a valid
+        // plan, then the counterexample gate (§4.6) adds one model round
+        // before the final answer.
+        Self::with_gateway(Arc::new(FakeProvider::new(vec![
+            orz_loop::gateway::fake::ScriptedResponse::tool_calls(vec![
+                orz_loop::gateway::model::ToolCall {
+                    name: "plan_write".to_string(),
+                    arguments: serde_json::json!({
+                        "plan": {
+                            "plan_id": "plan-acp-default",
+                            "goal": "测试目标",
+                            "steps": [{
+                                "id": "s1",
+                                "goal": "执行",
+                                "actions": [
+                                    {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                                ],
+                                "acceptance": "完成",
+                                "evidence": []
+                            }]
+                        }
+                    }),
+                    call_id: "call-plan".to_string(),
+                },
+            ]),
+            orz_loop::gateway::fake::ScriptedResponse::text("(fake) 已收到请求。"),
+            orz_loop::gateway::fake::ScriptedResponse::text("(fake) 已收到请求。"),
         ])))
     }
 
@@ -1045,6 +1068,9 @@ impl AcpServer {
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): production
             // sessions start with the first-round plan gate.
             .with_plan_first_enabled(true)
+            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console
+            // default + direct 受控降级（双模式）随生产路径启用。
+            .with_console_default_enabled(true)
             .with_plan_first_session_done(
                 self.sessions
                     .lock()
@@ -1629,6 +1655,37 @@ mod tests {
         dir
     }
 
+    /// PLAN-FIRST 阶段 A (2026-08-16): a `plan_write` tool call carrying a
+    /// structured plan object (main-lane plan gate).
+    fn plan_write_response(plan: serde_json::Value) -> ScriptedResponse {
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "plan_write".to_string(),
+            arguments: serde_json::json!({ "plan": plan }),
+            call_id: "call-plan".to_string(),
+        }])
+    }
+
+    /// PLAN-FIRST 阶段 C (2026-08-16): a console order write (main-lane
+    /// action bar) with an optional step binding.
+    fn action_write_call(
+        call_id: &str,
+        action: &str,
+        step_id: Option<&str>,
+        arguments: serde_json::Value,
+    ) -> ToolCall {
+        let mut args = serde_json::Map::new();
+        args.insert("action".to_string(), serde_json::json!(action));
+        if let Some(step_id) = step_id {
+            args.insert("step_id".to_string(), serde_json::json!(step_id));
+        }
+        args.insert("arguments".to_string(), arguments);
+        ToolCall {
+            name: "blackboard.action_write".to_string(),
+            arguments: serde_json::Value::Object(args),
+            call_id: call_id.to_string(),
+        }
+    }
+
     /// local_browser (2026-08-10): the probe reuses an already-ready lane
     /// (Available without re-launching), fails Degraded with a subdivided
     /// cause when the browser cannot start, and keeps the framework_fallback
@@ -1772,7 +1829,9 @@ mod tests {
                 // counterexample_gate + model_output + stagnation + finished.
                 // GAP-INQUIRY-SPLIT: no per-turn orientation event (fires
                 // only on the session-level 7-round trigger).
-                assert_eq!(replay.event_count, 9);
+                // PLAN-FIRST 阶段 A (2026-08-16): the plan gate adds a plan
+                // round (+4 events) to the production session.
+                assert_eq!(replay.event_count, 17);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -1796,11 +1855,25 @@ mod tests {
                 // Four scripted responses — two per prompt turn (each turn's
                 // first round is gate-intercepted; the default gateway's two
                 // entries would exhaust on the second prompt).
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::from_texts(vec![
-                    "(fake) 第一轮。",
-                    "(fake) 第一轮终答。",
-                    "(fake) 第二轮。",
-                    "(fake) 第二轮终答。",
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    // PLAN-FIRST 阶段 A (2026-08-16): 首个 prompt 先过计划门。
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-two",
+                        "goal": "hello",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "执行",
+                            "actions": [
+                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
+                    ScriptedResponse::text("(fake) 第一轮。"),
+                    ScriptedResponse::text("(fake) 第一轮终答。"),
+                    ScriptedResponse::text("(fake) 第二轮。"),
+                    ScriptedResponse::text("(fake) 第二轮终答。"),
                 ])));
                 server
                     .handle_session_new(
@@ -1832,13 +1905,14 @@ mod tests {
                     .collect();
                 assert_eq!(run_dirs.len(), 2, "one run journal per prompt");
 
-                for dir in &run_dirs {
+                for (i, dir) in run_dirs.iter().enumerate() {
                     let replay =
                         orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
                     assert!(replay.valid, "run journal invalid: {:?}", replay.errors);
-                    // GAP-INQUIRY-SPLIT: preflight + 8 turn events (the
-                    // per-turn orientation event is gone — 7-round trigger).
-                    assert_eq!(replay.event_count, 9, "preflight + 8 turn events");
+                    // GAP-INQUIRY-SPLIT: the first run carries the plan gate
+                    // (17 events); the second skips it (plan_gate_done).
+                    let expected = if i == 0 { 17 } else { 10 };
+                    assert_eq!(replay.event_count, expected, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 
@@ -1896,10 +1970,30 @@ mod tests {
                 std::fs::write(&target, "wired file content").unwrap();
 
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    // PLAN-FIRST 阶段 A/C: plan gate first, then a console
+                    // order (read-only action) reaches the permission bridge
+                    // at issuance.
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-read",
+                        "goal": "读取 sample.txt",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "读取",
+                            "actions": [
+                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": target.clone()}}
+                            ],
+                            "acceptance": "读取成功",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "read_file".to_string(),
-                        arguments: serde_json::json!({"target_file": target}),
-                        call_id: "call-1".to_string(),
+                        name: "blackboard.action_write".to_string(),
+                        arguments: serde_json::json!({
+                            "action": "workspace.read_file",
+                            "step_id": "s1",
+                            "arguments": {"target_file": target},
+                        }),
+                        call_id: "call-order-1".to_string(),
                     }]),
                     ScriptedResponse::text("完成（读取成功）。"),
                     ScriptedResponse::text("完成（读取成功）。"),
@@ -1953,10 +2047,31 @@ mod tests {
                 let base = test_dir();
 
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-bash",
+                        "goal": "执行命令",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "修改",
+                            "actions": [
+                                {
+                                    "step_id": "s1",
+                                    "do": "workspace.search_replace",
+                                    "with": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                                }
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "bash".to_string(),
-                        arguments: serde_json::json!({"command": "dir"}),
-                        call_id: "call-1".to_string(),
+                        name: "blackboard.action_write".to_string(),
+                        arguments: serde_json::json!({
+                            "action": "workspace.search_replace",
+                            "step_id": "s1",
+                            "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                        }),
+                        call_id: "call-order-1".to_string(),
                     }]),
                     ScriptedResponse::text("完成（bash 被拒）。"),
                     ScriptedResponse::text("完成（bash 被拒）。"),
@@ -1980,12 +2095,20 @@ mod tests {
                 let events = run_events(&base);
                 let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
                 assert!(
-                    !types.contains(&EventType::ToolStarted),
-                    "bash must not start headless: {types:?}"
+                    !events.iter().any(|e| {
+                        e.event_type == EventType::ToolStarted
+                            && e.payload.get("tool").and_then(|t| t.as_str())
+                                == Some("search_replace")
+                    }),
+                    "the denied order target must not start headless: {types:?}"
                 );
                 let pd = events
                     .iter()
-                    .find(|e| e.event_type == EventType::PermissionDecision)
+                    .filter(|e| e.event_type == EventType::PermissionDecision)
+                    .find(|e| {
+                        e.payload.get("tool").and_then(|t| t.as_str())
+                            == Some("search_replace")
+                    })
                     .expect("permission decision");
                 assert_eq!(
                     pd.payload.get("decision").and_then(|d| d.as_str()),
@@ -2032,21 +2155,62 @@ mod tests {
             .run_until(async {
                 let base_ro = test_dir();
                 let base_ww = test_dir();
-                // Two sequential prompts share the one FakeProvider — the
-                // script must cover both runs (each run pulls 3 items:
-                // tool_calls + gate text + final text).
+                // Two sequential prompts share the one FakeProvider — each
+                // run pulls plan_write + order + gate text + final text.
                 let script = vec![
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-ro",
+                        "goal": "执行命令",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "修改",
+                            "actions": [
+                                {
+                                    "step_id": "s1",
+                                    "do": "workspace.search_replace",
+                                    "with": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                                }
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "bash".to_string(),
-                        arguments: serde_json::json!({"command": "dir"}),
-                        call_id: "call-1".to_string(),
+                        name: "blackboard.action_write".to_string(),
+                        arguments: serde_json::json!({
+                            "action": "workspace.search_replace",
+                            "step_id": "s1",
+                            "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                        }),
+                        call_id: "call-order-ro".to_string(),
                     }]),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-ww",
+                        "goal": "执行命令",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "修改",
+                            "actions": [
+                                {
+                                    "step_id": "s1",
+                                    "do": "workspace.search_replace",
+                                    "with": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                                }
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "bash".to_string(),
-                        arguments: serde_json::json!({"command": "dir"}),
-                        call_id: "call-2".to_string(),
+                        name: "blackboard.action_write".to_string(),
+                        arguments: serde_json::json!({
+                            "action": "workspace.search_replace",
+                            "step_id": "s1",
+                            "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                        }),
+                        call_id: "call-order-ww".to_string(),
                     }]),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
@@ -2067,8 +2231,13 @@ mod tests {
                     .await
                     .unwrap();
                 let ro_types = run_bash_prompt(&server, "sess-ro", &base_ro).await;
+                let ro_events = run_events(&base_ro);
                 assert!(
-                    !ro_types.contains(&EventType::ToolStarted),
+                    !ro_events.iter().any(|e| {
+                        e.event_type == EventType::ToolStarted
+                            && e.payload.get("tool").and_then(|t| t.as_str())
+                                == Some("search_replace")
+                    }),
                     "read-only session must deny the mutation: {ro_types:?}"
                 );
 
@@ -2084,8 +2253,13 @@ mod tests {
                     .await
                     .unwrap();
                 let ww_types = run_bash_prompt(&server, "sess-ww", &base_ww).await;
+                let ww_events = run_events(&base_ww);
                 assert!(
-                    ww_types.contains(&EventType::ToolStarted),
+                    ww_events.iter().any(|e| {
+                        e.event_type == EventType::ToolStarted
+                            && e.payload.get("tool").and_then(|t| t.as_str())
+                                == Some("search_replace")
+                    }),
                     "interactive session with allow-all hub must execute: {ww_types:?}"
                 );
 
@@ -2108,14 +2282,31 @@ mod tests {
                 std::fs::write(base.join("lib.rs"), "fn main() {}").unwrap();
 
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-snap",
+                        "goal": "修改 lib.rs",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "修改",
+                            "actions": [
+                                {
+                                    "step_id": "s1",
+                                    "do": "workspace.search_replace",
+                                    "with": {"file_path": "lib.rs", "old_string": "fn main", "new_string": "fn renamed"},
+                                }
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "search_replace".to_string(),
+                        name: "blackboard.action_write".to_string(),
                         arguments: serde_json::json!({
-                            "file_path": "lib.rs",
-                            "old_string": "fn main",
-                            "new_string": "fn renamed",
+                            "action": "workspace.search_replace",
+                            "step_id": "s1",
+                            "arguments": {"file_path": "lib.rs", "old_string": "fn main", "new_string": "fn renamed"},
                         }),
-                        call_id: "call-1".to_string(),
+                        call_id: "call-order-snap".to_string(),
                     }]),
                     ScriptedResponse::text("完成（被拒）。"),
                     ScriptedResponse::text("完成（被拒）。"),
@@ -2136,18 +2327,20 @@ mod tests {
                     .unwrap();
                 assert_eq!(result["status"], "completed");
 
-                let types: Vec<EventType> = run_events(&base)
-                    .iter()
-                    .map(|e| e.event_type.clone())
-                    .collect();
+                let events = run_events(&base);
+                let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
                 assert!(types.contains(&EventType::PermissionDecision), "{types:?}");
                 assert!(
                     !types.contains(&EventType::SnapshotCreated),
                     "denied mutation must not snapshot: {types:?}"
                 );
                 assert!(
-                    !types.contains(&EventType::ToolStarted),
-                    "denied tool must not start: {types:?}"
+                    !events.iter().any(|e| {
+                        e.event_type == EventType::ToolStarted
+                            && e.payload.get("tool").and_then(|t| t.as_str())
+                                == Some("search_replace")
+                    }),
+                    "denied order target must not start: {types:?}"
                 );
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -3199,6 +3392,20 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let fake = Arc::new(FakeProvider::new(vec![
+                    // PLAN-FIRST 阶段 A (2026-08-16): 首个 prompt 先过计划门。
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-conv",
+                        "goal": "第一问",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "执行",
+                            "actions": [
+                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第二答"),
@@ -3226,10 +3433,11 @@ mod tests {
                 assert_eq!(r2["response"], "第二答");
 
                 // The second prompt's first model request opened with the
-                // first turn (two model calls per prompt: round + final).
+                // first turn (plan gate + two model calls per prompt — the
+                // counterexample gate adds one round).
                 let reqs = fake.received_requests();
-                assert_eq!(reqs.len(), 4, "two model calls per prompt");
-                let msgs = &reqs[2].messages;
+                assert_eq!(reqs.len(), 5, "plan + two model calls per prompt");
+                let msgs = &reqs[3].messages;
                 assert!(
                     msgs.iter().any(|m| m.content == "第一问"),
                     "first prompt in history: {msgs:?}"
@@ -3270,6 +3478,19 @@ mod tests {
                 let base = test_dir();
                 // Process 1: one successful prompt lands the sidecar.
                 let fake1 = Arc::new(FakeProvider::new(vec![
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-restart",
+                        "goal": "重启前的问题",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "执行",
+                            "actions": [
+                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                 ]));
@@ -3309,7 +3530,7 @@ mod tests {
 
                 // The new process's first request carried the old history.
                 let reqs = fake2.received_requests();
-                assert_eq!(reqs.len(), 2, "two model calls per prompt");
+                assert_eq!(reqs.len(), 2, "restored session skips the plan gate");
                 let msgs = &reqs[0].messages;
                 assert!(
                     msgs.iter().any(|m| m.content == "重启前的问题"),
@@ -3336,6 +3557,19 @@ mod tests {
                 // One successful prompt consumes the scripted replies; the
                 // second prompt hits an empty script → model failure.
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-fail",
+                        "goal": "第一问",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "执行",
+                            "actions": [
+                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                 ])));
@@ -3360,8 +3594,8 @@ mod tests {
 
                 // The sidecar still holds only the FIRST run's history.
                 let stored = load_conversation_sidecar(&base, "sess-fail").expect("sidecar");
-                assert_eq!(stored.messages.len(), 2, "{:?}", stored.messages);
                 assert!(stored.messages.iter().any(|m| m.content == "第一问"));
+                assert!(stored.messages.iter().any(|m| m.content == "第一答"));
                 assert!(stored.messages.iter().all(|m| m.content != "第二问"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -3415,6 +3649,19 @@ mod tests {
                 .unwrap();
 
                 let fake = Arc::new(FakeProvider::new(vec![
+                    plan_write_response(serde_json::json!({
+                        "plan_id": "plan-acp-act",
+                        "goal": "恢复激活",
+                        "steps": [{
+                            "id": "s1",
+                            "goal": "执行",
+                            "actions": [
+                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                            ],
+                            "acceptance": "完成",
+                            "evidence": []
+                        }]
+                    })),
                     ScriptedResponse::text("收到"),
                     ScriptedResponse::text("收到"),
                 ]));

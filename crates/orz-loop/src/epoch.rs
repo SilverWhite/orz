@@ -263,7 +263,8 @@ pub fn render_section(
                 let status = match step.status {
                     crate::blackboard::StepStatus::Pending => "pending",
                     crate::blackboard::StepStatus::InProgress => "in-progress",
-                    crate::blackboard::StepStatus::Completed => "completed",
+                    crate::blackboard::StepStatus::Done(_) => "done",
+                    crate::blackboard::StepStatus::Failed(_) => "failed",
                     crate::blackboard::StepStatus::Blocked => "blocked",
                 };
                 lines.push(format!(
@@ -434,6 +435,7 @@ mod tests {
                 order_id: "ORD-000001".into(),
                 action: "workspace.read_file".into(),
                 arguments: serde_json::json!({"target_file": "a.txt"}),
+                step_id: None,
                 round: 0,
                 plan_epoch: 1,
                 run_id: "RUN-1".into(),

@@ -355,17 +355,17 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             validation_error_count,
             degrade_reason,
         } => {
-            let state = match (outcome.as_str(), validation_valid, degrade_reason.as_deref()) {
+            let state = match (
+                outcome.as_str(),
+                validation_valid,
+                degrade_reason.as_deref(),
+            ) {
                 ("accepted", true, _) => "校验通过".to_string(),
                 ("refill_requested", _, _) => {
                     format!("校验失败({validation_error_count} 项)")
                 }
-                ("degraded", _, Some("plan_not_submitted")) => {
-                    "未提交计划（机械降级）".to_string()
-                }
-                ("degraded", _, Some("plan_rotate_failed")) => {
-                    "落板失败（机械降级）".to_string()
-                }
+                ("degraded", _, Some("plan_not_submitted")) => "未提交计划（机械降级）".to_string(),
+                ("degraded", _, Some("plan_rotate_failed")) => "落板失败（机械降级）".to_string(),
                 ("degraded", false, _) => {
                     format!("校验失败({validation_error_count} 项，机械降级)")
                 }
@@ -381,6 +381,36 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
                 false,
             );
             vec![format!("计划写入: {plan_id} → {outcome}")]
+        }
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
+        // 双模式切换决策——方向 + 触发 + 模型决定。
+        TuiEvent::ConsoleModeTransition {
+            transition_id,
+            from,
+            to,
+            trigger,
+            model_decision,
+        } => {
+            app.content.add_system_message(
+                &format!(
+                    "[控制台模式] {from} → {to} ({trigger}, 决定 {model_decision}) {transition_id}"
+                ),
+                false,
+            );
+            vec![format!("控制台模式: {from} → {to} · {model_decision}")]
+        }
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 动作栏订单记录。
+        TuiEvent::ConsoleOrderWritten {
+            order_id,
+            action,
+            step_id,
+        } => {
+            let step = step_id.as_deref().unwrap_or("(无步骤绑定)");
+            app.content.add_system_message(
+                &format!("[订单写入] {order_id} {action}（step {step}）"),
+                false,
+            );
+            vec![format!("订单写入: {order_id} {action}")]
         }
         TuiEvent::InformationSufficiencyAssessment {
             assessment_id,

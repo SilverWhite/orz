@@ -6,7 +6,9 @@
 
 use serde_json::{Map, Value};
 
-use crate::blackboard::{PlanAction, PlanStep, StepStatus};
+use crate::blackboard::{
+    DirectStepEvidence, DoneEvidence, FailedEvidence, PlanAction, PlanStep, StepStatus,
+};
 
 /// Canonical PLAN-FIRST execution-style framework block (shared with the
 /// external AGENTS.md wrapper; see orz-assurance `plan::framework`).
@@ -199,9 +201,7 @@ fn validate_step(
         Some(Value::String(s)) if !s.trim().is_empty() => {
             let trimmed = s.trim().to_string();
             if trimmed.chars().count() > STEP_ID_MAX_CHARS {
-                errors.push(format!(
-                    "steps[{idx}].id exceeds {STEP_ID_MAX_CHARS} chars"
-                ));
+                errors.push(format!("steps[{idx}].id exceeds {STEP_ID_MAX_CHARS} chars"));
             }
             if seen_ids.contains(&trimmed) {
                 errors.push(format!("steps[{idx}].id duplicate: {trimmed}"));
@@ -241,9 +241,7 @@ fn validate_step(
             }
             acceptance = Some(trimmed);
         }
-        Some(Value::String(_)) => {
-            errors.push(format!("steps[{idx}].acceptance must be non-empty"))
-        }
+        Some(Value::String(_)) => errors.push(format!("steps[{idx}].acceptance must be non-empty")),
         Some(_) => errors.push(format!("steps[{idx}].acceptance must be a string")),
         None => errors.push(format!("missing required field: steps[{idx}].acceptance")),
     }
@@ -336,7 +334,9 @@ fn validate_action(
     ignored_fields: &mut Vec<String>,
 ) {
     let Value::Object(a) = action else {
-        errors.push(format!("steps[{step_idx}].actions[{action_idx}] must be an object"));
+        errors.push(format!(
+            "steps[{step_idx}].actions[{action_idx}] must be an object"
+        ));
         return;
     };
     let mut cleaned = Map::new();
@@ -348,11 +348,7 @@ fn validate_action(
             ignored.push(format!("steps[{step_idx}].actions[{action_idx}].{key}"));
         }
     }
-    ignored_fields.extend(
-        ignored
-            .into_iter()
-            .map(|f| format!("{f}")),
-    );
+    ignored_fields.extend(ignored.into_iter().map(|f| format!("{f}")));
     let prefix = format!("steps[{step_idx}].actions[{action_idx}]");
 
     let mut a_step_id = None;
@@ -375,9 +371,7 @@ fn validate_action(
         Some(Value::String(s)) if !s.trim().is_empty() => {
             let trimmed = s.trim().to_string();
             if trimmed.chars().count() > ACTION_NAME_MAX_CHARS {
-                errors.push(format!(
-                    "{prefix}.do exceeds {ACTION_NAME_MAX_CHARS} chars"
-                ));
+                errors.push(format!("{prefix}.do exceeds {ACTION_NAME_MAX_CHARS} chars"));
             }
             do_action = Some(trimmed);
         }
@@ -441,6 +435,113 @@ pub(crate) fn plan_write_payload(
         },
         "degrade_reason": degrade_reason,
     })
+}
+
+/// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §6): 当前可执行
+/// 步骤 = 第一个非 done 步骤（pending / in_progress / failed 均可被订单
+/// 重新寻址——失败步骤可重试）。全部 done 时返回 None。
+pub(crate) fn current_step_index(steps: &[PlanStep]) -> Option<usize> {
+    steps.iter().position(|s| !s.status.is_done())
+}
+
+/// 步骤门拒绝原因（§6 `step_not_done` 家族）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StepGateError {
+    /// 无计划步骤（订单不绑定步骤）。
+    NoPlanSteps,
+    /// 计划在案但订单未带 step_id。
+    MissingStepId,
+    /// 订单 step_id 不是当前可执行步骤（上一步未 done / 未知 id）。
+    StepNotDone { expected: String, got: String },
+}
+
+impl StepGateError {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            StepGateError::NoPlanSteps => "step_not_done",
+            StepGateError::MissingStepId => "step_not_done",
+            StepGateError::StepNotDone { .. } => "step_not_done",
+        }
+    }
+
+    pub(crate) fn message(&self) -> String {
+        match self {
+            StepGateError::NoPlanSteps => {
+                "order refused — no plan steps in force; write a plan first".to_string()
+            }
+            StepGateError::MissingStepId => {
+                "order refused — the order must bind a plan step (step_id); \
+                 the step gate requires the current step to be done first"
+                    .to_string()
+            }
+            StepGateError::StepNotDone { expected, got } => format!(
+                "order refused — step_not_done: the current step is {expected:?}, \
+                 not {got:?}; the previous step must be done (receipt) before \
+                 the next order"
+            ),
+        }
+    }
+}
+
+/// §6 步骤门：console 订单发放前机械校验——订单必须绑定当前可执行步骤
+/// （第一个非 done 步骤），返回该步骤索引。
+pub(crate) fn order_step_gate(
+    steps: &[PlanStep],
+    order_step_id: Option<&str>,
+) -> Result<usize, StepGateError> {
+    let Some(idx) = current_step_index(steps) else {
+        return Err(StepGateError::NoPlanSteps);
+    };
+    let Some(step_id) = order_step_id else {
+        return Err(StepGateError::MissingStepId);
+    };
+    let current = &steps[idx];
+    if current.id != step_id {
+        return Err(StepGateError::StepNotDone {
+            expected: current.id.clone(),
+            got: step_id.to_string(),
+        });
+    }
+    // 上一步必须 done（current 是第一个非 done，故 0..idx 全 done；
+    // 显式断言防御索引漂移）。
+    if idx > 0 && !steps[idx - 1].status.is_done() {
+        return Err(StepGateError::StepNotDone {
+            expected: steps[idx - 1].id.clone(),
+            got: step_id.to_string(),
+        });
+    }
+    Ok(idx)
+}
+
+/// 发放时迁移：pending/failed → in_progress（§6）。
+pub(crate) fn mark_step_in_progress(steps: &mut [PlanStep], idx: usize) {
+    if let Some(step) = steps.get_mut(idx) {
+        step.status = StepStatus::InProgress;
+    }
+}
+
+/// receipt ok → done(receipt_id)；direct 证据门 → done(direct evidence)。
+pub(crate) fn mark_step_done(
+    steps: &mut [PlanStep],
+    idx: usize,
+    receipt_id: &str,
+    direct: Option<DirectStepEvidence>,
+) {
+    if let Some(step) = steps.get_mut(idx) {
+        step.status = StepStatus::Done(DoneEvidence {
+            receipt_id: receipt_id.to_string(),
+            direct,
+        });
+    }
+}
+
+/// receipt fail → failed(receipt_id)。
+pub(crate) fn mark_step_failed(steps: &mut [PlanStep], idx: usize, receipt_id: &str) {
+    if let Some(step) = steps.get_mut(idx) {
+        step.status = StepStatus::Failed(FailedEvidence {
+            receipt_id: receipt_id.to_string(),
+        });
+    }
 }
 
 #[cfg(test)]
@@ -518,11 +619,23 @@ mod tests {
                 "extra_top": true
             }
         }));
-        assert!(v.errors.iter().any(|e| e.contains("plan_id must be non-empty")));
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("plan_id must be non-empty"))
+        );
         assert!(v.errors.iter().any(|e| e.contains("step_id must match")));
         assert!(v.errors.iter().any(|e| e.contains("do must be non-empty")));
-        assert!(v.errors.iter().any(|e| e.contains("with must be an object")));
-        assert!(v.errors.iter().any(|e| e.contains("status must be \"pending\"")));
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("with must be an object"))
+        );
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("status must be \"pending\""))
+        );
         assert!(v.ignored_fields.contains(&"extra_top".to_string()));
     }
 
@@ -535,7 +648,11 @@ mod tests {
                 "steps": []
             }
         }));
-        assert!(v.errors.iter().any(|e| e.contains("steps must be non-empty")));
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("steps must be non-empty"))
+        );
 
         let dup = serde_json::json!({
             "plan": {
@@ -572,9 +689,7 @@ mod tests {
             }
         }));
         assert!(
-            v.errors
-                .iter()
-                .any(|e| e.contains("evidence exceeds")),
+            v.errors.iter().any(|e| e.contains("evidence exceeds")),
             "{:?}",
             v.errors
         );
@@ -635,10 +750,7 @@ mod tests {
     #[test]
     fn outcome_progression() {
         let errs = vec!["bad".to_string()];
-        assert_eq!(
-            decide_outcome(1, &errs),
-            PlanWriteOutcome::RefillRequested
-        );
+        assert_eq!(decide_outcome(1, &errs), PlanWriteOutcome::RefillRequested);
         assert!(matches!(
             decide_outcome(2, &errs),
             PlanWriteOutcome::Degraded { reason } if reason == "validation_failed_after_refill"

@@ -251,6 +251,24 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string),
         },
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
+        // 双模式切换决策记录。
+        EventType::ConsoleModeTransition => TuiEvent::ConsoleModeTransition {
+            transition_id: get_str(p, "transition_id"),
+            from: get_str(p, "from"),
+            to: get_str(p, "to"),
+            trigger: get_str(p, "trigger"),
+            model_decision: get_str(p, "model_decision"),
+        },
+        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 动作栏订单记录。
+        EventType::ConsoleOrderWritten => TuiEvent::ConsoleOrderWritten {
+            order_id: get_str(p, "order_id"),
+            action: get_str(p, "action"),
+            step_id: p
+                .pointer("/step_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        },
         EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
             assessment_id: get_str(p, "assessment_id"),
             status: get_str(p, "status"),
@@ -563,6 +581,24 @@ mod tests {
                     "step_count": 2,
                     "outcome": "accepted",
                     "validation": {"valid": true, "errors": [], "ignored_fields": []},
+                }),
+            ),
+            (
+                EventType::ConsoleModeTransition,
+                json!({
+                    "transition_id": "CONSMODE-RUN-1-0001",
+                    "from": "console",
+                    "to": "direct",
+                    "trigger": "assistant_failure_streak",
+                    "model_decision": "switch",
+                }),
+            ),
+            (
+                EventType::ConsoleOrderWritten,
+                json!({
+                    "order_id": "ORD-000001",
+                    "action": "workspace.read_file",
+                    "step_id": "s1",
                 }),
             ),
         ];

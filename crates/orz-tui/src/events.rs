@@ -181,6 +181,22 @@ pub enum TuiEvent {
         validation_error_count: i64,
         degrade_reason: Option<String>,
     },
+    // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
+    // 双模式切换决策记录（§7.4）。
+    ConsoleModeTransition {
+        transition_id: String,
+        from: String,
+        to: String,
+        trigger: String,
+        model_decision: String,
+    },
+    // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 动作栏订单记录
+    // （身份/step 绑定/机械盖章；§5-§6）。
+    ConsoleOrderWritten {
+        order_id: String,
+        action: String,
+        step_id: Option<String>,
+    },
     InformationSufficiencyAssessment {
         assessment_id: String,
         status: String,
@@ -350,6 +366,8 @@ impl TuiEvent {
             TuiEvent::DiagnosticCoverageCheckpoint { .. } => "diagnostic_coverage_checkpoint",
             TuiEvent::CheckpointResponse { .. } => "checkpoint_response",
             TuiEvent::PlanWrite { .. } => "plan_write",
+            TuiEvent::ConsoleModeTransition { .. } => "console_mode_transition",
+            TuiEvent::ConsoleOrderWritten { .. } => "console_order_written",
             TuiEvent::InformationSufficiencyAssessment { .. } => {
                 "information_sufficiency_assessment"
             }

@@ -265,13 +265,24 @@ mod tests {
             // PLAN-FIRST 阶段 A (2026-08-16): ACP production sessions start
             // with the first-round plan gate — the script answers it first.
             plan_write_response(),
+            // PLAN-FIRST 阶段 C (2026-08-16): console 默认面——执行/变更面
+            // 隐藏，模型经 action_write 写订单；权限请求在轮末机械发放时
+            // 到达（目标工具 search_replace）。
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "bash".to_string(),
-                arguments: serde_json::json!({"command": "dir"}),
-                call_id: "call-1".to_string(),
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.search_replace",
+                    "step_id": "s1",
+                    "arguments": {
+                        "file_path": "a.txt",
+                        "old_string": "v1",
+                        "new_string": "v2",
+                    },
+                }),
+                call_id: "call-order-1".to_string(),
             }]),
-            ScriptedResponse::text("完成（bash 已执行）。"),
-            ScriptedResponse::text("完成（bash 已执行）。"),
+            ScriptedResponse::text("完成（订单已执行）。"),
+            ScriptedResponse::text("完成（订单已执行）。"),
         ]
     }
 
@@ -287,7 +298,15 @@ mod tests {
                             "id": "s1",
                             "goal": "执行任务",
                             "actions": [
-                                {"step_id": "s1", "do": "bash", "with": {"command": "dir"}}
+                                {
+                                    "step_id": "s1",
+                                    "do": "workspace.search_replace",
+                                    "with": {
+                                        "file_path": "a.txt",
+                                        "old_string": "v1",
+                                        "new_string": "v2",
+                                    },
+                                }
                             ],
                             "acceptance": "命令已执行",
                             "evidence": []
@@ -349,8 +368,13 @@ mod tests {
 
                 let (request, respond) =
                     run_prompt_until_permission(&mut client, &base, "运行 dir").await;
-                // The host normalizes call ids to `call-<tool>`.
-                assert_eq!(request.tool_call.tool_call_id.0.as_ref(), "call-bash");
+                // The host normalizes call ids to `call-<tool>`; console
+                // issuance reaches the permission bridge for the order's
+                // target tool.
+                assert_eq!(
+                    request.tool_call.tool_call_id.0.as_ref(),
+                    "call-search_replace"
+                );
                 assert!(
                     request
                         .options
@@ -393,6 +417,7 @@ mod tests {
                 assert!(content.contains("\"allow_once\""));
                 assert!(content.contains("\"tool_started\""));
                 assert!(content.contains("\"tool_completed\""));
+                assert!(content.contains("\"console_order_written\""));
 
                 // Review P3-4: the journal replays through the projection and
                 // the view model carries the model text + tool trace.
@@ -417,7 +442,7 @@ mod tests {
                     "model text must reach the view: {model_texts:?}"
                 );
                 assert!(
-                    app.content.tool_trace_names().contains(&"bash"),
+                    app.content.tool_trace_names().contains(&"search_replace"),
                     "tool trace must reach the view"
                 );
                 let _ = std::fs::remove_dir_all(&base);
@@ -621,8 +646,10 @@ mod tests {
                     !content.lines().any(|line| {
                         let v: serde_json::Value = serde_json::from_str(line).unwrap();
                         v.get("event_type").and_then(|t| t.as_str()) == Some("tool_started")
-                            && v.get("payload").and_then(|p| p.get("tool")).and_then(|t| t.as_str())
-                                == Some("bash")
+                            && v.get("payload")
+                                .and_then(|p| p.get("tool"))
+                                .and_then(|t| t.as_str())
+                                == Some("search_replace")
                     }),
                     "denied tool must not execute"
                 );
